@@ -91,11 +91,11 @@ class IndexCore:
         self.index_to_haplo.append(haplo_id)
         return idx
 
-    def register_gamete_label(self, gamete_label: Any) -> int:
+    def register_gamete_label(self, gamete_label: str) -> int:
         """Register a gamete label and return its index.
 
         Args:
-            gamete_label: Gamete label instance or opaque identifier.
+            gamete_label: String label for gamete origin.
 
         Returns:
             int: Assigned integer index for the gamete label.
@@ -145,11 +145,11 @@ class IndexCore:
         """
         return self.haplo_to_index[haplo_id]
 
-    def gamete_label_index(self, gamete_label: Any) -> int:
+    def gamete_label_index(self, gamete_label: str) -> int:
         """Return the index for a registered gamete label key.
 
         Args:
-            gamete_label: Registered gamete label instance or identifier.
+            gamete_label: Registered gamete label string.
 
         Returns:
             int: The gamete label index.
@@ -508,7 +508,7 @@ class IndexCore:
         # currently genotypes are dense so mapping is identity; placeholder
         return old_to_new_g
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     """Compress a (haplogenotype, glab) pair into a single integer.
 
@@ -526,7 +526,7 @@ def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     """
     return int(hg_idx) * int(n_glabs) + int(glab_idx)
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def decompress_hg_glab(compressed_idx: int, n_glabs: int) -> Tuple[int, int]:
     """Decompress a combined hg+glab index back into its components.
 

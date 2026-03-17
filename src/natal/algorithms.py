@@ -20,7 +20,7 @@ from natal import numba_compat as nbc
 # 极小值阈值，防止分布参数为 0 导致数值错误
 EPS = 1e-10
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def continuous_poisson(lam: float) -> float:
     """用 Gamma 分布连续化 Poisson 分布。
     
@@ -38,7 +38,7 @@ def continuous_poisson(lam: float) -> float:
     return np.random.gamma(lam, 1.0)
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def continuous_binomial(n: float, p: float) -> float:
     """用 Beta 分布连续化 Binomial 分布。
     
@@ -70,7 +70,7 @@ def continuous_binomial(n: float, p: float) -> float:
     return proportion * n
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: NDArray[np.float64]) -> None:
     """用 Dirichlet 分布连续化 Multinomial 分布。
     
@@ -125,7 +125,7 @@ def continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: N
             out_counts[i] *= correction
 
 # 1. Prepare male gamete pool
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_mating_probability_matrix(
     sexual_selection_matrix: Annotated[NDArray[np.float64], "shape=(g,g)"], 
     male_counts: Annotated[NDArray[np.float64], "shape=(g,)"],
@@ -165,7 +165,7 @@ def compute_mating_probability_matrix(
     P = weighted / row_sums
     return P
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def sample_mating(
     female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
     sperm_store: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
@@ -258,7 +258,7 @@ def sample_mating(
         
         return S
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def fertilize_with_mating_genotype(
     female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
     sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
@@ -322,10 +322,11 @@ def fertilize_with_mating_genotype(
     P_offspring_flat = np.dot(all_gamete_pairs_flat, H_flat)  # (g*g, g)
     P_offspring = P_offspring_flat.reshape(n_genotypes, n_genotypes, n_genotypes)
     
+    # TODO: 这里取消了归一化，目的是可以模拟致死效应，但需检查正确性
     # 向量化归一化（一次性求和，替代 81 次 sum）
-    P_sums_step1 = P_offspring.sum(axis=2)  # (g, g) 一次求和！
-    P_sums_step1_safe = np.where(P_sums_step1 > 0, P_sums_step1, 1.0)
-    P_offspring = P_offspring / P_sums_step1_safe[:, :, None]
+    # P_sums_step1 = P_offspring.sum(axis=2)  # (g, g) 一次求和！
+    # P_sums_step1_safe = np.where(P_sums_step1 > 0, P_sums_step1, 1.0)
+    # P_offspring = P_offspring / P_sums_step1_safe[:, :, None]
     
     # =========================================================================
     # Step 2: 批量提取所有 (age, gf, gm) 组合的数据（向量化版本）
@@ -500,7 +501,7 @@ def fertilize_with_mating_genotype(
     else:
         return np.zeros(n_genotypes), np.zeros(n_genotypes)
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_age_based_survival_rates(
     female_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)"],
     male_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)"],
@@ -519,7 +520,7 @@ def compute_age_based_survival_rates(
     return np.asarray(female_survival_rates), np.asarray(male_survival_rates)
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_viability_survival_rates(
     female_viability_rates: Annotated[NDArray[np.float64], "shape=(g,)"],
     male_viability_rates: Annotated[NDArray[np.float64], "shape=(g,)"],
@@ -554,7 +555,7 @@ def compute_viability_survival_rates(
     return surv_f, surv_m
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def apply_survival_rates_deterministic(
     population: Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]],
     female_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
@@ -608,7 +609,7 @@ def apply_survival_rates_deterministic(
     return F, M
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def apply_survival_rates_deterministic_with_sperm_storage(
     population: Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]],
     sperm_store: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
@@ -679,7 +680,7 @@ def apply_survival_rates_deterministic_with_sperm_storage(
     return F, M, S
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def sample_survival_with_sperm_storage(
     population: Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]],
     sperm_store: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
@@ -809,7 +810,7 @@ def sample_survival_with_sperm_storage(
     return F, M, S
 
 # deprecated
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def sample_viability_with_sperm_storage(
     population: Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]],
     sperm_store: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
@@ -918,7 +919,7 @@ def sample_viability_with_sperm_storage(
     
     return F, M, S
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def recruit_juveniles_sampling(
     age_0_juvenile_counts: Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]],
     carrying_capacity: int,
@@ -979,7 +980,7 @@ def recruit_juveniles_sampling(
     return f_new, m_new
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def recruit_juveniles_given_scaling_factor_sampling(
     age_0_juvenile_counts: Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]],
     scaling_factor: float,
@@ -1048,7 +1049,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
     m_new = scaled[n_genotypes:]
     return f_new, m_new
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_equilibrium_metrics(
     carrying_capacity: float,
     expected_eggs_per_female: float,
@@ -1152,7 +1153,7 @@ LOGISTIC = LINEAR = 2
 CONCAVE = BEVERTON_HOLT = 3
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_scaling_factor_fixed(
     total_age_0: float,
     carrying_capacity: float,
@@ -1174,7 +1175,7 @@ def compute_scaling_factor_fixed(
         return 1.0
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_actual_competition_strength(
     juvenile_counts_by_age: NDArray[np.float64],
     relative_competition_strength: NDArray[np.float64],
@@ -1187,7 +1188,7 @@ def compute_actual_competition_strength(
     return actual_competition_strength
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_scaling_factor_logistic(
     actual_competition_strength: float,
     expected_competition_strength: float,
@@ -1207,7 +1208,7 @@ def compute_scaling_factor_logistic(
     return actual_growth_rate * expected_survival_rate
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def compute_scaling_factor_beverton_holt(
     actual_competition_strength: float,
     expected_competition_strength: float,

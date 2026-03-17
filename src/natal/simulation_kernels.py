@@ -17,12 +17,20 @@ from typing import Tuple, Dict, Any, Optional, List, Callable, Union, TYPE_CHECK
 import natal.algorithms as alg
 from natal.type_def import Sex
 from natal.numba_utils import njit_switch, jitclass_switch
-from natal.hook_dsl import HookRegistry
-from natal.population_state import PopulationState
+from natal.hook_dsl import (
+    HookRegistry,
+    EVENT_FIRST,
+    EVENT_REPRODUCTION,
+    EVENT_EARLY,
+    EVENT_SURVIVAL,
+    EVENT_LATE,
+)
+from natal.population_state import PopulationState, DiscretePopulationState
 from natal.population_config import PopulationConfig, NO_COMPETITION, FIXED, LOGISTIC, BEVERTON_HOLT
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
+    from natal.hook_dsl import CompiledEventHooks
 
 __all__ = [
     # No user-facing API for now
@@ -66,7 +74,7 @@ def import_state_arrays(
 # ============================================================================
 # 核心：分离的阶段函数（繁殖、生存、衰老）
 # ============================================================================
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def run_reproduction(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
@@ -163,7 +171,7 @@ def run_reproduction(
     
     return ind_count, sperm_store
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def run_survival(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
@@ -305,7 +313,7 @@ def run_survival(
     
     return ind_count, sperm_store
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def run_aging(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
@@ -346,10 +354,12 @@ RESULT_CONTINUE = 0
 RESULT_STOP = 1
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def run_tick(
     state: PopulationState,
     config: PopulationConfig,
+    registry: HookRegistry,
+    first_hook: Callable,
     reproduction_hook: Callable,
     early_hook: Callable,
     survival_hook: Callable,
@@ -367,6 +377,7 @@ def run_tick(
     Args:
         state: PopulationState 对象
         config: Population static config
+        first_hook: hook before reproduction starts
         reproduction_hook: hook after reproduction (or noop_hook)
         early_hook: hook after reproduction, before survival
         survival_hook: hook after survival
@@ -386,6 +397,7 @@ def run_tick(
         >>> 
         >>> new_state, result = run_tick(
         ...     state, config,
+        ...     first_hook=noop_hook,
         ...     reproduction_hook=noop_hook,
         ...     early_hook=my_early_hook,
         ...     survival_hook=noop_hook,
@@ -397,15 +409,29 @@ def run_tick(
     sperm_store = state.sperm_storage.copy()
     tick = state.n_tick
     
+    # ===== FIRST hook =====
+    result = registry.execute_csr_event(EVENT_FIRST, ind_count, tick)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+    result = first_hook(ind_count, tick)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+    
     # ===== 繁殖阶段 =====
     ind_count, sperm_store = run_reproduction(ind_count, sperm_store, config)
     
     # ===== REPRODUCTION hook =====
+    result = registry.execute_csr_event(EVENT_REPRODUCTION, ind_count, tick)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
     result = reproduction_hook(ind_count, tick)
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     
     # ===== EARLY hook =====
+    result = registry.execute_csr_event(EVENT_EARLY, ind_count, tick)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
     result = early_hook(ind_count, tick)
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
@@ -414,11 +440,17 @@ def run_tick(
     ind_count, sperm_store = run_survival(ind_count, sperm_store, config)
     
     # ===== SURVIVAL hook =====
+    result = registry.execute_csr_event(EVENT_SURVIVAL, ind_count, tick)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
     result = survival_hook(ind_count, tick)
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     
     # ===== LATE hook =====
+    result = registry.execute_csr_event(EVENT_LATE, ind_count, tick)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
     result = late_hook(ind_count, tick)
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
@@ -437,11 +469,13 @@ run_tick_with_hooks = run_tick
 # ============================================================================
 # 便利函数：循环运行和批量执行
 # ============================================================================
-@njit_switch(cache=True)
+@njit_switch(cache=False)
 def run(
     state: PopulationState,
     config: PopulationConfig,
+    registry: HookRegistry,
     n_ticks: int,
+    first_hook: Callable,
     reproduction_hook: Callable,
     early_hook: Callable,
     survival_hook: Callable,
@@ -459,6 +493,7 @@ def run(
         state: PopulationState 对象
         config: PopulationConfig 配置
         n_ticks: 运行的 tick 数
+        first_hook: hook before reproduction starts
         reproduction_hook: hook after reproduction
         early_hook: hook after reproduction, before survival
         survival_hook: hook after survival
@@ -477,6 +512,7 @@ def run(
         >>> 
         >>> state, history, stopped = run(
         ...     pop.state, pop.config, 100,
+        ...     first_hook=noop_hook,
         ...     reproduction_hook=noop_hook,
         ...     early_hook=noop_hook,
         ...     survival_hook=noop_hook,
@@ -512,8 +548,8 @@ def run(
     # 运行每个 tick
     for tick_i in range(n_ticks):
         current_state, result_code = run_tick(
-            state, config,
-            reproduction_hook, early_hook, survival_hook, late_hook
+            state, config, registry,
+            first_hook, reproduction_hook, early_hook, survival_hook, late_hook
         )
 
         if record_history:
@@ -542,3 +578,343 @@ def run(
 # 保留旧函数名作为别名（向后兼容）
 run_with_hooks = run
 run_ticks = run
+
+
+def run_with_compiled_event_hooks(
+    state: PopulationState,
+    config: PopulationConfig,
+    hooks: 'CompiledEventHooks',
+    n_ticks: int,
+    record_history: bool = False,
+) -> Tuple[Tuple[NDArray, NDArray, int], Optional[NDArray], bool]:
+    """Run age-structured kernels with a single compiled-hook bundle.
+
+    This helper keeps the Numba kernel signatures stable while avoiding
+    repetitive per-event argument plumbing at call sites.
+    """
+    return run(
+        state=state,
+        config=config,
+        registry=hooks.registry,
+        n_ticks=n_ticks,
+        first_hook=hooks.first,
+        reproduction_hook=hooks.reproduction,
+        early_hook=hooks.early,
+        survival_hook=hooks.survival,
+        late_hook=hooks.late,
+        record_history=record_history,
+    )
+
+# ============================================================================
+# Discrete Generation Kernels
+# ============================================================================
+
+@njit_switch(cache=False)
+def run_discrete_reproduction(
+    ind_count: NDArray[np.float64],
+    config: PopulationConfig,
+) -> NDArray[np.float64]:
+    """执行繁殖阶段（离散世代）：直接受精，不使用长期精子存储。"""
+    ind_count = ind_count.copy()
+    n_gen = config.n_genotypes
+    is_stochastic = config.is_stochastic
+    use_dirichlet_sampling = config.use_dirichlet_sampling
+    
+    adult_age = 1
+    female_adults = ind_count[0, adult_age, :]
+    male_adults = ind_count[1, adult_age, :]
+    
+    male_mating_rate = config.age_based_mating_rates[1, adult_age]
+    effective_male_counts = male_adults * male_mating_rate
+    
+    if effective_male_counts.sum() == 0 or female_adults.sum() == 0:
+        return ind_count
+        
+    mating_prob = alg.compute_mating_probability_matrix(
+        config.sexual_selection_fitness, 
+        effective_male_counts, 
+        n_gen
+    )
+    
+    temp_sperm_store = np.zeros((2, n_gen, n_gen), dtype=np.float64)
+    temp_female_counts = np.zeros((2, n_gen), dtype=np.float64)
+    temp_female_counts[adult_age, :] = female_adults
+    
+    female_mating_rate = config.age_based_mating_rates[0, adult_age]
+    
+    temp_sperm_store = alg.sample_mating(
+        temp_female_counts,
+        temp_sperm_store,
+        mating_prob,
+        female_mating_rate,
+        1.0, 
+        adult_age,
+        2, 
+        n_gen,
+        is_stochastic=is_stochastic,
+        use_dirichlet_sampling=use_dirichlet_sampling
+    )
+
+    n_0_female, n_0_male = alg.fertilize_with_mating_genotype(
+        temp_female_counts,
+        temp_sperm_store,
+        config.fecundity_fitness[0],
+        config.fecundity_fitness[1],
+        config.genotype_to_gametes_map[0],
+        config.genotype_to_gametes_map[1],
+        config.gametes_to_zygote_map,
+        config.expected_eggs_per_female,
+        adult_age,
+        2, 
+        n_gen,
+        config.n_haploid_genotypes,
+        config.n_glabs,
+        1.0, 
+        config.use_fixed_egg_count,
+        config.sex_ratio,
+        is_stochastic=is_stochastic,
+        use_dirichlet_sampling=use_dirichlet_sampling
+    )
+    
+    ind_count[0, 0, :] = n_0_female
+    ind_count[1, 0, :] = n_0_male
+    
+    return ind_count
+
+@njit_switch(cache=False)
+def run_discrete_survival(
+    ind_count: NDArray[np.float64],
+    config: PopulationConfig,
+) -> NDArray[np.float64]:
+    """执行存活（离散世代）：幼虫密度竞争与存活率筛选。"""
+    ind_count = ind_count.copy()
+    n_gen = config.n_genotypes
+    is_stochastic = config.is_stochastic
+    use_dirichlet_sampling = config.use_dirichlet_sampling
+    
+    juvenile_growth_mode = config.juvenile_growth_mode
+    total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
+    
+    if juvenile_growth_mode == NO_COMPETITION:
+        scaling_factor = 1.0
+    elif juvenile_growth_mode == FIXED:
+        scaling_factor = alg.compute_scaling_factor_fixed(
+            total_age_0=total_age_0,
+            carrying_capacity=config.carrying_capacity,
+        )
+    else:
+        # Discrete generation has exactly one juvenile age (age 0),
+        # so competition strength reduces to the age-0 total count.
+        actual_comp = total_age_0
+        if juvenile_growth_mode == LOGISTIC:
+            scaling_factor = alg.compute_scaling_factor_logistic(
+                actual_competition_strength=actual_comp,
+                expected_competition_strength=config.expected_competition_strength,
+                expected_survival_rate=config.expected_survival_rate,
+                low_density_growth_rate=config.low_density_growth_rate,
+            )
+        else:
+            scaling_factor = alg.compute_scaling_factor_beverton_holt(
+                actual_competition_strength=actual_comp,
+                expected_competition_strength=config.expected_competition_strength,
+                expected_survival_rate=config.expected_survival_rate,
+                low_density_growth_rate=config.low_density_growth_rate,
+            )
+            
+    f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
+        (ind_count[0, 0, :], ind_count[1, 0, :]),
+        scaling_factor,
+        n_gen,
+        is_stochastic=is_stochastic,
+        use_dirichlet_sampling=use_dirichlet_sampling
+    )
+    
+    s_age_f, s_age_m = alg.compute_age_based_survival_rates(
+        config.age_based_survival_rates[0],
+        config.age_based_survival_rates[1],
+        2
+    )
+    s_via_f, s_via_m = alg.compute_viability_survival_rates(
+        config.viability_fitness[0, 0, :],
+        config.viability_fitness[1, 0, :],
+        n_gen,
+        0, 
+        2
+    )
+    
+    s_combined_0_f = s_age_f[0] * s_via_f[0, :]
+    s_combined_0_m = s_age_m[0] * s_via_m[0, :]
+    
+    if is_stochastic:
+        if use_dirichlet_sampling:
+            f_surv = f_rec * s_combined_0_f
+            m_surv = m_rec * s_combined_0_m
+        else:
+            f_surv = np.zeros(n_gen, dtype=np.float64)
+            m_surv = np.zeros(n_gen, dtype=np.float64)
+            for g in range(n_gen):
+                nf = int(round(f_rec[g]))
+                nm = int(round(m_rec[g]))
+                f_surv[g] = float(np.random.binomial(nf, s_combined_0_f[g]))
+                m_surv[g] = float(np.random.binomial(nm, s_combined_0_m[g]))
+    else:
+        f_surv = f_rec * s_combined_0_f
+        m_surv = m_rec * s_combined_0_m
+
+    ind_count[0, 0, :] = f_surv
+    ind_count[1, 0, :] = m_surv
+    
+    return ind_count
+
+@njit_switch(cache=False)
+def run_discrete_aging(
+    ind_count: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """执行世代更替（离散世代）：幼虫晋升为成虫，旧成虫作废。"""
+    ind_count = ind_count.copy()
+    
+    ind_count[0, 1, :] = ind_count[0, 0, :]
+    ind_count[0, 0, :] = 0.0
+    
+    ind_count[1, 1, :] = ind_count[1, 0, :]
+    ind_count[1, 0, :] = 0.0
+    
+    return ind_count
+
+@njit_switch(cache=False)
+def run_discrete_tick(
+    state: DiscretePopulationState,
+    config: PopulationConfig,
+    registry: HookRegistry,
+    first_hook: Callable,
+    reproduction_hook: Callable,
+    early_hook: Callable,
+    survival_hook: Callable,
+    late_hook: Callable,
+) -> Tuple[Tuple[NDArray, int], int]:
+    """执行一个离散世代的 tick。"""
+    ind_count = state.individual_count.copy()
+    tick = state.n_tick
+    
+    result = registry.execute_csr_event(EVENT_FIRST, ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+
+    result = first_hook(ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+    
+    ind_count = run_discrete_reproduction(ind_count, config)
+    
+    result = registry.execute_csr_event(EVENT_REPRODUCTION, ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+
+    result = reproduction_hook(ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+    
+    result = registry.execute_csr_event(EVENT_EARLY, ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+
+    result = early_hook(ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+    
+    ind_count = run_discrete_survival(ind_count, config)
+    
+    result = registry.execute_csr_event(EVENT_SURVIVAL, ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+
+    result = survival_hook(ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+    
+    result = registry.execute_csr_event(EVENT_LATE, ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+
+    result = late_hook(ind_count, tick)
+    if result != 0: return (ind_count, tick), 1
+    
+    ind_count = run_discrete_aging(ind_count)
+    
+    return (ind_count, tick + 1), 0
+
+@njit_switch(cache=False)
+def run_discrete(
+    state: DiscretePopulationState,
+    config: PopulationConfig,
+    registry: HookRegistry,
+    n_ticks: int,
+    first_hook: Callable,
+    reproduction_hook: Callable,
+    early_hook: Callable,
+    survival_hook: Callable,
+    late_hook: Callable,
+    record_history: bool = False
+) -> Tuple[Tuple[NDArray, int], Optional[NDArray], bool]:
+    """连续运行 n 个离散世代 tick，支持 hooks，可选记录历史。"""
+    was_stopped = False
+    tick = state.n_tick
+    n_sexes = config.n_sexes
+    n_ages = config.n_ages
+    n_genotypes = config.n_genotypes
+
+    current_state = (state.individual_count.copy(), tick) #?
+
+    ind_size = current_state[0].size
+    flatten_size = 1 + ind_size
+    
+    if record_history:
+        history_array = np.zeros((n_ticks, flatten_size), dtype=np.float64)
+    else:
+        history_array = np.zeros((0, flatten_size), dtype=np.float64)
+        
+    history_count = 0
+    
+    for i in range(n_ticks):
+        temp_state = DiscretePopulationState(
+            n_sexes,
+            n_ages,
+            n_genotypes,
+            current_state[1],
+            current_state[0],
+        )
+        
+        current_state, result = run_discrete_tick(
+            temp_state, config, registry, first_hook, reproduction_hook, early_hook, survival_hook, late_hook
+        )
+        
+        if record_history:
+            flat_state = np.zeros(flatten_size, dtype=np.float64)
+            flat_state[0] = current_state[1]
+            flat_state[1:1 + ind_size] = current_state[0].flatten()
+            history_array[history_count, :] = flat_state
+            history_count += 1
+            
+        if result != 0:
+            was_stopped = True
+            break
+            
+    if record_history:
+        history_result = history_array[:history_count, :]
+    else:
+        history_result = None
+
+    return current_state, history_result, was_stopped
+
+
+def run_discrete_with_compiled_event_hooks(
+    state: DiscretePopulationState,
+    config: PopulationConfig,
+    hooks: 'CompiledEventHooks',
+    n_ticks: int,
+    record_history: bool = False,
+) -> Tuple[Tuple[NDArray, int], Optional[NDArray], bool]:
+    """Run discrete kernels with a single compiled-hook bundle."""
+    return run_discrete(
+        state=state,
+        config=config,
+        registry=hooks.registry,
+        n_ticks=n_ticks,
+        first_hook=hooks.first,
+        reproduction_hook=hooks.reproduction,
+        early_hook=hooks.early,
+        survival_hook=hooks.survival,
+        late_hook=hooks.late,
+        record_history=record_history,
+    )

@@ -2,48 +2,118 @@
 Genetic Simulation Utilities
 ============================
 
-提供遗传学模拟的核心组件：结构、实体、种群模型。
+Core components for genetic simulation: structures, entities, and population models.
 """
 
-from natal.genetic_structures import Species, Chromosome, Locus
-from natal.genetic_entities import Gene, Haplotype, HaploidGenotype, Genotype
-from natal.index_core import IndexCore, compress_hg_glab, decompress_hg_glab
-from natal.population_config import *
-from natal.population_state import *
-from natal.modifiers import *
-from natal.type_def import *
-from natal.algorithms import *
-from natal.base_population import *
-from natal.age_structured_population import *
-from natal.population_builder import (
-    PopulationBuilderBase,
-    AgeStructuredPopulationBuilder, 
-    DiscreteGenerationPopulationBuilder
-)
-from natal.recipes import GeneDriveRecipe, HomingModificationDrive, apply_recipe_to_population
-from natal.hook_dsl import *
+import pkgutil
+import importlib
+import ast
+from pathlib import Path
 
-__version__ = "0.1.0"
-__all__ = [
-    # Genetic structures
-    'Species', 'Chromosome', 'Locus',
-    
-    # Entities
-    'Gene', 'Haplotype', 'HaploidGenotype', 'Genotype',
-    
-    # Indexing
-    'IndexCore', 'compress_hg_glab', 'decompress_hg_glab',
-    
-    # Population & Configuration
-    'BasePopulation', 'AgeStructuredPopulation',
-    'AgeStructuredInitConfig', 'DiscreteGenerationInitConfig',
-    
-    # Builders
-    'PopulationBuilderBase',
-    'AgeStructuredPopulationBuilder',
-    'DiscreteGenerationPopulationBuilder',
-    
-    # Recipes & Modifiers
-    'GeneDriveRecipe', 'HomingModificationDrive', 'apply_recipe_to_population',
-    'GameteModifier', 'ZygoteModifier',
-]
+# Maps exported symbol names to the module that defines them.
+#
+# The package intentionally does not import any child modules during initialization.
+# It only builds a name index up front, for example:
+# {"Sex": "type_def", "AgeStructuredPopulation": "age_structured_population"}
+# When code first accesses natal.Sex, the matching module is imported on demand.
+_lazy_map = {}
+
+
+def _extract_module_exports(module_file: Path) -> list[str]:
+    """Return literal ``__all__`` entries from a module source file.
+
+    This uses static source parsing instead of importing the module so the package
+    can support true lazy loading. Importing the package only reads source text and
+    builds the export table; it does not execute child-module top-level code.
+
+    This requires each child module's ``__all__`` to be a literal value that
+    ``ast.literal_eval`` can resolve, for example:
+
+        __all__ = ["Sex", "Age"]
+
+    If ``__all__`` is built dynamically at runtime, this function returns an empty
+    list and that module will not participate in package-level lazy exports.
+    """
+    try:
+        # Read source text and parse an AST only; this never executes module code.
+        source = module_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(module_file))
+    except (OSError, SyntaxError):
+        # Ignore unreadable files or modules with syntax errors so one broken file
+        # does not prevent the package itself from importing.
+        return []
+
+    # Only inspect top-level statements. The top-level __all__ assignment defines
+    # the public symbols this package can expose lazily.
+    for node in tree.body:
+        value_node = None
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+                value_node = node.value
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
+                value_node = node.value
+
+        if value_node is None:
+            continue
+
+        try:
+            # ast.literal_eval only resolves safe literal structures and will not
+            # execute expressions.
+            exports = ast.literal_eval(value_node)
+        except Exception:
+            return []
+
+        if isinstance(exports, (list, tuple)) and all(isinstance(item, str) for item in exports):
+            return list(exports)
+        return []
+
+    return []
+
+# Scan the package directory and build the export-name -> module-name index.
+#
+# This only scans and parses files. It does not import modules, so importing natal
+# remains lightweight.
+package_dir = Path(__file__).resolve().parent
+for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lambda item: item[1]):
+
+    # Skip private modules and subpackages.
+    # The current strategy only handles sibling .py modules to avoid the added
+    # complexity of recursive subpackage scanning.
+    if module_name.startswith("_") or is_package:
+        continue
+
+    module_file = package_dir / f"{module_name}.py"
+    if not module_file.is_file():
+        continue
+
+    # If multiple modules export the same name, keep the first mapping instead of
+    # silently letting a later one overwrite it. Sorting by module name makes the
+    # result stable and predictable.
+    for name in _extract_module_exports(module_file):
+        _lazy_map.setdefault(name, module_name)
+
+# Public export list.
+#
+# This keeps from natal import * aligned with the package's public API and also
+# helps dir(natal) and some tooling discover these names.
+__all__ = list(_lazy_map)
+
+
+def __getattr__(name):
+    # When code accesses natal.<name> and that attribute is not present yet,
+    # Python calls the module-level __getattr__. Import the owning child module
+    # here so the symbol is loaded only on first access.
+    if name in _lazy_map:
+        module = importlib.import_module(f".{_lazy_map[name]}", __name__)
+        value = getattr(module, name)
+        # Cache the resolved object in this module's globals so future accesses do
+        # not have to go through __getattr__ again.
+        globals()[name] = value
+        return value
+    raise AttributeError(name)
+
+
+def __dir__():
+    # Expose lazily exported names to dir() and completion tools.
+    return sorted(set(globals()) | set(__all__))

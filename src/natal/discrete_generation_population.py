@@ -1,0 +1,278 @@
+"""Discrete-generation population model.
+
+This module provides a lightweight non-overlapping generation model that keeps
+n_ages=2:
+- age 0: offspring/zygotes produced in current tick
+- age 1: reproducing adults
+
+The simulation flow remains split as:
+reproduction -> survival -> late hook -> aging
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Union, Tuple, TYPE_CHECKING, Any
+
+import numpy as np
+from numpy.typing import NDArray
+
+from natal.base_population import BasePopulation, Species, Genotype, Sex
+from natal.population_state import DiscretePopulationState
+from natal.population_config import PopulationConfig
+from natal.index_core import IndexCore
+import natal.simulation_kernels as sk
+
+if TYPE_CHECKING:
+    from natal.population_builder import DiscreteGenerationPopulationBuilder
+
+
+__all__ = ["DiscreteGenerationPopulation"]
+
+
+class DiscreteGenerationPopulation(BasePopulation):
+    """Population with strict non-overlapping generations."""
+
+    def __init__(
+        self,
+        species: Species,
+        population_config: PopulationConfig,
+        name: Optional[str] = None,
+        initial_individual_count: Optional[
+            Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]]
+        ] = None,
+        hooks: Optional[Dict[str, List[Tuple[Any, Optional[str], Optional[int]]]]] = None,
+    ):
+        if name is None:
+            name = "DiscreteGenerationPop"
+
+        super().__init__(species, name, hooks=hooks or {})
+
+        self._config = population_config
+        self._config.n_ages = 2
+        self._config.new_adult_age = 1
+        self._config.adult_ages = np.array([1], dtype=np.int64)
+
+        self._genotypes_list = species.get_all_genotypes()
+        self._haploid_genotypes_list = species.get_all_haploid_genotypes()
+
+        self._initialize_registry()
+
+        n_sexes = self._config.n_sexes
+        n_genotypes = self._config.n_genotypes
+        n_ages = self._config.n_ages
+
+        self._state = DiscretePopulationState(
+            n_sexes=n_sexes,
+            n_ages=n_ages,
+            n_genotypes=n_genotypes,
+            n_tick=0,
+            individual_count=np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64),
+        )
+
+        self._history_shape = (
+            1 + n_sexes * n_ages * n_genotypes,
+        )
+
+        if initial_individual_count is not None:
+            self._distribute_initial_population(initial_individual_count)
+
+        self._finalize_hooks()
+
+    @classmethod
+    def setup(
+        cls,
+        species: Species,
+        name: str = "DiscreteGenerationPop",
+        stochastic: bool = True,
+        use_dirichlet_sampling: bool = False,
+        use_fixed_egg_count: bool = False,
+    ) -> "DiscreteGenerationPopulationBuilder":
+        """Create and preconfigure a discrete-generation population builder.
+
+        This is a convenience forwarding entry point. Parameter semantics and
+        defaults are the same as ``DiscreteGenerationPopulationBuilder.setup``.
+
+        Args:
+            species: Species definition used to initialize the builder.
+            name: Population name passed through to ``builder.setup``.
+            stochastic: Whether to use stochastic sampling. Passed through to ``builder.setup``.
+            use_dirichlet_sampling: If True, use Dirichlet; else Binomial/Multinomial sampling. 
+                Passed through to ``builder.setup``.
+            use_fixed_egg_count: If True, egg count is fixed; if False, Poisson distributed. 
+                Passed through to ``builder.setup``.
+
+        Returns:
+            A configured ``DiscreteGenerationPopulationBuilder`` for fluent chaining.
+
+        Example:
+            ``DiscreteGenerationPopulation.setup(species).initial_state(...).build()``
+        """
+        from natal.population_builder import DiscreteGenerationPopulationBuilder
+
+        builder = DiscreteGenerationPopulationBuilder(species)
+        builder.setup(
+            name=name,
+            stochastic=stochastic,
+            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_fixed_egg_count=use_fixed_egg_count,
+        )
+        return builder
+
+    def _create_registry(self) -> IndexCore:
+        return IndexCore()
+
+    def _get_genotypes(self) -> List[Genotype]:
+        return self._genotypes_list
+
+    def _get_haplogenotypes(self) -> Optional[List]:
+        return self._haploid_genotypes_list
+
+    def _resolve_genotype_key(self, genotype_key: Union[Genotype, str]) -> Genotype:
+        if isinstance(genotype_key, Genotype):
+            return genotype_key
+        if isinstance(genotype_key, str):
+            return self.species.get_genotype_from_str(genotype_key)
+        raise TypeError(f"Unsupported genotype key type: {type(genotype_key)}")
+
+    def _resolve_age_distribution(
+        self,
+        age_data: Union[List[int], Dict[int, int], int, float],
+    ) -> Tuple[float, float]:
+        """Resolve user-provided initial data into (age0, age1).
+
+        Rules:
+        - scalar x -> (0, x)
+        - [x] -> (0, x)
+        - [x0, x1] -> (x0, x1)
+        - {0: x0, 1: x1} -> (x0, x1), missing keys default to 0
+        """
+        if isinstance(age_data, (int, float)):
+            return 0.0, float(age_data)
+
+        if isinstance(age_data, list):
+            if len(age_data) == 0:
+                return 0.0, 0.0
+            if len(age_data) == 1:
+                return 0.0, float(age_data[0])
+            if len(age_data) == 2:
+                return float(age_data[0]), float(age_data[1])
+            raise ValueError(
+                f"Discrete initial list must have length <= 2, got {len(age_data)}"
+            )
+
+        if isinstance(age_data, dict):
+            unsupported_keys = [k for k in age_data.keys() if k not in (0, 1)]
+            if unsupported_keys:
+                raise ValueError(
+                    f"Discrete initial dict supports only age keys 0 and 1, got {unsupported_keys}"
+                )
+            return float(age_data.get(0, 0.0)), float(age_data.get(1, 0.0))
+
+        raise TypeError(f"Unsupported age_data type: {type(age_data)}")
+
+    def _distribute_initial_population(
+        self,
+        distribution: Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]],
+    ) -> None:
+        self._state.individual_count.fill(0.0)
+
+        for sex_key, genotype_dist in distribution.items():
+            sex_key_norm = sex_key.lower().strip()
+            if sex_key_norm == "female":
+                sex_idx = int(Sex.FEMALE.value)
+            elif sex_key_norm == "male":
+                sex_idx = int(Sex.MALE.value)
+            else:
+                raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
+
+            for genotype_key, age_data in genotype_dist.items():
+                genotype = self._resolve_genotype_key(genotype_key)
+                genotype_idx = self._registry.genotype_to_index[genotype]
+                age0_count, age1_count = self._resolve_age_distribution(age_data)
+                self._state.individual_count[sex_idx, 0, genotype_idx] = age0_count
+                self._state.individual_count[sex_idx, 1, genotype_idx] = age1_count
+
+    def _step_reproduction(self) -> None:
+        self._state.individual_count[:] = sk.run_discrete_reproduction(self._state.individual_count, self._config)
+
+    def _step_survival(self) -> None:
+        self._state.individual_count[:] = sk.run_discrete_survival(self._state.individual_count, self._config)
+
+    def _step_aging(self) -> None:
+        self._state.individual_count[:] = sk.run_discrete_aging(self._state.individual_count)
+
+    def run(
+        self,
+        n_steps: int = 1,
+        record_every: int = 1,
+        finish: bool = False,
+        clear_history_on_start: bool = True,
+    ) -> "DiscreteGenerationPopulation":
+        if self._finished:
+            raise RuntimeError(
+                f"Population '{self.name}' has finished. "
+                "Cannot run() again after finish=True."
+            )
+
+        hooks = self.get_compiled_event_hooks()
+
+        final_state_tuple, history_new, was_stopped = sk.run_discrete_with_compiled_event_hooks(
+            state=self._state,
+            config=self._config,
+            hooks=hooks,
+            n_ticks=n_steps,
+            record_history=(record_every > 0),
+        )
+
+        self._state.individual_count[:] = final_state_tuple[0]
+        self._state.n_tick = np.int32(final_state_tuple[1])
+        self._tick = int(final_state_tuple[1])
+
+        if history_new is not None and history_new.shape[0] > 0:
+            if clear_history_on_start:
+                self.clear_history()
+            for row_idx in range(history_new.shape[0]):
+                row = history_new[row_idx, :]
+                tick = int(row[0])
+                self._history.append((tick, row.copy()))
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
+
+    def get_total_count(self) -> int:
+        return int(round(np.sum(self._state.individual_count)))
+
+    def get_female_count(self) -> int:
+        return int(round(np.sum(self._state.individual_count[int(Sex.FEMALE.value)])))
+
+    def get_male_count(self) -> int:
+        return int(round(np.sum(self._state.individual_count[int(Sex.MALE.value)])))
+
+    def get_history(self) -> np.ndarray:
+        if len(self._history) == 0:
+            return np.zeros((0, self._history_shape[0]), dtype=np.float64)
+        return np.array([rec[1] for rec in self._history], dtype=np.float64)
+
+    def clear_history(self) -> None:
+        self._history.clear()
+
+    def create_history_snapshot(self) -> None:
+        flattened = self._state.flatten_all()
+        self._history.append((self._tick, flattened.copy()))
+
+    def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
+        state_flat = self._state.flatten_all()
+        history = self.get_history() if self._history else None
+        return state_flat, history
+
+    def export_config(self) -> PopulationConfig:
+        return self._config
+
+    def __repr__(self) -> str:
+        status = "Finished" if self._finished else "Active"
+        return f"<DiscreteGenerationPopulation(name='{self.name}', tick={self.tick}, status={status})>"

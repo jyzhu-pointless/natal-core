@@ -86,7 +86,7 @@ class GameteHaploidGenomeConversionRule:
         to_haploid_genotype: Union[HaploidGenotype, Callable[[HaploidGenotype], HaploidGenotype]],
         rate: float,
         name: Optional[str] = None,
-        sex_filter: Optional[Literal["male", "female", "both"]] = "both",
+        sex_filter: Optional[Literal["female", "male", "both"]] = "both",
         genotype_filter: _GenotypeFilter = None,
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
@@ -157,9 +157,9 @@ class GameteHaploidGenomeConversionRule:
         """Check if rule applies to a given sex."""
         if self.sex_filter == "both":
             return True
-        if self.sex_filter == "male":
+        if self.sex_filter == "female":
             return sex_idx == 0
-        elif self.sex_filter == "female":
+        elif self.sex_filter == "male":
             return sex_idx == 1
         return True
 
@@ -196,7 +196,7 @@ class GameteAlleleConversionRule:
         to_allele: Union[str, Gene],
         rate: float,
         name: Optional[str] = None,
-        sex_filter: Optional[Literal["male", "female", "both"]] = "both",
+        sex_filter: Optional[Literal["female", "male", "both"]] = "both",
         genotype_filter: _GenotypeFilter = None,
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
@@ -208,7 +208,7 @@ class GameteAlleleConversionRule:
             to_allele: Target allele (string identifier or Gene object).
             rate: Conversion probability, must be in [0, 1].
             name: Optional human-readable name.
-            sex_filter: Apply only to specific sex ("male", "female", or "both").
+            sex_filter: Apply only to specific sex ("female", "male", or "both").
             genotype_filter: Optional filter for applicable genotypes.
                            Accepts callable or genotype pattern string.
             source_glab: Optional gamete label filter. If specified, this rule only
@@ -233,7 +233,7 @@ class GameteAlleleConversionRule:
         self.from_allele = from_allele
         self.to_allele = to_allele
         self.rate = rate
-        self.name = name or f"{self.from_allele_str}→{self.to_allele_str}({rate})"
+        self.name = name or f"{self.from_allele_str}→{self.to_allele_str}({sex_filter})"
         self.sex_filter = sex_filter
         self.genotype_filter = genotype_filter
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
@@ -248,17 +248,17 @@ class GameteAlleleConversionRule:
         
         Args:
             sex_idx: Integer sex index (0 for first sex, 1 for second, etc.).
-            sex_name: Optional sex name for clarity ("male", "female").
+            sex_name: Optional sex name for clarity ("female", "male").
         
         Returns:
             True if rule applies to this sex.
         """
         if self.sex_filter == "both":
             return True
-        # Assume convention: sex_idx=0 is male, sex_idx=1 is female (typical)
-        if self.sex_filter == "male":
+        # Assume convention: sex_idx=0 is female, sex_idx=1 is male 
+        if self.sex_filter == "female":
             return sex_idx == 0
-        elif self.sex_filter == "female":
+        elif self.sex_filter == "male":
             return sex_idx == 1
         return True
     
@@ -425,13 +425,13 @@ class GameteConversionRuleSet:
             
             n_glabs = int(population._config.n_glabs)
             genotype_to_gametes_map = population._config.genotype_to_gametes_map
-            haploid_genotypes = population._get_all_possible_haploid_genotypes()
+            haploid_genotypes = population._registry.index_to_haplo
             
             # Resolve glab names to indices for all rules (once)
             resolved_rules = _resolve_rule_glabs(rules, population)
-            
-            for sex_idx in range(len(population._sexes)):
-                for genotype_idx, genotype in enumerate(population._genotypes):
+
+            for sex_idx in range(population._config.n_sexes):
+                for genotype_idx, genotype in enumerate(population._registry.index_to_genotype):
                     if not any(rule.applies_to_sex(sex_idx) and 
                               rule.applies_to_genotype(genotype) 
                               for rule in rules):
@@ -462,7 +462,7 @@ class GameteConversionRuleSet:
                         # Convert (HaploidGenotype, glab_idx) -> compressed index
                         compressed_freqs: Dict[int, float] = {}
                         for (hg, glab_idx), freq in converted_freqs.items():
-                            hg_idx = population._haploid_genotype_index.get(hg)
+                            hg_idx = population._registry.haplo_to_index.get(hg)
                             if hg_idx is not None and freq > 0:
                                 cidx = compress_hg_glab(hg_idx, glab_idx, n_glabs)
                                 compressed_freqs[cidx] = compressed_freqs.get(cidx, 0.0) + freq
@@ -608,6 +608,7 @@ def _compute_converted_gamete_freqs(
         current_freqs = next_freqs
         
     final_freqs = {k: v for k, v in current_freqs.items() if v > 1e-12}
+
     return final_freqs
 
 

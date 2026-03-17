@@ -383,8 +383,8 @@ class ZygoteConversionRuleSet:
             Tuple[int, int], Dict[int, float]
         ]:
             n_glabs = int(population._config.n_glabs)
-            haploid_genotypes = population._get_all_possible_haploid_genotypes()
-            diploid_genotypes = list(population._genotypes)
+            haploid_genotypes = population._registry.index_to_haplo
+            diploid_genotypes = population._registry.index_to_genotype
 
             # Build genotype index lookup
             genotype_index = {gt: idx for idx, gt in enumerate(diploid_genotypes)}

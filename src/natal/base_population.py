@@ -83,7 +83,7 @@ class BasePopulation(ABC):
         self._species = species
         self._name = name
         self._tick = 0
-        # ✅ DELAYED: Registry will be created via _initialize_registry()
+        # DELAYED: Registry will be created via _initialize_registry()
         self._index_core: Optional[IndexCore] = None
         self._registry: Optional[IndexCore] = None
         
@@ -214,6 +214,11 @@ class BasePopulation(ABC):
         if haplogenotypes:
             for hg in haplogenotypes:
                 self._index_core.register_haplogenotype(hg)
+        
+        # Step 4: Register gamete labels if provided
+        glabs = self._species.gamete_labels or ["default"]
+        for glab in glabs:
+            self._index_core.register_gamete_label(glab)
     
     def _get_haplogenotypes(self) -> Optional[List[HaploidGenotype]]:
         """Return haplogenotypes for registration (optional).
@@ -275,12 +280,49 @@ class BasePopulation(ABC):
     # ========================================================================
     # Modifier 管理
     # ========================================================================
+
+    def _refresh_modifier_maps(self) -> None:
+        if self._config is None or self._registry is None:
+            return
+
+        haploid_genotypes = self._registry.index_to_haplo
+        diploid_genotypes = self._registry.index_to_genotype
+        if not haploid_genotypes or not diploid_genotypes:
+            return
+
+        from natal.population_config import initialize_gamete_map, initialize_zygote_map
+
+        n_glabs = int(self._config.n_glabs)
+        gamete_funcs, zygote_funcs = build_modifier_wrappers(
+            gamete_modifiers=self._gamete_modifiers,
+            zygote_modifiers=self._zygote_modifiers,
+            population=self,
+            index_core=self._index_core,
+            haploid_genotypes=haploid_genotypes,
+            diploid_genotypes=diploid_genotypes,
+            n_glabs=n_glabs,
+        )
+
+        self._config.genotype_to_gametes_map = initialize_gamete_map(
+            haploid_genotypes=haploid_genotypes,
+            diploid_genotypes=diploid_genotypes,
+            n_glabs=n_glabs,
+            gamete_modifiers=gamete_funcs,
+        )
+
+        self._config.gametes_to_zygote_map = initialize_zygote_map(
+            haploid_genotypes=haploid_genotypes,
+            diploid_genotypes=diploid_genotypes,
+            n_glabs=n_glabs,
+            zygote_modifiers=zygote_funcs,
+        )
     
     def add_gamete_modifier(
         self, 
         modifier: GameteModifier, 
         name: Optional[str] = None, 
-        hook_id: Optional[int] = None
+        hook_id: Optional[int] = None,
+        refresh: bool = True,
     ) -> None:
         """Register a gamete-level modifier.
 
@@ -290,12 +332,15 @@ class BasePopulation(ABC):
             hook_id: Optional numeric priority used for ordering.
         """
         self._gamete_modifiers.append((hook_id, name, modifier))
+        if refresh:
+            self._refresh_modifier_maps()
     
     def add_zygote_modifier(
         self, 
         modifier: ZygoteModifier, 
         name: Optional[str] = None, 
-        hook_id: Optional[int] = None
+        hook_id: Optional[int] = None,
+        refresh: bool = True,
     ) -> None:
         """Register a zygote-level modifier.
 
@@ -305,6 +350,8 @@ class BasePopulation(ABC):
             hook_id: Optional numeric priority used for ordering.
         """
         self._zygote_modifiers.append((hook_id, name, modifier))
+        if refresh:
+            self._refresh_modifier_maps()
 
     # 确保 set_zygote_modifier 方法与 ZygoteModifier 定义一致
     def set_zygote_modifier(
@@ -950,7 +997,8 @@ class BasePopulation(ABC):
             # Use the hook's register method with event override
             if hasattr(func, 'register'):
                 func.register(self, event_override=event_name)
-                # The _register_compiled_hook already adds to _hooks
+                # Compiled hooks are stored in _compiled_hooks.
+                # Only selector-mode hooks with py_wrapper are mirrored to _hooks.
                 return
         
         # Traditional registration (no compilation)
@@ -1051,18 +1099,18 @@ class BasePopulation(ABC):
             desc: CompiledHookDescriptor from hook_dsl module.
         
         Note:
-            This method also registers the hook in the traditional _hooks dict
-            for backward compatibility with trigger_event().
+            To avoid maintaining two divergent hook sources, this method only
+            mirrors compiled hooks into traditional ``_hooks`` when a real
+            Python wrapper exists (selector-mode hooks). Pure declarative and
+            njit hooks stay in ``_compiled_hooks`` and are executed by kernels.
         """
         self._compiled_hooks.append(desc)
         
-        # Also register in traditional hooks for trigger_event compatibility
-        # Use the py_wrapper if available, otherwise create one
-        if desc.py_wrapper is not None:
-            hook_func = desc.py_wrapper
-        else:
-            # Fallback: no-op
-            hook_func = lambda p: None
+        # Mirror only real Python wrappers for trigger_event compatibility.
+        # Do not inject no-op placeholders for declarative/njit hooks.
+        if desc.py_wrapper is None:
+            return
+        hook_func = desc.py_wrapper
         
         # Register with traditional system
         event_name = desc.event
@@ -1315,6 +1363,8 @@ class BasePopulation(ABC):
         from natal.hook_dsl import CompiledEventHooks
         
         registry = self._build_hook_registry()
+        if registry is None:
+            registry = self._create_empty_hook_registry()
         return CompiledEventHooks.from_compiled_hooks(
             self._compiled_hooks,
             registry=registry

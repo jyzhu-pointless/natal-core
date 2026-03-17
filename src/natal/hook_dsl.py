@@ -991,7 +991,7 @@ def compile_declarative_hook(
     index_core = pop._index_core
     diploid_genotypes = index_core.index_to_genotype
     n_genotypes = index_core.num_genotypes()
-    n_ages = pop._n_ages
+    n_ages = pop._config.n_ages
     
     # Collect compiled data
     op_types_list = []
@@ -1209,7 +1209,7 @@ def {fn_name}(ind_count, tick):
 _njit_switch = njit_switch
 
 # No-op hook function (used as default when no hooks are registered)
-@_njit_switch(cache=True)
+@_njit_switch(cache=False)
 def _noop_hook(ind_count, tick):
     """Default no-op hook that does nothing and returns CONTINUE."""
     return 0
@@ -1476,7 +1476,7 @@ def hook(
                             event=actual_event,
                             priority=priority,
                             py_wrapper=lambda p, f=func: f(p),
-                            meta={'n_genotypes': pop._index_core.num_genotypes(), 'n_ages': pop._n_ages},
+                            meta={'n_genotypes': pop._index_core.num_genotypes(), 'n_ages': pop._config.n_ages},
                         )
                 except TypeError:
                     # Function requires arguments - treat as plain hook
@@ -1485,7 +1485,7 @@ def hook(
                         event=actual_event,
                         priority=priority,
                         py_wrapper=func,
-                        meta={'n_genotypes': pop._index_core.num_genotypes(), 'n_ages': pop._n_ages},
+                        meta={'n_genotypes': pop._index_core.num_genotypes(), 'n_ages': pop._config.n_ages},
                     )
             
             func._hook_compiled = desc
@@ -1496,14 +1496,6 @@ def hook(
         return func
     
     return decorator
-
-
-# =============================================================================
-# Execution Helper
-# =============================================================================
-
-
-
 
 # =============================================================================
 # Public API

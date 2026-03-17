@@ -1418,7 +1418,8 @@ class Species(GeneticStructure['HaploidGenome']):
     def __init__(
         self, 
         name: str, 
-        chromosomes: Optional[List['Chromosome']] = None
+        chromosomes: Optional[List['Chromosome']] = None,
+        gamete_labels: Optional[list] = None
     ):
         # Initialize structure caches for this Species
         # Format: {structure_type: {name: instance}}
@@ -1434,6 +1435,21 @@ class Species(GeneticStructure['HaploidGenome']):
         if chromosomes:
             for chrom in chromosomes:
                 self.add_chromosome(chrom)
+
+        # Gamete labels for this species
+        if gamete_labels is not None:
+            self._gamete_labels = list(gamete_labels)
+        else:
+            self._gamete_labels = []
+
+    @property
+    def gamete_labels(self) -> list:
+        """Return the list of gamete labels for this species."""
+        return self._gamete_labels
+
+    @gamete_labels.setter
+    def gamete_labels(self, labels: list) -> None:
+        self._gamete_labels = list(labels)
 
     @property
     def entity_type(self):
@@ -1666,7 +1682,8 @@ class Species(GeneticStructure['HaploidGenome']):
     def from_dict(
         cls,
         name: str,
-        structure: Dict[str, Union[List[str], Dict[str, List[str]]]]
+        structure: Dict[str, Union[List[str], Dict[str, List[str]]]],
+        gamete_labels: Optional[list] = None
     ) -> 'Species':
         """
         Create a Species with complete hierarchy from a dictionary specification.
@@ -1706,7 +1723,7 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         from natal.genetic_entities import Gene
         
-        species = cls(name)
+        species = cls(name, gamete_labels=gamete_labels)
         
         for chrom_name, loci_spec in structure.items():
             chrom = species.add_chromosome(chrom_name)
@@ -2520,7 +2537,8 @@ class Species(GeneticStructure['HaploidGenome']):
         
         return ";".join(haploid_parts)
     
-
+    def __repr__(self):
+        chrom_strs = []
         for chrom in self.chromosomes:
             loci_names = [locus.name for locus in chrom.loci]
             chrom_strs.append(f"'{chrom.name}': {loci_names}")

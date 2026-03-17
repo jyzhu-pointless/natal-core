@@ -29,7 +29,7 @@ from natal.helpers import resolve_sex_label
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
 
-__all__ = ["HomingModificationDrive"]
+__all__ = ["HomingDrive"]
 
 # Temporary type alias
 _AlleleSpecifier = Union[Gene, str]
@@ -60,7 +60,6 @@ _SexualSelectionScalingConfig = Union[
 
 RecipeFitnessPatch = Dict[str, Any]
 
-
 def _normalize_sex_key(sex_key: _SexSpecifier) -> int:
     """Normalize sex key to integer index used by PopulationConfig.
 
@@ -69,7 +68,6 @@ def _normalize_sex_key(sex_key: _SexSpecifier) -> int:
     - string aliases: female/f, male/m (case-insensitive)
     """
     return resolve_sex_label(sex_key)
-
 
 def _count_allele_copies(genotype: Genotype, target_gene: Gene) -> int:
     """Count copies of a target allele in a diploid genotype.
@@ -81,6 +79,25 @@ def _count_allele_copies(genotype: Genotype, target_gene: Gene) -> int:
     mat_gene, pat_gene = genotype.get_alleles_at_locus(target_gene.locus)
     return int(mat_gene is target_gene) + int(pat_gene is target_gene)
 
+def _make_fitness_patch_given_allele_scaling(
+    allele_name: str,
+    viability_scaling: Optional[_ViabilityScalingConfig] = None,
+    fecundity_scaling: Optional[_FecundityScalingConfig] = None,
+    sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
+) -> RecipeFitnessPatch:
+    """Helper to create a fitness patch dict for a single allele's scaling effects."""
+    patch: RecipeFitnessPatch = {}
+    
+    if viability_scaling is not None:
+        patch['viability_allele'] = {allele_name: viability_scaling}
+    
+    if fecundity_scaling is not None:
+        patch['fecundity_allele'] = {allele_name: fecundity_scaling}
+    
+    if sexual_selection_scaling is not None:
+        patch['sexual_selection_allele'] = {allele_name: sexual_selection_scaling}
+    
+    return patch
 
 def _apply_viability_allele_scaling(
     population: 'BasePopulation',
@@ -136,7 +153,6 @@ def _apply_viability_allele_scaling(
                     f"{type(sex_config).__name__}"
                 )
 
-
 def _apply_fecundity_allele_scaling(
     population: 'BasePopulation',
     all_genotypes: List[Genotype],
@@ -171,7 +187,6 @@ def _apply_fecundity_allele_scaling(
             current = float(fecundity_arr[sex_idx, genotype_idx])
             population._config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
 
-
 def _apply_sexual_selection_allele_scaling(
     population: 'BasePopulation',
     all_genotypes: List[Genotype],
@@ -205,7 +220,6 @@ def _apply_sexual_selection_allele_scaling(
 
             current = float(sex_sel_arr[f_idx, m_idx])
             population._config.set_sexual_selection_fitness(f_idx, m_idx, current * factor)
-
 
 def _apply_recipe_fitness_patch(population: 'BasePopulation', patch: RecipeFitnessPatch) -> None:
     """Apply a declarative recipe fitness patch to population config tensors.
@@ -347,40 +361,33 @@ def apply_recipe_to_population(population: 'BasePopulation', recipe: 'GeneDriveR
         - GeneDriveRecipe.apply() (legacy, for backwards compatibility)
         - population.apply_recipe() (preferred, population-driven API)
     """
+    recipe.bind_species(population.species)
+
     gamete_mod = recipe.gamete_modifier(population)
     zygote_mod = recipe.zygote_modifier(population)
-    
+
     if gamete_mod is not None:
         population.add_gamete_modifier(
-            gamete_mod, 
-            name=f"{recipe.name}/gamete"
+            gamete_mod,
+            name=f"{recipe.name}/gamete",
+            refresh=False,
         )
     
     if zygote_mod is not None:
         population.add_zygote_modifier(
             zygote_mod,
-            name=f"{recipe.name}/zygote"
+            name=f"{recipe.name}/zygote",
+            refresh=False,
         )
+
+    if gamete_mod is not None or zygote_mod is not None:
+        population._refresh_modifier_maps()
 
     # Preferred path: declarative fitness patch
     patch = recipe.fitness_patch()
     if patch:
         _apply_recipe_fitness_patch(population, patch)
         return
-
-    # Backward-compatible fallback: direct tensor modifier methods
-    if population._config is not None:
-        viab_array = recipe.viability_fitness_modifier(population._config.viability_fitness)
-        if viab_array is not population._config.viability_fitness:
-            population._config.viability_fitness[:] = viab_array
-
-        fec_array = recipe.fecundity_fitness_modifier(population._config.fecundity_fitness)
-        if fec_array is not population._config.fecundity_fitness:
-            population._config.fecundity_fitness[:] = fec_array
-
-        sex_sel_array = recipe.sexual_selection_fitness_modifier(population._config.sexual_selection_fitness)
-        if sex_sel_array is not population._config.sexual_selection_fitness:
-            population._config.sexual_selection_fitness[:] = sex_sel_array
 
 class GeneDriveRecipe(ABC):
     """Abstract base for gene drive and genetic modification recipes.
@@ -401,17 +408,58 @@ class GeneDriveRecipe(ABC):
     def __init__(
         self, 
         name: str = "",
-        species: Species = None
+        species: Optional[Species] = None,
     ):
         """Initialize the recipe.
         
         Args:
             name: Optional human-readable name for the recipe.
-            species: Optional species to which the recipe applies.
+            species: Optional species bound at construction time. If provided,
+                applying this recipe to a population with a different species
+                will raise an error.
         """
         self.name = name or self.__class__.__name__
-        self.species = species
         self.hook_id: Optional[int] = None
+        self._bound_species: Optional[Species] = species
+
+    def bind_species(self, species: Species) -> None:
+        """Bind this recipe instance to a concrete species.
+
+        This enables delayed species injection: users can construct recipes
+        without passing species, and binding happens automatically when the
+        recipe is applied to a population.
+        """
+        if self._bound_species is None:
+            self._bound_species = species
+            return
+
+        if self._bound_species is species:
+            return
+
+        raise ValueError(
+            f"Recipe '{self.name}' is already bound to species "
+            f"'{self._bound_species.name}' and cannot be applied to population species '{species.name}'."
+        )
+
+    def _require_bound_species(self) -> Species:
+        """Return the bound species or raise if recipe has not been injected yet."""
+        if self._bound_species is None:
+            raise RuntimeError(
+                f"Recipe '{self.name}' is not bound to a species. "
+                "Apply it through population.apply_recipe(...) or builder.recipes(...).build()."
+            )
+        return self._bound_species
+
+    def _resolve_bound_gene(self, allele_name: str) -> Gene:
+        """Resolve an allele name into a Gene using the currently bound species."""
+        species = self._require_bound_species()
+        gene = species.gene_index.get(allele_name)
+        if gene is None:
+            raise ValueError(
+                f"Allele '{allele_name}' not found in species '{species.name}' "
+                f"for recipe '{self.name}'."
+            )
+        return gene
     
     @abstractmethod
     def gamete_modifier(self, population: 'BasePopulation') -> Optional[GameteModifier]:
@@ -440,61 +488,25 @@ class GeneDriveRecipe(ABC):
         return None
     
     @abstractmethod
-    def viability_fitness_modifier(
-        self, 
-        array: np.ndarray
-    ) -> np.ndarray:
-        """Modify the viability_fitness array (sex, age, genotype).
+    def fitness_patch(self) -> Optional[RecipeFitnessPatch]:
+        """Return a declarative fitness patch dict to modify population config tensors.
         
-        Args:
-            array: Shape (n_sexes, n_ages, n_genotypes), values in [0, 1].
+        The patch can specify modifications to viability, fecundity, and sexual
+        selection fitness using a structured schema. This allows the framework
+        to apply complex fitness effects without requiring the recipe to directly
+        manipulate config tensors.
         
-        Returns:
-            Modified array or original if no modifications.
+        If a patch is provided, it takes precedence over legacy tensor modifier
+        methods (viability_fitness_modifier, etc.) for fitness effect
         """
-        return array
+        return None
     
-    @abstractmethod
-    def fecundity_fitness_modifier(
-        self, 
-        array: np.ndarray
-    ) -> np.ndarray:
-        """Modify the fecundity_fitness array (sex, genotype).
-        
-        Args:
-            array: Shape (n_sexes, n_genotypes), values in [0, 1].
-        
-        Returns:
-            Modified array or original if no modifications.
-        """
-        return array
-    
-    @abstractmethod
-    def sexual_selection_fitness_modifier(
-        self, 
-        array: np.ndarray
-    ) -> np.ndarray:
-        """Modify the sexual_selection_fitness array (female_genotype, male_genotype).
-        
-        Args:
-            array: Shape (n_genotypes, n_genotypes), values in [0, 1].
-        
-        Returns:
-            Modified array or original if no modifications.
-        """
-        return array
-    
-    def _resolve_allele(self, allele: _AlleleSpecifier) -> Gene:
-        """Helper to resolve allele inputs to Gene instances."""
+    def _resolve_allele_name(self, allele: _AlleleSpecifier) -> str:
+        """Helper to resolve allele inputs to their string names."""
         if isinstance(allele, Gene):
-            return allele
+            return allele.name
         elif isinstance(allele, str):
-            if self.species is None:
-                raise ValueError("Species must be set to parse allele strings.")
-            gene = self.species.gene_index.get(allele)
-            if gene is None:
-                raise ValueError(f"Gene '{allele}' not found in species.")
-            return gene
+            return allele
         else:
             raise TypeError("Allele must be a Gene instance or a string name.")
 
@@ -525,106 +537,113 @@ class GeneDriveRecipe(ABC):
         """
         apply_recipe_to_population(population, self)
 
-    def fitness_patch(self) -> RecipeFitnessPatch:
-        """Return declarative fitness patch for this recipe.
-
-        Default implementation returns an empty patch, which makes
-        ``apply_recipe_to_population`` fall back to legacy tensor modifier
-        methods (``viability_fitness_modifier`` / ``fecundity_fitness_modifier`` /
-        ``sexual_selection_fitness_modifier``).
-        """
-        return {}
-
-
-class HomingModificationDrive(GeneDriveRecipe):
-    """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
-    
-    This drive spreads via homologous recombination in heterozygotes,
-    creating a resistance allele (embryo resistance prevents cleavage).
-    
-    Arguments:
-        drive_genotype: The genotype carrying the drive cassette.
-        resistance_genotype: The resistance allele (created by cleavage).
-        homing_rate: Probability of successful homing (0-1).
-        embryo_resistance: Probability of embryo resistance preventing death.
-        male_bias: Sex bias in homing (male gametes may have different rates).
-        fertility_cost: Fecundity reduction for drive carriers (0-1).
-        viability_cost: Viability reduction for drive homozygotes (0-1).
-    """
+class HomingDrive(GeneDriveRecipe):
+    """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives)."""
     
     def __init__(
         self,
         name: str,
-        species: Species,
         drive_allele: _AlleleSpecifier,
         target_allele: _AlleleSpecifier,
-        resistance_allele: _AlleleSpecifier,
+        resistance_allele: Optional[_AlleleSpecifier] = None,
         functional_resistance_allele: Optional[_AlleleSpecifier] = None,
         cas9_allele: Optional[_AlleleSpecifier] = None,
-        split: bool = False,
         drive_conversion_rate: _SexSpecificRates = 0.5,
-        late_germline_resistance_formation_rate: _SexSpecificRates = 0.5,
-        embryo_resistance_formation_rate: _SexSpecificRates = 0.5,
-        functional_resistance_ratio: _SexSpecificRates = 0.0,
+        late_germline_resistance_formation_rate: _SexSpecificRates = 0.0,
+        embryo_resistance_formation_rate: _SexSpecificRates = 0.0,
+        functional_resistance_ratio: float = 0.0,
         fecundity_scaling: _FecundityScalingConfig = 1.0,
         viability_scaling: _ViabilityScalingConfig = 1.0,
         sexual_selection_scaling: _SexualSelectionScalingConfig = 1.0,
         cas9_deposition_glab: Optional[str] = None,
+        species: Optional[Species] = None,
+        use_paternal_deposition: bool = False,
     ):
-        self.drive_genotype = self._resolve_allele(drive_allele)
-        self.target_genotype = self._resolve_allele(target_allele)
-        self.resistance_allele = self._resolve_allele(resistance_allele)
-        self.functional_resistance_allele = (self._resolve_allele(functional_resistance_allele) 
+        """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
+    
+        This drive spreads via homology-directed repair (HDR) converting wild-type alleles into drive alleles in heterozygotes.
+        It can also generate resistance alleles through non-homologous end joining (NHEJ).
+        
+        Args:
+            name (str): Name of the gene drive.
+            drive_allele (str or Gene): The genotype carrying the drive cassette.
+            target_allele (str or Gene): The wild-type allele targeted by the drive.
+            resistance_allele (str or Gene, optional): The non-functional resistance allele formed by NHEJ.
+            functional_resistance_allele (str or Gene, optional): The functional resistance allele 
+                formed by in-frame NHEJ. If not provided, assume no functional resistance.
+            cas9_allele (str or Gene, optional): The allele carrying Cas9 for cleavage, used
+                when modeling a split drive where Cas9 is separate from the drive locus.
+            drive_conversion_rate (float or dict): Probability of drive conversion caused by Cas9 cleavage
+                and homology-directed repair in heterozygotes. Can be a single float (applies to both sexes), 
+                a dict with sex keys, or a tuple (female_rate, male_rate) for sex-specific rates.
+            late_germline_resistance_formation_rate (float or dict): Probability of resistance formation 
+                *after* drive conversion. Can be a single float (applies to both sexes), a dict with sex keys,
+                or a tuple (female_rate, male_rate) for sex-specific rates.
+        """
+        self._str_drive_allele = self._resolve_allele_name(drive_allele)
+        self._str_target_allele = self._resolve_allele_name(target_allele)
+        self._str_resistance_allele = (self._resolve_allele_name(resistance_allele)
+            if resistance_allele else None)
+        self._str_functional_resistance_allele = (self._resolve_allele_name(functional_resistance_allele) 
             if functional_resistance_allele else None)
-        self.cas9_allele = self._resolve_allele(cas9_allele) if cas9_allele else None
-        self.cas9_deposition_glab = cas9_deposition_glab
-
-        if isinstance(split, bool):
-            self.split = split
-        else:
-            raise TypeError("split must be a boolean value.")
+        self._str_cas9_allele = self._resolve_allele_name(cas9_allele) if cas9_allele else None
         
         self.drive_conversion_rate = self._resolve_rates(drive_conversion_rate)
         self.late_germline_resistance_formation_rate = self._resolve_rates(late_germline_resistance_formation_rate)
         self.embryo_resistance_formation_rate = self._resolve_rates(embryo_resistance_formation_rate)
-        self.functional_resistance_ratio = self._resolve_rates(functional_resistance_ratio)
+        self.functional_resistance_ratio = float(functional_resistance_ratio)
 
         # Store declarative fitness scaling configs.
-        self.fecundity_scaling = fecundity_scaling
-        self.viability_scaling = viability_scaling
-        self.sexual_selection_scaling = sexual_selection_scaling
+        self.fecundity_scaling = float(fecundity_scaling)
+        self.viability_scaling = float(viability_scaling)
+        self.sexual_selection_scaling = float(sexual_selection_scaling)
 
-        # Backward-compatible aliases used by legacy placeholder methods.
-        self.homing_rate = float(self.drive_conversion_rate[0])
-        self.resistance_genotype = self.resistance_allele
-        self.viability_cost = 0.0
-        self.fertility_cost = 0.0
-
+        self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
+        self.use_paternal_deposition = bool(use_paternal_deposition)
         
-        super().__init__(name, species)
+        super().__init__(name=name, species=species)
 
     def fitness_patch(self) -> RecipeFitnessPatch:
-        """Return declarative fitness patch for homing drive scaling configs.
-
-        Notes:
-            - Allele-level fitness patch avoids recipe-side genotype enumeration.
-            - Expansion to concrete genotypes is handled centrally during patch
-              application.
-        """
-        patch: RecipeFitnessPatch = {}
-        drive_allele_name = self.drive_genotype.name
-
-        if self.viability_scaling is not None:
-            patch['viability_allele'] = {drive_allele_name: self.viability_scaling}
-
-        if self.fecundity_scaling is not None:
-            patch['fecundity_allele'] = {drive_allele_name: self.fecundity_scaling}
-
-        if self.sexual_selection_scaling is not None:
-            patch['sexual_selection_allele'] = {drive_allele_name: self.sexual_selection_scaling}
-
-        return patch        
+        """Return declarative fitness patch for homing drive scaling configs."""
+        patch = _make_fitness_patch_given_allele_scaling(
+            self._str_drive_allele,
+            self.viability_scaling,
+            self.fecundity_scaling,
+            self.sexual_selection_scaling,
+        )
+        return patch
     
+    def _instantiate_allele(self, allele_name: str, population: 'BasePopulation') -> Gene:
+        """Helper to get Gene object for an allele name from the population's species."""
+        gene = population.species.gene_index.get(allele_name)
+        if gene is None:
+            raise ValueError(f"Allele '{allele_name}' not found in species '{population.species.name}'.")
+        return gene
+
+    @property
+    def drive_allele(self) -> Gene:
+        return self._resolve_bound_gene(self._str_drive_allele)
+
+    @property
+    def target_allele(self) -> Gene:
+        return self._resolve_bound_gene(self._str_target_allele)
+
+    @property
+    def resistance_genotype(self) -> Gene:
+        return self._resolve_bound_gene(self._str_resistance_allele)
+
+    @property
+    def functional_resistance_allele(self) -> Optional[Gene]:
+        if self._str_functional_resistance_allele is None:
+            return None
+        return self._resolve_bound_gene(self._str_functional_resistance_allele)
+
+    @property
+    def cas9_allele(self) -> Optional[Gene]:
+        if self._str_cas9_allele is None:
+            return None
+        return self._resolve_bound_gene(self._str_cas9_allele)
+
     def gamete_modifier(self, population: 'BasePopulation') -> Optional[GameteModifier]:
         """Implement homing in heterozygous parents, germline resistance, and Cas9 deposition.
         
@@ -632,8 +651,8 @@ class HomingModificationDrive(GeneDriveRecipe):
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
             from natal.recipes import _count_allele_copies
-            has_drive = _count_allele_copies(gt, self.drive_genotype) > 0
-            if self.split and self.cas9_allele:
+            has_drive = _count_allele_copies(gt, self.drive_allele) > 0
+            if self.cas9_allele:
                 has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0
                 return has_drive and has_cas9
             return has_drive
@@ -642,35 +661,34 @@ class HomingModificationDrive(GeneDriveRecipe):
         # This means the target pool shrinks after every rule. 
         # So Rule 2 (Resistance) only acts on the targets that FAILED Rule 1 (Homing).
         rule_set = GameteConversionRuleSet(f"{self.name}_Homing")
-        for sex_idx, sex_name in [(0, "male"), (1, "female")]:
-            homing_rate = self.drive_conversion_rate[sex_idx]
-            res_rate = self.late_germline_resistance_formation_rate[sex_idx]
-            func_res_ratio = self.functional_resistance_ratio[sex_idx]
+        for sex in (Sex.FEMALE, Sex.MALE):
+            homing_rate = self.drive_conversion_rate[sex]
+            res_rate = self.late_germline_resistance_formation_rate[sex]
 
             # 1. Homing (Target -> Drive)
             # Example: If homing_rate is 0.7, 70% of targets become Drive. 30% pass to the next rule.
             if homing_rate > 0:
                 rule_set.add_allele_convert(
-                    from_allele=self.target_genotype,
-                    to_allele=self.drive_genotype,
+                    from_allele=self.target_allele,
+                    to_allele=self.drive_allele,
                     rate=homing_rate,
-                    sex_filter=sex_name, # type: ignore
+                    sex_filter=sex,
                     genotype_filter=drive_carrier_filter,
                 )
-                
+            
             # 2. Germline Resistance (Target -> Resistance)
             # This operates ON THE REMAINDER of the target alleles (e.g. the 30% that survived Homing).
             if res_rate > 0:
-                if self.functional_resistance_allele and func_res_ratio > 0:
+                if self.functional_resistance_allele and self.functional_resistance_ratio > 0:
                     # 2a. Functional resistance
                     # Applying absolute `res_rate * func_res_ratio` directly works because GameteAlleleConversionRule
                     # calculates rates against the *current* target pool. So if 30% targets are left, and this 
                     # rate is 0.1, it converts 10% of that 30% (overall 3% of origin).
                     rule_set.add_allele_convert(
-                        from_allele=self.target_genotype,
+                        from_allele=self.target_allele,
                         to_allele=self.functional_resistance_allele,
-                        rate=res_rate * func_res_ratio,
-                        sex_filter=sex_name, # type: ignore
+                        rate=res_rate * self.functional_resistance_ratio,
+                        sex_filter=sex,
                         genotype_filter=drive_carrier_filter,
                     )
                     
@@ -678,37 +696,39 @@ class HomingModificationDrive(GeneDriveRecipe):
                     # The functional rule above removed `res_rate * func_res_ratio` from the available targets.
                     # To hit the correct math for the *remaining* non-functional portion, we divide the 
                     # non-functional rate by whatever remains of the target pool after the functional edits.
-                    target_remaining = 1.0 - (res_rate * func_res_ratio)
-                    adjusted_nf_rate = (res_rate * (1.0 - func_res_ratio)) / target_remaining if target_remaining > 0 else 0.0
+                    target_remaining = 1.0 - (res_rate * self.functional_resistance_ratio)
+                    adjusted_nf_rate = ((res_rate * (1.0 - self.functional_resistance_ratio)) 
+                                        / target_remaining) if target_remaining > 0 else 0.0
                     if adjusted_nf_rate > 0:
                         rule_set.add_allele_convert(
-                            from_allele=self.target_genotype,
+                            from_allele=self.target_allele,
                             to_allele=self.resistance_genotype,
                             rate=adjusted_nf_rate,
-                            sex_filter=sex_name, # type: ignore
+                            sex_filter=sex,
                             genotype_filter=drive_carrier_filter,
                         )
                 else:
                     # Generic resistance (no functional/non-functional split)
                     rule_set.add_allele_convert(
-                        from_allele=self.target_genotype,
+                        from_allele=self.target_allele,
                         to_allele=self.resistance_genotype,
                         rate=res_rate,
-                        sex_filter=sex_name, # type: ignore
+                        sex_filter=sex,
                         genotype_filter=drive_carrier_filter,
                     )
 
-        # 3. Gamete labeling for maternal Cas9 deposition
-        # Instead of editing alleles, this tags the entire output gamete from drive-carrying females 
-        # with `cas9_deposition_glab`. The zygote modifier will read this tag to apply embryo resistance.
-            rule_set.add_hg_convert(
-                hg_match=lambda hg: True,
-                to_haploid_genotype=lambda hg: hg,
-                rate=1.0,
-                sex_filter="female",
-                genotype_filter=drive_carrier_filter,
-                target_glab=self.cas9_deposition_glab
-            )
+                # 3. Gamete labeling for maternal Cas9 deposition
+                # Instead of editing alleles, this tags the entire output gamete from drive-carrying females 
+                # with `cas9_deposition_glab`. The zygote modifier will read this tag to apply embryo resistance.
+                if sex == Sex.FEMALE or self.use_paternal_deposition:
+                    rule_set.add_hg_convert(
+                        hg_match=lambda hg: True,
+                        to_haploid_genotype=lambda hg: hg,
+                        rate=1.0,
+                        sex_filter=sex,
+                        genotype_filter=drive_carrier_filter,
+                        target_glab=self.cas9_deposition_glab
+                    )
         
         return rule_set.to_gamete_modifier(population) if rule_set.rules else None
     
@@ -720,64 +740,55 @@ class HomingModificationDrive(GeneDriveRecipe):
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
             from natal.recipes import _count_allele_copies
-            has_drive = _count_allele_copies(gt, self.drive_genotype) > 0
+            has_drive = _count_allele_copies(gt, self.drive_allele) > 0
             if self.split and self.cas9_allele:
                 has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0
                 return has_drive and has_cas9
             return has_drive
             
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoResistance")
-        
-        # Base embryo resistance on the zygote having the drive allele,
-        # converting target alleles to resistance alleles.
-        rate = self.embryo_resistance_formation_rate[1] # Use female/maternal rate as proxy for maternal effect
-        if rate > 0:
-            if self.cas9_deposition_glab:
-                # Target maternal deposition directly using Gamete label
-                # This ensures embryo resistance ONLY happens if the egg was labeled `cas9_deposition_glab`
-                # during gametogenesis (meaning the mother actually had the Cas9/Drive allele).
-                
-                func_res_ratio = self.functional_resistance_ratio[1]
-                if self.functional_resistance_allele and func_res_ratio > 0:
-                    # 1. Functional resistance
-                    rule_set.add_allele_convert(
-                        from_allele=self.target_genotype,
-                        to_allele=self.functional_resistance_allele,
-                        rate=rate * func_res_ratio,
-                        side="both", # Embyro resistance can act on maternal OR paternal wild-type targets
-                        maternal_glab=self.cas9_deposition_glab
-                    )
-                    # 2. Non-functional resistance on remaining targets
-                    # Just like gametogenesis, we must adjust the rate to account for targets already removed 
-                    # by the functional resistance rule.
-                    target_remaining = 1.0 - (rate * func_res_ratio)
-                    nf_rate = (rate * (1.0 - func_res_ratio)) / target_remaining if target_remaining > 0 else 0.0
-                    if nf_rate > 0:
+
+        for sex in (Sex.FEMALE, Sex.MALE):
+            # Base embryo resistance on the zygote having the drive allele,
+            # converting target alleles to resistance alleles.
+            rate = self.embryo_resistance_formation_rate[sex]
+            if rate > 0:
+                if self.cas9_deposition_glab:
+                    # Target maternal deposition directly using Gamete label
+                    # This ensures embryo resistance ONLY happens if the egg was labeled `cas9_deposition_glab`
+                    # during gametogenesis (meaning the mother actually had the Cas9/Drive allele).
+                    
+                    func_res_ratio = self.functional_resistance_ratio
+                    if self.functional_resistance_allele and func_res_ratio > 0:
+                        # 1. Functional resistance
                         rule_set.add_allele_convert(
-                            from_allele=self.target_genotype,
-                            to_allele=self.resistance_genotype,
-                            rate=nf_rate,
-                            side="both",
-                            maternal_glab=self.cas9_deposition_glab
+                            from_allele=self.target_allele,
+                            to_allele=self.functional_resistance_allele,
+                            rate=rate * func_res_ratio,
+                            maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
+                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE else None,
                         )
-                else:
-                    # Generic resistance (no functional split) triggered by maternal glab
-                    rule_set.add_allele_convert(
-                        from_allele=self.target_genotype,
-                        to_allele=self.resistance_genotype,
-                        rate=rate,
-                        side="both",
-                        maternal_glab=self.cas9_deposition_glab
-                    )
-            else:
-                # Fallback: if no glab tracking is configured, just use the parent genotype filter 
-                # (assumes zygote must inherit the drive to experience cleavage).
-                rule_set.add_allele_convert(
-                    from_allele=self.target_genotype,
-                    to_allele=self.resistance_genotype,
-                    rate=rate,
-                    side="both",
-                    genotype_filter=drive_carrier_filter
-                )
+                        # 2. Non-functional resistance on remaining targets
+                        # Just like gametogenesis, we must adjust the rate to account for targets already removed 
+                        # by the functional resistance rule.
+                        target_remaining = 1.0 - (rate * func_res_ratio)
+                        nf_rate = (rate * (1.0 - func_res_ratio)) / target_remaining if target_remaining > 0 else 0.0
+                        if nf_rate > 0:
+                            rule_set.add_allele_convert(
+                                from_allele=self.target_allele,
+                                to_allele=self.resistance_genotype,
+                                rate=nf_rate,
+                                maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
+                                paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE else None,
+                            )
+                    else:
+                        # Generic resistance (no functional split) triggered by maternal glab
+                        rule_set.add_allele_convert(
+                            from_allele=self.target_allele,
+                            to_allele=self.resistance_genotype,
+                            rate=rate,
+                            maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
+                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE else None,
+                        )
             
         return rule_set.to_zygote_modifier(population) if rule_set.rules else None

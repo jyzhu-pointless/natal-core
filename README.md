@@ -18,3 +18,13 @@
 ---
 
 **⭐ [15 分钟快速上手](docs/01_quickstart.md)**
+
+## Development Notes
+
+如果你修改了包级 public API，比如新增、删除或重命名某个模块里的 `__all__` 导出，运行下面的命令即可重新生成用于编辑器补全和语法高亮的 stub 文件：
+
+```bash
+python scripts/generate_init_pyi.py
+```
+
+这会更新 [src/natal/__init__.pyi](src/natal/__init__.pyi)，而运行时的懒加载逻辑仍然由 [src/natal/__init__.py](src/natal/__init__.py) 负责。

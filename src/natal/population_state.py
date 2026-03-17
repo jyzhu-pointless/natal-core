@@ -50,6 +50,11 @@ _popstate_spec = [
     ('sperm_storage', nb_types.float64[:, :, :]),     # (age, genotype (female), genotype (male))
 ]
 
+_discrete_popstate_spec = [
+    ('n_tick', nb_types.int32),
+    ('individual_count', nb_types.float64[:, :, :]),  # (sex, age, genotype)
+]
+
 
 @njit_switch
 def _validate_or_default_array(arr: Optional[NDArray[np.float64]], expected_shape: tuple, name: str):
@@ -141,6 +146,44 @@ class PopulationState:
         ind_flat = self.individual_count.flatten()
         sperm_flat = self.sperm_storage.flatten()
         return np.concatenate((tick_arr, ind_flat, sperm_flat))
+
+
+@jitclass_switch(_discrete_popstate_spec)
+class DiscretePopulationState:
+    """State container dedicated to discrete-generation simulations.
+
+    Stores only tick and individual counts. No sperm storage tensor is allocated.
+    """
+
+    def __init__(
+        self,
+        n_sexes: int,
+        n_ages: int,
+        n_genotypes: int,
+        n_tick: int = 0,
+        individual_count: Optional[NDArray[np.float64]] = None,
+    ):
+        assert n_sexes > 0, "n_sexes must be positive"
+        assert n_ages > 0, "n_ages must be positive"
+        assert n_genotypes > 0, "n_genotypes must be positive"
+        assert n_tick >= 0, "n_tick must be non-negative"
+
+        self.n_tick = np.int32(n_tick)
+
+        if individual_count is None:
+            self.individual_count = np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64)
+        else:
+            expected_shape = (n_sexes, n_ages, n_genotypes)
+            assert individual_count.shape == expected_shape, (
+                f"Invalid shape for individual_count: expected {expected_shape}, got {individual_count.shape}"
+            )
+            self.individual_count = individual_count.astype(np.float64)
+
+    def flatten_all(self) -> NDArray[np.float64]:
+        """Flatten n_tick and individual_count into one 1D array."""
+        tick_arr = np.array([float(self.n_tick)], dtype=np.float64)
+        ind_flat = self.individual_count.flatten()
+        return np.concatenate((tick_arr, ind_flat))
 
 
 # ============================================================================

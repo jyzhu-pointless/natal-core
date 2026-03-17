@@ -115,28 +115,24 @@ class AgeStructuredPopulation(BasePopulation):
         gamete_labels: Optional[List[str]] = None,
         use_fixed_egg_count: bool = False,
     ) -> 'AgeStructuredPopulationBuilder':
-        """Create and initialize a builder with setup parameters.
-        
-        This is the recommended entry point for constructing populations.
-        Provides a clean API that avoids exposing the Builder class directly.
-        
+        """Create and preconfigure an age-structured population builder.
+
+        This is a convenience forwarding entry point. Parameter semantics and
+        defaults are the same as ``AgeStructuredPopulationBuilder.setup``.
+
         Args:
-            species: Genetic architecture for the population (required).
-            name: Human-readable population name.
-            stochastic: Whether to use stochastic sampling.
-            use_dirichlet_sampling: If True, use Dirichlet; else Binomial/Multinomial.
-            gamete_labels: Optional explicit gamete label strings.
-            use_fixed_egg_count: If True, egg count is fixed; if False, Poisson distributed.
-        
+            species: Species definition used to initialize the builder.
+            name: Population name passed through to ``builder.setup``.
+            stochastic: Passed through to ``builder.setup``.
+            use_dirichlet_sampling: Passed through to ``builder.setup``.
+            gamete_labels: Passed through to ``builder.setup``.
+            use_fixed_egg_count: Passed through to ``builder.setup``.
+
         Returns:
-            AgeStructuredPopulationBuilder: A builder with setup applied, ready for chaining.
-        
+            A configured ``AgeStructuredPopulationBuilder`` for fluent chaining.
+
         Example:
-            >>> pop = (AgeStructuredPopulation.setup(species, name="Pop1", stochastic=True)
-            ...     .age_structure(n_ages=10, new_adult_age=2)
-            ...     .survival(female_rates=[...], male_rates=[...])
-            ...     .initial_state(distribution={...})
-            ...     .build())
+            ``AgeStructuredPopulation.setup(species).age_structure(...).initial_state(...).build()``
         """
         from natal.population_builder import AgeStructuredPopulationBuilder
         builder = AgeStructuredPopulationBuilder(species)
@@ -853,14 +849,11 @@ class AgeStructuredPopulation(BasePopulation):
         
         # 调用 sk.run() 执行多步演化
         # sk.run 接受 PopulationState，返回 (final_state_tuple, history, was_stopped)
-        final_state_tuple, history_new, was_stopped = sk.run(
+        final_state_tuple, history_new, was_stopped = sk.run_with_compiled_event_hooks(
             state=self._state,
             config=config,
+            hooks=hooks,
             n_ticks=n_steps,
-            reproduction_hook=hooks.reproduction,
-            early_hook=hooks.early,
-            survival_hook=hooks.survival,
-            late_hook=hooks.late,
             record_history=(record_every > 0)
         )
         

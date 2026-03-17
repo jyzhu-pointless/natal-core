@@ -374,6 +374,12 @@ class PopulationConfig:
         self.expected_competition_strength = res_strength
         self.expected_survival_rate = res_survival
 
+        # Store generation time as a scalar field required by jitclass spec.
+        if generation_time is not None:
+            self.generation_time = float(generation_time)
+        else:
+            self.generation_time = float(self.compute_generation_time())
+
     def set_viability_fitness(self, sex: int, genotype_idx: int, value: float, age: int = -1) -> None:
         """Set viability fitness for a specific sex and genotype.
         
@@ -453,7 +459,7 @@ class PopulationConfig:
         """
         return self.initial_sperm_storage * self.population_scale
 
-    def generation_time(self) -> float:
+    def compute_generation_time(self) -> float:
         """Calculate the generation time using the formula:
         T = sum(x * l[x] * m[x]) / sum(l[x] * m[x])
         
@@ -657,10 +663,9 @@ def initialize_gamete_map(
             for gamete, freq in gametes.items():
                 if gamete in haploid_genotypes:
                     idx_hg = haploid_genotypes.index(gamete)
-                    # map frequency across all glab variants by default
-                    for glab in range(n_glabs):
-                        compressed_idx = compress_hg_glab(idx_hg, glab, n_glabs)
-                        genotype_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = freq
+                    # by default, only map frequency for the default glab (0)
+                    compressed_idx = compress_hg_glab(idx_hg, 0, n_glabs)
+                    genotype_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = freq
 
     # Apply optional modifier callables
     if gamete_modifiers:
