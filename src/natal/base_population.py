@@ -953,9 +953,13 @@ class BasePopulation(ABC):
     ) -> None:
         """
         注册事件 Hook，支持自动编译。
-        
-        如果 func 带有 @hook 装饰器的元数据（_hook_meta），会自动编译为
-        Numba 加速版本。普通函数也可以直接注册（向后兼容）。
+
+        当 `compile=True` 且函数带有 `@hook` 元数据时，会走 DSL 编译管线：
+        - 声明式 hook -> CSR 计划，进入 HookProgram（kernel 可执行）
+        - selector hook -> py_wrapper 或 njit_fn（取决于模式）
+        - numba hook -> njit_fn
+
+        普通 Python 函数仍可直接注册到传统 `_hooks`（兼容路径）。
         
         Args:
             event_name: 事件名称（必须在 ALLOWED_EVENTS 中）
@@ -1019,7 +1023,7 @@ class BasePopulation(ABC):
     def trigger_event(self, event_name: str) -> int:
         """
         触发事件，执行所有已注册的 hooks。
-        
+
         执行顺序：
         1. CSR操作（Numba快速路径）
         2. njit_fn hooks（用户自定义Numba函数）
@@ -1030,10 +1034,12 @@ class BasePopulation(ABC):
         
         Returns:
             int: RESULT_CONTINUE (0) 继续运行，RESULT_STOP (1) 请求停止
-        
+
         Note:
-            - HookExecutor 协调三层执行
-            - 如果没有 HookExecutor，降级到传统 _hooks 系统（兼容性）
+            - 优先走 HookExecutor（三层统一协调）
+            - 若执行器未构建，降级到传统 `_hooks`（仅 Python 回调）
+            - 在加速 run() 中，核心事件主要由 kernel 执行；trigger_event
+              主要用于显式事件触发（如 finish）与兼容路径
         
         Example:
             >>> result = pop.trigger_event('first')  # 执行所有 'first' hooks
@@ -1102,7 +1108,8 @@ class BasePopulation(ABC):
             To avoid maintaining two divergent hook sources, this method only
             mirrors compiled hooks into traditional ``_hooks`` when a real
             Python wrapper exists (selector-mode hooks). Pure declarative and
-            njit hooks stay in ``_compiled_hooks`` and are executed by kernels.
+            njit hooks stay in ``_compiled_hooks`` and are executed by kernels
+            (or by HookExecutor when trigger_event is used).
         """
         self._compiled_hooks.append(desc)
         
@@ -1173,16 +1180,16 @@ class BasePopulation(ABC):
         self._register_compiled_hook(desc)
         return desc
     
-    def _build_hook_registry(self):
-        """Build HookRegistry from compiled hooks.
+    def _build_hook_program(self):
+        """Build HookProgram from compiled hooks.
         
         This packs all compiled hooks into a Numba-compatible jitclass
         for efficient execution during simulation.
         
         Returns:
-            HookRegistry: Compiled hooks registry, or None if Numba unavailable
+            HookProgram: Compiled hook program data, or None if no hooks
         """
-        from natal.hook_dsl import HookRegistry, EVENT_NAMES
+        from natal.hook_dsl import HookProgram, EVENT_NAMES
         
         events = EVENT_NAMES
         n_events = len(events)
@@ -1206,6 +1213,7 @@ class BasePopulation(ABC):
         all_age_data = []
         all_sex_masks = []
         all_params = []
+        all_cond_offsets = [0]
         all_cond_types = []
         all_cond_params = []
         
@@ -1246,17 +1254,22 @@ class BasePopulation(ABC):
                 
                 # Handle params, conditions
                 all_params.extend(plan.params.tolist())
+                cond_offset_base = len(all_cond_types)
+                for i in range(plan.n_ops):
+                    all_cond_offsets.append(
+                        cond_offset_base + plan.condition_offsets[i + 1] - plan.condition_offsets[0]
+                    )
                 all_cond_types.extend(plan.condition_types.tolist())
                 all_cond_params.extend(plan.condition_params.tolist())
                 
                 op_offsets.append(len(all_op_types))
         
-        # 3. Create HookRegistry
+        # 3. Create HookProgram
         if n_hooks == 0:
-            # No hooks, return empty registry
+            # No hooks, return empty program
             return None
         
-        return HookRegistry(
+        return HookProgram(
             n_events=np.int32(n_events),
             n_hooks=np.int32(n_hooks),
             hook_offsets=np.array(hook_offsets, dtype=np.int32),
@@ -1269,15 +1282,16 @@ class BasePopulation(ABC):
             age_data=np.array(all_age_data, dtype=np.int32),
             sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
             params_data=np.array(all_params, dtype=np.float64),
+            condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
             condition_types_data=np.array(all_cond_types, dtype=np.int32),
             condition_params_data=np.array(all_cond_params, dtype=np.int32),
         )
     
     def _build_hook_executor(self):
-        """Build HookExecutor from compiled hooks and HookRegistry.
+        """Build HookExecutor from compiled hooks and HookProgram.
         
         HookExecutor is a Python-layer coordinator that manages:
-        1. CSR operations via HookRegistry.execute_csr_event()
+        1. CSR operations via execute_csr_event_program()
         2. njit_fn hooks (user Numba functions)
         3. py_wrapper hooks (Python wrappers for selector mode)
         
@@ -1286,36 +1300,34 @@ class BasePopulation(ABC):
         """
         from natal.hook_dsl import HookExecutor
         
-        # Get or build HookRegistry for CSR operations
-        registry = self._build_hook_registry()
-        if registry is None:
-            registry_available = False
+        # Get or build HookProgram for CSR operations
+        program = self._build_hook_program()
+        if program is None:
+            program_available = False
         else:
-            registry_available = True
+            program_available = True
         
         # Get all compiled hooks
         compiled_hooks = self._compiled_hooks
         if not compiled_hooks:
             return None
         
-        # If no registry (no CSR operations), create a dummy one
+        # If no program (no CSR operations), create an empty one
         # so HookExecutor can still manage njit_fn and py_wrapper hooks
-        if not registry_available:
-            import numpy as np
-            registry = self._create_empty_hook_registry()
+        if not program_available:
+            program = self._create_empty_hook_program()
         
         # Create executor
-        executor = HookExecutor.from_compiled_hooks(registry, compiled_hooks)
+        executor = HookExecutor.from_compiled_hooks(program, compiled_hooks)
         return executor
     
-    def _create_empty_hook_registry(self):
-        """Create an empty HookRegistry for non-CSR operations.
+    def _create_empty_hook_program(self):
+        """Create an empty HookProgram for non-CSR operations.
         
         Used when there are no declarative Op.* operations,
         but there are njit_fn or py_wrapper hooks.
         """
-        from natal.hook_dsl import HookRegistry, NUM_EVENTS
-        import numpy as np
+        from natal.hook_dsl import HookProgram, NUM_EVENTS
         
         n_events = NUM_EVENTS
         
@@ -1323,7 +1335,7 @@ class BasePopulation(ABC):
         hook_offsets = np.zeros(n_events + 1, dtype=np.int32)
         op_offsets = np.array([0], dtype=np.int32)
         
-        return HookRegistry(
+        return HookProgram(
             n_events=np.int32(n_events),
             n_hooks=np.int32(0),
             hook_offsets=hook_offsets,
@@ -1336,6 +1348,7 @@ class BasePopulation(ABC):
             age_data=np.array([], dtype=np.int32),
             sex_masks_data=np.array([], dtype=np.bool_),
             params_data=np.array([], dtype=np.float64),
+            condition_offsets_data=np.array([0], dtype=np.int32),
             condition_types_data=np.array([], dtype=np.int32),
             condition_params_data=np.array([], dtype=np.int32),
         )
@@ -1362,9 +1375,9 @@ class BasePopulation(ABC):
         """
         from natal.hook_dsl import CompiledEventHooks
         
-        registry = self._build_hook_registry()
+        registry = self._build_hook_program()
         if registry is None:
-            registry = self._create_empty_hook_registry()
+            registry = self._create_empty_hook_program()
         return CompiledEventHooks.from_compiled_hooks(
             self._compiled_hooks,
             registry=registry

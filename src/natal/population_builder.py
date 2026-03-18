@@ -92,7 +92,7 @@ class PopulationConfigBuilder:
         Raises:
             ValueError: If configuration is invalid.
         """
-        print("⏳ Building Population...")
+        print("⏳ Building population...")
 
         # ===== Validation =====
         if n_ages <= 1:
@@ -230,8 +230,10 @@ class PopulationConfigBuilder:
         else:
             resolved_carrying_capacity = 1000.0
         
+        print("🔧 Initializing population configuration...")
+
         # ===== Create and return PopulationConfig =====
-        return PopulationConfig(
+        cfg = PopulationConfig(
             n_genotypes=n_genotypes,
             n_haploid_genotypes=n_haplogenotypes,
             n_sexes=2,
@@ -261,6 +263,10 @@ class PopulationConfigBuilder:
             gametes_to_zygote_map=zygote_map,
             generation_time=generation_time
         )
+
+        print("✅ Population configuration initialized")
+
+        return cfg
     
     @staticmethod
     def _get_all_haploid_genotypes(species: Species) -> List[HaploidGenome]:

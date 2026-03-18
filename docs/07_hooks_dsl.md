@@ -1,552 +1,246 @@
-# Hook DSL 系统
+# Hook DSL 系统（现行架构）
 
-本章讲解 NATAL 的高阶钩子系统（Hook DSL），允许在模拟的特定阶段注入自定义逻辑。
+本章基于当前实现，详细说明 Hook 的定义方式、编译结果、执行路径和边界条件。
 
-## 核心概念
+## 一图看懂
 
-Hook 是在模拟的 **特定事件** 触发时执行的回调函数。NATAL 支持四个关键事件：
+```text
+用户写 Hook (@hook)
+  -> 编译为 CompiledHookDescriptor
+  -> 声明式 Op.* 打包为 HookProgram (CSR 数组)
+  -> 运行时按事件执行:
+       a. kernel 路径: HookProgram + 合并后的 njit hook
+       b. Python 路径: HookExecutor (CSR -> njit_fn -> py_wrapper)
+```
 
-| 事件 | 触发时机 | 用途 |
-|------|---------|------|
-| `first` | 每个 tick 开始（在繁殖前） | 初始化、释放个体 |
-| `reproduction` | 繁殖完成后 | 修改新生儿、检查性别比 |
-| `early` | 生存前的早期阶段 | 未定义的中间操作 |
-| `survival` | 生存完成后 | 监控死亡、应用额外筛选 |
-| `late` | tick 末尾（衰老后） | 监控、记录数据、停止条件 |
+关键词：
 
-## Hook 的三种写法
+- HookProgram：当前唯一的声明式 Hook 结构化数据载体
+- CompiledEventHooks：kernel 使用的单一 hooks bundle
+- HookExecutor：Python 侧事件触发协调器
 
-### 模式 1️⃣：声明式 Hook（推荐）
+## 事件模型
 
-使用 `@hook` 装饰器和 `Op.*` 操作，最简洁明了。
+支持 6 个事件名：
 
-#### 基本语法
+| 事件 | 说明 |
+|------|------|
+| first | 每个 tick 开始（繁殖前） |
+| reproduction | 繁殖计算后 |
+| early | 繁殖后、生存前 |
+| survival | 生存后 |
+| late | 衰老后，tick 末尾 |
+| finish | 模拟结束时触发（非每 tick） |
+
+## 三种 Hook 写法
+
+### 1) 声明式（推荐）
 
 ```python
 from natal.hook_dsl import hook, Op
 
-@hook(event='late')
-def monitor_population():
-    """在每个 tick 末尾检查种群"""
+@hook(event='first', priority=10)
+def release():
     return [
-        # 返回操作列表
-        Op.scale(genotypes='AA', ages=[0, 1], factor=0.9),
-        Op.add(genotypes='*', ages=0, delta=100, when='tick % 10 == 0'),
+        Op.add(genotypes='Drive|WT', ages=[2, 3, 4], delta=200, when='tick % 7 == 0'),
+        Op.scale(genotypes='WT|WT', ages='*', factor=0.98),
     ]
 
-# 注册到种群
-monitor_population.register(pop)
+release.register(pop)
 ```
 
-#### 支持的操作 Op.*
+声明式 hook 会被编译为 CSR 数组并写入 HookProgram。
 
-```python
-# 修改个体数量
-Op.add(genotypes='...', ages='...', delta=X, when='...')       # 增加
-Op.subtract(genotypes='...', ages='...', delta=X, when='...')  # 减少
-Op.scale(genotypes='...', ages='...', factor=X, when='...')    # 乘以因子
-Op.set(genotypes='...', ages='...', value=X, when='...')       # 设置为
-
-# 采样操作
-Op.sample(genotypes='...', ages='...', size=X, when='...')     # 采样保留
-
-# 停止条件（返回 STOP 信号）
-Op.stop_if_zero(genotypes='...', ages='...')                   # 如果为0则停止
-Op.stop_if_below(genotypes='...', ages='...', threshold=X)     # 如果低于阈值
-Op.stop_if_above(genotypes='...', ages='...', threshold=X)     # 如果高于阈值
-Op.stop_if_extinction()                                         # 如果种群灭绝
-```
-
-#### 操作参数详解
-
-##### 基因型选择器
-
-```python
-Op.add(genotypes='A1|A1', ...)         # 精确匹配单个基因型
-Op.add(genotypes=['A1|A1', 'A1|A2'], ...) # 列表选择
-Op.add(genotypes='A1|*', ...)          # 通配符（所有 A1 为第一个等位基因）
-Op.add(genotypes='*', ...)             # 所有基因型
-```
-
-##### 年龄选择器
-
-```python
-Op.add(ages=2, ...)                    # 单个年龄
-Op.add(ages=[2, 3, 4], ...)            # 列表
-Op.add(ages=range(2, 6), ...)          # 范围
-Op.add(ages='*', ...)                  # 所有年龄
-```
-
-##### 性别选择器
-
-```python
-Op.add(genotypes='A1|A1', sex='female', ...)     # 仅雌性
-Op.add(genotypes='A1|A1', sex='male', ...)       # 仅雄性
-Op.add(genotypes='A1|A1', sex='both', ...)       # 两性（默认）
-```
-
-##### 条件选择器
-
-```python
-# 条件何时生效
-Op.add(..., when='tick == 10')             # 恰好第 10 个 tick
-Op.add(..., when='tick % 10 == 0')         # 每 10 个 tick
-Op.add(..., when='tick >= 50 and tick < 100')  # 范围
-Op.add(..., when='population.get_total_count() < 100')  # 种群大小
-```
-
-#### 完整示例
-
-```python
-from natal.hook_dsl import hook, Op
-
-# 例 1：监控和报告
-@hook(event='late')
-def monitor():
-    return [
-        # 每 10 个 tick 检查一次种群大小
-        Op.add(genotypes='*', ages='*', delta=0, when='tick % 10 == 0'),
-        # （实际上这里 delta=0 不做任何事，但可以用于触发 hook）
-    ]
-
-monitor.register(pop)
-
-# 例 2：定期释放不育雄性（SIT）
-@hook(event='first')
-def release_sterile_males():
-    return [
-        Op.add(
-            genotypes='S|S',  # 不育标记
-            ages=[2, 3, 4],
-            delta=500,  # 每个 tick 增加 500 只
-            when='tick >= 10 and tick < 50'  # 第 10-49 tick
-        )
-    ]
-
-release_sterile_males.register(pop)
-
-# 例 3：灭绝条件
-@hook(event='late')
-def check_extinction():
-    return [
-        Op.stop_if_extinction(),  # 种群灭绝时停止
-    ]
-
-check_extinction.register(pop)
-```
-
-### 模式 2️⃣：选择器模式（中级）
-
-在声明式的基础上，预先计算索引。
-
-#### 基本语法
+### 2) 选择器模式
 
 ```python
 from natal.hook_dsl import hook
 
-@hook(event='late', selectors={'target_gt': 'A1|A2'})
-def modify_target(pop, target_gt):
-    """
-    Hook 函数接收 pop 和预解析的选择器参数
-    
-    selectors 会在初始化时被解析为整数索引
-    """
-    # target_gt 是整数索引
-    count = pop.state.individual_count[1, 3, target_gt]
-    
-    if count < 10:
-        # 如果该基因型太少，增加一些
-        pop.state.individual_count[1, 3, target_gt] = 50
-    
-    return 0  # 0 = 继续，1 = 停止
-
-modify_target.register(pop)
+@hook(event='late', selectors={'target_gt': 'Drive|WT'})
+def monitor(pop, target_gt):
+    # target_gt 是预解析后的索引（int）
+    c = pop.state.individual_count[:, :, target_gt].sum()
+    if c < 50:
+        pop.state.individual_count[0, 2, target_gt] += 10
 ```
 
-#### 选择器类型
+选择器模式有两条路径：
 
-```python
-@hook(event='first', selectors={
-    'my_gt': 'A1|A2',           # 基因型字符串
-    'age_range': [2, 3, 4],     # 年龄列表
-    'sex': 'female',            # 性别字符串
-    'label': 'Cas9_deposited',  # 配子标签
-})
-def complex_hook(pop, my_gt, age_range, sex, label):
-    # 所有选择器都被预解析
-    # my_gt 是整数索引
-    # age_range 是年龄列表
-    # sex 是性别整数（0=male, 1=female）
-    # label 是标签索引
-    pass
-```
+- Python 选择器路径（默认）：生成 `py_wrapper(pop)`，在 Python 事件系统执行。
+- Numba 选择器路径（`numba=True` 或函数本身是 `@njit`）：生成 `njit_fn(ind_count, tick)`，可进 kernel 主循环。
 
-### 模式 3️⃣：原生 Numba Hook（高级）
-
-完全由用户控制，最大灵活性但需要 Numba 知识。
-
-#### 基本语法
+### 3) 原生 Numba
 
 ```python
 from numba import njit
 
 @njit
-def my_numba_hook(ind_count, tick):
-    """
-    Args:
-        ind_count: (n_sexes, n_ages, n_genotypes) 个体计数数组
-        tick: 当前时间步
-        
-    Returns:
-        int: 0 (继续) 或 1 (停止)
-    """
-    if tick == 50:
-        # 第 50 个 tick 时，将年龄 2-4 的第一个基因型个体清零
-        ind_count[1, 2:5, 0] = 0
-    
-    return 0  # 继续
+def mortality_boost(ind_count, tick):
+    if tick >= 30:
+        ind_count[:, 0, :] *= 0.9
+    return 0
 
-# 注册（但这要求你已经知道索引值）
-pop.set_hook("late", my_numba_hook)
+pop.set_hook('early', mortality_boost)
 ```
 
-#### 例：基于种群大小的动态调整
+这类 hook 直接作为 `njit_fn` 参与合并执行。
+
+## 执行路径细化
+
+### 路径 A：kernel 加速路径（run）
+
+`AgeStructuredPopulation.run()` 与 `DiscreteGenerationPopulation.run()` 会走 `simulation_kernels.run_*_with_compiled_event_hooks(...)`。
+
+在每个事件点，执行顺序是：
+
+1. HookProgram 中对应事件的 CSR 操作
+2. 该事件合并后的 `njit_fn` hook
+
+Python `py_wrapper` 不在 kernel 内执行。
+
+### 路径 B：Python 事件路径（trigger_event）
+
+`BasePopulation.trigger_event(event)` 使用 HookExecutor，顺序是：
+
+1. CSR
+2. njit_fn
+3. py_wrapper
+
+典型用途是显式事件触发与兼容逻辑（例如 `finish`）。
+
+## Op API（按当前实现）
+
+### 数量变换
+
+- `Op.scale(...)`
+- `Op.set_count(...)`
+- `Op.add(...)`
+- `Op.subtract(...)`
+- `Op.sample(...)`
+
+### 其他声明式操作类型
+
+- `Op.kill(...)`
+- `Op.stop_if_zero(...)`
+- `Op.stop_if_below(...)`
+- `Op.stop_if_above(...)`
+- `Op.stop_if_extinction(...)`
+
+说明：
+
+- `Op.kill(prob=p)` 会根据配置执行：
+    - `is_stochastic=False`：确定性缩放 `count = count * (1 - p)`
+    - `is_stochastic=True`：按伯努利/二项抽样得到存活数
+- 在年龄结构模型中，若存在 `sperm_storage`，`Op.kill` 会先对每个 sperm 类型分别抽样，再对处女雌性抽样，最后合并为雌性存活数（与 survival 语义一致）。
+- 当 `use_dirichlet_sampling=True` 时，`Op.kill` 的 stochastic 分支使用连续近似（Beta/Binomial 近似）。
+- `Op.scale` / `Op.subtract` / `Op.sample` / `Op.set_count` 与上述逻辑共用同一抽样内核：
+    - 先换算为目标 count。
+    - 对有 `sperm_storage` 的雌性，缩减时按“先各 sperm 类型、再处女”抽样；增长时等价于添加处女个体。
+    - 其中 `Op.set_count`：目标大于当前值等价 `add`，小于当前值等价 `subtract`，等于当前值无变化。
+- `Op.stop_if_*` 在 kernel 中会返回停止信号（`RESULT_STOP`），从而提前结束 run 循环。
+
+## 条件表达式语法（`when=`）
+
+当前 DSL 条件解析仅支持以下形式：
+
+- `tick == N`
+- `tick % N == 0`
+- `tick >= N`
+- `tick > N`
+- `tick <= N`
+- `tick < N`
+
+并支持逻辑组合：
+
+- `not EXPR`
+- `EXPR and EXPR`
+- `EXPR or EXPR`
+- 括号分组：`(EXPR)`
+
+示例：
+
+- `tick >= 10 and tick < 50`
+- `tick % 7 == 0 and not (tick == 14)`
+- `(tick == 5 or tick == 10) and tick < 20`
+
+仍不支持任意 Python 表达式（例如函数调用或属性访问）。
+
+## 注册与优先级
+
+有两种常见注册方式：
 
 ```python
-from numba import njit
+# 方式 1：装饰器 + register
+@hook(event='first', priority=5)
+def h1():
+    return [Op.add(genotypes='*', ages=0, delta=1)]
 
-@njit
-def dynamic_release(ind_count, tick):
-    """根据种群大小动态释放个体"""
-    
-    total = ind_count.sum()
-    
-    if total > 5000 and tick % 5 == 0:
-        # 种群大于 5000 时，每 5 个 tick 增加一些
-        ind_count[1, 3, 0] += 100  # 增加雌性年龄3基因型0
-    
-    # 超过 10000 时停止
-    if total > 10000:
-        return 1  # 停止
-    
-    return 0  # 继续
+h1.register(pop)
 
-pop.set_hook("first", dynamic_release)
+# 方式 2：set_hook（可覆盖事件名）
+pop.set_hook('first', h1)
 ```
 
-## 比较三种模式
+注意：
 
-| 特性 | 声明式 | 选择器 | Numba |
-|------|--------|--------|-------|
-| 易用性 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
-| 灵活性 | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| 性能 | 最佳 | 好 | 最佳 |
-| 易调试 | ✅ | ✅ | ❌ |
-| Numba 兼容 | ✅ | 部分 | ✅ |
+- `register(pop, event_override=...)` 只接受事件覆盖，不接受优先级参数。
+- 优先级请在装饰器里设置：`@hook(priority=...)`。
 
-**建议**：
-- 简单操作 → 声明式
-- 中等复杂度 → 选择器
-- 复杂逻辑 + 最高性能 → Numba
+## selector 模式的当前边界
 
-## Hook 的执行时机
+`compile_selector_hook` 的 Numba 包装器目前将 selector 作为编译期常量注入。
 
-### tick 内的执行顺序
+- 单值 selector：按预期注入。
+- 多值 selector：当前会退化为取第一个索引（Numba 包装器限制）。
 
-```
-Tick t:
-  ├─ first hook       (在繁殖前)
-  ├─ [繁殖阶段]
-  ├─ reproduction hook (繁殖后)
-  ├─ early hook       (繁殖和生存之间)
-  ├─ [生存阶段]
-  ├─ survival hook    (生存后)
-  ├─ [衰老阶段]
-  ├─ late hook        (衰老后，tick 末尾)
-  └─ Tick t+1 开始
-```
+如果你需要在 selector 中保留数组语义，建议使用 Python selector 路径。
 
-### 使用场景
+## 与历史行为相关的要点
 
-```python
-# 释放个体 → 应该用 first hook
-@hook(event='first')
-def release():
-    return [Op.add(genotypes='Drive|*', ages=[2,3,4], delta=100)]
+- 声明式 `Op.add` 等操作现在通过 HookProgram 显式进入 kernel 事件循环。
+- 代码层已不再依赖旧的 HookRegistry 对象。
+- 为避免双轨维护，只有真实 `py_wrapper` 的 compiled hook 才会镜像进传统 `_hooks`。
 
-# 监控死亡 → 应该用 survival hook
-@hook(event='survival')
-def monitor_deaths():
-    return [...]
+## 调试建议
 
-# 统计和停止条件 → 应该用 late hook
-@hook(event='late')
-def finalize():
-    return [Op.stop_if_extinction()]
-```
+### 先确认走的是哪条路径
 
-## Hook 与 Modifier 的交互
+- 追求速度和稳定执行顺序：优先 kernel 路径（声明式 / njit selector / numba hook）。
+- 需要 Python 断点与复杂对象访问：用 Python selector 路径。
 
-Hook 和 Modifier 可以一起使用，创建复杂的模拟逻辑：
+### 快速定位问题
+
+1. 检查事件名是否正确（`first/reproduction/early/survival/late/finish`）。
+2. 检查 `when` 是否属于受支持语法。
+3. 检查 selector 是否是多值且被 Numba 路径截断。
+4. 检查优先级是否按预期设置在 `@hook(priority=...)`。
+
+## 最小可用示例
 
 ```python
 from natal.hook_dsl import hook, Op
 
-# Modifier：基因驱动（改变遗传学）
-def gene_drive_modifier(pop):
-    return {
-        "Drive|WT": {
-            ("Drive", "Cas9"): 0.95,
-            ("WT", "Cas9"): 0.05,
-        }
-    }
-
-# Hook 1：释放驱动型（改变种群动态）
-@hook(event='first')
-def release_drive():
+@hook(event='first', priority=0)
+def periodic_release():
     return [
-        Op.add(genotypes='Drive|WT', ages=[2, 3, 4, 5], 
-               delta=100, when='tick == 50')
+        Op.add(genotypes='Drive|WT', ages=[2, 3, 4], delta=100, when='tick % 5 == 0')
     ]
 
-# Hook 2：监控（收集数据）
-@hook(event='late')
-def monitor():
-    return [
-        Op.stop_if_extinction(),
-    ]
+@hook(event='late', selectors={'target_gt': 'Drive|WT'})
+def cap_target(pop, target_gt):
+    arr = pop.state.individual_count
+    if arr[:, :, target_gt].sum() > 5000:
+        arr[:, :, target_gt] *= 0.95
 
-# 注册
-pop.set_gamete_modifier(gene_drive_modifier, hook_name="drive")
-release_drive.register(pop)
-monitor.register(pop)
+periodic_release.register(pop)
+cap_target.register(pop)
 
-# 现在：Hook 1 注入个体 → Modifier 改变遗传学 → Hook 2 监控结果
 pop.run(200, record_every=10)
 ```
 
-## 高级用法
+## 相关章节
 
-### Hook 的动态条件
-
-```python
-@hook(event='late')
-def adaptive_hook():
-    """
-    条件可以访问 population 对象的属性
-    """
-    return [
-        # 如果种群大小低于初始的 50%，停止
-        Op.stop_if_below(
-            genotypes='*', 
-            ages='*',
-            threshold=1000,  # 假设初始是 2000
-            when='population.get_total_count() < 1000'
-        ),
-    ]
-```
-
-### 多个 Hook 的优先级
-
-```python
-# Hook 按注册顺序执行
-@hook(event='late')
-def hook_1():
-    return [Op.add(genotypes='A', ages=0, delta=50)]
-
-@hook(event='late')
-def hook_2():
-    return [Op.stop_if_above(genotypes='*', ages='*', threshold=10000)]
-
-# 注册顺序：hook_1 先执行，然后 hook_2
-hook_1.register(pop)
-hook_2.register(pop)
-
-# 可以通过优先级控制顺序
-hook_1.register(pop, priority=2)  # 后执行
-hook_2.register(pop, priority=1)  # 先执行
-```
-
-### Hook 中访问详细信息
-
-在选择器模式中可以访问种群的完整状态：
-
-```python
-@hook(event='late', selectors={'target_gt': 'A1|A2'})
-def detailed_hook(pop, target_gt):
-    """在 Hook 中访问详细的种群信息"""
-    
-    # 访问状态
-    total = pop.get_total_count()
-    females = pop.get_female_count()
-    
-    # 访问时间步
-    tick = pop._tick
-    
-    # 访问特定基因型的计数
-    from natal.type_def import Sex
-    target_count = pop.state.individual_count[Sex.FEMALE, :, target_gt].sum()
-    
-    # 根据条件决定操作
-    if target_count < 10 and tick > 100:
-        # 需要增加这个基因型
-        pop.state.individual_count[Sex.FEMALE, 3, target_gt] += 50
-    
-    return 0  # 继续
-
-detailed_hook.register(pop)
-```
-
-## 常见模式库
-
-### 模式 1：定期释放
-
-```python
-@hook(event='first')
-def periodic_release():
-    return [
-        Op.add(genotypes='Release|*', ages=[2, 3, 4], 
-               delta=500, when='tick % 7 == 0 and tick >= 14')
-        # 从 tick 14 开始，每 7 个 tick 释放 500 只
-    ]
-
-periodic_release.register(pop)
-```
-
-### 模式 2：灭绝检测
-
-```python
-@hook(event='late')
-def extinction_check():
-    return [
-        Op.stop_if_zero(genotypes='WT|WT', ages='*'),
-        # 或
-        Op.stop_if_extinction(),  # 整个种群灭绝时停止
-    ]
-
-extinction_check.register(pop)
-```
-
-### 模式 3：人工选择
-
-```python
-@hook(event='survival')
-def artificial_selection():
-    return [
-        Op.scale(genotypes='Desired|*', ages='*', factor=1.1),  # 增加偏好基因型
-        Op.scale(genotypes='Undesired|*', ages='*', factor=0.9),  # 减少非偏好基因型
-    ]
-
-artificial_selection.register(pop)
-```
-
-### 模式 4：年龄结构维护
-
-```python
-@hook(event='early')
-def maintain_age_structure():
-    return [
-        # 如果幼体过多，减少新生儿
-        Op.scale(genotypes='*', ages=0, factor=0.8, 
-                 when='population.get_total_count() > 10000'),
-    ]
-
-maintain_age_structure.register(pop)
-```
-
-## 性能考量
-
-### Numba Hook vs 声明式 Hook
-
-```python
-# Numba Hook：完全编译，最快
-@njit
-def fast_hook(ind_count, tick):
-    if tick % 100 == 0:
-        ind_count[1, 2, 0] += 100
-    return 0
-
-# 声明式 Hook：有 Python 开销，但仍很快
-@hook(event='first')
-def slow_hook():
-    return [
-        Op.add(genotypes='A1|A1', ages=2, delta=100, when='tick % 100 == 0')
-    ]
-
-# 性能差异：通常不明显（Hook 不是性能瓶颈）
-```
-
-### Hook 放在哪个事件最高效
-
-```python
-# ✅ 高效：操作最少数据
-@hook(event='first')
-def quick_release():
-    return [Op.add(genotypes='A1|A2', ages=[2, 3], delta=100)]
-
-# ❌ 低效：操作所有数据
-@hook(event='first')
-def slow_scale():
-    return [Op.scale(genotypes='*', ages='*', factor=0.99)]
-```
-
-## 调试 Hook
-
-### 添加日志
-
-```python
-@hook(event='late')
-def debug_hook():
-    """调试 Hook 可以打印信息"""
-    # 注意：在 Numba 编译时会丢失日志
-    return [
-        Op.add(genotypes='*', ages='*', delta=0),  # 无操作
-        # 但可以触发后续的 Python 层调试
-    ]
-```
-
-### Hook 中的断点
-
-```python
-@hook(event='late', selectors={'target_gt': 'A1|A2'})
-def debug_selector_hook(pop, target_gt):
-    """选择器 Hook 中可以使用 Python 调试工具"""
-    import pdb
-    
-    count = pop.state.individual_count[:, :, target_gt].sum()
-    if count < 10:
-        pdb.set_trace()  # 设置断点
-    
-    return 0
-
-debug_selector_hook.register(pop)
-```
-
----
-
-## 🎯 本章总结
-
-| 模式 | 最佳场景 | 代码复杂度 | 性能 |
-|------|---------|---------|------|
-| **声明式** | 简单的操作（增加、删除、停止） | 低 | 最佳 |
-| **选择器** | 需要条件判断的中等复杂度 | 中 | 好 |
-| **Numba** | 复杂的自定义逻辑 | 高 | 最佳 |
-
-**设计要点**：
-1. Hook 在特定时机执行，改变种群动态
-2. 三种写法各有优缺点，根据需求选择
-3. Hook 和 Modifier 可以组合使用
-4. 性能通常不是 Hook 的瓶颈
-
----
-
-## 📚 相关章节
-
-- [快速开始](01_quickstart.md) - Hook 的基本使用
-- [Modifier 机制](06_modifiers.md) - 与 Modifier 的协同
-- [Simulation Kernels 深度解析](03_simulation_kernels.md) - Hook 在计算中的角色
-- [Numba 优化指南](08_numba_optimization.md) - Numba Hook 的优化
-
----
-
-**准备优化性能了吗？** [前往下一章：Numba 优化指南 →](08_numba_optimization.md)
+- [快速开始](01_quickstart.md)
+- [Simulation Kernels 深度解析](03_simulation_kernels.md)
+- [Modifier 机制](06_modifiers.md)
+- [Numba 优化指南](08_numba_optimization.md)

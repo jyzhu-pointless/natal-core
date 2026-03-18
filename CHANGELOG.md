@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.3.18.b
+- Hook 执行内核拆分：将 CSR 执行逻辑抽为外部函数 `execute_csr_event_arrays`，统一以 `HookProgram` 作为数据载体
+- 新增 `HookProgram` 与 `build_hook_program` 作为非 jitclass 路径的数据接口（第一阶段）
+- 完全移除 `HookRegistry` 符号，核心内核统一走 `HookProgram + execute_csr_event_program`
+- 优化 Declarative `when` 表达式的解析，支持 `and`、`or`、`not` 等逻辑运算符，增强表达能力
+- 为 `Op.scale` / `Op.subtract` / `Op.sample` / `Op.set_count` 增加抽样逻辑
+
 ## 2026.3.18
 - 完善 HomingModificationDrive 逻辑
 - 修复了配子产生的默认逻辑，此前会产生各种 gamete label 的配子（且每一种归一化），现在只产生默认 label（"default" 或 index 0）

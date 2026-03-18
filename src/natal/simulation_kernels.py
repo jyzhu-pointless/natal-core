@@ -18,7 +18,9 @@ import natal.algorithms as alg
 from natal.type_def import Sex
 from natal.numba_utils import njit_switch, jitclass_switch
 from natal.hook_dsl import (
-    HookRegistry,
+    HookProgram,
+    execute_csr_event_program,
+    execute_csr_event_program_with_state,
     EVENT_FIRST,
     EVENT_REPRODUCTION,
     EVENT_EARLY,
@@ -358,7 +360,7 @@ RESULT_STOP = 1
 def run_tick(
     state: PopulationState,
     config: PopulationConfig,
-    registry: HookRegistry,
+    registry: HookProgram,
     first_hook: Callable,
     reproduction_hook: Callable,
     early_hook: Callable,
@@ -410,7 +412,16 @@ def run_tick(
     tick = state.n_tick
     
     # ===== FIRST hook =====
-    result = registry.execute_csr_event(EVENT_FIRST, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_FIRST,
+        ind_count,
+        sperm_store,
+        tick,
+        config.is_stochastic,
+        True,
+        config.use_dirichlet_sampling,
+    )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     result = first_hook(ind_count, tick)
@@ -421,7 +432,16 @@ def run_tick(
     ind_count, sperm_store = run_reproduction(ind_count, sperm_store, config)
     
     # ===== REPRODUCTION hook =====
-    result = registry.execute_csr_event(EVENT_REPRODUCTION, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_REPRODUCTION,
+        ind_count,
+        sperm_store,
+        tick,
+        config.is_stochastic,
+        True,
+        config.use_dirichlet_sampling,
+    )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     result = reproduction_hook(ind_count, tick)
@@ -429,7 +449,16 @@ def run_tick(
         return (ind_count, sperm_store, tick), RESULT_STOP
     
     # ===== EARLY hook =====
-    result = registry.execute_csr_event(EVENT_EARLY, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_EARLY,
+        ind_count,
+        sperm_store,
+        tick,
+        config.is_stochastic,
+        True,
+        config.use_dirichlet_sampling,
+    )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     result = early_hook(ind_count, tick)
@@ -440,7 +469,16 @@ def run_tick(
     ind_count, sperm_store = run_survival(ind_count, sperm_store, config)
     
     # ===== SURVIVAL hook =====
-    result = registry.execute_csr_event(EVENT_SURVIVAL, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_SURVIVAL,
+        ind_count,
+        sperm_store,
+        tick,
+        config.is_stochastic,
+        True,
+        config.use_dirichlet_sampling,
+    )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     result = survival_hook(ind_count, tick)
@@ -448,7 +486,16 @@ def run_tick(
         return (ind_count, sperm_store, tick), RESULT_STOP
     
     # ===== LATE hook =====
-    result = registry.execute_csr_event(EVENT_LATE, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_LATE,
+        ind_count,
+        sperm_store,
+        tick,
+        config.is_stochastic,
+        True,
+        config.use_dirichlet_sampling,
+    )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     result = late_hook(ind_count, tick)
@@ -473,7 +520,7 @@ run_tick_with_hooks = run_tick
 def run(
     state: PopulationState,
     config: PopulationConfig,
-    registry: HookRegistry,
+    registry: HookProgram,
     n_ticks: int,
     first_hook: Callable,
     reproduction_hook: Callable,
@@ -591,6 +638,12 @@ def run_with_compiled_event_hooks(
 
     This helper keeps the Numba kernel signatures stable while avoiding
     repetitive per-event argument plumbing at call sites.
+
+    Execution model:
+    - Declarative CSR ops are executed through ``hooks.registry``.
+    - Event-specific ``njit`` hooks are executed through
+      ``hooks.first/reproduction/early/survival/late``.
+    - Python wrappers are not executed in this kernel path.
     """
     return run(
         state=state,
@@ -732,14 +785,14 @@ def run_discrete_survival(
     s_age_f, s_age_m = alg.compute_age_based_survival_rates(
         config.age_based_survival_rates[0],
         config.age_based_survival_rates[1],
-        2
+        n_ages=2
     )
     s_via_f, s_via_m = alg.compute_viability_survival_rates(
         config.viability_fitness[0, 0, :],
         config.viability_fitness[1, 0, :],
         n_gen,
-        0, 
-        2
+        target_age=0, 
+        n_ages=2
     )
     
     s_combined_0_f = s_age_f[0] * s_via_f[0, :]
@@ -747,7 +800,7 @@ def run_discrete_survival(
     
     if is_stochastic:
         if use_dirichlet_sampling:
-            f_surv = f_rec * s_combined_0_f
+            f_surv = f_rec * s_combined_0_f # TODO: 不对
             m_surv = m_rec * s_combined_0_m
         else:
             f_surv = np.zeros(n_gen, dtype=np.float64)
@@ -785,7 +838,7 @@ def run_discrete_aging(
 def run_discrete_tick(
     state: DiscretePopulationState,
     config: PopulationConfig,
-    registry: HookRegistry,
+    registry: HookProgram,
     first_hook: Callable,
     reproduction_hook: Callable,
     early_hook: Callable,
@@ -795,8 +848,18 @@ def run_discrete_tick(
     """执行一个离散世代的 tick。"""
     ind_count = state.individual_count.copy()
     tick = state.n_tick
+    dummy_sperm_store = np.zeros((0, 0, 0), dtype=np.float64)
     
-    result = registry.execute_csr_event(EVENT_FIRST, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_FIRST,
+        ind_count,
+        dummy_sperm_store,
+        tick,
+        config.is_stochastic,
+        False,
+        config.use_dirichlet_sampling,
+    )
     if result != 0: return (ind_count, tick), 1
 
     result = first_hook(ind_count, tick)
@@ -804,13 +867,31 @@ def run_discrete_tick(
     
     ind_count = run_discrete_reproduction(ind_count, config)
     
-    result = registry.execute_csr_event(EVENT_REPRODUCTION, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_REPRODUCTION,
+        ind_count,
+        dummy_sperm_store,
+        tick,
+        config.is_stochastic,
+        False,
+        config.use_dirichlet_sampling,
+    )
     if result != 0: return (ind_count, tick), 1
 
     result = reproduction_hook(ind_count, tick)
     if result != 0: return (ind_count, tick), 1
     
-    result = registry.execute_csr_event(EVENT_EARLY, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_EARLY,
+        ind_count,
+        dummy_sperm_store,
+        tick,
+        config.is_stochastic,
+        False,
+        config.use_dirichlet_sampling,
+    )
     if result != 0: return (ind_count, tick), 1
 
     result = early_hook(ind_count, tick)
@@ -818,13 +899,31 @@ def run_discrete_tick(
     
     ind_count = run_discrete_survival(ind_count, config)
     
-    result = registry.execute_csr_event(EVENT_SURVIVAL, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_SURVIVAL,
+        ind_count,
+        dummy_sperm_store,
+        tick,
+        config.is_stochastic,
+        False,
+        config.use_dirichlet_sampling,
+    )
     if result != 0: return (ind_count, tick), 1
 
     result = survival_hook(ind_count, tick)
     if result != 0: return (ind_count, tick), 1
     
-    result = registry.execute_csr_event(EVENT_LATE, ind_count, tick)
+    result = execute_csr_event_program_with_state(
+        registry,
+        EVENT_LATE,
+        ind_count,
+        dummy_sperm_store,
+        tick,
+        config.is_stochastic,
+        False,
+        config.use_dirichlet_sampling,
+    )
     if result != 0: return (ind_count, tick), 1
 
     result = late_hook(ind_count, tick)
@@ -838,7 +937,7 @@ def run_discrete_tick(
 def run_discrete(
     state: DiscretePopulationState,
     config: PopulationConfig,
-    registry: HookRegistry,
+    registry: HookProgram,
     n_ticks: int,
     first_hook: Callable,
     reproduction_hook: Callable,
@@ -905,7 +1004,12 @@ def run_discrete_with_compiled_event_hooks(
     n_ticks: int,
     record_history: bool = False,
 ) -> Tuple[Tuple[NDArray, int], Optional[NDArray], bool]:
-    """Run discrete kernels with a single compiled-hook bundle."""
+    """Run discrete kernels with a single compiled-hook bundle.
+
+    Semantics are the same as ``run_with_compiled_event_hooks`` for the
+    age-structured kernel: CSR declarative ops + combined ``njit`` hooks run
+    inside kernel loops; Python wrappers are outside this path.
+    """
     return run_discrete(
         state=state,
         config=config,

@@ -594,9 +594,9 @@ class HomingDrive(GeneDriveRecipe):
         self.functional_resistance_ratio = float(functional_resistance_ratio)
 
         # Store declarative fitness scaling configs.
-        self.fecundity_scaling = float(fecundity_scaling)
-        self.viability_scaling = float(viability_scaling)
-        self.sexual_selection_scaling = float(sexual_selection_scaling)
+        self.fecundity_scaling = fecundity_scaling
+        self.viability_scaling = viability_scaling
+        self.sexual_selection_scaling = sexual_selection_scaling
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
@@ -611,6 +611,22 @@ class HomingDrive(GeneDriveRecipe):
             self.fecundity_scaling,
             self.sexual_selection_scaling,
         )
+        
+        # Apply same fitness costs to non-functional resistance allele (R2)
+        # but NOT to functional resistance allele (R1)
+        if self._str_resistance_allele:
+            r2_patch = _make_fitness_patch_given_allele_scaling(
+                self._str_resistance_allele,
+                self.viability_scaling,
+                self.fecundity_scaling,
+                self.sexual_selection_scaling,
+            )
+            for key, value in r2_patch.items():
+                if key in patch:
+                    patch[key].update(value)
+                else:
+                    patch[key] = value
+        
         return patch
     
     def _instantiate_allele(self, allele_name: str, population: 'BasePopulation') -> Gene:
