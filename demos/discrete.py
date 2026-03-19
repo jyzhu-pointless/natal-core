@@ -1,7 +1,8 @@
 import natal as nt
 import numpy as np
+import time
 
-# nt.disable_numba()  # Disable Numba for this demo to show pure Python behavior
+nt.enable_numba()
 
 sp = nt.Species.from_dict(
     name="TestSpecies",
@@ -59,11 +60,16 @@ pop = nt.DiscreteGenerationPopulation \
         juvenile_growth_mode="concave"
     ) \
     .recipes(drive) \
+    .hooks(release_drive_carriers) \
     .build()
 
-# .hooks(release_drive_carriers)
+pop.run(1) 
 
+start = time.time()
 pop.run(100)
+end = time.time()
+
+print(f"Execution time: {end - start:.3f} seconds\n")
 
 # === Demo outputs ===
 genotypes = [str(gt) for gt in pop._registry.index_to_genotype]
