@@ -12,3 +12,4 @@ wheels/
 # Temporary files
 tmpdocs/
 tests/
+.numba_cache/*

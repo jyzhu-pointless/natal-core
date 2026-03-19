@@ -38,7 +38,7 @@ __all__ = [
 # binomial_2d: Element-wise binomial sampling for 2D arrays
 # ============================================================================
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _binomial_2d_numba(
     n: np.ndarray,  # shape (A, G), int64
     p: np.ndarray,  # shape (A,) or (A, G), float64
@@ -86,7 +86,7 @@ def _binomial_2d_numpy(
 # fancy_index_3d_to_2d: Extract 2D slices from 3D array
 # ============================================================================
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _fancy_index_3d_to_2d_numba(
     arr_3d: np.ndarray,     # shape (D0, D1, D2)
     idx0: np.ndarray,       # shape (N,)
@@ -122,7 +122,7 @@ def _fancy_index_3d_to_2d_numpy(
 # fancy_index_3d_flat: Extract elements from 3D array using triple indices
 # ============================================================================
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _fancy_index_3d_flat_numba(
     arr_3d: np.ndarray,
     idx0: np.ndarray,
@@ -159,7 +159,7 @@ def _fancy_index_3d_flat_numpy(
 # multinomial_rows: Row-wise multinomial sampling
 # ============================================================================
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _multinomial_rows_numba(
     n_per_row: np.ndarray,
     p_matrix: np.ndarray,
@@ -206,7 +206,7 @@ def _multinomial_rows_numpy(
 # dynamically computed probability arrays in nested JIT functions.
 # This implementation uses explicit binomial sampling (like NumPy's algorithm).
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _multinomial_numba(
     n: int,
     pvals: np.ndarray,  # shape (k,), float64

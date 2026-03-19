@@ -89,7 +89,11 @@ class AgeStructuredPopulation(BasePopulation):
         self._index_core = IndexCore(species, population_config)
         
         # Create PopulationState
-        self._state = PopulationState(population_config.n_sexes, population_config.n_ages)
+        self._state = PopulationState.create(
+            n_genotypes=population_config.n_genotypes,
+            n_sexes=population_config.n_sexes,
+            n_ages=population_config.n_ages,
+        )
         
         # Initialize snapshot tracking
         self.snapshots = {}
@@ -637,7 +641,11 @@ class AgeStructuredPopulation(BasePopulation):
             state_obj = parse_flattened_state(state, n_sexes, n_ages, n_genotypes)
             self._state.individual_count[:] = state_obj.individual_count
             self._state.sperm_storage[:] = state_obj.sperm_storage
-            self._state.n_tick = state_obj.n_tick
+            self._state = PopulationState(
+                n_tick=state_obj.n_tick,
+                individual_count=self._state.individual_count,
+                sperm_storage=self._state.sperm_storage,
+            )
         elif isinstance(state, dict):
             # 从字典重建状态
             self._state.individual_count[:] = state['individual_count']
@@ -646,7 +654,11 @@ class AgeStructuredPopulation(BasePopulation):
             # 直接使用 PopulationState
             self._state.individual_count[:] = state.individual_count
             self._state.sperm_storage[:] = state.sperm_storage
-            self._state.n_tick = state.n_tick
+            self._state = PopulationState(
+                n_tick=state.n_tick,
+                individual_count=self._state.individual_count,
+                sperm_storage=self._state.sperm_storage,
+            )
         else:
             # 兼容旧的元组格式
             self._state.individual_count[:] = state[0]
@@ -847,19 +859,26 @@ class AgeStructuredPopulation(BasePopulation):
         # 获取编译后的事件 hooks
         hooks = self.get_compiled_event_hooks()
         
-        # 调用 sk.run() 执行多步演化
-        # sk.run 接受 PopulationState，返回 (final_state_tuple, history, was_stopped)
-        final_state_tuple, history_new, was_stopped = sk.run_with_compiled_event_hooks(
+        # 直接调用 sk.run 执行多步演化
+        final_state_tuple, history_new, was_stopped = sk.run(
             state=self._state,
             config=config,
-            hooks=hooks,
+            registry=hooks.registry,
             n_ticks=n_steps,
+            first_hook=hooks.first,
+            reproduction_hook=hooks.reproduction,
+            early_hook=hooks.early,
+            survival_hook=hooks.survival,
+            late_hook=hooks.late,
             record_history=(record_every > 0)
         )
         
         # 处理最终状态（tuple 格式：ind_count, sperm, tick）
-        self._state.individual_count[:] = final_state_tuple[0]
-        self._state.sperm_storage[:] = final_state_tuple[1]
+        self._state = PopulationState(
+            n_tick=np.int32(final_state_tuple[2]),
+            individual_count=final_state_tuple[0],
+            sperm_storage=final_state_tuple[1],
+        )
         self._tick = int(final_state_tuple[2])
         
         # 处理历史记录

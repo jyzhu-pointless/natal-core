@@ -47,10 +47,11 @@ class DiscreteGenerationPopulation(BasePopulation):
 
         super().__init__(species, name, hooks=hooks or {})
 
-        self._config = population_config
-        self._config.n_ages = 2
-        self._config.new_adult_age = 1
-        self._config.adult_ages = np.array([1], dtype=np.int64)
+        self._config = population_config._replace(
+            n_ages=2,
+            new_adult_age=1,
+            adult_ages=np.array([1], dtype=np.int64),
+        )
 
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
@@ -61,7 +62,7 @@ class DiscreteGenerationPopulation(BasePopulation):
         n_genotypes = self._config.n_genotypes
         n_ages = self._config.n_ages
 
-        self._state = DiscretePopulationState(
+        self._state = DiscretePopulationState.create(
             n_sexes=n_sexes,
             n_ages=n_ages,
             n_genotypes=n_genotypes,
@@ -216,16 +217,23 @@ class DiscreteGenerationPopulation(BasePopulation):
 
         hooks = self.get_compiled_event_hooks()
 
-        final_state_tuple, history_new, was_stopped = sk.run_discrete_with_compiled_event_hooks(
+        final_state_tuple, history_new, was_stopped = sk.run_discrete(
             state=self._state,
             config=self._config,
-            hooks=hooks,
+            registry=hooks.registry,
             n_ticks=n_steps,
+            first_hook=hooks.first,
+            reproduction_hook=hooks.reproduction,
+            early_hook=hooks.early,
+            survival_hook=hooks.survival,
+            late_hook=hooks.late,
             record_history=(record_every > 0),
         )
 
-        self._state.individual_count[:] = final_state_tuple[0]
-        self._state.n_tick = np.int32(final_state_tuple[1])
+        self._state = DiscretePopulationState(
+            n_tick=np.int32(final_state_tuple[1]),
+            individual_count=final_state_tuple[0],
+        )
         self._tick = int(final_state_tuple[1])
 
         if history_new is not None and history_new.shape[0] > 0:

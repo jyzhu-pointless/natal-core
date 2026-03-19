@@ -303,18 +303,23 @@ class BasePopulation(ABC):
             n_glabs=n_glabs,
         )
 
-        self._config.genotype_to_gametes_map = initialize_gamete_map(
+        genotype_to_gametes_map = initialize_gamete_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             gamete_modifiers=gamete_funcs,
         )
 
-        self._config.gametes_to_zygote_map = initialize_zygote_map(
+        gametes_to_zygote_map = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             zygote_modifiers=zygote_funcs,
+        )
+
+        self._config = self._config._replace(
+            genotype_to_gametes_map=genotype_to_gametes_map,
+            gametes_to_zygote_map=gametes_to_zygote_map,
         )
     
     def add_gamete_modifier(
@@ -452,7 +457,7 @@ class BasePopulation(ABC):
         if self._index_core is None:
             self._initialize_registry()
         
-        from natal.population_config import PopulationConfig
+        from natal.population_config import build_population_config, initialize_gamete_map, initialize_zygote_map
         from natal.genetic_entities import HaploidGenotype, Genotype
         from natal.type_def import Sex
         
@@ -465,9 +470,9 @@ class BasePopulation(ABC):
         n_glabs = 1  # 根据实际情况设置
         
         # 创建静态数据容器
-        self._config = PopulationConfig(
+        self._config = build_population_config(
             n_genotypes=n_genotypes,
-            n_hg=n_hg,
+            n_haploid_genotypes=n_hg,
             n_sexes=None,
             n_glabs=n_glabs
         )
@@ -480,16 +485,23 @@ class BasePopulation(ABC):
         )
 
         # 初始化 gametes_to_zygote_map 与 genotype_to_gametes_map
-        self._config.initialize_zygote_map(
+        gametes_to_zygote_map = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
-            zygote_modifiers=zygote_modifier_funcs
+            n_glabs=n_glabs,
+            zygote_modifiers=zygote_modifier_funcs,
         )
 
-        self._config.initialize_gamete_map(
+        genotype_to_gametes_map = initialize_gamete_map(
             diploid_genotypes=diploid_genotypes,
             haploid_genotypes=haploid_genotypes,
-            gamete_modifiers=gamete_modifier_funcs
+            n_glabs=n_glabs,
+            gamete_modifiers=gamete_modifier_funcs,
+        )
+
+        self._config = self._config._replace(
+            gametes_to_zygote_map=gametes_to_zygote_map,
+            genotype_to_gametes_map=genotype_to_gametes_map,
         )
 
     def register_gamete_labels(self, labels: Optional[Sequence[str]]) -> None:
@@ -910,7 +922,7 @@ class BasePopulation(ABC):
                     n_sexes, n_ages, _ = ind_copy.shape
                 else:
                     n_sexes, _ = ind_copy.shape
-            self._state = PopulationState(
+            self._state = PopulationState.create(
                 n_genotypes=n_genotypes,
                 n_ages=n_ages,
                 n_sexes=n_sexes,

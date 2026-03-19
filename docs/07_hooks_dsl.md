@@ -195,6 +195,21 @@ pop.set_hook('first', h1)
 
 如果你需要在 selector 中保留数组语义，建议使用 Python selector 路径。
 
+### Numba 缓存说明（wrapper 生成）
+
+为避免动态 exec 生成函数导致缓存不稳定，当前实现对以下 Numba wrapper 使用“稳定落盘模块”策略：
+
+- selector 的 Numba wrapper
+- 多个 njit hook 的 combined wrapper
+
+策略要点：
+
+- 依据 hook 身份与参数生成稳定哈希名。
+- 在 NUMBA_CACHE_DIR 下写入固定源码文件：hook_codegen/*.py。
+- 通过稳定模块路径加载 wrapper，再由 @njit_switch(cache=True) 编译。
+
+因此，只要 hook 定义和 selector 参数不变，wrapper 可复用同一缓存键，避免每次运行都产生新的动态函数缓存碎片。
+
 ## 与历史行为相关的要点
 
 - 声明式 `Op.add` 等操作现在通过 HookProgram 显式进入 kernel 事件循环。

@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import numpy as np
-from numba import types as nb_types
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, NamedTuple
 from numpy.typing import NDArray
 
 from natal.type_def import *
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.index_core import compress_hg_glab, decompress_hg_glab
-from natal.numba_utils import jitclass_switch
 import natal.algorithms as alg
 
 __all__ = [
     'NO_COMPETITION', 'FIXED', 'LOGISTIC', 'LINEAR', 'CONCAVE', 'BEVERTON_HOLT',
+    'PopulationConfig',
+    'build_population_config',
+    'PlainPopulationConfig',
+    'to_plain_population_config',
+    'from_plain_population_config',
     'extract_gamete_frequencies',
     'extract_gamete_frequencies_by_glab',
     'extract_zygote_frequencies',
@@ -24,537 +27,385 @@ FIXED = 1
 LOGISTIC = LINEAR = 2
 CONCAVE = BEVERTON_HOLT = 3
 
-# ============================================================================
-# 定义 @jitclass（保持原有结构以兼容性）
-# ============================================================================
+class PopulationConfig(NamedTuple):
+    """Primary immutable config container.
 
-_popconfig_spec = [
-    ('is_stochastic', nb_types.bool_),  # Flag for stochastic simulation mode
-    ('use_dirichlet_sampling', nb_types.bool_),  # If True and stochastic, use Dirichlet instead of Binomial/Multinomial
-    ('n_sexes', nb_types.int32),
-    ('n_ages', nb_types.int32),
-    ('n_genotypes', nb_types.int32),
-    ('n_haploid_genotypes', nb_types.int32),
-    ('n_glabs', nb_types.int32),
-    
-    ### static tensors
-    ('age_based_mating_rates', nb_types.float64[:, :]),                # (sex, age)
-    ('age_based_survival_rates', nb_types.float64[:, :]),              # (sex, age)
-    ('female_age_based_relative_fertility', nb_types.float64[:]),      # (age,)
-    ('viability_fitness', nb_types.float64[:, :, :]),                  # (sex, age, genotype)
-    ('fecundity_fitness', nb_types.float64[:, :]),                     # (sex, genotype) -- applied to all adult ages
-    ('sexual_selection_fitness', nb_types.float64[:, :]),              # (genotype, genotype) -- applied to female adults
-    # age 0 -> 1: density-dependent competition (specially modeled)
-    ('age_based_relative_competition_strength', nb_types.float64[:]),  # (age,)
-
-    ### static scalars
-    ('sperm_displacement_rate', nb_types.float64),
-    ('expected_eggs_per_female', nb_types.float64),
-    ('use_fixed_egg_count', nb_types.bool_),
-    ('carrying_capacity', nb_types.float64),           # 当前有效承载量（= base * scale）
-    ('sex_ratio', nb_types.float64),
-    ('low_density_growth_rate', nb_types.float64),
-    ('juvenile_growth_mode', nb_types.int32),
-    ('expected_competition_strength', nb_types.float64),       # 平衡态总竞争强度指标
-    ('expected_survival_rate', nb_types.float64),              # 平衡态下产出的幼虫预期的总生存率
-    ('generation_time', nb_types.float64),                     # 世代时间
-    
-    # New fields
-    ('new_adult_age', nb_types.int32),
-    ('adult_ages', nb_types.int64[:]),
-
-    ### mapping tensors
-    ('genotype_to_gametes_map', nb_types.float64[:, :, :]),
-    ('gametes_to_zygote_map', nb_types.float64[:, :, :]),
-    
-    ### initial state (for PMCMC and simulation restart)
-    ('initial_individual_count', nb_types.float64[:, :, :]),   # (sex, age, genotype)
-    ('initial_sperm_storage', nb_types.float64[:, :, :]),      # (age, genotype, hg*glabs)
-    
-    ### population scaling
-    ('population_scale', nb_types.float64),                    # 种群缩放因子，默认 1.0
-    ('base_carrying_capacity', nb_types.float64),              # 基准承载量（未缩放）
-    ('base_expected_num_adult_females', nb_types.float64),     # 基准成年雌性数量（未缩放）
-]
-
-@jitclass_switch(_popconfig_spec)
-class PopulationConfig:
-    """Static, reusable tensors used by the population model.
-
-    This container holds precomputed lookup tensors and fitness arrays used
-    across simulation steps. To support non-trivial zygote formation rules the
-    ``gametes_to_zygote_map`` is not required to be one-hot; it may encode
-    probabilistic or modified mappings. Index-mapping helpers are intentionally
-    kept separate.
-
-    Attributes (shapes documented):
-        is_stochastic: Whether the model uses stochastic dynamics
-        use_dirichlet_sampling: If True, use Dirichlet distribution instead of discrete sampling (Binomial/Multinomial) when is_stochastic=True
-        n_sexes: Number of sexes in the model
-        n_ages: Number of age classes
-        n_genotypes: Number of diploid genotypes
-        n_haploid_genotypes: Number of haploid genotypes
-        n_glabs: Number of gamete-label variants per haplotype
-        
-        # Static tensors
-        age_based_mating_rates: (sex, age) float64
-        age_based_survival_rates: (sex, age) float64
-        female_age_based_relative_fertility: (age,) float64
-        viability_fitness: (sex, age, genotype) float64
-        fecundity_fitness: (sex, genotype) float64 -- applied to all adult ages
-        sexual_selection_fitness: (genotype, genotype) float64 -- applied to female adults
-        age_based_relative_competition_strength: (age,) float64
-        
-        # Static scalars
-        sperm_displacement_rate: float64
-        expected_eggs_per_female: float64
-        use_fixed_egg_count: bool = False,
-        carrying_capacity: float64
-        sex_ratio: float64
-        low_density_growth_rate: float64
-
-        
-        # Mapping tensors
-        genotype_to_gametes_map: (n_sexes, n_genotypes, n_hg*n_glabs) float64
-        gametes_to_zygote_map: (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) float64
+    Scalar fields are immutable (rebuild with ``_replace``). NumPy arrays are
+    mutable in-place.
     """
 
-    def __init__(
-        self, 
-        n_genotypes: int = 0, 
-        n_haploid_genotypes: int = 0, 
-        n_sexes: int = 2, 
-        n_ages: int = 2,
-        n_glabs: int = 1,
-        is_stochastic: bool = True,  # Default to stochastic
-        use_dirichlet_sampling: bool = False,  # Default to discrete sampling (Binomial/Multinomial)
-        # Static tensors
-        age_based_mating_rates: Optional[NDArray[np.float64]] = None,
-        age_based_survival_rates: Optional[NDArray[np.float64]] = None,
-        female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
-        viability_fitness: Optional[NDArray[np.float64]] = None,
-        fecundity_fitness: Optional[NDArray[np.float64]] = None,
-        sexual_selection_fitness: Optional[NDArray[np.float64]] = None,
-        age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
-        # Static scalars
-        new_adult_age: int = 2,
-        sperm_displacement_rate: float = 0.05,
-        expected_eggs_per_female: float = 100.0,
-        use_fixed_egg_count: bool = False,
-        carrying_capacity: Optional[float] = None,  # 改为可选，会从其他参数推断
-        sex_ratio: float = 0.5,
-        low_density_growth_rate: float = 6.0,
-        juvenile_growth_mode: int = LOGISTIC,
-        generation_time: Optional[float] = None,  # 可选，若提供则覆盖计算值
-        # Mapping tensors
-        genotype_to_gametes_map: Optional[NDArray[np.float64]] = None,
-        gametes_to_zygote_map: Optional[NDArray[np.float64]] = None,
-        # Initial state (for PMCMC)
-        initial_individual_count: Optional[NDArray[np.float64]] = None,
-        initial_sperm_storage: Optional[NDArray[np.float64]] = None,
-        # Population scaling
-        population_scale: float = 1.0,
-        # Capacity configuration (two modes)
-        old_juvenile_carrying_capacity: Optional[float] = None,  # 显式设置 age=1 承载量
-        expected_num_adult_females: Optional[float] = None,      # 显式设置成年雌性数量
-        infer_capacity_from_initial_state: bool = True,          # 是否从初始状态推断
-        equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None, # 显式传入平衡态分布(sex, age)
-    ):
-        """Construct PopulationConfig with allocated tensors.
-
-        Args:
-            n_genotypes: Number of diploid genotypes.
-            n_haploid_genotypes: Number of haploid genotypes.
-            n_sexes: Number of sexes; if ``None`` it is inferred to 2 (MALE=0, FEMALE=1).
-            n_ages: Number of age classes (default: 2).
-            n_glabs: Number of gamete-label variants per haplotype.
-            is_stochastic: Whether the model uses stochastic dynamics.
-            use_dirichlet_sampling: If True and is_stochastic=True, use Dirichlet distribution instead of discrete sampling.
-                If False (default) and is_stochastic=True, use discrete sampling (Binomial/Multinomial).
-            
-            # Static tensors
-            age_based_mating_rates: Optional pre-initialized array shaped (sex, age).
-            age_based_survival_rates: Optional pre-initialized array shaped (sex, age).
-            female_age_based_relative_fertility: Optional pre-initialized array shaped (age,).
-            viability_fitness: Optional pre-initialized array shaped (sex, age, genotype).
-            fecundity_fitness: Optional pre-initialized array shaped (sex, genotype).
-            sexual_selection_fitness: Optional pre-initialized array shaped (genotype, genotype).
-            age_based_relative_competition_strength: Optional pre-initialized array shaped (age,).
-            
-            # Static scalars
-            sperm_displacement_rate: Sperm displacement rate.
-            expected_eggs_per_female: Average offspring per female.
-            use_fixed_egg_count: Whether to use fixed egg count.
-            carrying_capacity: Deprecated, use old_juvenile_carrying_capacity instead.
-            sex_ratio: Primary sex ratio (proportion of females).
-            low_density_growth_rate: Growth rate at low density.
-            juvenile_growth_mode: Growth mode for juveniles (default: LOGISTIC).
-            generation_time: Optional generation time. If not provided, it will be computed using 
-                the formula: T = sum(x * l[x] * m[x]) / sum(l[x] * m[x])
-            
-            # Mapping tensors
-            genotype_to_gametes_map: Optional pre-initialized array.
-            gametes_to_zygote_map: Optional pre-initialized array.
-            
-            # Initial state (for PMCMC)
-            initial_individual_count: Initial population distribution (sex, age, genotype).
-            initial_sperm_storage: Initial sperm storage (age, genotype, hg*glabs).
-            
-            # Population scaling
-            population_scale: Scale factor for population size (default 1.0).
-            
-            # Capacity configuration
-            old_juvenile_carrying_capacity: Explicit carrying capacity for age=1 juveniles.
-            expected_num_adult_females: Expected number of adult females at equilibrium.
-            infer_capacity_from_initial_state: If True, infer capacity from initial state.
-        """
-        if n_sexes is None:
-            # Infer n_sexes: 2 (MALE=0, FEMALE=1)
-            n_sexes = 2
-
-        # validate small values
-        assert n_genotypes > 0 and n_haploid_genotypes > 0 and n_glabs > 0, "invalid dimensions for PopulationConfig"
-        assert n_ages > 0, "n_ages must be positive"
-
-        n_hg_glabs = max(0, n_haploid_genotypes * n_glabs)
-
-        # Set basic dimensions and flags
-        self.is_stochastic = bool(is_stochastic)
-        self.use_dirichlet_sampling = bool(use_dirichlet_sampling)
-        self.n_genotypes = np.int32(n_genotypes)
-        self.n_haploid_genotypes = np.int32(n_haploid_genotypes)
-        self.n_sexes = np.int32(n_sexes)
-        self.n_ages = np.int32(n_ages)
-        self.n_glabs = np.int32(n_glabs)
-
-        # Initialize static scalars
-        self.new_adult_age = np.int32(new_adult_age)
-        self.adult_ages = np.arange(self.new_adult_age, self.n_ages, dtype=np.int64)
-        self.sperm_displacement_rate = float(sperm_displacement_rate)
-        self.expected_eggs_per_female = float(expected_eggs_per_female)
-        self.sex_ratio = float(sex_ratio)
-        self.low_density_growth_rate = float(low_density_growth_rate)
-        self.juvenile_growth_mode = np.int32(juvenile_growth_mode)
-        self.use_fixed_egg_count = bool(use_fixed_egg_count)
-        
-        # Population scaling
-        self.population_scale = float(population_scale)
-        
-        # Initialize initial state arrays
-        if initial_individual_count is not None:
-            self.initial_individual_count = initial_individual_count.copy()
-        else:
-            self.initial_individual_count = np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64)
-        
-        if initial_sperm_storage is not None:
-            self.initial_sperm_storage = initial_sperm_storage.copy()
-        else:
-            self.initial_sperm_storage = np.zeros((n_ages, n_genotypes, n_hg_glabs), dtype=np.float64)
-        
-        # Determine base_carrying_capacity (two modes)
-        # Priority: old_juvenile_carrying_capacity (age=1 juvenile capacity)
-        #          > carrying_capacity (deprecated, for backward compatibility)
-        #          > infer from initial state > default
-        # Note: old_juvenile_carrying_capacity is for age=1 only, not for overall capacity
-        if old_juvenile_carrying_capacity is not None:
-            # old_juvenile_carrying_capacity is the explicit age=1 capacity
-            self.base_carrying_capacity = float(old_juvenile_carrying_capacity)
-        elif carrying_capacity is not None:
-            # Use carrying_capacity directly (may be pre-computed from expected_num_adult_females * expected_eggs_per_female)
-            # This is deprecated in favor of old_juvenile_carrying_capacity
-            self.base_carrying_capacity = float(carrying_capacity)
-        elif infer_capacity_from_initial_state and initial_individual_count is not None:
-            # Mode C: Infer from initial state (age=1 total)
-            self.base_carrying_capacity = float(initial_individual_count[:, 1, :].sum())
-            if self.base_carrying_capacity <= 0:
-                self.base_carrying_capacity = 1000.0  # fallback default
-        else:
-            self.base_carrying_capacity = 1000.0  # default
-        
-        # Determine base_expected_num_adult_females
-        if expected_num_adult_females is not None:
-            self.base_expected_num_adult_females = float(expected_num_adult_females)
-        elif infer_capacity_from_initial_state and initial_individual_count is not None:
-            # Infer from initial state: female (sex=0), age >= new_adult_age
-            self.base_expected_num_adult_females = float(
-                initial_individual_count[0, new_adult_age:, :].sum()
-            )
-            if self.base_expected_num_adult_females <= 0:
-                self.base_expected_num_adult_females = 500.0  # fallback default
-        else:
-            self.base_expected_num_adult_females = 500.0  # default
-        
-        # Compute effective carrying_capacity (= base * scale)
-        self.carrying_capacity = self.base_carrying_capacity * self.population_scale
-
-        # Define helper method for array validation and defaulting
-        def _validate_or_default_array(
-            arr: Optional[NDArray[np.float64]], 
-            expected_shape, 
-            name, 
-            default_value: Callable[[tuple[int, ...], type], NDArray[np.float64]] = np.ones,
-            has_sex_dim: Optional[bool] = None, # only used when zeroing juvenile values
-            set_juvenile_values_to_zero: bool = False
-        ):
-            if arr is not None:
-                assert arr.shape == expected_shape, f"invalid shape for {name}: expected {expected_shape}, got {arr.shape}"
-                return arr
-            else:
-                arr = default_value(expected_shape, np.float64)
-                if set_juvenile_values_to_zero:
-                    if has_sex_dim:
-                        arr[:, :self.new_adult_age] = 0.0
-                    else:
-                        arr[:self.new_adult_age] = 0.0
-                return arr
-
-        # Initialize static tensors with validation
-        # Age-based mating rates (sex, age) -- zeros for juveniles
-        self.age_based_mating_rates = _validate_or_default_array(
-            age_based_mating_rates, (n_sexes, n_ages), "age_based_mating_rates",
-            has_sex_dim=True, set_juvenile_values_to_zero=True
-        )
-
-        # Age-based survival rates (sex, age) -- zeros for juveniles
-        self.age_based_survival_rates = _validate_or_default_array(
-            age_based_survival_rates, (n_sexes, n_ages), "age_based_survival_rates",
-            has_sex_dim=True, set_juvenile_values_to_zero=True
-        )
-
-        # Female age-based relative fertility (age,) -- zeros for juveniles
-        self.female_age_based_relative_fertility = _validate_or_default_array(
-            female_age_based_relative_fertility, (n_ages,), "female_age_based_relative_fertility",
-            has_sex_dim=False, set_juvenile_values_to_zero=True
-        )
-
-        # Viability fitness (sex, age, genotype)
-        self.viability_fitness = _validate_or_default_array(
-            viability_fitness, (n_sexes, n_ages, n_genotypes), "viability_fitness"
-        )
-
-        # Fecundity fitness (sex, genotype)
-        self.fecundity_fitness = _validate_or_default_array(
-            fecundity_fitness, (n_sexes, n_genotypes), "fecundity_fitness"
-        )
-
-        # Sexual selection fitness (genotype, genotype)
-        self.sexual_selection_fitness = _validate_or_default_array(
-            sexual_selection_fitness, (n_genotypes, n_genotypes), "sexual_selection_fitness"
-        )
-
-        # Age-based relative competition strength (age,)
-        self.age_based_relative_competition_strength = _validate_or_default_array(
-            age_based_relative_competition_strength, (n_ages,), "age_based_relative_competition_strength"
-        )
-
-        # Initialize mapping tensors (default to zeros)
-        self.genotype_to_gametes_map = _validate_or_default_array(
-            genotype_to_gametes_map, (n_sexes, n_genotypes, n_hg_glabs), 
-            "genotype_to_gametes_map", default_value=np.zeros
-        )
-        
-        self.gametes_to_zygote_map = _validate_or_default_array(
-            gametes_to_zygote_map, (n_hg_glabs, n_hg_glabs, n_genotypes), 
-            "gametes_to_zygote_map", default_value=np.zeros
-        )
-        
-        # 计算平衡态指标（密度依赖所需）
-        res_strength, res_survival = alg.compute_equilibrium_metrics(
-            carrying_capacity=self.carrying_capacity,
-            expected_eggs_per_female=self.expected_eggs_per_female,
-            age_based_survival_rates=self.age_based_survival_rates,
-            age_based_mating_rates=self.age_based_mating_rates,
-            female_age_based_relative_fertility=self.female_age_based_relative_fertility,
-            relative_competition_strength=self.age_based_relative_competition_strength,
-            sex_ratio=self.sex_ratio,
-            new_adult_age=self.new_adult_age,
-            n_ages=self.n_ages,
-            equilibrium_individual_count=equilibrium_individual_distribution,
-        )
-        self.expected_competition_strength = res_strength
-        self.expected_survival_rate = res_survival
-
-        # Store generation time as a scalar field required by jitclass spec.
-        if generation_time is not None:
-            self.generation_time = float(generation_time)
-        else:
-            self.generation_time = float(self.compute_generation_time())
+    # Scalars are immutable; rebuild this NamedTuple for scalar updates.
+    is_stochastic: bool
+    use_dirichlet_sampling: bool
+    n_sexes: int
+    n_ages: int
+    n_genotypes: int
+    n_haploid_genotypes: int
+    n_glabs: int
+    age_based_mating_rates: NDArray[np.float64]
+    age_based_survival_rates: NDArray[np.float64]
+    female_age_based_relative_fertility: NDArray[np.float64]
+    viability_fitness: NDArray[np.float64]
+    fecundity_fitness: NDArray[np.float64]
+    sexual_selection_fitness: NDArray[np.float64]
+    age_based_relative_competition_strength: NDArray[np.float64]
+    sperm_displacement_rate: float
+    expected_eggs_per_female: float
+    use_fixed_egg_count: bool
+    carrying_capacity: float
+    sex_ratio: float
+    low_density_growth_rate: float
+    juvenile_growth_mode: int
+    expected_competition_strength: float
+    expected_survival_rate: float
+    generation_time: float
+    new_adult_age: int
+    # NumPy arrays are still mutable in-place.
+    adult_ages: NDArray[np.int64]
+    genotype_to_gametes_map: NDArray[np.float64]
+    gametes_to_zygote_map: NDArray[np.float64]
+    initial_individual_count: NDArray[np.float64]
+    initial_sperm_storage: NDArray[np.float64]
+    population_scale: float
+    base_carrying_capacity: float
+    base_expected_num_adult_females: float
 
     def set_viability_fitness(self, sex: int, genotype_idx: int, value: float, age: int = -1) -> None:
-        """Set viability fitness for a specific sex and genotype.
-        
-        Viability selection acts on the transition from juvenile to adult,
-        so by default it is applied at age = new_adult_age - 1.
-        
-        Args:
-            sex: Sex index (0=female, 1=male)
-            genotype_idx: Genotype index
-            value: Viability fitness value (0 to 1)
-            age: Age index. If -1 (default), uses new_adult_age - 1
-        """
         if age < 0:
             age = self.new_adult_age - 1
         self.viability_fitness[sex, age, genotype_idx] = value
-    
+
     def set_fecundity_fitness(self, sex: int, genotype_idx: int, value: float) -> None:
-        """Set fecundity fitness for a specific sex and genotype.
-        
-        Fecundity selection applies to all adult ages.
-        
-        Args:
-            sex: Sex index (0=female, 1=male)
-            genotype_idx: Genotype index
-            value: Fecundity fitness value (0 to 1)
-        """
         self.fecundity_fitness[sex, genotype_idx] = value
 
     def set_sexual_selection_fitness(self, female_geno_idx: int, male_geno_idx: int, value: float) -> None:
-        """Set sexual selection preference for a (female, male) genotype pair.
-        
-        Args:
-            female_geno_idx: Female genotype index
-            male_geno_idx: Male genotype index
-            value: Sexual selection preference value (non-negative)
-        """
         self.sexual_selection_fitness[female_geno_idx, male_geno_idx] = value
 
-    def set_population_scale(self, scale: float) -> None:
-        """Set population scale factor and update effective carrying capacity.
-        
-        Args:
-            scale: Population scale factor (> 0).
-        """
-        self.population_scale = float(scale)
-        self.carrying_capacity = self.base_carrying_capacity * self.population_scale
-    
+    def set_population_scale(self, scale: float) -> "PopulationConfig":
+        scale_f = float(scale)
+        return self._replace(
+            population_scale=scale_f,
+            carrying_capacity=float(self.base_carrying_capacity) * scale_f,
+        )
+
     def get_effective_carrying_capacity(self) -> float:
-        """Get effective carrying capacity (base * scale).
-        
-        Returns:
-            Effective carrying capacity for age=1 juveniles.
-        """
-        return self.base_carrying_capacity * self.population_scale
-    
+        return float(self.base_carrying_capacity) * float(self.population_scale)
+
     def get_effective_expected_adult_females(self) -> float:
-        """Get effective expected number of adult females (base * scale).
-        
-        Returns:
-            Effective expected number of adult females.
-        """
-        return self.base_expected_num_adult_females * self.population_scale
-    
+        return float(self.base_expected_num_adult_females) * float(self.population_scale)
+
     def get_scaled_initial_individual_count(self) -> NDArray[np.float64]:
-        """Get scaled initial individual count array.
-        
-        Returns:
-            Initial individual count scaled by population_scale.
-        """
-        return self.initial_individual_count * self.population_scale
-    
+        return self.initial_individual_count * float(self.population_scale)
+
     def get_scaled_initial_sperm_storage(self) -> NDArray[np.float64]:
-        """Get scaled initial sperm storage array.
-        
-        Returns:
-            Initial sperm storage scaled by population_scale.
-        """
-        return self.initial_sperm_storage * self.population_scale
+        return self.initial_sperm_storage * float(self.population_scale)
 
     def compute_generation_time(self) -> float:
-        """Calculate the generation time using the formula:
-        T = sum(x * l[x] * m[x]) / sum(l[x] * m[x])
-        
-        Where:
-        - x: age
-        - l[x]: cumulative survival rate (product of survival rates from age 0 to x)
-        - m[x]: contribution to reproduction (includes mating rates and fertility)
-        
-        Calculated separately for females and males, then averaged.
-        
-        Returns:
-            Generation time as average of female and male generation times.
-
-        Note:
-            This calculation assumes pure wild-type population, equilibrium conditions and
-            no sperm storage effects.
-            
-            **Sperm Storage Complication & Solution Sketch:**
-            
-            With sperm storage (sperm_displacement_rate > 0), males and females are no 
-            longer independent in generation time calculation.
-            
-            **Problem:** A male mating at age x produces sperm that persists in the female 
-            population. These sperm are used at times t > x when females mate/ovulate, with 
-            decay (1-p)^(t-x). The actual timing depends on the female age distribution and 
-            when females reproduce.
-            
-            **Solution approach:**
-            
-            Define an "age-at-mating distribution" that captures when fertilization actually 
-            occurs (from the sperm's perspective):
-            
-            For a male mating at age x_m, the effective reproductive contribution at time τ 
-            later is:
-            
-                C[x_m, τ] = (1-p)^τ * Pr(female of reproductive age at τ) * (female contribution)
-            
-            The female contribution involves:
-            - Distribution of females across reproductive ages at each time τ
-            - Female age-specific mating rates and fertility
-            - Female survivorship
-            
-            This requires computing or assuming:
-            
-            1. **Stable age distribution:** If population is at demographic equilibrium, 
-               use Leslie matrix eigenvector to get age structure across time.
-            
-            2. **Age-at-mating distribution M(x_m, x_f):** The probability distribution 
-               of female ages x_f available when a male at age x_m mates.
-            
-            3. **Effective male fertility profile:**
-               m_eff[x_m] = sum_{τ=0}^∞ (1-p)^τ * sum_{x_f} M(x_m, x_f+τ) 
-                                                    * female_contribution[x_f+τ]
-            
-            Then use m_eff[x_m] in place of m[x_m] in the generation time formula.
-            
-            **Data needed:**
-            - Current: age_based_mating_rates, age_based_survival_rates, fertility data
-            - Additional: age-age mating preference matrix or random mating assumption
-            - Population age structure or Leslie matrix to derive stable distribution
-            
-            **Current implementation:** Uses m[x] without sperm storage, giving a lower 
-            bound on male generation time. The actual generation time (with sperm storage) 
-            would be longer.
-        """
         gen_times = np.zeros(self.n_sexes, dtype=np.float64)
-        
-        # Sex 0 = Female, Sex 1 = Male (standard convention)
         for sex in range(self.n_sexes):
-            # Pre-compute cumulative survival rates l[x] for all ages
             l = np.ones(self.n_ages, dtype=np.float64)
             for age in range(1, self.n_ages):
                 l[age] = l[age - 1] * self.age_based_survival_rates[sex, age - 1]
-            
+
             numerator = 0.0
             denominator = 0.0
-            
             for age in range(self.n_ages):
-                # m[x]: contribution to reproduction
                 m_x = self.age_based_mating_rates[sex, age]
-                
-                # For females, also multiply by relative fertility
-                if sex == 0:  # Female
+                if sex == 0:
                     m_x *= self.female_age_based_relative_fertility[age]
-                
-                # Accumulate numerator and denominator
                 if m_x > 0:
                     numerator += age * l[age] * m_x
                     denominator += l[age] * m_x
-            
-            # Avoid division by zero
+
             if denominator > 0:
                 gen_times[sex] = numerator / denominator
-        
-        return np.mean(gen_times)
+
+        return float(np.mean(gen_times))
+
+
+PlainPopulationConfig = PopulationConfig
+
+
+def _maybe_copy_array(arr: NDArray[np.float64], copy: bool) -> NDArray[np.float64]:
+    return arr.copy() if copy else arr
+
+
+def to_plain_population_config(config: 'PopulationConfig', copy: bool = True) -> PopulationConfig:
+    """Convert config object to immutable NamedTuple PopulationConfig."""
+    return PopulationConfig(
+        is_stochastic=bool(config.is_stochastic),
+        use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
+        n_sexes=int(config.n_sexes),
+        n_ages=int(config.n_ages),
+        n_genotypes=int(config.n_genotypes),
+        n_haploid_genotypes=int(config.n_haploid_genotypes),
+        n_glabs=int(config.n_glabs),
+        age_based_mating_rates=_maybe_copy_array(config.age_based_mating_rates, copy),
+        age_based_survival_rates=_maybe_copy_array(config.age_based_survival_rates, copy),
+        female_age_based_relative_fertility=_maybe_copy_array(config.female_age_based_relative_fertility, copy),
+        viability_fitness=_maybe_copy_array(config.viability_fitness, copy),
+        fecundity_fitness=_maybe_copy_array(config.fecundity_fitness, copy),
+        sexual_selection_fitness=_maybe_copy_array(config.sexual_selection_fitness, copy),
+        age_based_relative_competition_strength=_maybe_copy_array(config.age_based_relative_competition_strength, copy),
+        sperm_displacement_rate=float(config.sperm_displacement_rate),
+        expected_eggs_per_female=float(config.expected_eggs_per_female),
+        use_fixed_egg_count=bool(config.use_fixed_egg_count),
+        carrying_capacity=float(config.carrying_capacity),
+        sex_ratio=float(config.sex_ratio),
+        low_density_growth_rate=float(config.low_density_growth_rate),
+        juvenile_growth_mode=int(config.juvenile_growth_mode),
+        expected_competition_strength=float(config.expected_competition_strength),
+        expected_survival_rate=float(config.expected_survival_rate),
+        generation_time=float(config.generation_time),
+        new_adult_age=int(config.new_adult_age),
+        adult_ages=config.adult_ages.copy() if copy else config.adult_ages,
+        genotype_to_gametes_map=_maybe_copy_array(config.genotype_to_gametes_map, copy),
+        gametes_to_zygote_map=_maybe_copy_array(config.gametes_to_zygote_map, copy),
+        initial_individual_count=_maybe_copy_array(config.initial_individual_count, copy),
+        initial_sperm_storage=_maybe_copy_array(config.initial_sperm_storage, copy),
+        population_scale=float(config.population_scale),
+        base_carrying_capacity=float(config.base_carrying_capacity),
+        base_expected_num_adult_females=float(config.base_expected_num_adult_females),
+    )
+
+
+def from_plain_population_config(plain: PopulationConfig) -> PopulationConfig:
+    """Compatibility adapter: returns a copied PopulationConfig."""
+    return to_plain_population_config(plain, copy=True)
+
+
+def build_population_config(
+    n_genotypes: int = 0,
+    n_haploid_genotypes: int = 0,
+    n_sexes: int = 2,
+    n_ages: int = 2,
+    n_glabs: int = 1,
+    is_stochastic: bool = True,
+    use_dirichlet_sampling: bool = False,
+    age_based_mating_rates: Optional[NDArray[np.float64]] = None,
+    age_based_survival_rates: Optional[NDArray[np.float64]] = None,
+    female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
+    viability_fitness: Optional[NDArray[np.float64]] = None,
+    fecundity_fitness: Optional[NDArray[np.float64]] = None,
+    sexual_selection_fitness: Optional[NDArray[np.float64]] = None,
+    age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
+    new_adult_age: int = 2,
+    sperm_displacement_rate: float = 0.05,
+    expected_eggs_per_female: float = 100.0,
+    use_fixed_egg_count: bool = False,
+    carrying_capacity: Optional[float] = None,
+    sex_ratio: float = 0.5,
+    low_density_growth_rate: float = 6.0,
+    juvenile_growth_mode: int = LOGISTIC,
+    generation_time: Optional[float] = None,
+    genotype_to_gametes_map: Optional[NDArray[np.float64]] = None,
+    gametes_to_zygote_map: Optional[NDArray[np.float64]] = None,
+    initial_individual_count: Optional[NDArray[np.float64]] = None,
+    initial_sperm_storage: Optional[NDArray[np.float64]] = None,
+    population_scale: float = 1.0,
+    old_juvenile_carrying_capacity: Optional[float] = None,
+    expected_num_adult_females: Optional[float] = None,
+    infer_capacity_from_initial_state: bool = True,
+    equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None,
+) -> PopulationConfig:
+    """Build immutable PopulationConfig directly (legacy-free path)."""
+    if n_sexes is None:
+        n_sexes = 2
+
+    assert n_genotypes > 0 and n_haploid_genotypes > 0 and n_glabs > 0, "invalid dimensions for PopulationConfig"
+    assert n_ages > 0, "n_ages must be positive"
+
+    n_hg_glabs = n_haploid_genotypes * n_glabs
+    n_sexes_i = np.int32(n_sexes)
+    n_ages_i = np.int32(n_ages)
+    n_genotypes_i = np.int32(n_genotypes)
+    n_haploid_genotypes_i = np.int32(n_haploid_genotypes)
+    n_glabs_i = np.int32(n_glabs)
+    new_adult_age_i = np.int32(new_adult_age)
+    adult_ages = np.arange(new_adult_age_i, n_ages_i, dtype=np.int64)
+
+    if initial_individual_count is not None:
+        init_ind = initial_individual_count.copy()
+    else:
+        init_ind = np.zeros((n_sexes_i, n_ages_i, n_genotypes_i), dtype=np.float64)
+
+    if initial_sperm_storage is not None:
+        init_sperm = initial_sperm_storage.copy()
+    else:
+        init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_hg_glabs), dtype=np.float64)
+
+    if old_juvenile_carrying_capacity is not None:
+        base_carrying_capacity = float(old_juvenile_carrying_capacity)
+    elif carrying_capacity is not None:
+        base_carrying_capacity = float(carrying_capacity)
+    elif infer_capacity_from_initial_state and initial_individual_count is not None:
+        base_carrying_capacity = float(initial_individual_count[:, 1, :].sum())
+        if base_carrying_capacity <= 0:
+            base_carrying_capacity = 1000.0
+    else:
+        base_carrying_capacity = 1000.0
+
+    if expected_num_adult_females is not None:
+        base_expected_num_adult_females = float(expected_num_adult_females)
+    elif infer_capacity_from_initial_state and initial_individual_count is not None:
+        base_expected_num_adult_females = float(initial_individual_count[0, new_adult_age_i:, :].sum())
+        if base_expected_num_adult_females <= 0:
+            base_expected_num_adult_females = 500.0
+    else:
+        base_expected_num_adult_females = 500.0
+
+    population_scale_f = float(population_scale)
+    carrying_capacity_f = float(base_carrying_capacity) * population_scale_f
+
+    def _validate_or_default_array(
+        arr: Optional[NDArray[np.float64]],
+        expected_shape: tuple[int, ...],
+        name: str,
+        default_value: Callable[[tuple[int, ...], type], NDArray[np.float64]] = np.ones,
+        has_sex_dim: Optional[bool] = None,
+        set_juvenile_values_to_zero: bool = False,
+    ) -> NDArray[np.float64]:
+        if arr is not None:
+            assert arr.shape == expected_shape, f"invalid shape for {name}: expected {expected_shape}, got {arr.shape}"
+            return arr
+        arr2 = default_value(expected_shape, np.float64)
+        if set_juvenile_values_to_zero:
+            if has_sex_dim:
+                arr2[:, :new_adult_age_i] = 0.0
+            else:
+                arr2[:new_adult_age_i] = 0.0
+        return arr2
+
+    mating = _validate_or_default_array(
+        age_based_mating_rates,
+        (n_sexes_i, n_ages_i),
+        "age_based_mating_rates",
+        has_sex_dim=True,
+        set_juvenile_values_to_zero=True,
+    )
+    survival = _validate_or_default_array(
+        age_based_survival_rates,
+        (n_sexes_i, n_ages_i),
+        "age_based_survival_rates",
+        has_sex_dim=True,
+        set_juvenile_values_to_zero=True,
+    )
+    female_fertility = _validate_or_default_array(
+        female_age_based_relative_fertility,
+        (n_ages_i,),
+        "female_age_based_relative_fertility",
+        has_sex_dim=False,
+        set_juvenile_values_to_zero=True,
+    )
+    viability = _validate_or_default_array(viability_fitness, (n_sexes_i, n_ages_i, n_genotypes_i), "viability_fitness")
+    fecundity = _validate_or_default_array(fecundity_fitness, (n_sexes_i, n_genotypes_i), "fecundity_fitness")
+    sexual = _validate_or_default_array(sexual_selection_fitness, (n_genotypes_i, n_genotypes_i), "sexual_selection_fitness")
+    competition = _validate_or_default_array(
+        age_based_relative_competition_strength,
+        (n_ages_i,),
+        "age_based_relative_competition_strength",
+    )
+    g2g = _validate_or_default_array(
+        genotype_to_gametes_map,
+        (n_sexes_i, n_genotypes_i, n_hg_glabs),
+        "genotype_to_gametes_map",
+        default_value=np.zeros,
+    )
+    g2z = _validate_or_default_array(
+        gametes_to_zygote_map,
+        (n_hg_glabs, n_hg_glabs, n_genotypes_i),
+        "gametes_to_zygote_map",
+        default_value=np.zeros,
+    )
+
+    expected_competition_strength, expected_survival_rate = alg.compute_equilibrium_metrics(
+        carrying_capacity=carrying_capacity_f,
+        expected_eggs_per_female=float(expected_eggs_per_female),
+        age_based_survival_rates=survival,
+        age_based_mating_rates=mating,
+        female_age_based_relative_fertility=female_fertility,
+        relative_competition_strength=competition,
+        sex_ratio=float(sex_ratio),
+        new_adult_age=new_adult_age_i,
+        n_ages=n_ages_i,
+        equilibrium_individual_count=equilibrium_individual_distribution,
+    )
+
+    if generation_time is None:
+        temp_cfg = PopulationConfig(
+            is_stochastic=bool(is_stochastic),
+            use_dirichlet_sampling=bool(use_dirichlet_sampling),
+            n_sexes=n_sexes_i,
+            n_ages=n_ages_i,
+            n_genotypes=n_genotypes_i,
+            n_haploid_genotypes=n_haploid_genotypes_i,
+            n_glabs=n_glabs_i,
+            age_based_mating_rates=mating,
+            age_based_survival_rates=survival,
+            female_age_based_relative_fertility=female_fertility,
+            viability_fitness=viability,
+            fecundity_fitness=fecundity,
+            sexual_selection_fitness=sexual,
+            age_based_relative_competition_strength=competition,
+            sperm_displacement_rate=float(sperm_displacement_rate),
+            expected_eggs_per_female=float(expected_eggs_per_female),
+            use_fixed_egg_count=bool(use_fixed_egg_count),
+            carrying_capacity=carrying_capacity_f,
+            sex_ratio=float(sex_ratio),
+            low_density_growth_rate=float(low_density_growth_rate),
+            juvenile_growth_mode=np.int32(juvenile_growth_mode),
+            expected_competition_strength=float(expected_competition_strength),
+            expected_survival_rate=float(expected_survival_rate),
+            generation_time=0.0,
+            new_adult_age=new_adult_age_i,
+            adult_ages=adult_ages,
+            genotype_to_gametes_map=g2g,
+            gametes_to_zygote_map=g2z,
+            initial_individual_count=init_ind,
+            initial_sperm_storage=init_sperm,
+            population_scale=population_scale_f,
+            base_carrying_capacity=float(base_carrying_capacity),
+            base_expected_num_adult_females=float(base_expected_num_adult_females),
+        )
+        generation_time_f = float(temp_cfg.compute_generation_time())
+    else:
+        generation_time_f = float(generation_time)
+
+    return PopulationConfig(
+        is_stochastic=bool(is_stochastic),
+        use_dirichlet_sampling=bool(use_dirichlet_sampling),
+        n_sexes=n_sexes_i,
+        n_ages=n_ages_i,
+        n_genotypes=n_genotypes_i,
+        n_haploid_genotypes=n_haploid_genotypes_i,
+        n_glabs=n_glabs_i,
+        age_based_mating_rates=mating,
+        age_based_survival_rates=survival,
+        female_age_based_relative_fertility=female_fertility,
+        viability_fitness=viability,
+        fecundity_fitness=fecundity,
+        sexual_selection_fitness=sexual,
+        age_based_relative_competition_strength=competition,
+        sperm_displacement_rate=float(sperm_displacement_rate),
+        expected_eggs_per_female=float(expected_eggs_per_female),
+        use_fixed_egg_count=bool(use_fixed_egg_count),
+        carrying_capacity=carrying_capacity_f,
+        sex_ratio=float(sex_ratio),
+        low_density_growth_rate=float(low_density_growth_rate),
+        juvenile_growth_mode=np.int32(juvenile_growth_mode),
+        expected_competition_strength=float(expected_competition_strength),
+        expected_survival_rate=float(expected_survival_rate),
+        generation_time=generation_time_f,
+        new_adult_age=new_adult_age_i,
+        adult_ages=adult_ages,
+        genotype_to_gametes_map=g2g,
+        gametes_to_zygote_map=g2z,
+        initial_individual_count=init_ind,
+        initial_sperm_storage=init_sperm,
+        population_scale=population_scale_f,
+        base_carrying_capacity=float(base_carrying_capacity),
+        base_expected_num_adult_females=float(base_expected_num_adult_females),
+    )
 
 # -------------------------------------------
 # Helper functions for initializing maps

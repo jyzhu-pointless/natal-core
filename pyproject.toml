@@ -1,7 +1,7 @@
 [project]
 name = "natal-core"
 version = "0.1.0"
-description = "Add your description here"
+description = "Numba-Accelerated Toolbox for Analysis of Lifecycle-based population genetic dynamics"
 readme = "README.md"
 authors = [
     { name = "Jinyu Zhu", email = "jyzhu_2020@stu.pku.edu.cn" }

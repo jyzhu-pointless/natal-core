@@ -35,22 +35,71 @@ Example:
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import re
+import sys
+import threading
 import numpy as np
 from enum import IntEnum
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import (
     Dict, List, Optional, Union, Callable, Tuple, Any, 
     Literal, TYPE_CHECKING, NamedTuple
 )
 
-from natal.numba_utils import njit_switch
+from natal.numba_utils import njit_switch, get_numba_cache_dir
 from natal import algorithms as alg
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
     from natal.base_population import BasePopulation
     from natal.index_core import IndexCore
+
+_HOOK_CODEGEN_DIR = Path(get_numba_cache_dir()) / "hook_codegen"
+_HOOK_CODEGEN_LOCK = threading.Lock()
+
+
+def _stable_callable_identity(fn: Callable) -> str:
+    """Build a stable identity string for a callable across process runs."""
+    py_fn = getattr(fn, "py_func", fn)
+    module_name = getattr(py_fn, "__module__", "<unknown>")
+    qualname = getattr(py_fn, "__qualname__", getattr(py_fn, "__name__", "<unknown>"))
+    return f"{module_name}:{qualname}"
+
+
+def _hash_key(parts: List[str]) -> str:
+    """Compute a deterministic short hash key for generated wrapper identity."""
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def _write_codegen_module(stem: str, source: str) -> Path:
+    """Write generated wrapper module to stable path if it doesn't exist."""
+    with _HOOK_CODEGEN_LOCK:
+        _HOOK_CODEGEN_DIR.mkdir(parents=True, exist_ok=True)
+        module_path = _HOOK_CODEGEN_DIR / f"{stem}.py"
+        if not module_path.exists():
+            module_path.write_text(source, encoding="utf-8")
+        return module_path
+
+
+def _load_codegen_module(stem: str, module_path: Path):
+    """Load a generated wrapper module from file, reusing sys.modules when possible."""
+    module_name = f"natal._hook_codegen_{stem}"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+
+    spec = importlib.util.spec_from_file_location(module_name, str(module_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load generated hook module: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 # =============================================================================
 # Operation Types and Data Structures
@@ -505,7 +554,7 @@ class HookProgram(NamedTuple):
     condition_params_data: np.ndarray
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _check_csr_condition(cond_type, cond_param, tick):
     if cond_type == 0:  # COND_ALWAYS
         return True
@@ -530,7 +579,7 @@ def _check_csr_condition(cond_type, cond_param, tick):
     return True
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _eval_csr_condition_program(cond_types, cond_params, cond_start, cond_end, tick):
     """Evaluate one condition RPN program segment.
 
@@ -588,7 +637,7 @@ def _eval_csr_condition_program(cond_types, cond_params, cond_start, cond_end, t
     return stack[0] != 0
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _sample_survivors(n_base, survival_prob, stochastic_flag, dirichlet_flag):
     if n_base <= 0.0:
         return 0.0
@@ -599,7 +648,7 @@ def _sample_survivors(n_base, survival_prob, stochastic_flag, dirichlet_flag):
     return n_base * survival_prob
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _apply_target_without_sperm(current_count, target_count, stochastic_flag, dirichlet_flag):
     if target_count >= current_count:
         return target_count
@@ -609,7 +658,7 @@ def _apply_target_without_sperm(current_count, target_count, stochastic_flag, di
     return _sample_survivors(current_count, survival_prob, stochastic_flag, dirichlet_flag)
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def _apply_target_with_sperm(
     current_count,
     target_count,
@@ -665,7 +714,7 @@ def _apply_target_with_sperm(
     return new_sperm_sum + survivors_virgins
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def execute_csr_event_arrays(
     n_events,
     n_hooks,
@@ -842,7 +891,7 @@ def build_hook_program(program: HookProgram) -> HookProgram:
     return program
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def execute_csr_event_program_with_state(
     program: HookProgram,
     event_id,
@@ -880,7 +929,7 @@ def execute_csr_event_program_with_state(
     )
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def execute_csr_event_program(program: HookProgram, event_id, individual_count, tick):
     """Execute one event from a `HookProgram` (compatibility wrapper).
 
@@ -1590,7 +1639,7 @@ def _compile_selector_njit_wrapper(
     """Generate a Numba wrapper with selector constants baked in.
 
     Generates code like:
-        @_njit_switch(cache=False)
+        @_njit_switch(cache=True)
         def selector_wrapper(ind_count, tick):
             return user_fn(ind_count, tick, target=2)
     
@@ -1617,23 +1666,29 @@ def _compile_selector_njit_wrapper(
     
     args_str = ", ".join(arg_lines)
     
-    fn_name = f"_selector_wrapper_{user_fn.__name__}"
-    
-    code = f"""
-@_njit_switch(cache=False)
-def {fn_name}(ind_count, tick):
-    return _user_fn(ind_count, tick, {args_str})
-"""
-    
-    # Create execution namespace
-    global_ns = {
-        '_njit_switch': _njit_switch,
-        '_user_fn': user_fn,
-        'np': np,
-    }
-    
-    exec(code, global_ns)
-    return global_ns[fn_name]
+    selector_parts = ["selector", _stable_callable_identity(user_fn)]
+    for key in sorted(resolved_selectors.keys()):
+        values = ",".join(str(int(v)) for v in resolved_selectors[key].tolist())
+        selector_parts.append(f"{key}={values}")
+
+    key = _hash_key(selector_parts)
+    fn_name = f"_selector_wrapper_{key}"
+    module_stem = f"selector_wrapper_{key}"
+
+    code = "\n".join([
+        "from natal.hook_dsl import _njit_switch",
+        "_USER_FN = None",
+        "",
+        "@_njit_switch(cache=True)",
+        f"def {fn_name}(ind_count, tick):",
+        f"    return _USER_FN(ind_count, tick, {args_str})",
+        "",
+    ])
+
+    module_path = _write_codegen_module(module_stem, code)
+    module = _load_codegen_module(module_stem, module_path)
+    setattr(module, "_USER_FN", user_fn)
+    return getattr(module, fn_name)
 
 
 # =============================================================================
@@ -1644,7 +1699,7 @@ def {fn_name}(ind_count, tick):
 _njit_switch = njit_switch
 
 # No-op hook function (used as default when no hooks are registered)
-@_njit_switch(cache=False)
+@_njit_switch(cache=True)
 def _noop_hook(ind_count, tick):
     """Default no-op hook that does nothing and returns CONTINUE."""
     return 0
@@ -1691,37 +1746,41 @@ def compile_combined_hook(njit_fns: List[Callable], name: str = "combined_hook")
     if len(njit_fns) == 1:
         return njit_fns[0]
     
-    # Create global namespace with all function references
-    fn_names = [f'_fn_{i}' for i in range(len(njit_fns))]
-    global_ns = {fn_name: fn for fn_name, fn in zip(fn_names, njit_fns)}
-    global_ns['_njit_switch'] = _njit_switch
-    
-    # Generate code that calls each function in sequence
-    # Note: cache=False because dynamically generated functions can't be cached
+    combined_parts = ["combined"] + [_stable_callable_identity(fn) for fn in njit_fns]
+    key = _hash_key(combined_parts)
+    fn_name = f"_combined_hook_{key}"
+    module_stem = f"combined_hook_{key}"
+
+    placeholder_names = [f"_FN_{i}" for i in range(len(njit_fns))]
     lines = [
-        '@_njit_switch(cache=False)',
-        f'def {name}(ind_count, tick):',
+        "from natal.hook_dsl import _njit_switch",
     ]
-    for fn_name in fn_names:
-        lines.append(f'    _result = {fn_name}(ind_count, tick)')
-        lines.append('    if _result != 0:')
-        lines.append('        return _result')
-    lines.append('    return 0')
-    
-    code = '\n'.join(lines)
-    
-    # Execute to create the function
-    exec(code, global_ns)
-    
-    return global_ns[name]
+    lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
+    lines.extend([
+        "",
+        "@_njit_switch(cache=True)",
+        f"def {fn_name}(ind_count, tick):",
+    ])
+    for placeholder in placeholder_names:
+        lines.append(f"    _result = {placeholder}(ind_count, tick)")
+        lines.append("    if _result != 0:")
+        lines.append("        return _result")
+    lines.append("    return 0")
+    lines.append("")
+
+    module_path = _write_codegen_module(module_stem, "\n".join(lines))
+    module = _load_codegen_module(module_stem, module_path)
+    for placeholder, fn in zip(placeholder_names, njit_fns):
+        setattr(module, placeholder, fn)
+
+    return getattr(module, fn_name)
 
 
 class CompiledEventHooks:
     """Container for event-wise compiled hook callables.
 
     This object is the kernel-facing bundle used by
-    `run_with_compiled_event_hooks` and
-    `run_discrete_with_compiled_event_hooks`.
+    `run` and `run_discrete` in simulation kernels.
     
     Attributes:
         first/reproduction/early/survival/late/finish:

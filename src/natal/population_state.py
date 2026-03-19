@@ -1,237 +1,183 @@
-"""PopulationState data container.
+"""Population state containers based on NamedTuple.
 
-This module implements a lightweight NumPy-backed PopulationState used
-to store per-sex, per-age (optional), per-genotype individual counts, as
-well as optional sperm storage and female occupancy arrays for age-structured
-models.
-
-Key points:
-- The jitclass version (PopulationState) always uses 3D shape 
-    (n_sexes, n_ages, n_genotypes) for Numba compatibility.
-    Non-age-structured mode is represented with n_ages=1.
-- The dataclass version (PopulationStateDataclass) supports optional 2D 
-    or 3D individual_count (kept for backward compatibility).
-- Age-related methods check n_ages (for jitclass) or dimension check 
-    (for dataclass).
-
-Example:
-    from natal.population_state import PopulationState
-
-    state = PopulationState(n_sexes=2, n_ages=4, n_genotypes=5, n_haploid_genotypes=10)
-    # Use state.individual_count, state.sperm_storage, state.female_occupancy
-        
-Note:
-        This module is a data container only; mating, selection and inheritance
-        logic belong to higher-level components (for example the population
-        implementations and simulation loop).
+These containers keep scalar metadata immutable while allowing in-place mutation
+of NumPy array contents, which remains compatible with Numba kernels.
 """
 
 from __future__ import annotations
 
 import numpy as np
-from typing import Optional, Union
+from typing import Optional, Union, NamedTuple
 from numpy.typing import NDArray
-from numba import types as nb_types
-
-from natal.numba_utils import jitclass_switch, njit_switch
-from natal.index_core import compress_hg_glab, decompress_hg_glab
 
 __all__ = [
-    # No user-facing API for now
-]
-
-# ============================================================================
-# Numba jitclass Version (Numba-compatible)
-# ============================================================================
-
-_popstate_spec = [
-    ('n_tick', nb_types.int32),
-    ('individual_count', nb_types.float64[:, :, :]),  # (sex, age, genotype)
-    ('sperm_storage', nb_types.float64[:, :, :]),     # (age, genotype (female), genotype (male))
-]
-
-_discrete_popstate_spec = [
-    ('n_tick', nb_types.int32),
-    ('individual_count', nb_types.float64[:, :, :]),  # (sex, age, genotype)
+    "PopulationState",
+    "DiscretePopulationState",
+    "PlainPopulationState",
+    "PlainDiscretePopulationState",
+    "to_plain_population_state",
+    "to_plain_discrete_population_state",
+    "from_plain_population_state",
+    "from_plain_discrete_population_state",
+    "parse_flattened_state",
 ]
 
 
-@njit_switch
-def _validate_or_default_array(arr: Optional[NDArray[np.float64]], expected_shape: tuple, name: str):
-    """Validate an array's shape or return a default zero array.
+class PopulationState(NamedTuple):
+    """Age-structured state container.
 
-    Args:
-        arr: Input array, or None to use default.
-        expected_shape: Expected shape tuple.
-        name: Array name used in assertion messages.
-
-    Returns:
-        The validated array cast to float64, or a new zero array with the expected shape.
+    Scalars are immutable (use ``_replace`` to rebuild); array values remain
+    mutable in-place.
     """
-    if arr is not None:
-        assert arr.shape == expected_shape, f"Invalid shape for {name}: expected {expected_shape}, got {arr.shape}"
-        return arr.astype(np.float64)
-    else:
-        return np.zeros(expected_shape, dtype=np.float64)
 
+    n_tick: int
+    individual_count: NDArray[np.float64]
+    sperm_storage: NDArray[np.float64]
 
-@jitclass_switch(_popstate_spec)
-class PopulationState:
-    """Numba-compatible population state container.
-    
-    Always stores individual_count in 3D format (sex, age, genotype).
-    For non-age-structured mode, use n_ages=2 (0: offspring, 1: adult).
-    """
-    
-    def __init__(
-        self,
-        n_genotypes: int = 0,
-        n_sexes: int = None,
+    @classmethod
+    def create(
+        cls,
+        n_genotypes: int,
+        n_sexes: Optional[int] = None,
         n_ages: int = 2,
         n_tick: int = 0,
         individual_count: Optional[NDArray[np.float64]] = None,
-        sperm_storage: Optional[NDArray[np.float64]] = None
-    ):
-        """Construct PopulationState with allocated/validated arrays.
-
-        This __init__ mirrors the validation and defaulting behaviour used by
-        `PopulationConfig` and allocates Numba-compatible numpy arrays.
-        """
+        sperm_storage: Optional[NDArray[np.float64]] = None,
+    ) -> "PopulationState":
         if n_sexes is None:
             n_sexes = 2
-
-        # validate small values
         assert n_genotypes > 0, "n_genotypes must be positive"
         assert n_ages > 0, "n_ages must be positive"
         assert n_tick >= 0, "n_tick must be non-negative"
-
-        self.n_tick = np.int32(n_tick)
-
-        # individual_count: (sex, age, genotype)
-        self.individual_count = _validate_or_default_array(
-            individual_count, (n_sexes, n_ages, n_genotypes), "individual_count"
-        )
-
-        # sperm_storage: (age, genotype (female), genotype (male))
-        self.sperm_storage = _validate_or_default_array(
-            sperm_storage, (n_ages, n_genotypes, n_genotypes), "sperm_storage"
-        )
-    
-    def get_count(self, sex: int, age: int, genotype_index: int) -> float:
-        """Get individual count for sex/age/genotype."""
-        return self.individual_count[sex, age, genotype_index]
-    
-    def add_count(self, sex: int, age: int, genotype_index: int, count: float) -> None:
-        """Add count for sex/age/genotype."""
-        self.individual_count[sex, age, genotype_index] += count
-    
-    def set_count(self, sex: int, age: int, genotype_index: int, count: float) -> None:
-        """Set count for sex/age/genotype."""
-        self.individual_count[sex, age, genotype_index] = count
-    
-    def get_stored_sperm(self, age: int, female_genotype_index: int, male_genotype_index: int, ) -> float:
-        """Get stored sperm count."""
-        return self.sperm_storage[age, female_genotype_index, male_genotype_index]
-    
-    def set_stored_sperm(self, age: int, female_genotype_index: int, male_genotype_index: int, count: float) -> None:
-        """Add stored sperm count."""
-        self.sperm_storage[age, female_genotype_index, male_genotype_index] += count
-
-    def flatten_all(self) -> NDArray[np.float64]:
-        """Flatten n_ticks, individual_count, and sperm_storage into a single 1D array."""
-        # Use tuple instead of list for concatenate, Numba prefers tuple for heterogeneous types or known size
-        # However, concatenate usually takes a sequence.
-        # Issue might be list of standard arrays being passed to concatenate inside jitclass
-        tick_arr = np.array([float(self.n_tick)], dtype=np.float64)
-        ind_flat = self.individual_count.flatten()
-        sperm_flat = self.sperm_storage.flatten()
-        return np.concatenate((tick_arr, ind_flat, sperm_flat))
-
-
-@jitclass_switch(_discrete_popstate_spec)
-class DiscretePopulationState:
-    """State container dedicated to discrete-generation simulations.
-
-    Stores only tick and individual counts. No sperm storage tensor is allocated.
-    """
-
-    def __init__(
-        self,
-        n_sexes: int,
-        n_ages: int,
-        n_genotypes: int,
-        n_tick: int = 0,
-        individual_count: Optional[NDArray[np.float64]] = None,
-    ):
-        assert n_sexes > 0, "n_sexes must be positive"
-        assert n_ages > 0, "n_ages must be positive"
-        assert n_genotypes > 0, "n_genotypes must be positive"
-        assert n_tick >= 0, "n_tick must be non-negative"
-
-        self.n_tick = np.int32(n_tick)
 
         if individual_count is None:
-            self.individual_count = np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64)
+            ind = np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64)
         else:
             expected_shape = (n_sexes, n_ages, n_genotypes)
             assert individual_count.shape == expected_shape, (
                 f"Invalid shape for individual_count: expected {expected_shape}, got {individual_count.shape}"
             )
-            self.individual_count = individual_count.astype(np.float64)
+            ind = individual_count.astype(np.float64)
+
+        if sperm_storage is None:
+            sperm = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
+        else:
+            expected_shape = (n_ages, n_genotypes, n_genotypes)
+            assert sperm_storage.shape == expected_shape, (
+                f"Invalid shape for sperm_storage: expected {expected_shape}, got {sperm_storage.shape}"
+            )
+            sperm = sperm_storage.astype(np.float64)
+
+        return cls(n_tick=np.int32(n_tick), individual_count=ind, sperm_storage=sperm)
+
+    def get_count(self, sex: int, age: int, genotype_index: int) -> float:
+        return self.individual_count[sex, age, genotype_index]
+
+    def add_count(self, sex: int, age: int, genotype_index: int, count: float) -> None:
+        self.individual_count[sex, age, genotype_index] += count
+
+    def set_count(self, sex: int, age: int, genotype_index: int, count: float) -> None:
+        self.individual_count[sex, age, genotype_index] = count
+
+    def get_stored_sperm(self, age: int, female_genotype_index: int, male_genotype_index: int) -> float:
+        return self.sperm_storage[age, female_genotype_index, male_genotype_index]
+
+    def set_stored_sperm(self, age: int, female_genotype_index: int, male_genotype_index: int, count: float) -> None:
+        self.sperm_storage[age, female_genotype_index, male_genotype_index] += count
 
     def flatten_all(self) -> NDArray[np.float64]:
-        """Flatten n_tick and individual_count into one 1D array."""
         tick_arr = np.array([float(self.n_tick)], dtype=np.float64)
-        ind_flat = self.individual_count.flatten()
-        return np.concatenate((tick_arr, ind_flat))
+        return np.concatenate((tick_arr, self.individual_count.flatten(), self.sperm_storage.flatten()))
 
 
-# ============================================================================
-# parse_flattened_state: Numba-compiled
-# ============================================================================
+class DiscretePopulationState(NamedTuple):
+    """Discrete-generation state container."""
 
-@njit_switch
+    n_tick: int
+    individual_count: NDArray[np.float64]
+
+    @classmethod
+    def create(
+        cls,
+        n_sexes: int,
+        n_ages: int,
+        n_genotypes: int,
+        n_tick: int = 0,
+        individual_count: Optional[NDArray[np.float64]] = None,
+    ) -> "DiscretePopulationState":
+        assert n_sexes > 0, "n_sexes must be positive"
+        assert n_ages > 0, "n_ages must be positive"
+        assert n_genotypes > 0, "n_genotypes must be positive"
+        assert n_tick >= 0, "n_tick must be non-negative"
+
+        if individual_count is None:
+            ind = np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64)
+        else:
+            expected_shape = (n_sexes, n_ages, n_genotypes)
+            assert individual_count.shape == expected_shape, (
+                f"Invalid shape for individual_count: expected {expected_shape}, got {individual_count.shape}"
+            )
+            ind = individual_count.astype(np.float64)
+
+        return cls(n_tick=np.int32(n_tick), individual_count=ind)
+
+    def flatten_all(self) -> NDArray[np.float64]:
+        tick_arr = np.array([float(self.n_tick)], dtype=np.float64)
+        return np.concatenate((tick_arr, self.individual_count.flatten()))
+
+
+# Backward-compatible aliases
+PlainPopulationState = PopulationState
+PlainDiscretePopulationState = DiscretePopulationState
+
+
+def to_plain_population_state(state: PopulationState, copy: bool = True) -> PlainPopulationState:
+    ind = state.individual_count.copy() if copy else state.individual_count
+    sperm = state.sperm_storage.copy() if copy else state.sperm_storage
+    return PopulationState(n_tick=int(state.n_tick), individual_count=ind, sperm_storage=sperm)
+
+
+def to_plain_discrete_population_state(
+    state: DiscretePopulationState,
+    copy: bool = True,
+) -> PlainDiscretePopulationState:
+    ind = state.individual_count.copy() if copy else state.individual_count
+    return DiscretePopulationState(n_tick=int(state.n_tick), individual_count=ind)
+
+
+def from_plain_population_state(plain: PlainPopulationState) -> PopulationState:
+    return PopulationState(
+        n_tick=int(plain.n_tick),
+        individual_count=plain.individual_count,
+        sperm_storage=plain.sperm_storage,
+    )
+
+
+def from_plain_discrete_population_state(plain: PlainDiscretePopulationState) -> DiscretePopulationState:
+    return DiscretePopulationState(
+        n_tick=int(plain.n_tick),
+        individual_count=plain.individual_count,
+    )
+
+
 def parse_flattened_state(
     flat_array: NDArray[np.float64],
     n_sexes: Union[int, np.integer],
     n_ages: Union[int, np.integer],
     n_genotypes: Union[int, np.integer],
-    copy: bool = True
+    copy: bool = True,
 ) -> PopulationState:
-    """Parse flattened state from array with automatic type handling.
-    
-    Works in both pure Python and Numba-compiled contexts.
-    
-    Args:
-        flat_array: Flattened 1D array [n_tick, ind_count.ravel(), sperm.ravel()]
-        n_sexes: Number of sexes
-        n_ages: Number of age classes
-        n_genotypes: Number of genotypes
-        copy: Whether to copy arrays. If True, arrays are copied; if False, arrays are used in-place (default True)
-        
-    Returns:
-        PopulationState: Reconstructed state object
-        
-    Example:
-        >>> flat = np.array([1.0, 2.0, 3.0, ...])
-        >>> state = parse_flattened_state(flat, 2, 8, 9)
-    """
     n_tick = np.int32(flat_array[0])
-    individual_count = flat_array[1:1+n_sexes*n_ages*n_genotypes].reshape((n_sexes, n_ages, n_genotypes))
-    sperm_storage = flat_array[1+n_sexes*n_ages*n_genotypes:].reshape((n_ages, n_genotypes, n_genotypes))
+    end = 1 + n_sexes * n_ages * n_genotypes
+    individual_count = flat_array[1:end].reshape((n_sexes, n_ages, n_genotypes))
+    sperm_storage = flat_array[end:].reshape((n_ages, n_genotypes, n_genotypes))
 
     if copy:
         individual_count = individual_count.copy()
         sperm_storage = sperm_storage.copy()
-    
-    # Create PopulationState with position parameters
+
     return PopulationState(
-        n_genotypes,
-        n_sexes,
-        n_ages,
-        n_tick,
-        individual_count,
-        sperm_storage
+        n_tick=n_tick,
+        individual_count=individual_count,
+        sperm_storage=sperm_storage,
     )
-
-

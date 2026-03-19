@@ -23,6 +23,7 @@ from natal.type_def import Sex
 from natal.helpers import resolve_sex_label
 from natal.population_config import (
     PopulationConfig,
+    build_population_config,
     initialize_gamete_map, 
     initialize_zygote_map,
     NO_COMPETITION, FIXED, LOGISTIC, CONCAVE, BEVERTON_HOLT, LINEAR
@@ -233,7 +234,7 @@ class PopulationConfigBuilder:
         print("🔧 Initializing population configuration...")
 
         # ===== Create and return PopulationConfig =====
-        cfg = PopulationConfig(
+        cfg = build_population_config(
             n_genotypes=n_genotypes,
             n_haploid_genotypes=n_haplogenotypes,
             n_sexes=2,

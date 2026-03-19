@@ -58,7 +58,10 @@ pop = nt.DiscreteGenerationPopulation \
         carrying_capacity=100000,
         juvenile_growth_mode="concave"
     ) \
-    .recipes(drive).hooks(release_drive_carriers).build()
+    .recipes(drive) \
+    .build()
+
+# .hooks(release_drive_carriers)
 
 pop.run(100)
 

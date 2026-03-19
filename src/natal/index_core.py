@@ -508,7 +508,7 @@ class IndexCore:
         # currently genotypes are dense so mapping is identity; placeholder
         return old_to_new_g
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     """Compress a (haplogenotype, glab) pair into a single integer.
 
@@ -526,7 +526,7 @@ def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     """
     return int(hg_idx) * int(n_glabs) + int(glab_idx)
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def decompress_hg_glab(compressed_idx: int, n_glabs: int) -> Tuple[int, int]:
     """Decompress a combined hg+glab index back into its components.
 

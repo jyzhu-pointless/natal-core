@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.3.20
+- 移除 `jitclass`，`PopulationState`, `DiscretePopulationState` 和 `PopulationConfig` 全部改为用 `NamedTuple`
+- 优化 `njit` 缓存
+- 增加编译提示信息
+
 ## 2026.3.18.b
 - Hook 执行内核拆分：将 CSR 执行逻辑抽为外部函数 `execute_csr_event_arrays`，统一以 `HookProgram` 作为数据载体
 - 新增 `HookProgram` 与 `build_hook_program` 作为非 jitclass 路径的数据接口（第一阶段）

@@ -16,7 +16,7 @@ from numpy.typing import NDArray
 from typing import Tuple, Dict, Any, Optional, List, Callable, Union, TYPE_CHECKING
 import natal.algorithms as alg
 from natal.type_def import Sex
-from natal.numba_utils import njit_switch, jitclass_switch
+from natal.numba_utils import njit_switch
 from natal.hook_dsl import (
     HookProgram,
     execute_csr_event_program,
@@ -76,7 +76,7 @@ def import_state_arrays(
 # ============================================================================
 # 核心：分离的阶段函数（繁殖、生存、衰老）
 # ============================================================================
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_reproduction(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
@@ -173,7 +173,7 @@ def run_reproduction(
     
     return ind_count, sperm_store
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_survival(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
@@ -315,7 +315,7 @@ def run_survival(
     
     return ind_count, sperm_store
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_aging(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
@@ -356,7 +356,7 @@ RESULT_CONTINUE = 0
 RESULT_STOP = 1
 
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_tick(
     state: PopulationState,
     config: PopulationConfig,
@@ -516,7 +516,7 @@ run_tick_with_hooks = run_tick
 # ============================================================================
 # 便利函数：循环运行和批量执行
 # ============================================================================
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run(
     state: PopulationState,
     config: PopulationConfig,
@@ -567,11 +567,12 @@ def run(
         ...     record_history=True,
         ... )
     """
-    # 使用 PopulationState 对象作为当前状态
-    current_state = (state.individual_count, state.sperm_storage, state.n_tick)
-    
+    # 解构初始状态，循环内用显式局部变量维护，避免 _replace。
+    ind_count = state.individual_count.copy()
+    sperm = state.sperm_storage.copy()
+    tick = np.int32(state.n_tick)
+
     # 计算展平大小
-    ind_count, sperm, tick = current_state
     history_size = 1 + ind_count.size + sperm.size
     
     # 初始化历史数组
@@ -586,21 +587,27 @@ def run(
 
     # 记录初始状态
     if record_history:
-        ind_count, sperm, tick = current_state
         tick_arr = np.array([float(tick)], dtype=np.float64)
         flattened = np.concatenate((tick_arr, ind_count.flatten(), sperm.flatten()))
         history_array[history_count, :] = flattened
         history_count += 1
 
     # 运行每个 tick
-    for tick_i in range(n_ticks):
+    for _ in range(n_ticks):
+        temp_state = PopulationState(
+            n_tick=tick,
+            individual_count=ind_count,
+            sperm_storage=sperm,
+        )
+
         current_state, result_code = run_tick(
-            state, config, registry,
+            temp_state, config, registry,
             first_hook, reproduction_hook, early_hook, survival_hook, late_hook
         )
 
+        ind_count, sperm, tick = current_state
+
         if record_history:
-            ind_count, sperm, tick = current_state
             tick_arr = np.array([float(tick)], dtype=np.float64)
             flattened = np.concatenate((tick_arr, ind_count.flatten(), sperm.flatten()))
             history_array[history_count, :] = flattened
@@ -609,60 +616,23 @@ def run(
         if result_code == RESULT_STOP:
             was_stopped = True
             break
-        
-        # Update state for next iteration
-        state.individual_count[:] = current_state[0]
-        state.sperm_storage[:] = current_state[1]
-        state.n_tick = current_state[2]
 
     if record_history:
         history_result = history_array[:history_count, :]
     else:
         history_result = None
 
-    return current_state, history_result, was_stopped
+    return (ind_count, sperm, tick), history_result, was_stopped
 
 # 保留旧函数名作为别名（向后兼容）
 run_with_hooks = run
 run_ticks = run
 
-
-def run_with_compiled_event_hooks(
-    state: PopulationState,
-    config: PopulationConfig,
-    hooks: 'CompiledEventHooks',
-    n_ticks: int,
-    record_history: bool = False,
-) -> Tuple[Tuple[NDArray, NDArray, int], Optional[NDArray], bool]:
-    """Run age-structured kernels with a single compiled-hook bundle.
-
-    This helper keeps the Numba kernel signatures stable while avoiding
-    repetitive per-event argument plumbing at call sites.
-
-    Execution model:
-    - Declarative CSR ops are executed through ``hooks.registry``.
-    - Event-specific ``njit`` hooks are executed through
-      ``hooks.first/reproduction/early/survival/late``.
-    - Python wrappers are not executed in this kernel path.
-    """
-    return run(
-        state=state,
-        config=config,
-        registry=hooks.registry,
-        n_ticks=n_ticks,
-        first_hook=hooks.first,
-        reproduction_hook=hooks.reproduction,
-        early_hook=hooks.early,
-        survival_hook=hooks.survival,
-        late_hook=hooks.late,
-        record_history=record_history,
-    )
-
 # ============================================================================
 # Discrete Generation Kernels
 # ============================================================================
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_discrete_reproduction(
     ind_count: NDArray[np.float64],
     config: PopulationConfig,
@@ -734,7 +704,7 @@ def run_discrete_reproduction(
     
     return ind_count
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_discrete_survival(
     ind_count: NDArray[np.float64],
     config: PopulationConfig,
@@ -819,7 +789,7 @@ def run_discrete_survival(
     
     return ind_count
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_discrete_aging(
     ind_count: NDArray[np.float64],
 ) -> NDArray[np.float64]:
@@ -834,7 +804,7 @@ def run_discrete_aging(
     
     return ind_count
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_discrete_tick(
     state: DiscretePopulationState,
     config: PopulationConfig,
@@ -931,9 +901,9 @@ def run_discrete_tick(
     
     ind_count = run_discrete_aging(ind_count)
     
-    return (ind_count, tick + 1), 0
+    return (ind_count, np.int32(tick + 1)), 0
 
-@njit_switch(cache=False)
+@njit_switch(cache=True)
 def run_discrete(
     state: DiscretePopulationState,
     config: PopulationConfig,
@@ -948,14 +918,10 @@ def run_discrete(
 ) -> Tuple[Tuple[NDArray, int], Optional[NDArray], bool]:
     """连续运行 n 个离散世代 tick，支持 hooks，可选记录历史。"""
     was_stopped = False
-    tick = state.n_tick
-    n_sexes = config.n_sexes
-    n_ages = config.n_ages
-    n_genotypes = config.n_genotypes
+    ind_count = state.individual_count.copy()
+    tick = np.int32(state.n_tick)
 
-    current_state = (state.individual_count.copy(), tick) #?
-
-    ind_size = current_state[0].size
+    ind_size = ind_count.size
     flatten_size = 1 + ind_size
     
     if record_history:
@@ -965,23 +931,21 @@ def run_discrete(
         
     history_count = 0
     
-    for i in range(n_ticks):
+    for _ in range(n_ticks):
         temp_state = DiscretePopulationState(
-            n_sexes,
-            n_ages,
-            n_genotypes,
-            current_state[1],
-            current_state[0],
+            n_tick=tick,
+            individual_count=ind_count,
         )
         
         current_state, result = run_discrete_tick(
             temp_state, config, registry, first_hook, reproduction_hook, early_hook, survival_hook, late_hook
         )
+        ind_count, tick = current_state
         
         if record_history:
             flat_state = np.zeros(flatten_size, dtype=np.float64)
-            flat_state[0] = current_state[1]
-            flat_state[1:1 + ind_size] = current_state[0].flatten()
+            flat_state[0] = tick
+            flat_state[1:1 + ind_size] = ind_count.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
             
@@ -994,31 +958,4 @@ def run_discrete(
     else:
         history_result = None
 
-    return current_state, history_result, was_stopped
-
-
-def run_discrete_with_compiled_event_hooks(
-    state: DiscretePopulationState,
-    config: PopulationConfig,
-    hooks: 'CompiledEventHooks',
-    n_ticks: int,
-    record_history: bool = False,
-) -> Tuple[Tuple[NDArray, int], Optional[NDArray], bool]:
-    """Run discrete kernels with a single compiled-hook bundle.
-
-    Semantics are the same as ``run_with_compiled_event_hooks`` for the
-    age-structured kernel: CSR declarative ops + combined ``njit`` hooks run
-    inside kernel loops; Python wrappers are outside this path.
-    """
-    return run_discrete(
-        state=state,
-        config=config,
-        registry=hooks.registry,
-        n_ticks=n_ticks,
-        first_hook=hooks.first,
-        reproduction_hook=hooks.reproduction,
-        early_hook=hooks.early,
-        survival_hook=hooks.survival,
-        late_hook=hooks.late,
-        record_history=record_history,
-    )
+    return (ind_count, tick), history_result, was_stopped
