@@ -810,7 +810,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             species=self.species,
             population_config=pop_config,
             name=self.name,
-            initial_individual_count=self.initial_individual_count,
+            initial_individual_count=self.initial_individual_count, # TODO: initial也由config管理（Discrete同理）
             initial_sperm_storage=self.initial_sperm_storage,
             hooks=self._hooks
         )

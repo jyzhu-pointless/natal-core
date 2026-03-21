@@ -217,7 +217,7 @@ def sample_mating(
                     n_mating = continuous_binomial(_n1, _p1)
                 else:
                     # 离散采样：标准 Binomial
-                    n_mating = float(np.random.binomial(int(round(_n1)), _p1))
+                    n_mating = float(nbc.binomial(int(round(_n1)), _p1))
                 
                 # Step 2: 这些交配的雌性分别与哪个基因型的雄性交配？
                 if n_mating > EPS:
@@ -385,7 +385,7 @@ def fertilize_with_mating_genotype(
             else:
                 # 离散采样：标准 Binomial
                 n_reproducing = np.array([
-                    float(np.random.binomial(int(n_pairs_for_sampling[i]), p_reproduce))
+                    float(nbc.binomial(int(n_pairs_for_sampling[i]), p_reproduce))
                     for i in range(n_combos)
                 ], dtype=np.float64)
         else:
@@ -480,7 +480,7 @@ def fertilize_with_mating_genotype(
                 n_females_total = continuous_binomial(total_offspring, sex_ratio_scalar)
             else:
                 # 离散采样：标准 Binomial
-                n_females_total = float(np.random.binomial(int(total_offspring), sex_ratio_scalar))
+                n_females_total = float(nbc.binomial(int(total_offspring), sex_ratio_scalar))
         else:
             # 确定性模式：不取整
             n_females_total = total_offspring * sex_ratio
@@ -769,7 +769,7 @@ def sample_survival_with_sperm_storage(
                         S[age, g, gm] = continuous_binomial(n_sperm, p_f)
                     else:
                         # 离散采样：标准 Binomial
-                        S[age, g, gm] = float(np.random.binomial(int(n_sperm), p_f))
+                        S[age, g, gm] = float(nbc.binomial(int(n_sperm), p_f))
                 else:
                     S[age, g, gm] = 0.0
                 new_sperm_sum += S[age, g, gm]
@@ -781,7 +781,7 @@ def sample_survival_with_sperm_storage(
                     survivors_virgins = continuous_binomial(n_virgins, p_f)
                 else:
                     # 离散采样：标准 Binomial
-                    survivors_virgins = float(np.random.binomial(int(n_virgins), p_f))
+                    survivors_virgins = float(nbc.binomial(int(n_virgins), p_f))
             else:
                 survivors_virgins = 0.0
             
@@ -803,7 +803,7 @@ def sample_survival_with_sperm_storage(
                     M[age, g] = continuous_binomial(n_m, p_m)
                 else:
                     # 离散采样：标准 Binomial
-                    M[age, g] = float(np.random.binomial(int(n_m), p_m))
+                    M[age, g] = float(nbc.binomial(int(n_m), p_m))
             else:
                 M[age, g] = 0.0
     
@@ -887,7 +887,7 @@ def sample_viability_with_sperm_storage(
                     S[target_age, g, gm] = continuous_binomial(n_sperm, p_f_val)
                 else:
                     # 离散采样：标准 Binomial
-                    S[target_age, g, gm] = float(np.random.binomial(int(n_sperm), p_f_val))
+                    S[target_age, g, gm] = float(nbc.binomial(int(n_sperm), p_f_val))
             else:
                 S[target_age, g, gm] = 0.0
             new_sperm_sum += S[target_age, g, gm]
@@ -899,7 +899,7 @@ def sample_viability_with_sperm_storage(
                 survivors_virgins = continuous_binomial(n_virgins, p_f_val)
             else:
                 # 离散采样：标准 Binomial
-                survivors_virgins = float(np.random.binomial(int(n_virgins), p_f_val))
+                survivors_virgins = float(nbc.binomial(int(n_virgins), p_f_val))
         else:
             survivors_virgins = 0.0
         
@@ -913,7 +913,7 @@ def sample_viability_with_sperm_storage(
                 M[target_age, g] = continuous_binomial(n_m_val, p_m_val)
             else:
                 # 离散采样：标准 Binomial
-                M[target_age, g] = float(np.random.binomial(int(n_m_val), p_m_val))
+                M[target_age, g] = float(nbc.binomial(int(n_m_val), p_m_val))
         else:
             M[target_age, g] = 0.0
     

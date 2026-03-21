@@ -24,6 +24,161 @@ __all__ = [
     "binomial_2d", "multinomial_rows", "multinomial"
 ]
 
+from numba import njit
+import numpy as np
+import time
+
+# The original binomial implementation in Numba (numba.cpython.randomimpl) has a performance issue 
+# for large n*p due to a fallback to a slower algorithm (BTPE not implemented).
+# This is a custom, efficient implementation of the BTPE algorithm (adapted from numba.np.random) 
+# for binomial sampling.
+@njit_switch(cache=True)
+def binomial_btpe(n, p):
+    # C源码初始化部分
+    r = min(p, 1.0 - p)
+    q = 1.0 - r
+    fm = n * r + r
+    m = int(np.floor(fm))
+    p1 = np.floor(2.195 * np.sqrt(n * r * q) - 4.6 * q) + 0.5
+    xm = m + 0.5
+    xl = xm - p1
+    xr = xm + p1
+    c = 0.134 + 20.5 / (15.3 + m)
+    a = (fm - xl) / (fm - xl * r)
+    laml = a * (1.0 + a / 2.0)
+    a = (xr - fm) / (xr * q)
+    lamr = a * (1.0 + a / 2.0)
+    p2 = p1 * (1.0 + 2.0 * c)
+    p3 = p2 + c / laml
+    p4 = p3 + c / lamr
+
+    nrq = n * r * q
+
+    # 开始循环抽样
+    while True:
+        # 对应 Step10 头部
+        u = np.random.random() * p4
+        v = np.random.random()
+
+        # ---------- 区域划分开始 ----------
+        if u <= p1:
+            # 对应 Step10 下半部：u <= p1 时直接跳到 Step60
+            y = int(np.floor(xm - p1 * v + u))
+            break # goto Step60
+
+        elif u <= p2:
+            # 对应 Step20
+            x = xl + (u - p1) / c
+            v = v * c + 1.0 - np.fabs(m - x + 0.5) / p1
+            if v > 1.0:
+                continue # goto Step10
+            y = int(np.floor(x))
+            # 顺延进入下方的 Step50 检验
+            
+        elif u <= p3:
+            # 对应 Step30
+            y = int(np.floor(xl + np.log(v) / laml))
+            if y < 0 or v == 0.0:
+                continue # goto Step10
+            v = v * (u - p2) * laml
+            # 顺延进入下方的 Step50 检验
+            
+        else:
+            # 对应 Step40
+            y = int(np.floor(xr - np.log(v) / lamr))
+            if y > n or v == 0.0:
+                continue # goto Step10
+            v = v * (u - p3) * lamr
+            # 顺延进入下方的 Step50 检验
+        # ---------- 区域划分结束 ----------
+
+        # ---------- 检验阶段 (对应 Step50 & Step52) ----------
+        k = abs(y - m)
+        if (k > 20) and (k < (nrq / 2.0 - 1)):
+            # 对应 Step52 (Squeeze 检验和精确近似)
+            rho = (k / nrq) * ((k * (k / 3.0 + 0.625) + 0.16666666666666666) / nrq + 0.5)
+            t = -k * k / (2.0 * nrq)
+            A = np.log(v)
+            
+            if A < (t - rho):
+                break # goto Step60
+            if A > (t + rho):
+                continue # goto Step10
+
+            # 对应 Step52 的精确近似公式
+            x1 = float(y + 1)
+            f1 = float(m + 1)
+            z = float(n + 1 - m)
+            w = float(n - y + 1)
+            x2 = x1 * x1
+            f2 = f1 * f1
+            z2 = z * z
+            w2 = w * w
+
+            # C 源码里全都是 + 号，并且除数全都是 166320.
+            if A > (xm * np.log(f1 / x1) + (n - m + 0.5) * np.log(z / w) +
+                    (y - m) * np.log(w * r / (x1 * q)) +
+                    (13680. - (462. - (132. - (99. - 140. / f2) / f2) / f2) / f2) / f1 / 166320. +
+                    (13680. - (462. - (132. - (99. - 140. / z2) / z2) / z2) / z2) / z / 166320. +
+                    (13680. - (462. - (132. - (99. - 140. / x2) / x2) / x2) / x2) / x1 / 166320. +
+                    (13680. - (462. - (132. - (99. - 140. / w2) / w2) / w2) / w2) / w / 166320.):
+                continue # goto Step10
+                
+            break # 兜底接受，goto Step60
+            
+        else:
+            # 对应 Step50 下半部的精确阶乘连乘 F
+            s = r / q
+            a = s * (n + 1)
+            F = 1.0
+            if m < y:
+                for i in range(m + 1, y + 1):
+                    F *= (a / i - s)
+            elif m > y:
+                for i in range(y + 1, m + 1):
+                    F /= (a / i - s)
+
+            if v > F:
+                continue # goto Step10
+            break # goto Step60
+
+    # 对应 Step60
+    if p > 0.5:
+        y = n - y
+    return y
+
+# 用法示例
+@njit_switch(cache=True)
+def fast_binomial(n, p):
+    # 1. 异常处理：校验 p 的范围
+    if not (0.0 <= p <= 1.0):
+        raise ValueError("fast_binomial(): p outside of [0, 1]")
+        
+    # 2. 异常处理：校验 n 的范围
+    if n < 0:
+        raise ValueError("fast_binomial(): n <= 0")
+        
+    # 3. 极值边界情况 (O(1) 立即返回)
+    if p == 0.0 or n == 0:
+        return 0
+    if p == 1.0:
+        return n
+        
+    # 4. 核心路由逻辑
+    # numpy 默认在 n * min(p, 1-p) <= 30 时使用反演法(Inversion/BINV)
+    # 因为在 np 较小时，BINV 循环次数少，开销比 BTPE 准备那些常数要小
+    if p <= 0.5:
+        if n * p <= 30.0:
+            return np.random.binomial(n, p)  # Numba 自带的 BINV 在这里很快
+        else:
+            return binomial_btpe(n, p)
+    else:
+        q = 1.0 - p
+        if n * q <= 30.0:
+            return n - np.random.binomial(n, q)
+        else:
+            return n - binomial_btpe(n, q)
+
 # ============================================================================
 # Dual Implementation Pattern
 # ============================================================================
@@ -58,7 +213,7 @@ def _binomial_2d_numba(
                 p_val = float(p[i, j])
             
             if n_val > 0 and 0.0 <= p_val <= 1.0:
-                result[i, j] = np.random.binomial(n_val, p_val)
+                result[i, j] = fast_binomial(n_val, p_val)
             else:
                 result[i, j] = 0.0
     
@@ -172,7 +327,7 @@ def _multinomial_rows_numba(
     for i in range(n_rows):
         n_trials = int(n_per_row[i])
         if n_trials > 0:
-            result[i, :] = np.random.multinomial(n_trials, p_matrix[i, :])
+            result[i, :] = _multinomial_numba(n_trials, p_matrix[i, :])
         else:
             for j in range(n_cols):
                 result[i, j] = 0
@@ -245,7 +400,7 @@ def _multinomial_numba(
                 p_cond = 0.0
             
             # Sample from binomial
-            n_j = np.random.binomial(n_remaining, p_cond)
+            n_j = fast_binomial(n_remaining, p_cond)
             result[j] = n_j
             n_remaining -= n_j
         
@@ -277,6 +432,7 @@ if is_numba_enabled():
     fancy_index_3d_flat = _fancy_index_3d_flat_numba
     multinomial_rows = _multinomial_rows_numba
     multinomial = _multinomial_numba
+    binomial = fast_binomial
 else:
     # Use NumPy vectorized implementations
     binomial_2d = _binomial_2d_numpy
@@ -284,3 +440,4 @@ else:
     fancy_index_3d_flat = _fancy_index_3d_flat_numpy
     multinomial_rows = _multinomial_rows_numpy
     multinomial = _multinomial_numpy
+    binomial = np.random.binomial

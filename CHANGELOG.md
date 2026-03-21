@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026.3.21
+- 重构 hook，优化 hook 缓存
+
 ## 2026.3.20
 - 移除 `jitclass`，`PopulationState`, `DiscretePopulationState` 和 `PopulationConfig` 全部改为用 `NamedTuple`
 - 优化 `njit` 缓存

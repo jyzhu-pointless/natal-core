@@ -6,7 +6,7 @@ n_ages=2:
 - age 1: reproducing adults
 
 The simulation flow remains split as:
-reproduction -> survival -> late hook -> aging
+first hook -> reproduction -> early hook -> survival -> late hook -> aging
 """
 
 from __future__ import annotations
@@ -47,10 +47,14 @@ class DiscreteGenerationPopulation(BasePopulation):
 
         super().__init__(species, name, hooks=hooks or {})
 
+        config_hook_slot = int(getattr(population_config, "hook_slot", 0))
+        if config_hook_slot <= 0:
+            config_hook_slot = self.hook_slot
         self._config = population_config._replace(
             n_ages=2,
             new_adult_age=1,
             adult_ages=np.array([1], dtype=np.int64),
+            hook_slot=np.int32(config_hook_slot),
         )
 
         self._genotypes_list = species.get_all_genotypes()
@@ -118,22 +122,6 @@ class DiscreteGenerationPopulation(BasePopulation):
             use_fixed_egg_count=use_fixed_egg_count,
         )
         return builder
-
-    def _create_registry(self) -> IndexCore:
-        return IndexCore()
-
-    def _get_genotypes(self) -> List[Genotype]:
-        return self._genotypes_list
-
-    def _get_haplogenotypes(self) -> Optional[List]:
-        return self._haploid_genotypes_list
-
-    def _resolve_genotype_key(self, genotype_key: Union[Genotype, str]) -> Genotype:
-        if isinstance(genotype_key, Genotype):
-            return genotype_key
-        if isinstance(genotype_key, str):
-            return self.species.get_genotype_from_str(genotype_key)
-        raise TypeError(f"Unsupported genotype key type: {type(genotype_key)}")
 
     def _resolve_age_distribution(
         self,
@@ -216,17 +204,13 @@ class DiscreteGenerationPopulation(BasePopulation):
             )
 
         hooks = self.get_compiled_event_hooks()
+        run_fn = hooks.run_discrete_fn if hooks.run_discrete_fn is not None else sk.run_discrete
 
-        final_state_tuple, history_new, was_stopped = sk.run_discrete(
+        final_state_tuple, history_new, was_stopped = run_fn(
             state=self._state,
             config=self._config,
             registry=hooks.registry,
             n_ticks=n_steps,
-            first_hook=hooks.first,
-            reproduction_hook=hooks.reproduction,
-            early_hook=hooks.early,
-            survival_hook=hooks.survival,
-            late_hook=hooks.late,
             record_history=(record_every > 0),
         )
 

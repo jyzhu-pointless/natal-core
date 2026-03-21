@@ -77,13 +77,18 @@ def _extract_module_exports(module_file: Path) -> list[str]:
 package_dir = Path(__file__).resolve().parent
 for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lambda item: item[1]):
 
-    # Skip private modules and subpackages.
-    # The current strategy only handles sibling .py modules to avoid the added
-    # complexity of recursive subpackage scanning.
-    if module_name.startswith("_") or is_package:
+    # Skip private modules. Most subpackages are ignored, except known lazy-export
+    # providers such as `hook`.
+    if module_name.startswith("_"):
         continue
 
-    module_file = package_dir / f"{module_name}.py"
+    if is_package:
+        if module_name != "hook":
+            continue
+        module_file = package_dir / module_name / "__init__.py"
+    else:
+        module_file = package_dir / f"{module_name}.py"
+
     if not module_file.is_file():
         continue
 

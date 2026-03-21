@@ -185,14 +185,14 @@ def _finish_compile_feedback(feedback: Optional[dict], cached: bool, elapsed: fl
 
     fn_name = feedback.get("fn_name", "<unknown>")
     if feedback.get("is_nested"):
-        status = f"✅ Done in {elapsed:.2f} s (cache hit)" if cached else f"✅ Done in {elapsed:.2f} s"
+        status = f"⚡️ Done in {elapsed:.2f} s (cache hit)" if cached else f"✅ Done in {elapsed:.2f} s"
         prefix = feedback.get("prefix", f"💡 Compiling function: `{fn_name}`...")
         _log_print(f"{prefix} {status}", flush=True)
         return
 
     if feedback.get("is_tty"):
         prefix = feedback.get("prefix", f"💡 Compiling function: `{fn_name}`...")
-        status = f"✅ Done in {elapsed:.2f} s (cache hit)" if cached else f"✅ Done in {elapsed:.2f} s"
+        status = f"⚡️ Done in {elapsed:.2f} s (cache hit)" if cached else f"✅ Done in {elapsed:.2f} s"
 
         if feedback.get("spinner_active", False):
             stop_event = feedback.get("stop_event")
@@ -210,7 +210,7 @@ def _finish_compile_feedback(feedback: Optional[dict], cached: bool, elapsed: fl
         return
 
     if cached:
-        _log_print(f"✅ Done in {elapsed:.2f} s (cache hit)", flush=True)
+        _log_print(f"⚡️ Done in {elapsed:.2f} s (cache hit)", flush=True)
     else:
         _log_print(f"✅ Done in {elapsed:.2f} s", flush=True)
 
@@ -299,7 +299,7 @@ def _install_cache_log_formatter() -> None:
                             _freeze_spinner_for_nested_output(parent_feedback)
                             _append_or_print(
                                 parent_feedback,
-                                f"{child_indent}💡 Compiling function: `{cached_fn}`... ✅ Cached",
+                                f"{child_indent}💡 Compiling function: `{cached_fn}`... ⚡️ Cached",
                             )
             elif "data saved to" in normalized:
                 if active_context is not None:

@@ -68,6 +68,7 @@ def monitor(pop, target_gt):
 
 - Python 选择器路径（默认）：生成 `py_wrapper(pop)`，在 Python 事件系统执行。
 - Numba 选择器路径（`numba=True` 或函数本身是 `@njit`）：生成 `njit_fn(ind_count, tick)`，可进 kernel 主循环。
+  多值 selector 会以 `np.ndarray[int32]` 传入，不再退化为首元素。
 
 ### 3) 原生 Numba
 
@@ -97,6 +98,8 @@ pop.set_hook('early', mortality_boost)
 2. 该事件合并后的 `njit_fn` hook
 
 Python `py_wrapper` 不在 kernel 内执行。
+
+> 内核 API 名称保持 `run_tick/run/run_discrete_tick/run_discrete`，但签名已收紧为纯数据参数（不再接收 hook callable 参数）。
 
 ### 路径 B：Python 事件路径（trigger_event）
 
@@ -186,14 +189,25 @@ pop.set_hook('first', h1)
 - `register(pop, event_override=...)` 只接受事件覆盖，不接受优先级参数。
 - 优先级请在装饰器里设置：`@hook(priority=...)`。
 
-## selector 模式的当前边界
+## Numba 严格模式
 
-`compile_selector_hook` 的 Numba 包装器目前将 selector 作为编译期常量注入。
+当 `NUMBA_ENABLED=True`：
 
-- 单值 selector：按预期注入。
-- 多值 selector：当前会退化为取第一个索引（Numba 包装器限制）。
+1. 所有可执行 hook 必须走 Numba 通道（declarative CSR 或 `njit_fn`）。
+2. selector Python hook（`py_wrapper`）会在注册/编译阶段报错。
+3. custom Python hook 也会在注册阶段报错。
+4. 汇总阶段若检测到任何 `py_wrapper` 漏网，会直接抛出 `TypeError` 阻止运行。
 
-如果你需要在 selector 中保留数组语义，建议使用 Python selector 路径。
+这意味着 Numba 开启时不存在“静默降级到 Python hook”的路径。
+
+## selector 模式边界
+
+`compile_selector_hook` 的 Numba 包装器会将 selector 绑定为模块级常量：
+
+- 单值 selector：传入 `int`
+- 多值 selector：传入 `np.ndarray[int32]`
+
+因此 selector 的 Numba 路径可直接支持数组语义。
 
 ### Numba 缓存说明（wrapper 生成）
 

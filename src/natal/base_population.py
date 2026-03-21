@@ -19,6 +19,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple, Set, Callable, Any, FrozenSet, Union, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
+import hashlib
 import numpy as np
 from natal.genetic_structures import *
 from natal.genetic_entities import *
@@ -50,9 +51,7 @@ class BasePopulation(ABC):
     ALLOWED_EVENTS = [
         "initialization",
         "first",
-        "reproduction",
         "early",
-        "survival",
         "late",
         "finish",
     ]
@@ -82,6 +81,7 @@ class BasePopulation(ABC):
         
         self._species = species
         self._name = name
+        self._hook_slot = self._derive_hook_slot(name)
         self._tick = 0
         # DELAYED: Registry will be created via _initialize_registry()
         self._index_core: Optional[IndexCore] = None
@@ -160,32 +160,8 @@ class BasePopulation(ABC):
         self._pending_hooks.clear()
     
     # ========================================================================
-    # Template Method Pattern: Registry and Genotype Initialization
+    # Registry and Genotype Initialization
     # ========================================================================
-    
-    @abstractmethod
-    def _create_registry(self) -> IndexCore:
-        """Create and return the IndexCore for this population.
-        
-        Subclasses implement this to customize registry creation.
-        Called during _initialize_registry().
-        
-        Returns:
-            Initialized IndexCore instance.
-        """
-        pass
-    
-    @abstractmethod
-    def _get_genotypes(self) -> List[Genotype]:
-        """Return the list of genotypes for this population.
-        
-        Subclasses implement this to provide their genotype list.
-        Called during _initialize_registry().
-        
-        Returns:
-            List of Genotype objects to register.
-        """
-        pass
     
     def _initialize_registry(self) -> None:
         """Template method: Initialize registry and register all genotypes.
@@ -220,16 +196,33 @@ class BasePopulation(ABC):
         for glab in glabs:
             self._index_core.register_gamete_label(glab)
     
-    def _get_haplogenotypes(self) -> Optional[List[HaploidGenotype]]:
-        """Return haplogenotypes for registration (optional).
-        
-        Override this in subclasses if you have haplogenotypes to register.
-        By default returns None.
-        
-        Returns:
-            List of HaploidGenotype objects or None.
-        """
-        return None
+    # Helpers
+    def _create_registry(self) -> IndexCore:
+        return IndexCore()
+
+    def _get_genotypes(self) -> List[Genotype]:
+        return self._genotypes_list
+
+    def _get_haplogenotypes(self) -> Optional[List]:
+        return self._haploid_genotypes_list
+
+    def _resolve_genotype_key(self, genotype_key: Union[Genotype, str]) -> Genotype:
+        if isinstance(genotype_key, Genotype):
+            return genotype_key
+        if isinstance(genotype_key, str):
+            return self.species.get_genotype_from_str(genotype_key)
+        raise TypeError(f"Unsupported genotype key type: {type(genotype_key)}")
+
+    @staticmethod
+    def _derive_hook_slot(name: str) -> int:
+        """Derive a stable non-negative hook slot from population name."""
+        digest = hashlib.sha1(name.encode("utf-8")).hexdigest()
+        # Keep int32-compatible positive range for config scalar stability.
+        return int(digest[:8], 16) & 0x7FFFFFFF
+
+    @property
+    def hook_slot(self) -> int:
+        return int(self._hook_slot)
     
     # ========================================================================
     # 基础属性
@@ -648,14 +641,12 @@ class BasePopulation(ABC):
         2. 设置 _running 标志防止递归
         3. 触发 'first' hook
         4. 调用 _step_reproduction()
-        5. 触发 'reproduction' hook
-        6. 触发 'early' hook
-        7. 调用 _step_survival()
-        8. 触发 'survival' hook
-        9. 触发 'late' hook
-        10. 调用 _step_aging()
-        11. 更新 tick
-        12. 清除 _running 标志
+        5. 触发 'early' hook
+        6. 调用 _step_survival()
+        7. 触发 'late' hook
+        8. 调用 _step_aging()
+        9. 更新 tick
+        10. 清除 _running 标志
         
         如果任何 hook 返回 RESULT_STOP，会立即停止执行后续步骤，
         并自动设置 is_finished=True。
@@ -690,9 +681,6 @@ class BasePopulation(ABC):
             
             # 繁殖阶段
             self._step_reproduction()
-            if self.trigger_event("reproduction") == RESULT_STOP:
-                self._finished = True
-                return self
             
             # early hook
             if self.trigger_event("early") == RESULT_STOP:
@@ -701,9 +689,6 @@ class BasePopulation(ABC):
             
             # 生存阶段
             self._step_survival()
-            if self.trigger_event("survival") == RESULT_STOP:
-                self._finished = True
-                return self
             
             # late hook
             if self.trigger_event("late") == RESULT_STOP:
@@ -1124,6 +1109,13 @@ class BasePopulation(ABC):
             (or by HookExecutor when trigger_event is used).
         """
         self._compiled_hooks.append(desc)
+
+        from natal.numba_utils import NUMBA_ENABLED
+        if NUMBA_ENABLED and desc.py_wrapper is not None and desc.njit_fn is None:
+            raise TypeError(
+                f"Python py_wrapper hook '{desc.name}' is not allowed when Numba is enabled. "
+                "Please convert it to @njit or use declarative Op hooks."
+            )
         
         # Mirror only real Python wrappers for trigger_event compatibility.
         # Do not inject no-op placeholders for declarative/njit hooks.
@@ -1168,7 +1160,7 @@ class BasePopulation(ABC):
         This is an alternative to using the @hook decorator.
         
         Args:
-            event: Event name ('first', 'early', 'survival', 'late', etc.)
+            event: Event name ('first', 'early', 'late', 'finish')
             ops: List of HookOp operations (from Op.scale, Op.add, etc.)
             priority: Execution priority (lower = earlier)
             name: Hook name for debugging
@@ -1373,16 +1365,12 @@ class BasePopulation(ABC):
         
         Returns:
             CompiledEventHooks: Container with combined @njit hooks per event.
-                                Access via .reproduction, .early, .survival, .late
+                                Access via .first, .early, .late, .finish
         
         Example:
             >>> hooks = pop.get_compiled_event_hooks()
             >>> state, result = sk.run_tick(
-            ...     state, config,
-            ...     reproduction_hook=hooks.reproduction,
-            ...     early_hook=hooks.early,
-            ...     survival_hook=hooks.survival,
-            ...     late_hook=hooks.late,
+            ...     state, config, hooks.registry
             ... )
         """
         from natal.hook_dsl import CompiledEventHooks

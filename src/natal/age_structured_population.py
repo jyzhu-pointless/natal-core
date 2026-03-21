@@ -83,10 +83,16 @@ class AgeStructuredPopulation(BasePopulation):
         super().__init__(species, name, hooks=hooks or {})
         
         # Store configuration
-        self._config = population_config
+        config_hook_slot = int(getattr(population_config, "hook_slot", 0))
+        if config_hook_slot <= 0:
+            config_hook_slot = self.hook_slot
+        self._config = population_config._replace(hook_slot=np.int32(config_hook_slot))
+
+        self._genotypes_list = species.get_all_genotypes()
+        self._haploid_genotypes_list = species.get_all_haploid_genotypes()
         
         # Create IndexCore for genotype and gamete label mapping
-        self._index_core = IndexCore(species, population_config)
+        self._initialize_registry()
         
         # Create PopulationState
         self._state = PopulationState.create(
@@ -144,7 +150,6 @@ class AgeStructuredPopulation(BasePopulation):
             name=name,
             stochastic=stochastic,
             use_dirichlet_sampling=use_dirichlet_sampling,
-            gamete_labels=gamete_labels,
             use_fixed_egg_count=use_fixed_egg_count
         )
         return builder
@@ -181,35 +186,6 @@ class AgeStructuredPopulation(BasePopulation):
         # Would extract this from _setup_from_config logic
         # Placeholder for sperm storage initialization
         pass
-    
-    # ========================================================================
-    # Template Method Pattern Implementation
-    # (implements BasePopulation abstract methods)
-    # ========================================================================
-    
-    def _create_registry(self) -> IndexCore:
-        """Create a fresh IndexCore for this age-structured population.
-        
-        Returns:
-            A new IndexCore instance.
-        """
-        return IndexCore()
-    
-    def _get_genotypes(self) -> List[Genotype]:
-        """Return the list of genotypes for this population.
-        
-        Returns:
-            The stored list of genotypes.
-        """
-        return self._genotypes_list
-    
-    def _get_haplogenotypes(self) -> Optional[List]:
-        """Return haploid genotypes for registration.
-        
-        Returns:
-            The stored list of haploid genotypes.
-        """
-        return self._haploid_genotypes_list
 
     def _parse_population_distribution(
         self,
@@ -296,14 +272,22 @@ class AgeStructuredPopulation(BasePopulation):
         Args:
             parsed_dist: Parsed mapping returned by ``_parse_population_distribution``.
         """
-        for sex, genotype_dict in parsed_dist.items():
-            sex_idx = int(sex.value)
-            for genotype, age_dict in genotype_dict.items():
-                genotype_idx = self._index_core.genotype_to_index[genotype]
+        for sex_key, genotype_dict in parsed_dist.items():
+            sex_key_norm = sex_key.lower().strip()
+            if sex_key_norm == "female":
+                sex_idx = int(Sex.FEMALE.value)
+            elif sex_key_norm == "male":
+                sex_idx = int(Sex.MALE.value)
+            else:
+                raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
+            for genotype_key, age_dict in genotype_dict.items():
+                genotype = self._resolve_genotype_key(genotype_key)
+                genotype_idx = self._registry.genotype_to_index[genotype]
                 
+                # TODO: 恢复多种解析方法
                 # 直接写入 PopulationState
                 for age, count in age_dict.items():
-                    if 0 <= age < self._n_ages:
+                    if 0 <= age < self._config.n_ages:
                         self._state.individual_count[sex_idx, age, genotype_idx] += float(count)
     
     def _distribute_initial_sperm_storage(
@@ -332,7 +316,7 @@ class AgeStructuredPopulation(BasePopulation):
             else:
                 raise TypeError(f"Female genotype key must be Genotype or str, got {type(female_key)}")
             
-            female_idx = self._index_core.genotype_to_index[female_genotype]
+            female_idx = self._registry.genotype_to_index[female_genotype]
             
             for male_key, age_data in male_dict.items():
                 # 解析雄性基因型
@@ -343,7 +327,7 @@ class AgeStructuredPopulation(BasePopulation):
                 else:
                     raise TypeError(f"Male genotype key must be Genotype or str, got {type(male_key)}")
                 
-                male_idx = self._index_core.genotype_to_index[male_genotype]
+                male_idx = self._registry.genotype_to_index[male_genotype]
                 
                 # 解析 age_data：支持多种格式
                 if isinstance(age_data, dict):
@@ -549,14 +533,14 @@ class AgeStructuredPopulation(BasePopulation):
 
     def _get_fecundity(self, genotype: Genotype, sex: Sex) -> float:
         """Internal helper: return fecundity for a genotype and sex."""
-        genotype_idx = self._index_core.genotype_to_index[genotype]
+        genotype_idx = self._registry.genotype_to_index[genotype]
         sex_idx = int(sex.value)
         return self._config.fecundity_fitness[sex_idx, genotype_idx]
     
     def _get_sexual_preference(self, female_genotype: Genotype, male_genotype: Genotype) -> float:
         """Internal helper: return sexual preference value for a genotype pair."""
-        f_idx = self._index_core.genotype_to_index[female_genotype]
-        m_idx = self._index_core.genotype_to_index[male_genotype]
+        f_idx = self._registry.genotype_to_index[female_genotype]
+        m_idx = self._registry.genotype_to_index[male_genotype]
         return self._config.sexual_selection_fitness[f_idx, m_idx]
     
     # ========================================================================
@@ -700,7 +684,7 @@ class AgeStructuredPopulation(BasePopulation):
                 flattened,
                 n_sexes=2,
                 n_ages=self._n_ages,
-                n_genotypes=len(self._index_core.index_to_genotype)
+                n_genotypes=len(self._registry.index_to_genotype)
             )
             result.append((tick, state))
         return result
@@ -723,7 +707,7 @@ class AgeStructuredPopulation(BasePopulation):
                     flattened,
                     n_sexes=2,
                     n_ages=self._n_ages,
-                    n_genotypes=len(self._index_core.index_to_genotype)
+                    n_genotypes=len(self._registry.index_to_genotype)
                 )
                 # 直接复制状态数据
                 self._state.individual_count[:] = state.individual_count
@@ -858,19 +842,15 @@ class AgeStructuredPopulation(BasePopulation):
         
         # 获取编译后的事件 hooks
         hooks = self.get_compiled_event_hooks()
-        
-        # 直接调用 sk.run 执行多步演化
-        final_state_tuple, history_new, was_stopped = sk.run(
+        run_fn = hooks.run_fn if hooks.run_fn is not None else sk.run
+
+        # 直接调用固定签名 runner 执行多步演化
+        final_state_tuple, history_new, was_stopped = run_fn(
             state=self._state,
             config=config,
             registry=hooks.registry,
             n_ticks=n_steps,
-            first_hook=hooks.first,
-            reproduction_hook=hooks.reproduction,
-            early_hook=hooks.early,
-            survival_hook=hooks.survival,
-            late_hook=hooks.late,
-            record_history=(record_every > 0)
+            record_history=(record_every > 0),
         )
         
         # 处理最终状态（tuple 格式：ind_count, sperm, tick）
@@ -942,7 +922,7 @@ class AgeStructuredPopulation(BasePopulation):
         total_alleles = 0
         
         # 统计每个基因型的个体数（使用索引访问）
-        for genotype_idx, genotype in enumerate(self._index_core.index_to_genotype):
+        for genotype_idx, genotype in enumerate(self._registry.index_to_genotype):
             # 所有性别和年龄的总计数
             total_count = self._state.individual_count[:, :, genotype_idx].sum()
             
@@ -995,7 +975,7 @@ class AgeStructuredPopulation(BasePopulation):
         Returns:
             Tuple[int,int]: ``(female_count, male_count)`` across all ages.
         """
-        genotype_idx = self._index_core.genotype_to_index[genotype]
+        genotype_idx = self._registry.genotype_to_index[genotype]
         female_count = self._state.individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
         male_count = self._state.individual_count[Sex.MALE.value, :, genotype_idx].sum()
         return (female_count, male_count)
@@ -1004,7 +984,7 @@ class AgeStructuredPopulation(BasePopulation):
     def genotypes_present(self) -> Set[Genotype]:
         """Return the set of genotypes currently present in the population."""
         present = set()
-        for genotype_idx, genotype in enumerate(self._index_core.index_to_genotype):
+        for genotype_idx, genotype in enumerate(self._registry.index_to_genotype):
             total_count = self._state.individual_count[:, :, genotype_idx].sum()
             if total_count > 0:
                 present.add(genotype)

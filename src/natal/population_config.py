@@ -60,6 +60,7 @@ class PopulationConfig(NamedTuple):
     expected_survival_rate: float
     generation_time: float
     new_adult_age: int
+    hook_slot: int
     # NumPy arrays are still mutable in-place.
     adult_ages: NDArray[np.int64]
     genotype_to_gametes_map: NDArray[np.float64]
@@ -158,6 +159,7 @@ def to_plain_population_config(config: 'PopulationConfig', copy: bool = True) ->
         expected_survival_rate=float(config.expected_survival_rate),
         generation_time=float(config.generation_time),
         new_adult_age=int(config.new_adult_age),
+        hook_slot=int(config.hook_slot),
         adult_ages=config.adult_ages.copy() if copy else config.adult_ages,
         genotype_to_gametes_map=_maybe_copy_array(config.genotype_to_gametes_map, copy),
         gametes_to_zygote_map=_maybe_copy_array(config.gametes_to_zygote_map, copy),
@@ -198,6 +200,7 @@ def build_population_config(
     low_density_growth_rate: float = 6.0,
     juvenile_growth_mode: int = LOGISTIC,
     generation_time: Optional[float] = None,
+    hook_slot: int = 0,
     genotype_to_gametes_map: Optional[NDArray[np.float64]] = None,
     gametes_to_zygote_map: Optional[NDArray[np.float64]] = None,
     initial_individual_count: Optional[NDArray[np.float64]] = None,
@@ -358,6 +361,7 @@ def build_population_config(
             expected_survival_rate=float(expected_survival_rate),
             generation_time=0.0,
             new_adult_age=new_adult_age_i,
+            hook_slot=np.int32(hook_slot),
             adult_ages=adult_ages,
             genotype_to_gametes_map=g2g,
             gametes_to_zygote_map=g2z,
@@ -397,6 +401,7 @@ def build_population_config(
         expected_survival_rate=float(expected_survival_rate),
         generation_time=generation_time_f,
         new_adult_age=new_adult_age_i,
+        hook_slot=np.int32(hook_slot),
         adult_ages=adult_ages,
         genotype_to_gametes_map=g2g,
         gametes_to_zygote_map=g2z,

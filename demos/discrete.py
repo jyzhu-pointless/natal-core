@@ -2,8 +2,6 @@ import natal as nt
 import numpy as np
 import time
 
-nt.enable_numba()
-
 sp = nt.Species.from_dict(
     name="TestSpecies",
     structure={
@@ -39,7 +37,7 @@ pop = nt.DiscreteGenerationPopulation \
     .setup(
         species=sp, 
         name="TestPop",
-        stochastic=True
+        stochastic=True,
     ) \
     .initial_state(
         individual_count={
@@ -63,11 +61,11 @@ pop = nt.DiscreteGenerationPopulation \
     .hooks(release_drive_carriers) \
     .build()
 
-pop.run(1) 
+pop.run(5) 
 
-start = time.time()
-pop.run(100)
-end = time.time()
+start = time.perf_counter()
+pop.run(10000)
+end = time.perf_counter()
 
 print(f"Execution time: {end - start:.3f} seconds\n")
 
