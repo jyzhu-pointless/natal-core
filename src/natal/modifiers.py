@@ -118,7 +118,7 @@ def _resolve_sex_name(key: str) -> Optional[int]:
 def wrap_gamete_modifier(
     mod: GameteModifier,
     population: Any,
-    index_core: Any,
+    index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
@@ -131,7 +131,7 @@ def wrap_gamete_modifier(
     Args:
         mod: A GameteModifier callable (returns dict mapping keys to freq dicts).
         population: The population object (passed to mod if it takes an argument).
-        index_core: IndexCore instance for key resolution.
+        index_registry: IndexRegistry instance for key resolution.
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
@@ -154,32 +154,32 @@ def wrap_gamete_modifier(
             if sex_idx is not None and isinstance(val, dict):
                 for gk, comp_map in val.items():
                     try:
-                        gidx = gk if isinstance(gk, int) else index_core.resolve_genotype_index(diploid_genotypes, gk, strict=True)
+                        gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
                     except KeyError:
                         continue
                     if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
                         continue
-                    _apply_comp_map(modified, sex_idx, gidx, comp_map, index_core, haploid_genotypes, n_glabs, n_hg_glabs)
+                    _apply_comp_map(modified, sex_idx, gidx, comp_map, index_registry, haploid_genotypes, n_glabs, n_hg_glabs)
                 continue
 
             # Case B: explicit (sex_idx, genotype_key) tuple
             if isinstance(key, tuple) and len(key) == 2:
                 sex_idx, gk = key
-                gidx = gk if isinstance(gk, int) else index_core.resolve_genotype_index(diploid_genotypes, gk, strict=True)
+                gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
                 if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
                     continue
-                _apply_comp_map(modified, sex_idx, gidx, val, index_core, haploid_genotypes, n_glabs, n_hg_glabs)
+                _apply_comp_map(modified, sex_idx, gidx, val, index_registry, haploid_genotypes, n_glabs, n_hg_glabs)
                 continue
 
             # Case C: key is genotype_key applied to all sexes
             try:
-                gidx = key if isinstance(key, int) else index_core.resolve_genotype_index(diploid_genotypes, key, strict=True)
+                gidx = key if isinstance(key, int) else index_registry.resolve_genotype_index(diploid_genotypes, key, strict=True)
             except KeyError:
                 continue
             if not isinstance(val, dict):
                 continue
             for sex_idx in range(n_sexes):
-                _apply_comp_map(modified, sex_idx, gidx, val, index_core, haploid_genotypes, n_glabs, n_hg_glabs)
+                _apply_comp_map(modified, sex_idx, gidx, val, index_registry, haploid_genotypes, n_glabs, n_hg_glabs)
 
         return modified
     return tensor_modifier
@@ -188,7 +188,7 @@ def wrap_gamete_modifier(
 def wrap_zygote_modifier(
     mod: ZygoteModifier,
     population: Any,
-    index_core: Any,
+    index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
@@ -201,7 +201,7 @@ def wrap_zygote_modifier(
     Args:
         mod: A ZygoteModifier callable.
         population: The population object (passed to mod if it takes an argument).
-        index_core: IndexCore instance for key resolution.
+        index_registry: IndexRegistry instance for key resolution.
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
@@ -218,8 +218,8 @@ def wrap_zygote_modifier(
             raise TypeError("Zygote modifier must return a dict mapping keys to replacements")
 
         for key, val in bulk.items():
-            c1, c2 = _parse_zygote_key(key, index_core, haploid_genotypes, n_glabs)
-            mapping = _normalize_zygote_val(val, index_core, diploid_genotypes)
+            c1, c2 = _parse_zygote_key(key, index_registry, haploid_genotypes, n_glabs)
+            mapping = _normalize_zygote_val(val, index_registry, diploid_genotypes)
             _write_zygote_mapping(modified, c1, c2, mapping)
 
         return modified
@@ -230,7 +230,7 @@ def build_modifier_wrappers(
     gamete_modifiers: List[Tuple[int, Optional[str], GameteModifier]],
     zygote_modifiers: List[Tuple[int, Optional[str], ZygoteModifier]],
     population: Any,
-    index_core: Any,
+    index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
@@ -244,7 +244,7 @@ def build_modifier_wrappers(
         gamete_modifiers: List of (hook_id, name, modifier) tuples for gamete modifiers.
         zygote_modifiers: List of (hook_id, name, modifier) tuples for zygote modifiers.
         population: The population object.
-        index_core: IndexCore instance.
+        index_registry: IndexRegistry instance.
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
@@ -258,12 +258,12 @@ def build_modifier_wrappers(
 
     for _, _, mod in zygote_modifiers:
         zygote_modifier_funcs.append(
-            wrap_zygote_modifier(mod, population, index_core, haploid_genotypes, diploid_genotypes, n_glabs)
+            wrap_zygote_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
         )
 
     for _, _, mod in gamete_modifiers:
         gamete_modifier_funcs.append(
-            wrap_gamete_modifier(mod, population, index_core, haploid_genotypes, diploid_genotypes, n_glabs)
+            wrap_gamete_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
         )
 
     return gamete_modifier_funcs, zygote_modifier_funcs
@@ -278,7 +278,7 @@ def _apply_comp_map(
     sex_idx: int,
     gidx: int,
     comp_map: Any,
-    index_core: Any,
+    index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     n_glabs: int,
     n_hg_glabs: int,
@@ -288,7 +288,7 @@ def _apply_comp_map(
     if not isinstance(comp_map, dict):
         return
     for comp_key, freq in comp_map.items():
-        comp_idx = index_core.resolve_comp_idx(haploid_genotypes, n_glabs, comp_key, strict=False)
+        comp_idx = index_registry.resolve_comp_idx(haploid_genotypes, n_glabs, comp_key, strict=False)
         if comp_idx is None:
             continue
         if not (0 <= comp_idx < n_hg_glabs):
@@ -298,7 +298,7 @@ def _apply_comp_map(
 
 def _parse_zygote_key(
     key: Any,
-    index_core: Any,
+    index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     n_glabs: int,
 ) -> Tuple[int, int]:
@@ -306,9 +306,9 @@ def _parse_zygote_key(
     if isinstance(key, tuple) and len(key) == 2 and all(isinstance(x, int) for x in key):
         return key[0], key[1]
     part1, part2 = key
-    idx_hg1, glab1 = index_core.resolve_hg_glab_part(haploid_genotypes, part1, n_glabs, strict=True)
-    idx_hg2, glab2 = index_core.resolve_hg_glab_part(haploid_genotypes, part2, n_glabs, strict=True)
-    from natal.index_core import compress_hg_glab
+    idx_hg1, glab1 = index_registry.resolve_hg_glab_part(haploid_genotypes, part1, n_glabs, strict=True)
+    idx_hg2, glab2 = index_registry.resolve_hg_glab_part(haploid_genotypes, part2, n_glabs, strict=True)
+    from natal.index_registry import compress_hg_glab
     c1 = compress_hg_glab(idx_hg1, glab1, n_glabs)
     c2 = compress_hg_glab(idx_hg2, glab2, n_glabs)
     return c1, c2
@@ -316,7 +316,7 @@ def _parse_zygote_key(
 
 def _normalize_zygote_val(
     val: Any,
-    index_core: Any,
+    index_registry: Any,
     diploid_genotypes: List[Genotype],
 ) -> Dict[int, float]:
     """Normalize zygote replacement value into a mapping idx->prob."""
@@ -328,7 +328,7 @@ def _normalize_zygote_val(
         if isinstance(idx_candidate, int):
             idx = int(idx_candidate)
         else:
-            idx = index_core.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
+            idx = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
         mapping[int(idx)] = float(prob)
         return mapping
 
@@ -336,12 +336,12 @@ def _normalize_zygote_val(
     if isinstance(val, dict):
         for idx_candidate, prob in val.items():
             if not isinstance(idx_candidate, int):
-                idx_candidate = index_core.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
+                idx_candidate = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
             mapping[int(idx_candidate)] = float(prob)
         return mapping
 
     # single genotype replacement
-    idx = index_core.resolve_genotype_index(diploid_genotypes, val, strict=True)
+    idx = index_registry.resolve_genotype_index(diploid_genotypes, val, strict=True)
     mapping[int(idx)] = 1.0
     return mapping
 

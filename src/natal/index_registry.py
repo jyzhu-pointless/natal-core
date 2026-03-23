@@ -10,10 +10,10 @@ from natal.numba_utils import njit_switch
 # TODO: 性染色体相关基因的支持。如果设置了性染色体，genotype to index 在雌雄中不同
 # TODO: 当然，可以有空缺
 
-class IndexCore:
+class IndexRegistry:
     """Registry providing stable integer indices for population entities.
 
-    The IndexCore assigns and stores stable integer indices for entities that
+    The IndexRegistry assigns and stores stable integer indices for entities that
     occur in the population: diploid genotypes, haploid genotypes (haplogenotypes),
     and gamete labels. It exposes small helper methods to export index arrays and
     to resolve flexible selector types (objects, ints, or string keys) into
@@ -22,7 +22,7 @@ class IndexCore:
     Example:
 
 
-        ic = IndexCore()
+        ic = IndexRegistry()
         gid = ic.register_genotype('g1')
         hid = ic.register_haplogenotype('h1')
         glid = ic.register_gamete_label('gl1')

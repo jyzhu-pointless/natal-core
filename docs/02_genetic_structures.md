@@ -264,7 +264,7 @@ print(f"Heterozygous at locus A: {gt.is_heterozygous(sp['chr1']['A'])}")
 
 1. **内存效率**：避免创建重复的 Genotype 对象
 2. **哈希一致性**：字符串规范化确保 `"WT|Drive"` 和 `"Drive|WT"` 映射到同一对象
-3. **索引稳定性**：与 IndexCore 配合，每个 Genotype 对应唯一的整数索引
+3. **索引稳定性**：与 IndexRegistry 配合，每个 Genotype 对应唯一的整数索引
 
 ### 缓存的工作原理
 
@@ -276,7 +276,7 @@ print(f"Heterozygous at locus A: {gt.is_heterozygous(sp['chr1']['A'])}")
 Species.genotype_cache["Drive|WT"]
     ↓ [命中或创建]
 Genotype 对象（全局唯一）
-    ↓ [注册到 IndexCore]
+    ↓ [注册到 IndexRegistry]
 整数索引（例如 idx=5）
 ```
 
@@ -370,17 +370,17 @@ for gt in all_genotypes:
     pop.initial_individual_count["female"][str(gt)] = 0
 ```
 
-## 与 IndexCore 的关系
+## 与 IndexRegistry 的关系
 
-Genotype 对象与 IndexCore（索引机制）紧密配合：
+Genotype 对象与 IndexRegistry（索引机制）紧密配合：
 
 ```python
 from natal.nonWF_population import AgeStructuredPopulation
 
 pop = AgeStructuredPopulation(species=sp, ...)
 
-# 获取 IndexCore
-ic = pop.registry  # 或 pop._index_core
+# 获取 IndexRegistry
+ic = pop.registry  # 或 pop._index_registry
 
 # Genotype → 整数索引
 gt = sp.get_genotype_from_str("A1|A2")
@@ -396,7 +396,7 @@ individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_geno
 female_count_of_gt = individual_count[1, :, gt_idx]  # 某基因型所有年龄的雌性数量
 ```
 
-> 更多关于 IndexCore 的细节，见 [IndexCore 索引机制](05_index_core.md)
+> 更多关于 IndexRegistry 的细节，见 [IndexRegistry 索引机制](05_index_registry.md)
 
 ## 常见操作速查
 
@@ -466,7 +466,7 @@ alleles_at_locus = gt.get_alleles_at_locus(locus)  # (mat_gene, pat_gene)
 **关键点**：
 1. Genotype 使用全局缓存和字符串规范化
 2. 字符串和对象可互相转换
-3. Genotype 与 IndexCore 配合实现对象↔索引映射
+3. Genotype 与 IndexRegistry 配合实现对象↔索引映射
 4. 理解这些是使用 Modifier 和高级功能的基础
 
 ---
@@ -475,7 +475,7 @@ alleles_at_locus = gt.get_alleles_at_locus(locus)  # (mat_gene, pat_gene)
 
 - [快速开始：15 分钟上手 NATAL](01_quickstart.md) - 基本使用示例
 - [Simulation Kernels 深度解析](03_simulation_kernels.md) - 遗传学实体在计算中的应用
-- [IndexCore 索引机制](05_index_core.md) - 对象索引的详细机制
+- [IndexRegistry 索引机制](05_index_registry.md) - 对象索引的详细机制
 - [Modifier 机制](06_modifiers.md) - 如何基于 Genotype 定义遗传规则
 
 ---

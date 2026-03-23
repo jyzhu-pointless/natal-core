@@ -1,17 +1,26 @@
-""" Recipes for gene drive modifications.
+""" Genetic presets for mutations, gene drives, and allele conversions.
 
-This module provides pre-defined gene drive and genetic modification systems.
-Each recipe integrates multiple components:
-  - gamete_modifier: modifies gamete frequencies
-  - zygote_modifier: modifies embryo genotypes (e.g., embryo resistance)
-  - fitness_modifiers: viability/fecundity/sexual selection costs
+This module provides a framework for defining reusable genetic modifications including:
+- Gene drives (e.g., CRISPR/Cas9 homing drives)
+- General mutations (point mutations, insertions, deletions)
+- Allele conversion rules and fitness effects
+- Complex genetic constructions
 
-Recipes can be registered onto a population using the `apply()` method.
+Each preset can modify population genetics through three mechanisms:
+  - gamete_modifier: modifies gamete frequencies during gametogenesis
+  - zygote_modifier: modifies embryo genotypes after fertilization
+  - fitness_patch: declarative specification of viability/fecundity/sexual selection effects
 
-It also provides a generic allele conversion rule system for defining
-transformations between alleles at the gamete level:
-  - GameteAlleleConversionRule: defines from->to conversions with probabilities
-  - GameteConversionRuleSet: manages multiple rules and creates GameteModifiers
+Presets are applied to populations using the preferred API:
+  population.apply_preset(preset)  # Modern API
+  
+Legacy API (deprecated):
+  preset.apply(population)  # For backwards compatibility
+
+The module also provides a generic allele conversion rule system:
+  - GameteAlleleConversionRule: defines allele conversions with probabilities
+  - GameteConversionRuleSet: manages multiple conversion rules
+  - ZygoteAlleleConversionRule: defines conversions in embryos
 """
 
 from abc import ABC, abstractmethod
@@ -29,7 +38,11 @@ from natal.helpers import resolve_sex_label
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
 
-__all__ = ["HomingDrive"]
+__all__ = [
+    "GeneticPreset",      # Abstract base class for custom presets
+    "HomingDrive",        # Built-in gene drive preset
+    "apply_preset_to_population",  # Core application function
+]
 
 # Temporary type alias
 _AlleleSpecifier = Union[Gene, str]
@@ -37,10 +50,10 @@ _SexSpecifier = Union[Sex, str]
 _SexSpecificRates = Union[float, Tuple[float, float], Dict[_SexSpecifier, float]]
 
 # Defines how a specific allele scales fitness
-# e.g., if "Drive" allele has viability_scaling = 0.8, then:
+# e.g., if "Dr" allele has viability_scaling = 0.8, then:
 # "WT|WT" -> 1.0 viability
-# "Drive::WT" -> 0.8 viability
-# "Drive|Drive" -> 0.64 viability (multiplicative)
+# "Dr::WT" -> 0.8 viability
+# "Dr|Dr" -> 0.64 viability (multiplicative)
 _ViabilityScalingConfig = Union[
     float,             # both sex, at the largest juvenile age
     Dict[Age, float],  # both sex, age-specific
@@ -58,7 +71,7 @@ _SexualSelectionScalingConfig = Union[
     Tuple[float, float]           # (male selected by default, male selected by allele carriers)
 ]
 
-RecipeFitnessPatch = Dict[str, Any]
+PresetFitnessPatch = Dict[str, Any]
 
 def _normalize_sex_key(sex_key: _SexSpecifier) -> int:
     """Normalize sex key to integer index used by PopulationConfig.
@@ -79,47 +92,101 @@ def _count_allele_copies(genotype: Genotype, target_gene: Gene) -> int:
     mat_gene, pat_gene = genotype.get_alleles_at_locus(target_gene.locus)
     return int(mat_gene is target_gene) + int(pat_gene is target_gene)
 
+def _count_combined_allele_copies(genotype: Genotype, target_genes: List[Gene]) -> int:
+    """Count total copies of a list of alleles in a genotype."""
+    total = 0
+    # Optimization: Usually these alleles are at the same locus.
+    # We could optimize, but summing individual counts is safe and correct.
+    for gene in target_genes:
+        total += _count_allele_copies(genotype, gene)
+    # Cap at 2 for diploid systems if they are alleles of the same locus,
+    # but logic holds generally (e.g. 2 means homozygous-equivalent cost).
+    return total
+
+def _calculate_allele_effect(scale: Union[float, Tuple[float, float]], copies: int, mode: str = "multiplicative") -> float:
+    """Calculate fitness factor based on allele copies and scaling mode."""
+    if mode == "custom":
+        if not isinstance(scale, (tuple, list)) or len(scale) != 2:
+            raise ValueError("For 'custom' fitness mode, scaling value must be a tuple (heterozygous_fitness, homozygous_fitness).")
+        if copies == 0:
+            return 1.0
+        elif copies == 1:
+            return float(scale[0])
+        elif copies == 2:
+            return float(scale[1])
+        return 1.0
+
+    if isinstance(scale, (tuple, list)):
+        raise ValueError(f"Tuple scaling value {scale} is only valid when mode='custom'.")
+
+    scale_val = float(scale)
+    if mode == "multiplicative":
+        return scale_val ** copies
+    elif mode == "dominant":  # TODO: 存在问题：resistance和drive都存在时scale了两遍，不符合dominant
+        return scale_val if copies > 0 else 1.0
+    elif mode == "recessive":
+        return scale_val if copies == 2 else 1.0
+    else:
+        raise ValueError(f"Unknown fitness scaling mode: '{mode}'. Expected 'multiplicative', 'dominant', 'recessive', or 'custom'.")
+
 def _make_fitness_patch_given_allele_scaling(
-    allele_name: str,
+    allele_name: Union[str, List[str], Tuple[str, ...]],
     viability_scaling: Optional[_ViabilityScalingConfig] = None,
     fecundity_scaling: Optional[_FecundityScalingConfig] = None,
     sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
-) -> RecipeFitnessPatch:
+    viability_mode: str = "multiplicative",
+    fecundity_mode: str = "multiplicative",
+    sexual_selection_mode: str = "multiplicative",
+) -> PresetFitnessPatch:
     """Helper to create a fitness patch dict for a single allele's scaling effects."""
-    patch: RecipeFitnessPatch = {}
+    # Dictionary keys must be hashable. Lists are not, so we convert to tuple.
+    if isinstance(allele_name, list):
+        key = tuple(allele_name)
+    else:
+        key = allele_name
+        
+    patch: PresetFitnessPatch = {}
     
     if viability_scaling is not None:
-        patch['viability_allele'] = {allele_name: viability_scaling}
+        patch['viability_allele'] = {key: (viability_scaling, viability_mode)}
     
     if fecundity_scaling is not None:
-        patch['fecundity_allele'] = {allele_name: fecundity_scaling}
+        patch['fecundity_allele'] = {key: (fecundity_scaling, fecundity_mode)}
     
     if sexual_selection_scaling is not None:
-        patch['sexual_selection_allele'] = {allele_name: sexual_selection_scaling}
+        patch['sexual_selection_allele'] = {key: (sexual_selection_scaling, sexual_selection_mode)}
     
     return patch
 
 def _apply_viability_allele_scaling(
     population: 'BasePopulation',
     all_genotypes: List[Genotype],
-    allele_name: str,
+    allele_name: Union[str, Tuple[str, ...]],
     config: _ViabilityScalingConfig,
+    mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven viability scaling using multiplicative copy-number effect."""
     viability_arr = population._config.viability_fitness
     default_age = int(population._config.new_adult_age) - 1
-    target_gene = population.species.gene_index.get(allele_name)
-    if target_gene is None:
-        raise ValueError(f"Unknown allele '{allele_name}' in viability_allele patch.")
+    
+    # Resolve one or more alleles
+    target_genes = []
+    names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
+
+    for name in names:
+        gene = population.species.gene_index.get(name.strip())
+        if gene is None:
+            raise ValueError(f"Unknown allele '{name}' in viability_allele patch.")
+        target_genes.append(gene)
 
     for genotype in all_genotypes:
-        genotype_idx = population._index_core.genotype_to_index[genotype]
-        copies = _count_allele_copies(genotype, target_gene)
+        genotype_idx = population._index_registry.genotype_to_index[genotype]
+        copies = _count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             continue
 
-        if isinstance(config, (int, float)):
-            factor = float(config) ** copies
+        if isinstance(config, (int, float, tuple, list)):
+            factor = _calculate_allele_effect(config, copies, mode)
             for sex_idx in (0, 1):
                 current = float(viability_arr[sex_idx, default_age, genotype_idx])
                 population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
@@ -130,7 +197,7 @@ def _apply_viability_allele_scaling(
 
         if config and all(isinstance(age_key, int) for age_key in config.keys()):
             for age, scale in config.items():
-                factor = float(scale) ** copies
+                factor = _calculate_allele_effect(scale, copies, mode)
                 for sex_idx in (0, 1):
                     current = float(viability_arr[sex_idx, int(age), genotype_idx])
                     population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
@@ -138,13 +205,13 @@ def _apply_viability_allele_scaling(
 
         for sex_key, sex_config in config.items():
             sex_idx = _normalize_sex_key(sex_key)
-            if isinstance(sex_config, (int, float)):
-                factor = float(sex_config) ** copies
+            if isinstance(sex_config, (int, float, tuple, list)):
+                factor = _calculate_allele_effect(sex_config, copies, mode)
                 current = float(viability_arr[sex_idx, default_age, genotype_idx])
                 population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
             elif isinstance(sex_config, dict):
                 for age, scale in sex_config.items():
-                    factor = float(scale) ** copies
+                    factor = _calculate_allele_effect(scale, copies, mode)
                     current = float(viability_arr[sex_idx, int(age), genotype_idx])
                     population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
             else:
@@ -156,23 +223,31 @@ def _apply_viability_allele_scaling(
 def _apply_fecundity_allele_scaling(
     population: 'BasePopulation',
     all_genotypes: List[Genotype],
-    allele_name: str,
+    allele_name: Union[str, Tuple[str, ...]],
     config: _FecundityScalingConfig,
+    mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven fecundity scaling using multiplicative copy-number effect."""
     fecundity_arr = population._config.fecundity_fitness
-    target_gene = population.species.gene_index.get(allele_name)
-    if target_gene is None:
-        raise ValueError(f"Unknown allele '{allele_name}' in fecundity_allele patch.")
+    
+    # Resolve one or more alleles
+    target_genes = []
+    names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
+
+    for name in names:
+        gene = population.species.gene_index.get(name.strip())
+        if gene is None:
+            raise ValueError(f"Unknown allele '{name}' in fecundity_allele patch.")
+        target_genes.append(gene)
 
     for genotype in all_genotypes:
-        genotype_idx = population._index_core.genotype_to_index[genotype]
-        copies = _count_allele_copies(genotype, target_gene)
+        genotype_idx = population._index_registry.genotype_to_index[genotype]
+        copies = _count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             continue
 
-        if isinstance(config, (int, float)):
-            factor = float(config) ** copies
+        if isinstance(config, (int, float, tuple, list)):
+            factor = _calculate_allele_effect(config, copies, mode)
             for sex_idx in (0, 1):
                 current = float(fecundity_arr[sex_idx, genotype_idx])
                 population._config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
@@ -183,15 +258,16 @@ def _apply_fecundity_allele_scaling(
 
         for sex_key, scale in config.items():
             sex_idx = _normalize_sex_key(sex_key)
-            factor = float(scale) ** copies
+            factor = _calculate_allele_effect(scale, copies, mode)
             current = float(fecundity_arr[sex_idx, genotype_idx])
             population._config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
 
 def _apply_sexual_selection_allele_scaling(
     population: 'BasePopulation',
     all_genotypes: List[Genotype],
-    allele_name: str,
+    allele_name: Union[str, Tuple[str, ...]],
     config: _SexualSelectionScalingConfig,
+    mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven sexual-selection scaling.
 
@@ -199,15 +275,22 @@ def _apply_sexual_selection_allele_scaling(
     - tuple(default, carrier): binary by male carrier status (copy > 0).
     """
     sex_sel_arr = population._config.sexual_selection_fitness
-    target_gene = population.species.gene_index.get(allele_name)
-    if target_gene is None:
-        raise ValueError(f"Unknown allele '{allele_name}' in sexual_selection_allele patch.")
+    
+    # Resolve one or more alleles
+    target_genes = []
+    names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
+
+    for name in names:
+        gene = population.species.gene_index.get(name.strip())
+        if gene is None:
+            raise ValueError(f"Unknown allele '{name}' in sexual_selection_allele patch.")
+        target_genes.append(gene)
 
     for f_genotype in all_genotypes:
-        f_idx = population._index_core.genotype_to_index[f_genotype]
+        f_idx = population._index_registry.genotype_to_index[f_genotype]
         for m_genotype in all_genotypes:
-            m_idx = population._index_core.genotype_to_index[m_genotype]
-            copies = _count_allele_copies(m_genotype, target_gene)
+            m_idx = population._index_registry.genotype_to_index[m_genotype]
+            copies = _count_combined_allele_copies(m_genotype, target_genes)
 
             if isinstance(config, tuple):
                 if len(config) != 2:
@@ -216,13 +299,13 @@ def _apply_sexual_selection_allele_scaling(
                     )
                 factor = float(config[1] if copies > 0 else config[0])
             else:
-                factor = float(config) ** copies
+                factor = _calculate_allele_effect(config, copies, mode)
 
             current = float(sex_sel_arr[f_idx, m_idx])
             population._config.set_sexual_selection_fitness(f_idx, m_idx, current * factor)
 
-def _apply_recipe_fitness_patch(population: 'BasePopulation', patch: RecipeFitnessPatch) -> None:
-    """Apply a declarative recipe fitness patch to population config tensors.
+def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitnessPatch) -> None:
+    """Apply a declarative preset fitness patch to population config tensors.
 
     Patch schema (all keys optional):
     - viability: Dict[genotype_selector, _ViabilityScalingConfig]
@@ -235,17 +318,17 @@ def _apply_recipe_fitness_patch(population: 'BasePopulation', patch: RecipeFitne
     if population._config is None:
         return
 
-    all_genotypes = list(population._index_core.genotype_to_index.keys())
+    all_genotypes = list(population._index_registry.genotype_to_index.keys())
 
     viability_patch = patch.get('viability', {})
     for selector, config in viability_patch.items():
         matched = population.species.resolve_genotype_selectors(
             selector=selector,
             all_genotypes=all_genotypes,
-            context='recipe.viability',
+            context='preset.viability',
         )
         for genotype in matched:
-            genotype_idx = population._index_core.genotype_to_index[genotype]
+            genotype_idx = population._index_registry.genotype_to_index[genotype]
 
             # scalar: both sexes at default viability age
             if isinstance(config, (int, float)):
@@ -282,10 +365,10 @@ def _apply_recipe_fitness_patch(population: 'BasePopulation', patch: RecipeFitne
         matched = population.species.resolve_genotype_selectors(
             selector=selector,
             all_genotypes=all_genotypes,
-            context='recipe.fecundity',
+            context='preset.fecundity',
         )
         for genotype in matched:
-            genotype_idx = population._index_core.genotype_to_index[genotype]
+            genotype_idx = population._index_registry.genotype_to_index[genotype]
 
             if isinstance(config, (int, float)):
                 population._config.set_fecundity_fitness(0, genotype_idx, float(config))
@@ -304,7 +387,7 @@ def _apply_recipe_fitness_patch(population: 'BasePopulation', patch: RecipeFitne
         female_matched = population.species.resolve_genotype_selectors(
             selector=female_selector,
             all_genotypes=all_genotypes,
-            context='recipe.sexual_selection(female)',
+            context='preset.sexual_selection(female)',
         )
 
         # Allow shorthand: female_selector -> scalar means all-male targets
@@ -323,60 +406,79 @@ def _apply_recipe_fitness_patch(population: 'BasePopulation', patch: RecipeFitne
             male_matched = population.species.resolve_genotype_selectors(
                 selector=male_selector,
                 all_genotypes=all_genotypes,
-                context='recipe.sexual_selection(male)',
+                context='preset.sexual_selection(male)',
             )
             for f_genotype in female_matched:
-                f_idx = population._index_core.genotype_to_index[f_genotype]
+                f_idx = population._index_registry.genotype_to_index[f_genotype]
                 for m_genotype in male_matched:
-                    m_idx = population._index_core.genotype_to_index[m_genotype]
+                    m_idx = population._index_registry.genotype_to_index[m_genotype]
                     population._config.set_sexual_selection_fitness(f_idx, m_idx, float(scale))
 
-    # Allele-based patches: recipe defines per-allele effect, framework expands to genotypes.
+    # Allele-based patches: preset defines per-allele effect, framework expands to genotypes.
     viability_allele_patch = patch.get('viability_allele', {})
-    for allele_name, config in viability_allele_patch.items():
-        _apply_viability_allele_scaling(population, all_genotypes, str(allele_name), config)
+    for allele_name, val in viability_allele_patch.items():
+        if isinstance(val, tuple) and len(val) == 2:
+            config, mode = val
+        else:
+            config, mode = val, "multiplicative"
+        _apply_viability_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
     fecundity_allele_patch = patch.get('fecundity_allele', {})
-    for allele_name, config in fecundity_allele_patch.items():
-        _apply_fecundity_allele_scaling(population, all_genotypes, str(allele_name), config)
+    for allele_name, val in fecundity_allele_patch.items():
+        if isinstance(val, tuple) and len(val) == 2:
+            config, mode = val
+        else:
+            config, mode = val, "multiplicative"
+        _apply_fecundity_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
     sexual_selection_allele_patch = patch.get('sexual_selection_allele', {})
-    for allele_name, config in sexual_selection_allele_patch.items():
-        _apply_sexual_selection_allele_scaling(population, all_genotypes, str(allele_name), config)
+    for allele_name, val in sexual_selection_allele_patch.items():
+        if isinstance(val, tuple) and len(val) == 2:
+            config, mode = val
+        else:
+            config, mode = val, "multiplicative"
+        _apply_sexual_selection_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
-def apply_recipe_to_population(population: 'BasePopulation', recipe: 'GeneDriveRecipe') -> None:
-    """Pure function to apply a gene drive recipe to a population.
+def apply_preset_to_population(population: 'BasePopulation', preset: 'GeneticPreset') -> None:
+    """Apply a genetic preset to a population by registering its modifiers and fitness effects.
     
-    This function orchestrates registration of a recipe's modifiers and
-    fitness modifications onto a population. It is recipe-agnostic and
-    focuses only on the mechanical application process.
+    This function handles the mechanical application of a preset to a population,
+    including:
+    1. Species binding and validation
+    2. Registration of gamete modifiers
+    3. Registration of zygote modifiers  
+    4. Application of fitness patches
     
     Args:
         population: The BasePopulation instance to modify.
-        recipe: The GeneDriveRecipe instance to apply.
+        preset: The GeneticPreset instance to apply.
     
-    Design rationale:
-        By keeping this as a pure function, we decouple recipe definition
-        from application mechanics. The function can be called from:
-        - GeneDriveRecipe.apply() (legacy, for backwards compatibility)
-        - population.apply_recipe() (preferred, population-driven API)
+    Note:
+        This is typically called through the modern API:
+        ``population.apply_preset(preset)``
+        
+        The legacy API ``preset.apply(population)`` is deprecated but still supported.
+    
+    Raises:
+        ValueError: If preset is bound to a different species than the population
+        RuntimeError: If preset has no bound species
     """
-    recipe.bind_species(population.species)
+    preset.bind_species(population.species)
 
-    gamete_mod = recipe.gamete_modifier(population)
-    zygote_mod = recipe.zygote_modifier(population)
+    gamete_mod = preset.gamete_modifier(population)
+    zygote_mod = preset.zygote_modifier(population)
 
     if gamete_mod is not None:
         population.add_gamete_modifier(
             gamete_mod,
-            name=f"{recipe.name}/gamete",
+            name=f"{preset.name}/gamete",
             refresh=False,
         )
     
     if zygote_mod is not None:
         population.add_zygote_modifier(
             zygote_mod,
-            name=f"{recipe.name}/zygote",
+            name=f"{preset.name}/zygote",
             refresh=False,
         )
 
@@ -384,25 +486,34 @@ def apply_recipe_to_population(population: 'BasePopulation', recipe: 'GeneDriveR
         population._refresh_modifier_maps()
 
     # Preferred path: declarative fitness patch
-    patch = recipe.fitness_patch()
+    patch = preset.fitness_patch()
     if patch:
-        _apply_recipe_fitness_patch(population, patch)
+        _apply_preset_fitness_patch(population, patch)
         return
 
-class GeneDriveRecipe(ABC):
-    """Abstract base for gene drive and genetic modification recipes.
+class GeneticPreset(ABC):
+    """Abstract base for genetic modification presets including gene drives, mutations, and allele conversions.
     
-    A recipe bundles gamete modifiers, zygote modifiers, and fitness effects
-    that form a cohesive genetic system (e.g., a homing gene drive).
+    A preset bundles gamete modifiers, zygote modifiers, and fitness effects
+    that form a cohesive genetic system. This can include:
+    - Gene drives (e.g., CRISPR/Cas9 homing drives)
+    - General mutations (point mutations, insertions, deletions)
+    - Complex allele conversion systems
     
-    Recipes should implement:
-      - gamete_modifier(): returns GameteModifier callable
-      - zygote_modifier(): returns ZygoteModifier callable  
-      - viability_fitness_modifier(): modifies viability_fitness array
-      - fecundity_fitness_modifier(): modifies fecundity_fitness array
-      - sexual_selection_fitness_modifier(): modifies sexual selection array
+    Presets should implement:
+      - gamete_modifier(): returns GameteModifier callable or None
+      - zygote_modifier(): returns ZygoteModifier callable or None  
+      - fitness_patch(): returns declarative fitness configuration dict or None
     
-    All modifier methods are optional (can return None).
+    All methods are optional (can return None). At least one method should be implemented
+    for the preset to have any effect.
+    
+    Usage:
+        # Modern API (recommended)
+        population.apply_preset(preset)
+        
+        # Legacy API (deprecated)
+        preset.apply(population)
     """
     
     def __init__(
@@ -410,12 +521,12 @@ class GeneDriveRecipe(ABC):
         name: str = "",
         species: Optional[Species] = None,
     ):
-        """Initialize the recipe.
+        """Initialize the preset.
         
         Args:
-            name: Optional human-readable name for the recipe.
+            name: Optional human-readable name for the preset.
             species: Optional species bound at construction time. If provided,
-                applying this recipe to a population with a different species
+                applying this preset to a population with a different species
                 will raise an error.
         """
         self.name = name or self.__class__.__name__
@@ -423,11 +534,11 @@ class GeneDriveRecipe(ABC):
         self._bound_species: Optional[Species] = species
 
     def bind_species(self, species: Species) -> None:
-        """Bind this recipe instance to a concrete species.
+        """Bind this preset instance to a concrete species.
 
-        This enables delayed species injection: users can construct recipes
+        This enables delayed species injection: users can construct presets
         without passing species, and binding happens automatically when the
-        recipe is applied to a population.
+        preset is applied to a population.
         """
         if self._bound_species is None:
             self._bound_species = species
@@ -437,16 +548,16 @@ class GeneDriveRecipe(ABC):
             return
 
         raise ValueError(
-            f"Recipe '{self.name}' is already bound to species "
+            f"Preset '{self.name}' is already bound to species "
             f"'{self._bound_species.name}' and cannot be applied to population species '{species.name}'."
         )
 
     def _require_bound_species(self) -> Species:
-        """Return the bound species or raise if recipe has not been injected yet."""
+        """Return the bound species or raise if preset has not been injected yet."""
         if self._bound_species is None:
             raise RuntimeError(
-                f"Recipe '{self.name}' is not bound to a species. "
-                "Apply it through population.apply_recipe(...) or builder.recipes(...).build()."
+                f"Preset '{self.name}' is not bound to a species. "
+                "Apply it through population.apply_preset(...) or builder.presets(...).build()."
             )
         return self._bound_species
 
@@ -457,7 +568,7 @@ class GeneDriveRecipe(ABC):
         if gene is None:
             raise ValueError(
                 f"Allele '{allele_name}' not found in species '{species.name}' "
-                f"for recipe '{self.name}'."
+                f"for preset '{self.name}'."
             )
         return gene
     
@@ -488,12 +599,12 @@ class GeneDriveRecipe(ABC):
         return None
     
     @abstractmethod
-    def fitness_patch(self) -> Optional[RecipeFitnessPatch]:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Return a declarative fitness patch dict to modify population config tensors.
         
         The patch can specify modifications to viability, fecundity, and sexual
         selection fitness using a structured schema. This allows the framework
-        to apply complex fitness effects without requiring the recipe to directly
+        to apply complex fitness effects without requiring the preset to directly
         manipulate config tensors.
         
         If a patch is provided, it takes precedence over legacy tensor modifier
@@ -526,19 +637,51 @@ class GeneDriveRecipe(ABC):
             raise TypeError("Rate must be a float, tuple of floats, or dict with sex keys.")
 
     def apply(self, population) -> None:
-        """Register this recipe onto a population (DEPRECATED).
+        """Register this preset onto a population (DEPRECATED).
         
-        Deprecated:
-            Use population.apply_recipe(recipe) instead.
-            This method is kept for backwards compatibility.
+        .. deprecated:: 
+            Use population.apply_preset(preset) instead.
+            This method is kept for backwards compatibility and may be removed in future versions.
         
         Args:
             population: The BasePopulation instance to modify.
+            
+        See Also:
+            :meth:`natal.base_population.BasePopulation.apply_preset` - Preferred modern API
         """
-        apply_recipe_to_population(population, self)
+        apply_preset_to_population(population, self)
 
-class HomingDrive(GeneDriveRecipe):
-    """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives)."""
+class HomingDrive(GeneticPreset):
+    """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
+    
+    This preset implements a homing gene drive that spreads through homology-directed
+    repair (HDR) converting wild-type alleles into drive alleles in heterozygotes.
+    It can also generate resistance alleles through non-homologous end joining (NHEJ).
+    
+    Key features:
+    - Drive conversion in heterozygotes (WT → Drive)
+    - Germline resistance formation (WT → Resistance)
+    - Embryo resistance formation
+    - Maternal/paternal Cas9 deposition
+    - Functional vs non-functional resistance alleles
+    - Sex-specific rates for all processes
+    
+    The drive operates through a sequential cascade:
+    1. Homing conversion (WT → Drive)
+    2. Resistance formation in remaining WT alleles
+    3. Optional functional resistance split
+    
+    Usage:
+        drive = HomingDrive(
+            name="MyDrive",
+            drive_allele="Drive",
+            target_allele="WT",
+            resistance_allele="Resistance",
+            drive_conversion_rate=0.95,
+            late_germline_resistance_formation_rate=0.03
+        )
+        population.apply_preset(drive)
+    """
     
     def __init__(
         self,
@@ -555,18 +698,21 @@ class HomingDrive(GeneDriveRecipe):
         fecundity_scaling: _FecundityScalingConfig = 1.0,
         viability_scaling: _ViabilityScalingConfig = 1.0,
         sexual_selection_scaling: _SexualSelectionScalingConfig = 1.0,
+        viability_mode: str = "multiplicative",
+        fecundity_mode: str = "multiplicative",
+        sexual_selection_mode: str = "multiplicative",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
         use_paternal_deposition: bool = False,
     ):
-        """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
+        """Initialize a homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
     
         This drive spreads via homology-directed repair (HDR) converting wild-type alleles into drive alleles in heterozygotes.
         It can also generate resistance alleles through non-homologous end joining (NHEJ).
         
         Args:
             name (str): Name of the gene drive.
-            drive_allele (str or Gene): The genotype carrying the drive cassette.
+            drive_allele (str or Gene): The allele carrying the drive cassette.
             target_allele (str or Gene): The wild-type allele targeted by the drive.
             resistance_allele (str or Gene, optional): The non-functional resistance allele formed by NHEJ.
             functional_resistance_allele (str or Gene, optional): The functional resistance allele 
@@ -577,8 +723,41 @@ class HomingDrive(GeneDriveRecipe):
                 and homology-directed repair in heterozygotes. Can be a single float (applies to both sexes), 
                 a dict with sex keys, or a tuple (female_rate, male_rate) for sex-specific rates.
             late_germline_resistance_formation_rate (float or dict): Probability of resistance formation 
-                *after* drive conversion. Can be a single float (applies to both sexes), a dict with sex keys,
-                or a tuple (female_rate, male_rate) for sex-specific rates.
+                *after* drive conversion in the germline. Can be a single float (applies to both sexes), 
+                a dict with sex keys, or a tuple (female_rate, male_rate) for sex-specific rates.
+            embryo_resistance_formation_rate (float or dict): Probability of resistance formation 
+                in embryos due to maternal/paternal Cas9 deposition. Can be a single float, dict, or tuple.
+            functional_resistance_ratio (float): Proportion of resistance alleles that are functional 
+                (in-frame mutations). Range: 0.0 (all non-functional) to 1.0 (all functional).
+            fecundity_scaling (float or dict): Fitness cost multiplier for drive carriers affecting fecundity.
+                Applied multiplicatively based on allele copy number.
+            viability_scaling (float or dict): Fitness cost multiplier for drive carriers affecting viability.
+                Applied multiplicatively based on allele copy number.
+            sexual_selection_scaling (float or tuple): Fitness cost affecting sexual selection.
+                Can be a single float or tuple (default_selection, carrier_selection).
+            viability_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
+                If "custom", scaling values must be tuples (het_val, hom_val).
+            fecundity_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
+                If "custom", scaling values must be tuples (het_val, hom_val).
+            sexual_selection_mode (str): Scaling mode for scalar sexual_selection_scaling.
+                Note: if sexual_selection_scaling is a tuple, mode is ignored.
+            cas9_deposition_glab (str, optional): Gamete label for Cas9 deposition tracking.
+                Used for maternal/paternal effect modeling.
+            species (Species, optional): Species to bind at construction time. If None, 
+                will be bound when applied to population.
+            use_paternal_deposition (bool): Whether to enable paternal Cas9 deposition.
+                If True, fathers can deposit Cas9 in embryos.
+        
+        Example:
+            >>> drive = HomingDrive(
+            ...     name="MyDrive",
+            ...     drive_allele="Drive",
+            ...     target_allele="WT", 
+            ...     resistance_allele="R2",
+            ...     drive_conversion_rate=0.95,
+            ...     late_germline_resistance_formation_rate=0.03
+            ... )
+            >>> population.apply_preset(drive)
         """
         self._str_drive_allele = self._resolve_allele_name(drive_allele)
         self._str_target_allele = self._resolve_allele_name(target_allele)
@@ -597,35 +776,35 @@ class HomingDrive(GeneDriveRecipe):
         self.fecundity_scaling = fecundity_scaling
         self.viability_scaling = viability_scaling
         self.sexual_selection_scaling = sexual_selection_scaling
+        
+        self.viability_mode = viability_mode
+        self.fecundity_mode = fecundity_mode
+        self.sexual_selection_mode = sexual_selection_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
         
         super().__init__(name=name, species=species)
 
-    def fitness_patch(self) -> RecipeFitnessPatch:
+    def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for homing drive scaling configs."""
+        # Combine drive and non-functional resistance alleles into a single group.
+        # This ensures that a "Drive|Resistance" genotype is treated as having 
+        # 2 copies of the "disrupted" allele class, which is crucial for correct
+        # dominant/recessive scaling logic.
+        alleles = [self._str_drive_allele]
+        if self._str_resistance_allele:
+            alleles.append(self._str_resistance_allele)
+        
         patch = _make_fitness_patch_given_allele_scaling(
-            self._str_drive_allele,
+            alleles,
             self.viability_scaling,
             self.fecundity_scaling,
             self.sexual_selection_scaling,
+            self.viability_mode,
+            self.fecundity_mode,
+            self.sexual_selection_mode,
         )
-        
-        # Apply same fitness costs to non-functional resistance allele (R2)
-        # but NOT to functional resistance allele (R1)
-        if self._str_resistance_allele:
-            r2_patch = _make_fitness_patch_given_allele_scaling(
-                self._str_resistance_allele,
-                self.viability_scaling,
-                self.fecundity_scaling,
-                self.sexual_selection_scaling,
-            )
-            for key, value in r2_patch.items():
-                if key in patch:
-                    patch[key].update(value)
-                else:
-                    patch[key] = value
         
         return patch
     
@@ -666,7 +845,7 @@ class HomingDrive(GeneDriveRecipe):
         In heterozygotes (drive/wild-type), gametes are biased towards drive.
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
-            from natal.recipes import _count_allele_copies
+            from natal.genetic_presets import _count_allele_copies
             has_drive = _count_allele_copies(gt, self.drive_allele) > 0
             if self.cas9_allele:
                 has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0
@@ -733,18 +912,20 @@ class HomingDrive(GeneDriveRecipe):
                         genotype_filter=drive_carrier_filter,
                     )
 
-                # 3. Gamete labeling for maternal Cas9 deposition
-                # Instead of editing alleles, this tags the entire output gamete from drive-carrying females 
-                # with `cas9_deposition_glab`. The zygote modifier will read this tag to apply embryo resistance.
-                if sex == Sex.FEMALE or self.use_paternal_deposition:
-                    rule_set.add_hg_convert(
-                        hg_match=lambda hg: True,
-                        to_haploid_genotype=lambda hg: hg,
-                        rate=1.0,
-                        sex_filter=sex,
-                        genotype_filter=drive_carrier_filter,
-                        target_glab=self.cas9_deposition_glab
-                    )
+            # 3. Gamete labeling for maternal Cas9 deposition
+            # Instead of editing alleles, this tags the entire output gamete from drive-carrying females 
+            # with `cas9_deposition_glab`. The zygote modifier will read this tag to apply embryo resistance.
+            if sex == Sex.FEMALE or self.use_paternal_deposition:
+                rule_set.add_hg_convert(
+                    hg_match=lambda hg: True,
+                    to_haploid_genotype=lambda hg: hg,
+                    rate=1.0,
+                    sex_filter=sex,
+                    genotype_filter=drive_carrier_filter,
+                    target_glab=self.cas9_deposition_glab
+                )
+            
+            print(f"ruleset: {rule_set}")
         
         return rule_set.to_gamete_modifier(population) if rule_set.rules else None
     
@@ -755,7 +936,7 @@ class HomingDrive(GeneDriveRecipe):
         resistance alleles are created instead of drive homozygotes being lethal.
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
-            from natal.recipes import _count_allele_copies
+            from natal.genetic_presets import _count_allele_copies
             has_drive = _count_allele_copies(gt, self.drive_allele) > 0
             if self.split and self.cas9_allele:
                 has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0
@@ -782,7 +963,7 @@ class HomingDrive(GeneDriveRecipe):
                             to_allele=self.functional_resistance_allele,
                             rate=rate * func_res_ratio,
                             maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
-                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE else None,
+                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE and self.use_paternal_deposition else None,
                         )
                         # 2. Non-functional resistance on remaining targets
                         # Just like gametogenesis, we must adjust the rate to account for targets already removed 
@@ -795,7 +976,7 @@ class HomingDrive(GeneDriveRecipe):
                                 to_allele=self.resistance_genotype,
                                 rate=nf_rate,
                                 maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
-                                paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE else None,
+                                paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE and self.use_paternal_deposition else None,
                             )
                     else:
                         # Generic resistance (no functional split) triggered by maternal glab
@@ -804,7 +985,7 @@ class HomingDrive(GeneDriveRecipe):
                             to_allele=self.resistance_genotype,
                             rate=rate,
                             maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
-                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE else None,
+                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE and self.use_paternal_deposition else None,
                         )
             
         return rule_set.to_zygote_modifier(population) if rule_set.rules else None

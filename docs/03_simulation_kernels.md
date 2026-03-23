@@ -618,7 +618,7 @@ def my_hook(ind_count: NDArray[np.float64], tick: int) -> int:
     return 0  # 继续
 ```
 
-> 详细的 Hook 写法见 [Hook DSL 系统](07_hooks_dsl.md)
+> 详细的 Hook 写法见 [Hook 系统](07_hooks.md)
 
 ## 完整工作流程示例
 
@@ -687,9 +687,9 @@ print(f"History records: {len(pop.history)}")
 ## 📚 相关章节
 
 - [PopulationState & PopulationConfig](04_population_state_config.md) - 深入数据结构
-- [Hook DSL 系统](07_hooks_dsl.md) - Hook 的高级写法
+- [Hook 系统](07_hooks.md) - Hook 的高级写法
 - [Numba 优化指南](08_numba_optimization.md) - 性能优化技巧
-- [IndexCore 索引机制](05_index_core.md) - 对象索引在计算中的应用
+- [IndexRegistry 索引机制](05_index_registry.md) - 对象索引在计算中的应用
 
 ---
 

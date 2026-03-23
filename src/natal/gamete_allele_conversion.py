@@ -18,10 +18,11 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Set, Literal
 import numpy as np
+from natal.type_def import Sex
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
 from natal.population_config import extract_gamete_frequencies_by_glab
-from natal.index_core import compress_hg_glab
+from natal.index_registry import compress_hg_glab
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -35,6 +36,8 @@ __all__ = [
 ]
 
 _GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
+_SexSpecifier = Union[Sex, str]
+
 
 
 def _evaluate_genotype_filter(
@@ -153,15 +156,15 @@ class GameteHaploidGenomeConversionRule:
         """Return the replacement HaploidGenotype for a matched original."""
         return self._replacement_fn(hg)
 
-    def applies_to_sex(self, sex_idx: int, sex_name: Optional[str] = None) -> bool:
+    def applies_to_sex(self, sex_idx: _SexSpecifier, sex_name: Optional[str] = None) -> bool:
         """Check if rule applies to a given sex."""
         if self.sex_filter == "both":
             return True
-        if self.sex_filter == "female":
+        if self.sex_filter == "female" or self.sex_filter == 0:
             return sex_idx == 0
-        elif self.sex_filter == "male":
+        elif self.sex_filter == "male" or self.sex_filter == 1:
             return sex_idx == 1
-        return True
+        raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given diploid genotype."""
@@ -243,7 +246,7 @@ class GameteAlleleConversionRule:
     def __repr__(self) -> str:
         return f"GameteAlleleConversionRule({self.name}, rate={self.rate})"
     
-    def applies_to_sex(self, sex_idx: int, sex_name: Optional[str] = None) -> bool:
+    def applies_to_sex(self, sex_idx: _SexSpecifier, sex_name: Optional[str] = None) -> bool:
         """Check if rule applies to a given sex.
         
         Args:
@@ -256,11 +259,11 @@ class GameteAlleleConversionRule:
         if self.sex_filter == "both":
             return True
         # Assume convention: sex_idx=0 is female, sex_idx=1 is male 
-        if self.sex_filter == "female":
+        if self.sex_filter == "female" or self.sex_filter == 0:
             return sex_idx == 0
-        elif self.sex_filter == "male":
+        elif self.sex_filter == "male" or self.sex_filter == 1:
             return sex_idx == 1
-        return True
+        raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
     
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given genotype.
@@ -499,7 +502,7 @@ def _resolve_rule_glabs(
     Returns:
         List of ``(rule, resolved_source_glab_idx, resolved_target_glab_idx)``.
     """
-    glab_map = population._index_core.glab_to_index
+    glab_map = population._index_registry.glab_to_index
     resolved: List[_ResolvedGameteRule] = []
     for rule in rules:
         src = rule.source_glab
@@ -531,10 +534,27 @@ def _compute_converted_gamete_freqs(
     """
     # current_freqs holds the state of the gamete pool before evaluating the current rule.
     current_freqs = initial_freqs.copy()
+
+    readable_initial_freqs = {(str(hg), population.species.gamete_labels[glab_idx]): float(freq)
+                        for (hg, glab_idx), freq in initial_freqs.items()}
     
+    print(f"sex={"FEMALE" if sex_idx == 0 else "MALE"}, genotype={str(genotype)}, "
+        f"initial_freqs={readable_initial_freqs}")
+    
+    print(resolved_rules)
+
     for rule, src_glab_idx, tgt_glab_idx in resolved_rules:
+        print(f"rule: {rule}")
+
+        if sex_idx == 1 and isinstance(rule, GameteHaploidGenomeConversionRule):
+            sex_filter = rule.sex_filter
+            print(f"#### Processing GameteHaploidGenomeConversionRule in males with sex_filter={sex_filter}")
+            print(f"#### status: {rule.applies_to_sex(sex_idx)}")
+
         # Check rule-level conditions (does it apply to this sex / diploid genotype?)
         if not rule.applies_to_sex(sex_idx) or not rule.applies_to_genotype(genotype):
+            if not rule.applies_to_sex(sex_idx):
+                print(f"current rule: {rule}, not applied due to sex={sex_idx}")
             continue
             
         # next_freqs will collect the newly partitioned frequencies after applying THIS rule.
@@ -598,14 +618,26 @@ def _compute_converted_gamete_freqs(
                     converted_key = (converted_hg, out_glab)
                     next_freqs[converted_key] = (
                         next_freqs.get(converted_key, 0.0) + freq * prob
-                    )
+                    )   
                 else:
                     # Allele not found in this gamete -> pass untouched.
                     next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
-                    
+                
+                print(f"processing {str(hg), population.species.gamete_labels[glab_idx]}")
+                readable_next_freqs = {(str(hg), population.species.gamete_labels[glab_idx]): float(freq)
+                                        for (hg, glab_idx), freq in next_freqs.items()}
+                print(f"next freqs after conversion: {readable_next_freqs}")
+                
         # Update the pool for the next rule in the pipeline.
         # This allows chained events! (e.g. Rule1: Target->Drive(70%); Rule2: (Target->R1)(from the remaining 30%)).
         current_freqs = next_freqs
+        
+
+        readable_converted_freqs = {(str(hg), population.species.gamete_labels[glab_idx]): float(freq)
+                                    for (hg, glab_idx), freq in current_freqs.items()}
+        
+        print(f"sex={"FEMALE" if sex_idx == 0 else "MALE"}, genotype={str(genotype)}, "
+                f"converted_freqs={readable_converted_freqs}")
         
     final_freqs = {k: v for k, v in current_freqs.items() if v > 1e-12}
 

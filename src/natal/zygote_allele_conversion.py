@@ -27,7 +27,7 @@ from typing import (
 import numpy as np
 from natal.modifiers import ZygoteModifier
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
-from natal.index_core import compress_hg_glab
+from natal.index_registry import compress_hg_glab
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -398,7 +398,7 @@ class ZygoteConversionRuleSet:
 
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
 
-            from natal.index_core import decompress_hg_glab
+            from natal.index_registry import decompress_hg_glab
 
             for (c1, c2), base_gt in hg_glab_to_genotype.items():
                 if base_gt is None:
@@ -507,7 +507,7 @@ def _resolve_zygote_rule_glabs(
     Returns:
         List of ``(rule, resolved_maternal_glab_idx, resolved_paternal_glab_idx)``.
     """
-    glab_map = population._index_core.glab_to_index
+    glab_map = population._index_registry.glab_to_index
     resolved: List[_ResolvedRule] = []
     for rule in rules:
         mat = rule.maternal_glab

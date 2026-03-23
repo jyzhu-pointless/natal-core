@@ -558,7 +558,7 @@ def _run_with_hooks(
     config: PopulationConfig,
     registry: HookProgram,
     n_ticks: int,
-    record_history: bool = False
+    record_interval: int = 0
 ) -> Tuple[Tuple[NDArray, NDArray, int], Optional[NDArray], bool]:
     """连续运行 n 个 tick，支持 hooks，可选记录历史。
     
@@ -568,7 +568,7 @@ def _run_with_hooks(
         state: PopulationState 对象
         config: PopulationConfig 配置
         n_ticks: 运行的 tick 数
-        record_history: 是否记录历史快照
+        record_interval: 记录历史的间隔 (tick % interval == 0). 0 表示不记录.
         
     Returns:
         Tuple containing:
@@ -593,8 +593,10 @@ def _run_with_hooks(
     history_size = 1 + ind_count.size + sperm.size
     
     # 初始化历史数组
-    if record_history:
-        history_array = np.zeros((n_ticks + 1, history_size), dtype=np.float64)
+    if record_interval > 0:
+        # Estimate max snapshots needed: (n_ticks // interval) + 2 (start + end buffer)
+        estimated_size = (n_ticks // record_interval) + 2
+        history_array = np.zeros((estimated_size, history_size), dtype=np.float64)
         history_count = 0
     else:
         history_array = None
@@ -603,7 +605,7 @@ def _run_with_hooks(
     was_stopped = False
 
     # 记录初始状态
-    if record_history:
+    if record_interval > 0 and (tick % record_interval == 0):
         tick_arr = np.array([float(tick)], dtype=np.float64)
         flattened = np.concatenate((tick_arr, ind_count.flatten(), sperm.flatten()))
         history_array[history_count, :] = flattened
@@ -621,7 +623,7 @@ def _run_with_hooks(
 
         ind_count, sperm, tick = current_state
 
-        if record_history:
+        if record_interval > 0 and (tick % record_interval == 0):
             tick_arr = np.array([float(tick)], dtype=np.float64)
             flattened = np.concatenate((tick_arr, ind_count.flatten(), sperm.flatten()))
             history_array[history_count, :] = flattened
@@ -631,7 +633,7 @@ def _run_with_hooks(
             was_stopped = True
             break
 
-    if record_history:
+    if record_interval > 0:
         history_result = history_array[:history_count, :]
     else:
         history_result = None
@@ -643,10 +645,10 @@ def run(
     config: PopulationConfig,
     registry: HookProgram,
     n_ticks: int,
-    record_history: bool = False
+    record_interval: int = 0
 ) -> Tuple[Tuple[NDArray, NDArray, int], Optional[NDArray], bool]:
     """Fixed-signature run entrypoint with preconfigured compiled hooks."""
-    return _run_with_hooks(state, config, registry, n_ticks, record_history)
+    return _run_with_hooks(state, config, registry, n_ticks, record_interval)
 
 
 # Backward compatibility alias for internal generated wrappers.
@@ -795,8 +797,12 @@ def run_discrete_survival(
     
     if is_stochastic:
         if use_dirichlet_sampling:
-            f_surv = f_rec * s_combined_0_f # TODO: 不对
-            m_surv = m_rec * s_combined_0_m
+            # 连续化采样：使用 Beta 分布模拟 Binomial 筛选
+            f_surv = np.empty(n_gen, dtype=np.float64)
+            m_surv = np.empty(n_gen, dtype=np.float64)
+            for g in range(n_gen):
+                f_surv[g] = alg.continuous_binomial(f_rec[g], s_combined_0_f[g])
+                m_surv[g] = alg.continuous_binomial(m_rec[g], s_combined_0_m[g])
         else:
             f_surv = np.zeros(n_gen, dtype=np.float64)
             m_surv = np.zeros(n_gen, dtype=np.float64)
@@ -890,7 +896,7 @@ def _run_discrete_with_hooks(
     config: PopulationConfig,
     registry: HookProgram,
     n_ticks: int,
-    record_history: bool = False
+    record_interval: int = 0
 ) -> Tuple[Tuple[NDArray, int], Optional[NDArray], bool]:
     """连续运行 n 个离散世代 tick，支持 hooks，可选记录历史。"""
     was_stopped = False
@@ -900,8 +906,10 @@ def _run_discrete_with_hooks(
     ind_size = ind_count.size
     flatten_size = 1 + ind_size
     
-    if record_history:
-        history_array = np.zeros((n_ticks, flatten_size), dtype=np.float64)
+    if record_interval > 0:
+        # Estimate max size
+        estimated_size = (n_ticks // record_interval) + 2
+        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
     else:
         history_array = np.zeros((0, flatten_size), dtype=np.float64)
         
@@ -916,7 +924,7 @@ def _run_discrete_with_hooks(
         current_state, result = _run_discrete_tick_with_hooks(temp_state, config, registry)
         ind_count, tick = current_state
         
-        if record_history:
+        if record_interval > 0 and (tick % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
             flat_state[1:1 + ind_size] = ind_count.flatten()
@@ -927,7 +935,7 @@ def _run_discrete_with_hooks(
             was_stopped = True
             break
             
-    if record_history:
+    if record_interval > 0:
         history_result = history_array[:history_count, :]
     else:
         history_result = None
@@ -949,7 +957,7 @@ def run_discrete(
     config: PopulationConfig,
     registry: HookProgram,
     n_ticks: int,
-    record_history: bool = False
+    record_interval: int = 0
 ) -> Tuple[Tuple[NDArray, int], Optional[NDArray], bool]:
     """Fixed-signature discrete run entrypoint with preconfigured compiled hooks."""
-    return _run_discrete_with_hooks(state, config, registry, n_ticks, record_history)
+    return _run_discrete_with_hooks(state, config, registry, n_ticks, record_interval)

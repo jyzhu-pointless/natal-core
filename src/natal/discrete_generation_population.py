@@ -19,7 +19,7 @@ from numpy.typing import NDArray
 from natal.base_population import BasePopulation, Species, Genotype, Sex
 from natal.population_state import DiscretePopulationState
 from natal.population_config import PopulationConfig
-from natal.index_core import IndexCore
+from natal.index_registry import IndexRegistry
 import natal.simulation_kernels as sk
 
 if TYPE_CHECKING:
@@ -74,12 +74,23 @@ class DiscreteGenerationPopulation(BasePopulation):
             individual_count=np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64),
         )
 
+        cfg_init_ind = self._config.get_scaled_initial_individual_count()
+        if cfg_init_ind.shape == self._state.individual_count.shape:
+            self._state.individual_count[:] = cfg_init_ind
+
         self._history_shape = (
             1 + n_sexes * n_ages * n_genotypes,
         )
 
         if initial_individual_count is not None:
+            self._state.individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
+
+        self._initial_population_snapshot = (
+            self._state.individual_count.copy(),
+            None,
+            None,
+        )
 
         self._finalize_hooks()
 
@@ -176,7 +187,12 @@ class DiscreteGenerationPopulation(BasePopulation):
 
             for genotype_key, age_data in genotype_dist.items():
                 genotype = self._resolve_genotype_key(genotype_key)
-                genotype_idx = self._registry.genotype_to_index[genotype]
+                if hasattr(self._registry, "genotype_to_index"):
+                    genotype_idx = self._registry.genotype_to_index[genotype]
+                elif hasattr(self._registry, "get_genotype_index"):
+                    genotype_idx = self._registry.get_genotype_index(genotype)
+                else:
+                    raise AttributeError("Registry must provide genotype_to_index or get_genotype_index")
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
                 self._state.individual_count[sex_idx, 0, genotype_idx] = age0_count
                 self._state.individual_count[sex_idx, 1, genotype_idx] = age1_count
@@ -195,7 +211,7 @@ class DiscreteGenerationPopulation(BasePopulation):
         n_steps: int = 1,
         record_every: int = 1,
         finish: bool = False,
-        clear_history_on_start: bool = True,
+        clear_history_on_start: bool = False,
     ) -> "DiscreteGenerationPopulation":
         if self._finished:
             raise RuntimeError(
@@ -211,7 +227,7 @@ class DiscreteGenerationPopulation(BasePopulation):
             config=self._config,
             registry=hooks.registry,
             n_ticks=n_steps,
-            record_history=(record_every > 0),
+            record_interval=record_every,
         )
 
         self._state = DiscretePopulationState(
@@ -220,13 +236,7 @@ class DiscreteGenerationPopulation(BasePopulation):
         )
         self._tick = int(final_state_tuple[1])
 
-        if history_new is not None and history_new.shape[0] > 0:
-            if clear_history_on_start:
-                self.clear_history()
-            for row_idx in range(history_new.shape[0]):
-                row = history_new[row_idx, :]
-                tick = int(row[0])
-                self._history.append((tick, row.copy()))
+        self._process_kernel_history(history_new, clear_history_on_start)
 
         if was_stopped:
             self._finished = True
@@ -234,6 +244,17 @@ class DiscreteGenerationPopulation(BasePopulation):
         elif finish:
             self.finish_simulation()
 
+        return self
+
+    def run_tick(self) -> "DiscreteGenerationPopulation":
+        """Execute a single simulation tick.
+
+        Overrides BasePopulation.run_tick to use the accelerated run() pipeline
+        which correctly handles compiled hooks.
+        """
+        return self.run(n_steps=1, record_every=self.record_every)
+
+    def get_total_count(self) -> int:
         return self
 
     def get_total_count(self) -> int:
@@ -256,6 +277,7 @@ class DiscreteGenerationPopulation(BasePopulation):
     def create_history_snapshot(self) -> None:
         flattened = self._state.flatten_all()
         self._history.append((self._tick, flattened.copy()))
+        self._enforce_history_limit()
 
     def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
         state_flat = self._state.flatten_all()

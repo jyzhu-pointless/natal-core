@@ -13,17 +13,25 @@
 
 - **[Simulation Kernels 深度解析](03_simulation_kernels.md)** - 逐步讲解 `run_tick`、`run_reproduction`、`run_survival`、`run_aging` 算法
 - **[PopulationState & PopulationConfig](04_population_state_config.md)** - "编译"步骤、NumPy/Numba 底层设计
-- **[IndexCore 索引机制](05_index_core.md)** - 遗传学对象与基因型、单倍基因型+label 的映射关系
+- **[IndexRegistry 索引机制](05_index_registry.md)** - 遗传学对象与基因型、单倍基因型+label 的映射关系
 
 ### 高级功能
 
 - **[Modifier 机制](06_modifiers.md)** - 如何修改映射矩阵、基因驱动实现、细胞质标记
-- **[Hook DSL 系统](07_hooks_dsl.md)** - 声明式/选择器/原生 Numba 三种 Hook 写法
+- **[Hook 系统](07_hooks.md)** - 声明式/选择器/原生 Numba 三种 Hook 写法
 - **[Numba 优化指南](08_numba_optimization.md)** - 开关机制、编译耗时、缓存策略
 
 ### 数据与推断
 
 - **[Samplers & 观察过滤](10_samplers_observation.md)** - 灵活的数据提取工具，用于统计推断和数据同化
+
+### 遗传预设系统
+
+- **[遗传预设使用指南](15_genetic_presets_guide.md)** - 如何使用和创建基因驱动、突变系统等遗传修饰预设
+
+### 遗传预设系统
+
+- **[遗传预设使用指南](15_genetic_presets_guide.md)** - 如何使用和创建基因驱动、突变系统等遗传修饰预设
 
 ### PMCMC 入口说明（重要）
 
@@ -41,15 +49,19 @@
 
 ### 按使用场景
 
-**初学者**: 先从 [快速开始](01_quickstart.md) 开始，理解最基本的 API 调用。
+**初学者**: 先从 [快速开始](01_quickstart.md) 开始，理解最基本的 API 调用。推荐使用 **Builder模式** 创建种群。
 
-**模型开发者**: 了解 [遗传结构](02_genetic_structures.md) 和 [Modifier 机制](06_modifiers.md)，学会定义复杂的遗传学模型。
+**模型开发者**: 了解 [遗传结构](02_genetic_structures.md) 和 [遗传预设系统](15_genetic_presets_guide.md)，学会定义复杂的遗传学模型。
 
 **数据分析师**: 使用 [Samplers 系统](10_samplers_observation.md) 进行灵活的观察过滤和数据提取。
 
 **性能优化师**: 阅读 [Simulation Kernels](03_simulation_kernels.md)、[PopulationState & Config](04_population_state_config.md) 和 [Numba 优化](08_numba_optimization.md)。
 
-**高级用户**: 深入学习 [Hook DSL](07_hooks_dsl.md) 和 [IndexCore](05_index_core.md)，实现自定义模拟逻辑。
+**高级用户**: 深入学习 [Hook 系统](07_hooks.md) 和 [IndexRegistry](05_index_registry.md)，实现自定义模拟逻辑。
+
+**遗传建模者**: 使用 [遗传预设系统](15_genetic_presets_guide.md) 快速实现基因驱动、突变和复杂的遗传修饰。
+
+**遗传建模者**: 使用 [遗传预设系统](15_genetic_presets_guide.md) 快速实现基因驱动、突变和复杂的遗传修饰。
 
 ### 核心概念速查
 
@@ -60,13 +72,15 @@
 | **PopulationState** | 运行时种群状态（个体计数、精子存储） | [State & Config](04_population_state_config.md) |
 | **PopulationConfig** | 编译后的配置（映射矩阵、适应度） | [State & Config](04_population_state_config.md) |
 | **simulation_kernels** | 纯函数化模拟核心，支持 Numba 加速 | [Kernels 深度解析](03_simulation_kernels.md) |
-| **Hook DSL** | 声明式钩子系统，支持三种写法 | [Hook DSL](07_hooks_dsl.md) |
+| **Hook 系统** | 声明式钩子系统，支持三种写法 | [Hook 系统](07_hooks.md) |
 | **Modifier** | 配子/合子级别的遗传修饰 | [Modifier 机制](06_modifiers.md) |
 | **ObservationFilter** | 灵活的数据分组和提取工具 | [Samplers 系统](10_samplers_observation.md) |
-| **IndexCore** | 遗传学对象 ↔ 整数索引的映射注册表 | [IndexCore 机制](05_index_core.md) |
+| **IndexRegistry** | 遗传学对象 ↔ 整数索引的映射注册表 | [IndexRegistry 机制](05_index_registry.md) |
 | **Modifier** | 修改映射矩阵，实现基因驱动等复杂遗传现象 | [Modifier 机制](06_modifiers.md) |
 | **Gamete Label** | 标记配子的附加维度（如"Cas9沉积") | [Modifier 机制](06_modifiers.md) |
-| **Hook DSL** | 声明式钩子系统，在模拟特定阶段注入逻辑 | [Hook DSL](07_hooks_dsl.md) |
+| **Hook 系统** | 声明式钩子系统，在模拟特定阶段注入逻辑 | [Hook 系统](07_hooks.md) |
+| **Builder模式** | 推荐的种群创建方式，支持链式配置 | [快速开始](01_quickstart.md) |
+| **GeneticPreset** | 遗传修饰预设系统，简化基因驱动等实现 | [遗传预设系统](15_genetic_presets_guide.md) |
 
 ---
 
@@ -92,41 +106,94 @@ sp = Species("Mosquito")
 sp.add("chr1").add("drive").add_alleles(["WT", "Drive"])
 ```
 
-### 2️⃣ 初始化种群（"编译"）（5 分钟）
+### 2️⃣ 初始化种群（使用Builder模式）（5 分钟）
 
 ```python
-from natal.nonWF_population import AgeStructuredPopulation
+from natal.population_builder import AgeStructuredPopulationBuilder
 
-pop = AgeStructuredPopulation(
-    species=sp,
-    n_ages=8,
-    initial_individual_count={
+# 使用Builder模式创建和配置种群
+pop = (AgeStructuredPopulationBuilder(sp)
+    .setup(name="MosquitoPop", stochastic=True)
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({
         "female": {"WT|WT": [0, 600, 600, ...]},
         "male": {"WT|Drive": [0, 300, 300, ...]},
-    },
-    survival_rates=[1.0, 1.0, 5/6, ...],
-    expected_eggs_per_female=100,
-    use_sperm_storage=True,
-    gamete_labels=["default", "Cas9_deposited"],
-)
+    })
+    .survival(female_rates=[1.0, 1.0, 5/6, ...], male_rates=[...])
+    .reproduction(eggs_per_female=100, use_sperm_storage=True)
+    .build())
 ```
 
 ### 3️⃣ 定义遗传规则（Modifier）（5 分钟）
 
-```python
-# 基因驱动：D|w 杂合子的 D 配子比例 > w
-def gene_drive_mod(pop):
-    return {
-        "Drive|WT": {
-            ("Drive", "Cas9_deposited"): 0.95,
-            ("WT", "Cas9_deposited"): 0.05,
-        }
-    }
+#### 方法1：使用遗传预设（推荐）
 
-pop.set_gamete_modifier(gene_drive_mod, hook_name="drive")
+```python
+from natal.genetic_presets import HomingDrive
+
+# 创建基因驱动预设
+drive = HomingDrive(
+    name="MyDrive",
+    drive_allele="Drive", 
+    target_allele="WT",
+    resistance_allele="Resistance",
+    drive_conversion_rate=0.95,  # 95%转换效率
+    late_germline_resistance_formation_rate=0.03
+)
+
+# 应用到种群
+population.apply_preset(drive)
 ```
 
+#### 方法2：使用Builder模式（推荐）
+
+```python
+from natal.population_builder import AgeStructuredPopulationBuilder
+
+# 使用Builder链式构建种群
+pop = (AgeStructuredPopulationBuilder(species)
+    .setup(name="MyPop")
+    .ages(n_ages=8)
+    .initial_counts(
+        female={"WT|WT": [0, 600, 600, ...]},
+        male={"WT|Drive": [0, 300, 300, ...]}
+    )
+    .survival([1.0, 1.0, 5/6, ...])
+    .fecundity(expected_eggs_per_female=100)
+    .sperm_storage(True)
+    .gamete_labels(["default", "Cas9_deposited"])
+    .presets(drive)  # 直接添加预设
+    .build())
+```
+
+> 详细讲解见 [遗传预设系统](15_genetic_presets_guide.md) 和 [Modifier 机制](06_modifiers.md)
+
 ### 4️⃣ 定义模拟逻辑（Hook）（5 分钟）
+
+#### 方法1：使用遗传预设（推荐）
+
+```python
+from natal.genetic_presets import HomingDrive
+
+# 创建基因驱动预设
+drive = HomingDrive(
+    name="MyDrive",
+    drive_allele="Drive", 
+    target_allele="WT",
+    resistance_allele="Resistance",
+    drive_conversion_rate=0.95,
+    late_germline_resistance_formation_rate=0.03
+)
+
+# 应用到种群（在Builder中添加）
+pop = (AgeStructuredPopulationBuilder(species)
+    .setup(name="MyPop")
+    # ... 其他配置
+    .presets(drive)  # 添加基因驱动预设
+    .build())
+```
+
+#### 方法2：声明式 Hook（自定义逻辑）
 
 ```python
 from natal.hook_dsl import hook, Op
@@ -141,7 +208,7 @@ def release_drive():
 release_drive.register(pop)
 ```
 
-### 5️⃣ 运行模拟（1 分钟）
+####### 5️⃣ 运行模拟（1 分钟）
 
 ```python
 pop.run(n_steps=200, record_every=10)
@@ -149,6 +216,7 @@ pop.run(n_steps=200, record_every=10)
 # 查看结果
 print(f"最终种群: {pop.get_total_count()}")
 print(f"记录点数: {len(pop.history)}")
+print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 ```
 
 ---
@@ -180,7 +248,7 @@ print(f"记录点数: {len(pop.history)}")
 - `Genotype`, `HaploidGenotype`
 
 **索引层面**（面向计算）:
-- `IndexCore` 维护 object ↔ integer index 映射
+- `IndexRegistry` 维护 object ↔ integer index 映射
 - 所有 numpy 数组都使用整数索引
 - Modifier 和 Hook 基于索引进行操作
 
@@ -195,8 +263,8 @@ print(f"记录点数: {len(pop.history)}")
 
 ## ⚠️ 常见问题
 
-### Q: 什么时候需要了解 IndexCore?
-**A**: 通常不需要直接接触。只有在编写自定义 Modifier 或 Hook 时，才需要通过 `pop.registry` 或 `pop._index_core` 获取索引。
+### Q: 什么时候需要了解 IndexRegistry?
+**A**: 通常不需要直接接触。只有在编写自定义 Modifier 或 Hook 时，才需要通过 `pop.registry` 或 `pop._index_registry` 获取索引。
 
 ### Q: Gamete Label 有什么用?
 **A**: 用来标记配子的附加信息（如是否携带 Cas9）。可以有多个 label，每个 label 对应一个维度。在 Modifier 中可以根据 label 修改配子分布。

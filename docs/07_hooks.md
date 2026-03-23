@@ -1,4 +1,4 @@
-# Hook DSL 系统（现行架构）
+# Hook 系统
 
 本章基于当前实现，详细说明 Hook 的定义方式、编译结果、执行路径和边界条件。
 
@@ -9,7 +9,7 @@
   -> 编译为 CompiledHookDescriptor
   -> 声明式 Op.* 打包为 HookProgram (CSR 数组)
   -> 运行时按事件执行:
-       a. kernel 路径: HookProgram + 合并后的 njit hook
+       a. kernel 路径: HookProgram + 合并后的 njit hook（绑定到专属 runner）
        b. Python 路径: HookExecutor (CSR -> njit_fn -> py_wrapper)
 ```
 
@@ -21,15 +21,13 @@
 
 ## 事件模型
 
-支持 6 个事件名：
+当前 Hook 事件为 4 个：
 
 | 事件 | 说明 |
 |------|------|
 | first | 每个 tick 开始（繁殖前） |
-| reproduction | 繁殖计算后 |
 | early | 繁殖后、生存前 |
-| survival | 生存后 |
-| late | 衰老后，tick 末尾 |
+| late | 生存后、衰老前 |
 | finish | 模拟结束时触发（非每 tick） |
 
 ## 三种 Hook 写法
@@ -66,7 +64,7 @@ def monitor(pop, target_gt):
 
 选择器模式有两条路径：
 
-- Python 选择器路径（默认）：生成 `py_wrapper(pop)`，在 Python 事件系统执行。
+- Python 选择器路径（Numba 关闭时）：生成 `py_wrapper(pop)`，在 Python 事件系统执行。
 - Numba 选择器路径（`numba=True` 或函数本身是 `@njit`）：生成 `njit_fn(ind_count, tick)`，可进 kernel 主循环。
   多值 selector 会以 `np.ndarray[int32]` 传入，不再退化为首元素。
 
@@ -90,7 +88,12 @@ pop.set_hook('early', mortality_boost)
 
 ### 路径 A：kernel 加速路径（run）
 
-`AgeStructuredPopulation.run()` 与 `DiscreteGenerationPopulation.run()` 会走 `simulation_kernels.run_*_with_compiled_event_hooks(...)`。
+`AgeStructuredPopulation.run()` 与 `DiscreteGenerationPopulation.run()` 会优先调用 `CompiledEventHooks` 中 codegen 出来的专属 runner：
+
+- `hooks.run_tick_fn`
+- `hooks.run_fn`
+- `hooks.run_discrete_tick_fn`
+- `hooks.run_discrete_fn`
 
 在每个事件点，执行顺序是：
 
@@ -99,7 +102,7 @@ pop.set_hook('early', mortality_boost)
 
 Python `py_wrapper` 不在 kernel 内执行。
 
-> 内核 API 名称保持 `run_tick/run/run_discrete_tick/run_discrete`，但签名已收紧为纯数据参数（不再接收 hook callable 参数）。
+> 这样可以避免全局切换 hook 带来的并发冲突，同时保持 njit 内核签名为纯数据参数（不传 hook callable）。
 
 ### 路径 B：Python 事件路径（trigger_event）
 
@@ -110,6 +113,7 @@ Python `py_wrapper` 不在 kernel 内执行。
 3. py_wrapper
 
 典型用途是显式事件触发与兼容逻辑（例如 `finish`）。
+`finish` 目前主要由 Python 层触发（`run(..., finish=True)` 或提前终止后）。
 
 ## Op API（按当前实现）
 
@@ -239,7 +243,7 @@ pop.set_hook('first', h1)
 
 ### 快速定位问题
 
-1. 检查事件名是否正确（`first/reproduction/early/survival/late/finish`）。
+1. 检查事件名是否正确（`first/early/late/finish`）。
 2. 检查 `when` 是否属于受支持语法。
 3. 检查 selector 是否是多值且被 Numba 路径截断。
 4. 检查优先级是否按预期设置在 `@hook(priority=...)`。

@@ -36,7 +36,7 @@ from .types import (
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
-    from natal.index_core import IndexCore
+    from natal.index_registry import IndexRegistry
 
 
 class OpType(IntEnum):
@@ -180,7 +180,7 @@ class Op:
 
 def _resolve_genotypes(
     selector: Union[str, List[str], Literal["*"]],
-    index_core: "IndexCore",
+    index_registry: "IndexRegistry",
     diploid_genotypes: List[Any],
     n_genotypes: int,
 ) -> np.ndarray:
@@ -203,7 +203,7 @@ def _resolve_genotypes(
             indices.append(item)
             continue
 
-        idx = index_core.resolve_genotype_index(diploid_genotypes, item, strict=True)
+        idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
         if idx is None:
             raise ValueError(f"Cannot resolve genotype: {item}")
         indices.append(idx)
@@ -441,9 +441,9 @@ def compile_declarative_hook(
     (``*_offsets``) define CSR spans for variable-length selector/condition
     data and avoid Python object usage in runtime kernels.
     """
-    index_core = pop._index_core
-    diploid_genotypes = index_core.index_to_genotype
-    n_genotypes = index_core.num_genotypes()
+    index_registry = pop._index_registry
+    diploid_genotypes = index_registry.index_to_genotype
+    n_genotypes = index_registry.num_genotypes()
     n_ages = pop._config.n_ages
 
     op_types_list = []
@@ -462,7 +462,7 @@ def compile_declarative_hook(
         op_types_list.append(int(op.op_type))
 
         # 2) genotype span
-        gidx_array = _resolve_genotypes(op.genotypes, index_core, diploid_genotypes, n_genotypes)
+        gidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_genotypes)
         gidx_data_list.extend(gidx_array.tolist())
         gidx_offsets.append(len(gidx_data_list))
 

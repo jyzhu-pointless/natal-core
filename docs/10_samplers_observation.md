@@ -44,15 +44,15 @@
 
 ```python
 from samplers.observation import ObservationFilter
-from natal.index_core import IndexCore
+from natal.index_registry import IndexRegistry
 
 # 创建过滤器
-registry = pop.registry  # IndexCore 实例
+registry = pop.registry  # IndexRegistry 实例
 filter = ObservationFilter(registry)
 ```
 
 **参数**：
-- `registry`: IndexCore 对象，用于基因型名称解析
+- `registry`: IndexRegistry 对象，用于基因型名称解析
 
 ### build_filter 方法
 
@@ -626,7 +626,7 @@ groups = {"old": {"age": [6, 7]}}
 ## 下一步
 
 - [API 完整参考](09_api_reference.md) - 查看完整的方法签名
-- [Hook DSL 系统](07_hooks_dsl.md) - 在 Hook 中应用观察过滤
+- [Hook 系统](07_hooks.md) - 在 Hook 中应用观察过滤
 - [Numba 优化](08_numba_optimization.md) - 性能调优
 
 ---

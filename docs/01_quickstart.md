@@ -19,18 +19,16 @@ NATAL 采用 **声明式** 的方式定义遗传架构。使用 `Species.from_di
 ```python
 from natal.genetic_structures import Species
 
-# 方式1：使用 from_dict（推荐快速定义）
+# 定义遗传架构
 sp = Species.from_dict(
     name="AnophelesGambiae",
     structure={
-        "chr1": {
-            "A": ["WT", "Drive", "Resistance"]
+        "chr1": {    # Chromosome
+            "A": ["WT", "Drive", "Resistance"]    # Locus: [Alleles]
         }
-    }
+    },
+    gamete_labels=["default", "Cas9_deposited"]    # 可选：定义配子标签，用于模拟细胞质沉积效应
 )
-# chr1 是染色体名称
-# A 是位点名称
-# ["WT", "Drive", "Resistance"] 是等位基因列表
 ```
 
 ### 理解架构中的关键概念
@@ -56,88 +54,57 @@ print(f"WT|WT: {wt_wt}")
 print(f"WT|Drive: {wt_drive}")
 ```
 
-### 链式 API 方式（更灵活）
-
-如果需要更多控制，也可以使用链式 API：
-
-```python
-sp2 = Species("Aedes aegypti")
-
-# 添加常染色体
-chr1 = sp2.add("chr1")
-locus_A = chr1.add("A")
-locus_A.add_alleles(["WT", "Drive"])
-
-# 添加性染色体
-chr_x = sp2.add("ChrX", sex_type="X")
-chr_x.add("white").add_alleles(["w+", "w"])
-
-chr_y = sp2.add("ChrY", sex_type="Y")
-chr_y.add("Ymarker").add_alleles(["Y"])
-```
-
 > 更多遗传架构的细节，见 [遗传结构与实体](02_genetic_structures.md)
 
 ---
 
 ## 2️⃣ 第二步：初始化种群（3 分钟）
 
-初始化是最关键的一步，这里会进行"编译"——生成用于数值计算的映射矩阵。
+初始化是最关键的一步，这里会进行"编译"——生成用于数值计算的映射矩阵。使用Builder模式：
 
 ```python
-from natal.nonWF_population import AgeStructuredPopulation
+from natal.population_builder import AgeStructuredPopulationBuilder
 
-# 定义初始种群分布
-initial_individual_count = {
-    "female": {
-        "WT|WT":    [0, 600, 600, 500, 400, 300, 200, 100],
-        "WT|Drive": [0, 100, 100, 80, 60, 40, 20, 10],
-    },
-    "male": {
-        "WT|WT":    [0, 300, 300, 200, 100, 0, 0, 0],
-        "WT|Drive": [0, 300, 300, 200, 100, 0, 0, 0],
-    },
-}
-# 外层键：性别 ("female" 或 "male")
-# 中层键：基因型字符串 (如 "WT|WT")
-# 内层值：每个年龄的个体数量列表
-
-# 创建种群实例
-pop = AgeStructuredPopulation(
-    species=sp,
-    name="MosquitoPop",
-    n_ages=8,  # 8 个年龄类别 (0-7)
-    is_stochastic=False,  # False: 确定性模型; True: 随机性模型
+# 使用Builder模式创建和配置种群
+pop = (AgeStructuredPopulationBuilder(sp)
+    .setup(name="MosquitoPop", stochastic=False)  # False: 确定性模型; True: 随机性模型
     
-    # === 初始条件 ===
-    initial_individual_count=initial_individual_count,
+    # === 年龄结构 ===
+    .age_structure(n_ages=8, new_adult_age=2)  # 8个年龄类别，2岁为成年
+    
+    # === 初始种群分布 ===
+    .initial_state({
+        "female": {
+            "WT|WT":    [0, 600, 600, 500, 400, 300, 200, 100],
+            "WT|Drive": [0, 100, 100, 80, 60, 40, 20, 10],
+        },
+        "male": {
+            "WT|WT":    [0, 300, 300, 200, 100, 0, 0, 0],
+            "WT|Drive": [0, 300, 300, 200, 100, 0, 0, 0],
+        }
+    })
     
     # === 生存率 ===
-    # 按年龄的生存率（0-7 岁）
-    female_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-    male_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0],
+    .survival(
+        female_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+    )
     
     # === 繁殖相关 ===
-    # 成熟年龄（年龄 >= 2 时，性别才能参与交配）
-    female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
-    male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+    .reproduction(
+        eggs_per_female=100,           # 每只雌性产卵数
+        sex_ratio=0.5,                 # 后代性别比例
+        use_sperm_storage=True,        # 启用精子存储机制
+        gamete_labels=["default", "Cas9_deposited"]  # 配子标签
+    )
     
-    # === 精子存储 ===
-    use_sperm_storage=True,  # 启用精子存储机制
-    sperm_displacement_rate=0.05,  # 每次交配时旧精子被替换的比例
-    gamete_labels=["default", "Cas9_deposited"],  # 配子标签（用于标记细胞质特征）
+    # === 幼体竞争 ===
+    .competition(
+        juvenile_growth_mode=1,        # 1: 固定竞争模式
+        carrying_capacity=1200         # 幼体承载量
+    )
     
-    # === 生育力 ===
-    expected_eggs_per_female=100,  # 每只雌性产卵数
-    
-    # === 幼体生长 ===
-    juvenile_growth_mode=1,  # 0: 无竞争，1: 固定，2: 逻辑斯谛，3: Beverton-Holt
-    old_juvenile_carrying_capacity=1200,  # 幼体承载量
-    
-    # === 其他 ===
-    expected_num_adult_females=2100,
-    effective_population_size=0,
-)
+    .build())  # 构建最终种群实例
 
 print(f"初始化完成！")
 print(f"总种群大小: {pop.get_total_count():.0f}")
@@ -145,11 +112,44 @@ print(f"雌性总数: {pop.get_female_count():.0f}")
 print(f"雄性总数: {pop.get_male_count():.0f}")
 ```
 
+### 离散世代种群（DiscreteGenerationPopulation）
+
+如果你的模型不需要年龄结构（如理论模型、果蝇等实验室生物），可以使用更简单的离散世代模型：
+
+```python
+from natal.population_builder import DiscreteGenerationPopulationBuilder
+
+# 离散世代模型（无年龄结构）
+pop = (DiscreteGenerationPopulationBuilder(sp)
+    .setup(name="FruitFlyPop", stochastic=True)
+    .initial_state({
+        "female": {"WT|WT": 1000},  # 简单数量，不是年龄分布
+        "male": {"WT|WT": 1000}
+    })
+    .reproduction(
+        eggs_per_female=50,         # 每只雌性产卵数
+        sex_ratio=0.5                # 后代性别比例
+    )
+    .build())
+
+print(f"初始种群: {pop.get_total_count()}")
+```
+
+**两种种群类型对比：**
+
+| 特性 | AgeStructuredPopulation | DiscreteGenerationPopulation |
+|------|------------------------|----------------------------|
+| 年龄结构 | ✅ 支持 | ❌ 不支持 |
+| 生存率 | 按年龄配置 | 固定概率 |
+| 精子存储 | ✅ 支持 | ❌ 不支持 |
+| 适用场景 | 自然种群、混合笼养种群 | 实验室连续传代种群 |
+| 复杂度 | 较高 | 较低 |
+
 ### 初始化做了什么？（"编译"过程）
 
 高层看起来只是构造函数，但底层发生了很多事：
 
-1. **索引注册**: 所有基因型被分配整数索引，存储在 `pop.registry` (IndexCore)
+1. **索引注册**: 所有基因型被分配整数索引，存储在 `pop.registry` (IndexRegistry)
 2. **映射矩阵生成**: 生成两个关键矩阵：
    - `基因型→配子`: 规定每个基因型产生什么配子
    - `配子→合子`: 规定配子组合产生什么基因型
@@ -160,99 +160,68 @@ print(f"雄性总数: {pop.get_male_count():.0f}")
 
 ---
 
-## 3️⃣ 第三步：设置适应度（可选，2 分钟）
+## 3️⃣ 第三步：使用遗传预设系统（2 分钟）
 
-使用 `set_viability()` 和 `set_fecundity()` 方法修改基因型的适应度：
+对于常见的遗传修饰（如基因驱动、突变等），推荐使用**遗传预设系统**而不是手动编写modifier函数。预设系统提供了更简洁的API。
+
+### 使用基因驱动预设
 
 ```python
-# 方式1：修改个别基因型
-resistance = sp.get_genotype_from_str("Resistance|Resistance")
-pop.set_viability(resistance, 0.7, sex="female")  # Resistance|Resistance 雌性生存率降低
+from natal.genetic_presets import HomingDrive
 
-drive_drive = sp.get_genotype_from_str("Drive|Drive")
-pop.set_fecundity(drive_drive, 0.0, sex="female")  # Drive|Drive 雌性不育
+# 创建基因驱动预设
+drive = HomingDrive(
+    name="MyDrive",
+    drive_allele="Drive", 
+    target_allele="WT",
+    resistance_allele="Resistance",
+    drive_conversion_rate=0.95,  # 95%转换效率
+    late_germline_resistance_formation_rate=0.03
+)
 
-# 方式2：批量设置（更高效）
-fitness_map = {
-    wt_wt: 1.0,
-    wt_drive: 0.95,
-    "Resistance|Resistance": 0.8,
-}
-pop.set_viability_batch(fitness_map, sex="female")
+# 在Builder中添加预设
+pop = (AgeStructuredPopulationBuilder(sp)
+    .setup(name="MosquitoPop", stochastic=False)
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({...})
+    .survival(female_rates=[...], male_rates=[...])
+    .reproduction(eggs_per_female=100)
+    .presets(drive)  # 应用基因驱动预设
+    .build())
 ```
 
-> 适应度的高层原理见 [Modifier 机制](06_modifiers.md)
+### 使用其他预设
+
+预设系统支持多种遗传修饰：
+
+- **HomingDrive**: CRISPR/Cas9基因驱动
+- **PointMutation**: 简单点突变
+- **CustomPresets**: 用户自定义预设
+
+### 适应度设置（可选）
+
+如果需要设置适应度效应，可以在builder中配置：
+
+```python
+pop = (AgeStructuredPopulationBuilder(sp)
+    .setup(name="MyPop")
+    .age_structure(n_ages=8)
+    .initial_state({...})
+    .fitness(viability={
+        "Resistance|Resistance": {"female": 0.7},  # 抗性纯合子生存率降低
+        "Drive|Drive": {"female": 0.0}              # 驱动纯合子不育
+    })
+    .presets(drive)
+    .build())
+```
+
+> **💡 提示**: 对于需要自定义复杂遗传规则的高级用户，可以参考[Modifier机制](06_modifiers.md)手动编写modifier函数。但对于大多数常见场景，预设系统更简单可靠。
 
 ---
 
-## 4️⃣ 第四步：定义遗传规则 - Modifier（3 分钟）
+## 4️⃣ 第四步：定义模拟逻辑 - Hook（2 分钟）
 
-### 配子修饰器（Gamete Modifier）
-
-用来改变某些基因型产生配子的频率。典型场景：**基因驱动**。
-
-```python
-# 定义基因驱动：Drive|WT 杂合子的 Drive 配子比例异常高
-def gene_drive_modifier(pop):
-    """
-    返回一个字典：
-    {
-        基因型字符串: {
-            (等位基因, gamete_label): 频率,
-            ...
-        }
-    }
-    """
-    return {
-        "Drive|WT": {
-            ("Drive", "Cas9_deposited"): 0.95,  # 95% 是 Drive 配子，且标记为 Cas9 沉积
-            ("WT", "Cas9_deposited"): 0.05,
-        },
-        "WT|Drive": {
-            ("Drive", "Cas9_deposited"): 0.95,
-            ("WT", "Cas9_deposited"): 0.05,
-        },
-    }
-
-# 注册修饰器
-pop.set_gamete_modifier(gene_drive_modifier, hook_name="gene_drive")
-```
-
-### 合子修饰器（Zygote Modifier）
-
-用来改变配子组合产生基因型的频率。典型场景：**细胞质不兼容**、**胚胎拯救**。
-
-```python
-def embryo_resistance_modifier(pop):
-    """
-    返回一个字典：
-    {
-        (女性配子, 男性配子): {
-            基因型字符串: 频率,
-            ...
-        }
-    }
-    """
-    return {
-        (("Drive", "Cas9_deposited"), ("WT", "default")): {
-            "Resistance|Resistance": 0.5,  # 部分后代获得抗性
-            "Drive|Resistance": 0.3,
-            "WT|Resistance": 0.2,
-        },
-    }
-
-pop.set_zygote_modifier(embryo_resistance_modifier, hook_name="embryo_resistance")
-```
-
-> 详细讲解见 [Modifier 机制](06_modifiers.md)
-
----
-
-## 5️⃣ 第五步：定义模拟逻辑 - Hook（2 分钟）
-
-Hook 允许你在模拟的特定阶段注入自定义逻辑。
-
-### 声明式 Hook（最简单）
+Hook 允许你在模拟的特定阶段注入自定义逻辑。使用声明式 Hook 最简单：
 
 ```python
 from natal.hook_dsl import hook, Op
@@ -274,25 +243,7 @@ def release_drive_males():
 release_drive_males.register(pop)
 ```
 
-### 原生 Numba Hook（高性能）
-
-```python
-from numba import njit
-
-@njit
-def release_hook(ind_count, tick):
-    """原生 Numba 钩子——完全由用户控制"""
-    if tick == 10:
-        # ind_count shape: (n_sexes, n_ages, n_genotypes)
-        # 这里需要自己做索引查询
-        pass
-    return 0  # 0: 继续，1: 停止
-
-# 注册（需要自己管理索引）
-# pop.set_hook("first", release_hook)
-```
-
-> 详细的 Hook 写法见 [Hook DSL 系统](07_hooks_dsl.md)
+> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以使用原生 Numba Hook。详见 [Hook 系统](07_hooks.md)
 
 ---
 
@@ -330,11 +281,12 @@ for tick, state in history_objects:
 
 ## 📊 完整示例
 
-将所有步骤合并成一个完整的脚本：
+将所有步骤合并成一个完整的脚本，使用推荐的Builder模式：
 
 ```python
 from natal.genetic_structures import Species
-from natal.nonWF_population import AgeStructuredPopulation
+from natal.population_builder import AgeStructuredPopulationBuilder
+from natal.genetic_presets import HomingDrive
 from natal.hook_dsl import hook, Op
 
 # === 第一步：定义遗传架构 ===
@@ -345,44 +297,52 @@ sp = Species.from_dict(
     }
 )
 
-# === 第二步：初始化种群 ===
-initial_individual_count = {
-    "female": {"WT|WT": [0, 600, 600, 500, 400, 300, 200, 100]},
-    "male": {"WT|WT": [0, 300, 300, 200, 100, 0, 0, 0],
-             "WT|Drive": [0, 300, 300, 200, 100, 0, 0, 0]},
-}
+# === 第二步：使用Builder模式创建和配置种群 ===
+pop = (AgeStructuredPopulationBuilder(sp)
+    .setup(name="MosquitoPop", stochastic=False)
+    .age_structure(n_ages=8, new_adult_age=2)
+    
+    # 初始种群分布
+    .initial_state({
+        "female": {"WT|WT": [0, 600, 600, 500, 400, 300, 200, 100]},
+        "male": {
+            "WT|WT": [0, 300, 300, 200, 100, 0, 0, 0],
+            "WT|Drive": [0, 300, 300, 200, 100, 0, 0, 0]
+        }
+    })
+    
+    # 生存率配置
+    .survival(
+        female_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+    )
+    
+    # 繁殖配置
+    .reproduction(
+        eggs_per_female=100,
+        sex_ratio=0.5,
+        use_sperm_storage=True,
+        gamete_labels=["default", "Cas9_deposited"]
+    )
+    
+    # 添加基因驱动预设（替代手动modifier）
+    .presets(HomingDrive(
+        name="MyDrive",
+        drive_allele="Drive",
+        target_allele="WT", 
+        resistance_allele="Resistance",
+        drive_conversion_rate=0.95,
+        late_germline_resistance_formation_rate=0.03
+    ))
+    
+    # 设置适应度（Drive|Drive雌性不育）
+    .fitness(viability={
+        "Drive|Drive": {"female": 0.0}  # 雌性Drive纯合子完全不育
+    })
+    
+    .build())  # 构建最终种群实例
 
-pop = AgeStructuredPopulation(
-    species=sp,
-    name="MosquitoPop",
-    n_ages=8,
-    is_stochastic=False,
-    initial_individual_count=initial_individual_count,
-    female_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-    male_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0],
-    female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
-    male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
-    expected_eggs_per_female=100,
-    use_sperm_storage=True,
-    gamete_labels=["default", "Cas9_deposited"],
-)
-
-# === 第三步：设置适应度（可选）===
-drive_drive = sp.get_genotype_from_str("Drive|Drive")
-pop.set_fecundity(drive_drive, 0.0, sex="female")
-
-# === 第四步：定义 Modifier ===
-def gene_drive_mod(pop):
-    return {
-        "Drive|WT": {
-            ("Drive", "Cas9_deposited"): 0.95,
-            ("WT", "Cas9_deposited"): 0.05,
-        },
-    }
-
-pop.set_gamete_modifier(gene_drive_mod, hook_name="gene_drive")
-
-# === 第五步：定义 Hook ===
+# === 第三步：定义 Hook（释放驱动个体）===
 @hook(event='first')
 def release_drive():
     return [
@@ -392,11 +352,75 @@ def release_drive():
 
 release_drive.register(pop)
 
-# === 第六步：运行 ===
+# === 第四步：运行模拟 ===
 pop.run(n_steps=100, record_every=10)
 
-# === 查看结果 ===
+# === 第五步：查看结果 ===
 print(f"最终种群: {pop.get_total_count():.0f}")
+print(f"等位基因频率: {pop.compute_allele_frequencies()}")
+```
+
+### 离散世代种群完整示例
+
+如果使用离散世代模型，代码更简洁：
+
+```python
+from natal.genetic_structures import Species
+from natal.population_builder import DiscreteGenerationPopulationBuilder
+from natal.genetic_presets import HomingDrive
+from natal.hook_dsl import hook, Op
+
+# === 第一步：定义遗传架构 ===
+sp = Species.from_dict(
+    name="FruitFly",
+    structure={
+        "chr1": {"A": ["WT", "Drive", "Resistance"]}
+    }
+)
+
+# === 第二步：使用离散世代Builder创建种群 ===
+pop = (DiscreteGenerationPopulationBuilder(sp)
+    .setup(name="FruitFlyPop", stochastic=True)
+    
+    # 初始种群分布（简单数量，无需年龄分布）
+    .initial_state({
+        "female": {"WT|WT": 500},
+        "male": {"WT|WT": 500}
+    })
+    
+    # 繁殖配置
+    .reproduction(
+        eggs_per_female=50,
+        sex_ratio=0.5
+    )
+    
+    # 添加基因驱动预设
+    .presets(HomingDrive(
+        name="MyDrive",
+        drive_allele="Drive",
+        target_allele="WT",
+        resistance_allele="Resistance",
+        drive_conversion_rate=0.95,
+        late_germline_resistance_formation_rate=0.03
+    ))
+    
+    .build())
+
+# === 第三步：定义 Hook ===
+@hook(event='first')
+def release_drive():
+    return [
+        Op.add(genotypes='Drive|WT', delta=50, when='tick == 10')
+    ]
+
+release_drive.register(pop)
+
+# === 第四步：运行模拟 ===
+pop.run(n_steps=100, record_every=10)
+
+# === 第五步：查看结果 ===
+print(f"最终种群: {pop.get_total_count():.0f}")
+print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 ```
 
 ---
@@ -405,10 +429,11 @@ print(f"最终种群: {pop.get_total_count():.0f}")
 
 现在你已经掌握了基础知识！接下来可以：
 
-1. **深入学习遗传架构**：[遗传结构与实体](02_genetic_structures.md)
-2. **理解性能**：[Simulation Kernels 深度解析](03_simulation_kernels.md)
-3. **掌握高级功能**：[Modifier 机制](06_modifiers.md) 和 [Hook DSL](07_hooks_dsl.md)
-4. **优化性能**：[Numba 优化指南](08_numba_optimization.md)
+1. **深入学习遗传预设系统**：[遗传预设系统](15_genetic_presets_guide.md) - 学习如何创建自定义预设
+2. **理解遗传架构**：[遗传结构与实体](02_genetic_structures.md) - 深入了解Species、Chromosome等概念
+3. **掌握高级功能**：[Hook 系统](07_hooks.md) - 学习如何注入自定义模拟逻辑
+4. **需要自定义遗传规则**：[Modifier 机制](06_modifiers.md) - 手动编写gamete/zygote修饰器
+5. **性能优化**：[Numba 优化指南](08_numba_optimization.md) - 提升模拟性能
 
 ---
 
@@ -419,6 +444,50 @@ print(f"最终种群: {pop.get_total_count():.0f}")
 
 ### Q: 为什么初始化很慢？
 **A**: 初始化时要生成两个映射矩阵，复杂度与基因型数量的 3-4 次方有关。这只发生一次。之后的每个 tick 速度很快。
+
+### Q: 为什么要使用Builder模式？
+**A**: Builder模式提供了更清晰、更灵活的API：
+
+```python
+# Builder模式 - 链式调用，参数组织清晰
+pop = (AgeStructuredPopulationBuilder(species)
+    .setup(name="MyPop", stochastic=True)
+    .age_structure(n_ages=8)
+    .initial_state({...})
+    .survival(female_rates=[...], male_rates=[...])
+    .reproduction(eggs_per_female=100)
+    .presets(my_preset)  # 添加预设
+    .build())
+```
+
+Builder模式的优势：
+- **可读性更好**：每个配置步骤都有明确的方法名
+- **参数验证**：在构建时进行参数检查
+- **链式调用**：支持流畅的API设计
+- **扩展性**：易于添加新的配置选项
+
+### Q: 什么时候使用离散世代种群？
+**A**: 当你的模型不需要年龄结构时，使用`DiscreteGenerationPopulationBuilder`更简单：
+
+```python
+from natal.population_builder import DiscreteGenerationPopulationBuilder
+
+# 离散世代模型（无年龄结构）
+pop = (DiscreteGenerationPopulationBuilder(species)
+    .setup(name="SimplePop", stochastic=True)
+    .initial_state({
+        "female": {"WT|WT": 1000},
+        "male": {"WT|WT": 1000}
+    })
+    .reproduction(eggs_per_female=50)
+    .presets(my_drive)
+    .build())
+```
+
+适用于：
+- 果蝇等实验室模型
+- 理论模型研究
+- 不需要年龄相关效应的模拟
 
 ### Q: "确定性" vs "随机性" 是什么区别？
 **A**: 

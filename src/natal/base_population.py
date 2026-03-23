@@ -23,7 +23,7 @@ import hashlib
 import numpy as np
 from natal.genetic_structures import *
 from natal.genetic_entities import *
-from natal.index_core import IndexCore
+from natal.index_registry import IndexRegistry
 from natal.type_def import *
 from natal.population_state import PopulationState
 from natal.population_config import PopulationConfig
@@ -40,7 +40,7 @@ class BasePopulation(ABC):
 
     Core components:
         - ``species``: Genetic architecture descriptor.
-        - ``registry``: ``IndexCore`` instance for managing genotype/haplotype indices.
+        - ``registry``: ``IndexRegistry`` instance for managing genotype/haplotype indices.
         - ``state``: Abstract property implemented by subclasses (``PopulationState`` or
           age-structured variants).
         - ``_hooks``: Event hook registry mapping event names to ordered hook lists.
@@ -84,11 +84,15 @@ class BasePopulation(ABC):
         self._hook_slot = self._derive_hook_slot(name)
         self._tick = 0
         # DELAYED: Registry will be created via _initialize_registry()
-        self._index_core: Optional[IndexCore] = None
-        self._registry: Optional[IndexCore] = None
+        self._index_registry: Optional[IndexRegistry] = None
+        self._registry: Optional[IndexRegistry] = None
         
         # 演化历史：(tick, flattened_array) 对的列表
         self._history: List[Tuple[int, np.ndarray]] = []
+        
+        # History config
+        self.record_every: int = 1
+        self.max_history: int = 5000  # Default rolling window size
         
         # Hooks 系统：事件名 -> [(hook_id, hook_name, hook_func), ...]
         self._hooks: Dict[str, List[Tuple[int, Optional[str], Callable]]] = {
@@ -124,7 +128,7 @@ class BasePopulation(ABC):
         self._pending_hooks: List[Tuple[str, Callable, Optional[str], Optional[int]]] = []
         
         # 注册 hooks
-        # 注意：如果 hook 带有 @hook 元数据，此时可能无法编译（IndexCore未完全设置）
+        # 注意：如果 hook 带有 @hook 元数据，此时可能无法编译（IndexRegistry未完全设置）
         # 普通函数可以直接注册，带 @hook 的函数会被添加到 _pending_hooks 延迟编译
         if hooks:
             for event_name, hooks_list in hooks.items():
@@ -152,7 +156,7 @@ class BasePopulation(ABC):
         """Compile pending hooks after subclass initialization is complete.
         
         Called by subclasses after their __init__ completes. This allows hooks
-        with @hook metadata to be compiled with the now-initialized IndexCore.
+        with @hook metadata to be compiled with the now-initialized IndexRegistry.
         """
         # Compile any pending @hook-decorated functions
         for event_name, func, hook_name, hook_id in self._pending_hooks:
@@ -177,28 +181,28 @@ class BasePopulation(ABC):
         after super().__init__() but before other initialization.
         """
         # Step 1: Create registry
-        self._index_core = self._create_registry()
-        self._registry = self._index_core
+        self._index_registry = self._create_registry()
+        self._registry = self._index_registry
         
         # Step 2: Register genotypes
         genotypes = self._get_genotypes()
         for genotype in genotypes:
-            self._index_core.register_genotype(genotype)
+            self._index_registry.register_genotype(genotype)
         
         # Step 3: Try to register haplogenotypes if available
         haplogenotypes = self._get_haplogenotypes()
         if haplogenotypes:
             for hg in haplogenotypes:
-                self._index_core.register_haplogenotype(hg)
+                self._index_registry.register_haplogenotype(hg)
         
         # Step 4: Register gamete labels if provided
         glabs = self._species.gamete_labels or ["default"]
         for glab in glabs:
-            self._index_core.register_gamete_label(glab)
+            self._index_registry.register_gamete_label(glab)
     
     # Helpers
-    def _create_registry(self) -> IndexCore:
-        return IndexCore()
+    def _create_registry(self) -> IndexRegistry:
+        return IndexRegistry()
 
     def _get_genotypes(self) -> List[Genotype]:
         return self._genotypes_list
@@ -252,8 +256,8 @@ class BasePopulation(ABC):
         self._tick = value
     
     @property
-    def registry(self) -> IndexCore:
-        """IndexCore instance managing genotype, haplotype, and label indices."""
+    def registry(self) -> IndexRegistry:
+        """IndexRegistry instance managing genotype, haplotype, and label indices."""
         return self._registry
     
     @property
@@ -270,6 +274,38 @@ class BasePopulation(ABC):
         """A list of recorded historical states as ``(tick, flattened_array)`` tuples."""
         return list(self._history)
     
+    def _enforce_history_limit(self) -> None:
+        """Ensure history size does not exceed max_history by dropping oldest entries."""
+        if self.max_history > 0:
+            excess = len(self._history) - self.max_history
+            if excess > 0:
+                self._history = self._history[excess:]
+
+    def _process_kernel_history(
+        self, 
+        history_new: Optional[np.ndarray], 
+        clear_history_on_start: bool
+    ) -> None:
+        """Process and append history array returned from simulation kernels.
+        
+        Handles duplication checking (overlapping start/end ticks) and enforces limit.
+        """
+        if history_new is None or history_new.shape[0] == 0:
+            return
+
+        if clear_history_on_start:
+            self.clear_history()
+        
+        for row_idx in range(history_new.shape[0]):
+            row = history_new[row_idx, :]
+            tick = int(row[0])
+            # Skip duplicate entry if continuing history (overlap check)
+            if not clear_history_on_start and self._history and self._history[-1][0] == tick:
+                continue
+            self._history.append((tick, row.copy()))
+        
+        self._enforce_history_limit()
+
     # ========================================================================
     # Modifier 管理
     # ========================================================================
@@ -290,7 +326,7 @@ class BasePopulation(ABC):
             gamete_modifiers=self._gamete_modifiers,
             zygote_modifiers=self._zygote_modifiers,
             population=self,
-            index_core=self._index_core,
+            index_registry=self._index_registry,
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
@@ -398,29 +434,38 @@ class BasePopulation(ABC):
         self._gamete_modifiers.append((hook_id, hook_name, modifier))
         self._gamete_modifiers.sort(key=lambda x: x[0])
 
-    def apply_recipe(self, recipe) -> None:
-        """Apply a gene drive recipe to this population.
+    def apply_preset(self, preset) -> None:
+        """Apply a genetic preset to this population.
         
-        This is the preferred API for registering recipes. The recipe's
+        This is the preferred API for registering presets. The preset's
         gamete modifiers, zygote modifiers, and fitness effects are
         registered in the correct order.
         
         Args:
-            recipe: A GeneDriveRecipe instance.
+            preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
         
         Example:
-            >>> from natal.recipes import HomingModificationDrive
-            >>> drive = HomingModificationDrive(drive_genotype, resistance_genotype)
-            >>> population.apply_recipe(drive)
+            >>> from natal.genetic_presets import HomingDrive
+            >>> drive = HomingDrive(
+            ...     name="MyDrive",
+            ...     drive_allele="Drive", 
+            ...     target_allele="WT",
+            ...     drive_conversion_rate=0.95
+            ... )
+            >>> population.apply_preset(drive)
+        
+        See Also:
+            :class:`natal.genetic_presets.GeneticPreset` - Base class for creating custom presets
+            :class:`natal.genetic_presets.HomingDrive` - Built-in gene drive preset
         """
-        from natal.recipes import apply_recipe_to_population
-        apply_recipe_to_population(self, recipe)
+        from natal.genetic_presets import apply_preset_to_population
+        apply_preset_to_population(self, preset)
     
     @classmethod
     def builder(cls, species: 'Species'):
         """Create a builder for this population type.
         
-        This is the recommended way to construct populations with recipes.
+        This is the recommended way to construct populations with presets.
         
         Args:
             species: Genetic architecture for the population.
@@ -431,7 +476,7 @@ class BasePopulation(ABC):
         Example:
             >>> pop = (AgeStructuredPopulation.builder(species)
             ...     .set_age_structure(n_ages=10)
-            ...     .add_recipe(HomingModificationDrive(...))
+            ...     .add_preset(HomingModificationDrive(...))
             ...     .build())
         """
         raise NotImplementedError(f"{cls.__name__} must implement builder()")
@@ -447,7 +492,7 @@ class BasePopulation(ABC):
             Ensures registry is initialized before proceeding.
         """
         # ✅ Ensure registry is initialized
-        if self._index_core is None:
+        if self._index_registry is None:
             self._initialize_registry()
         
         from natal.population_config import build_population_config, initialize_gamete_map, initialize_zygote_map
@@ -499,14 +544,14 @@ class BasePopulation(ABC):
 
     def register_gamete_labels(self, labels: Optional[Sequence[str]]) -> None:
         """
-        Register gamete labels in the IndexCore.
+        Register gamete labels in the IndexRegistry.
 
         Args:
             labels: Sequence of string labels to register. Labels must be
                 unique in the provided sequence. Existing labels are ignored.
         """
-        if not hasattr(self, "_index_core") or self._index_core is None:
-            raise RuntimeError("IndexCore not initialized; cannot register gamete labels")
+        if not hasattr(self, "_index_registry") or self._index_registry is None:
+            raise RuntimeError("IndexRegistry not initialized; cannot register gamete labels")
 
         if labels is None:
             return
@@ -526,8 +571,8 @@ class BasePopulation(ABC):
 
         # Register each string label if not already present
         for lab in seq:
-            if lab not in self._index_core.glab_to_index:
-                self._index_core.register_gamete_label(lab)
+            if lab not in self._index_registry.glab_to_index:
+                self._index_registry.register_gamete_label(lab)
 
     # ------------------------------------------------------------------
     # Helper routines to simplify modifier key/value parsing. These were
@@ -541,12 +586,12 @@ class BasePopulation(ABC):
             haploid_genotypes: list of HaploidGenotype objects.
             part: flexible selector (HaploidGenotype, int, str, or tuple).
             n_glabs: number of gamete labels.
-            strict: pass-through to IndexCore resolver.
+            strict: pass-through to IndexRegistry resolver.
 
         Returns:
             (hg_idx, glab_idx)
         """
-        return self._index_core.resolve_hg_glab_part(haploid_genotypes, part, n_glabs, strict=strict)
+        return self._index_registry.resolve_hg_glab_part(haploid_genotypes, part, n_glabs, strict=strict)
 
     def _parse_zygote_key(self, key: Any, haploid_genotypes: List[HaploidGenotype], n_glabs: int) -> Tuple[int, int]:
         """Parse modifier key for zygote wrappers into compressed coords (c1,c2).
@@ -554,7 +599,7 @@ class BasePopulation(ABC):
         Delegates to the shared implementation in modifiers module.
         """
         from natal.modifiers import _parse_zygote_key
-        return _parse_zygote_key(key, self._index_core, haploid_genotypes, n_glabs)
+        return _parse_zygote_key(key, self._index_registry, haploid_genotypes, n_glabs)
 
     def _normalize_zygote_val(self, val: Any, diploid_genotypes: List[Genotype]) -> Dict[int, float]:
         """Normalize zygote replacement `val` into a mapping idx->prob.
@@ -562,7 +607,7 @@ class BasePopulation(ABC):
         Delegates to the shared implementation in modifiers module.
         """
         from natal.modifiers import _normalize_zygote_val
-        return _normalize_zygote_val(val, self._index_core, diploid_genotypes)
+        return _normalize_zygote_val(val, self._index_registry, diploid_genotypes)
 
     def _write_zygote_mapping(self, modified: np.ndarray, c1: int, c2: int, mapping: Dict[int, float]) -> None:
         """Apply mapping (idx->prob) to the compressed zygote slice.
@@ -585,7 +630,7 @@ class BasePopulation(ABC):
         Delegates to the shared implementation in modifiers module.
         """
         from natal.modifiers import _apply_comp_map
-        _apply_comp_map(modified, sex_idx, gidx, comp_map, self._index_core, haploid_genotypes, n_glabs, n_hg_glabs)
+        _apply_comp_map(modified, sex_idx, gidx, comp_map, self._index_registry, haploid_genotypes, n_glabs, n_hg_glabs)
 
     def _build_modifier_wrappers(
         self,
@@ -604,7 +649,7 @@ class BasePopulation(ABC):
             gamete_modifiers=self._gamete_modifiers,
             zygote_modifiers=self._zygote_modifiers,
             population=self,
-            index_core=self._index_core,
+            index_registry=self._index_registry,
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
@@ -877,7 +922,8 @@ class BasePopulation(ABC):
         """
         state_copy = (self.state.individual_count.copy(), 
                       self.state.sperm_storage.copy() if self.state.sperm_storage is not None else None)
-        self._history.append((self.tick, state_copy))
+        self._history.append((self.tick, state_copy)) # Note: this is legacy tuple format used by some tests
+        self._enforce_history_limit()
 
     def reset(self) -> None:
         """Reset the population to its initial state.
@@ -898,7 +944,7 @@ class BasePopulation(ABC):
         if hasattr(self, '_initial_population_snapshot') and self._initial_population_snapshot is not None:
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
             from natal.population_state import PopulationState
-            n_genotypes = len(self._index_core.index_to_genotype)
+            n_genotypes = len(self._index_registry.index_to_genotype)
             # infer ages/sexes from saved arrays
             n_ages = None
             n_sexes = None
@@ -918,23 +964,57 @@ class BasePopulation(ABC):
     
     def compute_allele_frequencies(self) -> Dict[str, float]:
         """
-        计算种群中所有等位基因的频率。
-        
-        默认实现，子类可覆写以优化性能。
+        计算种群中所有等位基因的频率（按位点归一化）。
         
         Returns:
-            Dict[allele_name, frequency]
+            Dict[str, float]: 映射 {allele_name: frequency}。
+            频率是相对于该位点总等位基因数的比例 (0.0 - 1.0)。
         """
-        # 初始化所有等位基因频率为 0
-        allele_frequencies = {}
+        if self._state is None or self._registry is None:
+            return {}
+
+        # 1. 初始化计数器
+        allele_counts: Dict[str, float] = {}
+        locus_totals: Dict[str, float] = {}  # locus_name -> total_count
+        
         for chromosome in self.species.chromosomes:
             for locus in chromosome.loci:
+                locus_totals[locus.name] = 0.0
                 for gene in locus.alleles:
-                    allele_frequencies[gene.name] = 0.0
+                    allele_counts[gene.name] = 0.0
+
+        # 2. 聚合基因型计数
+        # individual_count shape: (n_sexes, n_ages, n_genotypes)
+        # 对性别和年龄求和，得到每个基因型的总数
+        genotype_counts = self._state.individual_count.sum(axis=(0, 1))
         
-        # 具体实现依赖子类的数据结构
-        # 这里提供一个空壳，子类应覆写
-        return allele_frequencies
+        registry = self._registry
+        for g_idx, count in enumerate(genotype_counts):
+            if count <= 0:
+                continue
+            
+            genotype = registry.index_to_genotype[g_idx]
+            for chrom in self.species.chromosomes:
+                for locus in chrom.loci:
+                    mat, pat = genotype.get_alleles_at_locus(locus)
+                    for allele in (mat, pat):
+                        if allele is not None:
+                            allele_counts[allele.name] += count
+                            locus_totals[locus.name] += count
+
+        # 3. 计算频率
+        frequencies: Dict[str, float] = {}
+        for allele_name, count in allele_counts.items():
+            # 找到该等位基因对应的 locus total
+            # (由于我们没有直接的 gene->locus 快速反查，这里稍微低效一点但安全)
+            # 实际上我们可以通过 self.species.gene_index 查找
+            gene = self.species.gene_index.get(allele_name)
+            if gene and locus_totals[gene.locus.name] > 0:
+                frequencies[allele_name] = count / locus_totals[gene.locus.name]
+            else:
+                frequencies[allele_name] = 0.0
+                
+        return frequencies
     
     # ========================================================================
     # Hooks 系统

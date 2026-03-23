@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.3.23
+- 创建 webui
+- 部分概念重命名：`IndexCore` -> `IndexRegistry`，`recipe` -> `preset`
+- 恢复 `AgeStructuredPopulation` 的生存率、初始状态构建逻辑
+- 修复了 `gamete_allele_conversion.py` 中 `sex_filter` 无效的问题（现在可以识别字符串和数字表示的性别，且无效的表示会报错）
+- 优化文档
+
 ## 2026.3.21
 - 重构 hook，优化 hook 缓存
 

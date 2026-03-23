@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
 
 
-def _resolve_selector_to_array(spec: Any, index_core, diploid_genotypes: List[Any]) -> np.ndarray:
+def _resolve_selector_to_array(spec: Any, index_registry, diploid_genotypes: List[Any]) -> np.ndarray:
     """Resolve one selector spec into an int32 index array.
 
     We normalize all accepted selector forms to a single representation so the
@@ -43,7 +43,7 @@ def _resolve_selector_to_array(spec: Any, index_core, diploid_genotypes: List[An
     if isinstance(spec, str):
         if spec == "*":
             return np.arange(len(diploid_genotypes), dtype=np.int32)
-        idx = index_core.resolve_genotype_index(diploid_genotypes, spec, strict=True)
+        idx = index_registry.resolve_genotype_index(diploid_genotypes, spec, strict=True)
         if idx is None:
             raise ValueError(f"Cannot resolve genotype: {spec}")
         return np.array([idx], dtype=np.int32)
@@ -54,18 +54,18 @@ def _resolve_selector_to_array(spec: Any, index_core, diploid_genotypes: List[An
             if isinstance(item, int):
                 indices.append(item)
             elif isinstance(item, str):
-                idx = index_core.resolve_genotype_index(diploid_genotypes, item, strict=True)
+                idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
                 if idx is None:
                     raise ValueError(f"Cannot resolve genotype: {item}")
                 indices.append(idx)
             else:
-                idx = index_core.genotype_to_index.get(item)
+                idx = index_registry.genotype_to_index.get(item)
                 if idx is None:
                     raise ValueError(f"Cannot resolve selector item: {item}")
                 indices.append(idx)
         return np.array(indices, dtype=np.int32)
 
-    idx = index_core.genotype_to_index.get(spec)
+    idx = index_registry.genotype_to_index.get(spec)
     if idx is not None:
         return np.array([idx], dtype=np.int32)
 
@@ -85,17 +85,17 @@ def compile_selector_hook(
     ``resolved`` stores canonical selector arrays and is reused by both
     execution paths.
     """
-    index_core = pop._index_core
-    diploid_genotypes = index_core.index_to_genotype
+    index_registry = pop._index_registry
+    diploid_genotypes = index_registry.index_to_genotype
 
     # Resolve selectors exactly once during registration.
     resolved = {
-        name: _resolve_selector_to_array(spec, index_core, diploid_genotypes)
+        name: _resolve_selector_to_array(spec, index_registry, diploid_genotypes)
         for name, spec in selectors_spec.items()
     }
 
     meta = {
-        "n_genotypes": index_core.num_genotypes(),
+        "n_genotypes": index_registry.num_genotypes(),
         "n_ages": pop._n_ages,
     }
 

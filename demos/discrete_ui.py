@@ -1,6 +1,8 @@
 import natal as nt
 import numpy as np
 import time
+from natal.ui import launch
+
 
 sp = nt.Species.from_dict(
     name="TestSpecies",
@@ -19,18 +21,20 @@ drive = nt.HomingDrive(
     target_allele="WT",
     resistance_allele="R2",
     functional_resistance_allele="R1",
-    drive_conversion_rate=0.6,
+    drive_conversion_rate=0.8,
     late_germline_resistance_formation_rate=0.5,
     functional_resistance_ratio=0.001,
-    embryo_resistance_formation_rate=0.0,
-    fecundity_scaling=0.99,
+    embryo_resistance_formation_rate=0.1,
+    viability_scaling=0.9,
+    fecundity_scaling={"female": 0.0},
+    fecundity_mode="recessive",
     cas9_deposition_glab="cas9_deposited"
 )
 
 @nt.hook(event="first", priority=0)
 def release_drive_carriers():
     return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=5000, when="tick % 10 == 0 and tick > 0")
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=5000, when="tick == 10")
     ]
 
 pop = nt.DiscreteGenerationPopulation \
@@ -61,26 +65,4 @@ pop = nt.DiscreteGenerationPopulation \
     .hooks(release_drive_carriers) \
     .build()
 
-pop.run(5) 
-
-start = time.perf_counter()
-pop.run(10000)
-end = time.perf_counter()
-
-print(f"Execution time: {end - start:.3f} seconds\n")
-
-# === Demo outputs ===
-genotypes = [str(gt) for gt in pop._registry.index_to_genotype]
-count_female = [int(gt) for gt in pop._state.individual_count[0][1]]
-count_male = [int(gt) for gt in pop._state.individual_count[1][1]]
-
-# readable output
-for i, sex in enumerate(["female", "male"]):
-    print(f"{sex}:")
-    row = []
-    for j, gt in enumerate(genotypes):
-        count = count_female[j] if i == 0 else count_male[j]
-        row.append(f"{gt:>8}: {count:>6},")
-        if (j + 1) % 4 == 0 or j == len(genotypes) - 1:
-            print("  ", "  ".join(row))
-            row = []
+launch(pop)

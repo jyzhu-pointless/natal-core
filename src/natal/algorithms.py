@@ -280,10 +280,12 @@ def fertilize_with_mating_genotype(
     use_dirichlet_sampling: bool = False,
 ) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """向量化版本：批量 Multinomial 采样，减少 Python 循环层数。(60.9x 加速)
-    
+
     改进要点：
     1. 预计算所有 (age, gf, gm) 的期望卵数 → (n_adult_combos,) 向量
     2. 一次批量 Poisson 采样所有卵数 → 避免逐个采样
+       *注意*: 在此阶段若 `P_sums < 1.0` (Zygote Fitness/Lethality)，会先执行二项分布筛选减少卵数。
+       这属于 Pre-competition (Hard Selection) 筛选。
     3. 使用 np.random.multinomial() 直接采样后代基因型
     4. 向量化累积（而非逐个累积）
     
@@ -438,11 +440,32 @@ def fertilize_with_mating_genotype(
     
     if is_stochastic:
         # ===== 随机模式：逐个采样但用预计算的归一化概率 =====
+        
+        # 1. 计算存活合子数 (Pre-competition / Zygote Viability)
+        # 若 P_sums[i] < 1.0，说明部分合子基因型致死，需先进行二项分布筛选
+        n_viable_eggs = np.zeros(n_combos, dtype=np.float64)
+        
+        for i in range(n_combos):
+            n_total = n_eggs_per_combo[i]
+            p_surv = P_sums[i]
+            
+            if n_total <= EPS or p_surv <= EPS:
+                n_viable_eggs[i] = 0.0
+            elif p_surv >= 1.0 - EPS:
+                n_viable_eggs[i] = n_total
+            else:
+                if use_dirichlet_sampling:
+                    n_viable_eggs[i] = continuous_binomial(n_total, p_surv)
+                else:
+                    n_viable_eggs[i] = float(nbc.binomial(int(round(n_total)), p_surv))
+
+        # 2. 采样后代基因型 (Multinomial)
         offspring_samples = np.empty((n_combos, n_genotypes), dtype=np.float64)
         temp_offspring = np.zeros(n_genotypes, dtype=np.float64)  # 临时数组用于 Dirichlet
         
         for i in range(n_combos):
-            n_eggs = n_eggs_per_combo[i]
+            n_eggs = n_viable_eggs[i]
+            
             if n_eggs > EPS:
                 if use_dirichlet_sampling:
                     # 连续化采样：使用 Dirichlet 代替 Multinomial

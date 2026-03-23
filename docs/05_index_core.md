@@ -1,4 +1,4 @@
-# IndexCore 索引机制
+# IndexRegistry 索引机制
 
 本章讲解 NATAL 如何将遗传学对象（Genotype、HaploidGenotype 等）与整数索引关联。这是连接"高层对象世界"与"底层数值计算世界"的关键。
 
@@ -13,12 +13,12 @@ HaploidGenotype    ↔  整数索引 3
 "Cas9_deposited"   ↔  整数索引 1
 ```
 
-**目的**：numpy 数组使用整数索引（效率高），但用户想用遗传学对象（直观）。IndexCore 负责在两者之间转换。
+**目的**：numpy 数组使用整数索引（效率高），但用户想用遗传学对象（直观）。IndexRegistry 负责在两者之间转换。
 
-## IndexCore 类
+## IndexRegistry 类
 
 ```python
-class IndexCore:
+class IndexRegistry:
     """稳定的对象→整数索引注册表"""
     
     # 映射字典
@@ -37,7 +37,7 @@ class IndexCore:
 ### 1. 基因型索引
 
 ```python
-ic = pop.registry  # IndexCore 实例
+ic = pop.registry  # IndexRegistry 实例
 
 # 注册一个基因型
 gt = sp.get_genotype_from_str("A1|A2")
@@ -167,7 +167,7 @@ haploid_back, label_back = decompress_hg_glab(compressed, n_glabs)
 
 ## Modifier 中的使用
 
-在编写 Modifier 时，需要利用 IndexCore 获取基因型索引：
+在编写 Modifier 时，需要利用 IndexRegistry 获取基因型索引：
 
 ```python
 def gene_drive_modifier(pop):
@@ -203,7 +203,7 @@ def my_hook(ind_count, tick):
     """
     Numba 兼容的 Hook——必须使用整数索引
     
-    注意：Hook 在编译时无法访问 IndexCore，
+    注意：Hook 在编译时无法访问 IndexRegistry，
     所以需要在 Python 层确定索引，然后硬编码传入
     """
     if tick == 10:
@@ -215,7 +215,7 @@ def my_hook(ind_count, tick):
     
     return 0  # 继续
 
-# 使用选择器模式避免硬编码（见 Hook DSL 章节）
+# 使用选择器模式避免硬编码（见 Hook 系统 章节）
 ```
 
 ## 与 Modifier 的交互
@@ -287,7 +287,7 @@ config.viability_fitness[FEMALE, 3, gt_indices] = 0.9
 
 ## 与全局缓存的关系
 
-Genotype 使用全局缓存，而 IndexCore 维护对象→索引的注册：
+Genotype 使用全局缓存，而 IndexRegistry 维护对象→索引的注册：
 
 ```
 字符串 "A1|A2"
@@ -295,7 +295,7 @@ Genotype 使用全局缓存，而 IndexCore 维护对象→索引的注册：
 全局缓存 Species.genotype_cache
     ↓ [命中]
 Genotype 对象 (唯一)
-    ↓ IndexCore.register_genotype()
+    ↓ IndexRegistry.register_genotype()
 整数索引 (例如 5)
     ↓
 numpy 数组访问 individual_count[:, :, 5]
@@ -303,7 +303,7 @@ numpy 数组访问 individual_count[:, :, 5]
 
 两个机制协同工作：
 1. **全局缓存** 保证对象唯一性
-2. **IndexCore** 建立对象与索引的映射
+2. **IndexRegistry** 建立对象与索引的映射
 
 ---
 
@@ -311,17 +311,17 @@ numpy 数组访问 individual_count[:, :, 5]
 
 | 概念 | 作用 | 使用频率 |
 |------|------|---------|
-| **IndexCore** | 对象↔索引注册表 | 在 Modifier、Hook 中使用 |
+| **IndexRegistry** | 对象↔索引注册表 | 在 Modifier、Hook 中使用 |
 | **genotype_index()** | 获取基因型索引 | 常用 |
 | **haplo_index()** | 获取单倍基因型索引 | 少用（高级功能） |
 | **gamete_label_index()** | 获取标签索引 | 中等频率 |
 | **compress/decompress** | 压缩配子索引 | 低层函数中使用 |
 
 **关键点**：
-1. IndexCore 自动维护，用户通常通过 `pop.registry` 访问
+1. IndexRegistry 自动维护，用户通常通过 `pop.registry` 访问
 2. Modifier 返回对象→频率字典，内部自动转换为索引
 3. Numba Hook 直接工作于索引（对象信息丢失）
-4. 全局缓存 + IndexCore 构成完整的对象→索引系统
+4. 全局缓存 + IndexRegistry 构成完整的对象→索引系统
 
 ---
 
@@ -329,8 +329,8 @@ numpy 数组访问 individual_count[:, :, 5]
 
 - [遗传结构与实体](02_genetic_structures.md) - Genotype 对象的创建
 - [PopulationState & PopulationConfig](04_population_state_config.md) - 配置中的索引应用
-- [Modifier 机制](06_modifiers.md) - Modifier 中的 IndexCore 使用
-- [Hook DSL 系统](07_hooks_dsl.md) - 高级 Hook 选择器模式
+- [Modifier 机制](06_modifiers.md) - Modifier 中的 IndexRegistry 使用
+- [Hook 系统](07_hooks.md) - 高级 Hook 选择器模式
 
 ---
 

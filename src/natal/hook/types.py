@@ -19,7 +19,7 @@ import numpy as np
 from natal.numba_utils import get_numba_cache_dir
 
 if TYPE_CHECKING:
-    from natal.index_core import IndexCore
+    from natal.index_registry import IndexRegistry
 
 
 _HOOK_CODEGEN_DIR = Path(get_numba_cache_dir()) / "hook_codegen"

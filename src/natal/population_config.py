@@ -6,7 +6,7 @@ from numpy.typing import NDArray
 
 from natal.type_def import *
 from natal.genetic_entities import Genotype, HaploidGenotype
-from natal.index_core import compress_hg_glab, decompress_hg_glab
+from natal.index_registry import compress_hg_glab, decompress_hg_glab
 import natal.algorithms as alg
 
 __all__ = [

@@ -523,7 +523,7 @@ print(f"Estimated time for 10000 steps: {large_run_time:.1f} s")
 
 - [Simulation Kernels 深度解析](03_simulation_kernels.md) - @njit 函数的详细说明
 - [PopulationState & PopulationConfig](04_population_state_config.md) - @jitclass 的使用
-- [Hook DSL 系统](07_hooks_dsl.md) - Hook 性能优化
+- [Hook 系统](07_hooks.md) - Hook 性能优化
 - [快速开始](01_quickstart.md) - 实际使用中的性能调优
 
 ---

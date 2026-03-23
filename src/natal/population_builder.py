@@ -56,8 +56,8 @@ class PopulationConfigBuilder:
         is_stochastic: bool,
         use_dirichlet_sampling: bool,
         # Survival & Mating
-        female_age_based_survival_rates: Optional[NDArray],
-        male_age_based_survival_rates: Optional[NDArray],
+        female_age_based_survival_rates: Optional[Any],
+        male_age_based_survival_rates: Optional[Any],
         female_age_based_mating_rates: Optional[NDArray],
         male_age_based_mating_rates: Optional[NDArray],
         female_age_based_relative_fertility: Optional[NDArray],
@@ -80,6 +80,9 @@ class PopulationConfigBuilder:
         zygote_modifiers: Optional[List[Tuple[int, Optional[str], Callable]]],
         # Generation time
         generation_time: Optional[int],
+        # Initial state arrays (already parsed by builder)
+        initial_individual_count: Optional[NDArray[np.float64]] = None,
+        initial_sperm_storage: Optional[NDArray[np.float64]] = None,
     ) -> PopulationConfig:
         """Construct a complete PopulationConfig from builder parameters.
         
@@ -147,10 +150,10 @@ class PopulationConfigBuilder:
         _default_female = [1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0.0]
         _default_male = [1.0, 1.0, 2/3, 1/2, 0.0, 0.0, 0.0, 0.0]
         
-        female_survival = PopulationConfigBuilder._resolve_array_param(
+        female_survival = PopulationConfigBuilder._resolve_survival_param(
             female_age_based_survival_rates, n_ages, _default_female
         )
-        male_survival = PopulationConfigBuilder._resolve_array_param(
+        male_survival = PopulationConfigBuilder._resolve_survival_param(
             male_age_based_survival_rates, n_ages, _default_male
         )
         
@@ -262,8 +265,12 @@ class PopulationConfigBuilder:
             equilibrium_individual_distribution=equilibrium_individual_distribution,
             genotype_to_gametes_map=gamete_map,
             gametes_to_zygote_map=zygote_map,
-            generation_time=generation_time
+            generation_time=generation_time,
+            initial_individual_count=initial_individual_count,
         )
+
+        if initial_sperm_storage is not None:
+            cfg = cfg._replace(initial_sperm_storage=initial_sperm_storage.copy())
 
         print("✅ Population configuration initialized")
 
@@ -275,23 +282,280 @@ class PopulationConfigBuilder:
         return list(species.iter_haploid_genotypes())
     
     @staticmethod
-    def _resolve_array_param(
-        param: Optional[Union[List, NDArray]],
+    def _resolve_survival_param(
+        param: Optional[Any],
         expected_length: int,
         default: List[float]
     ) -> NDArray[np.float64]:
-        """Resolve array parameter with fallback to default."""
-        if param is not None:
-            arr = np.asarray(param, dtype=np.float64)
-            if len(arr) != expected_length:
-                raise ValueError(f"Parameter length {len(arr)} != {expected_length}")
-            return arr
+        """Resolve flexible survival spec into a 1D float array.
+
+        Supports:
+        - None -> default
+        - numeric scalar -> fill all ages
+        - sequence/ndarray -> truncate or pad with 0; trailing None sentinel supported
+        - dict[int, float] -> sparse age map with unspecified ages defaulting to 1.0
+        - callable(age) -> float
+        """
+        if param is None:
+            out = np.array(default[:expected_length], dtype=np.float64)
+            if out.size < expected_length:
+                out = np.pad(out, (0, expected_length - out.size), constant_values=0.0)
+            return out
+
+        if isinstance(param, (int, float)) and not isinstance(param, bool):
+            val = float(param)
+            if val < 0:
+                raise ValueError("Survival rates must be non-negative")
+            return np.full(expected_length, val, dtype=np.float64)
+
+        if isinstance(param, dict):
+            out = np.ones(expected_length, dtype=np.float64)
+            for age, value in param.items():
+                if not isinstance(age, int):
+                    raise TypeError("Age keys in survival dict must be int")
+                if age < 0 or age >= expected_length:
+                    raise ValueError(f"Age {age} out of range [0, {expected_length})")
+                fval = float(value)
+                if fval < 0:
+                    raise ValueError("Survival rates must be non-negative")
+                out[age] = fval
+            return out
+
+        if callable(param):
+            vals = np.empty(expected_length, dtype=np.float64)
+            for age in range(expected_length):
+                try:
+                    vals[age] = float(param(age))
+                except Exception as exc:
+                    raise ValueError(f"Error calling survival rate function at age {age}: {exc}") from exc
+            if np.any(vals < 0):
+                raise ValueError("Survival rates must be non-negative")
+            return vals
+
+        if isinstance(param, (list, tuple, np.ndarray)):
+            obj_arr = np.array(param, dtype=object)
+            if obj_arr.size == 0:
+                return np.zeros(expected_length, dtype=np.float64)
+
+            if obj_arr[-1] is None:
+                non_none = None
+                for value in obj_arr[::-1]:
+                    if value is not None:
+                        non_none = float(value)
+                        break
+                if non_none is None:
+                    out = np.array(default[:expected_length], dtype=np.float64)
+                    if out.size < expected_length:
+                        out = np.pad(out, (0, expected_length - out.size), constant_values=0.0)
+                    return out
+                vals = []
+                for value in obj_arr[:-1]:
+                    if value is None:
+                        raise TypeError("None only allowed as final sentinel in survival list")
+                    vals.append(float(value))
+                out = np.empty(expected_length, dtype=np.float64)
+                prefix = min(len(vals), expected_length)
+                if prefix > 0:
+                    out[:prefix] = np.asarray(vals[:prefix], dtype=np.float64)
+                if prefix < expected_length:
+                    out[prefix:] = float(non_none)
+                if np.any(out < 0):
+                    raise ValueError("Survival rates must be non-negative")
+                return out
+
+            arr = np.asarray(obj_arr, dtype=np.float64)
+            out = np.zeros(expected_length, dtype=np.float64)
+            prefix = min(arr.size, expected_length)
+            if prefix > 0:
+                out[:prefix] = arr[:prefix]
+            if np.any(out < 0):
+                raise ValueError("Survival rates must be non-negative")
+            return out
+
+        raise TypeError(
+            "survival rates must be None, sequence, dict, callable or numeric constant"
+        )
+
+    @staticmethod
+    def _resolve_sex_index(sex_key: Union[str, Sex]) -> int:
+        if isinstance(sex_key, Sex):
+            return int(sex_key.value)
+        if isinstance(sex_key, str):
+            return resolve_sex_label(sex_key)
+        raise TypeError(f"Sex key must be str or Sex, got {type(sex_key)}")
+
+    @staticmethod
+    def _resolve_genotype_index(
+        species: Species,
+        genotype_key: Union[Genotype, str],
+        genotype_to_index: Dict[Genotype, int],
+    ) -> int:
+        if isinstance(genotype_key, str):
+            genotype = species.get_genotype_from_str(genotype_key)
+        elif isinstance(genotype_key, Genotype):
+            genotype = genotype_key
         else:
-            # Use default, resized to expected_length
-            default_arr = np.array(default[:expected_length], dtype=np.float64)
-            if len(default_arr) < expected_length:
-                default_arr = np.pad(default_arr, (0, expected_length - len(default_arr)), constant_values=0)
-            return default_arr
+            raise TypeError(f"Genotype key must be Genotype or str, got {type(genotype_key)}")
+        if genotype.species is not species:
+            raise ValueError("Genotype must belong to this species")
+        return int(genotype_to_index[genotype])
+
+    @staticmethod
+    def _resolve_age_counts_age_structured(
+        age_data: Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
+        n_ages: int,
+        new_adult_age: int,
+    ) -> Dict[int, float]:
+        if isinstance(age_data, dict):
+            out: Dict[int, float] = {}
+            for age, count in age_data.items():
+                if not isinstance(age, int):
+                    raise TypeError(f"Age must be int, got {type(age)}")
+                if age < 0 or age >= n_ages:
+                    raise ValueError(f"Age {age} out of range [0, {n_ages})")
+                fcount = float(count)
+                if fcount < 0:
+                    raise ValueError(f"Count must be non-negative, got {fcount}")
+                if fcount > 0:
+                    out[age] = fcount
+            return out
+
+        if isinstance(age_data, (list, tuple, np.ndarray)):
+            arr = np.asarray(age_data, dtype=np.float64)
+            out = {}
+            for age, count in enumerate(arr):
+                if age >= n_ages:
+                    break
+                if count < 0:
+                    raise ValueError(f"Count must be non-negative, got {count}")
+                if count > 0:
+                    out[age] = float(count)
+            return out
+
+        if isinstance(age_data, (int, float)) and not isinstance(age_data, bool):
+            fcount = float(age_data)
+            if fcount < 0:
+                raise ValueError(f"Count must be non-negative, got {fcount}")
+            if fcount <= 0:
+                return {}
+            return {age: fcount for age in range(new_adult_age, n_ages)}
+
+        raise TypeError(
+            f"Age data must be List/Tuple/NDArray, Dict, or numeric scalar, got {type(age_data)}"
+        )
+
+    @staticmethod
+    def resolve_age_structured_initial_individual_count(
+        species: Species,
+        distribution: Dict[str, Dict[Union[Genotype, str], Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float]]],
+        n_ages: int,
+        new_adult_age: int,
+    ) -> NDArray[np.float64]:
+        genotypes = species.get_all_genotypes()
+        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
+        out = np.zeros((2, n_ages, len(genotypes)), dtype=np.float64)
+
+        for sex_key, genotype_dist in distribution.items():
+            sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
+            for genotype_key, age_data in genotype_dist.items():
+                genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
+                    species, genotype_key, genotype_to_index
+                )
+                age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
+                    age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
+                )
+                for age, count in age_counts.items():
+                    out[sex_idx, age, genotype_idx] += float(count)
+        return out
+
+    @staticmethod
+    def resolve_age_structured_initial_sperm_storage(
+        species: Species,
+        sperm_storage: Dict[
+            Union[Genotype, str],
+            Dict[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
+        ],
+        n_ages: int,
+        new_adult_age: int,
+    ) -> NDArray[np.float64]:
+        genotypes = species.get_all_genotypes()
+        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
+        out = np.zeros((n_ages, len(genotypes), len(genotypes)), dtype=np.float64)
+
+        for female_key, male_dict in sperm_storage.items():
+            female_idx = PopulationConfigBuilder._resolve_genotype_index(
+                species, female_key, genotype_to_index
+            )
+            if not isinstance(male_dict, dict):
+                raise TypeError(f"Sperm storage value must be dict, got {type(male_dict)}")
+            for male_key, age_data in male_dict.items():
+                male_idx = PopulationConfigBuilder._resolve_genotype_index(
+                    species, male_key, genotype_to_index
+                )
+                age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
+                    age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
+                )
+                for age, count in age_counts.items():
+                    out[age, female_idx, male_idx] += float(count)
+        return out
+
+    @staticmethod
+    def _resolve_discrete_age_distribution(
+        age_data: Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
+    ) -> Tuple[float, float]:
+        if isinstance(age_data, (int, float)) and not isinstance(age_data, bool):
+            value = float(age_data)
+            if value < 0:
+                raise ValueError(f"Count must be non-negative, got {value}")
+            return 0.0, value
+
+        if isinstance(age_data, (list, tuple, np.ndarray)):
+            arr = np.asarray(age_data, dtype=np.float64)
+            if arr.size == 0:
+                return 0.0, 0.0
+            if arr.size == 1:
+                if arr[0] < 0:
+                    raise ValueError(f"Count must be non-negative, got {arr[0]}")
+                return 0.0, float(arr[0])
+            if arr.size == 2:
+                if np.any(arr < 0):
+                    raise ValueError(f"Count must be non-negative, got {arr}")
+                return float(arr[0]), float(arr[1])
+            raise ValueError(f"Discrete initial list/array must have length <= 2, got {arr.size}")
+
+        if isinstance(age_data, dict):
+            unsupported_keys = [k for k in age_data.keys() if k not in (0, 1)]
+            if unsupported_keys:
+                raise ValueError(
+                    f"Discrete initial dict supports only age keys 0 and 1, got {unsupported_keys}"
+                )
+            age0 = float(age_data.get(0, 0.0))
+            age1 = float(age_data.get(1, 0.0))
+            if age0 < 0 or age1 < 0:
+                raise ValueError("Count must be non-negative")
+            return age0, age1
+
+        raise TypeError(f"Unsupported age_data type: {type(age_data)}")
+
+    @staticmethod
+    def resolve_discrete_initial_individual_count(
+        species: Species,
+        distribution: Dict[str, Dict[Union[Genotype, str], Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float]]],
+    ) -> NDArray[np.float64]:
+        genotypes = species.get_all_genotypes()
+        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
+        out = np.zeros((2, 2, len(genotypes)), dtype=np.float64)
+
+        for sex_key, genotype_dist in distribution.items():
+            sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
+            for genotype_key, age_data in genotype_dist.items():
+                genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
+                    species, genotype_key, genotype_to_index
+                )
+                age0, age1 = PopulationConfigBuilder._resolve_discrete_age_distribution(age_data)
+                out[sex_idx, 0, genotype_idx] += age0
+                out[sex_idx, 1, genotype_idx] += age1
+        return out
     
     @staticmethod
     def _build_modifier_tensors(modifiers: List, modifier_type: str) -> List:
@@ -314,20 +578,20 @@ class PopulationBuilderBase:
             species: Genetic architecture for the population.
         """
         self.species = species
-        self._recipes: List[Any] = []
+        self._presets: List[Any] = []
     
-    def add_recipe(self, recipe: Any) -> 'PopulationBuilderBase':
-        """Add a gene drive recipe to apply during build.
+    def add_preset(self, preset: Any) -> 'PopulationBuilderBase':
+        """Add a gene drive preset to apply during build.
         
-        Recipes are applied in the order they are added.
+        Presets are applied in the order they are added.
         
         Args:
-            recipe: A GeneDriveRecipe or similar modification system.
+            preset: A GeneDrivePreset or similar modification system.
         
         Returns:
             Self for chaining.
         """
-        self._recipes.append(recipe)
+        self._presets.append(preset)
         return self
     
     def build(self):
@@ -350,14 +614,14 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     - survival() - Age-based survival rates
     - reproduction() - Mating rates, fertility, eggs, sex ratio, sperm storage
     - competition() - Carrying capacity, growth mode, density-dependent parameters
-    - recipes() - Preset modification packages to apply during build
+    - presets() - Preset modification packages to apply during build
     - fitness() - Fitness tensors (viability, fecundity, sexual selection)
     - modifiers() - Custom gamete and zygote modifier functions
     - hooks() - Event hook registrations
     
     Notes:
-        Fitness and modifiers are applied AFTER recipes during build().
-        This allows recipes to set base values, which can then be overridden.
+        Fitness and modifiers are applied AFTER presets during build().
+        This allows presets to set base values, which can then be overridden.
     
     Example::
     
@@ -369,7 +633,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             .competition(juvenile_growth_mode='logistic', carrying_capacity=1000)
             .initial_state(distribution={...})
             .fitness(viability=np.ones((2,10,5)))
-            .add_recipe(HomingModificationDrive(...))
+            .add_preset(HomingModificationDrive(...))
             .build())
     """
     
@@ -476,8 +740,19 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     
     def initial_state(
         self,
-        individual_count: Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int]]]],
-        sperm_storage: Optional[Dict[Union[Genotype, str], Dict[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None
+        individual_count: Dict[
+            str,
+            Dict[
+                Union[Genotype, str],
+                Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
+            ],
+        ],
+        sperm_storage: Optional[
+            Dict[
+                Union[Genotype, str],
+                Dict[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
+            ]
+        ] = None
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure initial population state and sperm storage.
         
@@ -496,8 +771,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     
     def survival(
         self,
-        female_age_based_survival_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
-        male_age_based_survival_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        female_age_based_survival_rates: Optional[Any] = None,
+        male_age_based_survival_rates: Optional[Any] = None,
         generation_time: Optional[int] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
     ) -> 'AgeStructuredPopulationBuilder':
@@ -594,35 +869,36 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             self.equilibrium_individual_distribution = equilibrium_distribution
         return self
     
-    def recipes(self, *recipe_list: Any) -> 'AgeStructuredPopulationBuilder':
-        """Add preset recipe packages (applied during build).
+    def presets(self, *preset_list: Any) -> 'AgeStructuredPopulationBuilder':
+        """Add preset preset packages (applied during build).
         
-        Recipes are preset configurations that may include fitness tensors,
+        Presets are preset configurations that may include fitness tensors,
         modifiers, and other modifications. They are applied first, then
         overridden by explicit fitness(), modifiers(), and hooks() settings
         if provided.
         
         Args:
-            *recipe_list: Variable number of recipe objects to apply.
+            *preset_list: Variable number of preset objects to apply.
         
         Returns:
             Self for chaining.
         """
-        if recipe_list:
-            self._recipes = list(recipe_list)
+        if preset_list:
+            self._presets = list(preset_list)
         return self
     
     def fitness(
         self,
         viability: Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]] = None,
-        fecundity: Optional[Dict[GenotypeSelector, float]] = None,
-        sexual_selection: Optional[Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]] = None
+        fecundity: Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]] = None,
+        sexual_selection: Optional[Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]] = None,
+        mode: str = "replace",
     ) -> 'AgeStructuredPopulationBuilder':
-        """Configure fitness via population methods (applied after recipes).
+        """Configure fitness via population methods (applied after presets).
         
         Fitness is set using the population's set_viability(), set_fecundity(),
-        and set_sexual_selection() methods AFTER recipes are applied. This allows
-        recipes to set base fitness values which can then be overridden.
+        and set_sexual_selection() methods AFTER presets are applied. This allows
+        presets to set base fitness values which can then be overridden.
         
         Args:
             viability: Dict mapping genotype -> {sex: value} or genotype -> value.
@@ -630,9 +906,10 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                 If value is a float, applies to both sexes.
                 - Example: {'WT|WT': 1.0, 'Drive|WT': {'female': 0.9, 'male': 0.8}}
             
-            fecundity: Dict mapping genotype -> fitness value.
-                Applied to both sexes unless genotype includes sex qualifiers.
-                - Example: {'WT|WT': 1.0, 'Drive|WT': 0.5}
+            fecundity: Dict mapping genotype -> fitness value (float or dict).
+                - Float: Applies to both sexes.
+                - Dict: {sex: value} applies per-sex.
+                - Example: {'WT|WT': 1.0, 'Drive|WT': {'female': 0.5, 'male': 1.0}}
             
             sexual_selection: Nested mapping of female_selector -> {male_selector: value}.
                 - female_selector can be omitted by passing flat form {male_selector: value},
@@ -641,18 +918,21 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     and tuple unions of these.
                 - Example nested: {'WT|WT': {'WT|WT': 1.0, 'Drive|WT': 0.8}}
                 - Example all-female: {'Drive|WT': 0.8}
+            
+            mode: Scaling mode. 'replace' (default) overwrites existing values.
+                'multiply' scales existing values by the provided factor.
         
         Returns:
             Self for chaining.
         """
         if viability is not None:
-            self._fitness_operations.append(('viability', (viability,), {}))
+            self._fitness_operations.append(('viability', (viability,), {'mode': mode}))
         
         if fecundity is not None:
-            self._fitness_operations.append(('fecundity', (fecundity,), {}))
+            self._fitness_operations.append(('fecundity', (fecundity,), {'mode': mode}))
         
         if sexual_selection is not None:
-            self._fitness_operations.append(('sexual_selection', (sexual_selection,), {}))
+            self._fitness_operations.append(('sexual_selection', (sexual_selection,), {'mode': mode}))
         
         return self
 
@@ -687,9 +967,9 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         gamete_modifiers: Optional[List[Tuple[int, Optional[str], Callable]]] = None,
         zygote_modifiers: Optional[List[Tuple[int, Optional[str], Callable]]] = None
     ) -> 'AgeStructuredPopulationBuilder':
-        """Configure custom modifier functions (applied after recipes).
+        """Configure custom modifier functions (applied after presets).
         
-        Modifiers are registered AFTER recipes are applied, allowing recipes
+        Modifiers are registered AFTER presets are applied, allowing presets
         to establish base state which can then be modified.
         
         Args:
@@ -751,7 +1031,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
           1. Validates required configuration
           2. Creates PopulationConfig via PopulationConfigBuilder
           3. Creates AgeStructuredPopulation with PopulationConfig
-          4. Applies all recipes in order
+          4. Applies all presets in order
           5. Applies fitness settings directly to PopulationConfig tensors
           6. Returns fully configured population
         
@@ -776,6 +1056,22 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                 "Use .initial_state() before .build()"
             )
         
+        initial_individual_count = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
+            species=self.species,
+            distribution=self.initial_individual_count,
+            n_ages=self.n_ages,
+            new_adult_age=self.new_adult_age,
+        )
+
+        initial_sperm_storage = None
+        if self.initial_sperm_storage is not None:
+            initial_sperm_storage = PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
+                species=self.species,
+                sperm_storage=self.initial_sperm_storage,
+                n_ages=self.n_ages,
+                new_adult_age=self.new_adult_age,
+            )
+
         # 1️⃣ Build PopulationConfig via PopulationConfigBuilder
         pop_config = PopulationConfigBuilder.build(
             species=self.species,
@@ -803,6 +1099,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             gamete_modifiers=self.gamete_modifiers,
             zygote_modifiers=self.zygote_modifiers,
             generation_time=self.generation_time,
+            initial_individual_count=initial_individual_count,
+            initial_sperm_storage=initial_sperm_storage,
         )
         
         # 2️⃣ Create population with PopulationConfig and hooks
@@ -810,18 +1108,18 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             species=self.species,
             population_config=pop_config,
             name=self.name,
-            initial_individual_count=self.initial_individual_count, # TODO: initial也由config管理（Discrete同理）
-            initial_sperm_storage=self.initial_sperm_storage,
             hooks=self._hooks
         )
         
-        # 3️⃣ Apply all recipes in order
-        for recipe in self._recipes:
-            pop.apply_recipe(recipe)
+        # 3️⃣ Apply all presets in order
+        for preset in self._presets:
+            pop.apply_preset(preset)
         
-        # 4️⃣ Apply fitness settings directly to PopulationConfig (after recipes)
+        # 4️⃣ Apply fitness settings directly to PopulationConfig (after presets)
         for operation in self._fitness_operations:
             method_name, args, kwargs = operation
+            mode = kwargs.get('mode', 'replace')
+            is_multiply = (mode == 'multiply')
             
             if method_name == 'viability':
                 viability_map = args[0]
@@ -832,32 +1130,53 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop._index_core.genotype_to_index[genotype]
+                        genotype_idx = pop._index_registry.genotype_to_index[genotype]
+                        target_age = pop.new_adult_age - 1
 
                         if isinstance(values, dict):
                             # Per-sex values: {'female': 1.0, 'male': 0.9}
                             for sex_label, value in values.items():
                                 sex_idx = resolve_sex_label(sex_label)
-                                pop._config.set_viability_fitness(sex_idx, genotype_idx, value)
+                                val = float(value)
+                                if is_multiply:
+                                    current = pop._config.viability_fitness[sex_idx, target_age, genotype_idx]
+                                    val *= current
+                                pop._config.set_viability_fitness(sex_idx, genotype_idx, val)
                         else:
                             # Single value for both sexes
-                            pop._config.set_viability_fitness(0, genotype_idx, values)  # Female
-                            pop._config.set_viability_fitness(1, genotype_idx, values)  # Male
+                            for sex_idx in (0, 1):
+                                val = float(values)
+                                if is_multiply:
+                                    current = pop._config.viability_fitness[sex_idx, target_age, genotype_idx]
+                                    val *= current
+                                pop._config.set_viability_fitness(sex_idx, genotype_idx, val)
             
             elif method_name == 'fecundity':
                 fecundity_map = args[0]
-                for genotype_selector, value in fecundity_map.items():
+                for genotype_selector, values in fecundity_map.items():
                     matched_genotypes = pop.species.resolve_genotype_selectors(
                         selector=genotype_selector,
                         context='fecundity',
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop._index_core.genotype_to_index[genotype]
+                        genotype_idx = pop._index_registry.genotype_to_index[genotype]
 
-                        # Fecundity applies to both sexes
-                        pop._config.set_fecundity_fitness(0, genotype_idx, value)  # Female
-                        pop._config.set_fecundity_fitness(1, genotype_idx, value)  # Male
+                        if isinstance(values, dict):
+                            for sex_label, value in values.items():
+                                sex_idx = resolve_sex_label(sex_label)
+                                val = float(value)
+                                if is_multiply:
+                                    current = pop._config.fecundity_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop._config.set_fecundity_fitness(sex_idx, genotype_idx, val)
+                        else:
+                            for sex_idx in (0, 1):
+                                val = float(values)
+                                if is_multiply:
+                                    current = pop._config.fecundity_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop._config.set_fecundity_fitness(sex_idx, genotype_idx, val)
             
             elif method_name == 'sexual_selection':
                 preferences = args[0]
@@ -873,9 +1192,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
                     for f_genotype in matched_f_genotypes:
                         for m_genotype in matched_m_genotypes:
-                            f_idx = pop._index_core.genotype_to_index[f_genotype]
-                            m_idx = pop._index_core.genotype_to_index[m_genotype]
-                            pop._config.set_sexual_selection_fitness(f_idx, m_idx, preference)
+                            f_idx = pop._index_registry.genotype_to_index[f_genotype]
+                            m_idx = pop._index_registry.genotype_to_index[m_genotype]
+                            val = float(preference)
+                            if is_multiply:
+                                current = pop._config.sexual_selection_fitness[f_idx, m_idx]
+                                val *= current
+                            pop._config.set_sexual_selection_fitness(f_idx, m_idx, val)
         
         return pop
 
@@ -921,43 +1244,45 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self._fitness_operations: List[Tuple[str, tuple, dict]] = []
         self._hooks: Dict[str, List[Tuple[Callable, Optional[str], Optional[int]]]] = {}
 
-    def recipes(self, *recipe_list: Any) -> "DiscreteGenerationPopulationBuilder":
-        """Add preset recipe packages (applied during build).
+    def presets(self, *preset_list: Any) -> "DiscreteGenerationPopulationBuilder":
+        """Add preset preset packages (applied during build).
 
         Args:
-            *recipe_list: Variable number of recipe objects to apply.
+            *preset_list: Variable number of preset objects to apply.
 
         Returns:
             Self for chaining.
         """
-        if recipe_list:
-            self._recipes = list(recipe_list)
+        if preset_list:
+            self._presets = list(preset_list)
         return self
 
     def fitness(
         self,
         viability: Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]] = None,
-        fecundity: Optional[Dict[GenotypeSelector, float]] = None,
+        fecundity: Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]] = None,
         sexual_selection: Optional[Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]] = None,
+        mode: str = "replace",
     ) -> "DiscreteGenerationPopulationBuilder":
-        """Configure fitness via population methods (applied after recipes).
+        """Configure fitness via population methods (applied after presets).
 
         Args:
             viability: Mapping from genotype selectors to scalar or per-sex values.
-            fecundity: Mapping from genotype selectors to fecundity values.
+            fecundity: Mapping from genotype selectors to fecundity values (scalar or per-sex).
             sexual_selection: Flat or nested mating preference mapping.
+            mode: 'replace' or 'multiply'.
 
         Returns:
             Self for chaining.
         """
         if viability is not None:
-            self._fitness_operations.append(("viability", (viability,), {}))
+            self._fitness_operations.append(("viability", (viability,), {'mode': mode}))
 
         if fecundity is not None:
-            self._fitness_operations.append(("fecundity", (fecundity,), {}))
+            self._fitness_operations.append(("fecundity", (fecundity,), {'mode': mode}))
 
         if sexual_selection is not None:
-            self._fitness_operations.append(("sexual_selection", (sexual_selection,), {}))
+            self._fitness_operations.append(("sexual_selection", (sexual_selection,), {'mode': mode}))
 
         return self
 
@@ -1032,7 +1357,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
     def initial_state(
         self,
-        individual_count: Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]],
+        individual_count: Dict[
+            str,
+            Dict[
+                Union[Genotype, str],
+                Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
+            ],
+        ],
     ) -> "DiscreteGenerationPopulationBuilder":
         """Configure the initial population state.
 
@@ -1171,12 +1502,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                 "Use .initial_state() before .build()"
             )
 
-        female_survival = np.array(
-            [self.female_age0_survival, self.adult_survival], dtype=np.float64
+        initial_individual_count = PopulationConfigBuilder.resolve_discrete_initial_individual_count(
+            species=self.species,
+            distribution=self.initial_individual_count,
         )
-        male_survival = np.array(
-            [self.male_age0_survival, self.adult_survival], dtype=np.float64
-        )
+
+        female_survival = [self.female_age0_survival, self.adult_survival]
+        male_survival = [self.male_age0_survival, self.adult_survival]
 
         female_mating = np.array([0.0, self.female_adult_mating_rate], dtype=np.float64)
         male_mating = np.array([0.0, self.male_adult_mating_rate], dtype=np.float64)
@@ -1213,21 +1545,23 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             gamete_modifiers=self.gamete_modifiers,
             zygote_modifiers=self.zygote_modifiers,
             generation_time=1,
+            initial_individual_count=initial_individual_count,
         )
 
         pop = DiscreteGenerationPopulation(
             species=self.species,
             population_config=pop_config,
             name=self.name,
-            initial_individual_count=self.initial_individual_count,
             hooks=self._hooks,
         )
 
-        for recipe in self._recipes:
-            pop.apply_recipe(recipe)
+        for preset in self._presets:
+            pop.apply_preset(preset)
 
         for operation in self._fitness_operations:
             method_name, args, kwargs = operation
+            mode = kwargs.get('mode', 'replace')
+            is_multiply = (mode == 'multiply')
 
             if method_name == 'viability':
                 viability_map = args[0]
@@ -1238,28 +1572,50 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop._index_core.genotype_to_index[genotype]
-
+                        genotype_idx = pop._index_registry.genotype_to_index[genotype]
+                        target_age = 0 # Discrete generation only has age 0 selection
+                        
                         if isinstance(values, dict):
                             for sex_label, value in values.items():
                                 sex_idx = resolve_sex_label(sex_label)
-                                pop._config.set_viability_fitness(sex_idx, genotype_idx, value)
+                                val = float(value)
+                                if is_multiply:
+                                    current = pop._config.viability_fitness[sex_idx, target_age, genotype_idx]
+                                    val *= current
+                                pop._config.set_viability_fitness(sex_idx, genotype_idx, val)
                         else:
-                            pop._config.set_viability_fitness(0, genotype_idx, values)
-                            pop._config.set_viability_fitness(1, genotype_idx, values)
+                            for sex_idx in (0, 1):
+                                val = float(values)
+                                if is_multiply:
+                                    current = pop._config.viability_fitness[sex_idx, target_age, genotype_idx]
+                                    val *= current
+                                pop._config.set_viability_fitness(sex_idx, genotype_idx, val)
 
             elif method_name == 'fecundity':
                 fecundity_map = args[0]
-                for genotype_selector, value in fecundity_map.items():
+                for genotype_selector, values in fecundity_map.items():
                     matched_genotypes = pop.species.resolve_genotype_selectors(
                         selector=genotype_selector,
                         context='fecundity',
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop._index_core.genotype_to_index[genotype]
-                        pop._config.set_fecundity_fitness(0, genotype_idx, value)
-                        pop._config.set_fecundity_fitness(1, genotype_idx, value)
+                        genotype_idx = pop._index_registry.genotype_to_index[genotype]
+                        if isinstance(values, dict):
+                            for sex_label, value in values.items():
+                                sex_idx = resolve_sex_label(sex_label)
+                                val = float(value)
+                                if is_multiply:
+                                    current = pop._config.fecundity_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop._config.set_fecundity_fitness(sex_idx, genotype_idx, val)
+                        else:
+                            for sex_idx in (0, 1):
+                                val = float(values)
+                                if is_multiply:
+                                    current = pop._config.fecundity_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop._config.set_fecundity_fitness(sex_idx, genotype_idx, val)
 
             elif method_name == 'sexual_selection':
                 preferences = args[0]
@@ -1275,8 +1631,12 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
                     for f_genotype in matched_f_genotypes:
                         for m_genotype in matched_m_genotypes:
-                            f_idx = pop._index_core.genotype_to_index[f_genotype]
-                            m_idx = pop._index_core.genotype_to_index[m_genotype]
-                            pop._config.set_sexual_selection_fitness(f_idx, m_idx, preference)
+                            f_idx = pop._index_registry.genotype_to_index[f_genotype]
+                            m_idx = pop._index_registry.genotype_to_index[m_genotype]
+                            val = float(preference)
+                            if is_multiply:
+                                current = pop._config.sexual_selection_fitness[f_idx, m_idx]
+                                val *= current
+                            pop._config.set_sexual_selection_fitness(f_idx, m_idx, val)
 
         return pop

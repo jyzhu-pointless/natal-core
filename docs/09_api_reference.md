@@ -8,9 +8,9 @@
 - [AgeStructuredPopulation](#agestructuredpopulation)
 - [PopulationState](#populationstate)
 - [PopulationConfig](#populationconfig)
-- [IndexCore](#indexcore)
+- [IndexRegistry](#indexcore)
 - [Simulation Kernels](#simulation-kernels)
-- [Hook DSL](#hook-dsl)
+- [Hook 系统](#hook-dsl)
 
 ---
 
@@ -380,7 +380,7 @@ species() -> Species
 
 ```python
 @property
-registry() -> IndexCore
+registry() -> IndexRegistry
 ```
 
 索引注册表。
@@ -477,7 +477,7 @@ fecundity_fitness: np.ndarray[np.float64]
 
 ---
 
-## IndexCore
+## IndexRegistry
 
 对象↔索引注册表。
 
@@ -720,7 +720,7 @@ def batch_ticks(
 
 ---
 
-## Hook DSL
+## Hook 系统
 
 `natal.hook_dsl` 模块。
 
@@ -736,7 +736,7 @@ def batch_ticks(
 创建声明式 Hook。
 
 **参数**：
-- `event`: 事件名称 ("first", "reproduction", "early", "survival", "late", "finish")
+- `event`: 事件名称 ("first", "early", "late", "finish")
 - `selectors`: 预解析选择器字典
 
 **返回**：Hook 对象，需要调用 `.register(pop)` 注册
@@ -862,7 +862,7 @@ def decompress_hg_glab(
 | 初始化种群 | [快速开始 - 第二步](01_quickstart.md#2️⃣-第二步初始化种群3-分钟) |
 | 设置适应度 | [快速开始 - 第三步](01_quickstart.md#3️⃣-第三步设置适应度可选2-分钟) |
 | 编写 Modifier | [Modifier 机制](06_modifiers.md) |
-| 编写 Hook | [Hook DSL 系统](07_hooks_dsl.md) |
+| 编写 Hook | [Hook 系统](07_hooks.md) |
 | 导出和批量运行 | [Simulation Kernels](03_simulation_kernels.md#批量-monte-carlo-模拟) |
 | 性能优化 | [Numba 优化指南](08_numba_optimization.md) |
 

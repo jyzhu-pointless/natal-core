@@ -18,6 +18,7 @@ __all__ = [
 	'HookExecutor',
 	'execute_csr_event_arrays',
 	'execute_csr_event_program',
+	'execute_csr_event_program_with_state',
 	'build_hook_program',
 	# Numba-friendly hook utilities
 	'noop_hook',

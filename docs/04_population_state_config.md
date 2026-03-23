@@ -72,7 +72,7 @@ state.individual_count[:, 7, :] = 老年（下一 tick 死亡）
 #### 维度 3：基因型 (n_genotypes)
 
 ```python
-# 整数索引（由 IndexCore 分配）
+# 整数索引（由 IndexRegistry 分配）
 # 例：3 个等位基因 (A1, A2, A3) → 6 个基因型
 state.individual_count[:, :, 0] = A1|A1
 state.individual_count[:, :, 1] = A1|A2
@@ -255,7 +255,7 @@ initial_individual_count = {
 # 内部处理
 # 1. 遍历所有基因型字符串
 # 2. 通过 species.get_genotype_from_str() 转换为 Genotype 对象
-# 3. 通过 IndexCore 获取整数索引
+# 3. 通过 IndexRegistry 获取整数索引
 # 4. 创建 numpy 数组
 
 individual_count = np.zeros((n_sexes, n_ages, n_genotypes))
@@ -309,7 +309,7 @@ for mat_haploid_idx in range(n_haploid_genotypes):
             for pat_label_idx in range(n_glabs):
                 # 1. 孟德尔遗传：两个单倍体基因组结合产生的基因型
                 result_genotype = maternal + paternal
-                result_gt_idx = index_core.genotype_index(result_genotype)
+                result_gt_idx = index_registry.genotype_index(result_genotype)
                 
                 # 2. Label 处理（取决于性别和具体规则）
                 # 例：后代继承母亲的 cytoplasm label
@@ -450,9 +450,9 @@ n_genotypes = 1000  → 100-500 ms/tick
 
 - [遗传结构与实体](02_genetic_structures.md) - Genotype 对象的详细说明
 - [Simulation Kernels 深度解析](03_simulation_kernels.md) - 配置在计算中的使用
-- [IndexCore 索引机制](05_index_core.md) - 对象→索引的映射机制
+- [IndexRegistry 索引机制](05_index_registry.md) - 对象→索引的映射机制
 - [Modifier 机制](06_modifiers.md) - 如何修改映射矩阵
 
 ---
 
-**准备理解索引机制了吗？** [前往下一章：IndexCore 索引机制 →](05_index_core.md)
+**准备理解索引机制了吗？** [前往下一章：IndexRegistry 索引机制 →](05_index_registry.md)

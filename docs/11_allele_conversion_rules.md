@@ -114,15 +114,25 @@ population.add_gamete_modifier(
 
 ```python
 from natal.gamete_allele_conversion import GameteConversionRuleSet
-from natal.population_builder import PopulationBuilder
+from natal.population_builder import DiscreteGenerationPopulationBuilder
+from natal.genetic_structures import Species
 
-# 1. 创建种群
-pop = PopulationBuilder() \
-    .add_chromosomes({"autosome": 1}) \
-    .add_loci({"autosome": [{"name": "drive_locus", "alleles": ["W", "D"]}]}) \
-    .build_population()
+# 1. 定义物种
+species = Species.from_dict(
+    name="DriveSpecies",
+    structure={"chr1": {"drive_locus": ["W", "D"]}}
+)
 
-# 2. 定义转换规则
+# 2. 创建种群（使用现代Builder模式）
+pop = (DiscreteGenerationPopulationBuilder(species)
+    .setup(name="DrivePop", stochastic=True)
+    .initial_state({
+        "female": {"W|W": 500, "W|D": 200},
+        "male": {"W|W": 500, "W|D": 200}
+    })
+    .build())
+
+# 3. 定义转换规则
 ruleset = GameteConversionRuleSet("homing_drive")
 ruleset.add_convert(
     from_allele="W",      # 野生型
@@ -131,11 +141,12 @@ ruleset.add_convert(
     sex_filter="both"     # 在所有性别中应用
 )
 
-# 3. 应用到种群
+# 4. 应用到种群
 gamete_mod = ruleset.to_gamete_modifier(pop)
 pop.add_gamete_modifier(gamete_mod, name="homing")
 
-# 4. 运行模拟
+# 5. 运行模拟
+pop.run(n_steps=100, record_every=10)
 # ... 种群会在每代中看到 W -> D 的转换
 ```
 
@@ -213,29 +224,47 @@ population.add_gamete_modifier(gamete_mod, name="sex_specific")
 - D 配子: 50% + 25% = 75%
 - W 配子: 25%
 
-## 集成到 GeneDriveRecipe
+## 集成到 GeneticPreset
 
-虽然 `GameteConversionRuleSet` 是独立的，但你也可以将其集成到自定义的基因驱动配方中：
+虽然 `GameteConversionRuleSet` 是独立的，但你也可以将其集成到自定义的遗传修饰预设中：
 
 ```python
-from natal.recipes import GeneDriveRecipe, GameteConversionRuleSet
+from natal.genetic_presets import GeneticPreset
+from natal.gamete_allele_conversion import GameteConversionRuleSet
 
-class MyCustomDrive(GeneDriveRecipe):
+class MyCustomDrive(GeneticPreset):
     def __init__(self):
         super().__init__(name="CustomDrive")
         self.conversion_ruleset = GameteConversionRuleSet()
         self.conversion_ruleset.add_convert("A", "B", rate=0.5)
     
-    def gamete_modifier(self):
-        # 在这里使用转换规则
-        ruleset = self.conversion_ruleset
+    def gamete_modifier(self, population):
+        # 使用转换规则创建修饰器
+        return self.conversion_ruleset.to_gamete_modifier(population)
         
-        def modifier():
-            # 自定义gamete修改逻辑
-            # 可以调用 ruleset.to_gamete_modifier()
-            return {}
-        
-        return modifier
+    def fitness_patch(self):
+        # 可选：定义适应度效应
+        return {
+            "viability_allele": {"B": 0.95}  # B等位基因轻微有害
+        }
+```
+
+# 使用现代API应用预设：
+```python
+from natal.population_builder import AgeStructuredPopulationBuilder
+from natal.genetic_structures import Species
+
+species = Species.from_dict("TestSpecies", {
+    "chr1": {"test_locus": ["A", "B"]}
+})
+
+drive = MyCustomDrive()
+pop = (AgeStructuredPopulationBuilder(species)
+       .setup(name="TestPop", stochastic=False)
+       .age_structure(n_ages=5)
+       .initial_state({"female": {"A|A": 100}})
+       .presets(drive)  # 应用预设
+       .build())
 ```
 
 ## 性能考虑

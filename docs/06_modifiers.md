@@ -2,6 +2,8 @@
 
 本章讲解如何通过 Modifier 修改种群遗传规则，实现基因驱动、细胞质不兼容等复杂遗传现象。
 
+> **💡 提示**: 对于常见的遗传修饰（如基因驱动），推荐使用[遗传预设系统](15_genetic_presets_guide.md)，它提供了更简洁的API。本章介绍底层Modifier机制，适合需要自定义复杂规则的高级用户。
+
 ## 核心原理
 
 Modifier 的本质是 **修改映射矩阵**：
@@ -32,28 +34,29 @@ Modifier 的本质是 **修改映射矩阵**：
 - **配子选择**：某类配子优先存活
 - **标记配子**：标记特定的配子类型（如 Cas9 蛋白沉积）
 
-#### 函数签名
+#### 现代Builder模式中的使用
 
 ```python
-def gamete_modifier(pop) -> Dict:
-    """
-    Args:
-        pop: AgeStructuredPopulation 对象
-        
-    Returns:
-        Dict: {基因型: {(等位基因, label): 频率, ...}}
-    """
+from natal.population_builder import AgeStructuredPopulationBuilder
+
+def my_gamete_modifier(pop):
     return {
         "Drive|WT": {
             ("Drive", "Cas9_deposited"): 0.95,
             ("WT", "Cas9_deposited"): 0.05,
-        },
-        "WT|Drive": {
-            ("Drive", "Cas9_deposited"): 0.95,
-            ("WT", "Cas9_deposited"): 0.05,
-        },
+        }
     }
+
+# 在Builder中使用
+pop = (AgeStructuredPopulationBuilder(species)
+    .setup(name="MyPop")
+    .age_structure(n_ages=8)
+    .initial_state({...})
+    .modifiers(gamete_modifiers=[(None, "my_modifier", my_gamete_modifier)])
+    .build())
 ```
+
+
 
 #### 例 1：基因驱动（Homing Endonuclease Gene Drive）
 
@@ -140,7 +143,30 @@ pop.set_gamete_modifier(cas9_deposition_modifier, hook_name="Cas9_mark")
 - **复杂的遗传比例**：不遵循孟德尔比例的遗传
 - **孤雌生殖触发**：某些配子组合产生全雌后代
 
-#### 函数签名
+#### 现代Builder模式中的使用
+
+```python
+from natal.population_builder import AgeStructuredPopulationBuilder
+
+def my_zygote_modifier(pop):
+    return {
+        (("Drive", "Cas9_deposited"), ("WT", "default")): {
+            "Resistance|Resistance": 0.5,
+            "Drive|Resistance": 0.3,
+            "WT|Resistance": 0.2,
+        },
+    }
+
+# 在Builder中使用
+pop = (AgeStructuredPopulationBuilder(species)
+    .setup(name="MyPop")
+    .age_structure(n_ages=8)
+    .initial_state({...})
+    .modifiers(zygote_modifiers=[(None, "my_modifier", my_zygote_modifier)])
+    .build())
+```
+
+#### 传统方式（直接设置）
 
 ```python
 def zygote_modifier(pop) -> Dict:
@@ -159,6 +185,9 @@ def zygote_modifier(pop) -> Dict:
             "A2|A2": 0.5,
         },
     }
+
+
+```
 ```
 
 #### 例 1：细胞质不兼容（CI）
@@ -533,9 +562,197 @@ def fast_modifier(pop):
 
 - [快速开始](01_quickstart.md) - Modifier 的基本使用
 - [遗传结构与实体](02_genetic_structures.md) - Genotype 的字符串化
-- [IndexCore 索引机制](05_index_core.md) - 后台的对象→索引映射
-- [Hook DSL 系统](07_hooks_dsl.md) - 与 Hook 的配合
+- [IndexRegistry 索引机制](05_index_registry.md) - 后台的对象→索引映射
+- [Hook 系统](07_hooks.md) - 与 Hook 的配合
 
 ---
 
-**准备使用 Hook 系统了吗？** [前往下一章：Hook DSL 系统 →](07_hooks_dsl.md)
+**准备使用 Hook 系统了吗？** [前往下一章：Hook 系统 →](07_hooks.md)
+
+---
+
+## 选择指南：Modifier vs Genetic Presets
+
+| 场景 | 推荐方法 | 原因 |
+|------|----------|------|
+| **基因驱动** | ✅ Genetic Presets | 内置HomingDrive，参数化配置 |
+| **简单突变** | ✅ Genetic Presets | 几行代码实现，自动处理底层细节 |
+| **复杂自定义规则** | ⚖️ 两者皆可 | 预设提供框架，modifier提供完全控制 |
+| **特殊转换逻辑** | ✅ Modifier | 需要手动控制映射矩阵时 |
+| **性能优化** | ✅ Modifier | 直接操作索引，避免额外开销 |
+| **教学/学习** | ✅ Genetic Presets | 更直观，隐藏底层复杂性 |
+
+### 从Modifier迁移到Presets
+
+如果你有现有的modifier函数，可以很容易地包装成预设：
+
+```python
+from natal.genetic_presets import GeneticPreset
+
+class LegacyModifierPreset(GeneticPreset):
+    def __init__(self, gamete_modifier_func=None, zygote_modifier_func=None):
+        super().__init__(name="LegacyModifier")
+        self.gamete_modifier_func = gamete_modifier_func
+        self.zygote_modifier_func = zygote_modifier_func
+    
+    def gamete_modifier(self, population):
+        return self.gamete_modifier_func(population) if self.gamete_modifier_func else None
+    
+    def zygote_modifier(self, population):
+        return self.zygote_modifier_func(population) if self.zygote_modifier_func else None
+
+# 使用现有的modifier函数
+legacy_preset = LegacyModifierPreset(
+    gamete_modifier_func=your_existing_gamete_modifier,
+    zygote_modifier_func=your_existing_zygote_modifier
+)
+
+population.apply_preset(legacy_preset)
+```
+
+### Builder模式中的Modifier使用
+
+现代NATAL推荐使用Builder模式创建种群，modifier可以在builder中配置：
+
+```python
+from natal.population_builder import AgeStructuredPopulationBuilder
+
+def my_gamete_modifier(pop):
+    return {"Drive|WT": {("Drive", "Cas9_deposited"): 0.95}}
+
+def my_zygote_modifier(pop):
+    return {(("Drive", "Cas9_deposited"), ("WT", "default")): {"Resistance|Resistance": 0.5}}
+
+# 在Builder中配置modifier
+pop = (AgeStructuredPopulationBuilder(species)
+    .setup(name="MyPop")
+    .age_structure(n_ages=8)
+    .initial_state({...})
+    .modifiers(
+        gamete_modifiers=[(None, "my_gamete", my_gamete_modifier)],
+        zygote_modifiers=[(None, "my_zygote", my_zygote_modifier)]
+    )
+    .build())
+```
+
+### 性能对比
+
+- **Genetic Presets**: 轻微的性能开销（规则编译），但提供更好的抽象
+- **直接Modifier**: 零额外开销，完全控制，但需要手动处理所有细节
+- **实际差异**: 在大多数模拟中，差异可以忽略不计
+
+### 总结
+
+- **新手/常见任务**: 从Genetic Presets开始
+- **高级用户/特殊需求**: 使用Modifier或组合两者
+- **代码复用**: 将常用的modifier包装成预设
+- **团队协作**: 预设提供更好的接口抽象
+- **现代API**: 优先使用Builder模式创建种群
+
+---
+
+## 选择指南：Modifier vs Genetic Presets
+
+| 场景 | 推荐方法 | 原因 |
+|------|----------|------|
+| **基因驱动** | ✅ Genetic Presets | 内置HomingDrive，参数化配置 |
+| **简单突变** | ✅ Genetic Presets | 几行代码实现，自动处理底层细节 |
+| **复杂自定义规则** | ⚖️ 两者皆可 | 预设提供框架，modifier提供完全控制 |
+| **特殊转换逻辑** | ✅ Modifier | 需要手动控制映射矩阵时 |
+| **性能优化** | ✅ Modifier | 直接操作索引，避免额外开销 |
+| **教学/学习** | ✅ Genetic Presets | 更直观，隐藏底层复杂性 |
+
+### 从Modifier迁移到Presets
+
+如果你有现有的modifier函数，可以很容易地包装成预设：
+
+```python
+from natal.genetic_presets import GeneticPreset
+
+class LegacyModifierPreset(GeneticPreset):
+    def __init__(self, gamete_modifier_func=None, zygote_modifier_func=None):
+        super().__init__(name="LegacyModifier")
+        self.gamete_modifier_func = gamete_modifier_func
+        self.zygote_modifier_func = zygote_modifier_func
+    
+    def gamete_modifier(self, population):
+        return self.gamete_modifier_func(population) if self.gamete_modifier_func else None
+    
+    def zygote_modifier(self, population):
+        return self.zygote_modifier_func(population) if self.zygote_modifier_func else None
+
+# 使用现有的modifier函数
+legacy_preset = LegacyModifierPreset(
+    gamete_modifier_func=your_existing_gamete_modifier,
+    zygote_modifier_func=your_existing_zygote_modifier
+)
+
+population.apply_preset(legacy_preset)
+```
+
+### 性能对比
+
+- **Genetic Presets**: 轻微的性能开销（规则编译），但提供更好的抽象
+- **直接Modifier**: 零额外开销，完全控制，但需要手动处理所有细节
+- **实际差异**: 在大多数模拟中，差异可以忽略不计
+
+### 总结
+
+- **新手/常见任务**: 从Genetic Presets开始
+- **高级用户/特殊需求**: 使用Modifier或组合两者
+- **代码复用**: 将常用的modifier包装成预设
+- **团队协作**: 预设提供更好的接口抽象
+
+---
+
+## 选择指南：Modifier vs Genetic Presets
+
+| 场景 | 推荐方法 | 原因 |
+|------|----------|------|
+| **基因驱动** | ✅ Genetic Presets | 内置HomingDrive，参数化配置 |
+| **简单突变** | ✅ Genetic Presets | 几行代码实现，自动处理底层细节 |
+| **复杂自定义规则** | ⚖️ 两者皆可 | 预设提供框架，modifier提供完全控制 |
+| **特殊转换逻辑** | ✅ Modifier | 需要手动控制映射矩阵时 |
+| **性能优化** | ✅ Modifier | 直接操作索引，避免额外开销 |
+| **教学/学习** | ✅ Genetic Presets | 更直观，隐藏底层复杂性 |
+
+### 从Modifier迁移到Presets
+
+如果你有现有的modifier函数，可以很容易地包装成预设：
+
+```python
+from natal.genetic_presets import GeneticPreset
+
+class LegacyModifierPreset(GeneticPreset):
+    def __init__(self, gamete_modifier_func=None, zygote_modifier_func=None):
+        super().__init__(name="LegacyModifier")
+        self.gamete_modifier_func = gamete_modifier_func
+        self.zygote_modifier_func = zygote_modifier_func
+    
+    def gamete_modifier(self, population):
+        return self.gamete_modifier_func(population) if self.gamete_modifier_func else None
+    
+    def zygote_modifier(self, population):
+        return self.zygote_modifier_func(population) if self.zygote_modifier_func else None
+
+# 使用现有的modifier函数
+legacy_preset = LegacyModifierPreset(
+    gamete_modifier_func=your_existing_gamete_modifier,
+    zygote_modifier_func=your_existing_zygote_modifier
+)
+
+population.apply_preset(legacy_preset)
+```
+
+### 性能对比
+
+- **Genetic Presets**: 轻微的性能开销（规则编译），但提供更好的抽象
+- **直接Modifier**: 零额外开销，完全控制，但需要手动处理所有细节
+- **实际差异**: 在大多数模拟中，差异可以忽略不计
+
+### 总结
+
+- **新手/常见任务**: 从Genetic Presets开始
+- **高级用户/特殊需求**: 使用Modifier或组合两者
+- **代码复用**: 将常用的modifier包装成预设
+- **团队协作**: 预设提供更好的接口抽象

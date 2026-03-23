@@ -24,12 +24,12 @@
         return None
     
     @abstractmethod
-    def fitness_patch(self) -> Optional[RecipeFitnessPatch]:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Return a declarative fitness patch dict to modify population config tensors.
         
         The patch can specify modifications to viability, fecundity, and sexual
         selection fitness using a structured schema. This allows the framework
-        to apply complex fitness effects without requiring the recipe to directly
+        to apply complex fitness effects without requiring the preset to directly
         manipulate config tensors.
         
         If a patch is provided, it takes precedence over legacy tensor modifier
@@ -62,18 +62,18 @@
             raise TypeError("Rate must be a float, tuple of floats, or dict with sex keys.")
 
     def apply(self, population) -> None:
-        """Register this recipe onto a population (DEPRECATED).
+        """Register this preset onto a population (DEPRECATED).
         
         Deprecated:
-            Use population.apply_recipe(recipe) instead.
+            Use population.apply_preset(preset) instead.
             This method is kept for backwards compatibility.
         
         Args:
             population: The BasePopulation instance to modify.
         """
-        apply_recipe_to_population(population, self)
+        apply_preset_to_population(population, self)
 
-class HomingModificationDrive(GeneDriveRecipe):
+class HomingModificationDrive(GeneDrivePreset):
     """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
     
     This drive spreads via homologous recombination in heterozygotes,
@@ -106,7 +106,7 @@ class HomingModificationDrive(GeneDriveRecipe):
         In heterozygotes (drive/wild-type), gametes are biased towards drive.
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
-            from natal.recipes import _count_allele_copies
+            from natal.presets import _count_allele_copies
             has_drive = _count_allele_copies(gt, self.drive_allele) > 0
             if self.split and self.cas9_allele:
                 has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0
@@ -194,7 +194,7 @@ class HomingModificationDrive(GeneDriveRecipe):
         resistance alleles are created instead of drive homozygotes being lethal.
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
-            from natal.recipes import _count_allele_copies
+            from natal.presets import _count_allele_copies
             has_drive = _count_allele_copies(gt, self.drive_allele) > 0
             if self.split and self.cas9_allele:
                 has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0

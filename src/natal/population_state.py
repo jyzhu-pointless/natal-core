@@ -20,6 +20,7 @@ __all__ = [
     "from_plain_population_state",
     "from_plain_discrete_population_state",
     "parse_flattened_state",
+    "parse_flattened_discrete_state",
 ]
 
 
@@ -180,4 +181,23 @@ def parse_flattened_state(
         n_tick=n_tick,
         individual_count=individual_count,
         sperm_storage=sperm_storage,
+    )
+
+
+def parse_flattened_discrete_state(
+    flat_array: NDArray[np.float64],
+    n_sexes: Union[int, np.integer],
+    n_ages: Union[int, np.integer],
+    n_genotypes: Union[int, np.integer],
+    copy: bool = True,
+) -> DiscretePopulationState:
+    n_tick = np.int32(flat_array[0])
+    individual_count = flat_array[1:].reshape((n_sexes, n_ages, n_genotypes))
+
+    if copy:
+        individual_count = individual_count.copy()
+
+    return DiscretePopulationState(
+        n_tick=n_tick,
+        individual_count=individual_count,
     )

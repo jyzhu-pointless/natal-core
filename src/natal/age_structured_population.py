@@ -15,7 +15,7 @@ from numpy.typing import NDArray
 from natal.base_population import BasePopulation, Species, Genotype, Sex, HaploidGenome
 from natal.population_state import PopulationState
 from natal.population_config import PopulationConfig, initialize_gamete_map, initialize_zygote_map
-from natal.index_core import IndexCore
+from natal.index_registry import IndexRegistry
 import natal.simulation_kernels as sk
 
 if TYPE_CHECKING:
@@ -91,7 +91,7 @@ class AgeStructuredPopulation(BasePopulation):
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
         
-        # Create IndexCore for genotype and gamete label mapping
+        # Create IndexRegistry for genotype and gamete label mapping
         self._initialize_registry()
         
         # Create PopulationState
@@ -100,17 +100,33 @@ class AgeStructuredPopulation(BasePopulation):
             n_sexes=population_config.n_sexes,
             n_ages=population_config.n_ages,
         )
+
+        # Preferred path: initialize from builder-injected config arrays.
+        cfg_init_ind = population_config.get_scaled_initial_individual_count()
+        if cfg_init_ind.shape == self._state.individual_count.shape:
+            self._state.individual_count[:] = cfg_init_ind
+        cfg_init_sperm = population_config.get_scaled_initial_sperm_storage()
+        if cfg_init_sperm.shape == self._state.sperm_storage.shape:
+            self._state.sperm_storage[:] = cfg_init_sperm
         
         # Initialize snapshot tracking
         self.snapshots = {}
         
-        # Distribute initial population if provided
+        # Backward-compatible override path from constructor args.
         if initial_individual_count is not None:
+            self._state.individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
         
-        # Initialize sperm storage if provided
+        # Backward-compatible override path from constructor args.
         if initial_sperm_storage is not None and population_config.use_sperm_storage:
+            self._state.sperm_storage.fill(0.0)
             self._initialize_sperm_storage(initial_sperm_storage)
+
+        self._initial_population_snapshot = (
+            self._state.individual_count.copy(),
+            self._state.sperm_storage.copy() if self._state.sperm_storage is not None else None,
+            None,
+        )
         
         # Initialize registry using Template Method Pattern
         self._initialize_registry()
@@ -489,12 +505,12 @@ class AgeStructuredPopulation(BasePopulation):
     @property
     def n_ages(self) -> int:
         """Number of age classes in this population."""
-        return self._n_ages
+        return self._config.n_ages
     
     @property
     def new_adult_age(self) -> int:
         """Minimum age at which individuals are considered adults."""
-        return self._new_adult_age
+        return self._config.new_adult_age
     
     def get_total_count(self) -> int:
         """Return the total number of individuals in the population."""
@@ -806,7 +822,7 @@ class AgeStructuredPopulation(BasePopulation):
         n_steps: int,
         record_every: int = 1,
         finish: bool = False,
-        clear_history_on_start: bool = True
+        clear_history_on_start: bool = False
     ) -> 'AgeStructuredPopulation':
         """
         运行多步演化（使用 simulation_kernels 加速）。
@@ -821,7 +837,7 @@ class AgeStructuredPopulation(BasePopulation):
                 如果为 True，运行完成后会触发 'finish' 事件，
                 并将种群标记为已完成，之后无法再运行 run_tick()
             clear_history_on_start: 是否在开始时清空现有历史记录
-                如果为 True（默认），会清空所有旧的快照，只保留本次 run() 的结果
+                如果为 True，会清空所有旧的快照，只保留本次 run() 的结果
                 如果为 False，本次 run() 的快照会累积到现有历史中
         
         Returns:
@@ -850,7 +866,7 @@ class AgeStructuredPopulation(BasePopulation):
             config=config,
             registry=hooks.registry,
             n_ticks=n_steps,
-            record_history=(record_every > 0),
+            record_interval=record_every,
         )
         
         # 处理最终状态（tuple 格式：ind_count, sperm, tick）
@@ -863,14 +879,7 @@ class AgeStructuredPopulation(BasePopulation):
         
         # 处理历史记录
         # history_new 是 2D NDArray (n_snapshots, history_size)，其中每行是 [tick_val, ind_count_flat..., sperm_storage_flat...]
-        if history_new is not None and history_new.shape[0] > 0:
-            if clear_history_on_start:
-                self.clear_history()
-            for row_idx in range(history_new.shape[0]):
-                row = history_new[row_idx, :]
-                tick = int(row[0])
-                flattened = row.copy()
-                self._history.append((tick, flattened))
+        self._process_kernel_history(history_new, clear_history_on_start)
         
         # 如果因 hooks 提前终止，设置 _finished 标志
         if was_stopped:
@@ -899,52 +908,7 @@ class AgeStructuredPopulation(BasePopulation):
             >>> pop.tick  # 查看当前 tick 数
             1
         """
-        return self.run(n_steps=1, record_every=1)
-    
-    def compute_allele_frequencies(self) -> Dict[str, float]:
-        """Compute allele frequencies across the entire population.
-
-        Returns:
-            Dict[str, float]: Mapping from allele name to frequency in the
-            population (based on allele counts aggregated over sexes and ages).
-        """
-        # 初始化等位基因频率
-        allele_freqs = {}
-        allele_counts = {}
-        
-        # 收集所有等位基因
-        for chrom in self.species.chromosomes:
-            for locus in chrom.loci:
-                for gene in locus.alleles:
-                    allele_freqs[gene.name] = 0.0
-                    allele_counts[gene.name] = 0
-        
-        total_alleles = 0
-        
-        # 统计每个基因型的个体数（使用索引访问）
-        for genotype_idx, genotype in enumerate(self._registry.index_to_genotype):
-            # 所有性别和年龄的总计数
-            total_count = self._state.individual_count[:, :, genotype_idx].sum()
-            
-            if total_count == 0:
-                continue
-            
-            # 统计等位基因
-            for chrom in self.species.chromosomes:
-                for locus in chrom.loci:
-                    mat_gene, pat_gene = genotype.get_alleles_at_locus(locus)
-                    
-                    for gene in [mat_gene, pat_gene]:
-                        if gene is not None:
-                            allele_counts[gene.name] = allele_counts.get(gene.name, 0) + total_count
-                            total_alleles += total_count
-        
-        # 计算频率
-        if total_alleles > 0:
-            for allele_name in allele_freqs.keys():
-                allele_freqs[allele_name] = allele_counts.get(allele_name, 0) / total_alleles
-        
-        return allele_freqs
+        return self.run(n_steps=1, record_every=self.record_every, clear_history_on_start=False)
     
     def get_age_distribution(self, sex: str = 'both') -> np.ndarray:
         """Return the age distribution for the requested sex.
