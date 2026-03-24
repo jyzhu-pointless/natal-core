@@ -1,20 +1,19 @@
 [project]
 name = "natal-core"
 version = "0.1.0"
-description = "Numba-Accelerated Toolbox for Analysis of Lifecycle-based population genetic dynamics"
+description = "Numba-Accelerated Toolkit for Analysis of Lifecycle-based population genetic dynamics"
 readme = "README.md"
 authors = [
     { name = "Jinyu Zhu", email = "jyzhu_2020@stu.pku.edu.cn" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 dependencies = [
-    "nicegui[highcharts]>=3.9.0",
-    "numba>=0.64.0",
-    "numpy>=2.4.2",
-    "pandas>=2.3.3",
-    "plotly>=6.6.0",
-    "scipy>=1.17.1",
-    "streamlit>=1.55.0",
+    "nicegui[highcharts]>=3.0.0",
+    "numba>=0.60.0",
+    "numpy>=2.0.0",
+    "pandas>=2.1.0",
+    "plotly>=6.0.0",
+    "scipy>=1.11.0",
 ]
 
 [build-system]

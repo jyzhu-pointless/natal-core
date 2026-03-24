@@ -1,14 +1,5 @@
-"""纯函数化模拟核心——在 Population 外部运行、支持 Numba 加速。
-
-核心设计：
-1. export_state(pop) → (state_arrays, config, history)      # 导出（含历史）
-2. run_tick(state_arrays, config, counter) → state   # 纯函数 tick
-3. run(state_arrays, config, n) → (state, history) # 循环运行
-4. batch_ticks(...) → batch_states  # 批量（MC采样）
-5. import_state(pop, state_arrays, history)                 # 导入（含历史）
-
-所有操作都可被 Numba JIT 编译，适合大规模并行采样。
-随机数生成由外部统一管理（通过 np.random.seed()）。
+"""
+纯函数化模拟核心——在 Population 外部运行、支持 Numba 加速。
 """
 
 import numpy as np

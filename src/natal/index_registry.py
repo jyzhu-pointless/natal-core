@@ -41,14 +41,14 @@ class IndexRegistry:
 
     def __init__(self) -> None:
         # entity mappings
-        self.genotype_to_index: Dict[Any, int] = {}
-        self.index_to_genotype: List[Any] = []
+        self.genotype_to_index: Dict[Genotype, int] = {}
+        self.index_to_genotype: List[Genotype] = []
 
-        self.haplo_to_index: Dict[Any, int] = {}
-        self.index_to_haplo: List[Any] = []
+        self.haplo_to_index: Dict[HaploidGenotype, int] = {}
+        self.index_to_haplo: List[HaploidGenotype] = []
 
-        self.glab_to_index: Dict[Any, int] = {}
-        self.index_to_glab: List[Any] = []
+        self.glab_to_index: Dict[str, int] = {}
+        self.index_to_glab: List[str] = []
 
         # axis sizes for compatibility (not used for numeric flattening)
         self.axis_sizes: Dict[str, int] = {}
@@ -192,7 +192,7 @@ class IndexRegistry:
             return int(haplo_or_index)
         return self.register_haplogenotype(haplo_or_index)
 
-    def _ensure_glab_index(self, glab_or_index: Union[Any, int]) -> int:
+    def _ensure_glab_index(self, glab_or_index: Union[str, int]) -> int:
         """Convert a gamete-label selector to an integer index.
 
         Behaves similarly to :meth:`_ensure_genotype_index`.
@@ -236,7 +236,7 @@ class IndexRegistry:
         return int(n_hg) * int(n_glabs)
 
     # ---------- resolver helpers (centralized key parsing) ----------
-    def resolve_genotype_index(self, diploid_genotypes: Sequence[Any], gk: Any, strict: bool = False) -> Optional[int]:
+    def resolve_genotype_index(self, diploid_genotypes: Sequence[Any], gk: Any, strict: bool = True) -> Optional[int]:
         """Resolve a flexible genotype selector to a diploid genotype index.
 
         Accepted selector types:
@@ -280,10 +280,15 @@ class IndexRegistry:
                     continue
 
         if strict:
-            raise KeyError(f"Cannot resolve genotype key: {gk}")
+            raise KeyError(f"Cannot resolve genotype key: {gk} in {diploid_genotypes}")
         return None
 
-    def resolve_hg_glab_part(self, haploid_genotypes: Sequence[Any], part: Any, n_glabs: int, strict: bool = False) -> Optional[Tuple[int, int]]:
+    def resolve_hg_glab_part(
+        self, 
+        haploid_genotypes: Sequence[HaploidGenotype], 
+        part: Any, 
+        n_glabs: int
+    ) -> Tuple[int, int]:
         """Resolve a haploid/genetic part into an (hg_idx, glab_idx) pair.
 
         Accepted input formats for ``part``:
@@ -297,14 +302,12 @@ class IndexRegistry:
             haploid_genotypes: Sequence of haploid genotype objects.
             part: The flexible selector to resolve.
             n_glabs: Number of gamete labels (used for decompression).
-            strict: If True raise KeyError on failure, otherwise return None.
 
         Returns:
-            Optional[Tuple[int, int]]: The resolved (hg_idx, glab_idx) pair or
-            None when unresolved and ``strict`` is False.
+            Tuple[int, int]: The resolved (hg_idx, glab_idx) pair.
 
         Raises:
-            KeyError: If resolution fails and ``strict`` is True.
+            KeyError: If resolution fails.
         """
         # tuple of ints (already decompressed)
         if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], int) and isinstance(part[1], int):
@@ -330,18 +333,14 @@ class IndexRegistry:
                     pass
 
             if found_idx is None:
-                if strict:
-                    raise KeyError(f"Unknown haploid string: {name}")
-                return None
+                raise KeyError(f"Unknown haploid string: {name}")
 
             if isinstance(lab, int):
                 glab_idx = int(lab)
             else:
                 glab_idx = self.glab_to_index.get(str(lab))
                 if glab_idx is None:
-                    if strict:
-                        raise KeyError(f"Unknown glab label: {lab}")
-                    return None
+                    raise KeyError(f"Unknown glab label: {lab}")
             return (found_idx, glab_idx)
 
         # (HaploidGenotype, glab)
@@ -350,18 +349,14 @@ class IndexRegistry:
             try:
                 idx_hg = int(haploid_genotypes.index(hg_obj))
             except ValueError:
-                if strict:
-                    raise KeyError(f"Unknown haploid object: {hg_obj}")
-                return None
+                raise KeyError(f"Unknown haploid object: {hg_obj}")
 
             if isinstance(lab, int):
                 glab_idx = int(lab)
             else:
                 glab_idx = self.glab_to_index.get(str(lab))
                 if glab_idx is None:
-                    if strict:
-                        raise KeyError(f"Unknown glab label: {lab}")
-                    return None
+                    raise KeyError(f"Unknown glab label: {lab}")
             return (idx_hg, glab_idx)
 
         # HaploidGenotype object -> default glab 0
@@ -369,18 +364,14 @@ class IndexRegistry:
             try:
                 return (int(haploid_genotypes.index(part)), 0)
             except ValueError:
-                if strict:
-                    raise KeyError(f"Unknown haploid object: {part}")
-                return None
+                raise KeyError(f"Unknown haploid object: {part}")
 
         # compressed integer
         if isinstance(part, int):
             try:
                 return self.decompress_hg_glab(part, n_glabs)
             except Exception:
-                if strict:
-                    raise
-                return None
+                raise KeyError(f"Unknown compressed index: {part}")
 
         # string matching to_string()
         if isinstance(part, str):
@@ -391,9 +382,7 @@ class IndexRegistry:
                 except Exception:
                     continue
 
-        if strict:
-            raise KeyError(f"Cannot resolve hg+glab part: {part}")
-        return None
+        raise KeyError(f"Cannot resolve hg+glab part: {part}")
 
     def resolve_comp_idx(self, haploid_genotypes: Sequence[Any], n_glabs: int, comp_key: Any, strict: bool = False) -> Optional[int]:
         """Resolve a comp-map key into a compressed hg+glab integer index.

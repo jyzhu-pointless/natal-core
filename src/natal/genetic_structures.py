@@ -21,12 +21,12 @@ import numpy as np
 from typing import (
     Generic, TypeVar, Union, Optional, Any,
     Dict, List, Set, Tuple, Iterable, Callable, 
-    get_args, TYPE_CHECKING, Literal
+    get_args, TYPE_CHECKING, Literal, TypeGuard, Hashable
 )
+from abc import ABC, abstractmethod
 from enum import Enum
 import itertools
 import importlib
-import inspect
 import logging
 
 if TYPE_CHECKING:
@@ -107,7 +107,7 @@ class SexChromosomeType(Enum):
         """是否只能从父本遗传"""
         return self == SexChromosomeType.Y
     
-class RegistryBase(Generic[T]):
+class RegistryBase(ABC, Generic[T]):
     """
     Base class for registries. Provides common interface for register/unregister operations.
     
@@ -116,6 +116,12 @@ class RegistryBase(Generic[T]):
         - _single_register(item): Register a single item
         - _single_unregister(item): Unregister a single item
     """
+    # RegistryBase intentionally separates:
+    # - "single item" primitives (_single_register/_single_unregister/_single_unregister_by_key)
+    # - "batch input" orchestration (register/unregister)
+    #
+    # This keeps subclass logic focused on storage semantics while centralizing
+    # input normalization and strict runtime type checks.
     def __init__(self, expected_type: Optional[type] = None):
         self._expected_type = expected_type
 
@@ -123,35 +129,107 @@ class RegistryBase(Generic[T]):
         if self._expected_type and not isinstance(item, self._expected_type):
             raise TypeError(f"Expected type {self._expected_type.__name__}, got {type(item).__name__}")
 
-    def _get_key(self, item: T):
+    def _is_valid_item_type(self, item: object) -> TypeGuard[T]:
+        """Runtime validator + static type narrower for generic T.
+
+        Why this exists:
+        - Pylance/Pyright often cannot narrow Union/object to T in generic code.
+        - TypeGuard[T] makes the narrowing explicit after a runtime check.
+        """
+        if self._expected_type is None:
+            return True
+        return isinstance(item, self._expected_type)
+
+    @abstractmethod
+    def _get_key(self, item: T) -> Hashable:
         """Extract the key for deduplication. Override in subclass."""
-        raise NotImplementedError
+        pass
     
+    @abstractmethod
     def _single_register(self, item: T) -> None:
         """Register a single item. Override in subclass."""
-        raise NotImplementedError
+        pass
     
-    def _single_unregister(self, key_or_item) -> None:
-        """Unregister a single item by key or item. Override in subclass."""
-        raise NotImplementedError
+    @abstractmethod
+    def _single_unregister(self, item: T) -> None:
+        """Unregister a single item. Override in subclass."""
+        pass
 
-    def register(self, item_or_items: Union[T, Iterable[T]]) -> None:
+    @abstractmethod
+    def _single_unregister_by_key(self, key: str) -> None:
+        """Unregister a single item by key. Override in subclass."""
+        pass
+
+    def register(self, item_or_items: Union[T, List[T], Tuple[T, ...], Set[T]]) -> None:
         """Register one or more items."""
         # GeneticStructure is iterable (yields children) but should be registered as single item
-        # Use explicit list/tuple/set check instead of Iterable to avoid this
-        if isinstance(item_or_items, (list, tuple, set)):
+        # Use explicit list/tuple/set check instead of Iterable to avoid this.
+        # (str / custom iterable objects should not be silently treated as batch input.)
+        if isinstance(item_or_items, list):
             for item in item_or_items:
-                self._single_register(item)
+                if self._is_valid_item_type(item):
+                    self._single_register(item)
+                else:
+                    raise TypeError(f"Expected registry item type, got {type(item).__name__}")
+        elif isinstance(item_or_items, tuple):
+            for item in item_or_items:
+                if self._is_valid_item_type(item):
+                    self._single_register(item)
+                else:
+                    raise TypeError(f"Expected registry item type, got {type(item).__name__}")
+        elif isinstance(item_or_items, set):
+            for item in item_or_items:
+                if self._is_valid_item_type(item):
+                    self._single_register(item)
+                else:
+                    raise TypeError(f"Expected registry item type, got {type(item).__name__}")
         else:
-            self._single_register(item_or_items)
+            if self._is_valid_item_type(item_or_items):
+                self._single_register(item_or_items)
+            else:
+                raise TypeError(f"Expected registry item type, got {type(item_or_items).__name__}")
 
-    def unregister(self, item_or_items) -> None:
+    def unregister(
+        self,
+        item_or_items: Union[T, str, List[Union[T, str]], Tuple[Union[T, str], ...], Set[Union[T, str]]]
+    ) -> None:
         """Unregister one or more items (by key or item object)."""
-        if isinstance(item_or_items, (list, tuple, set)):
+        # unregister supports mixed batch input: [item, "name", item, ...]
+        # where str means key-based removal and non-str means object removal.
+        if isinstance(item_or_items, list):
             for item in item_or_items:
-                self._single_unregister(item)
+                if isinstance(item, str):
+                    self._single_unregister_by_key(item)
+                else:
+                    if self._is_valid_item_type(item):
+                        self._single_unregister(item)
+                    else:
+                        raise TypeError(f"Expected registry item type, got {type(item).__name__}")
+        elif isinstance(item_or_items, tuple):
+            for item in item_or_items:
+                if isinstance(item, str):
+                    self._single_unregister_by_key(item)
+                else:
+                    if self._is_valid_item_type(item):
+                        self._single_unregister(item)
+                    else:
+                        raise TypeError(f"Expected registry item type, got {type(item).__name__}")
+        elif isinstance(item_or_items, set):
+            for item in item_or_items:
+                if isinstance(item, str):
+                    self._single_unregister_by_key(item)
+                else:
+                    if self._is_valid_item_type(item):
+                        self._single_unregister(item)
+                    else:
+                        raise TypeError(f"Expected registry item type, got {type(item).__name__}")
+        elif isinstance(item_or_items, str):
+            self._single_unregister_by_key(item_or_items)
         else:
-            self._single_unregister(item_or_items)
+            if self._is_valid_item_type(item_or_items):
+                self._single_unregister(item_or_items)
+            else:
+                raise TypeError(f"Expected registry item type, got {type(item_or_items).__name__}")
 
     def __len__(self) -> int:
         raise NotImplementedError
@@ -164,6 +242,9 @@ class EntityRegistry(RegistryBase[E]):
     """
     Registry for entity objects. Deduplication by object identity.
     """
+    # EntityRegistry is identity-based:
+    # - _set provides O(1) membership uniqueness checks
+    # - _storage preserves insertion order for deterministic iteration
     def __init__(self, expected_type: Optional[type] = None):
         super().__init__(expected_type)
         self._storage: List[E] = []
@@ -182,6 +263,13 @@ class EntityRegistry(RegistryBase[E]):
         if item in self._set:
             self._storage.remove(item)
             self._set.remove(item)
+
+    def _single_unregister_by_key(self, key: str) -> None:
+        # Entities do not have a globally unique name key in this registry layer.
+        # Key-based unregister belongs to ChildStructureRegistry.
+        raise TypeError(
+            "EntityRegistry does not support unregistering by string key; pass entity instance(s) instead."
+        )
 
     def __iter__(self):
         return iter(self._storage)
@@ -207,10 +295,17 @@ class ChildStructureRegistry(RegistryBase[S]):
     Registry for child structures. Keyed by name, preserves insertion order.
     Supports both register (existing) and add (create + register).
     """
-    def __init__(self, owner: 'GeneticStructure', expected_type: Optional[type] = None):
+    def __init__(self, owner: 'GeneticStructure[Any]', expected_type: Optional[type[S]] = None):
         super().__init__(expected_type)
         self._owner = owner  # The parent structure that owns this registry
         self._storage: Dict[str, S] = {}
+
+    def _is_expected_child(self, item: object) -> TypeGuard[S]:
+        # Additional explicit narrower used when reading from heterogeneous caches.
+        # Cache values are stored in broader Dict[str, GeneticStructure] maps; this
+        # function safely narrows back to S for assignment into Dict[str, S].
+        expected_type = self._expected_type
+        return expected_type is not None and isinstance(item, expected_type)
 
     def _get_key(self, item: S) -> str:
         return item.name
@@ -223,10 +318,13 @@ class ChildStructureRegistry(RegistryBase[S]):
         if item.name not in self._storage:
             self._storage[item.name] = item
 
-    def _single_unregister(self, key_or_item) -> None:
-        """Unregister by name (str) or by item."""
-        name = key_or_item if isinstance(key_or_item, str) else key_or_item.name
-        self._storage.pop(name, None)
+    def _single_unregister(self, item: S) -> None:
+        """Unregister by item."""
+        self._storage.pop(item.name, None)
+
+    def _single_unregister_by_key(self, key: str) -> None:
+        """Unregister by name."""
+        self._storage.pop(key, None)
 
     def add(self, name: str, **kwargs) -> S:
         """
@@ -239,48 +337,72 @@ class ChildStructureRegistry(RegistryBase[S]):
             raise ValueError("Child structure name must be a non-empty string.")
         if name in self._storage:
             raise ValueError(f"Child structure '{name}' already exists.")
-        if not self._expected_type:
+        expected_type = self._expected_type
+        if expected_type is None:
             raise ValueError("expected_type not set, cannot construct child structure.")
         
         # Get the Species from the owner
-        species = getattr(self._owner, '_species', None)
+        species: Optional['Species'] = self._owner._species
         
         # Check if structure already exists in cache (Species-scoped or global)
         if species is not None and hasattr(species, '_structure_cache'):
-            # Use Species-scoped cache
-            if self._expected_type not in species._structure_cache:
-                species._structure_cache[self._expected_type] = {}
+            # Preferred path: Species-scoped cache (isolation between species).
+            if expected_type not in species._structure_cache:
+                species._structure_cache[expected_type] = {}
             
-            cache = species._structure_cache[self._expected_type]
+            cache = species._structure_cache[expected_type]
             if name in cache:
                 # Return cached instance
-                child = cache[name]
-                # Still register it in this owner's registry if not already there
-                if name not in self._storage:
-                    self._storage[name] = child
-                return child
+                cached_child = cache[name]
+                if self._is_expected_child(cached_child):
+                    # Still register it in this owner's registry if not already there
+                    if name not in self._storage:
+                        self._storage[name] = cached_child
+                    return cached_child
+                raise TypeError(
+                    f"Cached structure for '{name}' has wrong type: "
+                    f"expected {expected_type.__name__}, got {type(cached_child).__name__}"
+                )
             
             # Create new child with parent (species is inherited automatically)
-            child = self._expected_type(name, parent=self._owner, **kwargs)
+            created_child = expected_type(name, parent=self._owner, **kwargs)
+            if not self._is_expected_child(created_child):
+                raise TypeError(
+                    f"Created structure for '{name}' has wrong type: "
+                    f"expected {expected_type.__name__}, got {type(created_child).__name__}"
+                )
+            child = created_child
             
             # Cache it in the Species
             cache[name] = child
         else:
-            # Use global fallback cache for backward compatibility
-            if self._expected_type not in _GLOBAL_STRUCTURE_CACHE:
-                _GLOBAL_STRUCTURE_CACHE[self._expected_type] = {}
+            # Fallback path for backward compatibility with structures not yet
+            # bound into a Species context.
+            if expected_type not in _GLOBAL_STRUCTURE_CACHE:
+                _GLOBAL_STRUCTURE_CACHE[expected_type] = {}
             
-            cache = _GLOBAL_STRUCTURE_CACHE[self._expected_type]
+            cache = _GLOBAL_STRUCTURE_CACHE[expected_type]
             if name in cache:
                 # Return cached instance
-                child = cache[name]
-                # Still register it in this owner's registry if not already there
-                if name not in self._storage:
-                    self._storage[name] = child
-                return child
+                cached_child = cache[name]
+                if self._is_expected_child(cached_child):
+                    # Still register it in this owner's registry if not already there
+                    if name not in self._storage:
+                        self._storage[name] = cached_child
+                    return cached_child
+                raise TypeError(
+                    f"Cached structure for '{name}' has wrong type: "
+                    f"expected {expected_type.__name__}, got {type(cached_child).__name__}"
+                )
             
             # Create new child with parent (no species means orphan)
-            child = self._expected_type(name, parent=self._owner, **kwargs)
+            created_child = expected_type(name, parent=self._owner, **kwargs)
+            if not self._is_expected_child(created_child):
+                raise TypeError(
+                    f"Created structure for '{name}' has wrong type: "
+                    f"expected {expected_type.__name__}, got {type(created_child).__name__}"
+                )
+            child = created_child
             
             # Cache it globally
             cache[name] = child
@@ -330,6 +452,7 @@ class GeneticStructure(Generic[E]):
         >>> assert locus1 is not locus3  # Different speciess allow same name
     """
     child_structure_type: Optional[type] = None  # Child structure type per subclass
+    _species: Optional['Species']
 
     def __new__(
         cls,
@@ -384,7 +507,13 @@ class GeneticStructure(Generic[E]):
         if name.strip() == "":
             raise ValueError("Structure name cannot be empty.")
         
-        # Create registry (entity_type is now a property in subclasses)
+        # Registry wiring:
+        # - _entities tracks runtime-bound entity instances (Gene/Haplotype/...)
+        # - _child_structures (if enabled by subclass) tracks structural children
+        #   (Locus under Chromosome, Chromosome under Species, etc.)
+        #
+        # entity_type remains a subclass property to support lazy import and avoid
+        # circular imports with natal.genetic_entities.
         self.name = name
         self._entities: EntityRegistry = EntityRegistry()
         
@@ -487,8 +616,7 @@ class GeneticStructure(Generic[E]):
         """
         pass
 
-    @classmethod
-    def clear_all_caches(cls) -> None:
+    def clear_all_caches(self) -> None:
         """
         Clear all caches including:
         - Global fallback cache (for structures without Species)
@@ -596,7 +724,7 @@ class GeneticStructure(Generic[E]):
     
     def register(
         self,
-        entity_or_entities: E | Iterable[E]
+        entity_or_entities: Union[E, List[E], Tuple[E, ...], Set[E]]
     ) -> 'GeneticStructure[E]':
         """
         Register a single entity or an iterable of entities with this structure.
@@ -609,13 +737,13 @@ class GeneticStructure(Generic[E]):
         Returns:
             The GeneticStructure instance (for chaining).
         """
-        # Delegate to the EntityRegistry which handles single/bulk inputs and type checks.
+        # Delegate single/batch normalization and strict type-checking to EntityRegistry.
         self._entities.register(entity_or_entities)
         return self
     
     def unregister(
         self,
-        entity_or_entities: E | Iterable[E]
+        entity_or_entities: Union[E, List[E], Tuple[E, ...], Set[E]]
     ) -> 'GeneticStructure[E]':
         """
         Unregister a single entity or an iterable of entities from this structure.
@@ -640,7 +768,7 @@ class GeneticStructure(Generic[E]):
     def with_entities(
         cls,
         name: str,
-        entity_ids: str | Iterable[str],
+        entity_ids: Union[str, Iterable[str]],
         **entity_kwargs
     ) -> GeneticStructure[E]:
         """
@@ -652,7 +780,7 @@ class GeneticStructure(Generic[E]):
             **entity_kwargs: Additional keyword arguments to pass to the entity constructor.
         """
         structure = cls(name)
-        entity_type = cls.entity_type
+        entity_type = structure.entity_type
         if entity_type is None:
             raise TypeError(f"{cls.__name__} has no entity type defined.")
         
@@ -743,27 +871,27 @@ class Locus(GeneticStructure['Gene']):
 
     def register(
         self,
-        entity_or_entities: E | Iterable[E]
-    ) -> 'GeneticStructure[E]':
+        entity_or_entities: Union['Gene', List['Gene'], Tuple['Gene', ...], Set['Gene']]
+    ) -> 'Locus':
         """
         Register gene entities and invalidate species gene index cache.
         """
-        result = super().register(entity_or_entities)
+        super().register(entity_or_entities)
         if self._species is not None and hasattr(self._species, '_invalidate_gene_index_cache'):
             self._species._invalidate_gene_index_cache()
-        return result
+        return self
 
     def unregister(
         self,
-        entity_or_entities: E | Iterable[E]
-    ) -> 'GeneticStructure[E]':
+        entity_or_entities: Union['Gene', List['Gene'], Tuple['Gene', ...], Set['Gene']]
+    ) -> 'Locus':
         """
         Unregister gene entities and invalidate species gene index cache.
         """
-        result = super().unregister(entity_or_entities)
+        super().unregister(entity_or_entities)
         if self._species is not None and hasattr(self._species, '_invalidate_gene_index_cache'):
             self._species._invalidate_gene_index_cache()
-        return result
+        return self
 
     @property
     def alleles(self) -> List['Gene']:
@@ -868,7 +996,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         name: str, 
         loci: Optional[List[Locus]] = None,
         species: Optional['Species'] = None,
-        parent: Optional['Chromosome'] = None,
+        parent: Optional['Species'] = None,
         recombination_rates: Optional[Union[List[float], np.ndarray]] = None,
         sex_type: Optional[Union[SexChromosomeType, str]] = None,
     ):
@@ -994,6 +1122,8 @@ class Chromosome(GeneticStructure['Haplotype']):
         """
         if self._recombination_map is None:
             self._update_recombination_map()
+        if self._recombination_map is None:
+            raise ValueError("Recombination map is unavailable for chromosomes with fewer than 2 loci.")
         return self._recombination_map
     
     # Backward compatibility alias
@@ -1033,7 +1163,12 @@ class Chromosome(GeneticStructure['Haplotype']):
         
         if isinstance(locus_or_name, str):
             # Create new Locus via base class add method with kwargs
-            locus = self.add(locus_or_name, position=position, **kwargs)
+            created = self.add(locus_or_name, position=position, **kwargs)
+            if not isinstance(created, Locus):
+                raise TypeError(
+                    f"Expected add() to return Locus, got {type(created).__name__}"
+                )
+            locus = created
         elif isinstance(locus_or_name, Locus):
             locus = locus_or_name
             # Register existing Locus if not already in registry
@@ -1186,9 +1321,9 @@ class Chromosome(GeneticStructure['Haplotype']):
         """Get the index of a locus by name in the sorted loci list."""
         return self.recombination_map._name_to_index(name)
 
-    class RecombinationMap(np.ndarray):
+    class RecombinationMap:
         """
-        A 1D array storing recombination rates between adjacent loci.
+        A 1D container storing recombination rates between adjacent loci.
         
         For n loci, the map has n-1 entries where entry i is the recombination
         rate between locus i and locus i+1 (in sorted order by position).
@@ -1197,30 +1332,29 @@ class Chromosome(GeneticStructure['Haplotype']):
             For loci [A, B, C, D], the map is [r(A,B), r(B,C), r(C,D)]
             where index i = rate between locus i and locus i+1.
         """
-        def __new__(
-            cls,
+        loci_names: List[str]
+        _rates: np.ndarray
+
+        def __init__(
+            self,
             loci: Optional[List[Locus]] = None,
             rates: Optional[np.ndarray] = None,
             dtype=float
-        ):
+        ) -> None:
             size = len(loci) - 1 if loci and len(loci) > 1 else 0
             if size <= 0:
                 raise ValueError("RecombinationMap requires at least 2 loci.")
-            
-            obj = super().__new__(cls, (size,), dtype)
-            obj.loci_names = [locus.name for locus in loci] if loci else []
-            
+
+            self._rates = np.zeros(size, dtype=dtype)
+            self.loci_names = [locus.name for locus in loci] if loci else []
+
             if rates is not None:
                 if len(rates) != size:
                     raise ValueError(f"Expected {size} rates, got {len(rates)}")
-                obj[:] = rates
-            else:
-                obj[:] = 0.0  # Default: complete linkage
-            
-            return obj
+                self._rates[:] = rates
 
         # ---------- Name conversion ----------
-        def _name_to_index(self, name):
+        def _name_to_index(self, name: str) -> int:
             """Convert locus name to index in loci list."""
             if not self.loci_names:
                 raise ValueError("No loci names defined in map.")
@@ -1229,7 +1363,7 @@ class Chromosome(GeneticStructure['Haplotype']):
             except ValueError:
                 raise KeyError(f"Locus name '{name}' not found.")
 
-        def _normalize_single_key(self, key):
+        def _normalize_single_key(self, key: Union[int, str, Locus]) -> int:
             """Normalize a single key to integer index."""
             if isinstance(key, str):
                 return self._name_to_index(key)
@@ -1239,7 +1373,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 return key
 
         # ---------- Reading ----------
-        def __getitem__(self, key):
+        def __getitem__(self, key: Any) -> Any:
             """
             Get recombination rate(s).
             
@@ -1264,15 +1398,15 @@ class Chromosome(GeneticStructure['Haplotype']):
                 # Sum rates in the interval [idx_a, idx_b)
                 total_rate = 0.0
                 for i in range(idx_a, idx_b):
-                    total_rate += super().__getitem__(i)
+                    total_rate += float(self._rates[i])
                 
                 return min(total_rate, 0.5)  # Cap at 0.5
             else:
                 # Direct index access
-                return super().__getitem__(key)
+                return self._rates[key]
 
         # ---------- Writing ----------
-        def __setitem__(self, key, value):
+        def __setitem__(self, key: Any, value: Any) -> None:
             """
             Set recombination rate(s).
             
@@ -1286,7 +1420,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 has been called will NOT invalidate the gamete cache. You must
                 manually clear the cache: genotype._gamete_cache = None
             """
-            arr_val = np.asarray(value, dtype=self.dtype)
+            arr_val = np.asarray(value, dtype=self._rates.dtype)
             
             if np.any((arr_val < 0) | (arr_val > 0.5)):
                 raise ValueError("Recombination rates must be in [0, 0.5]")
@@ -1303,39 +1437,54 @@ class Chromosome(GeneticStructure['Haplotype']):
                         f"Loci {a!r} and {b!r} are not adjacent. "
                         f"RecombinationMap only stores rates between adjacent loci."
                     )
-                super().__setitem__(min(idx_a, idx_b), arr_val)
+                self._rates[min(idx_a, idx_b)] = arr_val
             else:
                 # Direct index access
-                super().__setitem__(key, arr_val)
+                self._rates[key] = arr_val
 
         # ---------- Visualization ----------
-        def __repr__(self):
+        def __repr__(self) -> str:
             return self._formatted_repr()
 
-        def __str__(self):
+        def __str__(self) -> str:
             return self._formatted_repr()
 
-        def _formatted_repr(self):
+        def _formatted_repr(self) -> str:
             if self.loci_names and len(self.loci_names) > 1:
                 pairs = []
                 for i in range(len(self)):
                     pairs.append(f"r({self.loci_names[i]},{self.loci_names[i+1]})={self[i]:.3f}")
                 return f"RecombinationMap([{', '.join(pairs)}])"
             else:
-                return f"RecombinationMap({np.array2string(self, precision=3)})"
+                return f"RecombinationMap({np.array2string(self._rates, precision=3)})"
 
         # ---------- Utility methods ----------
-        def validate(self):
+        def validate(self) -> Tuple[bool, str]:
             """Validate the recombination map."""
-            if np.any(self < 0) or np.any(self > 0.5):
+            if np.any(self._rates < 0) or np.any(self._rates > 0.5):
                 return False, "Values out of range [0, 0.5]."
             return True, "Map is valid."
         
-        def get_adjacent_loci(self, index: int) -> tuple:
+        def get_adjacent_loci(self, index: int) -> Tuple[str, str]:
             """Get the names of the two loci at the given rate index."""
             if index < 0 or index >= len(self):
                 raise IndexError(f"Index {index} out of range for map of size {len(self)}")
             return (self.loci_names[index], self.loci_names[index + 1])
+
+        def __len__(self) -> int:
+            return len(self._rates)
+
+        def __iter__(self):
+            return iter(self._rates)
+
+        def __array__(self, dtype=None) -> np.ndarray:
+            if dtype is None:
+                return np.asarray(self._rates)
+            return np.asarray(self._rates, dtype=dtype)
+
+        @property
+        def dtype(self):
+            return self._rates.dtype
     
     # Backward compatibility alias
     RecombinationMatrix = RecombinationMap
@@ -1414,6 +1563,8 @@ class Species(GeneticStructure['HaploidGenome']):
     Aliases: GenomeTemplate
     """
     child_structure_type = Chromosome  # Species contains Chromosomes as children
+    _sex_chromosome_groups: Optional[Dict[str, List['Chromosome']]]
+    _valid_sex_genotypes: Optional[List[Tuple['Chromosome', 'Chromosome']]]
 
     def __init__(
         self, 
@@ -1575,6 +1726,8 @@ class Species(GeneticStructure['HaploidGenome']):
             if not chrom.is_sex_chromosome:
                 continue
             system = chrom.sex_system
+            if system is None:
+                continue
             if system not in system_chroms:
                 system_chroms[system] = {}
             # 用性染色体类型名称作为 key
@@ -1603,10 +1756,6 @@ class Species(GeneticStructure['HaploidGenome']):
         
         return valid_combos
     
-    def get_chromosome(self, name: str) -> 'Chromosome':
-        """根据名称获取染色体"""
-        return self._child_structures.get(name)
-    
     def add_chromosome(
         self, 
         chrom_or_name: Union['Chromosome', str],
@@ -1626,7 +1775,12 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         if isinstance(chrom_or_name, str):
             # Create new Chromosome via base class add method
-            chrom = self.add(chrom_or_name, loci=loci, sex_type=sex_type)
+            created = self.add(chrom_or_name, loci=loci, sex_type=sex_type)
+            if not isinstance(created, Chromosome):
+                raise TypeError(
+                    f"Expected add() to return Chromosome, got {type(created).__name__}"
+                )
+            chrom = created
         elif isinstance(chrom_or_name, Chromosome):
             chrom = chrom_or_name
             # Update sex_type if provided
@@ -1866,7 +2020,7 @@ class Species(GeneticStructure['HaploidGenome']):
             for locus in chrom.loci:
                 locus_to_chroms.setdefault(locus, []).append(chrom)
 
-        candidate_chroms = None
+        candidate_chroms: Optional[Set['Chromosome']] = None
         for gene in genes:
             chroms_for_locus = locus_to_chroms.get(gene.locus, [])
             if not chroms_for_locus:
@@ -1884,18 +2038,13 @@ class Species(GeneticStructure['HaploidGenome']):
                     f"No common chromosome found for genes {[g.name for g in genes]} in species '{self.name}'."
                 )
 
+        if candidate_chroms is None or len(candidate_chroms) == 0:
+            raise ValueError(f"No chromosome candidates found for genes {[g.name for g in genes]}.")
         if len(candidate_chroms) > 1:
             chrom_names = [c.name for c in self.chromosomes if c in candidate_chroms]
             raise ValueError(
                 f"Multiple chromosomes match genes {[g.name for g in genes]} in species '{self.name}': {chrom_names}. "
                 f"Please ensure gene names are unique across chromosomes."
-            )
-            logger.warning(
-                "Multiple chromosomes match genes %s in species '%s': %s. Use the first one: %s",
-                [g.name for g in genes],
-                self.name,
-                chrom_names,
-                chrom_names[0],
             )
 
         chrom = next(c for c in self.chromosomes if c in candidate_chroms)

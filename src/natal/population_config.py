@@ -219,12 +219,12 @@ def build_population_config(
     assert n_ages > 0, "n_ages must be positive"
 
     n_hg_glabs = n_haploid_genotypes * n_glabs
-    n_sexes_i = np.int32(n_sexes)
-    n_ages_i = np.int32(n_ages)
-    n_genotypes_i = np.int32(n_genotypes)
-    n_haploid_genotypes_i = np.int32(n_haploid_genotypes)
-    n_glabs_i = np.int32(n_glabs)
-    new_adult_age_i = np.int32(new_adult_age)
+    n_sexes_i = int(n_sexes)
+    n_ages_i = int(n_ages)
+    n_genotypes_i = int(n_genotypes)
+    n_haploid_genotypes_i = int(n_haploid_genotypes)
+    n_glabs_i = int(n_glabs)
+    new_adult_age_i = int(new_adult_age)
     adult_ages = np.arange(new_adult_age_i, n_ages_i, dtype=np.int64)
 
     if initial_individual_count is not None:
@@ -356,12 +356,12 @@ def build_population_config(
             carrying_capacity=carrying_capacity_f,
             sex_ratio=float(sex_ratio),
             low_density_growth_rate=float(low_density_growth_rate),
-            juvenile_growth_mode=np.int32(juvenile_growth_mode),
+            juvenile_growth_mode=int(juvenile_growth_mode),
             expected_competition_strength=float(expected_competition_strength),
             expected_survival_rate=float(expected_survival_rate),
             generation_time=0.0,
             new_adult_age=new_adult_age_i,
-            hook_slot=np.int32(hook_slot),
+            hook_slot=int(hook_slot),
             adult_ages=adult_ages,
             genotype_to_gametes_map=g2g,
             gametes_to_zygote_map=g2z,
@@ -396,12 +396,12 @@ def build_population_config(
         carrying_capacity=carrying_capacity_f,
         sex_ratio=float(sex_ratio),
         low_density_growth_rate=float(low_density_growth_rate),
-        juvenile_growth_mode=np.int32(juvenile_growth_mode),
+        juvenile_growth_mode=int(juvenile_growth_mode),
         expected_competition_strength=float(expected_competition_strength),
         expected_survival_rate=float(expected_survival_rate),
         generation_time=generation_time_f,
         new_adult_age=new_adult_age_i,
-        hook_slot=np.int32(hook_slot),
+        hook_slot=int(hook_slot),
         adult_ages=adult_ages,
         genotype_to_gametes_map=g2g,
         gametes_to_zygote_map=g2z,

@@ -16,7 +16,7 @@ Docstring style: Google style (Args, Returns, Raises, Example).
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple, Set, Callable, Any, FrozenSet, Union, Sequence
+from typing import Dict, List, Optional, Tuple, Set, Callable, Any, Union, Sequence, TypeVar, Generic, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import IntEnum
 import hashlib
@@ -25,12 +25,17 @@ from natal.genetic_structures import *
 from natal.genetic_entities import *
 from natal.index_registry import IndexRegistry
 from natal.type_def import *
-from natal.population_state import PopulationState
+from natal.population_state import PopulationState, DiscretePopulationState
 from natal.population_config import PopulationConfig
 from natal.modifiers import GameteModifier, ZygoteModifier, build_modifier_wrappers, _resolve_sex_name
 from natal.hook_dsl import CompiledEventHooks
 
-class BasePopulation(ABC):
+T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
+
+if TYPE_CHECKING:
+    from natal.hook_dsl import HookProgram
+
+class BasePopulation(ABC, Generic[T_State]):
     """Abstract base class for population models.
 
     The base class unifies common behavior for different population model
@@ -55,12 +60,12 @@ class BasePopulation(ABC):
         "late",
         "finish",
     ]
-    
+
     def __init__(
         self,
         species: Species,
         name: str = "Population",
-        hooks: Optional[Dict[str, List[Tuple[Callable, Optional[str], Optional[int]]]]] = None
+        hooks: Dict[str, List[Tuple[Callable, Optional[str], Optional[int]]]] = {},
     ):
         """Initialize the base population.
 
@@ -68,8 +73,7 @@ class BasePopulation(ABC):
             species: Genetic architecture specifying chromosomes, loci, and alleles.
             name: Optional population name (default: "Population").
             hooks: Optional mapping of event names to hook registrations. Each
-                entry should be a sequence of tuples in the form ``(func,)``,
-                ``(func, hook_name)``, or ``(func, hook_name, hook_id)``. Hooks
+                entry should be a sequence of tuples in the form ``(func, hook_name, hook_id)``. Hooks
                 provided here will be registered during initialization.
 
         Note:
@@ -84,9 +88,9 @@ class BasePopulation(ABC):
         self._hook_slot = self._derive_hook_slot(name)
         self._tick = 0
         # DELAYED: Registry will be created via _initialize_registry()
-        self._index_registry: Optional[IndexRegistry] = None
-        self._registry: Optional[IndexRegistry] = None
-        
+        self._index_registry: IndexRegistry
+        self._registry: IndexRegistry
+
         # 演化历史：(tick, flattened_array) 对的列表
         self._history: List[Tuple[int, np.ndarray]] = []
         
@@ -112,10 +116,10 @@ class BasePopulation(ABC):
         self._hook_executor: Optional[Any] = None  # HookExecutor
 
         # 静态数据容器
-        self._config: Optional[PopulationConfig] = None
+        self._config: PopulationConfig
 
         # PopulationState 容器
-        self._state: Optional[PopulationState] = None
+        self._state: T_State
 
         # 演化状态：是否已完成（finish）
         self._finished = False
@@ -133,15 +137,7 @@ class BasePopulation(ABC):
         if hooks:
             for event_name, hooks_list in hooks.items():
                 for hook_info in hooks_list:
-                    if len(hook_info) == 1:
-                        func = hook_info[0]
-                        hook_name = None
-                        hook_id = None
-                    elif len(hook_info) == 2:
-                        func, hook_name = hook_info
-                        hook_id = None
-                    else:
-                        func, hook_name, hook_id = hook_info
+                    func, hook_name, hook_id = hook_info
                     
                     # Check if function has @hook metadata
                     hook_meta = getattr(func, '_hook_meta', None)
@@ -205,10 +201,12 @@ class BasePopulation(ABC):
         return IndexRegistry()
 
     def _get_genotypes(self) -> List[Genotype]:
-        return self._genotypes_list
+        return self.species.get_all_genotypes()
+        # return self._registry.index_to_genotype
 
-    def _get_haplogenotypes(self) -> Optional[List]:
-        return self._haploid_genotypes_list
+    def _get_haplogenotypes(self) -> Optional[List[HaploidGenotype]]:
+        return self.species.get_all_haploid_genotypes()
+        # return self._registry.index_to_haplo
 
     def _resolve_genotype_key(self, genotype_key: Union[Genotype, str]) -> Genotype:
         if isinstance(genotype_key, Genotype):
@@ -261,12 +259,14 @@ class BasePopulation(ABC):
         return self._registry
     
     @property
-    def state(self) -> PopulationState:
+    def state(self) -> T_State:
         """Return the current population state container.
 
         Returns:
             PopulationState: The current state object used by the population.
         """
+        if self._state is None:
+            raise AttributeError("Population state has not been initialized.")
         return self._state
     
     @property
@@ -280,6 +280,10 @@ class BasePopulation(ABC):
             excess = len(self._history) - self.max_history
             if excess > 0:
                 self._history = self._history[excess:]
+
+    @abstractmethod
+    def clear_history(self) -> None:
+        pass
 
     def _process_kernel_history(
         self, 
@@ -309,6 +313,17 @@ class BasePopulation(ABC):
     # ========================================================================
     # Modifier 管理
     # ========================================================================
+    def _next_modifier_id(self, modifiers: Sequence[Tuple[int, Optional[str], Any]]) -> int:
+        """Return the next auto-assigned modifier id."""
+        # Keep compatibility with legacy in-memory lists that may contain None ids.
+        ids = [mid for mid, _, _ in modifiers if isinstance(mid, int)]
+        return (max(ids) + 1) if ids else 0
+
+    def _resolve_modifier_id(self, modifier_id: Optional[int], modifiers: Sequence[Tuple[int, Optional[str], Any]]) -> int:
+        """Normalize optional modifier_id into a concrete integer id."""
+        if modifier_id is not None:
+            return int(modifier_id)
+        return self._next_modifier_id(modifiers)
 
     def _refresh_modifier_maps(self) -> None:
         if self._config is None or self._registry is None:
@@ -355,7 +370,7 @@ class BasePopulation(ABC):
         self, 
         modifier: GameteModifier, 
         name: Optional[str] = None, 
-        hook_id: Optional[int] = None,
+        modifier_id: Optional[int] = None,
         refresh: bool = True,
     ) -> None:
         """Register a gamete-level modifier.
@@ -363,9 +378,11 @@ class BasePopulation(ABC):
         Args:
             modifier: A ``GameteModifier`` callable or object.
             name: Optional human-readable name for debugging.
-            hook_id: Optional numeric priority used for ordering.
+            modifier_id: Optional numeric priority used for ordering.
         """
-        self._gamete_modifiers.append((hook_id, name, modifier))
+        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
+        self._gamete_modifiers.append((resolved_id, name, modifier))
+        self._gamete_modifiers.sort(key=lambda x: x[0])
         if refresh:
             self._refresh_modifier_maps()
     
@@ -373,7 +390,7 @@ class BasePopulation(ABC):
         self, 
         modifier: ZygoteModifier, 
         name: Optional[str] = None, 
-        hook_id: Optional[int] = None,
+        modifier_id: Optional[int] = None,
         refresh: bool = True,
     ) -> None:
         """Register a zygote-level modifier.
@@ -381,9 +398,11 @@ class BasePopulation(ABC):
         Args:
             modifier: A ``ZygoteModifier`` callable or object.
             name: Optional human-readable name for debugging.
-            hook_id: Optional numeric priority used for ordering.
+            modifier_id: Optional numeric priority used for ordering.
         """
-        self._zygote_modifiers.append((hook_id, name, modifier))
+        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
+        self._zygote_modifiers.append((resolved_id, name, modifier))
+        self._zygote_modifiers.sort(key=lambda x: x[0])
         if refresh:
             self._refresh_modifier_maps()
 
@@ -391,47 +410,40 @@ class BasePopulation(ABC):
     def set_zygote_modifier(
         self,
         modifier: ZygoteModifier,
-        hook_id: Optional[int] = None,
-        hook_name: Optional[str] = None
+        modifier_id: Optional[int] = None,
+        modifier_name: Optional[str] = None
     ) -> None:
         """Register a zygote modifier with an optional priority.
 
         Args:
             modifier: A ``ZygoteModifier`` instance or callable.
-            hook_id: Numeric priority (lower values execute earlier). If omitted
+            modifier_id: Numeric priority (lower values execute earlier). If omitted
                 an id will be auto-assigned.
-            hook_name: Optional name for debugging.
+            modifier_name: Optional name for debugging.
         """
         if not callable(modifier):
             raise TypeError("Zygote modifier must be callable")
-        
-        # 自动分配 hook_id
-        if hook_id is None:
-            if self._zygote_modifiers:
-                hook_id = max(hid for hid, _, _ in self._zygote_modifiers) + 1
-            else:
-                hook_id = 0
-        
+
+        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
+
         # 添加并排序
-        self._zygote_modifiers.append((hook_id, hook_name, modifier))
+        self._zygote_modifiers.append((resolved_id, modifier_name, modifier))
         self._zygote_modifiers.sort(key=lambda x: x[0])
 
     def set_gamete_modifier(
         self,
         modifier: GameteModifier,
-        hook_id: Optional[int] = None,
-        hook_name: Optional[str] = None
+        modifier_id: Optional[int] = None,
+        modifier_name: Optional[str] = None
     ) -> None:
         """Register a gamete modifier with optional priority and name."""
         if not callable(modifier):
             raise TypeError("Gamete modifier must be callable")
-        
-        # 自动分配hook_id
-        if hook_id is None:
-            hook_id = max((hid for hid, _, _ in self._gamete_modifiers), default=0) + 1
-        
+
+        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
+
         # 添加并排序
-        self._gamete_modifiers.append((hook_id, hook_name, modifier))
+        self._gamete_modifiers.append((resolved_id, modifier_name, modifier))
         self._gamete_modifiers.sort(key=lambda x: x[0])
 
     def apply_preset(self, preset) -> None:
@@ -500,8 +512,8 @@ class BasePopulation(ABC):
         from natal.type_def import Sex
         
         # 获取所有可能的单倍型和二倍型
-        haploid_genotypes = self._get_all_possible_haploid_genotypes()
-        diploid_genotypes = self._get_all_possible_diploid_genotypes()
+        haploid_genotypes: List[HaploidGenome] = self.species.get_all_haploid_genotypes()
+        diploid_genotypes: List[Genotype] = self.species.get_all_genotypes()
         
         n_hg = len(haploid_genotypes)
         n_genotypes = len(diploid_genotypes)
@@ -511,7 +523,7 @@ class BasePopulation(ABC):
         self._config = build_population_config(
             n_genotypes=n_genotypes,
             n_haploid_genotypes=n_hg,
-            n_sexes=None,
+            n_sexes=2, # TODO
             n_glabs=n_glabs
         )
         
@@ -579,19 +591,23 @@ class BasePopulation(ABC):
     # extracted from the inline closures in _build_modifier_wrappers to
     # reduce cognitive complexity and improve testability.
     # ------------------------------------------------------------------
-    def _resolve_hg_glab(self, haploid_genotypes: List[HaploidGenotype], part: Any, n_glabs: int, strict: bool = True) -> Tuple[int, int]:
+    def _resolve_hg_glab(
+        self, 
+        haploid_genotypes: List[HaploidGenotype], 
+        part: Any, 
+        n_glabs: int
+    ) -> Tuple[int, int]:
         """Resolve a flexible haploid/genotype+glab part into numeric indices.
 
         Args:
             haploid_genotypes: list of HaploidGenotype objects.
             part: flexible selector (HaploidGenotype, int, str, or tuple).
             n_glabs: number of gamete labels.
-            strict: pass-through to IndexRegistry resolver.
 
         Returns:
             (hg_idx, glab_idx)
         """
-        return self._index_registry.resolve_hg_glab_part(haploid_genotypes, part, n_glabs, strict=strict)
+        return self._index_registry.resolve_hg_glab_part(haploid_genotypes, part, n_glabs)
 
     def _parse_zygote_key(self, key: Any, haploid_genotypes: List[HaploidGenotype], n_glabs: int) -> Tuple[int, int]:
         """Parse modifier key for zygote wrappers into compressed coords (c1,c2).
@@ -655,29 +671,12 @@ class BasePopulation(ABC):
             n_glabs=n_glabs,
         )
 
-    def _get_all_possible_haploid_genotypes(self) -> List[HaploidGenotype]:
-        """
-        获取所有可能的单倍型列表
-        这是一个示例实现，需要根据实际情况扩展
-        """
-        # 简化实现，假设已经有方法可以获取所有可能的单倍型
-        # 实际应用中，这可能需要通过枚举所有可能的等位基因组合来生成
-        pass
-
-    def _get_all_possible_diploid_genotypes(self) -> List[Genotype]:
-        """
-        获取所有可能的二倍型列表
-        这是一个示例实现，需要根据实际情况扩展
-        """
-        # 简化实现，假设已经有方法可以获取所有可能的二倍型
-        # 实际应用中，这可能需要通过枚举所有可能的单倍型组合来生成
-        pass
-
     # ========================================================================
     # 核心方法
     # ========================================================================
     
-    def step(self) -> 'BasePopulation':
+    @abstractmethod
+    def run_tick(self) -> 'BasePopulation[T_State]':
         """
         执行一个演化步骤。
         
@@ -702,101 +701,11 @@ class BasePopulation(ABC):
         Raises:
             RuntimeError: 如果种群已 finish 或正在运行中
         """
-        from natal.hook_dsl import RESULT_STOP
-        
-        if self._finished:
-            raise RuntimeError(
-                f"Population '{self.name}' has finished. "
-                "Cannot step() after finish=True."
-            )
-        
-        if self._running:
-            raise RuntimeError(
-                f"Population '{self.name}' is already running. "
-                "Cannot call step()/run_tick()/run() recursively (e.g., from within a hook)."
-            )
-        
-        try:
-            self._running = True
-            
-            # first hook
-            if self.trigger_event("first") == RESULT_STOP:
-                self._finished = True
-                return self
-            
-            # 繁殖阶段
-            self._step_reproduction()
-            
-            # early hook
-            if self.trigger_event("early") == RESULT_STOP:
-                self._finished = True
-                return self
-            
-            # 生存阶段
-            self._step_survival()
-            
-            # late hook
-            if self.trigger_event("late") == RESULT_STOP:
-                self._finished = True
-                return self
-
-            # update age
-            self._step_aging()
-            
-            # 更新 tick
-            self._tick += 1
-            
-        finally:
-            self._running = False
-        
-        return self
-        
-    @abstractmethod
-    def _step_reproduction(self) -> None:
-        """
-        繁殖阶段的内部实现。
-        
-        子类必须实现此方法来定义具体的繁殖逻辑。
-        注意：此方法不应更新 tick。
-        """
-        pass
-    
-    @abstractmethod
-    def _step_survival(self) -> None:
-        """
-        生存阶段的内部实现。
-        
-        子类必须实现此方法来定义具体的生存/选择逻辑。
-        注意：此方法不应更新 tick。
-        """
         pass
 
-    @abstractmethod
-    def _step_aging(self) -> None:
-        """
-        老化阶段的内部实现。
-        
-        子类必须实现此方法来定义具体的年龄逻辑。
-        注意：此方法不应更新 tick。
-        """
-        pass
-    
-    def run_tick(self) -> 'BasePopulation':
-        """
-        run_tick 是 step() 的完全别名。
-        
-        两个方法严格等价，都执行相同的逻辑。
-        
-        Returns:
-            self（支持链式调用）
-        
-        Raises:
-            RuntimeError: 如果种群已 finish 或正在运行中
-        
-        Example:
-            >>> pop.run_tick()  # 与 pop.step() 完全等价
-        """
-        return self.step()
+    def step(self) -> 'BasePopulation[T_State]':
+        """Alias for `BasePopulation.run_tick()`"""
+        return self.run_tick()
     
     @abstractmethod
     def get_total_count(self) -> int:
@@ -868,6 +777,7 @@ class BasePopulation(ABC):
         self._finished = True
         self.trigger_event("finish")
     
+    @abstractmethod
     def run(
         self, 
         n_steps: int, 
@@ -876,91 +786,13 @@ class BasePopulation(ABC):
     ) -> 'BasePopulation':
         """
         运行多步演化。
-        
-        Args:
-            n_steps: 要运行的步数
-            record_every: 每隔多少步记录一次快照（0 表示不记录）
-            finish: 是否在运行完成后标记为 finished
-                如果为 True，运行完成后会触发 'finish' 事件，
-                并将种群标记为已完成，之后无法再运行 run_tick()
-        
-        Returns:
-            self（支持链式调用）
-        
-        Raises:
-            RuntimeError: 如果种群已 finish，无法继续运行
         """
-        if self._finished:
-            raise RuntimeError(
-                f"Population '{self.name}' has finished. "
-                "Cannot run() again after finish=True."
-            )
+        pass
         
-        # Create a snapshot at the beginning if tick is 0
-        if self.tick == 0:
-            self.create_snapshot()
-        
-        for i in range(n_steps):
-            self.step()
-            # 如果 step() 中的 hook 触发了终止条件，提前退出循环
-            if self._finished:
-                break
-            if record_every > 0 and self.tick % record_every == 0:
-                self.create_snapshot()
-        
-        # 只有在没有被 hook 终止的情况下，且用户请求 finish 时才调用
-        if finish and not self._finished:
-            self.finish_simulation()
-        
-        return self
-    
-    def create_snapshot(self) -> None:
-        """
-        创建当前种群状态的历史记录。
-        
-        将当前 tick 和 state 的副本保存到历史列表。
-        """
-        state_copy = (self.state.individual_count.copy(), 
-                      self.state.sperm_storage.copy() if self.state.sperm_storage is not None else None)
-        self._history.append((self.tick, state_copy)) # Note: this is legacy tuple format used by some tests
-        self._enforce_history_limit()
-
+    @abstractmethod
     def reset(self) -> None:
-        """Reset the population to its initial state.
-
-        Behavior:
-        - Reset `self._tick` to 0.
-        - Clear the history list.
-        - Clear the `finished` flag so the population may be run again.
-        - If the instance provides an `_initial_population_snapshot` (tuple
-          of arrays created by subclasses), restore it. Otherwise reallocate
-          an empty `PopulationState` with the same array shapes.
-        """
-        # reset tick and flags
-        self._tick = 0
-        self._history = []
-        self._finished = False
-        # restore initial snapshot if subclass saved one
-        if hasattr(self, '_initial_population_snapshot') and self._initial_population_snapshot is not None:
-            ind_copy, sperm_copy, _ = self._initial_population_snapshot
-            from natal.population_state import PopulationState
-            n_genotypes = len(self._index_registry.index_to_genotype)
-            # infer ages/sexes from saved arrays
-            n_ages = None
-            n_sexes = None
-            if ind_copy is not None:
-                if ind_copy.ndim == 3:
-                    n_sexes, n_ages, _ = ind_copy.shape
-                else:
-                    n_sexes, _ = ind_copy.shape
-            self._state = PopulationState.create(
-                n_genotypes=n_genotypes,
-                n_ages=n_ages,
-                n_sexes=n_sexes,
-                n_tick=0,
-                individual_count=ind_copy.copy() if ind_copy is not None else None,
-                sperm_storage=sperm_copy.copy() if sperm_copy is not None else None,
-            )
+        """Reset the population to its initial state."""
+        pass
     
     def compute_allele_frequencies(self) -> Dict[str, float]:
         """
@@ -1076,8 +908,9 @@ class BasePopulation(ABC):
         
         if compile and hook_meta is not None:
             # Use the hook's register method with event override
-            if hasattr(func, 'register'):
-                func.register(self, event_override=event_name)
+            register_fn = getattr(func, 'register', None)
+            if register_fn is not None:
+                register_fn(self, event_override=event_name)
                 # Compiled hooks are stored in _compiled_hooks.
                 # Only selector-mode hooks with py_wrapper are mirrored to _hooks.
                 return
@@ -1264,14 +1097,14 @@ class BasePopulation(ABC):
         self._register_compiled_hook(desc)
         return desc
     
-    def _build_hook_program(self):
+    def _build_hook_program(self) -> HookProgram:
         """Build HookProgram from compiled hooks.
         
         This packs all compiled hooks into a Numba-compatible jitclass
         for efficient execution during simulation.
         
         Returns:
-            HookProgram: Compiled hook program data, or None if no hooks
+            HookProgram: Compiled hook program data
         """
         from natal.hook_dsl import HookProgram, EVENT_NAMES
         
@@ -1349,10 +1182,6 @@ class BasePopulation(ABC):
                 op_offsets.append(len(all_op_types))
         
         # 3. Create HookProgram
-        if n_hooks == 0:
-            # No hooks, return empty program
-            return None
-        
         return HookProgram(
             n_events=np.int32(n_events),
             n_hooks=np.int32(n_hooks),

@@ -24,7 +24,7 @@ The module also provides a generic allele conversion rule system:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Set, Literal
+from typing import Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Set, Literal, TypeGuard
 import numpy as np
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
@@ -46,7 +46,7 @@ __all__ = [
 
 # Temporary type alias
 _AlleleSpecifier = Union[Gene, str]
-_SexSpecifier = Union[Sex, str]
+_SexSpecifier = Union[Sex, int, str]
 _SexSpecificRates = Union[float, Tuple[float, float], Dict[_SexSpecifier, float]]
 
 # Defines how a specific allele scales fitness
@@ -54,18 +54,38 @@ _SexSpecificRates = Union[float, Tuple[float, float], Dict[_SexSpecifier, float]
 # "WT|WT" -> 1.0 viability
 # "Dr::WT" -> 0.8 viability
 # "Dr|Dr" -> 0.64 viability (multiplicative)
+# Viability patch config for one allele key.
+# Supported shapes:
+# 1) float
+#    -> apply at default viability age for both sexes
+# 2) (het, hom) tuple
+#    -> only meaningful with mode="custom"
+# 3) {age: scale}
+#    -> apply to both sexes by age
+# 4) {sex: scale or {age: scale}}
+#    -> sex-specific, optionally age-specific
 _ViabilityScalingConfig = Union[
     float,             # both sex, at the largest juvenile age
-    Dict[Age, float],  # both sex, age-specific
-    Dict[              # sex-specific
-        _SexSpecifier, 
-        Union[float, Dict[Age, float]]
-    ]
+    Tuple[float, float],
+    Dict[Age, Union[float, Tuple[float, float]]],  # both sex, age-specific
+    Dict[  # sex-specific
+        _SexSpecifier,
+        Union[float, Tuple[float, float], Dict[Age, Union[float, Tuple[float, float]]]],
+    ],
 ]
+# Fecundity patch config for one allele key.
+# Supported shapes:
+# 1) float
+# 2) (het, hom) tuple for mode="custom"
+# 3) {sex: scale}
 _FecundityScalingConfig = Union[
-    float,                        # both sex
-    Dict[_SexSpecifier, float]    # sex-specific
+    float,  # both sex
+    Tuple[float, float],
+    Dict[_SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
 ]
+# Sexual-selection patch config for one allele key.
+# float: copy-number based scaling (by mode)
+# tuple(default, carrier): binary carrier rule
 _SexualSelectionScalingConfig = Union[
     float,                        # applies to all female genotypes
     Tuple[float, float]           # (male selected by default, male selected by allele carriers)
@@ -103,7 +123,11 @@ def _count_combined_allele_copies(genotype: Genotype, target_genes: List[Gene]) 
     # but logic holds generally (e.g. 2 means homozygous-equivalent cost).
     return total
 
-def _calculate_allele_effect(scale: Union[float, Tuple[float, float]], copies: int, mode: str = "multiplicative") -> float:
+def _calculate_allele_effect(
+    scale: Union[float, Tuple[float, float]], 
+    copies: int, 
+    mode: str = "multiplicative"
+) -> float:
     """Calculate fitness factor based on allele copies and scaling mode."""
     if mode == "custom":
         if not isinstance(scale, (tuple, list)) or len(scale) != 2:
@@ -122,12 +146,22 @@ def _calculate_allele_effect(scale: Union[float, Tuple[float, float]], copies: i
     scale_val = float(scale)
     if mode == "multiplicative":
         return scale_val ** copies
-    elif mode == "dominant":  # TODO: 存在问题：resistance和drive都存在时scale了两遍，不符合dominant
+    elif mode == "dominant":
         return scale_val if copies > 0 else 1.0
     elif mode == "recessive":
         return scale_val if copies == 2 else 1.0
     else:
-        raise ValueError(f"Unknown fitness scaling mode: '{mode}'. Expected 'multiplicative', 'dominant', 'recessive', or 'custom'.")
+        raise ValueError(f"Unknown fitness scaling mode: '{mode}'. "
+                         "Expected 'multiplicative', 'dominant', 'recessive', or 'custom'.")
+
+def _is_effect_scale(value: object) -> TypeGuard[Union[float, Tuple[float, float]]]:
+    """Narrow runtime config value to the scale type accepted by _calculate_allele_effect."""
+    return isinstance(value, (int, float)) or (
+        isinstance(value, tuple)
+        and len(value) == 2
+        and isinstance(value[0], (int, float))
+        and isinstance(value[1], (int, float))
+    )
 
 def _make_fitness_patch_given_allele_scaling(
     allele_name: Union[str, List[str], Tuple[str, ...]],
@@ -166,6 +200,10 @@ def _apply_viability_allele_scaling(
     mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven viability scaling using multiplicative copy-number effect."""
+    # viability tensor layout:
+    #   viability_fitness[sex_idx, age_idx, genotype_idx]
+    # This function multiplies existing values in-place via setter calls,
+    # so multiple presets/patches compose multiplicatively.
     viability_arr = population._config.viability_fitness
     default_age = int(population._config.new_adult_age) - 1
     
@@ -183,9 +221,12 @@ def _apply_viability_allele_scaling(
         genotype_idx = population._index_registry.genotype_to_index[genotype]
         copies = _count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
+            # No target allele copies in this genotype: no effect.
             continue
 
         if isinstance(config, (int, float, tuple, list)):
+            # Scalar/custom tuple branch:
+            # apply same factor to both sexes at default viability age.
             factor = _calculate_allele_effect(config, copies, mode)
             for sex_idx in (0, 1):
                 current = float(viability_arr[sex_idx, default_age, genotype_idx])
@@ -194,9 +235,16 @@ def _apply_viability_allele_scaling(
 
         if not isinstance(config, dict):
             raise TypeError(f"Invalid viability allele config for '{allele_name}': {type(config).__name__}")
-
-        if config and all(isinstance(age_key, int) for age_key in config.keys()):
+        
+        if config:
+            # Age-map branch:
+            # config treated as {age: scale} for both sexes.
             for age, scale in config.items():
+                assert _is_effect_scale(scale)
+                if not isinstance(age, int):
+                    raise TypeError(
+                        f"Invalid viability age key for '{allele_name}': {type(age).__name__}"
+                    )
                 factor = _calculate_allele_effect(scale, copies, mode)
                 for sex_idx in (0, 1):
                     current = float(viability_arr[sex_idx, int(age), genotype_idx])
@@ -204,13 +252,26 @@ def _apply_viability_allele_scaling(
             continue
 
         for sex_key, sex_config in config.items():
+            # Sex-map branch:
+            # sex_config can be either:
+            #   - direct scale for default age
+            #   - nested {age: scale}
             sex_idx = _normalize_sex_key(sex_key)
-            if isinstance(sex_config, (int, float, tuple, list)):
+            if _is_effect_scale(sex_config):
                 factor = _calculate_allele_effect(sex_config, copies, mode)
                 current = float(viability_arr[sex_idx, default_age, genotype_idx])
                 population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
             elif isinstance(sex_config, dict):
                 for age, scale in sex_config.items():
+                    if not isinstance(age, int):
+                        raise TypeError(
+                            f"Invalid viability sex-age key for '{allele_name}', sex '{sex_key}': {type(age).__name__}"
+                        )
+                    if not _is_effect_scale(scale):
+                        raise TypeError(
+                            f"Invalid viability sex-age scale for '{allele_name}', sex '{sex_key}', age {age}: "
+                            f"{type(scale).__name__}"
+                        )
                     factor = _calculate_allele_effect(scale, copies, mode)
                     current = float(viability_arr[sex_idx, int(age), genotype_idx])
                     population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
@@ -228,6 +289,9 @@ def _apply_fecundity_allele_scaling(
     mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven fecundity scaling using multiplicative copy-number effect."""
+    # fecundity tensor layout:
+    #   fecundity_fitness[sex_idx, genotype_idx]
+    # As with viability, this function multiplies current values.
     fecundity_arr = population._config.fecundity_fitness
     
     # Resolve one or more alleles
@@ -247,6 +311,7 @@ def _apply_fecundity_allele_scaling(
             continue
 
         if isinstance(config, (int, float, tuple, list)):
+            # Global branch (both sexes).
             factor = _calculate_allele_effect(config, copies, mode)
             for sex_idx in (0, 1):
                 current = float(fecundity_arr[sex_idx, genotype_idx])
@@ -257,6 +322,7 @@ def _apply_fecundity_allele_scaling(
             raise TypeError(f"Invalid fecundity allele config for '{allele_name}': {type(config).__name__}")
 
         for sex_key, scale in config.items():
+            # Sex-specific branch.
             sex_idx = _normalize_sex_key(sex_key)
             factor = _calculate_allele_effect(scale, copies, mode)
             current = float(fecundity_arr[sex_idx, genotype_idx])
@@ -274,6 +340,9 @@ def _apply_sexual_selection_allele_scaling(
     - float: multiplicative by male allele copy-number for all female genotypes.
     - tuple(default, carrier): binary by male carrier status (copy > 0).
     """
+    # sexual-selection tensor layout:
+    #   sexual_selection_fitness[female_genotype_idx, male_genotype_idx]
+    # Effect is computed from male allele copies, then applied per pair.
     sex_sel_arr = population._config.sexual_selection_fitness
     
     # Resolve one or more alleles
@@ -293,12 +362,15 @@ def _apply_sexual_selection_allele_scaling(
             copies = _count_combined_allele_copies(m_genotype, target_genes)
 
             if isinstance(config, tuple):
+                # Binary carrier logic:
+                # config[0] for non-carriers, config[1] for carriers.
                 if len(config) != 2:
                     raise ValueError(
                         f"sexual_selection allele tuple for '{allele_name}' must have length 2, got {len(config)}"
                     )
                 factor = float(config[1] if copies > 0 else config[0])
             else:
+                # Copy-number-based logic via mode.
                 factor = _calculate_allele_effect(config, copies, mode)
 
             current = float(sex_sel_arr[f_idx, m_idx])
@@ -320,6 +392,14 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
 
     all_genotypes = list(population._index_registry.genotype_to_index.keys())
 
+    # ----------------------------------------------------------------------
+    # 1) Selector-based viability patch
+    #
+    # Input examples:
+    # - {"A1|A1": 0.8}
+    # - {"A1|A1": {0: 0.9, 1: 0.8}}
+    # - {"A1|A1": {"female": 0.9, "male": {0: 0.95}}}
+    # ----------------------------------------------------------------------
     viability_patch = patch.get('viability', {})
     for selector, config in viability_patch.items():
         matched = population.species.resolve_genotype_selectors(
@@ -360,6 +440,13 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
                         f"{type(sex_config).__name__}"
                     )
 
+    # ----------------------------------------------------------------------
+    # 2) Selector-based fecundity patch
+    #
+    # Input examples:
+    # - {"A1|A1": 0.8}
+    # - {"A1|A1": {"female": 0.9, "male": 0.7}}
+    # ----------------------------------------------------------------------
     fecundity_patch = patch.get('fecundity', {})
     for selector, config in fecundity_patch.items():
         matched = population.species.resolve_genotype_selectors(
@@ -382,6 +469,13 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
                 sex_idx = _normalize_sex_key(sex_key)
                 population._config.set_fecundity_fitness(sex_idx, genotype_idx, float(scale))
 
+    # ----------------------------------------------------------------------
+    # 3) Selector-based sexual-selection patch
+    #
+    # Input examples:
+    # - {"female_selector": 0.9}  # shorthand for all males
+    # - {"female_selector": {"male_selector": 1.2}}
+    # ----------------------------------------------------------------------
     sexual_selection_patch = patch.get('sexual_selection', {})
     for female_selector, male_config in sexual_selection_patch.items():
         female_matched = population.species.resolve_genotype_selectors(
@@ -414,7 +508,15 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
                     m_idx = population._index_registry.genotype_to_index[m_genotype]
                     population._config.set_sexual_selection_fitness(f_idx, m_idx, float(scale))
 
-    # Allele-based patches: preset defines per-allele effect, framework expands to genotypes.
+    # ----------------------------------------------------------------------
+    # 4) Allele-based patches
+    #
+    # This layer expands allele-centric config into genotype-level writes:
+    # 1) resolve allele name(s) to Gene objects
+    # 2) count target copies per genotype (0/1/2)
+    # 3) convert copies -> factor according to mode
+    # 4) multiply corresponding tensor cells
+    # ----------------------------------------------------------------------
     viability_allele_patch = patch.get('viability_allele', {})
     for allele_name, val in viability_allele_patch.items():
         if isinstance(val, tuple) and len(val) == 2:
@@ -825,6 +927,8 @@ class HomingDrive(GeneticPreset):
 
     @property
     def resistance_genotype(self) -> Gene:
+        if self._str_resistance_allele is None:
+            raise ValueError(f"Resistance allele not defined in HomingDrive '{self.name}'.")
         return self._resolve_bound_gene(self._str_resistance_allele)
 
     @property
@@ -935,14 +1039,6 @@ class HomingDrive(GeneticPreset):
         Crosses between drive and wild-type show cleavage resistance, where
         resistance alleles are created instead of drive homozygotes being lethal.
         """
-        def drive_carrier_filter(gt: Genotype) -> bool:
-            from natal.genetic_presets import _count_allele_copies
-            has_drive = _count_allele_copies(gt, self.drive_allele) > 0
-            if self.split and self.cas9_allele:
-                has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0
-                return has_drive and has_cas9
-            return has_drive
-            
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoResistance")
 
         for sex in (Sex.FEMALE, Sex.MALE):

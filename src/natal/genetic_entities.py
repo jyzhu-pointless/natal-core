@@ -39,6 +39,7 @@ from natal.helpers import validate_name
 from natal.genetic_structures import GeneticStructure, Locus, Chromosome, Species
 
 S = TypeVar("S", bound=GeneticStructure)  # Genetic Structure Type
+E = TypeVar("E", bound="GeneticEntity")  # Concrete entity type for __new__
 logger = logging.getLogger(__name__)  # temp logger
 
 __all__ = [
@@ -64,15 +65,18 @@ class GeneticEntity(Generic[S]):
         >>> assert gene is gene2
     """
     structure_type: type = GeneticStructure  # Override in subclass
-    # Cache: {(structure_id, entity_class): {name: entity_instance}}
-    _instance_cache: Dict[Tuple[int, type], Dict[str, 'GeneticEntity']] = {}
+    # Cache: {(species_id, structure_type, structure_name, entity_class, entity_name): entity_instance}
+    _instance_cache: Dict[Tuple[int, type, str, type, str], object] = {}
+    # Late-bound during __new__/__init__. Annotations only (no defaults) so hasattr checks keep working.
+    _pending_cache_key: Tuple[int, type, str, type, str]
+    _initialized: bool
 
     def __new__(
-        cls,
+        cls: type[E],
         name: str,
-        structure: S = None,
-        **kwargs
-    ):
+        structure: Optional[S] = None,
+        **kwargs: object
+    ) -> E:
         # For subclasses that use different parameter names (e.g., locus, chromosome, species)
         # We need to extract the structure from kwargs
         actual_structure = structure
@@ -80,31 +84,38 @@ class GeneticEntity(Generic[S]):
             # Check common parameter names (new and old names)
             for key in ('locus', 'chromosome', 'species', 'linkage', 'genome'):
                 if key in kwargs:
-                    actual_structure = kwargs[key]
+                    candidate = kwargs[key]
+                    if isinstance(candidate, GeneticStructure):
+                        actual_structure = candidate
                     break
         
         if actual_structure is None:
             # Will be caught in __init__
-            return super().__new__(cls)
+            return object.__new__(cls)
         
         # Get the Species from the structure
         species = getattr(actual_structure, '_species', None)
         
         if species is None:
             # No species context - create without caching (for backward compatibility)
-            return super().__new__(cls)
+            return object.__new__(cls)
         
         # Use Species-level entity cache
         # Cache key: (species id, structure type, structure name, entity class, entity name)
         # This ensures uniqueness within a Species
         cache_key = (id(species), type(actual_structure), actual_structure.name, cls, name)
         
-        if cache_key in GeneticEntity._instance_cache:
+        cached = GeneticEntity._instance_cache.get(cache_key)
+        if cached is not None:
             # Return cached instance
-            return GeneticEntity._instance_cache[cache_key]
+            if isinstance(cached, cls):
+                return cached
+            raise TypeError(
+                f"Cache type mismatch: expected {cls.__name__}, got {type(cached).__name__}."
+            )
         
         # Create new instance (do NOT cache here - cache in __init__ after success)
-        instance = super().__new__(cls)
+        instance = object.__new__(cls)
         # Store cache_key for use in __init__
         instance._pending_cache_key = cache_key
         return instance
@@ -192,7 +203,7 @@ class Gene(GeneticEntity[Locus]):
     """
     structure_type = Locus  # Gene must be bound to a Locus
 
-    def __new__(cls, name: str, locus: Locus = None, **kwargs):
+    def __new__(cls, name: str, locus: Optional[Locus] = None, **kwargs) -> "Gene":
         # Pass locus to parent __new__ via kwargs
         return super().__new__(cls, name, locus=locus, **kwargs)
 
@@ -241,7 +252,7 @@ class Haplotype(GeneticEntity[Chromosome]):
     """
     structure_type = Chromosome  # Haplotype must be bound to a Chromosome
 
-    def __new__(cls, chromosome: Chromosome = None, genes: List[Gene] = None, **kwargs):
+    def __new__(cls, chromosome: Optional[Chromosome] = None, genes: Optional[List[Gene]] = None, **kwargs) -> "Haplotype":
         # Generate name from genes for caching (ignore any passed 'name' parameter)
         kwargs.pop('name', None)  # Remove 'name' if present to avoid conflicts
         if genes:
@@ -346,7 +357,7 @@ class HaploidGenotype(GeneticEntity[Species]):
     """
     structure_type = Species  # HaploidGenotype must be bound to a Species
 
-    def __new__(cls, species: Species = None, haplotypes: List[Haplotype] = None, **kwargs):
+    def __new__(cls, species: Optional[Species] = None, haplotypes: Optional[List[Haplotype]] = None, **kwargs) -> "HaploidGenotype":
         # Generate name from haplotypes for caching (ignore any passed 'name' parameter)
         kwargs.pop('name', None)  # Remove 'name' if present to avoid conflicts
         if haplotypes:
@@ -460,12 +471,14 @@ class HaploidGenotype(GeneticEntity[Species]):
     def __str__(self) -> str:
         return self.to_string()
     
-    def get_haplotype_for_chromosome(self, chromosome: Chromosome) -> Optional[Haplotype]:
+    def get_haplotype_for_chromosome(self, chromosome: Chromosome) -> Haplotype:
         """Get the haplotype for a specific chromosome."""
         for hap in self.haplotypes:
             if hap.chromosome is chromosome:
                 return hap
-        return None
+        raise ValueError(
+            f"Chromosome {chromosome.name!r} not found in haploid genotype for species {self.species.name!r}."
+        )
 
     @classmethod
     def from_str(cls, species: 'Species', haploid_str: str) -> 'HaploidGenotype':
@@ -512,8 +525,12 @@ class Genotype:
     
     # Cache: {species: {(maternal_id, paternal_id, name): instance}}
     _cache: Dict[Species, Dict[Tuple[int, int, str], 'Genotype']] = {}
+    # Late-bound during __new__/__init__. Annotations only (no defaults) so hasattr checks keep working.
+    _pending_cache_species: Species
+    _pending_cache_key: Tuple[int, int, str]
+    _initialized: bool
     
-    def __new__(cls, species: Species, maternal: 'HaploidGenotype', paternal: 'HaploidGenotype'):
+    def __new__(cls, species: Species, maternal: 'HaploidGenotype', paternal: 'HaploidGenotype') -> "Genotype":
         """
         Create or retrieve a cached Genotype instance.
         

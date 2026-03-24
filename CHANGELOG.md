@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026.3.24
+- 根据类型检查进行了一些修改，当前版本可用
+
 ## 2026.3.23
 - 创建 webui
 - 部分概念重命名：`IndexCore` -> `IndexRegistry`，`recipe` -> `preset`

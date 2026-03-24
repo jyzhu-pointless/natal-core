@@ -11,7 +11,7 @@ This module provides regex-like pattern matching for genetic sequences:
 """
 
 from abc import ABC, abstractmethod as abstract_method
-from typing import Optional, Set, List, Dict, Tuple, Callable, Union
+from typing import Optional, Set, List, Dict, Tuple, Callable, Union, Literal, Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -151,11 +151,11 @@ class LocusPattern:
 class HaplotypePath:
     """Pattern for a single Haplotype (one copy of a pair of homologous chromosomes)."""
     
-    def __init__(self, locus_patterns: List[PatternElement]):
+    def __init__(self, locus_patterns: Sequence[PatternElement]):
         """Initialize a haplotype pattern.
         
         Args:
-            locus_patterns: List of PatternElement for each locus in order.
+            locus_patterns: Sequence of PatternElement for each locus in order.
                            Each PatternElement matches a single allele at that locus.
         """
         self.locus_patterns = locus_patterns
@@ -410,7 +410,7 @@ class GenotypePatternParser:
             # Split by semicolon, respecting parentheses
             chr_pattern_strs = self._split_by_semicolon_respecting_parens(pattern_str)
             
-            chromosome_patterns: List[Optional[ChromosomePairPattern]] = []
+            chromosome_patterns: List[Union[ChromosomePairPattern, Literal["WILDCARD_CHROMOSOME"]]] = []
             for chr_str in chr_pattern_strs:
                 chr_pattern = self._parse_chromosome_pair(chr_str)
                 chromosome_patterns.append(chr_pattern)
@@ -480,7 +480,7 @@ class GenotypePatternParser:
         
         return result
     
-    def _parse_chromosome_pair(self, chr_str: str) -> Union[ChromosomePairPattern, str]:
+    def _parse_chromosome_pair(self, chr_str: str) -> Union[ChromosomePairPattern, Literal["WILDCARD_CHROMOSOME"]]:
         """Parse a single chromosome pair pattern string.
         
         For genotypes:
@@ -707,7 +707,7 @@ class GenotypePatternParser:
             # Split by semicolon, respecting parentheses
             chr_strs = self._split_by_semicolon_respecting_parens(pattern_str)
             
-            haplotype_patterns: List[Optional[HaplotypePath]] = []
+            haplotype_patterns: List[Optional[Union[HaplotypePath, Literal["WILDCARD_CHROMOSOME"]]]] = []
             for chr_str in chr_strs:
                 if chr_str == "*":
                     # Wildcard chromosome - will be expanded later

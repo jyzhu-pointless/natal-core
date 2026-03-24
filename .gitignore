@@ -13,3 +13,5 @@ wheels/
 tmpdocs/
 tests/
 .numba_cache/*
+
+.DS_Store

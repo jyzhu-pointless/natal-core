@@ -35,7 +35,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from natal.age_structured_population import AgeStructuredPopulation
+    from natal.base_population import BasePopulation
     from natal.index_registry import IndexRegistry
 
 
@@ -430,7 +430,7 @@ def _parse_condition(condition: Optional[str]) -> Tuple[np.ndarray, np.ndarray]:
 
 def compile_declarative_hook(
     ops: List[HookOp],
-    pop: "AgeStructuredPopulation",
+    pop: "BasePopulation",
     event: str,
     priority: int = 0,
     name: str = "declarative_hook",

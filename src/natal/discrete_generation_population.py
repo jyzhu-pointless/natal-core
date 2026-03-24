@@ -29,9 +29,8 @@ if TYPE_CHECKING:
 __all__ = ["DiscreteGenerationPopulation"]
 
 
-class DiscreteGenerationPopulation(BasePopulation):
+class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     """Population with strict non-overlapping generations."""
-
     def __init__(
         self,
         species: Species,
@@ -187,12 +186,7 @@ class DiscreteGenerationPopulation(BasePopulation):
 
             for genotype_key, age_data in genotype_dist.items():
                 genotype = self._resolve_genotype_key(genotype_key)
-                if hasattr(self._registry, "genotype_to_index"):
-                    genotype_idx = self._registry.genotype_to_index[genotype]
-                elif hasattr(self._registry, "get_genotype_index"):
-                    genotype_idx = self._registry.get_genotype_index(genotype)
-                else:
-                    raise AttributeError("Registry must provide genotype_to_index or get_genotype_index")
+                genotype_idx = self._registry.genotype_to_index[genotype]
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
                 self._state.individual_count[sex_idx, 0, genotype_idx] = age0_count
                 self._state.individual_count[sex_idx, 1, genotype_idx] = age1_count
@@ -220,18 +214,24 @@ class DiscreteGenerationPopulation(BasePopulation):
             )
 
         hooks = self.get_compiled_event_hooks()
-        run_fn = hooks.run_discrete_fn if hooks.run_discrete_fn is not None else sk.run_discrete
+        
+        # run_discrete_fn 和 registry 总是由 get_compiled_event_hooks() 初始化的
+        assert hooks.run_discrete_fn is not None, "hooks.run_discrete_fn should always be initialized"
+        assert hooks.registry is not None, "hooks.registry should always be initialized"
+        
+        run_fn = hooks.run_discrete_fn
+        registry = hooks.registry
 
         final_state_tuple, history_new, was_stopped = run_fn(
             state=self._state,
             config=self._config,
-            registry=hooks.registry,
+            registry=registry,
             n_ticks=n_steps,
             record_interval=record_every,
         )
 
         self._state = DiscretePopulationState(
-            n_tick=np.int32(final_state_tuple[1]),
+            n_tick=int(final_state_tuple[1]),
             individual_count=final_state_tuple[0],
         )
         self._tick = int(final_state_tuple[1])
@@ -254,8 +254,22 @@ class DiscreteGenerationPopulation(BasePopulation):
         """
         return self.run(n_steps=1, record_every=self.record_every)
 
-    def get_total_count(self) -> int:
-        return self
+    def reset(self) -> None:
+        """Reset the population to its initial state."""
+        self._tick = 0
+        self._history = []
+        self._finished = False
+        if hasattr(self, '_initial_population_snapshot') and self._initial_population_snapshot is not None:
+            ind_copy, _, _ = self._initial_population_snapshot
+            
+            # Recreate state with initial data
+            self._state = DiscretePopulationState.create(
+                n_sexes=self._config.n_sexes,
+                n_ages=self._config.n_ages,
+                n_genotypes=self._config.n_genotypes,
+                n_tick=0,
+                individual_count=ind_copy.copy() if ind_copy is not None else None,
+            )
 
     def get_total_count(self) -> int:
         return int(round(np.sum(self._state.individual_count)))

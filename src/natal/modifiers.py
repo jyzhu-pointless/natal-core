@@ -41,7 +41,7 @@ class GameteModifier(Protocol):
     The result writes frequency distributions for compressed indices directly
     back into numeric tensors.
     """
-    def __call__(self, *args: Any) -> Dict[Any, Dict[int, float]]: ...
+    def __call__(self, *args, **kwargs) -> Dict[Any, Dict[int, float]]: ...
 
 # 合子修饰器接口保持不变
 class ZygoteModifier(Protocol):
@@ -67,7 +67,7 @@ class ZygoteModifier(Protocol):
 
         Dict[Any, Union[int, Genotype, Dict[int, float]]]
     """
-    def __call__(self, *args: Any) -> Dict[Any, Union[int, Genotype, Dict[int, float]]]: ...
+    def __call__(self, *args, **kwargs) -> Dict[Any, Union[int, Genotype, Dict[int, float]]]: ...
 
 
 # ============================================================================
@@ -241,8 +241,8 @@ def build_modifier_wrappers(
     modifier systems that need to convert high-level modifiers to tensor ops.
 
     Args:
-        gamete_modifiers: List of (hook_id, name, modifier) tuples for gamete modifiers.
-        zygote_modifiers: List of (hook_id, name, modifier) tuples for zygote modifiers.
+        gamete_modifiers: List of (modifier_id, name, modifier) tuples for gamete modifiers.
+        zygote_modifiers: List of (modifier_id, name, modifier) tuples for zygote modifiers.
         population: The population object.
         index_registry: IndexRegistry instance.
         haploid_genotypes: List of all HaploidGenotype objects.

@@ -10,7 +10,7 @@ This module connects three authoring styles into one runtime contract:
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from natal.numba_utils import njit_switch
 
@@ -106,7 +106,19 @@ class CompiledEventHooks:
         "run_discrete_fn",
     )
 
-    def __init__(self):
+    # Type annotations for attributes
+    first: Callable
+    early: Callable
+    late: Callable
+    finish: Callable
+    registry: Optional[Any]
+    _event_hooks: Dict[str, Callable]
+    run_tick_fn: Optional[Callable]
+    run_fn: Optional[Callable]
+    run_discrete_tick_fn: Optional[Callable]
+    run_discrete_fn: Optional[Callable]
+
+    def __init__(self) -> None:
         self.first = _noop_hook
         self.early = _noop_hook
         self.late = _noop_hook
@@ -141,7 +153,7 @@ class CompiledEventHooks:
         result = CompiledEventHooks()
         result.registry = registry
 
-        hooks_by_event: Dict[str, List[Callable]] = {name: [] for name in EVENT_NAMES}
+        hooks_by_event: Dict[str, List[Tuple[int, Callable]]] = {name: [] for name in EVENT_NAMES}
         for desc in compiled_hooks:
             if desc.njit_fn is not None and desc.event in hooks_by_event:
                 hooks_by_event[desc.event].append((desc.priority, desc.njit_fn))
@@ -175,18 +187,18 @@ def hook(
 
     def decorator(func: Callable) -> Callable:
         # Store metadata for debugging / introspection / future recompilation.
-        func._hook_meta = {
+        func._hook_meta = {  # type: ignore
             "event": event,
             "selectors": selectors or {},
             "priority": priority,
             "numba_mode": numba,
         }
-        func._hook_compiled = None
+        func._hook_compiled = None  # type: ignore
 
-        func._hook_event = event
-        func._hook_selectors_spec = selectors or {}
-        func._hook_priority = priority
-        func._hook_numba_mode = numba
+        func._hook_event = event  # type: ignore
+        func._hook_selectors_spec = selectors or {}  # type: ignore
+        func._hook_priority = priority  # type: ignore
+        func._hook_numba_mode = numba  # type: ignore
 
         def register(pop: "BasePopulation", event_override: Optional[str] = None):
             """Compile this hook against one population instance."""
@@ -208,7 +220,7 @@ def hook(
                     event=actual_event,
                     priority=priority,
                     njit_fn=func,
-                    meta={"n_genotypes": pop._index_registry.num_genotypes(), "n_ages": pop._n_ages},
+                    meta={"n_genotypes": pop._index_registry.num_genotypes(), "n_ages": pop._config.n_ages},
                 )
             elif selectors:
                 # Mode 2: selector-based hook (python or njit wrapper path).
@@ -252,11 +264,11 @@ def hook(
                             meta={"n_genotypes": pop._index_registry.num_genotypes(), "n_ages": pop._config.n_ages},
                         )
 
-            func._hook_compiled = desc
+            func._hook_compiled = desc  # type: ignore
             pop._register_compiled_hook(desc)
             return desc
 
-        func.register = register
+        func.register = register  # type: ignore
         return func
 
     return decorator

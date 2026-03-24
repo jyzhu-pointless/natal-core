@@ -36,7 +36,7 @@ __all__ = [
 ]
 
 _GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
-_SexSpecifier = Union[Sex, str]
+_SexSpecifier = Union[Sex, int, str]
 
 
 
@@ -89,7 +89,7 @@ class GameteHaploidGenomeConversionRule:
         to_haploid_genotype: Union[HaploidGenotype, Callable[[HaploidGenotype], HaploidGenotype]],
         rate: float,
         name: Optional[str] = None,
-        sex_filter: Optional[Literal["female", "male", "both"]] = "both",
+        sex_filter: Optional[Union[str, int, Sex]] = "both",
         genotype_filter: _GenotypeFilter = None,
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
@@ -141,8 +141,11 @@ class GameteHaploidGenomeConversionRule:
         self.hg_match = hg_match
         self.to_haploid_genotype = to_haploid_genotype
         self.rate = rate
-        self.name = name or f"GameteHGConversion(rate={rate})"
-        self.sex_filter = sex_filter
+        self.name = name or f"GameteHGConversion(rate={rate}, sex={sex_filter or 'both'})"
+        if sex_filter is None:
+            self.sex_filter = "both"
+        else:
+            self.sex_filter = sex_filter
         self.genotype_filter = genotype_filter
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
         self.source_glab = source_glab
@@ -160,9 +163,9 @@ class GameteHaploidGenomeConversionRule:
         """Check if rule applies to a given sex."""
         if self.sex_filter == "both":
             return True
-        if self.sex_filter == "female" or self.sex_filter == 0:
+        if self.sex_filter == "female" or self.sex_filter == 0 or self.sex_filter is Sex.FEMALE:
             return sex_idx == 0
-        elif self.sex_filter == "male" or self.sex_filter == 1:
+        elif self.sex_filter == "male" or self.sex_filter == 1 or self.sex_filter is Sex.MALE:
             return sex_idx == 1
         raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
 
@@ -199,7 +202,7 @@ class GameteAlleleConversionRule:
         to_allele: Union[str, Gene],
         rate: float,
         name: Optional[str] = None,
-        sex_filter: Optional[Literal["female", "male", "both"]] = "both",
+        sex_filter: Optional[Union[str, int, Sex]] = "both",
         genotype_filter: _GenotypeFilter = None,
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
@@ -236,8 +239,11 @@ class GameteAlleleConversionRule:
         self.from_allele = from_allele
         self.to_allele = to_allele
         self.rate = rate
-        self.name = name or f"{self.from_allele_str}→{self.to_allele_str}({sex_filter})"
-        self.sex_filter = sex_filter
+        self.name = name or f"{self.from_allele_str}→{self.to_allele_str}({sex_filter or 'both'})"
+        if sex_filter is None:
+            self.sex_filter = "both"
+        else:
+            self.sex_filter = sex_filter
         self.genotype_filter = genotype_filter
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
         self.source_glab = source_glab
@@ -259,9 +265,9 @@ class GameteAlleleConversionRule:
         if self.sex_filter == "both":
             return True
         # Assume convention: sex_idx=0 is female, sex_idx=1 is male 
-        if self.sex_filter == "female" or self.sex_filter == 0:
+        if self.sex_filter == "female" or self.sex_filter == 0 or self.sex_filter is Sex.FEMALE:
             return sex_idx == 0
-        elif self.sex_filter == "male" or self.sex_filter == 1:
+        elif self.sex_filter == "male" or self.sex_filter == 1 or self.sex_filter is Sex.MALE:
             return sex_idx == 1
         raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
     
@@ -475,7 +481,7 @@ class GameteConversionRuleSet:
             
             return result
         
-        return gamete_modifier_func
+        return gamete_modifier_func  # TODO: protocol 有问题
     
     def __repr__(self) -> str:
         return f"{self.name} with {len(self.rules)} rules"

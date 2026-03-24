@@ -22,7 +22,7 @@ __all__ = [
     "NUMBA_SIGNATURE_TRACE_ENABLED", "is_numba_signature_trace_enabled",
     "enable_numba_signature_trace", "disable_numba_signature_trace",
     "NUMBA_CACHE_DIR", "get_numba_cache_dir",
-    "jitclass_switch", "njit_switch", "numba_disabled", "numba_enabled",
+    "njit_switch", "numba_disabled", "numba_enabled",
     "with_numba_disabled", "with_numba_enabled"
 ]
 
@@ -105,7 +105,7 @@ def _apply_numba_cache_dir() -> None:
 
     try:
         from numba.core import config as numba_config
-        numba_config.CACHE_DIR = str(cache_dir)
+        setattr(numba_config, "CACHE_DIR", str(cache_dir))
     except Exception:
         pass
 
@@ -455,7 +455,7 @@ def njit_switch(
                 _apply_numba_cache_dir()
 
                 # Keep all JIT/cache output under one project switch.
-                numba_config.DEBUG_CACHE = 1 if NUMBA_LOG_ENABLED else 0
+                setattr(numba_config, "DEBUG_CACHE", 1 if NUMBA_LOG_ENABLED else 0)
                 _install_cache_log_formatter()
                 _install_dispatcher_compile_formatter()
 
@@ -480,63 +480,6 @@ def njit_switch(
     return decorator
 
 # ============================================================================
-# @jitclass_switch Decorator (Class-level)
-# ============================================================================
-
-def jitclass_switch(
-    spec_or_cls: Optional[type | list] = None,
-    **jitclass_kwargs
-) -> Callable:
-    """
-    Numba @jitclass decorator for classes (controlled by global NUMBA_ENABLED flag).
-    
-    Args:
-        spec_or_cls: Either a spec list (when used as @jitclass_switch(spec))
-                     or the class itself (when used as @jitclass_switch)
-        **jitclass_kwargs: Additional arguments for numba.jitclass
-    
-    Usage:
-        ```python
-        # With spec (recommended)
-        spec = [('field1', types.int64), ('field2', types.float64)]
-        @jitclass_switch(spec)
-        class MyClass:
-            ...
-        
-        # Without spec (inference not always possible)
-        @jitclass_switch
-        class MyClass:
-            ...
-        ```
-    """
-    
-    def decorator(cls: type) -> type:
-        numba_cls = None
-        
-        if NUMBA_ENABLED:
-            try:
-                from numba.experimental import jitclass as numba_jitclass
-                numba_cls = numba_jitclass(spec_or_cls, **jitclass_kwargs)(cls)
-            except ImportError:
-                pass
-            except Exception:
-                pass
-        
-        # Return compiled or original class
-        return numba_cls if numba_cls is not None else cls
-    
-    # Support both @jitclass_switch and @jitclass_switch(spec)
-    if spec_or_cls is not None and isinstance(spec_or_cls, type):
-        # Used as @jitclass_switch (spec_or_cls is the class)
-        return decorator(spec_or_cls)
-    else:
-        # Used as @jitclass_switch(spec) (spec_or_cls is the spec)
-        # Return decorator that will be applied to the class
-        def spec_decorator(cls: type) -> type:
-            return decorator(cls)
-        return spec_decorator
-
-# ============================================================================
 # Utility Functions
 # ============================================================================
 
@@ -557,7 +500,7 @@ def disable_numba_log():
 
     try:
         from numba.core import config as numba_config
-        numba_config.DEBUG_CACHE = 0
+        setattr(numba_config, "DEBUG_CACHE", 0)
     except Exception:
         pass
 
@@ -586,7 +529,7 @@ def enable_numba_log():
 
     try:
         from numba.core import config as numba_config
-        numba_config.DEBUG_CACHE = 1
+        setattr(numba_config, "DEBUG_CACHE", 1)
         _install_cache_log_formatter()
         _install_dispatcher_compile_formatter()
     except Exception:

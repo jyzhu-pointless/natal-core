@@ -25,7 +25,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from natal.age_structured_population import AgeStructuredPopulation
+    from natal.base_population import BasePopulation
 
 
 def _resolve_selector_to_array(spec: Any, index_registry, diploid_genotypes: List[Any]) -> np.ndarray:
@@ -74,7 +74,7 @@ def _resolve_selector_to_array(spec: Any, index_registry, diploid_genotypes: Lis
 
 def compile_selector_hook(
     func: Callable,
-    pop: "AgeStructuredPopulation",
+    pop: "BasePopulation",
     event: str,
     selectors_spec: Dict[str, Any],
     priority: int = 0,
@@ -96,7 +96,7 @@ def compile_selector_hook(
 
     meta = {
         "n_genotypes": index_registry.num_genotypes(),
-        "n_ages": pop._n_ages,
+        "n_ages": pop._config.n_ages,
     }
 
     from ..numba_utils import NUMBA_ENABLED

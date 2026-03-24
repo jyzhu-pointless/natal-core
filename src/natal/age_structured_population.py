@@ -9,7 +9,7 @@ Primary class:
     ``BasePopulation`` and ``PopulationState``.
 """
 
-from typing import Dict, List, Optional, Union, Tuple, Set, Callable, TYPE_CHECKING
+from typing import Dict, List, Optional, Union, Tuple, Callable, Set, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 from natal.base_population import BasePopulation, Species, Genotype, Sex, HaploidGenome
@@ -24,10 +24,10 @@ if TYPE_CHECKING:
 __all__ = ["AgeStructuredPopulation"]
 
 # =============================================================================
-# 新架构年龄结构种群模型（基于 BasePopulation）
+# Age-structured population model (based on BasePopulation)
 # =============================================================================
 
-class AgeStructuredPopulation(BasePopulation):
+class AgeStructuredPopulation(BasePopulation[PopulationState]):
     """Age-structured population model (overlapping generations).
 
     An age-structured population built on ``BasePopulation`` and
@@ -47,7 +47,7 @@ class AgeStructuredPopulation(BasePopulation):
         name: Optional[str] = None,
         initial_individual_count: Optional[Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
         initial_sperm_storage: Optional[Dict[Union[Genotype, str], Dict[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
-        hooks: Optional[Dict[str, List[Tuple[Callable, Optional[str], Optional[int]]]]] = None,
+        hooks: Dict[str, List[Tuple[Callable, Optional[str], Optional[int]]]] = {},
     ):
         """Initialize an age-structured population instance using a PopulationConfig.
 
@@ -61,7 +61,7 @@ class AgeStructuredPopulation(BasePopulation):
             initial_individual_count (Optional[Dict]): Initial population distribution (required unless pre-initialized).
                 Format: {sex: {genotype: counts_by_age}}
             initial_sperm_storage (Optional[Dict]): Initial sperm storage state (if supported).
-            hooks (Optional[Dict]): Event hook registrations to apply.
+            hooks (Dict): Event hook registrations to apply.
 
         Example:
             >>> pop_config = PopulationConfigBuilder.build(species, ...)
@@ -80,7 +80,7 @@ class AgeStructuredPopulation(BasePopulation):
             name = "AgeStructuredPop"
         
         # Initialize parent with hooks
-        super().__init__(species, name, hooks=hooks or {})
+        super().__init__(species, name, hooks=hooks)
         
         # Store configuration
         config_hook_slot = int(getattr(population_config, "hook_slot", 0))
@@ -118,9 +118,9 @@ class AgeStructuredPopulation(BasePopulation):
             self._distribute_initial_population(initial_individual_count)
         
         # Backward-compatible override path from constructor args.
-        if initial_sperm_storage is not None and population_config.use_sperm_storage:
-            self._state.sperm_storage.fill(0.0)
-            self._initialize_sperm_storage(initial_sperm_storage)
+        if initial_sperm_storage is not None:
+            # TODO: add population_config.use_sperm_storage
+            self._distribute_initial_sperm_storage(species, initial_sperm_storage)
 
         self._initial_population_snapshot = (
             self._state.individual_count.copy(),
@@ -180,115 +180,8 @@ class AgeStructuredPopulation(BasePopulation):
             distribution: Format {sex: {genotype: age_counts}}
                 where age_counts can be a list or dict of age -> count.
         """
-        # Parse and distribute to population state
-        parsed_dist = self._parse_population_distribution(
-            self.species, distribution, self._config.n_ages
-        )
-        
-        for sex_idx, sex_data in parsed_dist.items():
-            for genotype_idx, age_data in sex_data.items():
-                for age, count in age_data.items():
-                    self._state.individuals[sex_idx, age, genotype_idx] = count
-    
-    def _initialize_sperm_storage(
-        self,
-        sperm_storage: Dict[Union[Genotype, str], Dict[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]
-    ) -> None:
-        """Initialize sperm storage from specification.
-        
-        Args:
-            sperm_storage: Mapping of female genotypes to sperm collections.
-        """
-        # Would extract this from _setup_from_config logic
-        # Placeholder for sperm storage initialization
-        pass
-
-    def _parse_population_distribution(
-        self,
-        species: Species,
-        dist: Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int]]]],
-        n_ages: int
-    ) -> Dict[Sex, Dict[Genotype, Dict[int, int]]]:
-        """Validate and parse the initial population distribution.
-
-        Supported genotype keys:
-            - ``Genotype`` instances
-            - ``str`` values parsable by ``species.get_genotype_from_str``
-
-        Returns:
-            Dict[Sex, Dict[Genotype, Dict[int,int]]]: Parsed sparse mapping of
-            counts by age for each genotype and sex.
-        """
-        parsed_dist = {}
-        
-        for sex_str, genotype_dist in dist.items():
-            if sex_str not in ("male", "female"):
-                raise ValueError(f"Sex must be 'male' or 'female', got '{sex_str}'")
-            
-            sex = Sex.MALE if sex_str == "male" else Sex.FEMALE
-            parsed_dist[sex] = {}
-            
-            for genotype_key, age_data in genotype_dist.items():
-                # 支持字符串和 Genotype 对象
-                if isinstance(genotype_key, str):
-                    genotype = species.get_genotype_from_str(genotype_key)
-                elif isinstance(genotype_key, Genotype):
-                    genotype = genotype_key
-                else:
-                    raise TypeError(f"Genotype key must be Genotype object or str, got {type(genotype_key)}")
-                
-                if genotype.species is not species:
-                    raise ValueError("Genotype must belong to this species")
-                
-                # 转换为 Dict[int, int]（稀疏格式）
-                if isinstance(age_data, list):
-                    # List 格式：[count_age0, count_age1, ...]
-                    age_dict = {age: count for age, count in enumerate(age_data) if count > 0}
-                elif isinstance(age_data, dict):
-                    # Dict 格式：{age: count, ...}
-                    age_dict = {}
-                    for age, count in age_data.items():
-                        if not isinstance(age, int):
-                            raise TypeError(f"Age must be int, got {type(age)}")
-                        if age < 0 or age >= n_ages:
-                            raise ValueError(f"Age {age} out of range [0, {n_ages})")
-                        if count < 0:
-                            raise ValueError(f"Count must be non-negative, got {count}")
-                        if count > 0:
-                            age_dict[age] = count
-                else:
-                    raise TypeError(f"Age data must be List or Dict, got {type(age_data)}")
-                
-                parsed_dist[sex][genotype] = age_dict
-        
-        return parsed_dist
-    
-    def _extract_genotypes_from_distribution(
-        self,
-        parsed_dist: Dict[Sex, Dict[Genotype, Dict[int, int]]]
-    ) -> List[Genotype]:
-        """Extract unique genotypes from a parsed distribution mapping.
-
-        Returns:
-            List[Genotype]: Sorted list of unique genotypes appearing in the
-            provided distribution.
-        """
-        genotypes_set = set()
-        for sex_dict in parsed_dist.values():
-            for genotype in sex_dict.keys():
-                genotypes_set.add(genotype)
-        return sorted(list(genotypes_set), key=lambda gt: str(gt))
-
-    def _distribute_initial_population(
-        self,
-        parsed_dist: Dict[Sex, Dict[Genotype, Dict[int, int]]]
-    ) -> None:
-        """Populate the internal ``PopulationState`` from a parsed distribution.
-
-        Args:
-            parsed_dist: Parsed mapping returned by ``_parse_population_distribution``.
-        """
-        for sex_key, genotype_dict in parsed_dist.items():
+        self._state.individual_count.fill(0.0)
+        for sex_key, genotype_dist in distribution.items():
             sex_key_norm = sex_key.lower().strip()
             if sex_key_norm == "female":
                 sex_idx = int(Sex.FEMALE.value)
@@ -296,15 +189,21 @@ class AgeStructuredPopulation(BasePopulation):
                 sex_idx = int(Sex.MALE.value)
             else:
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
-            for genotype_key, age_dict in genotype_dict.items():
+
+            for genotype_key, age_data in genotype_dist.items():
                 genotype = self._resolve_genotype_key(genotype_key)
                 genotype_idx = self._registry.genotype_to_index[genotype]
-                
-                # TODO: 恢复多种解析方法
-                # 直接写入 PopulationState
-                for age, count in age_dict.items():
-                    if 0 <= age < self._config.n_ages:
-                        self._state.individual_count[sex_idx, age, genotype_idx] += float(count)
+
+                if isinstance(age_data, list):
+                    for age, count in enumerate(age_data):
+                        if age < self._config.n_ages and count > 0:
+                            self._state.individual_count[sex_idx, age, genotype_idx] = float(count)
+                elif isinstance(age_data, dict):
+                    for age, count in age_data.items():
+                        if age < self._config.n_ages and count > 0:
+                            self._state.individual_count[sex_idx, age, genotype_idx] = float(count)
+                else:
+                    raise TypeError(f"age_data must be a list or dict, got {type(age_data)}")
     
     def _distribute_initial_sperm_storage(
         self,
@@ -323,6 +222,7 @@ class AgeStructuredPopulation(BasePopulation):
             sperm_storage_dist: Mapping of {female_genotype: {male_genotype: age_data}}.
                 Genotype keys can be Genotype objects or strings.
         """
+        self._state.sperm_storage.fill(0.0)
         for female_key, male_dict in sperm_storage_dist.items():
             # 解析雌性基因型
             if isinstance(female_key, str):
@@ -351,8 +251,8 @@ class AgeStructuredPopulation(BasePopulation):
                     for age, count in age_data.items():
                         if not isinstance(age, int):
                             raise TypeError(f"Age must be int, got {type(age)}")
-                        if age < 0 or age >= self._n_ages:
-                            raise ValueError(f"Age {age} out of range [0, {self._n_ages})")
+                        if age < 0 or age >= self.n_ages:
+                            raise ValueError(f"Age {age} out of range [0, {self.n_ages})")
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
                         if count > 0:
@@ -361,7 +261,7 @@ class AgeStructuredPopulation(BasePopulation):
                 elif isinstance(age_data, (list, tuple)):
                     # List 格式：[count_age0, count_age1, ...]
                     for age, count in enumerate(age_data):
-                        if age >= self._n_ages:
+                        if age >= self.n_ages:
                             break
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
@@ -373,135 +273,34 @@ class AgeStructuredPopulation(BasePopulation):
                     if age_data < 0:
                         raise ValueError(f"Sperm count must be non-negative, got {age_data}")
                     if age_data > 0:
-                        for age in range(self._new_adult_age, self._n_ages):
+                        for age in range(self.new_adult_age, self.n_ages):
                             self._state.sperm_storage[age, female_idx, male_idx] = float(age_data)
                 else:
                     raise TypeError(f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}")
-
-    def _get_all_possible_haploid_genotypes_from_genotypes(self, genotypes: List[Genotype]) -> List[HaploidGenome]:
-        """Return all unique haploid genomes found in a list of diploid genotypes."""
-        haplotypes = set()
-        for genotype in genotypes:
-            haplotypes.add(genotype.maternal)
-            haplotypes.add(genotype.paternal)
-        return sorted(haplotypes, key=lambda h: str(h)) # TODO: 可能需要支持两性不同的配子
-    
-    def _compute_initial_age2_total(self) -> int:
-        """Compute the total number of individuals at age 2 in the initial state."""
-        if self._n_ages <= 2:
-            return 0
-        return self._state.individual_count[:, 2, :].sum()
-
-    def _resolve_survival_rates(self, rates, n_ages: int, default: List[float]) -> np.ndarray:
-        """Parse a flexible survival-rate specification into a NumPy array.
-
-        Supported input formats (in order):
-            - sequence (list/tuple/ndarray) of floats: truncated or padded as needed;
-              a sentinel ``None`` at the end indicates fill-with-last-non-None.
-            - dict mapping age (int) -> float: unspecified ages default to 1.0.
-            - callable(age) -> float: invoked per age index.
-            - scalar float: same value for all ages.
-
-        Args:
-            rates: User-provided specification (one of the supported formats).
-            n_ages: Target length of the returned array.
-            default: Default fallback list used when ``rates`` is None.
-
-        Returns:
-            np.ndarray: Array of length ``n_ages`` containing parsed survival rates.
-        """
-        # 默认
-        if rates is None:
-            return np.array(default[:n_ages], dtype=float)
-
-        # 常数情况
-        if isinstance(rates, (int, float)) and not isinstance(rates, bool):
-            val = float(rates)
-            if val < 0:
-                raise ValueError("Survival rates must be non-negative")
-            return np.full(n_ages, val, dtype=float)
-
-        # 序列情况（list/tuple/ndarray）
-        if isinstance(rates, (list, tuple, np.ndarray)):
-            arr = np.array(rates, dtype=object)
-            # 支持以 None 结尾表示用最后一个非 None 值填充
-            if arr.size > 0 and arr[-1] is None:
-                # 找到最后一个非 None
-                non_none = None
-                for v in arr[::-1]:
-                    if v is not None:
-                        non_none = float(v)
-                        break
-                if non_none is None:
-                    # 全 None -> 使用默认
-                    return np.array(default[:n_ages], dtype=float)
-                vals = []
-                for v in arr[:-1]:
-                    if v is None:
-                        raise TypeError("None only allowed as final sentinel in survival list")
-                    vals.append(float(v))
-                # pad with last non-none
-                if len(vals) >= n_ages:
-                    return np.array(vals[:n_ages], dtype=float)
-                padded = np.empty(n_ages, dtype=float)
-                padded[: len(vals)] = vals
-                padded[len(vals) :] = non_none
-                return padded
-
-            # 普通序列：不足部分使用 0 填充
-            arrf = np.array(arr, dtype=float)
-            if arrf.size >= n_ages:
-                out = arrf[:n_ages].astype(float)
-            else:
-                out = np.zeros(n_ages, dtype=float)
-                out[: arrf.size] = arrf
-            if (out < 0).any():
-                raise ValueError("Survival rates must be non-negative")
-            return out
-
-        # 字典情况：缺省为 1.0
-        if isinstance(rates, dict):
-            out = np.ones(n_ages, dtype=float)
-            for k, v in rates.items():
-                if not isinstance(k, int):
-                    raise TypeError("Age keys in survival dict must be int")
-                if k < 0 or k >= n_ages:
-                    raise ValueError(f"Age {k} out of range [0, {n_ages})")
-                val = float(v)
-                if val < 0:
-                    raise ValueError("Survival rates must be non-negative")
-                out[k] = val
-            return out
-
-        # 可调用情况：逐年龄调用 callable(age)
-        if callable(rates):
-            vals = []
-            for age in range(n_ages):
-                try:
-                    v = rates(age)
-                    vals.append(float(v))
-                except Exception as e:
-                    raise ValueError(f"Error calling survival rate function at age {age}: {e}")
-            arrf = np.array(vals, dtype=float)
-            if (arrf < 0).any():
-                raise ValueError("Survival rates must be non-negative")
-            return arrf
-
-        raise TypeError("female_survival_rates / male_survival_rates must be None, sequence, dict, callable or numeric constant")
-
-    def set_female_survival_rates(self, rates) -> None:
-        """Set or update female per-age survival rates using the same formats as initialization."""
-        self._female_survival_rates = self._resolve_survival_rates(rates, self._n_ages, self._female_survival_rates.tolist())
-
-    def set_male_survival_rates(self, rates) -> None:
-        """Set or update male per-age survival rates using the same formats as initialization."""
-        self._male_survival_rates = self._resolve_survival_rates(rates, self._n_ages, self._male_survival_rates.tolist())
     
     @property
     def state(self) -> PopulationState:
         """Population state data container."""
         return self._state
     
+    def reset(self) -> None:
+        """Reset the population to its initial state."""
+        self._tick = 0
+        self._history = []
+        self._finished = False
+        if hasattr(self, '_initial_population_snapshot') and self._initial_population_snapshot is not None:
+            ind_copy, sperm_copy, _ = self._initial_population_snapshot
+            
+            # Recreate state with initial data
+            self._state = PopulationState.create(
+                n_genotypes=self._config.n_genotypes,
+                n_sexes=self._config.n_sexes,
+                n_ages=self._config.n_ages,
+                n_tick=0,
+                individual_count=ind_copy.copy() if ind_copy is not None else None,
+                sperm_storage=sperm_copy.copy() if sperm_copy is not None else None,
+            )
+
     @property
     def n_ages(self) -> int:
         """Number of age classes in this population."""
@@ -539,10 +338,10 @@ class AgeStructuredPopulation(BasePopulation):
         total = 0
         
         if sex in ('female', 'F', 'both'):
-            total += self._state.individual_count[Sex.FEMALE.value, self._new_adult_age:self._n_ages, :].sum()
+            total += self._state.individual_count[Sex.FEMALE.value, self.new_adult_age:self.n_ages, :].sum()
         
         if sex in ('male', 'M', 'both'):
-            total += self._state.individual_count[Sex.MALE.value, self._new_adult_age:self._n_ages, :].sum()
+            total += self._state.individual_count[Sex.MALE.value, self.new_adult_age:self.n_ages, :].sum()
         
         return int(total)
     
@@ -595,10 +394,12 @@ class AgeStructuredPopulation(BasePopulation):
         Returns:
             np.ndarray: 形状 (n_snapshots, 1 + n_sexes*n_ages*n_genotypes + n_ages*n_genotypes^2)
                 的 float64 数组，每行为一个快照的展平状态。
-                如果没有历史记录，返回形状为 (0, history_shape) 的空数组。
+        
+        Raises:
+            ValueError: 如果没有历史记录。
         """
         if len(self._history) == 0:
-            return np.zeros((0, self._history_shape[0]), dtype=np.float64)
+            raise ValueError("No history recorded")
         
         # 堆叠所有快照的展平数据
         flat_array = np.array([rec[1] for rec in self._history], dtype=np.float64)
@@ -699,7 +500,7 @@ class AgeStructuredPopulation(BasePopulation):
             state = parse_flattened_state(
                 flattened,
                 n_sexes=2,
-                n_ages=self._n_ages,
+                n_ages=self._config.n_ages,
                 n_genotypes=len(self._registry.index_to_genotype)
             )
             result.append((tick, state))
@@ -722,7 +523,7 @@ class AgeStructuredPopulation(BasePopulation):
                 state = parse_flattened_state(
                     flattened,
                     n_sexes=2,
-                    n_ages=self._n_ages,
+                    n_ages=self._config.n_ages,
                     n_genotypes=len(self._registry.index_to_genotype)
                 )
                 # 直接复制状态数据
@@ -754,60 +555,6 @@ class AgeStructuredPopulation(BasePopulation):
     # ========================================================================
     # 演化逻辑
     # ========================================================================
-    
-    def _step_reproduction(self) -> None:
-        """Reproduction step: compute newborns and add them to age 0.
-
-        Adult individuals produce offspring during this step.
-        Delegates to simulation_kernels.run_reproduction for core logic.
-        """
-        
-        config = self._get_kernel_config()
-        
-        new_ind, new_sperm = sk.run_reproduction(
-            self._state.individual_count,
-            self._state.sperm_storage,
-            config,
-        )
-        
-        self._state.individual_count[:] = new_ind
-        self._state.sperm_storage[:] = new_sperm
-    
-    def _step_survival(self) -> None:
-        """Survival step: apply survival rates and aging-related updates.
-        
-        Delegates to simulation_kernels.run_survival for core logic.
-        Note: run_survival now handles juvenile_growth_mode internally,
-        so _apply_juvenile_growth is no longer called here.
-        """
-        
-        config = self._get_kernel_config()
-        
-        new_ind, new_sperm = sk.run_survival(
-            self._state.individual_count,
-            self._state.sperm_storage,
-            config,
-        )
-        
-        self._state.individual_count[:] = new_ind
-        self._state.sperm_storage[:] = new_sperm
-    
-    def _step_aging(self) -> None:
-        """Aging step: advance ages by one year.
-        
-        Delegates to simulation_kernels.run_aging for core logic.
-        """
-        
-        config = self._get_kernel_config()
-        
-        new_ind, new_sperm = sk.run_aging(
-            self._state.individual_count,
-            self._state.sperm_storage,
-            config,
-        )
-        
-        self._state.individual_count[:] = new_ind
-        self._state.sperm_storage[:] = new_sperm
     
     def _get_kernel_config(self) -> tuple:
         """Build configuration tuple for simulation_kernels.
@@ -858,20 +605,27 @@ class AgeStructuredPopulation(BasePopulation):
         
         # 获取编译后的事件 hooks
         hooks = self.get_compiled_event_hooks()
-        run_fn = hooks.run_fn if hooks.run_fn is not None else sk.run
+        
+        # run_fn 和 registry 总是由 get_compiled_event_hooks() 初始化的
+        # 但类型检查器可能看不到这个保证，所以我们显式地处理
+        assert hooks.run_fn is not None, "hooks.run_fn should always be initialized"
+        assert hooks.registry is not None, "hooks.registry should always be initialized"
+        
+        run_fn = hooks.run_fn
+        registry = hooks.registry
 
         # 直接调用固定签名 runner 执行多步演化
         final_state_tuple, history_new, was_stopped = run_fn(
             state=self._state,
             config=config,
-            registry=hooks.registry,
+            registry=registry,
             n_ticks=n_steps,
             record_interval=record_every,
         )
         
         # 处理最终状态（tuple 格式：ind_count, sperm, tick）
         self._state = PopulationState(
-            n_tick=np.int32(final_state_tuple[2]),
+            n_tick=int(final_state_tuple[2]),
             individual_count=final_state_tuple[0],
             sperm_storage=final_state_tuple[1],
         )

@@ -661,8 +661,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.initial_sperm_storage: Optional[Dict] = None
         
         # Survival and mating
-        self.female_age_based_survival_rates: Optional[NDArray] = None
-        self.male_age_based_survival_rates: Optional[NDArray] = None
+        self.female_age_based_survival_rates: Optional[Any] = None
+        self.male_age_based_survival_rates: Optional[Any] = None
         self.female_age_based_mating_rates: Optional[NDArray] = None
         self.male_age_based_mating_rates: Optional[NDArray] = None
         self.female_age_based_relative_fertility: Optional[NDArray] = None
@@ -1333,11 +1333,11 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
     def setup(
         self,
-        name: str = "AgeStructuredPop",
+        name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
         use_dirichlet_sampling: bool = False,
         use_fixed_egg_count: bool = False
-    ) -> 'AgeStructuredPopulationBuilder':
+    ) -> 'DiscreteGenerationPopulationBuilder':
         """Configure basic population settings.
         
         Args:

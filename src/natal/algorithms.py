@@ -11,7 +11,7 @@ from typing import Tuple, Annotated, Optional, Union
 
 import numpy as np
 from numpy.typing import NDArray
-from natal.numba_utils import njit_switch
+from natal.numba_compat import njit_switch
 from natal import numba_compat as nbc
 
 # ============================================================================
@@ -1061,7 +1061,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
             m_new = temp_counts[n_genotypes:].astype(np.float64)
         else:
             # 离散采样：标准 Multinomial
-            draws = nbc.multinomial(desired, probs)
+            draws = nbc.multinomial(int(round(desired)), probs)
             f_new = draws[:n_genotypes].astype(np.float64)
             m_new = draws[n_genotypes:].astype(np.float64)
         return f_new, m_new
