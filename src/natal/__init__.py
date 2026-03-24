@@ -102,7 +102,7 @@ for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lam
 #
 # This keeps from natal import * aligned with the package's public API and also
 # helps dir(natal) and some tooling discover these names.
-__all__ = list(_lazy_map)
+__all__ = list(_lazy_map)  # type: ignore  # TODO
 
 
 def __getattr__(name):

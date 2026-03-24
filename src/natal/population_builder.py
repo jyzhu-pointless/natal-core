@@ -14,6 +14,7 @@ Example::
 """
 
 from typing import Dict, List, Optional, Union, Any, Callable, Tuple, TYPE_CHECKING, Iterable
+import inspect
 import numpy as np
 from numpy.typing import NDArray
 
@@ -72,8 +73,8 @@ class PopulationConfigBuilder:
         juvenile_growth_mode: Union[int, str],
         low_density_growth_rate: float,
         carrying_capacity: Optional[float],
-        old_juvenile_carrying_capacity: Optional[int],
-        expected_num_adult_females: Optional[int],
+        old_juvenile_carrying_capacity: Optional[float],
+        expected_num_adult_females: Optional[float],
         equilibrium_individual_distribution: Optional[NDArray],
         # Modifiers
         gamete_modifiers: Optional[List[Tuple[int, Optional[str], Callable]]],
@@ -322,10 +323,27 @@ class PopulationConfigBuilder:
             return out
 
         if callable(param):
+            sig = inspect.signature(param)
+            required_positional = 0
+            accepts_var_positional = False
+            for p in sig.parameters.values():
+                if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                    if p.default is inspect.Signature.empty:
+                        required_positional += 1
+                elif p.kind == inspect.Parameter.VAR_POSITIONAL:
+                    accepts_var_positional = True
+            if required_positional > 1 or (required_positional == 0 and not accepts_var_positional):
+                raise TypeError("Survival callable must accept one int age argument")
+
             vals = np.empty(expected_length, dtype=np.float64)
             for age in range(expected_length):
                 try:
-                    vals[age] = float(param(age))
+                    value = param(age)
+                    if not isinstance(value, (int, float, np.integer, np.floating)) or isinstance(value, bool):
+                        raise TypeError(
+                            f"Survival callable must return a float-compatible number, got {type(value)}"
+                        )
+                    vals[age] = float(value)
                 except Exception as exc:
                     raise ValueError(f"Error calling survival rate function at age {age}: {exc}") from exc
             if np.any(vals < 0):
@@ -735,7 +753,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if generation_time is not None:
             self.generation_time = generation_time
         if equilibrium_distribution is not None:
-            self.equilibrium_individual_distribution = equilibrium_distribution
+            self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
         return self
     
     def initial_state(
@@ -794,7 +812,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if generation_time is not None:
             self.generation_time = generation_time
         if equilibrium_distribution is not None:
-            self.equilibrium_individual_distribution = equilibrium_distribution
+            self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
         return self
     
     def reproduction(
@@ -824,11 +842,11 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             Self for chaining.
         """
         if female_age_based_mating_rates is not None:
-            self.female_age_based_mating_rates = female_age_based_mating_rates
+            self.female_age_based_mating_rates = np.array(female_age_based_mating_rates)
         if male_age_based_mating_rates is not None:
-            self.male_age_based_mating_rates = male_age_based_mating_rates
+            self.male_age_based_mating_rates = np.array(male_age_based_mating_rates)
         if female_age_based_relative_fertility is not None:
-            self.female_age_based_relative_fertility = female_age_based_relative_fertility
+            self.female_age_based_relative_fertility = np.array(female_age_based_relative_fertility)
         self.expected_eggs_per_female = eggs_per_female
         self.use_fixed_egg_count = use_fixed_egg_count
         self.sex_ratio = sex_ratio
@@ -866,7 +884,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if expected_num_adult_females is not None:
             self.expected_num_adult_females = expected_num_adult_females
         if equilibrium_distribution is not None:
-            self.equilibrium_individual_distribution = equilibrium_distribution
+            self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
         return self
     
     def presets(self, *preset_list: Any) -> 'AgeStructuredPopulationBuilder':
@@ -959,7 +977,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
         # Flat form: {male_selector: value} => apply to all female genotypes.
         for male_selector, value in sexual_selection.items():
-            entries.append(("*", male_selector, float(value)))
+            assert isinstance(value, float), "In flat sexual_selection form, values must be floats"
+            entries.append(("*", male_selector, value))
         return entries
 
     def modifiers(
@@ -1236,7 +1255,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
         self.juvenile_growth_mode: Union[int, str] = LOGISTIC
         self.low_density_growth_rate: float = 1.0
-        self.carrying_capacity: Optional[int] = None
+        self.carrying_capacity: Optional[float] = None
         self.equilibrium_individual_distribution: Optional[NDArray] = None
 
         self.gamete_modifiers: Optional[List[Tuple[int, Optional[str], Callable]]] = None
@@ -1306,9 +1325,10 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                 for male_selector, value in male_map.items():
                     entries.append((female_selector, male_selector, float(value)))
             return entries
-
+        
         for male_selector, value in sexual_selection.items():
-            entries.append(("*", male_selector, float(value)))
+            assert isinstance(value, float), "In flat sexual_selection form, values must be floats"
+            entries.append(("*", male_selector, value))
         return entries
 
     def modifiers(

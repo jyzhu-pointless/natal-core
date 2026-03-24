@@ -1,3 +1,4 @@
+# type: ignore
 """
 NiceGUI-based Dashboard for NATAL populations.
 
@@ -1074,19 +1075,21 @@ class Dashboard:
         self.chart_allele.run_method('zoomOut')
 
 
-def launch(population: 'BasePopulation', port: int = 8080, title: str = "NATAL"):
+def launch(population: 'BasePopulation', port: int = 8080, title: str = "NATAL Dashboard"):
     """
     Launch the embedded dashboard.
     
     Args:
         population: The population object to visualize.
         port: Web server port.
+        title: The title of the dashboard.
     """
     # Reset NiceGUI state to avoid conflicts if re-run in same process
     # Note: NiceGUI is singleton-based, so multiple launches might need care.
     
     @ui.page('/')
     def main_page():
+        ui.add_head_html('<link rel="icon" href="natal.svg" type="image/svg+xml">')
         dashboard = Dashboard(population)
         dashboard.build_layout()
         
@@ -1094,4 +1097,6 @@ def launch(population: 'BasePopulation', port: int = 8080, title: str = "NATAL")
     # In a script usage, we typically want this to block so the script keeps running
     # and serving the UI.
     print(f"🚀 Starting Dashboard at http://localhost:{port}")
-    ui.run(title=title, port=port, show=False, reload=False)
+    print(f"📖 Click Ctrl+C to stop the dashboard")
+    title = f"{population.name} - NATAL Dashboard" if population.name else "NATAL Dashboard"
+    ui.run(title=title, port=port, show=False, reload=False, favicon='natal.svg')

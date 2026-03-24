@@ -541,26 +541,12 @@ def _compute_converted_gamete_freqs(
     # current_freqs holds the state of the gamete pool before evaluating the current rule.
     current_freqs = initial_freqs.copy()
 
-    readable_initial_freqs = {(str(hg), population.species.gamete_labels[glab_idx]): float(freq)
-                        for (hg, glab_idx), freq in initial_freqs.items()}
-    
-    print(f"sex={"FEMALE" if sex_idx == 0 else "MALE"}, genotype={str(genotype)}, "
-        f"initial_freqs={readable_initial_freqs}")
-    
-    print(resolved_rules)
-
     for rule, src_glab_idx, tgt_glab_idx in resolved_rules:
-        print(f"rule: {rule}")
-
         if sex_idx == 1 and isinstance(rule, GameteHaploidGenomeConversionRule):
             sex_filter = rule.sex_filter
-            print(f"#### Processing GameteHaploidGenomeConversionRule in males with sex_filter={sex_filter}")
-            print(f"#### status: {rule.applies_to_sex(sex_idx)}")
 
         # Check rule-level conditions (does it apply to this sex / diploid genotype?)
         if not rule.applies_to_sex(sex_idx) or not rule.applies_to_genotype(genotype):
-            if not rule.applies_to_sex(sex_idx):
-                print(f"current rule: {rule}, not applied due to sex={sex_idx}")
             continue
             
         # next_freqs will collect the newly partitioned frequencies after applying THIS rule.
@@ -629,21 +615,9 @@ def _compute_converted_gamete_freqs(
                     # Allele not found in this gamete -> pass untouched.
                     next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
                 
-                print(f"processing {str(hg), population.species.gamete_labels[glab_idx]}")
-                readable_next_freqs = {(str(hg), population.species.gamete_labels[glab_idx]): float(freq)
-                                        for (hg, glab_idx), freq in next_freqs.items()}
-                print(f"next freqs after conversion: {readable_next_freqs}")
-                
         # Update the pool for the next rule in the pipeline.
         # This allows chained events! (e.g. Rule1: Target->Drive(70%); Rule2: (Target->R1)(from the remaining 30%)).
         current_freqs = next_freqs
-        
-
-        readable_converted_freqs = {(str(hg), population.species.gamete_labels[glab_idx]): float(freq)
-                                    for (hg, glab_idx), freq in current_freqs.items()}
-        
-        print(f"sex={"FEMALE" if sex_idx == 0 else "MALE"}, genotype={str(genotype)}, "
-                f"converted_freqs={readable_converted_freqs}")
         
     final_freqs = {k: v for k, v in current_freqs.items() if v > 1e-12}
 

@@ -1028,8 +1028,6 @@ class HomingDrive(GeneticPreset):
                     genotype_filter=drive_carrier_filter,
                     target_glab=self.cas9_deposition_glab
                 )
-            
-            print(f"ruleset: {rule_set}")
         
         return rule_set.to_gamete_modifier(population) if rule_set.rules else None
     

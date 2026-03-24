@@ -69,7 +69,7 @@ class PopulationState(NamedTuple):
             )
             sperm = sperm_storage.astype(np.float64)
 
-        return cls(n_tick=np.int32(n_tick), individual_count=ind, sperm_storage=sperm)
+        return cls(n_tick=int(n_tick), individual_count=ind, sperm_storage=sperm)
 
     def get_count(self, sex: int, age: int, genotype_index: int) -> float:
         return self.individual_count[sex, age, genotype_index]
@@ -120,7 +120,7 @@ class DiscretePopulationState(NamedTuple):
             )
             ind = individual_count.astype(np.float64)
 
-        return cls(n_tick=np.int32(n_tick), individual_count=ind)
+        return cls(n_tick=int(n_tick), individual_count=ind)
 
     def flatten_all(self) -> NDArray[np.float64]:
         tick_arr = np.array([float(self.n_tick)], dtype=np.float64)
@@ -168,7 +168,7 @@ def parse_flattened_state(
     n_genotypes: Union[int, np.integer],
     copy: bool = True,
 ) -> PopulationState:
-    n_tick = np.int32(flat_array[0])
+    n_tick = int(flat_array[0])
     end = 1 + n_sexes * n_ages * n_genotypes
     individual_count = flat_array[1:end].reshape((n_sexes, n_ages, n_genotypes))
     sperm_storage = flat_array[end:].reshape((n_ages, n_genotypes, n_genotypes))
@@ -191,7 +191,7 @@ def parse_flattened_discrete_state(
     n_genotypes: Union[int, np.integer],
     copy: bool = True,
 ) -> DiscretePopulationState:
-    n_tick = np.int32(flat_array[0])
+    n_tick = int(flat_array[0])
     individual_count = flat_array[1:].reshape((n_sexes, n_ages, n_genotypes))
 
     if copy:

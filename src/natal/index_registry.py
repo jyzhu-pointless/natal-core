@@ -205,6 +205,7 @@ class IndexRegistry:
         """
         if isinstance(glab_or_index, int) and 0 <= glab_or_index < len(self.index_to_glab):
             return int(glab_or_index)
+        assert isinstance(glab_or_index, str), f"Gamete label must be a string or int index, got {type(glab_or_index)}"
         return self.register_gamete_label(glab_or_index)
 
     # ---------- helpers for compressed hg+glab indexing ----------
@@ -452,7 +453,7 @@ class IndexRegistry:
                     if strict:
                         raise KeyError(f"Unknown glab label: {part_glab}")
                     return None
-
+            assert isinstance(idx_hg, int) and isinstance(glab_idx, int), "Resolved indices must be integers"
             return self.compress_hg_glab(idx_hg, glab_idx, n_glabs)
 
         # HaploidGenotype -> default glab 0

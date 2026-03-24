@@ -462,7 +462,7 @@ class ZygoteConversionRuleSet:
 
                 # Clean up and map the final Genotype objects back to integer indices for the C-core array.
                 final_dist: Dict[int, float] = {}
-                base_idx = genotype_index.get(base_gt)
+                base_idx = genotype_index[base_gt]
                 
                 for gt, prob in current_freqs.items():
                     if prob > 1e-12:

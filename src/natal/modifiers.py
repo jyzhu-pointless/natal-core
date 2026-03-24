@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Sequence
+from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Sequence, Mapping
 from typing import TypeVar, cast
 import inspect
 import numpy as np
@@ -41,7 +41,7 @@ class GameteModifier(Protocol):
     The result writes frequency distributions for compressed indices directly
     back into numeric tensors.
     """
-    def __call__(self, *args, **kwargs) -> Dict[Any, Dict[int, float]]: ...
+    def __call__(self, *args, **kwargs) -> Mapping[Any, Mapping[int, float]]: ...
 
 # 合子修饰器接口保持不变
 class ZygoteModifier(Protocol):
@@ -67,14 +67,14 @@ class ZygoteModifier(Protocol):
 
         Dict[Any, Union[int, Genotype, Dict[int, float]]]
     """
-    def __call__(self, *args, **kwargs) -> Dict[Any, Union[int, Genotype, Dict[int, float]]]: ...
+    def __call__(self, *args, **kwargs) -> Mapping[Any, Union[int, Genotype, Mapping[int, float]]]: ...
 
 
 # ============================================================================
 # HELPER FUNCTIONS FOR MODIFIER CONSTRUCTION
 # ============================================================================
 
-def _invoke_modifier(mod: Callable, population: Any = None) -> dict:
+def _invoke_modifier(mod: Callable, population: Any = None) -> Mapping[Any, Any]:
     """Invoke a modifier callable, supporting both 0-arg and 1-arg signatures.
     
     Args:
@@ -145,8 +145,8 @@ def wrap_gamete_modifier(
 
         bulk = _invoke_modifier(mod, population)
 
-        if not isinstance(bulk, dict):
-            raise TypeError("Gamete modifier must return a dict mapping keys to compressed-index->freq dicts")
+        if not isinstance(bulk, Mapping):
+            raise TypeError("Gamete modifier must return a mapping from keys to compressed-index->freq mappings")
 
         for key, val in bulk.items():
             # Case A: top-level sex-name ('male'/'female')
@@ -214,8 +214,8 @@ def wrap_zygote_modifier(
 
         bulk = _invoke_modifier(mod, population)
 
-        if not isinstance(bulk, dict):
-            raise TypeError("Zygote modifier must return a dict mapping keys to replacements")
+        if not isinstance(bulk, Mapping):
+            raise TypeError("Zygote modifier must return a mapping from keys to replacements")
 
         for key, val in bulk.items():
             c1, c2 = _parse_zygote_key(key, index_registry, haploid_genotypes, n_glabs)
@@ -285,7 +285,7 @@ def _apply_comp_map(
 ) -> None:
     """Apply a comp_map (comp_key->freq) into the tensor slice [sex_idx, gidx]."""
     modified[sex_idx, gidx, :] = 0.0
-    if not isinstance(comp_map, dict):
+    if not isinstance(comp_map, Mapping):
         return
     for comp_key, freq in comp_map.items():
         comp_idx = index_registry.resolve_comp_idx(haploid_genotypes, n_glabs, comp_key, strict=False)
@@ -333,7 +333,7 @@ def _normalize_zygote_val(
         return mapping
 
     # distribution dict
-    if isinstance(val, dict):
+    if isinstance(val, Mapping):
         for idx_candidate, prob in val.items():
             if not isinstance(idx_candidate, int):
                 idx_candidate = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)

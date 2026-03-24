@@ -75,18 +75,6 @@ def import_state(pop: 'AgeStructuredPopulation', state: 'PopulationState') -> No
     """导入状态到种群。推荐直接使用 pop.import_state()。"""
     pop.import_state(state)
 
-
-def import_state_arrays(
-    pop: 'AgeStructuredPopulation',
-    state_arrays: Union[Tuple, Dict[str, NDArray]],
-    history: Optional[List] = None
-) -> None:
-    """导入 numpy/dict → AgeStructuredPopulation（便利包装）。
-    
-    直接委托给 pop.import_state() 方法。推荐使用 pop.import_state() 直接调用。
-    """
-    pop.import_state(state_arrays, history)
-
 # ============================================================================
 # 核心：分离的阶段函数（繁殖、生存、衰老）
 # ============================================================================
@@ -578,7 +566,7 @@ def _run_with_hooks(
     # 解构初始状态，循环内用显式局部变量维护，避免 _replace。
     ind_count = state.individual_count.copy()
     sperm = state.sperm_storage.copy()
-    tick = np.int32(state.n_tick)
+    tick = int(state.n_tick)
 
     # 计算展平大小
     history_size = 1 + ind_count.size + sperm.size
@@ -590,7 +578,7 @@ def _run_with_hooks(
         history_array = np.zeros((estimated_size, history_size), dtype=np.float64)
         history_count = 0
     else:
-        history_array = None
+        history_array = np.zeros((0, history_size), dtype=np.float64)  # placeholder for type checking
         history_count = 0
     
     was_stopped = False
@@ -879,7 +867,7 @@ def _run_discrete_tick_with_hooks(
     
     ind_count = run_discrete_aging(ind_count)
     
-    return (ind_count, np.int32(tick + 1)), 0
+    return (ind_count, int(tick + 1)), 0
 
 @njit_switch(cache=True)
 def _run_discrete_with_hooks(
@@ -892,7 +880,7 @@ def _run_discrete_with_hooks(
     """连续运行 n 个离散世代 tick，支持 hooks，可选记录历史。"""
     was_stopped = False
     ind_count = state.individual_count.copy()
-    tick = np.int32(state.n_tick)
+    tick = int(state.n_tick)
 
     ind_size = ind_count.size
     flatten_size = 1 + ind_size
