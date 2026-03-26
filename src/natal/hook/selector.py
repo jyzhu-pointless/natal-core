@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List
 import numpy as np
 
 from .types import (
+    DemeSelector,
     _hash_key,
     _is_numba_dispatcher,
     _load_codegen_module,
@@ -79,13 +80,18 @@ def compile_selector_hook(
     selectors_spec: Dict[str, Any],
     priority: int = 0,
     numba_mode: bool = False,
+    deme_selector: DemeSelector = "*",
 ) -> CompiledHookDescriptor:
     """Compile selector hook into njit or python descriptor.
 
     ``resolved`` stores canonical selector arrays and is reused by both
     execution paths.
     """
-    index_registry = pop._index_registry
+    index_registry = getattr(pop, "_index_registry", None)
+    if index_registry is None:
+        index_registry = getattr(pop, "_index_core", None)
+    if index_registry is None:
+        raise AttributeError("Population must expose _index_registry (or legacy _index_core)")
     diploid_genotypes = index_registry.index_to_genotype
 
     # Resolve selectors exactly once during registration.
@@ -119,6 +125,7 @@ def compile_selector_hook(
             name=func.__name__,
             event=event,
             priority=priority,
+            deme_selector=deme_selector,
             selectors=resolved,
             meta=meta,
             njit_fn=njit_fn,
@@ -133,6 +140,7 @@ def compile_selector_hook(
         name=func.__name__,
         event=event,
         priority=priority,
+        deme_selector=deme_selector,
         selectors=resolved,
         meta=meta,
         py_wrapper=py_wrapper,

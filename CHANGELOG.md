@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.3.26
+- 修复 `HomingDrive` 中 maternal deposition 总是有效的 bug
+- 增加 spatial model 的一些模块
+
 ## 2026.3.25
 - 继续根据类型检查进行了一些修改，当前版本可用
 - 修改 UI title 和 favicon

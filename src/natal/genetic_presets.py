@@ -1034,52 +1034,87 @@ class HomingDrive(GeneticPreset):
     def zygote_modifier(self, population: 'BasePopulation') -> Optional[ZygoteModifier]:
         """Implement embryo resistance.
         
-        Crosses between drive and wild-type show cleavage resistance, where
-        resistance alleles are created instead of drive homozygotes being lethal.
+        Cleavage in the embryo (due to deposited Cas9 or zygotic expression) 
+        converts wild-type alleles into resistance alleles.
         """
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoResistance")
 
+        def zygote_has_cas9(gt: Genotype) -> bool:
+            """Check if the zygote itself carries the Cas9 source (somatic cleavage)."""
+            from natal.genetic_presets import _count_allele_copies
+            target = self.cas9_allele if self.cas9_allele else self.drive_allele
+            return _count_allele_copies(gt, target) > 0
+
         for sex in (Sex.FEMALE, Sex.MALE):
-            # Base embryo resistance on the zygote having the drive allele,
-            # converting target alleles to resistance alleles.
             rate = self.embryo_resistance_formation_rate[sex]
             if rate > 0:
+                m_glab = None
+                p_glab = None
+                g_filter = None
+
                 if self.cas9_deposition_glab:
-                    # Target maternal deposition directly using Gamete label
-                    # This ensures embryo resistance ONLY happens if the egg was labeled `cas9_deposition_glab`
-                    # during gametogenesis (meaning the mother actually had the Cas9/Drive allele).
-                    
-                    func_res_ratio = self.functional_resistance_ratio
-                    if self.functional_resistance_allele and func_res_ratio > 0:
-                        # 1. Functional resistance
-                        rule_set.add_allele_convert(
-                            from_allele=self.target_allele,
-                            to_allele=self.functional_resistance_allele,
-                            rate=rate * func_res_ratio,
-                            maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
-                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE and self.use_paternal_deposition else None,
-                        )
-                        # 2. Non-functional resistance on remaining targets
-                        # Just like gametogenesis, we must adjust the rate to account for targets already removed 
-                        # by the functional resistance rule.
-                        target_remaining = 1.0 - (rate * func_res_ratio)
-                        nf_rate = (rate * (1.0 - func_res_ratio)) / target_remaining if target_remaining > 0 else 0.0
-                        if nf_rate > 0:
-                            rule_set.add_allele_convert(
-                                from_allele=self.target_allele,
-                                to_allele=self.resistance_genotype,
-                                rate=nf_rate,
-                                maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
-                                paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE and self.use_paternal_deposition else None,
-                            )
+                    # Label-based deposition (Maternal/Paternal effect)
+                    if sex == Sex.FEMALE:
+                        m_glab = self.cas9_deposition_glab
+                    elif self.use_paternal_deposition:
+                        p_glab = self.cas9_deposition_glab
                     else:
-                        # Generic resistance (no functional split) triggered by maternal glab
+                        # Male rate > 0 but no paternal deposition -> somatic/zygotic expression
+                        g_filter = zygote_has_cas9
+                else:
+                    # No labels provided -> cleavage depends on zygote's own Cas9 alleles
+                    g_filter = zygote_has_cas9
+
+                # Skip if no filter is active to avoid global mutation bug
+                if m_glab is None and p_glab is None and g_filter is None:
+                    continue
+
+                func_res_ratio = self.functional_resistance_ratio
+                if self.functional_resistance_allele and func_res_ratio > 0:
+                    # 1. Functional resistance
+                    rule_set.add_allele_convert(
+                        from_allele=self.target_allele,
+                        to_allele=self.functional_resistance_allele,
+                        rate=rate * func_res_ratio,
+                        maternal_glab=m_glab,
+                        paternal_glab=p_glab,
+                        genotype_filter=g_filter,
+                    )
+                    # 2. Non-functional resistance on remaining targets
+                    target_remaining = 1.0 - (rate * func_res_ratio)
+                    nf_rate = (rate * (1.0 - func_res_ratio)) / target_remaining if target_remaining > 0 else 0.0
+                    if nf_rate > 0:
                         rule_set.add_allele_convert(
                             from_allele=self.target_allele,
                             to_allele=self.resistance_genotype,
-                            rate=rate,
-                            maternal_glab=self.cas9_deposition_glab if sex == Sex.FEMALE else None,
-                            paternal_glab=self.cas9_deposition_glab if sex == Sex.MALE and self.use_paternal_deposition else None,
+                            rate=nf_rate,
+                            maternal_glab=m_glab,
+                            paternal_glab=p_glab,
+                            genotype_filter=g_filter,
                         )
+                else:
+                    # Generic resistance (no functional split)
+                    rule_set.add_allele_convert(
+                        from_allele=self.target_allele,
+                        to_allele=self.resistance_genotype,
+                        rate=rate,
+                        maternal_glab=m_glab,
+                        paternal_glab=p_glab,
+                        genotype_filter=g_filter,
+                    )
             
         return rule_set.to_zygote_modifier(population) if rule_set.rules else None
+
+
+class ToxinAntidoteDrive(GeneticPreset):
+    """Toxin-Antidote gene drive (e.g., TARE, TADE, TADS).
+    
+    This preset implements a toxin-antidote gene drive system where a "toxin" allele causes lethality or sterility, 
+    and an "antidote" allele rescues carriers from the toxin's effects. The drive spreads by biasing inheritance of the antidote.
+    
+    Key features:
+    - Toxin allele that disrupts viability or fecundity
+    - Antidote allele that rescues carriers from toxin effects
+    - Drive conversion that biases inheritance of the antidote allele
+    """
+    pass  # Placeholder for future implementation of Toxin-Antidote drive preset

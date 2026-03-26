@@ -10,6 +10,8 @@ from natal.hook.compiler import _njit_switch
 __all__ = [
 	# Core types
 	'OpType',
+	'DemeSelector',
+	'deme_selector_matches',
 	'HookOp',
 	'Op',
 	'CompiledHookPlan',

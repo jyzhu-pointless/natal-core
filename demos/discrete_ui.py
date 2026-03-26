@@ -8,7 +8,7 @@ sp = nt.Species.from_dict(
     name="TestSpecies",
     structure={
         "chr1": {
-            "loc": ["WT", "Dr", "R2", "R1"]
+            "loc1": ["WT", "Dr", "R2", "R1"]
         }
     },
     gamete_labels=["default", "cas9_deposited"]

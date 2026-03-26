@@ -8,9 +8,7 @@ from .compiler import (
     noop_hook,
 )
 from .declarative import (
-    HookOp,
     Op,
-    OpType,
     _parse_condition,
     compile_declarative_hook,
 )
@@ -24,6 +22,10 @@ from .executor import (
 )
 from .selector import compile_selector_hook
 from .types import (
+    DemeSelector,
+    deme_selector_matches,
+        HookOp,
+        OpType,
     COND_ALWAYS,
     COND_OP_AND,
     COND_OP_NOT,
@@ -50,6 +52,8 @@ from .types import (
 
 __all__ = [
     "OpType",
+    "DemeSelector",
+    "deme_selector_matches",
     "HookOp",
     "Op",
     "CompiledHookPlan",

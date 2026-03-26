@@ -130,6 +130,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         
         # Initialize registry using Template Method Pattern
         self._initialize_registry()
+        self._finalize_hooks()
     
     @classmethod
     def setup(

@@ -22,6 +22,7 @@ from natal.type_def import Sex
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
 from natal.population_config import extract_gamete_frequencies_by_glab
+from natal.helpers import resolve_sex_label
 from natal.index_registry import compress_hg_glab
 
 if TYPE_CHECKING:
@@ -163,11 +164,11 @@ class GameteHaploidGenomeConversionRule:
         """Check if rule applies to a given sex."""
         if self.sex_filter == "both":
             return True
-        if self.sex_filter == "female" or self.sex_filter == 0 or self.sex_filter is Sex.FEMALE:
-            return sex_idx == 0
-        elif self.sex_filter == "male" or self.sex_filter == 1 or self.sex_filter is Sex.MALE:
-            return sex_idx == 1
-        raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
+        try:
+            target_sex_idx = resolve_sex_label(self.sex_filter)
+            return sex_idx == target_sex_idx
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given diploid genotype."""
@@ -264,12 +265,11 @@ class GameteAlleleConversionRule:
         """
         if self.sex_filter == "both":
             return True
-        # Assume convention: sex_idx=0 is female, sex_idx=1 is male 
-        if self.sex_filter == "female" or self.sex_filter == 0 or self.sex_filter is Sex.FEMALE:
-            return sex_idx == 0
-        elif self.sex_filter == "male" or self.sex_filter == 1 or self.sex_filter is Sex.MALE:
-            return sex_idx == 1
-        raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
+        try:
+            target_sex_idx = resolve_sex_label(self.sex_filter)
+            return sex_idx == target_sex_idx
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
     
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given genotype.

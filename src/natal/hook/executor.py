@@ -29,6 +29,7 @@ from .types import (
     RESULT_STOP,
     CompiledHookDescriptor,
     HookProgram,
+    deme_selector_matches,
 )
 
 if TYPE_CHECKING:
@@ -435,8 +436,12 @@ class HookExecutor:
 
         return HookExecutor(registry, dict(hooks_by_event))
 
-    def execute_event(self, event_id: int, population: "BasePopulation", tick: int) -> int:
-        """Run one event with phase ordering: CSR -> njit -> Python."""
+    def execute_event(self, event_id: int, population: "BasePopulation", tick: int, deme_id: int = 0) -> int:
+        """Run one event with phase ordering: CSR -> njit -> Python.
+
+        ``deme_id`` is only used for hook descriptor filtering (``deme_selector``).
+        CSR declarative plans remain event-scoped and run first as before.
+        """
         if event_id < 0 or event_id >= NUM_EVENTS:
             return RESULT_CONTINUE
 
@@ -465,8 +470,10 @@ class HookExecutor:
         if result == RESULT_STOP:
             return RESULT_STOP
 
-        # Phase 2: user-provided njit hooks.
+        # Phase 2: user-provided njit hooks (filtered by deme_selector).
         for desc in self.hooks_by_event.get(event_id, []):
+            if not deme_selector_matches(desc.deme_selector, deme_id):
+                continue
             if desc.njit_fn is not None:
                 try:
                     result = desc.njit_fn(ind_count, tick)
@@ -477,8 +484,10 @@ class HookExecutor:
 
         from ..numba_utils import NUMBA_ENABLED
 
-        # Phase 3: python wrappers (disallowed when NUMBA_ENABLED is True).
+        # Phase 3: python wrappers (filtered by deme_selector; disallowed when NUMBA_ENABLED is True).
         for desc in self.hooks_by_event.get(event_id, []):
+            if not deme_selector_matches(desc.deme_selector, deme_id):
+                continue
             if desc.py_wrapper is not None and desc.njit_fn is None:
                 if NUMBA_ENABLED:
                     raise RuntimeError(

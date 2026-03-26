@@ -33,7 +33,7 @@ from natal.hook_dsl import CompiledEventHooks
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
 if TYPE_CHECKING:
-    from natal.hook_dsl import HookProgram
+    from natal.hook_dsl import HookProgram, DemeSelector
 
 class BasePopulation(ABC, Generic[T_State]):
     """Abstract base class for population models.
@@ -858,7 +858,8 @@ class BasePopulation(ABC, Generic[T_State]):
         func: Callable,
         hook_id: Optional[int] = None,
         hook_name: Optional[str] = None,
-        compile: bool = True
+        compile: bool = True,
+        deme_selector: Optional["DemeSelector"] = None,
     ) -> None:
         """
         注册事件 Hook，支持自动编译。
@@ -880,6 +881,9 @@ class BasePopulation(ABC, Generic[T_State]):
                      较小的 ID 先执行
             hook_name: Hook 的可读名称（可选，用于调试）
             compile: 是否尝试编译 @hook 装饰的函数（默认 True）
+            deme_selector: 可选的子种群选择器。
+                - None: 保持 panmictic 默认行为（不显式覆写 selector）
+                - 非 None: 传给 hook 编译注册流程用于 spatial 过滤
         
         Raises:
             ValueError: 如果事件不存在或 hook_id 已被使用
@@ -910,7 +914,11 @@ class BasePopulation(ABC, Generic[T_State]):
             # Use the hook's register method with event override
             register_fn = getattr(func, 'register', None)
             if register_fn is not None:
-                register_fn(self, event_override=event_name)
+                # Panmictic path: do not force any selector override.
+                if deme_selector is None:
+                    register_fn(self, event_override=event_name)
+                else:
+                    register_fn(self, event_override=event_name, deme_selector_override=deme_selector)
                 # Compiled hooks are stored in _compiled_hooks.
                 # Only selector-mode hooks with py_wrapper are mirrored to _hooks.
                 return
@@ -930,7 +938,7 @@ class BasePopulation(ABC, Generic[T_State]):
         # 按 ID 排序保证执行顺序
         self._hooks[event_name].sort(key=lambda x: x[0])
     
-    def trigger_event(self, event_name: str) -> int:
+    def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """
         触发事件，执行所有已注册的 hooks。
 
@@ -963,7 +971,7 @@ class BasePopulation(ABC, Generic[T_State]):
             from natal.hook_dsl import EVENT_ID_MAP
             event_id = EVENT_ID_MAP.get(event_name)
             if event_id is not None:
-                result = self._hook_executor.execute_event(event_id, self, self.tick)
+                result = self._hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)
                 return result
         
         # 降级到传统 _hooks 系统（兼容性）
@@ -1093,7 +1101,13 @@ class BasePopulation(ABC, Generic[T_State]):
             ... )
         """
         from natal.hook_dsl import compile_declarative_hook
-        desc = compile_declarative_hook(ops, self, event, priority, name)
+        desc = compile_declarative_hook(
+            ops,
+            self,
+            event,
+            priority=priority,
+            name=name,
+        )
         self._register_compiled_hook(desc)
         return desc
     
@@ -1267,7 +1281,7 @@ class BasePopulation(ABC, Generic[T_State]):
         )
 
     def get_compiled_event_hooks(self) -> 'CompiledEventHooks':
-        """Get compiled hooks for use with simulation_kernels.run_tick.
+        """Get compiled hooks for use with generated kernel wrappers.
         
         This method collects all registered hooks and compiles them into
         Numba-friendly combined functions, one per event.
@@ -1278,9 +1292,8 @@ class BasePopulation(ABC, Generic[T_State]):
         
         Example:
             >>> hooks = pop.get_compiled_event_hooks()
-            >>> state, result = sk.run_tick(
-            ...     state, config, hooks.registry
-            ... )
+            >>> hooks.run_fn is not None
+            True
         """
         from natal.hook_dsl import CompiledEventHooks
         

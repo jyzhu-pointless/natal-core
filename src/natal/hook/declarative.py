@@ -13,13 +13,14 @@ The resulting plan is pure data and can be executed inside njit kernels.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from enum import IntEnum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
 from .types import (
+    HookOp,
+    OpType,
+    DemeSelector,
     COND_ALWAYS,
     COND_OP_AND,
     COND_OP_NOT,
@@ -37,43 +38,6 @@ from .types import (
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
     from natal.index_registry import IndexRegistry
-
-
-class OpType(IntEnum):
-    """Operation opcodes consumed by the runtime kernel.
-
-    We intentionally keep integer values stable because these values are
-    serialized into ``CompiledHookPlan.op_types`` and interpreted in the
-    executor hot-loop.
-    """
-
-    SCALE = 0
-    SET = 1
-    ADD = 2
-    SUBTRACT = 3
-    KILL = 4
-    SAMPLE = 5
-    STOP_IF_ZERO = 6
-    STOP_IF_BELOW = 7
-    STOP_IF_ABOVE = 8
-    STOP_IF_EXTINCTION = 9
-
-
-@dataclass
-class HookOp:
-    """Single declarative operation before compilation.
-
-    Fields in this class can still be symbolic (for example genotype labels).
-    The compiler resolves all symbolic fields into concrete integer arrays.
-    """
-
-    op_type: OpType
-    genotypes: Union[str, List[str], Literal["*"]] = "*"
-    ages: Union[int, List[int], range, Literal["*"]] = "*"
-    sex: Literal["female", "male", "both"] = "both"
-    param: float = 1.0
-    condition: Optional[str] = None
-
 
 class Op:
     """Factory helpers for building declarative operations.
@@ -433,6 +397,7 @@ def compile_declarative_hook(
     pop: "BasePopulation",
     event: str,
     priority: int = 0,
+    deme_selector: DemeSelector = "*",
     name: str = "declarative_hook",
 ) -> CompiledHookDescriptor:
     """Compile declarative ops into a ``CompiledHookDescriptor``.
@@ -499,6 +464,8 @@ def compile_declarative_hook(
         name=name,
         event=event,
         priority=priority,
+        deme_selector=deme_selector,
         plan=plan,
         meta={"n_genotypes": n_genotypes, "n_ages": n_ages},
+        ops=ops,
     )

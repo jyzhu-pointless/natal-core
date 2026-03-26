@@ -26,6 +26,7 @@ except ImportError:
 from natal.visualization import render_cell_svg, get_allele_color
 from natal.index_registry import decompress_hg_glab
 from natal.population_state import parse_flattened_state, parse_flattened_discrete_state, PopulationState
+from natal.population_config import NO_COMPETITION, FIXED, LINEAR, CONCAVE
 
 
 if TYPE_CHECKING:
@@ -438,8 +439,9 @@ class Dashboard:
             if f_val != 1.0 or m_val != 1.0 or "Dr" in str(g_obj) or "Drive" in str(g_obj):
                 data.append({
                     "Genotype": str(g_obj),
-                    "Female": f"{f_val:.3g}",
-                    "Male": f"{m_val:.3g}"
+                    "Age": float(target_age),
+                    "Female": float(f_val),
+                    "Male": float(m_val),
                 })
         return data
 
@@ -455,8 +457,8 @@ class Dashboard:
             if f_val != 1.0 or m_val != 1.0 or "Dr" in str(g_obj) or "Drive" in str(g_obj):
                 data.append({
                     "Genotype": str(g_obj),
-                    "Female": f"{f_val:.3g}",
-                    "Male": f"{m_val:.3g}"
+                    "Female": float(f_val),
+                    "Male": float(m_val),
                 })
         return data
 
@@ -583,33 +585,138 @@ class Dashboard:
         self.refresh_ui()
         ui.notify("Population reset to initial state.")
 
-    def export_data(self):
-        """Export full config and current state to JSON."""
+    def show_export_dialog(self):
+        """Open a dialog to let the user select what to export."""
+        with ui.dialog() as self.export_dialog, ui.card():
+            ui.label('Select items to export').classes('text-lg font-bold')
+            self.cb_config = ui.checkbox('Configuration & Fitness', value=True)
+            self.cb_history = ui.checkbox('Population History', value=True)
+            self.cb_hooks = ui.checkbox('Hooks', value=True)
+            with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                ui.button('Export', on_click=self._do_export)
+                ui.button('Cancel', on_click=self.export_dialog.close).props('flat')
+        self.export_dialog.open()
 
+    def _do_export(self):
+        """The click handler for the dialog's export button."""
+        include_config = self.cb_config.value
+        include_history = self.cb_history.value
+        include_hooks = self.cb_hooks.value
+        self.export_dialog.close()
+        self._do_export_logic(include_config, include_history, include_hooks)
+        ui.notify('Export started...')
+
+    def _get_hooks_data(self):
+        """Serialize hook information for export."""
+        from natal.hook.types import OpType
+
+        op_type_name_map = {
+            OpType.SCALE: "scale",
+            OpType.SET: "set_count",
+            OpType.ADD: "add",
+            OpType.SUBTRACT: "subtract",
+            OpType.KILL: "kill",
+            OpType.SAMPLE: "sample",
+            OpType.STOP_IF_ZERO: "stop_if_zero",
+            OpType.STOP_IF_BELOW: "stop_if_below",
+            OpType.STOP_IF_ABOVE: "stop_if_above",
+            OpType.STOP_IF_EXTINCTION: "stop_if_extinction",
+        }
+
+        def normalize_op_type(op_type) -> str:
+            try:
+                enum_value = OpType(int(op_type))
+                return op_type_name_map.get(enum_value, enum_value.name.lower())
+            except (ValueError, TypeError):
+                if hasattr(op_type, "name"):
+                    return str(op_type.name).lower()
+                return str(op_type).lower()
+
+        def normalize_ages(ages):
+            if ages == "*":
+                return "*"
+            if isinstance(ages, range):
+                return [float(a) for a in ages]
+            if isinstance(ages, (list, tuple, np.ndarray)):
+                return [float(a) for a in ages]
+            if isinstance(ages, (int, float, np.integer, np.floating)):
+                return float(ages)
+            return str(ages)
+
+        hooks_data = []
+        for desc in self.pop.get_compiled_hooks():
+            hook_info = {
+                "event": desc.event,
+                "name": desc.name,
+                "priority": desc.priority,
+            }
+            if hasattr(desc, 'ops') and desc.ops:
+                hook_info["type"] = "declarative"
+                op_list = []
+                for op in desc.ops:
+                    op_dict = {
+                        "type": normalize_op_type(op.op_type),
+                        "genotypes": op.genotypes,
+                        "ages": normalize_ages(op.ages),
+                        "sex": op.sex,
+                        "param": op.param,
+                        "condition": op.condition,
+                    }
+                    op_list.append(op_dict)
+                hook_info["operations"] = op_list
+            else:
+                hook_info["type"] = "custom"
+                target_fn = desc.njit_fn or desc.py_wrapper
+                if target_fn:
+                    try:
+                        sig = inspect.signature(target_fn)
+                        hook_info["signature"] = str(sig)
+                    except (ValueError, TypeError):
+                        hook_info["signature"] = "N/A"
+            hooks_data.append(hook_info)
+        return hooks_data
+
+    def _get_sexual_selection_data(self):
+        """Helper to get sexual selection fitness data for export."""
+        config = self.pop.export_config()
+        registry = self.pop.registry
+        genotypes = registry.index_to_genotype
+
+        data = []
+        for f_idx, f_gt in enumerate(genotypes):
+            for m_idx, m_gt in enumerate(genotypes):
+                pref = config.sexual_selection_fitness[f_idx, m_idx]
+                if pref != 1.0:
+                    data.append({
+                        "female_genotype": str(f_gt),
+                        "male_genotype": str(m_gt),
+                        "preference": pref,
+                    })
+        return data
+
+    def _do_export_logic(self, include_config: bool, include_history: bool, include_hooks: bool):
+        """The core logic for exporting data to JSON."""
         def numpy_converter(obj):
             if isinstance(obj, np.integer):
                 return int(obj)
-            elif isinstance(obj, np.floating):
+            if isinstance(obj, np.floating):
                 return float(obj)
-            elif isinstance(obj, np.ndarray):
+            if isinstance(obj, np.ndarray):
                 return obj.tolist()
-            elif isinstance(obj, np.bool_):
+            if isinstance(obj, np.bool_):
                 return bool(obj)
             raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
         def semanticize_state(state):
             registry = self.pop.registry
             genotypes = [str(g) for g in registry.index_to_genotype]
-            
-            # Handle discrete (2D) vs age-structured (3D)
+
             if state.individual_count.ndim == 3:
                 n_ages = state.individual_count.shape[1]
-                
                 state_dict = {
                     "tick": int(state.n_tick),
-                    "individual_count": { "female": {}, "male": {} }
+                    "individual_count": {"female": [], "male": []},
                 }
-
                 for age in range(n_ages):
                     female_counts = {}
                     male_counts = {}
@@ -621,53 +728,86 @@ class Dashboard:
                         if m_count > 0:
                             male_counts[g_str] = m_count
                     if female_counts:
-                        state_dict["individual_count"]["female"][age] = female_counts
+                        state_dict["individual_count"]["female"].append({
+                            "age": float(age),
+                            "counts": female_counts,
+                        })
                     if male_counts:
-                        state_dict["individual_count"]["male"][age] = male_counts
+                        state_dict["individual_count"]["male"].append({
+                            "age": float(age),
+                            "counts": male_counts,
+                        })
+
+                if hasattr(state, "sperm_storage") and state.sperm_storage is not None:
+                    sperm_data = []
+                    sperm = state.sperm_storage
+                    for age in range(sperm.shape[0]):
+                        entries = []
+                        nonzero_pos = np.argwhere(sperm[age] > 0)
+                        for f_idx, m_idx in nonzero_pos:
+                            entries.append({
+                                "female_genotype": genotypes[int(f_idx)],
+                                "male_genotype": genotypes[int(m_idx)],
+                                "value": float(sperm[age, f_idx, m_idx]),
+                            })
+                        if entries:
+                            sperm_data.append({
+                                "age": float(age),
+                                "entries": entries,
+                            })
+                    if sperm_data:
+                        state_dict["sperm_storage"] = sperm_data
                 return state_dict
-            else:
-                # Fallback for unexpected shapes, though usually it's 3D even for discrete
-                return {"tick": int(state.n_tick), "raw_shape": state.individual_count.shape}
-        
-        # Reconstruct history
-        history_list = []
-        n_sexes = self.pop._config.n_sexes
-        n_ages = self.pop._config.n_ages
-        n_genotypes = self.pop._config.n_genotypes
-        expected_ind_size = int(n_sexes * n_ages * n_genotypes)
+            return {"tick": int(state.n_tick), "raw_shape": state.individual_count.shape}
 
-        for tick, flat_state in self.pop.history:
-            if flat_state.size == 1 + expected_ind_size:
-                state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
-            else:
-                state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
-            
-            history_list.append(semanticize_state(state_obj))
-        
-        # Also add current state if not in history (e.g. at tick 0 before first record)
-        if not history_list or history_list[-1]["tick"] != self.pop.tick:
-             history_list.append(semanticize_state(self.pop.state))
+        export_content = {"population_name": self.pop.name}
 
-        export_content = {
-            "population_name": self.pop.name,
-            "current_state": semanticize_state(self.pop.state),
-            "history": history_list,
-            "configuration": {
+        if include_history:
+            history_list = []
+            n_sexes = self.pop._config.n_sexes
+            n_ages = self.pop._config.n_ages
+            n_genotypes = self.pop._config.n_genotypes
+            expected_ind_size = int(n_sexes * n_ages * n_genotypes)
+
+            for tick, flat_state in self.pop.history:
+                if flat_state.size == 1 + expected_ind_size:
+                    state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
+                else:
+                    state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
+                history_list.append(semanticize_state(state_obj))
+
+            if not history_list or history_list[-1]["tick"] != self.pop.tick:
+                history_list.append(semanticize_state(self.pop.state))
+            export_content["history"] = history_list
+
+        if include_config:
+            export_content["configuration"] = {
                 "parameters": self._get_config_scalars(),
+                "all_config": self._get_full_config_data(),
+                "presets_visualization": self._get_presets_visualization_data(),
                 "fitness": {
                     "viability": self._get_viability_data(),
-                    "fecundity": self._get_fecundity_data()
-                }
-            },
-        }
+                    "fecundity": self._get_fecundity_data(),
+                    "sexual_selection": self._get_sexual_selection_data(),
+                },
+            }
+
+        if include_hooks:
+            export_content["hooks"] = self._get_hooks_data()
 
         try:
-            json_str = json.dumps(export_content, indent=2, default=numpy_converter)
-            ui.download(json_str.encode('utf-8'),
-                        filename=f"natal_export_{self.pop.name}_{self.pop.tick}.json",
-                        media_type='application/json')
+            json_str = json.dumps(export_content, default=numpy_converter)
+            ui.download(
+                json_str.encode('utf-8'),
+                filename=f"natal_export_{self.pop.name}_{self.pop.tick}.json",
+                media_type='application/json',
+            )
         except Exception as e:
             ui.notify(f"Export failed: {e}", type='negative')
+
+    def export_data(self):
+        """Backwards-compatible export entrypoint."""
+        self._do_export_logic(include_config=True, include_history=True, include_hooks=True)
 
     def handle_chart_click(self, e):
         """Handle click on chart points to inspect history."""
@@ -685,21 +825,101 @@ class Dashboard:
         self.inspect_tick(int(e.value))
 
     def _get_config_scalars(self):
-        conf = self.pop._config
+        conf = self.pop.export_config()
+        growth_mode = int(conf.juvenile_growth_mode)
         return {
-            "is_stochastic": conf.is_stochastic,
-            "use_dirichlet_sampling": conf.use_dirichlet_sampling,
-            "n_sexes": conf.n_sexes,
-            "n_ages": conf.n_ages,
-            "n_genotypes": conf.n_genotypes,
-            "new_adult_age": conf.new_adult_age,
-            "sperm_displacement_rate": conf.sperm_displacement_rate,
-            "expected_eggs_per_female": conf.expected_eggs_per_female,
-            "use_fixed_egg_count": conf.use_fixed_egg_count,
-            "carrying_capacity": conf.carrying_capacity,
-            "sex_ratio": conf.sex_ratio,
-            "low_density_growth_rate": conf.low_density_growth_rate,
-            "juvenile_growth_mode": conf.juvenile_growth_mode,
+            "is_stochastic": bool(conf.is_stochastic),
+            "use_dirichlet_sampling": bool(conf.use_dirichlet_sampling),
+            "n_sexes": int(conf.n_sexes),
+            "n_ages": int(conf.n_ages),
+            "n_genotypes": int(conf.n_genotypes),
+            "n_haploid_genotypes": int(conf.n_haploid_genotypes),
+            "n_glabs": int(conf.n_glabs),
+            "new_adult_age": int(conf.new_adult_age),
+            "sperm_displacement_rate": float(conf.sperm_displacement_rate),
+            "expected_eggs_per_female": float(conf.expected_eggs_per_female),
+            "use_fixed_egg_count": bool(conf.use_fixed_egg_count),
+            "carrying_capacity": float(conf.carrying_capacity),
+            "base_carrying_capacity": float(conf.base_carrying_capacity),
+            "population_scale": float(conf.population_scale),
+            "base_expected_num_adult_females": float(conf.base_expected_num_adult_females),
+            "sex_ratio": float(conf.sex_ratio),
+            "low_density_growth_rate": float(conf.low_density_growth_rate),
+            "expected_competition_strength": float(conf.expected_competition_strength),
+            "expected_survival_rate": float(conf.expected_survival_rate),
+            "generation_time": float(conf.generation_time),
+            "hook_slot": int(conf.hook_slot),
+            "juvenile_growth_mode": {
+                "code": growth_mode,
+                "name": self._growth_mode_name(growth_mode),
+            },
+        }
+
+    def _growth_mode_name(self, mode: int) -> str:
+        mapping = {
+            NO_COMPETITION: "NO_COMPETITION",
+            FIXED: "FIXED",
+            LINEAR: "LINEAR",
+            CONCAVE: "CONCAVE",
+        }
+        return mapping.get(int(mode), f"UNKNOWN_{mode}")
+
+    def _jsonable_config_value(self, value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.floating):
+            return float(value)
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, tuple):
+            return [self._jsonable_config_value(v) for v in value]
+        if isinstance(value, list):
+            return [self._jsonable_config_value(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self._jsonable_config_value(v) for k, v in value.items()}
+        return value
+
+    def _get_full_config_data(self):
+        conf = self.pop.export_config()
+        data = {}
+        for key, value in conf._asdict().items():
+            data[key] = self._jsonable_config_value(value)
+        data["juvenile_growth_mode_name"] = self._growth_mode_name(int(conf.juvenile_growth_mode))
+        return data
+
+    def _get_presets_visualization_data(self):
+        """Best-effort preset-centric summary for export visualization."""
+        preset_map: Dict[str, Dict] = {}
+
+        def record_modifier(mod_type: str, mod_tuple):
+            mod_id, mod_name, _ = mod_tuple
+            name = mod_name or f"{mod_type}_{mod_id}"
+            if "/" in name:
+                preset_name, suffix = name.split("/", 1)
+            else:
+                preset_name, suffix = name, mod_type
+            if preset_name not in preset_map:
+                preset_map[preset_name] = {
+                    "preset_name": preset_name,
+                    "gamete_modifiers": [],
+                    "zygote_modifiers": [],
+                }
+            item = {"id": int(mod_id), "name": name, "kind": suffix}
+            if mod_type == "gamete":
+                preset_map[preset_name]["gamete_modifiers"].append(item)
+            else:
+                preset_map[preset_name]["zygote_modifiers"].append(item)
+
+        for mod in getattr(self.pop, "_gamete_modifiers", []):
+            record_modifier("gamete", mod)
+        for mod in getattr(self.pop, "_zygote_modifiers", []):
+            record_modifier("zygote", mod)
+
+        return {
+            "preset_count": len(preset_map),
+            "presets": list(preset_map.values()),
         }
 
     def _get_genotype_fitness(self, g_idx: int, target_age: int) -> dict:
@@ -839,7 +1059,7 @@ class Dashboard:
 
                 with ui.row().classes('w-full gap-2 mt-2'):
                     ui.button('Reset', on_click=self.reset_simulation).props('icon=restart_alt flat color=grey').classes('flex-grow')
-                    ui.button('Export', on_click=self.export_data).props('icon=download flat color=grey').classes('flex-grow')
+                    ui.button('Export', on_click=self.show_export_dialog).props('icon=download flat color=grey').classes('flex-grow')
                 
                 def reset_zoom_and_update():
                     self.reset_zoom()
@@ -918,7 +1138,8 @@ class Dashboard:
                             conf = self.pop._config
                             ui.label(f"Carrying Capacity: {conf.carrying_capacity}").classes('text-base')
                             ui.label(f"Eggs/Female: {conf.expected_eggs_per_female}").classes('text-base')
-                            ui.label(f"Growth Mode: {conf.juvenile_growth_mode}").classes('text-base')
+                            mode_code = int(conf.juvenile_growth_mode)
+                            ui.label(f"Growth Mode: {mode_code} ({self._growth_mode_name(mode_code)})").classes('text-base')
                             ui.label(f"Stochastic: {conf.is_stochastic}").classes('text-base')
                         
                         # Fitness Tables
@@ -943,9 +1164,13 @@ class Dashboard:
                 def format_op(op) -> str:
                     """Format a declarative HookOp into a human-readable string."""
                     from natal.hook.declarative import OpType
-                    
-                    type_name = str(op.op_type).split('.')[-1]
-                    
+
+                    try:
+                        normalized_type = OpType(int(op.op_type))
+                        type_name = normalized_type.name.lower()
+                    except (ValueError, TypeError):
+                        type_name = str(op.op_type).split('.')[-1].lower()
+
                     parts = [f"<b>{type_name}</b>"]
                     
                     # Genotypes
@@ -988,59 +1213,23 @@ class Dashboard:
                                 with ui.column().classes('p-2'):
                                     ui.label(f"Priority: {desc.priority}").classes('text-xs text-gray-500')
                                     
-                                    # --- Declarative Hook Plan Visualization ---
                                     if desc.plan:
-                                        # Declarative hook
-                                        ui.label("Declarative Operations:").classes('font-bold text-base')
-                                        
-                                        # We need the original Ops list if available, but CompiledHookDescriptor 
-                                        # only stores the compiled plan arrays by default.
-                                        # However, if it was created via register_declarative_hook or @hook, 
-                                        # the source function usually returns the ops list.
-                                        # If we have the source wrapper, we can't easily execute it to get ops again safely.
-                                        # BUT, `compile_declarative_hook` consumes ops.
-                                        # 
-                                        # Best effort: If it's a wrapper, try to show source. 
-                                        # If it's pure data plan (no wrapper), we can't reverse engineer easily without stored metadata.
-                                        # Let's check if we have the original Ops attached.
-                                        # (Currently we don't attach them to the descriptor, but we could or just show source)
-                                        
-                                        # If it has a python wrapper (e.g. from @hook that returned ops), show its source
+                                        if hasattr(desc, 'ops') and desc.ops:
+                                            ui.label("Declarative Operations:").classes('font-bold text-base')
+                                            with ui.column().classes('gap-1'):
+                                                for op in desc.ops:
+                                                    ui.html(format_op(op)).classes('text-sm font-mono p-1 border-b bg-gray-50 rounded')
+                                        else:
+                                            ui.label("Compiled Plan (Low-level arrays)").classes('text-sm text-gray-400')
+                                    else:
                                         if desc.py_wrapper:
                                             try:
                                                 code = inspect.getsource(desc.py_wrapper)
-                                                # Try to extract the return list if simple
                                                 ui.code(code, language='python').classes('w-full text-sm')
                                             except OSError:
                                                 ui.label("(Source code unavailable)").classes('italic')
                                         elif desc.njit_fn:
-                                             # Njit hook
-                                            try:
-                                                code = inspect.getsource(desc.njit_fn)
-                                                ui.code(code, language='python').classes('w-full text-sm')
-                                            except OSError:
-                                                ui.label("(Njit Source unavailable)").classes('italic')
-                                        else:
-                                            # Just plan data available.
-                                            ui.label("Compiled Plan (Low-level arrays)").classes('text-sm text-gray-400')
-                                    
-                                    # --- Custom Function Hook ---
-                                    else:
-                                        target_fn = desc.njit_fn or desc.py_wrapper
-                                        if target_fn:
-                                            # Try to resolve original function if it's a wrapper
-                                            if hasattr(target_fn, '__wrapped__'):
-                                                target_fn = target_fn.__wrapped__
-                                                
-                                            ui.label(f"Function: {target_fn.__name__}").classes('font-mono text-sm mb-1')
-                                            if target_fn.__doc__:
-                                                ui.markdown(f"_{target_fn.__doc__.strip()}_").classes('text-sm text-gray-600 mb-2 block')
-                                                
-                                            try:
-                                                code = inspect.getsource(target_fn)
-                                                ui.code(code, language='python').classes('w-full text-sm')
-                                            except OSError:
-                                                ui.label("(Source code not available)").classes('italic')
+                                            ui.label("Custom Numba Hook").classes('font-bold')
 
                 # --- Tab 4: Genetics ---
                 with ui.tab_panel(tab_rules):

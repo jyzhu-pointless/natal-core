@@ -17,6 +17,7 @@ from natal.numba_utils import njit_switch
 from .declarative import HookOp, compile_declarative_hook
 from .selector import compile_selector_hook
 from .types import (
+    DemeSelector,
     EVENT_NAMES,
     HookProgram,
     _hash_key,
@@ -178,6 +179,7 @@ def hook(
     selectors: Optional[Dict[str, Any]] = None,
     priority: int = 0,
     numba: bool = False,
+    deme_selector: DemeSelector = "*",
 ):
     """Decorator entrypoint for all supported hook authoring styles.
 
@@ -192,6 +194,7 @@ def hook(
             "selectors": selectors or {},
             "priority": priority,
             "numba_mode": numba,
+            "deme_selector": deme_selector,
         }
         func._hook_compiled = None  # type: ignore
 
@@ -199,13 +202,19 @@ def hook(
         func._hook_selectors_spec = selectors or {}  # type: ignore
         func._hook_priority = priority  # type: ignore
         func._hook_numba_mode = numba  # type: ignore
+        func._hook_deme_selector = deme_selector  # type: ignore
 
-        def register(pop: "BasePopulation", event_override: Optional[str] = None):
+        def register(
+            pop: "BasePopulation",
+            event_override: Optional[str] = None,
+            deme_selector_override: Optional[DemeSelector] = None,
+        ):
             """Compile this hook against one population instance."""
             from ..numba_utils import NUMBA_ENABLED
             from .types import CompiledHookDescriptor
 
             actual_event = event_override or event
+            actual_deme_selector = deme_selector if deme_selector_override is None else deme_selector_override
             if actual_event is None:
                 raise ValueError(
                     f"Event not specified for hook '{func.__name__}'. "
@@ -219,12 +228,21 @@ def hook(
                     name=func.__name__,
                     event=actual_event,
                     priority=priority,
+                    deme_selector=actual_deme_selector,
                     njit_fn=func,
                     meta={"n_genotypes": pop._index_registry.num_genotypes(), "n_ages": pop._config.n_ages},
                 )
             elif selectors:
                 # Mode 2: selector-based hook (python or njit wrapper path).
-                desc = compile_selector_hook(func, pop, actual_event, selectors, priority, numba_mode=numba)
+                desc = compile_selector_hook(
+                    func,
+                    pop,
+                    actual_event,
+                    selectors,
+                    priority,
+                    numba_mode=numba,
+                    deme_selector=actual_deme_selector,
+                )
             else:
                 # Mode 3: declarative hook if function returns HookOp list,
                 # otherwise plain Python callback fallback.
@@ -238,6 +256,7 @@ def hook(
                         name=func.__name__,
                         event=actual_event,
                         priority=priority,
+                        deme_selector=actual_deme_selector,
                         py_wrapper=func,
                         meta={"n_genotypes": pop._index_registry.num_genotypes(), "n_ages": pop._config.n_ages},
                     )
@@ -249,7 +268,14 @@ def hook(
                                 f"Declarative hook '{func.__name__}' must return List[HookOp], "
                                 "or use function arguments for python hook mode."
                             )
-                        desc = compile_declarative_hook(result, pop, actual_event, priority, func.__name__)
+                        desc = compile_declarative_hook(
+                            result,
+                            pop,
+                            actual_event,
+                            priority,
+                            deme_selector=actual_deme_selector,
+                            name=func.__name__,
+                        )
                     else:
                         if NUMBA_ENABLED:
                             raise TypeError(
@@ -260,6 +286,7 @@ def hook(
                             name=func.__name__,
                             event=actual_event,
                             priority=priority,
+                            deme_selector=actual_deme_selector,
                             py_wrapper=lambda p, f=func: f(p),
                             meta={"n_genotypes": pop._index_registry.num_genotypes(), "n_ages": pop._config.n_ages},
                         )

@@ -11,8 +11,9 @@ import importlib.util
 import sys
 import threading
 from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 
@@ -20,6 +21,64 @@ from natal.numba_utils import get_numba_cache_dir
 
 if TYPE_CHECKING:
     from natal.index_registry import IndexRegistry
+
+
+class OpType(IntEnum):
+    """Operation opcodes consumed by the runtime kernel.
+
+    We intentionally keep integer values stable because these values are
+    serialized into ``CompiledHookPlan.op_types`` and interpreted in the
+    executor hot-loop.
+    """
+
+    SCALE = 0
+    SET = 1
+    ADD = 2
+    SUBTRACT = 3
+    KILL = 4
+    SAMPLE = 5
+    STOP_IF_ZERO = 6
+    STOP_IF_BELOW = 7
+    STOP_IF_ABOVE = 8
+    STOP_IF_EXTINCTION = 9
+
+
+@dataclass
+class HookOp:
+    """Single declarative operation before compilation.
+
+    Fields in this class can still be symbolic (for example genotype labels).
+    The compiler resolves all symbolic fields into concrete integer arrays.
+    """
+
+    op_type: OpType
+    genotypes: Union[str, List[str], Literal["*"]] = "*"
+    ages: Union[int, List[int], range, Literal["*"]] = "*"
+    sex: Literal["female", "male", "both"] = "both"
+    param: float = 1.0
+    condition: Optional[str] = None
+
+
+DemeSelector = Union[int, List[int], Tuple[int, ...], range, Literal["*"]]
+
+
+def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
+    """Return whether one deme id should execute under ``selector``.
+
+    Supported forms:
+    - "*" for all demes
+    - int for one deme
+    - list/tuple/range for a set of demes
+    """
+    if selector == "*":
+        return True
+    if isinstance(selector, int):
+        return selector == deme_id
+    if isinstance(selector, range):
+        return deme_id in selector
+    if isinstance(selector, (list, tuple)):
+        return deme_id in selector
+    raise TypeError(f"Unsupported deme selector type: {type(selector).__name__}")
 
 
 _HOOK_CODEGEN_DIR = Path(get_numba_cache_dir()) / "hook_codegen"
@@ -172,12 +231,14 @@ class CompiledHookDescriptor:
     name: str
     event: str
     priority: int = 0
+    deme_selector: DemeSelector = "*"
     plan: Optional[CompiledHookPlan] = None
     selectors: Dict[str, np.ndarray] = field(default_factory=dict)
     static_arrays: Tuple[np.ndarray, ...] = field(default_factory=tuple)
     meta: Dict[str, int] = field(default_factory=dict)
     njit_fn: Optional[Callable] = None
     py_wrapper: Optional[Callable] = None
+    ops: Optional[List[HookOp]] = None
 
 
 class HookProgram(NamedTuple):
