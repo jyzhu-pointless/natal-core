@@ -16,7 +16,7 @@ from natal.base_population import BasePopulation, Species, Genotype, Sex, Haploi
 from natal.population_state import PopulationState
 from natal.population_config import PopulationConfig, initialize_gamete_map, initialize_zygote_map
 from natal.index_registry import IndexRegistry
-import natal.simulation_kernels as sk
+import natal.kernel.simulation_kernels as sk
 
 if TYPE_CHECKING:
     from natal.population_builder import AgeStructuredPopulationBuilder

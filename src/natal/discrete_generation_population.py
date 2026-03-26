@@ -20,7 +20,7 @@ from natal.base_population import BasePopulation, Species, Genotype, Sex
 from natal.population_state import DiscretePopulationState
 from natal.population_config import PopulationConfig
 from natal.index_registry import IndexRegistry
-import natal.simulation_kernels as sk
+import natal.kernel.simulation_kernels as sk
 
 if TYPE_CHECKING:
     from natal.population_builder import DiscreteGenerationPopulationBuilder

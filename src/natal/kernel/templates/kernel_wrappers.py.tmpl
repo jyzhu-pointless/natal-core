@@ -1,0 +1,151 @@
+# type: ignore
+import numpy as np
+from natal.hook_dsl import (_njit_switch, execute_csr_event_program_with_state, EVENT_FIRST, EVENT_EARLY, EVENT_LATE)
+from natal.population_state import PopulationState, DiscretePopulationState
+from natal.kernel.simulation_kernels import (run_reproduction, run_survival, run_aging, run_discrete_reproduction, run_discrete_survival, run_discrete_aging)
+
+_FIRST_HOOK = None
+_EARLY_HOOK = None
+_LATE_HOOK = None
+
+RESULT_CONTINUE = 0
+RESULT_STOP = 1
+
+@_njit_switch(cache=True)
+def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
+    result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return RESULT_STOP
+    return _FIRST_HOOK(ind_count, tick)
+
+@_njit_switch(cache=True)
+def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
+    result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return RESULT_STOP
+    return _EARLY_HOOK(ind_count, tick)
+
+@_njit_switch(cache=True)
+def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
+    result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return RESULT_STOP
+    return _LATE_HOOK(ind_count, tick)
+
+@_njit_switch(cache=True)
+def __RUN_TICK_NAME__(state, config, registry):
+    ind_count = state.individual_count.copy()
+    sperm_store = state.sperm_storage.copy()
+    tick = state.n_tick
+    result = _first_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+    ind_count, sperm_store = run_reproduction(ind_count, sperm_store, config)
+    result = _early_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+    ind_count, sperm_store = run_survival(ind_count, sperm_store, config)
+    result = _late_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+    ind_count, sperm_store = run_aging(ind_count, sperm_store, config)
+    return (ind_count, sperm_store, np.int32(tick + 1)), RESULT_CONTINUE
+
+@_njit_switch(cache=True)
+def __RUN_NAME__(state, config, registry, n_ticks, record_interval=0):
+    was_stopped = False
+    ind_count = state.individual_count.copy()
+    sperm_store = state.sperm_storage.copy()
+    tick = np.int32(state.n_tick)
+    ind_size = ind_count.size
+    sperm_size = sperm_store.size
+    flatten_size = 1 + ind_size + sperm_size
+    if record_interval > 0:
+        estimated_size = (n_ticks // record_interval) + 2
+        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
+    else:
+        history_array = np.zeros((0, flatten_size), dtype=np.float64)
+    history_count = 0
+    if record_interval > 0 and (tick % record_interval == 0):
+        flat_state = np.zeros(flatten_size, dtype=np.float64)
+        flat_state[0] = tick
+        flat_state[1:1 + ind_size] = ind_count.flatten()
+        flat_state[1 + ind_size:] = sperm_store.flatten()
+        history_array[history_count, :] = flat_state
+        history_count += 1
+    for _ in range(n_ticks):
+        temp_state = PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store)
+        current_state, result = __RUN_TICK_NAME__(temp_state, config, registry)
+        ind_count, sperm_store, tick = current_state
+        if record_interval > 0 and (tick % record_interval == 0):
+            flat_state = np.zeros(flatten_size, dtype=np.float64)
+            flat_state[0] = tick
+            flat_state[1:1 + ind_size] = ind_count.flatten()
+            flat_state[1 + ind_size:] = sperm_store.flatten()
+            history_array[history_count, :] = flat_state
+            history_count += 1
+        if result != RESULT_CONTINUE:
+            was_stopped = True
+            break
+    if record_interval > 0:
+        history_result = history_array[:history_count, :]
+    else:
+        history_result = None
+    return (ind_count, sperm_store, tick), history_result, was_stopped
+
+@_njit_switch(cache=True)
+def __RUN_DISCRETE_TICK_NAME__(state, config, registry):
+    ind_count = state.individual_count.copy()
+    tick = state.n_tick
+    dummy_sperm_store = np.zeros((0, 0, 0), dtype=np.float64)
+    result = _first_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return (ind_count, tick), RESULT_STOP
+    ind_count = run_discrete_reproduction(ind_count, config)
+    result = _early_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return (ind_count, tick), RESULT_STOP
+    ind_count = run_discrete_survival(ind_count, config)
+    result = _late_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_dirichlet_sampling)
+    if result != RESULT_CONTINUE:
+        return (ind_count, tick), RESULT_STOP
+    ind_count = run_discrete_aging(ind_count)
+    return (ind_count, np.int32(tick + 1)), RESULT_CONTINUE
+
+@_njit_switch(cache=True)
+def __RUN_DISCRETE_NAME__(state, config, registry, n_ticks, record_interval=0):
+    was_stopped = False
+    ind_count = state.individual_count.copy()
+    tick = np.int32(state.n_tick)
+    ind_size = ind_count.size
+    flatten_size = 1 + ind_size
+    if record_interval > 0:
+        estimated_size = (n_ticks // record_interval) + 2
+        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
+    else:
+        history_array = np.zeros((0, flatten_size), dtype=np.float64)
+    history_count = 0
+    if record_interval > 0 and (tick % record_interval == 0):
+        flat_state = np.zeros(flatten_size, dtype=np.float64)
+        flat_state[0] = tick
+        flat_state[1:1 + ind_size] = ind_count.flatten()
+        history_array[history_count, :] = flat_state
+        history_count += 1
+    for _ in range(n_ticks):
+        temp_state = DiscretePopulationState(n_tick=tick, individual_count=ind_count)
+        current_state, result = __RUN_DISCRETE_TICK_NAME__(temp_state, config, registry)
+        ind_count, tick = current_state
+        if record_interval > 0 and (tick % record_interval == 0):
+            flat_state = np.zeros(flatten_size, dtype=np.float64)
+            flat_state[0] = tick
+            flat_state[1:1 + ind_size] = ind_count.flatten()
+            history_array[history_count, :] = flat_state
+            history_count += 1
+        if result != RESULT_CONTINUE:
+            was_stopped = True
+            break
+    if record_interval > 0:
+        history_result = history_array[:history_count, :]
+    else:
+        history_result = None
+    return (ind_count, tick), history_result, was_stopped
