@@ -2,7 +2,7 @@
 import numpy as np
 from natal.hook_dsl import (_njit_switch, execute_csr_event_program_with_state, EVENT_FIRST, EVENT_EARLY, EVENT_LATE)
 from natal.population_state import PopulationState, DiscretePopulationState
-from natal.kernel.simulation_kernels import (run_reproduction, run_survival, run_aging, run_discrete_reproduction, run_discrete_survival, run_discrete_aging)
+from natal.kernels.simulation_kernels import (run_reproduction, run_survival, run_aging, run_discrete_reproduction, run_discrete_survival, run_discrete_aging)
 
 _FIRST_HOOK = None
 _EARLY_HOOK = None

@@ -78,12 +78,12 @@ package_dir = Path(__file__).resolve().parent
 for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lambda item: item[1]):
 
     # Skip private modules. Most subpackages are ignored, except known lazy-export
-    # providers such as `hook`.
+    # providers such as `hooks`.
     if module_name.startswith("_"):
         continue
 
     if is_package:
-        if module_name != "hook":
+        if module_name != "hooks":
             continue
         module_file = package_dir / module_name / "__init__.py"
     else:

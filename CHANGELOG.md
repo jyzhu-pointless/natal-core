@@ -1,9 +1,14 @@
 # Changelog
 
+## 2026.3.26.c
+- 重命名 `hook/` -> `hooks/`，并同步更新相关导入路径
+- 重命名 `kernel/` -> `kernels/`，并同步更新相关导入路径
+
 ## 2026.3.26.b
 - 移除 `simulation_kernels.py` 中未使用的 `run/run_tick` 旧入口，统一走 hook codegen 生成的 wrapper
 - 将 kernel wrapper codegen 从 `hook/compiler.py` 拆分到 `natal/kernel/codegen.py`，并将模板外置到 `src/natal/kernel/templates/kernel_wrappers.py.tmpl`
 - 将核心 `simulation_kernels` 实现迁移到 `natal/kernel/simulation_kernels.py`，保留 `natal/simulation_kernels.py` 兼容转发
+- 包结构重命名：`natal/hook` -> `natal/hooks`，`natal/kernel` -> `natal/kernels`，并同步更新内部导入与模板引用
 
 ## 2026.3.26
 - 修复 `HomingDrive` 中 maternal deposition 总是有效的 bug

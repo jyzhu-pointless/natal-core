@@ -27,6 +27,7 @@ from natal.visualization import render_cell_svg, get_allele_color
 from natal.index_registry import decompress_hg_glab
 from natal.population_state import parse_flattened_state, parse_flattened_discrete_state, PopulationState
 from natal.population_config import NO_COMPETITION, FIXED, LINEAR, CONCAVE
+from natal.age_structured_population import AgeStructuredPopulation
 
 
 if TYPE_CHECKING:
@@ -42,6 +43,7 @@ class Dashboard:
             raise ImportError("NiceGUI is required. Please install it with: pip install nicegui")
         
         self.pop = population
+        self._is_age_structured_population = isinstance(population, AgeStructuredPopulation)
         self.is_running = False
         self.is_processing = False
         self._tick_timer = None
@@ -369,6 +371,35 @@ class Dashboard:
             self.lbl_status_mode.text = "LIVE VIEW"
             self.lbl_status_mode.classes(add='text-green-600', remove='text-orange-600')
 
+        # Update aggregated summaries
+        self.summary_sex_container.clear()
+        with self.summary_sex_container:
+            with ui.row().classes('w-full justify-between text-sm'):
+                ui.label('Female').classes('font-medium text-pink-600')
+                ui.label(f"{females:,}").classes('font-mono')
+            with ui.row().classes('w-full justify-between text-sm'):
+                ui.label('Male').classes('font-medium text-blue-600')
+                ui.label(f"{males:,}").classes('font-mono')
+            with ui.row().classes('w-full justify-between text-sm border-t pt-1 mt-1'):
+                ui.label('Total').classes('font-bold text-gray-700')
+                ui.label(f"{total:,}").classes('font-mono font-bold')
+
+        if self._is_age_structured_population:
+            self.age_summary_card.visible = True
+            self.summary_age_container.clear()
+            age_totals = state.individual_count.sum(axis=(0, 2))
+            age_female_totals = state.individual_count[0].sum(axis=1)
+            age_male_totals = state.individual_count[1].sum(axis=1)
+            with self.summary_age_container:
+                for age in range(age_totals.shape[0]):
+                    with ui.row().classes('w-full justify-between text-sm'):
+                        ui.label(f"Age {age}").classes('font-medium text-gray-700')
+                        ui.label(
+                            f"F {int(age_female_totals[age]):,} / M {int(age_male_totals[age]):,} / T {int(age_totals[age]):,}"
+                        ).classes('font-mono text-xs')
+        else:
+            self.age_summary_card.visible = False
+
         # Update Genotype Cards
         # Clear existing
         self.genotype_container.clear()
@@ -608,7 +639,7 @@ class Dashboard:
 
     def _get_hooks_data(self):
         """Serialize hook information for export."""
-        from natal.hook.types import OpType
+        from natal.hooks.types import OpType
 
         op_type_name_map = {
             OpType.SCALE: "scale",
@@ -1126,6 +1157,15 @@ class Dashboard:
                             ui.number(label='Go to Tick', value=None, min=0, precision=0, on_change=self.handle_tick_input).props('dense outlined').classes('w-32')
                         self.lbl_status_mode = ui.label('LIVE VIEW').classes('font-bold text-green-600 text-lg')
 
+                    with ui.row().classes('w-full gap-4 mb-4 items-start'):
+                        with ui.card().classes('p-3 border rounded shadow-sm w-72'):
+                            ui.label('Count Summary by Sex').classes('text-sm font-bold text-gray-700 mb-1')
+                            self.summary_sex_container = ui.column().classes('w-full gap-1')
+                        with ui.card().classes('p-3 border rounded shadow-sm min-w-[20rem] flex-grow') as self.age_summary_card:
+                            ui.label('Count Summary by Age').classes('text-sm font-bold text-gray-700 mb-1')
+                            self.summary_age_container = ui.column().classes('w-full gap-1')
+                            self.age_summary_card.visible = self._is_age_structured_population
+
                     # Container for Genotype Cards
                     self.genotype_container = ui.row().classes('w-full flex-wrap gap-4')
                     
@@ -1163,7 +1203,7 @@ class Dashboard:
                 # --- Tab 3: Hooks ---
                 def format_op(op) -> str:
                     """Format a declarative HookOp into a human-readable string."""
-                    from natal.hook.declarative import OpType
+                    from natal.hooks.declarative import OpType
 
                     try:
                         normalized_type = OpType(int(op.op_type))

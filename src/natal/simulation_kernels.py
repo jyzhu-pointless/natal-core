@@ -1,9 +1,9 @@
 """Backward-compatible shim for kernel simulation kernels.
 
-Core implementations now live in ``natal.kernel.simulation_kernels``.
+Core implementations now live in ``natal.kernels.simulation_kernels``.
 """
 
-from natal.kernel.simulation_kernels import (
+from natal.kernels.simulation_kernels import (
     export_config,
     import_config,
     export_state,

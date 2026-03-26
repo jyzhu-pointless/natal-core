@@ -22,7 +22,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = [
-    "src/natal/kernel/templates/*.tmpl",
+    "src/natal/kernels/templates/*.tmpl",
 ]
 
 [tool.hatch.build.targets.wheel]

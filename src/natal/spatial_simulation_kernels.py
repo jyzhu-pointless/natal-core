@@ -22,7 +22,7 @@ from numpy.typing import NDArray
 from natal.numba_utils import njit_switch
 from natal.population_config import PopulationConfig
 from natal.population_state import PopulationState
-from natal.kernel.simulation_kernels import run_aging, run_reproduction, run_survival
+from natal.kernels.simulation_kernels import run_aging, run_reproduction, run_survival
 from natal.hook_dsl import EVENT_EARLY, EVENT_FIRST, EVENT_LATE
 
 __all__ = [

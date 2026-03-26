@@ -13,7 +13,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from natal.numba_utils import njit_switch
-from natal.kernel.codegen import compile_kernel_bound_wrappers
+from natal.kernels.codegen import compile_kernel_bound_wrappers
 
 from .declarative import HookOp, compile_declarative_hook
 from .selector import compile_selector_hook
