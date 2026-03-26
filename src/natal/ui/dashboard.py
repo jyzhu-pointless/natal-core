@@ -58,6 +58,7 @@ class Dashboard:
         self.view_max: Optional[float] = None
         
         self._last_chart_tick = -1
+        self._history_ticks: List[int] = []  # For efficient binary search in zoom
         self._rebuild_chart_history()
         self.inspected_tick: Optional[int] = None
         self.inspection_mode = False # False = Current, True = History
@@ -212,10 +213,19 @@ class Dashboard:
         # Clear current
         self._chart_history = []
         self._allele_freq_history = {}
+        self._history_ticks = []
         self._last_chart_tick = -1
         
         if not self.pop.history:
             return
+        
+        # Collect all known alleles from species upfront (for handling 0-frequency cases)
+        known_alleles = set()
+        if hasattr(self.pop, 'species') and self.pop.species:
+            for chrom in self.pop.species.chromosomes:
+                for locus in chrom.loci:
+                    for gene in locus.alleles:
+                        known_alleles.add(gene.name)
             
         # We need to compute total counts and allele freqs from history snapshots.
         # This can be expensive if history is huge, but max_history limits it.
@@ -225,9 +235,14 @@ class Dashboard:
         for tick, flat_state in self.pop.history:
             total_pop, freqs = self._compute_metrics_from_flat(tick, flat_state)
             self._chart_history.append([tick, total_pop])
+            self._history_ticks.append(tick)
             
-            # Allele Frequencies
-            for allele, freq in freqs.items():
+            # Allele Frequencies - add data for all known alleles (including those with freq=0)
+            for allele in known_alleles:
+                freq = freqs.get(allele, None)
+                if freq is None:
+                    freq = 0.0  # Use 0.0 for missing alleles
+                
                 if allele not in self._allele_freq_history:
                     self._allele_freq_history[allele] = []
                 self._allele_freq_history[allele].append([tick, freq])
@@ -248,6 +263,14 @@ class Dashboard:
 
     def _update_charts(self):
         """Update chart data from current population state."""
+        # Collect all known alleles from species upfront (for handling 0-frequency cases)
+        known_alleles = set()
+        if hasattr(self.pop, 'species') and self.pop.species:
+            for chrom in self.pop.species.chromosomes:
+                for locus in chrom.loci:
+                    for gene in locus.alleles:
+                        known_alleles.add(gene.name)
+        
         # Initialize allele series structures if missing
         # (We do this early to ensure series order is stable)
         for allele in self._allele_freq_history.keys():
@@ -288,8 +311,14 @@ class Dashboard:
         if new_points:
             for tick, total, freqs in new_points:
                 self._chart_history.append([tick, total])
+                self._history_ticks.append(tick)
                 
-                for allele, freq in freqs.items():
+                # Add data for all known alleles (including those with freq=0)
+                for allele in known_alleles:
+                    freq = freqs.get(allele, None)
+                    if freq is None:
+                        freq = 0.0  # Use 0.0 for missing alleles
+                    
                     if allele not in self._allele_freq_history:
                         self._allele_freq_history[allele] = []
                         # Add series if it appeared mid-simulation
@@ -429,31 +458,31 @@ class Dashboard:
                     svg = render_cell_svg(gt, self.pop.species, size=80)
                     ui.html(svg)
                     # Name
-                    ui.label(str(gt)).classes('text-xs font-bold mt-1 text-center leading-tight text-gray-800')
+                    ui.label(str(gt)).classes('text-base font-bold mt-1 text-center leading-tight text-gray-800')
                     
                     # Fitness (NEW)
                     fit_info = self._get_genotype_fitness(i, target_age_fit)
                     if fit_info:
                         with ui.column().classes('w-full items-center gap-0 my-1 bg-gray-50 rounded p-1'):
                             if 'via' in fit_info:
-                                ui.label(fit_info['via']).classes('text-xs text-gray-600')
+                                ui.label(fit_info['via']).classes('text-sm text-gray-600')
                             if 'fec' in fit_info:
-                                ui.label(fit_info['fec']).classes('text-xs text-gray-600')
+                                ui.label(fit_info['fec']).classes('text-sm text-gray-600')
 
                     # Counts
                     with ui.row().classes('w-full justify-between px-1 mt-1'):
-                        ui.label(f"F: {total_f}").classes('text-sm font-bold text-pink-600')
-                        ui.label(f"M: {total_m}").classes('text-sm font-bold text-blue-600')
+                        ui.label(f"F: {total_f}").classes('text-base font-bold text-pink-600')
+                        ui.label(f"M: {total_m}").classes('text-base font-bold text-blue-600')
                     
                     # Detailed age breakdown (skipping Age 0)
-                    if n_ages > 1:
+                    if self._is_age_structured_population:
                         with ui.column().classes('w-full gap-0 mt-1'):
                             # Iterate ages starting from 1
                             for age in range(1, n_ages):
                                 af = int(ind_count[0, age, i])
                                 am = int(ind_count[1, age, i])
                                 if af > 0 or am > 0:
-                                    with ui.row().classes('w-full justify-between text-xs text-gray-500 leading-tight'):
+                                    with ui.row().classes('w-full justify-between text-sm text-gray-500 leading-tight'):
                                         ui.label(f"A{age}")
                                         ui.label(f"{af}/{am}")
 
