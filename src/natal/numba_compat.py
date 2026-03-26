@@ -21,7 +21,7 @@ import numpy as np
 from .numba_utils import njit_switch, is_numba_enabled
 
 __all__ = [
-    "binomial_2d", "multinomial_rows", "multinomial"
+    "binomial_2d", "multinomial_rows", "multinomial", "set_numba_seed"
 ]
 
 from numba import njit
@@ -421,6 +421,17 @@ def _multinomial_numpy(
     return np.random.multinomial(n, pvals)
 
 
+@njit_switch(cache=True)
+def _set_numba_seed_numba(seed: int) -> None:
+    """Set RNG seed inside Numba/JIT random state."""
+    np.random.seed(seed)
+
+
+def _set_numba_seed_numpy(seed: int) -> None:
+    """Set RNG seed for NumPy random state in non-Numba mode."""
+    np.random.seed(seed)
+
+
 # ============================================================================
 # Export the correct implementation based on Numba configuration
 # ============================================================================
@@ -433,6 +444,7 @@ if is_numba_enabled():
     multinomial_rows = _multinomial_rows_numba
     multinomial = _multinomial_numba
     binomial = fast_binomial
+    set_numba_seed = _set_numba_seed_numba
 else:
     # Use NumPy vectorized implementations
     binomial_2d = _binomial_2d_numpy
@@ -441,3 +453,4 @@ else:
     multinomial_rows = _multinomial_rows_numpy
     multinomial = _multinomial_numpy
     binomial = np.random.binomial
+    set_numba_seed = _set_numba_seed_numpy

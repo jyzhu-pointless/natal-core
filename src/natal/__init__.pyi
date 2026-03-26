@@ -73,7 +73,7 @@ from .hook_dsl import (
     RESULT_STOP,
 )
 
-from .numba_compat import binomial_2d, multinomial_rows, multinomial
+from .numba_compat import binomial_2d, multinomial_rows, multinomial, set_numba_seed
 
 from .numba_utils import (
     NUMBA_ENABLED,
@@ -243,6 +243,7 @@ __all__ = [
     "is_numba_signature_trace_enabled",
     "multinomial",
     "multinomial_rows",
+    "set_numba_seed",
     "njit_switch",
     "noop_hook",
     "numba_disabled",

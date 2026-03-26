@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.3.26.d
+- 修复了 algorithms 中未正确处理配子储存与替换的问题
+- 为 algorithms 增加概率范围限制和异常报错
+- 为 algorithms 支持完整的 mating rates
+- 增加 numba 随机种子设置方法
+- 优化 UI 界面
+
 ## 2026.3.26.c
 - 重命名 `hook/` -> `hooks/`，并同步更新相关导入路径
 - 重命名 `kernel/` -> `kernels/`，并同步更新相关导入路径

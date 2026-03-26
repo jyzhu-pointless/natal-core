@@ -18,7 +18,7 @@ sp = nt.Species.from_dict(
 @nt.hook(event="first", priority=0)
 def release_drive_carriers_overl():
     return [
-        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=120, when="tick == 10")
+        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=60, when="tick == 10")
     ]
 
 drive = nt.HomingDrive(
@@ -28,10 +28,10 @@ drive = nt.HomingDrive(
     target_allele="WT",
     resistance_allele="R2",
     functional_resistance_allele="R1",
-    drive_conversion_rate=0.9,
+    drive_conversion_rate=0.8,
     late_germline_resistance_formation_rate=0.5,
     functional_resistance_ratio=0.01,
-    embryo_resistance_formation_rate=0.01,
+    embryo_resistance_formation_rate=0.1,
     viability_scaling=0.95,
     fecundity_scaling={"female": 0.0},
     fecundity_mode="recessive",

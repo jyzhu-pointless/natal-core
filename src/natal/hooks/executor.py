@@ -170,21 +170,29 @@ def _apply_target_with_sperm(current_count, target_count, sperm_row, stochastic_
             sperm_row[gm_idx] *= ratio
         return target_count
 
+    n_f_raw = float(current_count)
     if dirichlet_flag:
-        n_f = current_count
+        n_f = n_f_raw
     else:
-        n_f = float(int(round(current_count)))
+        n_f = float(int(round(n_f_raw)))
 
     total_sperm_count = 0.0
     for gm_idx in range(sperm_row.shape[0]):
-        if dirichlet_flag:
-            total_sperm_count += sperm_row[gm_idx]
-        else:
-            total_sperm_count += float(int(round(sperm_row[gm_idx])))
+        total_sperm_count += float(sperm_row[gm_idx])
 
-    n_virgins = n_f - total_sperm_count
-    if n_virgins < 0.0:
-        n_virgins = 0.0
+    # Validate on raw mass first, then convert to sampling counts.
+    n_virgins_raw = n_f_raw - total_sperm_count
+    if n_virgins_raw < 0.0:
+        print(
+            "n_virgins<0 in _apply_target_with_sperm:",
+            n_virgins_raw,
+            "n_f_raw=",
+            n_f_raw,
+            "total_sperm=",
+            total_sperm_count,
+        )
+        raise ValueError("Invalid state: n_virgins < 0 in _apply_target_with_sperm")
+    n_virgins = n_virgins_raw if dirichlet_flag else float(int(round(n_virgins_raw)))
 
     new_sperm_sum = 0.0
     for gm_idx in range(sperm_row.shape[0]):

@@ -94,18 +94,11 @@ def run_reproduction(
     # alg.sample_mating updates sperm storage based on mating rates
     female_counts = ind_count[0, :, :] # (n_ages, n_genotypes)
     
-    # This is slightly simplified: assume constant rate for all adults or take max?
-    # Original code used config.adult_female_mating_rate, implying a scalar.
-    # But now we have age-based rates. We can take the rate at the first adult age.
-    adult_mating_rate = 1.0 # default
-    if len(adult_ages) > 0:
-        adult_mating_rate = config.age_based_mating_rates[0, adult_ages[0]]  # sex=0 is FEMALE
-
     sperm_store = alg.sample_mating(
         female_counts,
         sperm_store,
         mating_prob,
-        adult_mating_rate,
+        config.age_based_mating_rates[0, :],  # female age-specific mating rates
         config.sperm_displacement_rate,
         adult_ages[0] if len(adult_ages) > 0 else 0,
         n_ages,
@@ -351,13 +344,11 @@ def run_discrete_reproduction(
     temp_female_counts = np.zeros((2, n_gen), dtype=np.float64)
     temp_female_counts[adult_age, :] = female_adults
     
-    female_mating_rate = config.age_based_mating_rates[0, adult_age]
-    
     temp_sperm_store = alg.sample_mating(
         temp_female_counts,
         temp_sperm_store,
         mating_prob,
-        female_mating_rate,
+        config.age_based_mating_rates[0, :],  # female age-specific mating rates
         1.0, 
         adult_age,
         2, 

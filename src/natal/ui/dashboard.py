@@ -374,15 +374,15 @@ class Dashboard:
         # Update aggregated summaries
         self.summary_sex_container.clear()
         with self.summary_sex_container:
-            with ui.row().classes('w-full justify-between text-sm'):
-                ui.label('Female').classes('font-medium text-pink-600')
-                ui.label(f"{females:,}").classes('font-mono')
-            with ui.row().classes('w-full justify-between text-sm'):
-                ui.label('Male').classes('font-medium text-blue-600')
-                ui.label(f"{males:,}").classes('font-mono')
-            with ui.row().classes('w-full justify-between text-sm border-t pt-1 mt-1'):
-                ui.label('Total').classes('font-bold text-gray-700')
-                ui.label(f"{total:,}").classes('font-mono font-bold')
+            with ui.row().classes('w-full justify-between items-center py-1'):
+                ui.label('Female').classes('font-semibold text-base text-pink-600')
+                ui.label(f"{females:,}").classes('font-mono text-base')
+            with ui.row().classes('w-full justify-between items-center py-1'):
+                ui.label('Male').classes('font-semibold text-base text-blue-600')
+                ui.label(f"{males:,}").classes('font-mono text-base')
+            with ui.row().classes('w-full justify-between items-center border-t pt-2 mt-1'):
+                ui.label('Total').classes('font-bold text-lg text-gray-700')
+                ui.label(f"{total:,}").classes('font-mono font-bold text-lg')
 
         if self._is_age_structured_population:
             self.age_summary_card.visible = True
@@ -392,11 +392,12 @@ class Dashboard:
             age_male_totals = state.individual_count[1].sum(axis=1)
             with self.summary_age_container:
                 for age in range(age_totals.shape[0]):
-                    with ui.row().classes('w-full justify-between text-sm'):
-                        ui.label(f"Age {age}").classes('font-medium text-gray-700')
-                        ui.label(
-                            f"F {int(age_female_totals[age]):,} / M {int(age_male_totals[age]):,} / T {int(age_totals[age]):,}"
-                        ).classes('font-mono text-xs')
+                    with ui.row().classes('w-full items-center justify-between py-1 border-b last:border-b-0'):
+                        ui.label(f"Age {age}").classes('font-semibold text-base text-gray-700 min-w-[5rem]')
+                        with ui.row().classes('gap-3 text-sm font-mono'):
+                            ui.label(f"F {int(age_female_totals[age]):,}").classes('text-pink-600')
+                            ui.label(f"M {int(age_male_totals[age]):,}").classes('text-blue-600')
+                            ui.label(f"T {int(age_totals[age]):,}").classes('text-gray-800 font-semibold')
         else:
             self.age_summary_card.visible = False
 
@@ -1157,17 +1158,21 @@ class Dashboard:
                             ui.number(label='Go to Tick', value=None, min=0, precision=0, on_change=self.handle_tick_input).props('dense outlined').classes('w-32')
                         self.lbl_status_mode = ui.label('LIVE VIEW').classes('font-bold text-green-600 text-lg')
 
-                    with ui.row().classes('w-full gap-4 mb-4 items-start'):
-                        with ui.card().classes('p-3 border rounded shadow-sm w-72'):
-                            ui.label('Count Summary by Sex').classes('text-sm font-bold text-gray-700 mb-1')
-                            self.summary_sex_container = ui.column().classes('w-full gap-1')
-                        with ui.card().classes('p-3 border rounded shadow-sm min-w-[20rem] flex-grow') as self.age_summary_card:
-                            ui.label('Count Summary by Age').classes('text-sm font-bold text-gray-700 mb-1')
-                            self.summary_age_container = ui.column().classes('w-full gap-1')
-                            self.age_summary_card.visible = self._is_age_structured_population
+                    with ui.row().classes('w-full gap-12 items-start no-wrap'):
+                        with ui.column().classes('w-[26rem] shrink-0 gap-3'):
+                            with ui.card().classes('p-3 border rounded shadow-sm w-full'):
+                                ui.label('Count Summary by Sex').classes('text-lg font-bold text-gray-700 mb-1')
+                                self.summary_sex_container = ui.column().classes('w-full gap-1')
+                            with ui.card().classes('p-3 border rounded shadow-sm w-full') as self.age_summary_card:
+                                ui.label('Count Summary by Age').classes('text-lg font-bold text-gray-700 mb-1')
+                                self.summary_age_container = ui.column().classes('w-full gap-1')
+                                self.age_summary_card.visible = self._is_age_structured_population
 
-                    # Container for Genotype Cards
-                    self.genotype_container = ui.row().classes('w-full flex-wrap gap-4')
+                        # Container for Genotype Cards (right side)
+                        with ui.column().classes('flex-1 min-w-0'):
+                            self.genotype_container = ui.row().classes('w-full flex-wrap gap-4')
+                        
+
                     
                 # --- Tab 2: Configuration ---
                 with ui.tab_panel(tab_config):

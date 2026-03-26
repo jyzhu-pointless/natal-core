@@ -21,6 +21,15 @@ from natal import numba_compat as nbc
 EPS = 1e-10
 
 @njit_switch(cache=True)
+def _clamp01(x: float) -> float:
+    """Clamp a probability-like value into [0, 1]."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    return x
+
+@njit_switch(cache=True)
 def continuous_poisson(lam: float) -> float:
     """用 Gamma 分布连续化 Poisson 分布。
     
@@ -57,8 +66,11 @@ def continuous_binomial(n: float, p: float) -> float:
     if p >= 1.0 - EPS:
         return float(n)
     
-    # 矩匹配：浓度参数 = n - 1
+    # 矩匹配：把 Binomial(n, p) 映射成比例变量 r~Beta(alpha,beta)，再返回 n*r。
+    # 这里把 Beta 的总浓度设为 (n-1)，使得方差阶数量级与 Binomial 对齐。
+    # concentration 越大，r 的波动越小（更接近确定性 p）。
     concentration = n - 1.0
+    # alpha / (alpha + beta) = p，保证比例均值为 p
     alpha = p * concentration
     beta_val = (1.0 - p) * concentration
     
@@ -67,6 +79,7 @@ def continuous_binomial(n: float, p: float) -> float:
     beta_val = max(beta_val, EPS)
     
     proportion = np.random.beta(alpha, beta_val)
+    # 返回“连续计数”而非比例：count = n * proportion
     return proportion * n
 
 
@@ -84,6 +97,8 @@ def continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: N
         out_counts: 输出数组，用于存储结果 (shape=(k,))，会被修改
     """
     k = len(p_array)
+    # 与 continuous_binomial 类似，Dirichlet 总浓度设为 (n-1)。
+    # 每一类浓度 alpha_i = p_i * (n-1)，这样均值为 p_i。
     concentration = n - 1.0
     sum_gamma = 0.0
     
@@ -100,7 +115,9 @@ def continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: N
         out_counts[i] = val
         sum_gamma += val
     
-    # 归一化并乘以总数 n
+    # 归一化并乘以总数 n：
+    # 若 g_i ~ Gamma(alpha_i,1)，则 g_i/sum(g) ~ Dirichlet(alpha)
+    # 最后 out_i = n * g_i/sum(g) 即连续化的“各类别计数”。
     if sum_gamma > EPS:
         factor = n / sum_gamma
         for i in range(k):
@@ -155,9 +172,13 @@ def compute_mating_probability_matrix(
     assert M.shape == (g,)
 
     # Multiply columns of alpha by male_counts (equivalent to alpha @ diag(M))
+    # weighted[gf,gm] = sexual_pref(gf,gm) * effective_males(gm)
+    # 语义：雌性基因型 gf 看到的雄性基因型 gm“可选权重”。
     weighted = A * M[None, :]  # shape (g,g)
 
     # Row-normalize weighted matrix
+    # row_sums[gf] = sum_gm weighted[gf,gm]
+    # 归一化后得到 P(gm | gf)。
     row_sums = weighted.sum(axis=1).reshape(-1, 1)  # shape (g,1)
     # avoid division by zero: leave zero rows as zeros
     # Vectorized handling: replace zero row sums with 1.0 and compute P without a Python loop
@@ -170,7 +191,7 @@ def sample_mating(
     female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
     sperm_store: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
     mating_prob: Annotated[NDArray[np.float64], "shape=(g,g)"],
-    adult_mating_rate: float,
+    female_mating_rates_by_age: Annotated[NDArray[np.float64], "shape=(A,)"],
     sperm_displacement_rate: float,
     adult_start_idx: int,
     n_ages: int,
@@ -188,18 +209,37 @@ def sample_mating(
     Args:
         use_dirichlet_sampling: If True and is_stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
+
+    Invariants:
+        - `S[a, gf, :]` is interpreted as a partition of *mated* females of
+          (age=a, female_genotype=gf) by male genotype.
+        - Virgins are represented implicitly as:
+          `virgins = female_count[a, gf] - sum_gm(S[a, gf, gm])`
+        - To preserve this meaning, this function rebuilds adult rows each tick
+          from current mating outcomes, rather than blending with previous rows.
+
+    Formula change:
+        - Previous implementation used a single scalar mating rate for all
+          adult ages. Now we use age-specific female mating rates:
+          `p_mating(age) = female_mating_rates_by_age[age]`.
     """
     S = sperm_store.copy()
     F = female_counts.copy()
+    female_rates = np.asarray(female_mating_rates_by_age)
     
     # n_f_int = np.round(F).astype(np.int64)
     P = np.asarray(mating_prob)  # (g, g)
+    assert female_rates.shape[0] == n_ages
     
     # 提取成年个体
     adult_ages = np.arange(adult_start_idx, n_ages)
     F_adults = F[adult_start_idx:, :]  # (n_adult, g)
     
-    displacement_factor = sperm_displacement_rate
+    # NOTE:
+    # sperm_store stores only mated-female allocations by male genotype.
+    # Therefore each tick we rebuild adult rows from current mating outcomes,
+    # instead of mixing with previous rows. Keep sperm_displacement_rate for
+    # API compatibility, but it is intentionally unused here.
     
     if is_stochastic:
         # ===== 单配制随机模式 =====
@@ -209,14 +249,18 @@ def sample_mating(
             
             for gf in range(n_genotypes):
                 # Step 1: 有多少个该基因型的雌性参与交配？
+                # _n1: 当前 (age, gf) 雌性数量
                 _n1 = float(F_adults[a_idx, gf])
-                _p1 = float(adult_mating_rate)
+                # Age-specific female mating probability at age a.
+                _p1 = _clamp01(float(female_rates[a]))
                 
                 if use_dirichlet_sampling:
                     # 连续化采样：使用 Beta 代替 Binomial
                     n_mating = continuous_binomial(_n1, _p1)
                 else:
                     # 离散采样：标准 Binomial
+                    # n_mating ~ Binomial(_n1, _p1)
+                    # 语义：该年龄/雌性基因型中，本 tick 发生交配的雌性数。
                     n_mating = float(nbc.binomial(int(round(_n1)), _p1))
                 
                 # Step 2: 这些交配的雌性分别与哪个基因型的雄性交配？
@@ -228,14 +272,15 @@ def sample_mating(
                         actual_matings[gf, :] = temp_mating
                     else:
                         # 离散采样：标准 Multinomial
+                        # actual_matings[gf,gm]:
+                        # 在已交配雌性 gf 中，与雄性 gm 配对的人数分配。
                         actual_matings[gf, :] = nbc.multinomial(int(round(n_mating)), P[gf, :]).astype(np.float64)
             
-            # Step 3: 更新精子库
-            S[a, :, :] = np.where(
-                S[a, :, :] > 0,
-                (1 - displacement_factor) * S[a, :, :] + displacement_factor * actual_matings,
-                actual_matings
-            )
+            # Step 3: 更新精子库（整行重建）
+            # sperm_store 仅记录已交配雌性，不包含 virgins，因此直接覆盖为本轮交配结果。
+            for gf in range(n_genotypes):
+                for gm in range(n_genotypes):
+                    S[a, gf, gm] = actual_matings[gf, gm]
         
         return S
     
@@ -246,15 +291,16 @@ def sample_mating(
             expected_gf_gm = np.zeros((n_genotypes, n_genotypes), dtype=np.float64)
             
             for gf in range(n_genotypes):
-                n_mating = F_adults[a_idx, gf] * adult_mating_rate
+                # 确定性版本：
+                # E[n_mating(age)] = female_count(age) * mating_rate(age)
+                n_mating = F_adults[a_idx, gf] * _clamp01(float(female_rates[a]))
+                # E[matings(gf,gm)] = E[n_mating] * P(gm|gf)
                 expected_gf_gm[gf, :] = n_mating * P[gf, :]
             
-            # 更新精子库
-            S[a, :, :] = np.where(
-                S[a, :, :] > 0,
-                (1 - displacement_factor) * S[a, :, :] + displacement_factor * expected_gf_gm,
-                expected_gf_gm
-            )
+            # 更新精子库（与随机分支保持一致，整行重建）
+            for gf in range(n_genotypes):
+                for gm in range(n_genotypes):
+                    S[a, gf, gm] = expected_gf_gm[gf, gm]
         
         return S
 
@@ -324,7 +370,10 @@ def fertilize_with_mating_genotype(
     P_offspring_flat = np.dot(all_gamete_pairs_flat, H_flat)  # (g*g, g)
     P_offspring = P_offspring_flat.reshape(n_genotypes, n_genotypes, n_genotypes)
     
-    # TODO: 这里取消了归一化，目的是可以模拟致死效应，但需检查正确性
+    # NOTE:
+    # We intentionally do not pre-normalize P_offspring along offspring-genotype
+    # axis. If row sum < 1, the missing mass is interpreted as lethality and is
+    # handled later by viability filtering (n_viable_eggs sampling).
     # 向量化归一化（一次性求和，替代 81 次 sum）
     # P_sums_step1 = P_offspring.sum(axis=2)  # (g, g) 一次求和！
     # P_sums_step1_safe = np.where(P_sums_step1 > 0, P_sums_step1, 1.0)
@@ -362,7 +411,13 @@ def fertilize_with_mating_genotype(
     gf_array = combo_indices[:, 1]  # (N_combos,)
     gm_array = combo_indices[:, 2]  # (N_combos,)
     
-    # lambda[i] = lambda_per_pair[i] * n_reproducing_pairs[i]
+    # lambda_per_pair[i]:
+    # 一个 (gf,gm) 配对对在单 tick 的“期望产卵数”。
+    # = 基础产卵数 * 雌性生育适合度 * 雄性生育适合度
+    # 量纲：eggs / pair / tick
+    #
+    # total_lambda[i] = lambda_per_pair[i] * n_reproducing_pairs[i]
+    # 量纲：eggs / tick
     lambda_per_pair = average_eggs_per_wt_female * phi_f[gf_array] * phi_m[gm_array]  # (N_combos,)
     
     if is_stochastic:
@@ -377,7 +432,7 @@ def fertilize_with_mating_genotype(
         if proportion_of_females_that_reproduce < 1.0:
             # 批量 binomial 采样
             # 显式转换为 float 以避免 Numba binomial 类型问题
-            p_reproduce = float(proportion_of_females_that_reproduce)
+            p_reproduce = _clamp01(float(proportion_of_females_that_reproduce))
             if use_dirichlet_sampling:
                 # 连续化采样：使用 Beta 代替 Binomial
                 n_reproducing = np.array([
@@ -394,7 +449,8 @@ def fertilize_with_mating_genotype(
             # 直接使用 n_pairs_for_sampling
             n_reproducing = n_pairs_for_sampling.astype(np.float64)
         
-        # 计算期望总卵数 (lambda)
+        # 计算每个 combo 的总期望卵数：
+        # total_lambda = n_reproducing * lambda_per_pair
         total_lambda = n_reproducing.astype(np.float64) * lambda_per_pair  # (N_combos,)
         
         # 批量采样卵数（关键优化！）
@@ -427,11 +483,14 @@ def fertilize_with_mating_genotype(
     # =========================================================================
     
     # 预计算所有 combo 的基因型概率矩阵及其归一化系数
-    # P_matrix: (n_combos, g)
+    # P_matrix[i, g_off] = P(offspring genotype = g_off | combo_i)
+    # 其中 combo_i 表示某个 (age, gf, gm)。
     # Numba 不支持多维 fancy indexing，使用循环逐一提取各 combo 的概率矩阵
     P_matrix = np.empty((n_combos, n_genotypes), dtype=np.float64)
     for i in range(n_combos):
         P_matrix[i, :] = P_offspring[int(gf_array[i]), int(gm_array[i]), :]
+    # P_sums[i] = sum_g_off P_matrix[i, g_off]
+    # 若 < 1，缺失质量被解释为“胚胎/合子致死”概率质量。
     P_sums = P_matrix.sum(axis=1)   # shape (n_combos,)
     
     # 避免除零
@@ -447,6 +506,7 @@ def fertilize_with_mating_genotype(
         
         for i in range(n_combos):
             n_total = n_eggs_per_combo[i]
+            # p_surv: 该 combo 下“可存活到后续分型步骤”的概率质量
             p_surv = P_sums[i]
             
             if n_total <= EPS or p_surv <= EPS:
@@ -460,6 +520,7 @@ def fertilize_with_mating_genotype(
                     n_viable_eggs[i] = float(nbc.binomial(int(round(n_total)), p_surv))
 
         # 2. 采样后代基因型 (Multinomial)
+        # 使用归一化后的 P_matrix_norm 条件分布把存活卵分配到各基因型。
         offspring_samples = np.empty((n_combos, n_genotypes), dtype=np.float64)
         temp_offspring = np.zeros(n_genotypes, dtype=np.float64)  # 临时数组用于 Dirichlet
         
@@ -480,11 +541,12 @@ def fertilize_with_mating_genotype(
             else:
                 offspring_samples[i, :] = 0.0
         
-        # 向量化累积
+        # 向量化累积：把所有 combo 的后代基因型计数按列求和
         n_offspring_by_geno = offspring_samples.sum(axis=0).astype(np.float64)
     else:
         # ===== 确定性模式：直接用期望值 =====
         # 贡献度矩阵：(n_combos, g)
+        # contributions[i,g] = eggs_i * P(offspring=g | combo_i)
         contributions = n_eggs_per_combo[:, None] * P_matrix  # shape (n_combos, n_genotypes)
         # 一次性求和
         n_offspring_by_geno = contributions.sum(axis=0)
@@ -497,7 +559,8 @@ def fertilize_with_mating_genotype(
     if total_offspring > EPS:
         if is_stochastic:
             # 显式转换为 Python float 以避免 Numba binomial 类型问题
-            sex_ratio_scalar = float(sex_ratio)
+            # sex_ratio = P(female); 总雌性数 ~ Binomial(total_offspring, sex_ratio)
+            sex_ratio_scalar = _clamp01(float(sex_ratio))
             if use_dirichlet_sampling:
                 # 连续化采样：使用 Beta 代替 Binomial
                 n_females_total = continuous_binomial(total_offspring, sex_ratio_scalar)
@@ -510,7 +573,9 @@ def fertilize_with_mating_genotype(
         
         n_males_total = total_offspring - n_females_total
         
-        # 分配给各基因型（按比例）
+        # 分配给各基因型（按比例）：
+        # 在当前实现里，性别分配先在总量上做，再按基因型总占比分摊。
+        # 即默认“基因型与性别分配独立”。
         n_offspring_female = np.zeros(n_genotypes, dtype=np.float64)
         n_offspring_male = np.zeros(n_genotypes, dtype=np.float64)
         
@@ -729,6 +794,13 @@ def sample_survival_with_sperm_storage(
         
     Returns:
         Tuple[female_new, male_new, sperm_store_new]
+
+    Important implementation notes:
+        - Invariant check for `n_virgins` uses raw floating-point mass:
+          `n_virgins_raw = F_raw - sum(S_raw)`.
+          This avoids false negatives from per-cell rounding in stochastic mode.
+        - Discrete sampling still rounds each category to integer trial counts
+          before binomial draws, but only after the raw-mass invariant check.
     """
     female, male = population
     F = np.asarray(female).copy()
@@ -759,26 +831,44 @@ def sample_survival_with_sperm_storage(
     for age in range(n_ages):
         for g in range(n_genotypes):
             # ===== 采样雌性及其精子存储 =====
+            n_f_raw = float(F[age, g])
             if use_dirichlet_sampling:
-                n_f = F[age, g]
+                n_f = n_f_raw
             else:
                 # 离散采样需要转为整数，下同
-                n_f = float(int(round(F[age, g])))
+                n_f = float(int(round(n_f_raw)))
                 
             g_idx_f = g % s_f_2d.shape[1]
-            p_f = float(s_f_2d[age, g_idx_f])
+            p_f = _clamp01(float(s_f_2d[age, g_idx_f]))
             
             # 计算处女雌蚊数（没有存储精子的雌蚊）
+            # total_sperm_count = sum_gm S[age,g,gm]
+            # 语义：该 (age,g) 中“已交配雌性质量”。
             total_sperm_count = 0.0
             for gm in range(n_genotypes):
-                if use_dirichlet_sampling:
-                    total_sperm_count += S[age, g, gm]
-                else:
-                    total_sperm_count += float(int(round(S[age, g, gm])))
+                total_sperm_count += float(S[age, g, gm])
+
+            # Validate on raw mass (not per-cell rounded mass), then convert for sampling.
+            n_virgins_raw = n_f_raw - total_sperm_count
+            if n_virgins_raw < -EPS:
+                print(
+                    "n_virgins<0 in sample_survival_with_sperm_storage:",
+                    n_virgins_raw,
+                    "age=",
+                    age,
+                    "g=",
+                    g,
+                    "n_f_raw=",
+                    n_f_raw,
+                    "total_sperm=",
+                    total_sperm_count,
+                )
+                raise ValueError("Invalid state: n_virgins < 0 in sample_survival_with_sperm_storage")
+            # 离散模式下用于 binomial 的试验次数应为整数；连续模式保持浮点质量。
+            n_virgins = n_virgins_raw if use_dirichlet_sampling else float(int(round(n_virgins_raw)))
             
-            n_virgins = n_f - total_sperm_count
-            
-            # 对每种精子存储分别采样（独立地使用生存率 p_f）
+            # 对每种精子存储分别采样（独立地使用同一生存率 p_f）：
+            # S_new[gm] ~ Binomial(S_old[gm], p_f)
             new_sperm_sum = 0.0
             for gm in range(n_genotypes):
                 if use_dirichlet_sampling:
@@ -808,7 +898,8 @@ def sample_survival_with_sperm_storage(
             else:
                 survivors_virgins = 0.0
             
-            # F[age, g] = 存储精子的存活雌蚊 + 存活的处女雌蚊
+            # 质量守恒重建：
+            # F_new = (已交配存活总和) + (处女存活数)
             F[age, g] = new_sperm_sum + survivors_virgins
             
             # ===== 采样雄性 =====
@@ -818,7 +909,7 @@ def sample_survival_with_sperm_storage(
                 n_m = float(int(round(M[age, g])))
                 
             g_idx_m = g % s_m_2d.shape[1]
-            p_m = float(s_m_2d[age, g_idx_m])
+            p_m = _clamp01(float(s_m_2d[age, g_idx_m]))
             
             if n_m > EPS:
                 if use_dirichlet_sampling:
@@ -860,6 +951,10 @@ def sample_viability_with_sperm_storage(
         
     Returns:
         Tuple[female_new, male_new, sperm_store_new]
+
+    Notes:
+        - This legacy path mirrors `sample_survival_with_sperm_storage`.
+        - Negative `n_virgins_raw` is treated as invalid state and raises.
     """
     female, male = population
     F = np.asarray(female).copy()
@@ -876,25 +971,40 @@ def sample_viability_with_sperm_storage(
     
     # 仅在 target_age 进行采样
     for g in range(n_genotypes):
+        n_f_raw = float(F[target_age, g])
         if use_dirichlet_sampling:
-            n_f_val = F[target_age, g]
+            n_f_val = n_f_raw
             n_m_val = M[target_age, g]
         else:
-            n_f_val = float(int(round(F[target_age, g])))
+            n_f_val = float(int(round(n_f_raw)))
             n_m_val = float(int(round(M[target_age, g])))
         
-        p_f_val = float(v_f[g])
-        p_m_val = float(v_m[g])
+        p_f_val = _clamp01(float(v_f[g]))
+        p_m_val = _clamp01(float(v_m[g]))
         
         # ===== 采样雌性及其精子存储 =====
         # 计算处女雌蚊数
         total_sperm_count = 0.0
         for gm in range(n_genotypes):
-            if use_dirichlet_sampling:
-                total_sperm_count += S[target_age, g, gm]
-            else:
-                total_sperm_count += float(int(round(S[target_age, g, gm])))
-        n_virgins = n_f_val - total_sperm_count
+            total_sperm_count += float(S[target_age, g, gm])
+
+        # Validate on raw mass (not per-cell rounded mass), then convert for sampling.
+        n_virgins_raw = n_f_raw - total_sperm_count
+        if n_virgins_raw < -EPS:
+            print(
+                "n_virgins<0 in sample_viability_with_sperm_storage:",
+                n_virgins_raw,
+                "target_age=",
+                target_age,
+                "g=",
+                g,
+                "n_f_raw=",
+                n_f_raw,
+                "total_sperm=",
+                total_sperm_count,
+            )
+            raise ValueError("Invalid state: n_virgins < 0 in sample_viability_with_sperm_storage")
+        n_virgins = n_virgins_raw if use_dirichlet_sampling else float(int(round(n_virgins_raw)))
         
         # 对每种精子存储分别采样（独立地使用生存率 p_f_val）
         new_sperm_sum = 0.0
@@ -1110,7 +1220,9 @@ def compute_equilibrium_metrics(
     p_unmated = 1.0
     for age in range(new_adult_age, n_ages):
         m_rate = age_based_mating_rates[0, age]
+        # 递推：P(unmated until age a) = Π_{k<=a}(1 - m_rate[k])
         p_unmated *= (1.0 - m_rate)
+        # P(mated by age a) = 1 - P(unmated by age a)
         p_mated[age] = 1.0 - p_unmated
 
     if equilibrium_individual_count is not None:
@@ -1121,6 +1233,8 @@ def compute_equilibrium_metrics(
         for age in range(new_adult_age, n_ages):
             n_f = expected_distribution[0, age]
             # 这里考虑累计交配率（持有精子的比例）和相对性
+            # 该年龄对 age0 产出的贡献：
+            # n_f * P(mated) * relative_fertility * eggs_per_female
             produced_age_0 += n_f * p_mated[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
             
         total_age_1 = expected_distribution[0, 1] + expected_distribution[1, 1]
@@ -1131,11 +1245,16 @@ def compute_equilibrium_metrics(
         expected_distribution = np.zeros((2, n_ages), dtype=np.float64)
         
         # Age 1: 分配雌雄
+        # Age1 基线分配：
+        # female_age1 = total_age1 * sex_ratio
+        # male_age1   = total_age1 * (1-sex_ratio)
         expected_distribution[0, 1] = total_age_1 * sex_ratio
         expected_distribution[1, 1] = total_age_1 * (1.0 - sex_ratio)
         
         # 推演后续年龄（基于生存率）
         for age in range(2, n_ages):
+            # 年龄推进期望：
+            # N(age) = N(age-1) * survival(age-1)
             expected_distribution[0, age] = expected_distribution[0, age - 1] * age_based_survival_rates[0, age - 1]
             expected_distribution[1, age] = expected_distribution[1, age - 1] * age_based_survival_rates[1, age - 1]
             
@@ -1147,6 +1266,7 @@ def compute_equilibrium_metrics(
 
     # 计算总期望竞争强度 (仅限幼虫参与竞争，即 age < new_adult_age)
     # Age 0 为产生的 Egg 数；Age 1+ 为分布中的幸存者
+    # 竞争强度是“各幼虫年龄人数 * 对应竞争权重”的加权和。
     expected_competition_strength = produced_age_0 * relative_competition_strength[0]
     for age in range(1, new_adult_age):
         n_total = expected_distribution[0, age] + expected_distribution[1, age]
@@ -1158,6 +1278,9 @@ def compute_equilibrium_metrics(
     s_0_avg = sex_ratio * age_based_survival_rates[0, 0] + (1.0 - sex_ratio) * age_based_survival_rates[1, 0]
     
     if produced_age_0 > 0 and s_0_avg > 1e-10:
+        # 从平衡关系反推：
+        # total_age_1 = produced_age_0 * expected_survival_rate * s_0_avg
+        # => expected_survival_rate = total_age_1 / (produced_age_0 * s_0_avg)
         expected_survival_rate = total_age_1 / (produced_age_0 * s_0_avg)
     else:
         expected_survival_rate = 1.0
