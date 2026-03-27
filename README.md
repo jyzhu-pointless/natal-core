@@ -1,10 +1,10 @@
 # ⚡ NATAL
 **N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles
 
-[![NATAL](https://img.shields.io/badge/NATAL-0.1.0-purple.svg)](https://github.com/jyzhu-pointless/natal-core)
-[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![NumPy](https://img.shields.io/badge/NumPy-2.4.2+-green.svg)](https://numpy.org/)
-[![Numba](https://img.shields.io/badge/Numba-0.64.0+-orange.svg)](https://numba.pydata.org/)
+[![NATAL](https://img.shields.io/badge/NATAL-dev-purple.svg)](https://github.com/jyzhu-pointless/natal-core)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
+[![Numba](https://img.shields.io/badge/Numba-0.60.0+-orange.svg)](https://numba.pydata.org/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](LICENSE)
 
 ![logo](./natal-brand.svg)
