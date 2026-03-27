@@ -132,6 +132,8 @@ from .population_state import (
     parse_flattened_discrete_state,
 )
 
+from .spatial_population import SpatialPopulation
+
 from .type_def import Sex, Age, GameteLabel
 
 from .visualization import get_allele_color, render_cell_svg
@@ -244,6 +246,7 @@ __all__ = [
     "multinomial",
     "multinomial_rows",
     "set_numba_seed",
+    "SpatialPopulation",
     "njit_switch",
     "noop_hook",
     "numba_disabled",

@@ -14,6 +14,7 @@ from natal.numba_utils import get_numba_cache_dir
 
 _TEMPLATES_DIR = Path(__file__).with_suffix("").parent / "templates"
 _WRAPPER_TEMPLATE_PATH = _TEMPLATES_DIR / "kernel_wrappers.py.tmpl"
+_SPATIAL_WRAPPER_TEMPLATE_PATH = _TEMPLATES_DIR / "spatial_kernel_wrappers.py.tmpl"
 # Keep kernel wrappers in their own cache namespace, independent from hook-only codegen.
 _KERNEL_CODEGEN_DIR = Path(get_numba_cache_dir()) / "kernel_codegen"
 _KERNEL_CODEGEN_LOCK = threading.Lock()
@@ -76,6 +77,18 @@ def _render_kernel_wrapper_source(
     )
 
 
+def _render_spatial_kernel_wrapper_source(
+    run_spatial_tick_name: str,
+    run_spatial_name: str,
+) -> str:
+    """Render the spatial wrapper template with unique generated names."""
+    template = _SPATIAL_WRAPPER_TEMPLATE_PATH.read_text(encoding="utf-8")
+    return (
+        template.replace("__RUN_SPATIAL_TICK_NAME__", run_spatial_tick_name)
+        .replace("__RUN_SPATIAL_NAME__", run_spatial_name)
+    )
+
+
 def compile_kernel_bound_wrappers(
     first_fn: Callable,
     early_fn: Callable,
@@ -117,4 +130,42 @@ def compile_kernel_bound_wrappers(
         getattr(module, run_name),
         getattr(module, run_discrete_tick_name),
         getattr(module, run_discrete_name),
+    )
+
+
+def compile_spatial_kernel_bound_wrappers(
+    first_fn: Callable,
+    early_fn: Callable,
+    late_fn: Callable,
+) -> Tuple[Callable, Callable]:
+    """Compile spatial wrappers bound to one event-hook set.
+
+    The returned callables are ``(run_spatial_tick_fn, run_spatial_fn)``.
+    Spatial phase order inside wrappers is:
+    first -> reproduction -> early -> survival -> late -> aging -> migration.
+    """
+    key = _hash_key(
+        [
+            "spatial_kernel_wrappers_v1",
+            _stable_callable_identity(first_fn),
+            _stable_callable_identity(early_fn),
+            _stable_callable_identity(late_fn),
+        ]
+    )
+    module_stem = f"spatial_kernel_wrappers_{key}"
+    run_spatial_tick_name = f"_run_spatial_tick_bound_{key}"
+    run_spatial_name = f"_run_spatial_bound_{key}"
+
+    source = _render_spatial_kernel_wrapper_source(
+        run_spatial_tick_name=run_spatial_tick_name,
+        run_spatial_name=run_spatial_name,
+    )
+    module_path = _write_codegen_module(module_stem, source)
+    module = _load_codegen_module(module_stem, module_path)
+    setattr(module, "_FIRST_HOOK", first_fn)
+    setattr(module, "_EARLY_HOOK", early_fn)
+    setattr(module, "_LATE_HOOK", late_fn)
+    return (
+        getattr(module, run_spatial_tick_name),
+        getattr(module, run_spatial_name),
     )

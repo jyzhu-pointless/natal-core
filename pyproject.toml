@@ -6,7 +6,21 @@ readme = "README.md"
 authors = [
     { name = "Jinyu Zhu", email = "jyzhu_2020@stu.pku.edu.cn" }
 ]
+license = { text = "MIT" }
 requires-python = ">=3.9"
+keywords = ["population-genetics", "simulation", "numba", "bioinformatics", "evolutionary-biology"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
 dependencies = [
     "nicegui[highcharts]>=3.0.0",
     "numba>=0.60.0",
@@ -15,6 +29,12 @@ dependencies = [
     "plotly>=6.0.0",
     "scipy>=1.11.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jyzhu-pointless/natal-core"
+Documentation = "https://github.com/jyzhu-pointless/natal-core/tree/main/docs"
+Repository = "https://github.com/jyzhu-pointless/natal-core"
+Issues = "https://github.com/jyzhu-pointless/natal-core/issues"
 
 [build-system]
 requires = ["hatchling"]

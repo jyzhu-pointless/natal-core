@@ -68,29 +68,29 @@ def ensure_type(obj, expected_type: type) -> None:
 
 class SexChromosomeType(Enum):
     """
-    性染色体类型枚举。
+    Sex chromosome type enumeration.
     
-    定义了常见的性染色体类型和它们的遗传特性：
-    - AUTOSOME: 常染色体，不参与性别决定
-    - X: 哺乳动物 X 染色体，可来自任意亲本
-    - Y: 哺乳动物 Y 染色体，只能来自 paternal
-    - Z: 鸟类/蛾类 Z 染色体，可来自任意亲本
-    - W: 鸟类/蛾类 W 染色体，只能来自 maternal
+    Defines common sex chromosome types and their inheritance properties:
+    - AUTOSOME: Autosome, not involved in sex determination
+    - X: Mammalian X chromosome, can come from either parent
+    - Y: Mammalian Y chromosome, paternal only
+    - Z: Bird/moth Z chromosome, can come from either parent
+    - W: Bird/moth W chromosome, maternal only
     """
-    AUTOSOME = "autosome"  # 常染色体
-    X = "X"                # XY系统中的X染色体
-    Y = "Y"                # XY系统中的Y染色体，只从父本遗传
-    Z = "Z"                # ZW系统中的Z染色体
-    W = "W"                # ZW系统中的W染色体，只从母本遗传
+    AUTOSOME = "autosome"  # Autosome
+    X = "X"                # X chromosome in XY system
+    Y = "Y"                # Y chromosome in XY system, paternal only
+    Z = "Z"                # Z chromosome in ZW system
+    W = "W"                # W chromosome in ZW system, maternal only
     
     @property
     def is_sex_chromosome(self) -> bool:
-        """是否为性染色体"""
+        """Whether this is a sex chromosome"""
         return self != SexChromosomeType.AUTOSOME
     
     @property
     def sex_system(self) -> Optional[str]:
-        """返回所属的性别决定系统"""
+        """Returns the sex determination system this chromosome belongs to"""
         if self in (SexChromosomeType.X, SexChromosomeType.Y):
             return "XY"
         elif self in (SexChromosomeType.Z, SexChromosomeType.W):
@@ -99,12 +99,12 @@ class SexChromosomeType(Enum):
     
     @property
     def maternal_only(self) -> bool:
-        """是否只能从母本遗传"""
+        """Whether it can only be inherited from mother"""
         return self == SexChromosomeType.W
     
     @property
     def paternal_only(self) -> bool:
-        """是否只能从父本遗传"""
+        """Whether it can only be inherited from father"""
         return self == SexChromosomeType.Y
     
 class RegistryBase(ABC, Generic[T]):
@@ -326,7 +326,7 @@ class ChildStructureRegistry(RegistryBase[S]):
         """Unregister by name."""
         self._storage.pop(key, None)
 
-    def add(self, name: str, **kwargs) -> S:
+    def add(self, name: str, **kwargs: Any) -> S:
         """
         Create a new child structure and register it.
         This is a convenience method: create + register.
@@ -769,7 +769,7 @@ class GeneticStructure(Generic[E]):
         cls,
         name: str,
         entity_ids: Union[str, Iterable[str]],
-        **entity_kwargs
+        **entity_kwargs: Any
     ) -> GeneticStructure[E]:
         """
         Factory method to create a GeneticStructure instance and register entities by their identifiers.
@@ -815,7 +815,7 @@ class Locus(GeneticStructure['Gene']):
         position: Optional[Union[int, float]] = None,
         chromosome: Optional['Chromosome'] = None,
         parent: Optional['Chromosome'] = None,
-        **kwargs
+        **kwargs: Any
     ):
         # Check if already initialized (cached instance)
         if hasattr(self, '_initialized') and self._initialized:
@@ -957,7 +957,7 @@ class Locus(GeneticStructure['Gene']):
         
         Example:
             >>> locus = Locus.with_alleles("A", ["A1", "A2", "A3"])
-            >>> locus.alleles  # → [Gene("A1"), Gene("A2"), Gene("A3")]
+            >>> locus.alleles  # â†’ [Gene("A1"), Gene("A2"), Gene("A3")]
         """
         return cls(name, position=position).add_alleles(alleles_or_allele_names)
     
@@ -974,12 +974,12 @@ class Chromosome(GeneticStructure['Haplotype']):
     chromosome. It also stores the recombination rates between loci.
     
     Attributes:
-        sex_type: 性染色体类型 (SexChromosomeType 或字符串)。
-            - None 或 'autosome': 常染色体（默认）
-            - 'X': XY系统中的X染色体
-            - 'Y': XY系统中的Y染色体（只能从父本遗传）
-            - 'Z': ZW系统中的Z染色体
-            - 'W': ZW系统中的W染色体（只能从母本遗传）
+        sex_type: Sex chromosome type (SexChromosomeType or string).
+            - None or 'autosome': Autosome (default)
+            - 'X': X chromosome in XY system
+            - 'Y': Y chromosome in XY system (paternal only)
+            - 'Z': Z chromosome in ZW system
+            - 'W': W chromosome in ZW system (maternal only)
     
     Example:
         >>> chr_x = Chromosome('X', sex_type='X')
@@ -1015,7 +1015,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         if species is None:
             species = parent
         
-        # 设置性染色体类型
+        # Set sex chromosome type
         self._set_sex_type(sex_type)
         
         # Chromosome's species is automatically inherited from parent Species
@@ -1041,7 +1041,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 self.recombination_map[i] = rate
     
     def _set_sex_type(self, sex_type: Optional[Union[SexChromosomeType, str]]) -> None:
-        """设置性染色体类型（内部方法）"""
+        """Set sex chromosome type (internal method)"""
         if sex_type is None:
             self._sex_type = SexChromosomeType.AUTOSOME
         elif isinstance(sex_type, SexChromosomeType):
@@ -1068,27 +1068,27 @@ class Chromosome(GeneticStructure['Haplotype']):
     
     @property
     def sex_type(self) -> SexChromosomeType:
-        """返回性染色体类型"""
+        """Returns the sex chromosome type"""
         return self._sex_type
     
     @sex_type.setter
     def sex_type(self, value: Optional[Union[SexChromosomeType, str]]) -> None:
-        """设置性染色体类型"""
+        """Set the sex chromosome type"""
         self._set_sex_type(value)
     
     @property
     def is_sex_chromosome(self) -> bool:
-        """是否为性染色体"""
+        """Whether this is a sex chromosome"""
         return self._sex_type.is_sex_chromosome
     
     @property
     def is_autosome(self) -> bool:
-        """是否为常染色体"""
+        """Whether this is an autosome"""
         return not self.is_sex_chromosome
     
     @property
     def sex_system(self) -> Optional[str]:
-        """返回所属的性别决定系统 ('XY', 'ZW', 或 None)"""
+        """Returns the sex determination system this chromosome belongs to ('XY', 'ZW', or None)"""
         return self._sex_type.sex_system
 
     @property
@@ -1651,20 +1651,20 @@ class Species(GeneticStructure['HaploidGenome']):
     
     @property
     def sex_chromosomes(self) -> List['Chromosome']:
-        """返回所有性染色体"""
+        """Returns all sex chromosomes"""
         return [c for c in self.chromosomes if c.is_sex_chromosome]
     
     @property
     def autosomes(self) -> List['Chromosome']:
-        """返回所有常染色体"""
+        """Returns all autosomes"""
         return [c for c in self.chromosomes if c.is_autosome]
     
     @property
     def sex_system(self) -> Optional[str]:
         """
-        返回性别决定系统 ('XY', 'ZW', 或 None)。
+        Returns the sex determination system ('XY', 'ZW', or None).
         
-        根据 Chromosome.sex_type 自动推断。如果有多个系统会抛出错误。
+        Automatically inferred from Chromosome.sex_type. Raises an error if multiple systems are found.
         """
         systems = set()
         for chrom in self.chromosomes:
@@ -1683,15 +1683,15 @@ class Species(GeneticStructure['HaploidGenome']):
     
     @property
     def gene_index(self) -> Dict[str, 'Gene']:
-        """返回基因名称到基因实例的映射。"""
+        """Returns a mapping from gene names to gene instances."""
         return self._build_gene_index()
 
     def _build_sex_chromosome_groups(self) -> Dict[str, List['Chromosome']]:
         """
-        从 Chromosome.sex_type 自动构建 _sex_chromosome_groups。
+        Automatically build _sex_chromosome_groups from Chromosome.sex_type.
         
         Returns:
-            性染色体组字典，key 是系统名如 'XY' 或 'ZW'
+            Sex chromosome group dictionary, keys are system names like 'XY' or 'ZW'
         """
         groups: Dict[str, List['Chromosome']] = {}
         
@@ -1706,20 +1706,20 @@ class Species(GeneticStructure['HaploidGenome']):
     
     def _build_valid_sex_genotypes(self) -> List[Tuple['Chromosome', 'Chromosome']]:
         """
-        从 Chromosome.sex_type 自动推断有效的性染色体基因型组合。
+        Automatically infer valid sex chromosome genotype combinations from Chromosome.sex_type.
         
-        规则：
-        - XY 系统: X 可来自任意亲本，Y 只能来自 paternal
-          → 有效组合: (X, X), (X, Y)
-        - ZW 系统: Z 可来自任意亲本，W 只能来自 maternal
-          → 有效组合: (Z, Z), (W, Z)
+        Rules:
+        - XY system: X can come from either parent, Y is paternal only
+          â†’ Valid combinations: (X, X), (X, Y)
+        - ZW system: Z can come from either parent, W is maternal only
+          â†’ Valid combinations: (Z, Z), (W, Z)
         
         Returns:
-            有效的 (maternal_chrom, paternal_chrom) 组合列表
+            List of valid (maternal_chrom, paternal_chrom) combinations
         """
         valid_combos: List[Tuple['Chromosome', 'Chromosome']] = []
         
-        # 按性别决定系统分组染色体
+        # æŒ‰æ€§åˆ«å†³å®šç³»ç»Ÿåˆ†ç»„æŸ“è‰²ä½“
         system_chroms: Dict[str, Dict[str, 'Chromosome']] = {}
         
         for chrom in self.chromosomes:
@@ -1730,7 +1730,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 continue
             if system not in system_chroms:
                 system_chroms[system] = {}
-            # 用性染色体类型名称作为 key
+            # ç”¨æ€§æŸ“è‰²ä½“ç±»åž‹åç§°ä½œä¸º key
             system_chroms[system][chrom.sex_type.value] = chrom
         
         for system, chroms in system_chroms.items():
@@ -1768,7 +1768,7 @@ class Species(GeneticStructure['HaploidGenome']):
         Args:
             chrom_or_name: Either a Chromosome instance or a name to create a new one.
             loci: Optional list of loci (only used when creating new Chromosome by name).
-            sex_type: 性染色体类型 ('X', 'Y', 'Z', 'W' 或 None 表示常染色体)
+            sex_type: æ€§æŸ“è‰²ä½“ç±»åž‹ ('X', 'Y', 'Z', 'W' æˆ– None è¡¨ç¤ºå¸¸æŸ“è‰²ä½“)
             
         Returns:
             The added Chromosome instance.
@@ -1839,8 +1839,7 @@ class Species(GeneticStructure['HaploidGenome']):
         structure: Dict[str, Union[List[str], Dict[str, List[str]]]],
         gamete_labels: Optional[list] = None
     ) -> 'Species':
-        """
-        Create a Species with complete hierarchy from a dictionary specification.
+        """Create a Species with complete hierarchy from a dictionary specification.
         
         Args:
             name: Name of the species.
@@ -1955,7 +1954,7 @@ class Species(GeneticStructure['HaploidGenome']):
             for locus in chrom.loci:
                 for gene in locus.alleles:
                     if gene.name in gene_index:
-                        # TODO: 目前不支持重复基因名，后续可考虑支持
+                        # TODO: ç›®å‰ä¸æ”¯æŒé‡å¤åŸºå› åï¼ŒåŽç»­å¯è€ƒè™‘æ”¯æŒ
                         raise ValueError(
                             f"Duplicate gene name '{gene.name}' found in species. "
                             f"Gene names must be unique for string-based lookups. "
@@ -2391,7 +2390,7 @@ class Species(GeneticStructure['HaploidGenome']):
         self,
         pattern: str,
         max_count: Optional[int] = None
-    ):
+    ) -> Iterable['Genotype']:
         """
         Enumerate all genotypes matching a pattern.
         
@@ -2472,7 +2471,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 pat_locus_combos.append(pat_alleles)
             pat_hap_combos = list(iterproduct(*pat_locus_combos))
             
-            # All combinations for this chromosome (maternal × paternal)
+            # All combinations for this chromosome (maternal Ã— paternal)
             chr_combos = [
                 (mat_hap_combo, pat_hap_combo)
                 for mat_hap_combo in mat_hap_combos
@@ -2576,7 +2575,7 @@ class Species(GeneticStructure['HaploidGenome']):
         self,
         pattern: str,
         max_count: Optional[int] = None
-    ):
+    ) -> Iterable['HaploidGenome']:
         """
         Enumerate all haploid genomes matching a pattern.
         
@@ -2700,51 +2699,51 @@ class Species(GeneticStructure['HaploidGenome']):
         return len(self.chromosomes)
     
     # ========================================================================
-    # 基因型枚举和计数
+    # åŸºå› åž‹æžšä¸¾å’Œè®¡æ•°
     # ========================================================================
     
     def _get_sex_chromosome_groups(self) -> Optional[Dict[str, List['Chromosome']]]:
         """
-        获取性染色体组配置。
+        èŽ·å–æ€§æŸ“è‰²ä½“ç»„é…ç½®ã€‚
         
-        优先使用显式设置的 _sex_chromosome_groups 属性，
-        否则从 Chromosome.sex_type 自动推断。
+        ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®çš„ _sex_chromosome_groups å±žæ€§ï¼Œ
+        å¦åˆ™ä»Ž Chromosome.sex_type è‡ªåŠ¨æŽ¨æ–­ã€‚
         
         Returns:
-            性染色体组字典，或 None（如果没有性染色体）
+            æ€§æŸ“è‰²ä½“ç»„å­—å…¸ï¼Œæˆ– Noneï¼ˆå¦‚æžœæ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼‰
         """
-        # 优先使用显式设置
+        # ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®
         if hasattr(self, '_sex_chromosome_groups') and self._sex_chromosome_groups:
             return self._sex_chromosome_groups
         
-        # 自动推断
+        # è‡ªåŠ¨æŽ¨æ–­
         groups = self._build_sex_chromosome_groups()
         return groups if groups else None
     
     def _get_valid_sex_genotypes(self) -> Optional[List[Tuple['Chromosome', 'Chromosome']]]:
         """
-        获取有效的性染色体基因型组合。
+        èŽ·å–æœ‰æ•ˆçš„æ€§æŸ“è‰²ä½“åŸºå› åž‹ç»„åˆã€‚
         
-        优先使用显式设置的 _valid_sex_genotypes 属性，
-        否则从 Chromosome.sex_type 自动推断。
+        ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®çš„ _valid_sex_genotypes å±žæ€§ï¼Œ
+        å¦åˆ™ä»Ž Chromosome.sex_type è‡ªåŠ¨æŽ¨æ–­ã€‚
         
         Returns:
-            有效的 (maternal_chrom, paternal_chrom) 组合列表，或 None
+            æœ‰æ•ˆçš„ (maternal_chrom, paternal_chrom) ç»„åˆåˆ—è¡¨ï¼Œæˆ– None
         """
-        # 优先使用显式设置
+        # ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®
         if hasattr(self, '_valid_sex_genotypes') and self._valid_sex_genotypes:
             return self._valid_sex_genotypes
         
-        # 自动推断
+        # è‡ªåŠ¨æŽ¨æ–­
         valid = self._build_valid_sex_genotypes()
         return valid if valid else None
     
     def count_alleles(self) -> int:
         """
-        计算所有位点的等位基因总数。
+        è®¡ç®—æ‰€æœ‰ä½ç‚¹çš„ç­‰ä½åŸºå› æ€»æ•°ã€‚
         
         Returns:
-            等位基因总数
+            ç­‰ä½åŸºå› æ€»æ•°
         """
         total = 0
         for chrom in self.chromosomes:
@@ -2754,18 +2753,18 @@ class Species(GeneticStructure['HaploidGenome']):
     
     def count_haploid_genotypes(self) -> int:
         """
-        计算所有可能的单倍体基因组数量。
+        Calculate the total number of possible haploid genomes.
         
-        对于每个位点有 n 个等位基因，单倍体基因组数 = 各位点等位基因数的乘积。
-        如果存在性染色体组，每个组内只选一个染色体。
+        For each locus with n alleles, the haploid genome count = product of allele counts at each locus.
+        If sex chromosome groups exist, only one chromosome is selected per group.
         
         Returns:
-            可能的单倍体基因组总数
+            Total number of possible haploid genomes
         """
-        # 获取性染色体配置（优先使用显式设置，否则自动推断）
+        # èŽ·å–æ€§æŸ“è‰²ä½“é…ç½®ï¼ˆä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®ï¼Œå¦åˆ™è‡ªåŠ¨æŽ¨æ–­ï¼‰
         sex_chr_groups = self._get_sex_chromosome_groups()
         
-        # 识别性染色体组中的所有染色体
+        # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
         sex_chroms = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
@@ -2773,17 +2772,17 @@ class Species(GeneticStructure['HaploidGenome']):
         
         total = 1
         
-        # 常染色体的等位基因数乘积
+        # å¸¸æŸ“è‰²ä½“çš„ç­‰ä½åŸºå› æ•°ä¹˜ç§¯
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
-                continue  # 跳过性染色体，后面单独处理
+                continue  # è·³è¿‡æ€§æŸ“è‰²ä½“ï¼ŒåŽé¢å•ç‹¬å¤„ç†
             for locus in chrom.loci:
                 n_alleles = len(locus.alleles)
                 if n_alleles > 0:
                     total *= n_alleles
         
-        # 对于性染色体组，每个组可以选择组内任一染色体
-        # 每个染色体的 haplotype 数量 = 其 loci 等位基因数的乘积
+        # å¯¹äºŽæ€§æŸ“è‰²ä½“ç»„ï¼Œæ¯ä¸ªç»„å¯ä»¥é€‰æ‹©ç»„å†…ä»»ä¸€æŸ“è‰²ä½“
+        # æ¯ä¸ªæŸ“è‰²ä½“çš„ haplotype æ•°é‡ = å…¶ loci ç­‰ä½åŸºå› æ•°çš„ä¹˜ç§¯
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 group_total = 0
@@ -2800,28 +2799,28 @@ class Species(GeneticStructure['HaploidGenome']):
     
     def count_genotypes(self) -> int:
         """
-        计算所有可能的二倍体基因型数量。
+        Calculate the total number of possible diploid genotypes.
         
-        如果定义了 _valid_sex_genotypes，只计算有效的性染色体组合。
+        If _valid_sex_genotypes is defined, only valid sex chromosome combinations are counted.
         
-        性染色体系统配置：
-        - 可以通过设置 Chromosome.sex_type 自动推断
-        - 也可以手动设置 _sex_chromosome_groups 和 _valid_sex_genotypes
+        Sex chromosome system configuration:
+        - Can be automatically inferred by setting Chromosome.sex_type
+        - Can also be manually set via _sex_chromosome_groups and _valid_sex_genotypes
         
         Returns:
-            可能的基因型总数
+            Total number of possible genotypes
         """
-        # 使用辅助方法获取配置（优先显式设置，否则自动推断）
+        # ä½¿ç”¨è¾…åŠ©æ–¹æ³•èŽ·å–é…ç½®ï¼ˆä¼˜å…ˆæ˜¾å¼è®¾ç½®ï¼Œå¦åˆ™è‡ªåŠ¨æŽ¨æ–­ï¼‰
         sex_chr_groups = self._get_sex_chromosome_groups()
         valid_sex_gts = self._get_valid_sex_genotypes()
         
         if not sex_chr_groups:
-            # 没有性染色体，简单的 n^2
+            # æ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼Œç®€å•çš„ n^2
             n_haploid = self.count_haploid_genotypes()
             return n_haploid * n_haploid
         
-        # 有性染色体时需要特殊处理
-        # 先计算常染色体部分的组合数
+        # æœ‰æ€§æŸ“è‰²ä½“æ—¶éœ€è¦ç‰¹æ®Šå¤„ç†
+        # å…ˆè®¡ç®—å¸¸æŸ“è‰²ä½“éƒ¨åˆ†çš„ç»„åˆæ•°
         sex_chroms = set()
         for group_chroms in sex_chr_groups.values():
             sex_chroms.update(group_chroms)
@@ -2835,10 +2834,10 @@ class Species(GeneticStructure['HaploidGenome']):
                 if n_alleles > 0:
                     autosome_haploid_count *= n_alleles
         
-        # 常染色体的基因型数 = autosome_haploid_count^2
+        # å¸¸æŸ“è‰²ä½“çš„åŸºå› åž‹æ•° = autosome_haploid_count^2
         autosome_genotype_count = autosome_haploid_count * autosome_haploid_count
         
-        # 计算每个染色体的 haplotype 数
+        # è®¡ç®—æ¯ä¸ªæŸ“è‰²ä½“çš„ haplotype æ•°
         def count_chrom_haplotypes(chrom):
             count = 1
             for locus in chrom.loci:
@@ -2847,37 +2846,37 @@ class Species(GeneticStructure['HaploidGenome']):
                     count *= n_alleles
             return count
         
-        # 对于性染色体组，计算有效组合数
+        # å¯¹äºŽæ€§æŸ“è‰²ä½“ç»„ï¼Œè®¡ç®—æœ‰æ•ˆç»„åˆæ•°
         if valid_sex_gts:
-            # 使用显式定义的有效基因型
+            # ä½¿ç”¨æ˜¾å¼å®šä¹‰çš„æœ‰æ•ˆåŸºå› åž‹
             sex_genotype_count = 0
             for mat_chrom, pat_chrom in valid_sex_gts:
                 n_mat = count_chrom_haplotypes(mat_chrom)
                 n_pat = count_chrom_haplotypes(pat_chrom)
                 sex_genotype_count += n_mat * n_pat
         else:
-            # 没有定义有效基因型，默认所有组合都有效
+            # æ²¡æœ‰å®šä¹‰æœ‰æ•ˆåŸºå› åž‹ï¼Œé»˜è®¤æ‰€æœ‰ç»„åˆéƒ½æœ‰æ•ˆ
             sex_genotype_count = 1
             for group_chroms in sex_chr_groups.values():
                 group_total = 0
                 for chrom in group_chroms:
                     group_total += count_chrom_haplotypes(chrom)
-                # 每个组的 maternal × paternal
+                # æ¯ä¸ªç»„çš„ maternal Ã— paternal
                 sex_genotype_count *= group_total * group_total
         
         return autosome_genotype_count * sex_genotype_count
     
     def iter_haploid_genotypes(self) -> Iterable['HaploidGenome']:
         """
-        迭代所有可能的单倍体基因组 (HaploidGenome)。
+        Iterate over all possible haploid genomes (HaploidGenome).
         
-        如果存在性染色体组，每个组只选择一个染色体。
-        注意：此方法返回所有可能的 haploid genotypes，不区分 maternal/paternal。
-        对于需要区分的场景，请使用 iter_maternal_haploid_genotypes() 和 
-        iter_paternal_haploid_genotypes()。
+        If sex chromosome groups exist, only one chromosome is selected per group.
+        Note: This method returns all possible haploid genotypes without distinguishing 
+        between maternal/paternal. For scenarios requiring distinction, use 
+        iter_maternal_haploid_genotypes() and iter_paternal_haploid_genotypes().
         
         Yields:
-            HaploidGenome 实例
+            HaploidGenome instances
         
         Example:
             >>> for hg in species.iter_haploid_genotypes():
@@ -2887,17 +2886,17 @@ class Species(GeneticStructure['HaploidGenome']):
         
         sex_chr_groups = self._get_sex_chromosome_groups()
         
-        # 识别性染色体组中的所有染色体
+        # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
         sex_chroms = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 sex_chroms.update(group_chroms)
         
-        # 为常染色体收集所有可能的 Haplotype
+        # ä¸ºå¸¸æŸ“è‰²ä½“æ”¶é›†æ‰€æœ‰å¯èƒ½çš„ Haplotype
         autosome_haplotypes: List[List['Haplotype']] = []
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
-                continue  # 性染色体单独处理
+                continue  # æ€§æŸ“è‰²ä½“å•ç‹¬å¤„ç†
             
             locus_alleles = [list(locus.alleles) for locus in chrom.loci]
             if not locus_alleles or any(len(a) == 0 for a in locus_alleles):
@@ -2909,8 +2908,8 @@ class Species(GeneticStructure['HaploidGenome']):
                 haps_for_chrom.append(hap)
             autosome_haplotypes.append(haps_for_chrom)
         
-        # 为性染色体组收集可能的 Haplotype 选项
-        # 每个组内的所有染色体的 haplotype 放在一个列表中（选其一）
+        # ä¸ºæ€§æŸ“è‰²ä½“ç»„æ”¶é›†å¯èƒ½çš„ Haplotype é€‰é¡¹
+        # æ¯ä¸ªç»„å†…çš„æ‰€æœ‰æŸ“è‰²ä½“çš„ haplotype æ”¾åœ¨ä¸€ä¸ªåˆ—è¡¨ä¸­ï¼ˆé€‰å…¶ä¸€ï¼‰
         sex_group_haplotypes: List[List['Haplotype']] = []
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
@@ -2925,13 +2924,13 @@ class Species(GeneticStructure['HaploidGenome']):
                 if group_haps:
                     sex_group_haplotypes.append(group_haps)
         
-        # 合并常染色体和性染色体组的 haplotype 列表
+        # åˆå¹¶å¸¸æŸ“è‰²ä½“å’Œæ€§æŸ“è‰²ä½“ç»„çš„ haplotype åˆ—è¡¨
         all_haplotype_options = autosome_haplotypes + sex_group_haplotypes
         
         if not all_haplotype_options:
             return
         
-        # 所有组合 -> HaploidGenome
+        # æ‰€æœ‰ç»„åˆ -> HaploidGenome
         for haplotype_combo in itertools.product(*all_haplotype_options):
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
     
@@ -2940,42 +2939,42 @@ class Species(GeneticStructure['HaploidGenome']):
         is_paternal: bool
     ) -> Iterable['HaploidGenome']:
         """
-        迭代指定亲本（maternal 或 paternal）可用的单倍体基因组。
+        è¿­ä»£æŒ‡å®šäº²æœ¬ï¼ˆmaternal æˆ– paternalï¼‰å¯ç”¨çš„å•å€ä½“åŸºå› ç»„ã€‚
         
-        根据 _valid_sex_genotypes 确定每个亲本可用的染色体。
+        æ ¹æ® _valid_sex_genotypes ç¡®å®šæ¯ä¸ªäº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“ã€‚
         
         Args:
-            is_paternal: True 表示 paternal，False 表示 maternal
+            is_paternal: True è¡¨ç¤º paternalï¼ŒFalse è¡¨ç¤º maternal
             
         Yields:
-            HaploidGenome 实例
+            HaploidGenome å®žä¾‹
         """
         from natal.genetic_entities import Haplotype, HaploidGenome
         
         sex_chr_groups = self._get_sex_chromosome_groups()
         valid_sex_gts = self._get_valid_sex_genotypes()
         
-        # 识别性染色体组中的所有染色体
+        # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
         sex_chroms = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 sex_chroms.update(group_chroms)
         
-        # 确定该亲本可用的性染色体
+        # ç¡®å®šè¯¥äº²æœ¬å¯ç”¨çš„æ€§æŸ“è‰²ä½“
         available_sex_chroms = set()
         if sex_chr_groups:
             if valid_sex_gts:
-                # 从有效基因型中提取该亲本可用的染色体
+                # ä»Žæœ‰æ•ˆåŸºå› åž‹ä¸­æå–è¯¥äº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“
                 for mat_chrom, pat_chrom in valid_sex_gts:
                     if is_paternal:
                         available_sex_chroms.add(pat_chrom)
                     else:
                         available_sex_chroms.add(mat_chrom)
             else:
-                # 没有限制，所有性染色体都可用
+                # æ²¡æœ‰é™åˆ¶ï¼Œæ‰€æœ‰æ€§æŸ“è‰²ä½“éƒ½å¯ç”¨
                 available_sex_chroms = sex_chroms
         
-        # 为常染色体收集所有可能的 Haplotype
+        # ä¸ºå¸¸æŸ“è‰²ä½“æ”¶é›†æ‰€æœ‰å¯èƒ½çš„ Haplotype
         autosome_haplotypes: List[List['Haplotype']] = []
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
@@ -2991,13 +2990,13 @@ class Species(GeneticStructure['HaploidGenome']):
                 haps_for_chrom.append(hap)
             autosome_haplotypes.append(haps_for_chrom)
         
-        # 为性染色体组收集可能的 Haplotype 选项
+        # ä¸ºæ€§æŸ“è‰²ä½“ç»„æ”¶é›†å¯èƒ½çš„ Haplotype é€‰é¡¹
         sex_group_haplotypes: List[List['Haplotype']] = []
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 group_haps = []
                 for chrom in group_chroms:
-                    # 只包含该亲本可用的染色体
+                    # åªåŒ…å«è¯¥äº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“
                     if chrom not in available_sex_chroms:
                         continue
                     
@@ -3010,47 +3009,47 @@ class Species(GeneticStructure['HaploidGenome']):
                 if group_haps:
                     sex_group_haplotypes.append(group_haps)
         
-        # 合并常染色体和性染色体组的 haplotype 列表
+        # åˆå¹¶å¸¸æŸ“è‰²ä½“å’Œæ€§æŸ“è‰²ä½“ç»„çš„ haplotype åˆ—è¡¨
         all_haplotype_options = autosome_haplotypes + sex_group_haplotypes
         
         if not all_haplotype_options:
             return
         
-        # 所有组合 -> HaploidGenome
+        # æ‰€æœ‰ç»„åˆ -> HaploidGenome
         for haplotype_combo in itertools.product(*all_haplotype_options):
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
     
     def iter_maternal_haploid_genotypes(self) -> Iterable['HaploidGenome']:
         """
-        迭代 maternal（母本）可遗传的单倍体基因组。
+        è¿­ä»£ maternalï¼ˆæ¯æœ¬ï¼‰å¯é—ä¼ çš„å•å€ä½“åŸºå› ç»„ã€‚
         
-        根据 _valid_sex_genotypes 确定可用的性染色体。
+        æ ¹æ® _valid_sex_genotypes ç¡®å®šå¯ç”¨çš„æ€§æŸ“è‰²ä½“ã€‚
         
         Yields:
-            HaploidGenome 实例
+            HaploidGenome å®žä¾‹
         """
         return self._iter_haploid_genotypes_for_parent(is_paternal=False)
     
     def iter_paternal_haploid_genotypes(self) -> Iterable['HaploidGenome']:
         """
-        迭代 paternal（父本）可遗传的单倍体基因组。
+        è¿­ä»£ paternalï¼ˆçˆ¶æœ¬ï¼‰å¯é—ä¼ çš„å•å€ä½“åŸºå› ç»„ã€‚
         
-        根据 _valid_sex_genotypes 确定可用的性染色体。
+        æ ¹æ® _valid_sex_genotypes ç¡®å®šå¯ç”¨çš„æ€§æŸ“è‰²ä½“ã€‚
         
         Yields:
-            HaploidGenome 实例
+            HaploidGenome å®žä¾‹
         """
         return self._iter_haploid_genotypes_for_parent(is_paternal=True)
     
     def iter_genotypes(self) -> Iterable['Genotype']:
         """
-        迭代所有可能的基因型 (Genotype)。
+        è¿­ä»£æ‰€æœ‰å¯èƒ½çš„åŸºå› åž‹ (Genotype)ã€‚
         
-        区分 maternal 和 paternal，所以 (A|B) 和 (B|A) 是不同的基因型。
-        如果定义了 _valid_sex_genotypes 或 Chromosome.sex_type，只生成有效的性染色体组合。
+        åŒºåˆ† maternal å’Œ paternalï¼Œæ‰€ä»¥ (A|B) å’Œ (B|A) æ˜¯ä¸åŒçš„åŸºå› åž‹ã€‚
+        å¦‚æžœå®šä¹‰äº† _valid_sex_genotypes æˆ– Chromosome.sex_typeï¼Œåªç”Ÿæˆæœ‰æ•ˆçš„æ€§æŸ“è‰²ä½“ç»„åˆã€‚
         
         Yields:
-            Genotype 实例
+            Genotype å®žä¾‹
         
         Example:
             >>> for gt in species.iter_genotypes():
@@ -3062,28 +3061,28 @@ class Species(GeneticStructure['HaploidGenome']):
         valid_sex_gts = self._get_valid_sex_genotypes()
         
         if not sex_chr_groups:
-            # 没有性染色体，简单的笛卡尔积
+            # æ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼Œç®€å•çš„ç¬›å¡å°”ç§¯
             all_haploid_genotypes = list(self.iter_haploid_genotypes())
             for maternal, paternal in itertools.product(all_haploid_genotypes, repeat=2):
                 yield Genotype(species=self, maternal=maternal, paternal=paternal)
         elif valid_sex_gts:
-            # 有性染色体且定义了有效基因型，需要验证组合
+            # æœ‰æ€§æŸ“è‰²ä½“ä¸”å®šä¹‰äº†æœ‰æ•ˆåŸºå› åž‹ï¼Œéœ€è¦éªŒè¯ç»„åˆ
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
             
-            # 构建有效组合的 set 用于快速查找
+            # æž„å»ºæœ‰æ•ˆç»„åˆçš„ set ç”¨äºŽå¿«é€ŸæŸ¥æ‰¾
             valid_chrom_pairs = set(valid_sex_gts)
             
             for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
-                # 获取 maternal 和 paternal 的性染色体
+                # èŽ·å– maternal å’Œ paternal çš„æ€§æŸ“è‰²ä½“
                 mat_sex_chrom = self._get_sex_chromosome(maternal, sex_chr_groups)
                 pat_sex_chrom = self._get_sex_chromosome(paternal, sex_chr_groups)
                 
-                # 检查是否是有效组合
+                # æ£€æŸ¥æ˜¯å¦æ˜¯æœ‰æ•ˆç»„åˆ
                 if (mat_sex_chrom, pat_sex_chrom) in valid_chrom_pairs:
                     yield Genotype(species=self, maternal=maternal, paternal=paternal)
         else:
-            # 有性染色体但没有定义有效基因型，所有组合都有效
+            # æœ‰æ€§æŸ“è‰²ä½“ä½†æ²¡æœ‰å®šä¹‰æœ‰æ•ˆåŸºå› åž‹ï¼Œæ‰€æœ‰ç»„åˆéƒ½æœ‰æ•ˆ
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
             
@@ -3096,16 +3095,16 @@ class Species(GeneticStructure['HaploidGenome']):
         sex_chr_groups: Dict[str, List['Chromosome']]
     ) -> Optional['Chromosome']:
         """
-        获取 HaploidGenome 中的性染色体。
+        èŽ·å– HaploidGenome ä¸­çš„æ€§æŸ“è‰²ä½“ã€‚
         
-        假设每个性染色体组只选择一个染色体。
+        å‡è®¾æ¯ä¸ªæ€§æŸ“è‰²ä½“ç»„åªé€‰æ‹©ä¸€ä¸ªæŸ“è‰²ä½“ã€‚
         
         Args:
-            haploid_genome: 单倍体基因组
-            sex_chr_groups: 性染色体组定义
+            haploid_genome: å•å€ä½“åŸºå› ç»„
+            sex_chr_groups: æ€§æŸ“è‰²ä½“ç»„å®šä¹‰
             
         Returns:
-            性染色体，如果没有则返回 None
+            æ€§æŸ“è‰²ä½“ï¼Œå¦‚æžœæ²¡æœ‰åˆ™è¿”å›ž None
         """
         sex_chroms = set()
         for group_chroms in sex_chr_groups.values():
@@ -3118,19 +3117,19 @@ class Species(GeneticStructure['HaploidGenome']):
     
     def get_all_haploid_genotypes(self) -> List['HaploidGenome']:
         """
-        获取所有可能的单倍体基因组列表。
+        èŽ·å–æ‰€æœ‰å¯èƒ½çš„å•å€ä½“åŸºå› ç»„åˆ—è¡¨ã€‚
         
         Returns:
-            所有 HaploidGenome 实例的列表
+            æ‰€æœ‰ HaploidGenome å®žä¾‹çš„åˆ—è¡¨
         """
         return list(self.iter_haploid_genotypes())
     
     def get_all_genotypes(self) -> List['Genotype']:
         """
-        获取所有可能的基因型列表。
+        èŽ·å–æ‰€æœ‰å¯èƒ½çš„åŸºå› åž‹åˆ—è¡¨ã€‚
         
         Returns:
-            所有 Genotype 实例的列表
+            æ‰€æœ‰ Genotype å®žä¾‹çš„åˆ—è¡¨
         """
         return list(self.iter_genotypes())
 

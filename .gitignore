@@ -15,3 +15,7 @@ tests/
 .numba_cache/*
 
 .DS_Store
+
+site/*
+test_*
+.github/*

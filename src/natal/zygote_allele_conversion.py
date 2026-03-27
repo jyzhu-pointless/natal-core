@@ -25,7 +25,12 @@ from typing import (
     Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Literal,
 )
 import numpy as np
-from natal.modifiers import ZygoteModifier
+from natal.modifiers import (
+    ZygoteModifier,
+    GenotypeFilter,
+    evaluate_genotype_filter,
+    resolve_optional_glab_index,
+)
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
 from natal.index_registry import compress_hg_glab
 
@@ -39,7 +44,7 @@ __all__ = [
     "ZygoteConversionRuleSet"
 ]
 
-_GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
+_GenotypeFilter = GenotypeFilter
 
 
 def _evaluate_genotype_filter(
@@ -47,26 +52,8 @@ def _evaluate_genotype_filter(
     genotype: Genotype,
     compiled_filter: Optional[Callable[[Genotype], bool]],
 ) -> Tuple[bool, Optional[Callable[[Genotype], bool]]]:
-    """Evaluate genotype_filter and lazily compile pattern-string filters."""
-    if genotype_filter is None:
-        return True, compiled_filter
-
-    if callable(genotype_filter):
-        return genotype_filter(genotype), compiled_filter
-
-    if isinstance(genotype_filter, str):
-        if compiled_filter is None:
-            from natal.genetic_patterns import GenotypePatternParser
-            try:
-                pattern = GenotypePatternParser(genotype.species).parse(genotype_filter)
-            except Exception as exc:
-                raise ValueError(
-                    f"Invalid genotype_filter pattern: {genotype_filter}"
-                ) from exc
-            compiled_filter = pattern.to_filter()
-        return compiled_filter(genotype), compiled_filter
-
-    raise TypeError("genotype_filter must be a callable, pattern string, or None")
+    """Compatibility wrapper around shared genotype filter evaluator."""
+    return evaluate_genotype_filter(genotype_filter, genotype, compiled_filter)
 
 
 # ============================================================================
@@ -510,14 +497,8 @@ def _resolve_zygote_rule_glabs(
     glab_map = population._index_registry.glab_to_index
     resolved: List[_ResolvedRule] = []
     for rule in rules:
-        mat = rule.maternal_glab
-        pat = rule.paternal_glab
-        mat_idx: Optional[int] = None
-        pat_idx: Optional[int] = None
-        if mat is not None:
-            mat_idx = mat if isinstance(mat, int) else glab_map[mat]
-        if pat is not None:
-            pat_idx = pat if isinstance(pat, int) else glab_map[pat]
+        mat_idx = resolve_optional_glab_index(rule.maternal_glab, glab_map)
+        pat_idx = resolve_optional_glab_index(rule.paternal_glab, glab_map)
         resolved.append((rule, mat_idx, pat_idx))
     return resolved
 

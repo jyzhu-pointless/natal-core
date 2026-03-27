@@ -28,7 +28,7 @@ drive = nt.HomingDrive(
     target_allele="WT",
     resistance_allele="R2",
     functional_resistance_allele="R1",
-    drive_conversion_rate=0.8,
+    drive_conversion_rate=0.9,
     late_germline_resistance_formation_rate=0.5,
     functional_resistance_ratio=0.01,
     embryo_resistance_formation_rate=0.1,
@@ -70,7 +70,8 @@ pop = nt.AgeStructuredPopulation\
         new_adult_age=2,
     ) \
     .initial_state(
-        individual_count=initial_distribution
+        individual_count=initial_distribution # type: ignore
+        # TODO: 类型检查未通过，需要调整！
     ) \
     .reproduction(
         female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],

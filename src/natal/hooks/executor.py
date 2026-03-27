@@ -29,11 +29,52 @@ from .types import (
     RESULT_STOP,
     CompiledHookDescriptor,
     HookProgram,
-    deme_selector_matches,
+    DemeSelector,
 )
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
+
+
+def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
+    """Return whether one deme id should execute under ``selector``.
+
+    Supported forms:
+    - "*" for all demes
+    - int for one deme
+    - list/tuple/range for a set of demes
+    """
+    if selector == "*":
+        return True
+    if isinstance(selector, int):
+        return selector == deme_id
+    if isinstance(selector, range):
+        return deme_id in selector
+    if isinstance(selector, (list, tuple)):
+        return deme_id in selector
+    raise TypeError(f"Unsupported deme selector type: {type(selector).__name__}")
+
+
+@njit_switch(cache=True)
+def njit_deme_selector_matches(sel_type: int, start: int, end: int, data: np.ndarray, deme_id: int) -> bool:
+    """Numba-compatible version of deme_selector_matches.
+
+    Types: 0=ANY, 1=SINGLE, 2=RANGE, 3=LIST
+    """
+    if sel_type == 0:  # ANY ("*")
+        return True
+    if sel_type == 1:  # SINGLE (int)
+        return data[start] == deme_id
+    if sel_type == 2:  # RANGE (range)
+        return deme_id >= data[start] and deme_id < data[start + 1]
+    if sel_type == 3:  # LIST (list/tuple)
+        if start >= end:
+            return False
+        for i in range(start, end):
+            if data[i] == deme_id:
+                return True
+        return False
+    return True
 
 
 @njit_switch(cache=True)
@@ -225,6 +266,9 @@ def execute_csr_event_arrays(
     condition_offsets_data,
     condition_types_data,
     condition_params_data,
+    deme_selector_types,
+    deme_selector_offsets,
+    deme_selector_data,
     event_id,
     individual_count,
     sperm_storage,
@@ -232,6 +276,7 @@ def execute_csr_event_arrays(
     tick,
     is_stochastic,
     use_dirichlet_sampling,
+    deme_id,
 ):
     """Execute one event from flattened CSR arrays.
 
@@ -247,6 +292,16 @@ def execute_csr_event_arrays(
 
     for hook_idx in range(hook_start, hook_end):
         if hook_idx < 0 or hook_idx >= n_hooks:
+            continue
+
+        # Filtering by deme_id using serialized selector data
+        if not njit_deme_selector_matches(
+            deme_selector_types[hook_idx],
+            deme_selector_offsets[hook_idx],
+            deme_selector_offsets[hook_idx + 1],
+            deme_selector_data,
+            deme_id,
+        ):
             continue
 
         op_start = op_offsets[hook_idx]
@@ -369,6 +424,7 @@ def execute_csr_event_program_with_state(
     is_stochastic,
     has_sperm_storage,
     use_dirichlet_sampling,
+    deme_id=0,
 ):
     """Execute event directly from ``HookProgram`` while exposing state flags."""
     return execute_csr_event_arrays(
@@ -387,6 +443,9 @@ def execute_csr_event_program_with_state(
         program.condition_offsets_data,
         program.condition_types_data,
         program.condition_params_data,
+        program.deme_selector_types,
+        program.deme_selector_offsets,
+        program.deme_selector_data,
         event_id,
         individual_count,
         sperm_storage,
@@ -394,6 +453,7 @@ def execute_csr_event_program_with_state(
         tick,
         is_stochastic,
         use_dirichlet_sampling,
+        deme_id,
     )
 
 
@@ -409,7 +469,8 @@ def execute_csr_event_program(program: HookProgram, event_id, individual_count, 
         tick,
         False,
         False,
-        False,
+        False,  # use_dirichlet_sampling
+        0,      # deme_id
     )
 
 
@@ -474,6 +535,7 @@ class HookExecutor:
             is_stochastic,
             has_sperm_storage,
             use_dirichlet_sampling,
+            deme_id,
         )
         if result == RESULT_STOP:
             return RESULT_STOP
@@ -484,7 +546,7 @@ class HookExecutor:
                 continue
             if desc.njit_fn is not None:
                 try:
-                    result = desc.njit_fn(ind_count, tick)
+                    result = desc.njit_fn(ind_count, tick, deme_id)
                     if result == RESULT_STOP:
                         return RESULT_STOP
                 except Exception as e:

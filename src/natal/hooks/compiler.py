@@ -13,7 +13,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from natal.numba_utils import njit_switch
-from natal.kernels.codegen import compile_kernel_bound_wrappers
+from natal.kernels.codegen import compile_kernel_bound_wrappers, compile_spatial_kernel_bound_wrappers
 
 from .declarative import HookOp, compile_declarative_hook
 from .selector import compile_selector_hook
@@ -38,12 +38,35 @@ _njit_switch = njit_switch
 
 
 @_njit_switch(cache=True)
-def _noop_hook(ind_count, tick):
+def _noop_hook(ind_count, tick, deme_id=0):
     """Default hook implementation used for missing event handlers."""
     return 0
 
 
 noop_hook = _noop_hook
+
+
+def _normalize_njit_fn(fn: Callable) -> Callable:
+    """Ensure an njit hook matches the internal (ind_count, tick, deme_id) signature.
+    
+    If the user provided a 2-arg function, wrap it.
+    """
+    py_fn = getattr(fn, "py_func", fn)
+    sig = inspect.signature(py_fn)
+    params = list(sig.parameters.values())
+    
+    # If it already matches or has varargs, assume it handles 3 args.
+    if len(params) >= 3:
+        return fn
+        
+    # Wrap 2-arg function: (ind_count, tick) -> (ind_count, tick, deme_id)
+    key = _hash_key(["wrap2to3", _stable_callable_identity(fn)])
+    fn_name = f"_wrapped_hook_{key}"
+    
+    @_njit_switch(cache=True)
+    def wrapped(ind_count, tick, deme_id=0):
+        return fn(ind_count, tick)
+    return wrapped
 
 
 def compile_combined_hook(njit_fns: List[Callable], name: str = "combined_hook") -> Callable:
@@ -71,11 +94,11 @@ def compile_combined_hook(njit_fns: List[Callable], name: str = "combined_hook")
         [
             "",
             "@_njit_switch(cache=True)",
-            f"def {fn_name}(ind_count, tick):",
+            f"def {fn_name}(ind_count, tick, deme_id=0):",
         ]
     )
     for placeholder in placeholder_names:
-        lines.append(f"    _result = {placeholder}(ind_count, tick)")
+        lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
         lines.append("    if _result != 0:")
         lines.append("        return _result")
     lines.append("    return 0")
@@ -106,6 +129,8 @@ class CompiledEventHooks:
         "run_fn",
         "run_discrete_tick_fn",
         "run_discrete_fn",
+        "run_spatial_tick_fn",
+        "run_spatial_fn",
     )
 
     # Type annotations for attributes
@@ -119,6 +144,8 @@ class CompiledEventHooks:
     run_fn: Optional[Callable]
     run_discrete_tick_fn: Optional[Callable]
     run_discrete_fn: Optional[Callable]
+    run_spatial_tick_fn: Optional[Callable]
+    run_spatial_fn: Optional[Callable]
 
     def __init__(self) -> None:
         self.first = _noop_hook
@@ -131,6 +158,8 @@ class CompiledEventHooks:
         self.run_fn = None
         self.run_discrete_tick_fn = None
         self.run_discrete_fn = None
+        self.run_spatial_tick_fn = None
+        self.run_spatial_fn = None
 
     def get_hook(self, event_name: str) -> Callable:
         return self._event_hooks.get(event_name, _noop_hook)
@@ -172,6 +201,10 @@ class CompiledEventHooks:
             result.run_discrete_tick_fn,
             result.run_discrete_fn,
         ) = compile_kernel_bound_wrappers(result.first, result.early, result.late)
+        (
+            result.run_spatial_tick_fn,
+            result.run_spatial_fn,
+        ) = compile_spatial_kernel_bound_wrappers(result.first, result.early, result.late)
         return result
 
 
@@ -225,12 +258,13 @@ def hook(
             if numba:
                 # Mode 1: explicit custom njit hook.
                 _validate_numba_hook_required(func, func.__name__, "@hook(numba=True)")
+                norm_fn = _normalize_njit_fn(func)
                 desc = CompiledHookDescriptor(
                     name=func.__name__,
                     event=actual_event,
                     priority=priority,
                     deme_selector=actual_deme_selector,
-                    njit_fn=func,
+                    njit_fn=norm_fn,
                     meta={"n_genotypes": pop._index_registry.num_genotypes(), "n_ages": pop._config.n_ages},
                 )
             elif selectors:

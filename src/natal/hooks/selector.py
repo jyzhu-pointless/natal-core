@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
 import numpy as np
+import inspect
 
 from .types import (
     DemeSelector,
@@ -120,7 +121,13 @@ def compile_selector_hook(
         if numba_mode:
             _validate_numba_hook_required(func, func.__name__, "selector numba_mode=True")
 
-        njit_fn = _compile_selector_njit_wrapper(func, resolved)
+        # Handle signature normalization for user function (2 or 3 args before selectors)
+        py_func = getattr(func, "py_func", func)
+        sig = inspect.signature(py_func)
+        # Check if user fn expects deme_id (3 positional args before kwargs)
+        has_deme_id = len([p for p in sig.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]) >= 3
+        
+        njit_fn = _compile_selector_njit_wrapper(func, resolved, has_deme_id)
         return CompiledHookDescriptor(
             name=func.__name__,
             event=event,
@@ -147,7 +154,11 @@ def compile_selector_hook(
     )
 
 
-def _compile_selector_njit_wrapper(user_fn: Callable, resolved_selectors: Dict[str, np.ndarray]) -> Callable:
+def _compile_selector_njit_wrapper(
+    user_fn: Callable, 
+    resolved_selectors: Dict[str, np.ndarray],
+    has_deme_id: bool,
+) -> Callable:
     """Generate a Numba wrapper with selector constants baked in.
 
     The generated module imports ``_njit_switch`` from ``hook_dsl`` so wrapper
@@ -172,12 +183,15 @@ def _compile_selector_njit_wrapper(user_fn: Callable, resolved_selectors: Dict[s
         "_USER_FN = None",
     ]
     code_lines.extend([f"{placeholder} = None" for placeholder in selector_placeholders])
+    
+    call_args = "ind_count, tick, deme_id" if has_deme_id else "ind_count, tick"
+    
     code_lines.extend(
         [
             "",
             "@_njit_switch(cache=True)",
-            f"def {fn_name}(ind_count, tick):",
-            f"    return _USER_FN(ind_count, tick, {args_str})",
+            f"def {fn_name}(ind_count, tick, deme_id=0):",
+            f"    return _USER_FN({call_args}, {args_str})",
             "",
         ]
     )

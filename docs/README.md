@@ -25,6 +25,10 @@
 
 - **[Samplers & 观察过滤](10_samplers_observation.md)** - 灵活的数据提取工具，用于统计推断和数据同化
 
+### Spatial 模拟
+
+- **[Spatial 模拟实现指南](16_spatial_simulation_guide.md)** - 空间拓扑、迁移、kernel+codegen+hook 合并与当前能力边界
+
 ### 遗传预设系统
 
 - **[遗传预设使用指南](15_genetic_presets_guide.md)** - 如何使用和创建基因驱动、突变系统等遗传修饰预设

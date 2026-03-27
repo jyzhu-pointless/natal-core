@@ -16,6 +16,7 @@ from .executor import (
     HookExecutor,
     _eval_csr_condition_program,
     build_hook_program,
+    deme_selector_matches,
     execute_csr_event_arrays,
     execute_csr_event_program,
     execute_csr_event_program_with_state,
@@ -23,7 +24,6 @@ from .executor import (
 from .selector import compile_selector_hook
 from .types import (
     DemeSelector,
-    deme_selector_matches,
         HookOp,
         OpType,
     COND_ALWAYS,

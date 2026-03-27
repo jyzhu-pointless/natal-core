@@ -62,25 +62,6 @@ class HookOp:
 DemeSelector = Union[int, List[int], Tuple[int, ...], range, Literal["*"]]
 
 
-def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
-    """Return whether one deme id should execute under ``selector``.
-
-    Supported forms:
-    - "*" for all demes
-    - int for one deme
-    - list/tuple/range for a set of demes
-    """
-    if selector == "*":
-        return True
-    if isinstance(selector, int):
-        return selector == deme_id
-    if isinstance(selector, range):
-        return deme_id in selector
-    if isinstance(selector, (list, tuple)):
-        return deme_id in selector
-    raise TypeError(f"Unsupported deme selector type: {type(selector).__name__}")
-
-
 _HOOK_CODEGEN_DIR = Path(get_numba_cache_dir()) / "hook_codegen"
 _HOOK_CODEGEN_LOCK = threading.Lock()
 
@@ -259,3 +240,6 @@ class HookProgram(NamedTuple):
     condition_offsets_data: np.ndarray
     condition_types_data: np.ndarray
     condition_params_data: np.ndarray
+    deme_selector_types: np.ndarray
+    deme_selector_offsets: np.ndarray
+    deme_selector_data: np.ndarray

@@ -25,9 +25,10 @@ from natal.genetic_structures import *
 from natal.genetic_entities import *
 from natal.index_registry import IndexRegistry
 from natal.type_def import *
+from natal.helpers import resolve_sex_label
 from natal.population_state import PopulationState, DiscretePopulationState
 from natal.population_config import PopulationConfig
-from natal.modifiers import GameteModifier, ZygoteModifier, build_modifier_wrappers, _resolve_sex_name
+from natal.modifiers import GameteModifier, ZygoteModifier, build_modifier_wrappers
 from natal.hook_dsl import CompiledEventHooks
 
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
@@ -109,10 +110,10 @@ class BasePopulation(ABC, Generic[T_State]):
         # 统一的合子修饰器列表
         self._zygote_modifiers: List[Tuple[int, Optional[str], ZygoteModifier]] = []
 
-        # 编译后的 Hook 描述符列表（用于 numba 加速）
+        # 编译后的 Hook Description符列表（用于 numba 加速）
         self._compiled_hooks: List[Any] = []  # List[CompiledHookDescriptor]
         
-        # Hook 执行器（Python 层协调器，管理所有类型的 hooks）
+        # Hook 执行器（Python 层协调器，管理所有Type的 hooks）
         self._hook_executor: Optional[Any] = None  # HookExecutor
 
         # 静态数据容器
@@ -638,7 +639,10 @@ class BasePopulation(ABC, Generic[T_State]):
 
         Returns None for unknown keys.
         """
-        return _resolve_sex_name(key)
+        try:
+            return resolve_sex_label(key)
+        except (TypeError, ValueError):
+            return None
 
     def _apply_comp_map(self, modified: np.ndarray, sex_idx: int, gidx: int, comp_map: Any, haploid_genotypes: List[HaploidGenotype], n_glabs: int, n_hg_glabs: int) -> None:
         """Apply a comp_map (comp_key->freq) into the provided modified tensor slice.
@@ -677,29 +681,26 @@ class BasePopulation(ABC, Generic[T_State]):
     
     @abstractmethod
     def run_tick(self) -> 'BasePopulation[T_State]':
-        """
-        执行一个演化步骤。
-        
-        标准流程：
-        1. 检查是否已 finish
-        2. 设置 _running 标志防止递归
-        3. 触发 'first' hook
-        4. 调用 _step_reproduction()
-        5. 触发 'early' hook
-        6. 调用 _step_survival()
-        7. 触发 'late' hook
-        8. 调用 _step_aging()
-        9. 更新 tick
-        10. 清除 _running 标志
-        
-        如果任何 hook 返回 RESULT_STOP，会立即停止执行后续步骤，
-        并自动设置 is_finished=True。
-        
+        """Execute one simulation tick.
+
+        Typical sequence:
+        1. Check termination and re-entrancy guards.
+        2. Trigger ``first`` hooks.
+        3. Run reproduction step.
+        4. Trigger ``early`` hooks.
+        5. Run survival step.
+        6. Trigger ``late`` hooks.
+        7. Run aging step.
+        8. Increment tick and clear running flag.
+
+        If any hook returns ``RESULT_STOP``, remaining steps are skipped and
+        the population is marked as finished.
+
         Returns:
-            self（支持链式调用）
-        
+            BasePopulation[T_State]: ``self`` for chaining.
+
         Raises:
-            RuntimeError: 如果种群已 finish 或正在运行中
+            RuntimeError: If the population is finished or already running.
         """
         pass
 
@@ -709,17 +710,17 @@ class BasePopulation(ABC, Generic[T_State]):
     
     @abstractmethod
     def get_total_count(self) -> int:
-        """返回种群总个体数"""
+        """Return the total number of individuals in the population."""
         pass
     
     @abstractmethod
     def get_female_count(self) -> int:
-        """返回雌性总个体数"""
+        """Return the total number of female individuals."""
         pass
     
     @abstractmethod
     def get_male_count(self) -> int:
-        """返回雄性总个体数"""
+        """Return the total number of male individuals."""
         pass
     
     # ========================================================================
@@ -743,7 +744,7 @@ class BasePopulation(ABC, Generic[T_State]):
     
     @property
     def sex_ratio(self) -> float:
-        """性比（雌/雄），雄性为0时返回 np.inf"""
+        """Return the female-to-male ratio, or ``np.inf`` when male count is zero."""
         males = self.get_male_count()
         return self.get_female_count() / males if males > 0 else np.inf
     
@@ -875,14 +876,14 @@ class BasePopulation(ABC, Generic[T_State]):
             event_name: 事件名称（必须在 ALLOWED_EVENTS 中）
             func: 回调函数，支持以下形式：
                   - 普通函数: func(population)
-                  - @hook 装饰的声明式函数: 返回 [Op.scale(...), ...] 
+                  - @hook 装饰的声明式函数: Returns [Op.scale(...), ...] 
                   - @hook(selectors={...}) 装饰的选择器函数
             hook_id: Hook 的数值优先级（可选，自动分配）
                      较小的 ID 先执行
             hook_name: Hook 的可读名称（可选，用于调试）
-            compile: 是否尝试编译 @hook 装饰的函数（默认 True）
+            compile: 是否尝试编译 @hook 装饰的函数（Default True）
             deme_selector: 可选的子种群选择器。
-                - None: 保持 panmictic 默认行为（不显式覆写 selector）
+                - None: 保持 panmictic Default行为（不显式覆写 selector）
                 - 非 None: 传给 hook 编译注册流程用于 spatial 过滤
         
         Raises:
@@ -949,6 +950,7 @@ class BasePopulation(ABC, Generic[T_State]):
         
         Args:
             event_name: 要触发的事件名称
+            deme_id: 子种群 ID（可选，Default为 0）
         
         Returns:
             int: RESULT_CONTINUE (0) 继续运行，RESULT_STOP (1) 请求停止
@@ -1002,7 +1004,7 @@ class BasePopulation(ABC, Generic[T_State]):
             hook_id: Hook 的 ID
         
         Returns:
-            删除成功返回 True，否则返回 False
+            删除成功Returns True，否则Returns False
         """
         if event_name not in self._hooks:
             return False
@@ -1148,6 +1150,10 @@ class BasePopulation(ABC, Generic[T_State]):
         all_cond_types = []
         all_cond_params = []
         
+        all_deme_sel_types = []
+        all_deme_sel_offsets = [0]
+        all_deme_sel_data = []
+
         n_ops_list = []
         op_offsets = [0]
         
@@ -1194,6 +1200,24 @@ class BasePopulation(ABC, Generic[T_State]):
                 all_cond_params.extend(plan.condition_params.tolist())
                 
                 op_offsets.append(len(all_op_types))
+
+                # Pack deme selector from CompiledHookDescriptor
+                sel = hook.deme_selector
+                if sel == "*":
+                    all_deme_sel_types.append(0)
+                elif isinstance(sel, int):
+                    all_deme_sel_types.append(1)
+                    all_deme_sel_data.append(int(sel))
+                elif isinstance(sel, range):
+                    all_deme_sel_types.append(2)
+                    all_deme_sel_data.append(int(sel.start))
+                    all_deme_sel_data.append(int(sel.stop))
+                elif isinstance(sel, (list, tuple)):
+                    all_deme_sel_types.append(3)
+                    all_deme_sel_data.extend([int(x) for x in sel])
+                else:
+                    all_deme_sel_types.append(0)
+                all_deme_sel_offsets.append(len(all_deme_sel_data))
         
         # 3. Create HookProgram
         return HookProgram(
@@ -1212,6 +1236,9 @@ class BasePopulation(ABC, Generic[T_State]):
             condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
             condition_types_data=np.array(all_cond_types, dtype=np.int32),
             condition_params_data=np.array(all_cond_params, dtype=np.int32),
+            deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
+            deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
+            deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
         )
     
     def _build_hook_executor(self):
@@ -1278,6 +1305,9 @@ class BasePopulation(ABC, Generic[T_State]):
             condition_offsets_data=np.array([0], dtype=np.int32),
             condition_types_data=np.array([], dtype=np.int32),
             condition_params_data=np.array([], dtype=np.int32),
+            deme_selector_types=np.array([], dtype=np.int32),
+            deme_selector_offsets=np.array([0], dtype=np.int32),
+            deme_selector_data=np.array([], dtype=np.int32),
         )
 
     def get_compiled_event_hooks(self) -> 'CompiledEventHooks':

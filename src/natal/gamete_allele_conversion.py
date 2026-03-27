@@ -19,7 +19,13 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Set, Literal
 import numpy as np
 from natal.type_def import Sex
-from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.modifiers import (
+    GameteModifier,
+    ZygoteModifier,
+    GenotypeFilter,
+    evaluate_genotype_filter,
+    resolve_optional_glab_index,
+)
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
 from natal.population_config import extract_gamete_frequencies_by_glab
 from natal.helpers import resolve_sex_label
@@ -36,7 +42,7 @@ __all__ = [
     "GameteConversionRuleSet"
 ]
 
-_GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
+_GenotypeFilter = GenotypeFilter
 _SexSpecifier = Union[Sex, int, str]
 
 
@@ -46,26 +52,8 @@ def _evaluate_genotype_filter(
     genotype: Genotype,
     compiled_filter: Optional[Callable[[Genotype], bool]],
 ) -> Tuple[bool, Optional[Callable[[Genotype], bool]]]:
-    """Evaluate genotype_filter and lazily compile pattern-string filters."""
-    if genotype_filter is None:
-        return True, compiled_filter
-
-    if callable(genotype_filter):
-        return genotype_filter(genotype), compiled_filter
-
-    if isinstance(genotype_filter, str):
-        if compiled_filter is None:
-            from natal.genetic_patterns import GenotypePatternParser
-            try:
-                pattern = GenotypePatternParser(genotype.species).parse(genotype_filter)
-            except Exception as exc:
-                raise ValueError(
-                    f"Invalid genotype_filter pattern: {genotype_filter}"
-                ) from exc
-            compiled_filter = pattern.to_filter()
-        return compiled_filter(genotype), compiled_filter
-
-    raise TypeError("genotype_filter must be a callable, pattern string, or None")
+    """Compatibility wrapper around shared genotype filter evaluator."""
+    return evaluate_genotype_filter(genotype_filter, genotype, compiled_filter)
 
 class GameteHaploidGenomeConversionRule:
     """Defines a whole-HaploidGenotype replacement rule at the gamete level.
@@ -511,14 +499,8 @@ def _resolve_rule_glabs(
     glab_map = population._index_registry.glab_to_index
     resolved: List[_ResolvedGameteRule] = []
     for rule in rules:
-        src = rule.source_glab
-        tgt = rule.target_glab
-        src_idx: Optional[int] = None
-        tgt_idx: Optional[int] = None
-        if src is not None:
-            src_idx = src if isinstance(src, int) else glab_map[src]
-        if tgt is not None:
-            tgt_idx = tgt if isinstance(tgt, int) else glab_map[tgt]
+        src_idx = resolve_optional_glab_index(rule.source_glab, glab_map)
+        tgt_idx = resolve_optional_glab_index(rule.target_glab, glab_map)
         resolved.append((rule, src_idx, tgt_idx))
     return resolved
 

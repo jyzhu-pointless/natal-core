@@ -1,11 +1,33 @@
+# -*- coding: utf-8 -*-
+"""Modifier system for population simulations.
+
+This module defines protocols and helper functions for constructing and
+wrapping modifiers that alter gamete or zygote production in the simulation.
+Modifiers are callable objects that return frequency distributions, and are
+converted into tensor‑level functions that directly update NumPy arrays.
+
+Two modifier types are supported:
+- Gamete modifiers: alter the mapping from (sex, diploid genotype) to
+  haploid gamete frequencies.
+- Zygote modifiers: alter the mapping from a pair of haploid gametes
+  (with gamete labels) to a diploid zygote genotype.
+
+The wrapper factories (`wrap_gamete_modifier`, `wrap_zygote_modifier`) take
+high‑level modifiers that return domain‑object dictionaries and produce
+callables that operate on NumPy tensors.
+"""
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Sequence, Mapping
 from typing import TypeVar, cast
 import inspect
 import numpy as np
-from natal.type_def import Sex
+from natal.helpers import resolve_sex_label
 from natal.genetic_entities import Genotype, HaploidGenotype
+
+GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
+GlabSelector = Optional[Union[str, int]]
 
 # Bulk-only modifier interface expectations (strict form):
 # - gamete modifier: callable() -> Dict[(sex_idx:int, genotype_idx:int) -> Dict[compressed_hg_glab_idx:int -> freq:float]]
@@ -29,13 +51,10 @@ class GameteModifier(Protocol):
     ``{ compressed_hg_glab_idx: frequency, ... }``. Keys may be flexible types
     in wrappers (for convenience) but should ultimately resolve to integers.
 
-    Notes:
-        - ``sex_idx`` is an ``int``.
-        - ``genotype_idx`` may be an ``int``, a ``Genotype`` object, or a
-          string produced by ``Genotype.to_string()``.
+    ``sex_idx`` is an ``int``. ``genotype_idx`` may be an ``int``, a
+    ``Genotype`` object, or a string produced by ``Genotype.to_string()``.
 
-    Example:
-
+    Examples:
         return {(0, 5): {3: 0.2, 4: 0.8}, (1, 5): {3: 1.0}}
 
     The result writes frequency distributions for compressed indices directly
@@ -43,7 +62,7 @@ class GameteModifier(Protocol):
     """
     def __call__(self, *args, **kwargs) -> Mapping[Any, Mapping[int, float]]: ...
 
-# 合子修饰器接口保持不变
+
 class ZygoteModifier(Protocol):
     """Protocol for a bulk zygote modifier.
 
@@ -76,11 +95,11 @@ class ZygoteModifier(Protocol):
 
 def _invoke_modifier(mod: Callable, population: Any = None) -> Mapping[Any, Any]:
     """Invoke a modifier callable, supporting both 0-arg and 1-arg signatures.
-    
+
     Args:
         mod: The modifier callable.
         population: Optional population object to pass if the modifier accepts one.
-    
+
     Returns:
         The dict returned by the modifier.
     """
@@ -98,12 +117,66 @@ def _resolve_sex_name(key: str) -> Optional[int]:
     """
     if not isinstance(key, str):
         return None
-    k = key.lower()
-    if k in ("male", "m"):
-        return int(Sex.MALE)
-    if k in ("female", "f"):
-        return int(Sex.FEMALE)
-    return None
+    try:
+        return resolve_sex_label(key)
+    except (TypeError, ValueError):
+        return None
+
+
+def evaluate_genotype_filter(
+    genotype_filter: GenotypeFilter,
+    genotype: Genotype,
+    compiled_filter: Optional[Callable[[Genotype], bool]],
+) -> Tuple[bool, Optional[Callable[[Genotype], bool]]]:
+    """Evaluate genotype_filter and lazily compile pattern-string filters.
+
+    The function supports three filter forms:
+    - ``None``: always pass
+    - callable: evaluate directly
+    - string pattern: compile once via ``GenotypePatternParser`` then reuse
+    """
+    if genotype_filter is None:
+        return True, compiled_filter
+
+    if callable(genotype_filter):
+        return genotype_filter(genotype), compiled_filter
+
+    if isinstance(genotype_filter, str):
+        if compiled_filter is None:
+            from natal.genetic_patterns import GenotypePatternParser
+            try:
+                pattern = GenotypePatternParser(genotype.species).parse(genotype_filter)
+            except Exception as exc:
+                raise ValueError(
+                    f"Invalid genotype_filter pattern: {genotype_filter}"
+                ) from exc
+            compiled_filter = pattern.to_filter()
+        return compiled_filter(genotype), compiled_filter
+
+    raise TypeError("genotype_filter must be a callable, pattern string, or None")
+
+
+def resolve_optional_glab_index(
+    value: GlabSelector,
+    glab_to_index: Mapping[str, int],
+) -> Optional[int]:
+    """Resolve an optional glab selector to an integer index.
+
+    Args:
+        value: Glab selector as ``None``, integer index, or string label.
+        glab_to_index: Mapping from glab labels to integer indices.
+
+    Returns:
+        The resolved glab index. Returns ``None`` when ``value`` is ``None``.
+
+    Raises:
+        KeyError: If ``value`` is a string label not present in ``glab_to_index``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    return int(glab_to_index[value])
 
 
 # ============================================================================
@@ -124,10 +197,10 @@ def wrap_gamete_modifier(
     n_glabs: int,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level GameteModifier into a tensor-level callable.
-    
+
     The returned callable accepts a tensor of shape (n_sexes, n_genotypes, n_hg_glabs)
     and returns a modified copy.
-    
+
     Args:
         mod: A GameteModifier callable (returns dict mapping keys to freq dicts).
         population: The population object (passed to mod if it takes an argument).
@@ -135,7 +208,7 @@ def wrap_gamete_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
-    
+
     Returns:
         A callable (np.ndarray) -> np.ndarray.
     """
@@ -194,10 +267,10 @@ def wrap_zygote_modifier(
     n_glabs: int,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level ZygoteModifier into a tensor-level callable.
-    
+
     The returned callable accepts a tensor of shape (n_hg_glabs, n_hg_glabs, n_genotypes)
     and returns a modified copy.
-    
+
     Args:
         mod: A ZygoteModifier callable.
         population: The population object (passed to mod if it takes an argument).
@@ -205,7 +278,7 @@ def wrap_zygote_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
-    
+
     Returns:
         A callable (np.ndarray) -> np.ndarray.
     """
@@ -283,7 +356,18 @@ def _apply_comp_map(
     n_glabs: int,
     n_hg_glabs: int,
 ) -> None:
-    """Apply a comp_map (comp_key->freq) into the tensor slice [sex_idx, gidx]."""
+    """Apply a comp_map (comp_key->freq) into the tensor slice [sex_idx, gidx].
+
+    Args:
+        modified: The target tensor (n_sexes, n_genotypes, n_hg_glabs).
+        sex_idx: Sex index.
+        gidx: Genotype index.
+        comp_map: Mapping from compressed‑key to frequency.
+        index_registry: IndexRegistry for resolving keys.
+        haploid_genotypes: List of all haploid genotypes.
+        n_glabs: Number of gamete‑label variants.
+        n_hg_glabs: Total number of compressed haploid entries.
+    """
     modified[sex_idx, gidx, :] = 0.0
     if not isinstance(comp_map, Mapping):
         return
@@ -302,7 +386,17 @@ def _parse_zygote_key(
     haploid_genotypes: List[HaploidGenotype],
     n_glabs: int,
 ) -> Tuple[int, int]:
-    """Parse modifier key for zygote wrappers into compressed coords (c1, c2)."""
+    """Parse modifier key for zygote wrappers into compressed coords (c1, c2).
+
+    Args:
+        key: The key from the modifier mapping (e.g. a tuple or pair of keys).
+        index_registry: IndexRegistry for resolving haploid/gamete‑label parts.
+        haploid_genotypes: List of all haploid genotypes.
+        n_glabs: Number of gamete‑label variants.
+
+    Returns:
+        A tuple of two compressed indices (c1, c2).
+    """
     if isinstance(key, tuple) and len(key) == 2 and all(isinstance(x, int) for x in key):
         return key[0], key[1]
     part1, part2 = key
@@ -319,7 +413,16 @@ def _normalize_zygote_val(
     index_registry: Any,
     diploid_genotypes: List[Genotype],
 ) -> Dict[int, float]:
-    """Normalize zygote replacement value into a mapping idx->prob."""
+    """Normalize zygote replacement value into a mapping idx->prob.
+
+    Args:
+        val: The value from the modifier mapping.
+        index_registry: IndexRegistry for resolving genotype indices.
+        diploid_genotypes: List of all diploid genotypes.
+
+    Returns:
+        Dictionary mapping genotype index to probability.
+    """
     mapping: Dict[int, float] = {}
 
     # single tuple (idx_or_genotype, prob)
@@ -352,7 +455,14 @@ def _write_zygote_mapping(
     c2: int,
     mapping: Dict[int, float],
 ) -> None:
-    """Apply mapping (idx->prob) to the compressed zygote slice."""
+    """Apply mapping (idx->prob) to the compressed zygote slice.
+
+    Args:
+        modified: The target tensor (n_hg_glabs, n_hg_glabs, n_genotypes).
+        c1: Compressed index of first gamete.
+        c2: Compressed index of second gamete.
+        mapping: Dictionary mapping genotype index to probability.
+    """
     modified[c1, c2, :] = 0.0
     for idx_mod, prob in mapping.items():
         modified[c1, c2, int(idx_mod)] = float(prob)

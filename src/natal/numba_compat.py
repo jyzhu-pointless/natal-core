@@ -34,7 +34,7 @@ import time
 # for binomial sampling.
 @njit_switch(cache=True)
 def binomial_btpe(n, p):
-    # C源码初始化部分
+    # C source code initialization
     r = min(p, 1.0 - p)
     q = 1.0 - r
     fm = n * r + r
@@ -54,48 +54,48 @@ def binomial_btpe(n, p):
 
     nrq = n * r * q
 
-    # 开始循环抽样
+    # Start sampling loop
     while True:
-        # 对应 Step10 头部
+        # Corresponds to Step10 header
         u = np.random.random() * p4
         v = np.random.random()
 
-        # ---------- 区域划分开始 ----------
+        # ---------- Region division start ----------
         if u <= p1:
-            # 对应 Step10 下半部：u <= p1 时直接跳到 Step60
+            # Corresponds to Step10 lower half: when u <= p1, jump directly to Step60
             y = int(np.floor(xm - p1 * v + u))
             break # goto Step60
 
         elif u <= p2:
-            # 对应 Step20
+            # Corresponds to Step20
             x = xl + (u - p1) / c
             v = v * c + 1.0 - np.fabs(m - x + 0.5) / p1
             if v > 1.0:
                 continue # goto Step10
             y = int(np.floor(x))
-            # 顺延进入下方的 Step50 检验
+            # Continue to Step50 verification below
             
         elif u <= p3:
-            # 对应 Step30
+            # Corresponds to Step30
             y = int(np.floor(xl + np.log(v) / laml))
             if y < 0 or v == 0.0:
                 continue # goto Step10
             v = v * (u - p2) * laml
-            # 顺延进入下方的 Step50 检验
+            # Continue to Step50 verification below
             
         else:
-            # 对应 Step40
+            # Corresponds to Step40
             y = int(np.floor(xr - np.log(v) / lamr))
             if y > n or v == 0.0:
                 continue # goto Step10
             v = v * (u - p3) * lamr
-            # 顺延进入下方的 Step50 检验
-        # ---------- 区域划分结束 ----------
+            # Continue to Step50 verification below
+        # ---------- Region division end ----------
 
-        # ---------- 检验阶段 (对应 Step50 & Step52) ----------
+        # ---------- Verification phase (corresponds to Step50 & Step52) ----------
         k = abs(y - m)
         if (k > 20) and (k < (nrq / 2.0 - 1)):
-            # 对应 Step52 (Squeeze 检验和精确近似)
+            # Corresponds to Step52 (Squeeze verification and precise approximation)
             rho = (k / nrq) * ((k * (k / 3.0 + 0.625) + 0.16666666666666666) / nrq + 0.5)
             t = -k * k / (2.0 * nrq)
             A = np.log(v)
@@ -105,7 +105,7 @@ def binomial_btpe(n, p):
             if A > (t + rho):
                 continue # goto Step10
 
-            # 对应 Step52 的精确近似公式
+            # Corresponds to precise approximation formula in Step52
             x1 = float(y + 1)
             f1 = float(m + 1)
             z = float(n + 1 - m)
@@ -115,7 +115,7 @@ def binomial_btpe(n, p):
             z2 = z * z
             w2 = w * w
 
-            # C 源码里全都是 + 号，并且除数全都是 166320.
+            # All plus signs in C source code, and all denominators are 166320
             if A > (xm * np.log(f1 / x1) + (n - m + 0.5) * np.log(z / w) +
                     (y - m) * np.log(w * r / (x1 * q)) +
                     (13680. - (462. - (132. - (99. - 140. / f2) / f2) / f2) / f2) / f1 / 166320. +
@@ -124,10 +124,10 @@ def binomial_btpe(n, p):
                     (13680. - (462. - (132. - (99. - 140. / w2) / w2) / w2) / w2) / w / 166320.):
                 continue # goto Step10
                 
-            break # 兜底接受，goto Step60
+            break # Fallback acceptance, goto Step60
             
         else:
-            # 对应 Step50 下半部的精确阶乘连乘 F
+            # Corresponds to precise factorial multiplication F in lower half of Step50
             s = r / q
             a = s * (n + 1)
             F = 1.0
@@ -142,34 +142,34 @@ def binomial_btpe(n, p):
                 continue # goto Step10
             break # goto Step60
 
-    # 对应 Step60
+    # Corresponds to Step60
     if p > 0.5:
         y = n - y
     return y
 
-# 用法示例
+# Usage Example
 @njit_switch(cache=True)
 def fast_binomial(n, p):
-    # 1. 异常处理：校验 p 的范围
+    # 1. Exception handling: validate p range
     if not (0.0 <= p <= 1.0):
         raise ValueError("fast_binomial(): p outside of [0, 1]")
         
-    # 2. 异常处理：校验 n 的范围
+    # 2. Exception handling: validate n range
     if n < 0:
         raise ValueError("fast_binomial(): n <= 0")
         
-    # 3. 极值边界情况 (O(1) 立即返回)
+    # 3. Extreme boundary cases (O(1) immediate return)
     if p == 0.0 or n == 0:
         return 0
     if p == 1.0:
         return n
         
-    # 4. 核心路由逻辑
-    # numpy 默认在 n * min(p, 1-p) <= 30 时使用反演法(Inversion/BINV)
-    # 因为在 np 较小时，BINV 循环次数少，开销比 BTPE 准备那些常数要小
+    # 4. Core routing logic
+    # NumPy default uses inversion method (Inversion/BINV) when n * min(p, 1-p) <= 30
+    # Because when n is small, BINV has fewer loop iterations, and the overhead is smaller than preparing BTPE constants
     if p <= 0.5:
         if n * p <= 30.0:
-            return np.random.binomial(n, p)  # Numba 自带的 BINV 在这里很快
+            return np.random.binomial(n, p)  # Numba's built-in BINV is fast here
         else:
             return binomial_btpe(n, p)
     else:
@@ -367,12 +367,19 @@ def _multinomial_numba(
     pvals: np.ndarray,  # shape (k,), float64
 ) -> np.ndarray:
     """Hand-written multinomial using binomial sampling.
-    
+
     This is the same algorithm used by NumPy/Numba internally, but written
     explicitly to avoid the type inference bug in nested JIT functions.
-    
+
     Algorithm: For each category j (except the last), sample from Binomial
     with conditional probability p_j / (1 - sum(p_0..p_{j-1})).
+
+    Args:
+        n: Total number of trials
+        pvals: Probability vector with shape (k,) that sums to 1.0
+
+    Returns:
+        Array of sampled counts with shape (k,) that sums to n
     """
     k = len(pvals)
     result = np.zeros(k, dtype=np.int64)

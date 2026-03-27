@@ -1,3 +1,15 @@
+# -*- coding: utf-8 -*-
+"""Population configuration container and related utilities.
+
+This module defines the immutable configuration structure ``PopulationConfig``,
+functions to build, convert, and inspect configuration objects, as well as
+helpers to initialise genotype/gamete mapping arrays.
+
+The configuration is designed to be passed into simulation kernels and remains
+compatible with Numba.  Scalar fields are immutable (rebuild with ``_replace``),
+while NumPy arrays can be mutated in place.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -21,17 +33,69 @@ __all__ = [
     'extract_zygote_frequencies',
 ]
 
-# 增长模式常量（与 algorithms.py 保持一致）
+# Growth mode constants (keep in sync with algorithms.py)
 NO_COMPETITION = 0
 FIXED = 1
 LOGISTIC = LINEAR = 2
 CONCAVE = BEVERTON_HOLT = 3
 
+
 class PopulationConfig(NamedTuple):
-    """Primary immutable config container.
+    """Primary immutable configuration container.
 
     Scalar fields are immutable (rebuild with ``_replace``). NumPy arrays are
     mutable in-place.
+
+    Attributes:
+        is_stochastic: Whether demographic events are stochastic.
+        use_dirichlet_sampling: If True, use Dirichlet sampling for gamete
+            proportions; otherwise use multinomial sampling.
+        n_sexes: Number of sexes (usually 2).
+        n_ages: Number of age classes.
+        n_genotypes: Number of diploid genotype types.
+        n_haploid_genotypes: Number of haploid genotype types.
+        n_glabs: Number of gamete‑label variants per haplotype.
+        age_based_mating_rates: Shape (n_sexes, n_ages) – mating rates per sex/age.
+        age_based_survival_rates: Shape (n_sexes, n_ages) – survival probabilities.
+        female_age_based_relative_fertility: Shape (n_ages,) – relative fertility
+            of females at each age.
+        viability_fitness: Shape (n_sexes, n_ages, n_genotypes) – viability
+            fitness coefficients.
+        fecundity_fitness: Shape (n_sexes, n_genotypes) – fecundity fitness
+            coefficients.
+        sexual_selection_fitness: Shape (n_genotypes, n_genotypes) – sexual
+            selection coefficients (female genotype × male genotype).
+        age_based_relative_competition_strength: Shape (n_ages,) – relative
+            contribution to competition for each age.
+        sperm_displacement_rate: Probability that a new mating displaces stored
+            sperm.
+        expected_eggs_per_female: Expected number of eggs per female per tick.
+        use_fixed_egg_count: If True, use the deterministic expected egg count;
+            otherwise sample from a Poisson distribution.
+        carrying_capacity: Current carrying capacity (scaled by population_scale).
+        sex_ratio: Proportion of newborns that are female.
+        low_density_growth_rate: Intrinsic growth rate at low density.
+        juvenile_growth_mode: Growth mode for juveniles (see constants).
+        expected_competition_strength: Pre‑computed equilibrium competition
+            strength.
+        expected_survival_rate: Pre‑computed equilibrium survival rate.
+        generation_time: Pre‑computed mean generation time.
+        new_adult_age: Age at which individuals become adults.
+        hook_slot: Slot index for hook functions (reserved).
+        adult_ages: 1D array of age indices that are considered adult.
+        genotype_to_gametes_map: Shape (n_sexes, n_genotypes, n_hg*n_glabs) –
+            probability of producing each (haplotype, glab) combination.
+        gametes_to_zygote_map: Shape (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) –
+            probability of forming a given diploid genotype from two gametes.
+        initial_individual_count: Shape (n_sexes, n_ages, n_genotypes) – initial
+            population distribution.
+        initial_sperm_storage: Shape (n_ages, n_genotypes, n_genotypes) – initial
+            stored sperm counts.
+        population_scale: Scaling factor applied to carrying capacity and expected
+            adult females.
+        base_carrying_capacity: Unscaled carrying capacity.
+        base_expected_num_adult_females: Unscaled expected number of adult
+            females.
     """
 
     # Scalars are immutable; rebuild this NamedTuple for scalar updates.
@@ -72,17 +136,49 @@ class PopulationConfig(NamedTuple):
     base_expected_num_adult_females: float
 
     def set_viability_fitness(self, sex: int, genotype_idx: int, value: float, age: int = -1) -> None:
+        """Set viability fitness for a specific (sex, genotype, age) combination.
+
+        Args:
+            sex: Sex index.
+            genotype_idx: Diploid genotype index.
+            value: Fitness value.
+            age: Age class; if negative, defaults to new_adult_age - 1.
+        """
         if age < 0:
             age = self.new_adult_age - 1
         self.viability_fitness[sex, age, genotype_idx] = value
 
     def set_fecundity_fitness(self, sex: int, genotype_idx: int, value: float) -> None:
+        """Set fecundity fitness for a specific (sex, genotype).
+
+        Args:
+            sex: Sex index.
+            genotype_idx: Diploid genotype index.
+            value: Fitness value.
+        """
         self.fecundity_fitness[sex, genotype_idx] = value
 
     def set_sexual_selection_fitness(self, female_geno_idx: int, male_geno_idx: int, value: float) -> None:
+        """Set sexual selection fitness for a female‑male genotype pair.
+
+        Args:
+            female_geno_idx: Female genotype index.
+            male_geno_idx: Male genotype index.
+            value: Fitness value.
+        """
         self.sexual_selection_fitness[female_geno_idx, male_geno_idx] = value
 
     def set_population_scale(self, scale: float) -> "PopulationConfig":
+        """Return a new config with the population scale factor updated.
+
+        The carrying capacity is automatically scaled accordingly.
+
+        Args:
+            scale: New population scale factor.
+
+        Returns:
+            A new PopulationConfig instance with updated scale and carrying capacity.
+        """
         scale_f = float(scale)
         return self._replace(
             population_scale=scale_f,
@@ -90,18 +186,46 @@ class PopulationConfig(NamedTuple):
         )
 
     def get_effective_carrying_capacity(self) -> float:
+        """Return the carrying capacity after applying population_scale.
+
+        Returns:
+            Scaled carrying capacity.
+        """
         return float(self.base_carrying_capacity) * float(self.population_scale)
 
     def get_effective_expected_adult_females(self) -> float:
+        """Return the expected number of adult females after applying population_scale.
+
+        Returns:
+            Scaled expected adult female count.
+        """
         return float(self.base_expected_num_adult_females) * float(self.population_scale)
 
     def get_scaled_initial_individual_count(self) -> NDArray[np.float64]:
+        """Return the initial individual counts scaled by population_scale.
+
+        Returns:
+            Array of shape (n_sexes, n_ages, n_genotypes) with scaled counts.
+        """
         return self.initial_individual_count * float(self.population_scale)
 
     def get_scaled_initial_sperm_storage(self) -> NDArray[np.float64]:
+        """Return the initial sperm storage counts scaled by population_scale.
+
+        Returns:
+            Array of shape (n_ages, n_genotypes, n_genotypes) with scaled counts.
+        """
         return self.initial_sperm_storage * float(self.population_scale)
 
     def compute_generation_time(self) -> float:
+        """Compute the mean generation time from the current configuration.
+
+        Uses the age‑based survival and mating rates to calculate the average
+        age of reproduction.
+
+        Returns:
+            Mean generation time (float).
+        """
         gen_times = np.zeros(self.n_sexes, dtype=np.float64)
         for sex in range(self.n_sexes):
             l = np.ones(self.n_ages, dtype=np.float64)
@@ -128,11 +252,23 @@ PlainPopulationConfig = PopulationConfig
 
 
 def _maybe_copy_array(arr: NDArray[np.float64], copy: bool) -> NDArray[np.float64]:
+    """Helper to conditionally copy a NumPy array."""
     return arr.copy() if copy else arr
 
 
 def to_plain_population_config(config: 'PopulationConfig', copy: bool = True) -> PopulationConfig:
-    """Convert config object to immutable NamedTuple PopulationConfig."""
+    """Convert config object to a plain (copied) PopulationConfig.
+
+    If `copy` is True, all arrays are deep‑copied; otherwise they are referenced
+    directly.
+
+    Args:
+        config: Input PopulationConfig instance.
+        copy: Whether to copy the arrays.
+
+    Returns:
+        A new PopulationConfig instance (with the same scalar values).
+    """
     return PopulationConfig(
         is_stochastic=bool(config.is_stochastic),
         use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
@@ -172,7 +308,14 @@ def to_plain_population_config(config: 'PopulationConfig', copy: bool = True) ->
 
 
 def from_plain_population_config(plain: PopulationConfig) -> PopulationConfig:
-    """Compatibility adapter: returns a copied PopulationConfig."""
+    """Compatibility adapter: returns a copied PopulationConfig.
+
+    Args:
+        plain: Input PopulationConfig.
+
+    Returns:
+        A copied PopulationConfig (arrays are deep‑copied).
+    """
     return to_plain_population_config(plain, copy=True)
 
 
@@ -211,7 +354,61 @@ def build_population_config(
     infer_capacity_from_initial_state: bool = True,
     equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None,
 ) -> PopulationConfig:
-    """Build immutable PopulationConfig directly (legacy-free path)."""
+    """Build an immutable PopulationConfig directly (legacy‑free path).
+
+    This function constructs a complete configuration, filling missing arrays
+    with sensible defaults and computing derived values such as equilibrium
+    metrics and generation time.
+
+    Args:
+        n_genotypes: Number of diploid genotype types.
+        n_haploid_genotypes: Number of haploid genotype types.
+        n_sexes: Number of sexes (default 2).
+        n_ages: Number of age classes (default 2).
+        n_glabs: Number of gamete‑label variants per haplotype (default 1).
+        is_stochastic: Whether to use stochastic demography.
+        use_dirichlet_sampling: Use Dirichlet sampling for gamete proportions.
+        age_based_mating_rates: Array (n_sexes, n_ages) – mating rates.
+        age_based_survival_rates: Array (n_sexes, n_ages) – survival probabilities.
+        female_age_based_relative_fertility: Array (n_ages,) – relative female
+            fertility per age.
+        viability_fitness: Array (n_sexes, n_ages, n_genotypes) – viability fitness.
+        fecundity_fitness: Array (n_sexes, n_genotypes) – fecundity fitness.
+        sexual_selection_fitness: Array (n_genotypes, n_genotypes) – sexual
+            selection coefficients.
+        age_based_relative_competition_strength: Array (n_ages,) – competition
+            weight per age.
+        new_adult_age: Age at which individuals become adults (default 2).
+        sperm_displacement_rate: Probability of sperm displacement (default 0.05).
+        expected_eggs_per_female: Expected number of eggs per female per tick.
+        use_fixed_egg_count: If True, use deterministic egg count.
+        carrying_capacity: Optional explicit carrying capacity (scaled later).
+        sex_ratio: Proportion of newborns that are female.
+        low_density_growth_rate: Intrinsic growth rate at low density.
+        juvenile_growth_mode: Growth mode (see constants).
+        generation_time: Optional pre‑computed generation time; if None, computed.
+        hook_slot: Slot index for hooks (default 0).
+        genotype_to_gametes_map: Pre‑built mapping from genotype to gametes.
+        gametes_to_zygote_map: Pre‑built mapping from gamete pair to zygote.
+        initial_individual_count: Initial population counts (n_sexes, n_ages,
+            n_genotypes). If None, filled with zeros.
+        initial_sperm_storage: Initial sperm storage counts (n_ages, n_genotypes,
+            n_genotypes). If None, filled with zeros.
+        population_scale: Scaling factor for carrying capacity and expected
+            adult females.
+        old_juvenile_carrying_capacity: Legacy name for base carrying capacity.
+        expected_num_adult_females: Expected number of adult females (unscaled).
+        infer_capacity_from_initial_state: If True and carrying_capacity is None,
+            compute base capacity from initial_individual_count.
+        equilibrium_individual_distribution: Optional distribution used to compute
+            equilibrium metrics.
+
+    Returns:
+        A fully populated PopulationConfig instance.
+
+    Raises:
+        AssertionError: If required dimensions are invalid or shape mismatches occur.
+    """
     if n_sexes is None:
         n_sexes = 2
 
@@ -412,6 +609,7 @@ def build_population_config(
         base_expected_num_adult_females=float(base_expected_num_adult_females),
     )
 
+
 # -------------------------------------------
 # Helper functions for initializing maps
 # -------------------------------------------
@@ -422,7 +620,7 @@ def initialize_zygote_map(
     zygote_modifiers: Optional[List[Callable]] = None
 ) -> NDArray[np.float64]:
     """Initialize the ``gametes_to_zygote_map`` tensor.
-·
+
     The function first populates a baseline mapping following Mendelian
     inheritance for all haplotype pairs and gamete-label combinations, and
     then applies optional zygote modifiers to transform the tensor.
@@ -433,11 +631,17 @@ def initialize_zygote_map(
         n_glabs: Number of gamete labels (default: 1).
         zygote_modifiers: Optional sequence of callables that accept and
             return a modified ``gametes_to_zygote_map`` tensor.
+
+    Returns:
+        Array of shape (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) representing
+        the probability of each zygote genotype given a pair of gametes.
+
+    Raises:
+        ValueError: If any of the input lists is empty or n_glabs is not positive.
     """
     n_hg = len(haploid_genotypes)
     n_genotypes = len(diploid_genotypes)
     n_hg_glabs = n_hg * n_glabs
-    # derive n_glabs from shape and provided n_hg
     if n_hg <= 0:
         raise ValueError("haploid_genotypes must be non-empty")
     if n_genotypes <= 0:
@@ -445,21 +649,17 @@ def initialize_zygote_map(
     if n_glabs <= 0:
         raise ValueError("n_glabs must be positive")
     
-    # 1. 按默认遗传规律生成one-hot张量
-    # 初始化所有组合为零
+    # 1. Build baseline one-hot tensor according to Mendelian inheritance
     gametes_to_zygote_map: NDArray[np.float64] = np.zeros((n_hg_glabs, n_hg_glabs, n_genotypes), dtype=np.float64)
     
-    # 为每个单倍型组合创建对应的二倍型
     for idx_hg1, hg1 in enumerate(haploid_genotypes):
         for idx_hg2, hg2 in enumerate(haploid_genotypes):
-            # 生成合子基因型
             zygote_gt = Genotype(
                 species=hg1.species,
                 maternal=hg1,
                 paternal=hg2
             )
             
-            # 如果这个基因型在我们的列表中
             if zygote_gt in diploid_genotypes:
                 idx_gt = diploid_genotypes.index(zygote_gt)
                 # Baseline: labels are equivalent — populate all (glab1, glab2)
@@ -469,11 +669,12 @@ def initialize_zygote_map(
                         compressed_idx2 = compress_hg_glab(idx_hg2, glab2, n_glabs)
                         gametes_to_zygote_map[compressed_idx1, compressed_idx2, idx_gt] = 1.0
     
-    # 2. 应用合子修饰器进行改造
+    # 2. Apply optional zygote modifiers
     if zygote_modifiers:
         for modifier in zygote_modifiers:
             gametes_to_zygote_map = modifier(gametes_to_zygote_map)
     return gametes_to_zygote_map
+
 
 def initialize_gamete_map(
     haploid_genotypes: List[HaploidGenotype],
@@ -496,6 +697,9 @@ def initialize_gamete_map(
 
     Returns:
         NDArray[np.float64]: Array shaped ``(n_sexes, n_genotypes, n_hg*n_glabs)``.
+
+    Raises:
+        ValueError: If any of the input lists is empty or n_glabs is not positive.
     """
     n_hg = len(haploid_genotypes)
     n_genotypes = len(diploid_genotypes)
@@ -506,7 +710,7 @@ def initialize_gamete_map(
     if n_glabs <= 0:
         raise ValueError("n_glabs must be positive")
 
-    # infer number of sexes from Sex enum
+    # Infer number of sexes from Sex enum
     n_sexes = max(int(s.value) for s in Sex) + 1
     n_hg_glabs = n_hg * n_glabs
 
@@ -519,7 +723,7 @@ def initialize_gamete_map(
             for gamete, freq in gametes.items():
                 if gamete in haploid_genotypes:
                     idx_hg = haploid_genotypes.index(gamete)
-                    # by default, only map frequency for the default glab (0)
+                    # By default, only map frequency for the default glab (0)
                     compressed_idx = compress_hg_glab(idx_hg, 0, n_glabs)
                     genotype_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = freq
 
@@ -539,22 +743,22 @@ def extract_gamete_frequencies(
     n_glabs: int = 1,
 ) -> dict[HaploidGenotype, float]:
     """Extract gamete frequencies for a specific (sex, genotype) pair.
-    
-    This is a convenience function to convert a row of genotype_to_gametes_map
+
+    This convenience function converts a row of genotype_to_gametes_map
     from compressed haploid-glab indices back to HaploidGenotype objects with
-    their aggregated frequencies.
-    
+    their aggregated frequencies across all glab variants.
+
     Args:
         genotype_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
         sex_idx: Sex index (0, 1, ...).
         genotype_idx: Diploid genotype index.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
-    
+
     Returns:
         Dictionary mapping HaploidGenotype -> aggregated frequency across all glabs.
         Only includes haplotype types with non-zero frequency.
-    
+
     Example:
         >>> config = population._config
         >>> hg_list = population._get_all_possible_haploid_genotypes()
@@ -589,22 +793,22 @@ def extract_gamete_frequencies_by_glab(
     n_glabs: int = 1,
 ) -> dict[tuple[HaploidGenotype, int], float]:
     """Extract gamete frequencies at (HaploidGenotype, glab_idx) granularity.
-    
+
     Unlike ``extract_gamete_frequencies`` which aggregates across all glab
     variants, this function preserves the glab dimension, returning separate
     entries for each (haplotype, glab) combination.
-    
+
     Args:
         genotype_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
         sex_idx: Sex index (0, 1, ...).
         genotype_idx: Diploid genotype index.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
-    
+
     Returns:
         Dictionary mapping (HaploidGenotype, glab_idx) -> frequency.
         Only includes entries with non-zero frequency.
-    
+
     Example:
         >>> freqs = extract_gamete_frequencies_by_glab(
         ...     config.genotype_to_gametes_map, 0, 5, hg_list, n_glabs=2
@@ -632,21 +836,21 @@ def extract_zygote_frequencies(
     n_glabs: int = 1,
 ) -> dict[Genotype, float]:
     """Extract zygote frequencies for a specific pair of gametes.
-    
-    This is a convenience function to convert a slice of gametes_to_zygote_map
+
+    This convenience function converts a slice of gametes_to_zygote_map
     from compressed gamete indices to Genotype objects with their frequencies.
-    
+
     Args:
         gametes_to_zygote_map: The (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) array.
         gamete1_compressed_idx: Compressed index of first gamete (maternal).
         gamete2_compressed_idx: Compressed index of second gamete (paternal).
         diploid_genotypes: List of all Genotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
-    
+
     Returns:
         Dictionary mapping Genotype -> frequency. Only includes genotypes with
         non-zero frequency.
-    
+
     Example:
         >>> config = population._config
         >>> genotypes = list(population._genotypes)

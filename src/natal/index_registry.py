@@ -1,3 +1,21 @@
+"""Registry for stable integer indexing of population entities.
+
+This module provides an :class:`IndexRegistry` that assigns and maintains
+stable integer indices for genotypes, haploid genotypes, and gamete labels.
+It also offers helper functions to compress/decompress combined
+(haplogenotype, gamete‑label) indices.
+
+The registry is used throughout the simulation to translate domain objects
+(e.g., ``Genotype`` instances, strings) into compact integer indices that
+are suitable for NumPy arrays and Numba‑accelerated kernels.
+
+Todo:
+    * Support for sex‑chromosome‑specific indexing: genotypes may map to
+      different indices depending on sex. This could be implemented by
+      maintaining separate mappings for each sex or by allowing a
+      ``sex`` argument in index resolution methods.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -7,8 +25,6 @@ import numpy as np
 
 from natal.numba_utils import njit_switch
 
-# TODO: 性染色体相关基因的支持。如果设置了性染色体，genotype to index 在雌雄中不同
-# TODO: 当然，可以有空缺
 
 class IndexRegistry:
     """Registry providing stable integer indices for population entities.
@@ -20,15 +36,10 @@ class IndexRegistry:
     numeric indices suitable for numeric backends.
 
     Example:
-
-
         ic = IndexRegistry()
         gid = ic.register_genotype('g1')
         hid = ic.register_haplogenotype('h1')
         glid = ic.register_gamete_label('gl1')
-
-    Args:
-        (no arguments)
 
     Attributes:
         genotype_to_index: Mapping from genotype identifier to assigned index.
@@ -109,12 +120,27 @@ class IndexRegistry:
 
     # ---------- query API ----------
     def num_genotypes(self) -> int:
+        """Return the number of registered diploid genotypes.
+
+        Returns:
+            int: Count of registered diploid genotypes.
+        """
         return len(self.index_to_genotype)
 
     def num_haplogenotypes(self) -> int:
+        """Return the number of registered haploid genotypes.
+
+        Returns:
+            int: Count of registered haploid genotypes.
+        """
         return len(self.index_to_haplo)
 
     def num_gamete_labels(self) -> int:
+        """Return the number of registered gamete labels.
+
+        Returns:
+            int: Count of registered gamete labels.
+        """
         return len(self.index_to_glab)
 
     def genotype_index(self, genotype_id: Any) -> int:
@@ -202,6 +228,9 @@ class IndexRegistry:
 
         Returns:
             int: A valid gamete-label index.
+
+        Raises:
+            AssertionError: If the input is not a string nor a valid integer index.
         """
         if isinstance(glab_or_index, int) and 0 <= glab_or_index < len(self.index_to_glab):
             return int(glab_or_index)
@@ -212,12 +241,31 @@ class IndexRegistry:
     @staticmethod
     def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
         """Compress a (haplogenotype, glab) pair into a single integer.
+
+        See :func:`compress_hg_glab` for details.
+
+        Args:
+            hg_idx: Haplogenotype index.
+            glab_idx: Gamete-label index.
+            n_glabs: Number of distinct gamete labels.
+
+        Returns:
+            int: The compressed combined index.
         """
         return compress_hg_glab(hg_idx, glab_idx, n_glabs)
-    
+
     @staticmethod
     def decompress_hg_glab(compressed_idx: int, n_glabs: int) -> Tuple[int, int]:
         """Decompress a combined hg+glab index back into its components.
+
+        See :func:`decompress_hg_glab` for details.
+
+        Args:
+            compressed_idx: The compressed integer index.
+            n_glabs: Number of distinct gamete labels used during compression.
+
+        Returns:
+            Tuple[int, int]: ``(hg_idx, glab_idx)`` unpacked from ``compressed_idx``.
         """
         return decompress_hg_glab(compressed_idx, n_glabs)
 
@@ -237,7 +285,9 @@ class IndexRegistry:
         return int(n_hg) * int(n_glabs)
 
     # ---------- resolver helpers (centralized key parsing) ----------
-    def resolve_genotype_index(self, diploid_genotypes: Sequence[Any], gk: Any, strict: bool = True) -> Optional[int]:
+    def resolve_genotype_index(
+        self, diploid_genotypes: Sequence[Any], gk: Any, strict: bool = True
+    ) -> Optional[int]:
         """Resolve a flexible genotype selector to a diploid genotype index.
 
         Accepted selector types:
@@ -285,10 +335,10 @@ class IndexRegistry:
         return None
 
     def resolve_hg_glab_part(
-        self, 
-        haploid_genotypes: Sequence[HaploidGenotype], 
-        part: Any, 
-        n_glabs: int
+        self,
+        haploid_genotypes: Sequence[HaploidGenotype],
+        part: Any,
+        n_glabs: int,
     ) -> Tuple[int, int]:
         """Resolve a haploid/genetic part into an (hg_idx, glab_idx) pair.
 
@@ -314,7 +364,6 @@ class IndexRegistry:
         if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], int) and isinstance(part[1], int):
             return (int(part[0]), int(part[1]))
 
-        # (HaploidGenotype, glab)
         # (str, glab) where first element is haploid string representation
         if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], str):
             name, lab = part
@@ -385,7 +434,13 @@ class IndexRegistry:
 
         raise KeyError(f"Cannot resolve hg+glab part: {part}")
 
-    def resolve_comp_idx(self, haploid_genotypes: Sequence[Any], n_glabs: int, comp_key: Any, strict: bool = False) -> Optional[int]:
+    def resolve_comp_idx(
+        self,
+        haploid_genotypes: Sequence[Any],
+        n_glabs: int,
+        comp_key: Any,
+        strict: bool = False,
+    ) -> Optional[int]:
         """Resolve a comp-map key into a compressed hg+glab integer index.
 
         Supported key formats:
@@ -498,6 +553,7 @@ class IndexRegistry:
         # currently genotypes are dense so mapping is identity; placeholder
         return old_to_new_g
 
+
 @njit_switch(cache=True)
 def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     """Compress a (haplogenotype, glab) pair into a single integer.
@@ -515,6 +571,7 @@ def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
         int: The compressed combined index.
     """
     return int(hg_idx) * int(n_glabs) + int(glab_idx)
+
 
 @njit_switch(cache=True)
 def decompress_hg_glab(compressed_idx: int, n_glabs: int) -> Tuple[int, int]:

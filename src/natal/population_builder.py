@@ -1,16 +1,21 @@
+# -*- coding: utf-8 -*-
 """Builder for constructing population instances with fluent API.
 
-This module provides PopulationBuilder classes for streamlined, chainable population
-construction. It separates configuration management from object instantiation,
-preventing parameter bloat and enabling clear, readable code.
+This module provides PopulationBuilder classes for streamlined, chainable
+population construction. It separates configuration management from object
+instantiation, preventing parameter bloat and enabling clear, readable code.
 
-Example::
+Example:
+    Examples can be given using the ``AgeStructuredPopulation.builder`` entry point::
 
-    pop = (AgeStructuredPopulation.builder(species)
-        .setup(name="Pop1", stochastic=True)
-        .age_structure(n_ages=10, new_adult_age=2)
-        .survival(female_rates=[...], male_rates=[...])
-        .build())
+        pop = (AgeStructuredPopulation.builder(species)
+            .setup(name="Pop1", stochastic=True)
+            .age_structure(n_ages=10, new_adult_age=2)
+            .survival(female_rates=[...], male_rates=[...])
+            .build())
+
+.. _Google Python Style Guide:
+   http://google.github.io/styleguide/pyguide.html
 """
 
 from typing import Dict, List, Optional, Union, Any, Callable, Tuple, TYPE_CHECKING, Iterable
@@ -40,11 +45,10 @@ GenotypeSelectorAtom = Union[Genotype, str]
 GenotypeSelector = Union[GenotypeSelectorAtom, Tuple[GenotypeSelectorAtom, ...]]
 
 class PopulationConfigBuilder:
-    """Internal builder for constructing PopulationConfig from builder parameters.
+    """Internal builder for constructing PopulationConfig.
     
-    Handles all low-level configuration details and array initialization.
-    This class encapsulates the complexity of converting high-level builder
-    parameters into a complete PopulationConfig instance.
+    Handles all low-level configuration details and array initialization. It
+    encapsulating the complexity of converting builder parameters.
     """
     
     # TODO: initial 状态在哪里？
@@ -86,18 +90,45 @@ class PopulationConfigBuilder:
         initial_sperm_storage: Optional[NDArray[np.float64]] = None,
     ) -> PopulationConfig:
         """Construct a complete PopulationConfig from builder parameters.
-        
+
         Args:
-            species: Genetic architecture.
-            All builder parameters...
-        
+            species (Species): Genetic architecture.
+            n_ages (int): Number of age classes.
+            new_adult_age (int): Minimum age for adults.
+            is_stochastic (bool): Whether to use stochastic sampling.
+            use_dirichlet_sampling (bool): Whether to use Dirichlet sampling.
+            female_age_based_survival_rates (Any): Survival rates for females.
+            male_age_based_survival_rates (Any): Survival rates for males.
+            female_age_based_mating_rates (NDArray): Mating rates for females.
+            male_age_based_mating_rates (NDArray): Mating rates for males.
+            female_age_based_relative_fertility (NDArray): Fertility weights for females.
+            expected_eggs_per_female (float): Average egg production.
+            use_fixed_egg_count (bool): Whether egg count is deterministic.
+            sex_ratio (float): Offspring sex ratio.
+            use_sperm_storage (bool): Whether to enable sperm storage.
+            sperm_displacement_rate (float): Rate of sperm displacement.
+            relative_competition_factor (float): Competition intensity.
+            juvenile_growth_mode (Union[int, str]): Growth model type.
+            low_density_growth_rate (float): Intrinsic growth rate.
+            carrying_capacity (Optional[float]): Total capacity.
+            old_juvenile_carrying_capacity (Optional[float]): Capacity for older juveniles.
+            expected_num_adult_females (Optional[float]): Target adult female count.
+            equilibrium_individual_distribution (Optional[NDArray]): Expected distribution.
+            gamete_modifiers (List[Tuple]): Custom gamete modifiers.
+            zygote_modifiers (List[Tuple]): Custom zygote modifiers.
+            generation_time (Optional[int]): Calculated generation time.
+            initial_individual_count (Optional[NDArray[np.float64]]): Initial counts array.
+            initial_sperm_storage (Optional[NDArray[np.float64]]): Initial sperm storage array.
+
         Returns:
-            Fully initialized PopulationConfig instance.
-        
+            PopulationConfig: A fully initialized PopulationConfig instance.
+
         Raises:
-            ValueError: If configuration is invalid.
+            ValueError: If n_ages, new_adult_age or other parameters are invalid.
+            TypeError: If input types are incorrect.
+
         """
-        print("⏳ Building population...")
+        print("⏳ Building population config...")
 
         # ===== Validation =====
         if n_ages <= 1:
@@ -114,24 +145,8 @@ class PopulationConfigBuilder:
         n_haplogenotypes = len(haploid_genotypes)
         n_glabs = len(gamete_labels)
         
-        if not isinstance(gamete_labels, (list, tuple)):
-            raise TypeError("gamete_labels must be a list or tuple of strings")
-        
-        # ===== Setup modifiers =====
-        gamete_modifiers_list = list(gamete_modifiers) if gamete_modifiers else []
-        zygote_modifiers_list = list(zygote_modifiers) if zygote_modifiers else []
-        
-        gamete_modifiers_list.sort(key=lambda x: x[0] if x[0] is not None else float('inf'))
-        zygote_modifiers_list.sort(key=lambda x: x[0] if x[0] is not None else float('inf'))
-        
-        # Build modifier tensor wrappers (placeholder - would need mapping functions)
-        gamete_tensor_mods = PopulationConfigBuilder._build_modifier_tensors(
-            gamete_modifiers_list, "gamete"
-        )
-        zygote_tensor_mods = PopulationConfigBuilder._build_modifier_tensors(
-            zygote_modifiers_list, "zygote"
-        )
-        
+        gamete_tensor_mods, zygote_tensor_mods = PopulationConfigBuilder._setup_modifiers(gamete_modifiers, zygote_modifiers)
+
         # ===== Build genotype/gamete maps =====
         gamete_map = initialize_gamete_map(
             diploid_genotypes=genotypes,
@@ -206,35 +221,13 @@ class PopulationConfigBuilder:
                 age_based_relative_competition_strength[1] = relative_competition_factor
         
         # ===== Parse juvenile growth mode =====
-        if isinstance(juvenile_growth_mode, int):
-            if juvenile_growth_mode not in [NO_COMPETITION, FIXED, LOGISTIC, CONCAVE]:
-                raise ValueError(f"Invalid juvenile_growth_mode int: {juvenile_growth_mode}")
-            juvenile_growth_mode_int = juvenile_growth_mode
-        elif isinstance(juvenile_growth_mode, str):
-            mode_map = {
-                'NO_COMPETITION': NO_COMPETITION,
-                'FIXED': FIXED,
-                'LOGISTIC': LOGISTIC,
-                'CONCAVE': CONCAVE,
-                'BEVERTON_HOLT': BEVERTON_HOLT,
-                'LINEAR': LINEAR
-            }
-            if juvenile_growth_mode.upper() not in mode_map:
-                raise ValueError(f"Invalid juvenile_growth_mode str: {juvenile_growth_mode}")
-            juvenile_growth_mode_int = mode_map[juvenile_growth_mode.upper()]
-        else:
-            raise TypeError(f"juvenile_growth_mode must be int or str, got {type(juvenile_growth_mode)}")
-        
+        juvenile_growth_mode_int = PopulationConfigBuilder._resolve_growth_mode(juvenile_growth_mode)
+
         # ===== Compute carrying capacity =====
-        if old_juvenile_carrying_capacity is not None:
-            resolved_carrying_capacity = float(old_juvenile_carrying_capacity)
-        elif carrying_capacity is not None:
-            resolved_carrying_capacity = float(carrying_capacity)
-        elif expected_num_adult_females is not None:
-            resolved_carrying_capacity = float(expected_num_adult_females) * expected_eggs_per_female
-        else:
-            resolved_carrying_capacity = 1000.0
-        
+        resolved_carrying_capacity = PopulationConfigBuilder._resolve_carrying_capacity(
+            carrying_capacity, old_juvenile_carrying_capacity, expected_num_adult_females, expected_eggs_per_female
+        )
+
         print("🔧 Initializing population configuration...")
 
         # ===== Create and return PopulationConfig =====
@@ -278,8 +271,63 @@ class PopulationConfigBuilder:
         return cfg
     
     @staticmethod
+    def _setup_modifiers(gamete_modifiers, zygote_modifiers):
+        """Helper to organize and build modifier tensors."""
+        gamete_modifiers_list = list(gamete_modifiers) if gamete_modifiers else []
+        zygote_modifiers_list = list(zygote_modifiers) if zygote_modifiers else []
+        
+        gamete_modifiers_list.sort(key=lambda x: x[0] if x[0] is not None else float('inf'))
+        zygote_modifiers_list.sort(key=lambda x: x[0] if x[0] is not None else float('inf'))
+        
+        gamete_tensor_mods = PopulationConfigBuilder._build_modifier_tensors(gamete_modifiers_list, "gamete")
+        zygote_tensor_mods = PopulationConfigBuilder._build_modifier_tensors(zygote_modifiers_list, "zygote")
+        return gamete_tensor_mods, zygote_tensor_mods
+
+    @staticmethod
+    def _resolve_growth_mode(mode: Union[int, str]) -> int:
+        """Resolve juvenile growth mode string or int to internal constant."""
+        if isinstance(mode, int):
+            if mode not in [NO_COMPETITION, FIXED, LOGISTIC, CONCAVE, BEVERTON_HOLT, LINEAR]:
+                raise ValueError(f"Invalid growth mode constant: {mode}")
+            return mode
+        if isinstance(mode, str):
+            mode_map = {
+                'NO_COMPETITION': NO_COMPETITION, 'FIXED': FIXED,
+                'LOGISTIC': LOGISTIC, 'CONCAVE': CONCAVE,
+                'BEVERTON_HOLT': BEVERTON_HOLT, 'LINEAR': LINEAR
+            }
+            upper_mode = mode.upper()
+            if upper_mode not in mode_map:
+                raise ValueError(f"Unknown growth mode string: {mode}")
+            return mode_map[upper_mode]
+        raise TypeError(f"Growth mode must be int or str, got {type(mode)}")
+
+    @staticmethod
+    def _resolve_carrying_capacity(
+        carrying_capacity: Optional[float],
+        old_juvenile_carrying_capacity: Optional[float],
+        expected_num_adult_females: Optional[float],
+        expected_eggs_per_female: float
+    ) -> float:
+        """Logic to resolve carrying capacity from multiple possible sources."""
+        if old_juvenile_carrying_capacity is not None:
+            return float(old_juvenile_carrying_capacity)
+        if carrying_capacity is not None:
+            return float(carrying_capacity)
+        if expected_num_adult_females is not None:
+            return float(expected_num_adult_females) * expected_eggs_per_female
+        return 1000.0
+
+    @staticmethod
     def _get_all_haploid_genotypes(species: Species) -> List[HaploidGenome]:
-        """Extract all haploid genomes from Species-level genotype iterators."""
+        """Extract all haploid genomes from Species-level genotype iterators.
+
+        Args:
+            species (Species): The species instance to query.
+
+        Returns:
+            List[HaploidGenome]: A list of all haploid genotypes.
+        """
         return list(species.iter_haploid_genotypes())
     
     @staticmethod
@@ -290,12 +338,25 @@ class PopulationConfigBuilder:
     ) -> NDArray[np.float64]:
         """Resolve flexible survival spec into a 1D float array.
 
-        Supports:
-        - None -> default
-        - numeric scalar -> fill all ages
-        - sequence/ndarray -> truncate or pad with 0; trailing None sentinel supported
-        - dict[int, float] -> sparse age map with unspecified ages defaulting to 1.0
-        - callable(age) -> float
+        Note:
+            Supports various input types:
+            - None: uses default.
+            - numeric scalar: fills all ages with this value.
+            - sequence/ndarray: truncated or padded with 0.
+            - dict[int, float]: sparse age map, unspecified ages default to 1.0.
+            - callable(age): returns float for each age.
+
+        Args:
+            param (Optional[Any]): The flexible survival parameter to resolve.
+            expected_length (int): Required length of the output array.
+            default (List[float]): Default values to fallback to.
+
+        Returns:
+            NDArray[np.float64]: A 1D array of resolved survival rates.
+
+        Raises:
+            ValueError: If rates are negative or out of range.
+            TypeError: If input type is unsupported.
         """
         if param is None:
             out = np.array(default[:expected_length], dtype=np.float64)
@@ -396,6 +457,17 @@ class PopulationConfigBuilder:
 
     @staticmethod
     def _resolve_sex_index(sex_key: Union[str, Sex]) -> int:
+        """Resolve a sex key into an integer index (0 or 1).
+
+        Args:
+            sex_key (Union[str, Sex]): The sex label or enum.
+
+        Returns:
+            int: 0 for female, 1 for male.
+
+        Raises:
+            TypeError: If sex_key is neither str nor Sex.
+        """
         if isinstance(sex_key, Sex):
             return int(sex_key.value)
         if isinstance(sex_key, str):
@@ -408,6 +480,20 @@ class PopulationConfigBuilder:
         genotype_key: Union[Genotype, str],
         genotype_to_index: Dict[Genotype, int],
     ) -> int:
+        """Resolve a genotype key into its registered integer index.
+
+        Args:
+            species (Species): The species to resolve against.
+            genotype_key (Union[Genotype, str]): The genotype instance or string label.
+            genotype_to_index (Dict[Genotype, int]): Index mapping.
+
+        Returns:
+            int: The index of the genotype.
+
+        Raises:
+            TypeError: If genotype_key is invalid type.
+            ValueError: If genotype does not belong to the species.
+        """
         if isinstance(genotype_key, str):
             genotype = species.get_genotype_from_str(genotype_key)
         elif isinstance(genotype_key, Genotype):
@@ -424,6 +510,20 @@ class PopulationConfigBuilder:
         n_ages: int,
         new_adult_age: int,
     ) -> Dict[int, float]:
+        """Normalize age-based distribution data into a sparse dictionary.
+
+        Args:
+            age_data (Union[List, Dict, float]): Raw age distribution data.
+            n_ages (int): Total number of age classes.
+            new_adult_age (int): Minimum age for adults.
+
+        Returns:
+            Dict[int, float]: Mapping of age to individual count.
+
+        Raises:
+            ValueError: If counts are negative or ages are out of range.
+            TypeError: If data type is unsupported.
+        """
         if isinstance(age_data, dict):
             out: Dict[int, float] = {}
             for age, count in age_data.items():
@@ -469,6 +569,17 @@ class PopulationConfigBuilder:
         n_ages: int,
         new_adult_age: int,
     ) -> NDArray[np.float64]:
+        """Resolve initial individual counts for age-structured models.
+
+        Args:
+            species (Species): The bound Species object.
+            distribution (Dict): User-provided distribution mapping.
+            n_ages (int): Total number of age classes.
+            new_adult_age (int): Minimum age for adults.
+
+        Returns:
+            NDArray[np.float64]: A 3D array [sex, age, genotype].
+        """
         genotypes = species.get_all_genotypes()
         genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
         out = np.zeros((2, n_ages, len(genotypes)), dtype=np.float64)
@@ -496,6 +607,20 @@ class PopulationConfigBuilder:
         n_ages: int,
         new_adult_age: int,
     ) -> NDArray[np.float64]:
+        """Resolve initial sperm storage for age-structured models.
+
+        Args:
+            species (Species): The bound Species object.
+            sperm_storage (Dict): User-provided sperm storage mapping.
+            n_ages (int): Total number of age classes.
+            new_adult_age (int): Minimum age for adults.
+
+        Returns:
+            NDArray[np.float64]: A 3D array [age, female_genotype, male_genotype].
+
+        Raises:
+            TypeError: If storage value is not a dictionary.
+        """
         genotypes = species.get_all_genotypes()
         genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
         out = np.zeros((n_ages, len(genotypes), len(genotypes)), dtype=np.float64)
@@ -521,6 +646,17 @@ class PopulationConfigBuilder:
     def _resolve_discrete_age_distribution(
         age_data: Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
     ) -> Tuple[float, float]:
+        """Normalize discrete distribution data into (age0, age1) counts.
+
+        Args:
+            age_data: Raw distribution data.
+
+        Returns:
+            Tuple[float, float]: Count for age 0 and age 1.
+
+        Raises:
+            ValueError: If negative counts or invalid lengths are provided.
+        """
         if isinstance(age_data, (int, float)) and not isinstance(age_data, bool):
             value = float(age_data)
             if value < 0:
@@ -560,6 +696,15 @@ class PopulationConfigBuilder:
         species: Species,
         distribution: Dict[str, Dict[Union[Genotype, str], Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float]]],
     ) -> NDArray[np.float64]:
+        """Resolve initial individual counts for discrete generation models.
+
+        Args:
+            species (Species): The bound Species object.
+            distribution (Dict): User-provided distribution mapping.
+
+        Returns:
+            NDArray[np.float64]: A 3D array [sex, age, genotype] with age max 2.
+        """
         genotypes = species.get_all_genotypes()
         genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
         out = np.zeros((2, 2, len(genotypes)), dtype=np.float64)
@@ -578,22 +723,30 @@ class PopulationConfigBuilder:
     @staticmethod
     def _build_modifier_tensors(modifiers: List, modifier_type: str) -> List:
         """Convert modifier tuples to tensor modifier format (placeholder).
-        
-        In the actual implementation, this would transform modifier functions
-        into their tensor-compatible form. For now, return as-is.
+
+        Args:
+            modifiers (List): List of modifier tuples.
+            modifier_type (str): Type tag (gamete or zygote).
+
+        Returns:
+            List: The modifier list.
         """
         return modifiers if modifiers else []
 
 
 
 class PopulationBuilderBase:
-    """Abstract base builder with common chainable methods."""
+    """Abstract base builder with common chainable methods.
+
+    Attributes:
+        species (Species): Genetic architecture for the population.
+    """
     
     def __init__(self, species: Species):
         """Initialize builder with required species.
         
         Args:
-            species: Genetic architecture for the population.
+            species (Species): Genetic architecture for the population.
         """
         self.species = species
         self._presets: List[Any] = []
@@ -602,20 +755,21 @@ class PopulationBuilderBase:
         """Add a gene drive preset to apply during build.
         
         Presets are applied in the order they are added.
-        
+
         Args:
-            preset: A GeneDrivePreset or similar modification system.
-        
+            preset (Any): A GeneDrivePreset or similar modification system.
+
         Returns:
-            Self for chaining.
+            PopulationBuilderBase: Self for chaining.
         """
         self._presets.append(preset)
         return self
     
     def build(self):
         """Build and return the configured Population.
-        
-        Must be implemented by subclasses.
+
+        Raises:
+            NotImplementedError: Must be implemented by subclasses.
         """
         raise NotImplementedError
 
@@ -623,43 +777,16 @@ class PopulationBuilderBase:
 class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     """Builder for AgeStructuredPopulation with organized group methods.
     
-    Parameters are grouped into 10 logical categories reflecting ecological
-    and demographic structure:
-    
-    - setup() - Basic settings (name, stochasticity, gamete labels)
-    - age_structure() - Age classes, generation time, equilibrium distribution
-    - initial_state() - Initial population and sperm storage distribution
-    - survival() - Age-based survival rates
-    - reproduction() - Mating rates, fertility, eggs, sex ratio, sperm storage
-    - competition() - Carrying capacity, growth mode, density-dependent parameters
-    - presets() - Preset modification packages to apply during build
-    - fitness() - Fitness tensors (viability, fecundity, sexual selection)
-    - modifiers() - Custom gamete and zygote modifier functions
-    - hooks() - Event hook registrations
-    
     Notes:
         Fitness and modifiers are applied AFTER presets during build().
         This allows presets to set base values, which can then be overridden.
-    
-    Example::
-    
-        pop = (AgeStructuredPopulation.builder(species)
-            .setup(name="Pop1", stochastic=True)
-            .age_structure(n_ages=10, new_adult_age=2, generation_time=25)
-            .survival(female_rates=[...], male_rates=[...])
-            .reproduction(eggs_per_female=50, sex_ratio=0.5)
-            .competition(juvenile_growth_mode='logistic', carrying_capacity=1000)
-            .initial_state(distribution={...})
-            .fitness(viability=np.ones((2,10,5)))
-            .add_preset(HomingModificationDrive(...))
-            .build())
     """
     
     def __init__(self, species: Species):
         """Initialize builder.
         
         Args:
-            species: Genetic architecture for the population.
+            species (Species): Genetic architecture for the population.
         """
         super().__init__(species)
         # Store builder parameters directly
@@ -714,15 +841,15 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         use_fixed_egg_count: bool = False
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure basic population settings.
-        
+
         Args:
-            name: Human-readable population name.
-            stochastic: Whether to use stochastic sampling.
-            use_dirichlet_sampling: If True, use Dirichlet; else Binomial/Multinomial sampling.
-            use_fixed_egg_count: If True, egg count is fixed; if False, Poisson distributed.
-        
+            name (str): Human-readable population name.
+            stochastic (bool): Whether to use stochastic sampling.
+            use_dirichlet_sampling (bool): If True, use Dirichlet; else standard sampling.
+            use_fixed_egg_count (bool): If True, egg count is fixed; if False, Poisson.
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         self.name = name
         self.is_stochastic = stochastic
@@ -738,15 +865,15 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure age structure and generation time.
-        
+
         Args:
-            n_ages: Number of age classes.
-            new_adult_age: Age at which individuals become adults (and can reproduce).
-            generation_time: Optional time for one generation (years, etc.).
-            equilibrium_distribution: Optional equilibrium distribution (sex, age) for scaling.
-        
+            n_ages (int): Number of age classes.
+            new_adult_age (int): Age at which individuals become adults.
+            generation_time (Optional[int]): Optional time for one generation.
+            equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         self.n_ages = n_ages
         self.new_adult_age = new_adult_age
@@ -773,14 +900,14 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         ] = None
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure initial population state and sperm storage.
-        
+
         Args:
-            individual_count: Initial population distribution (required).
+            individual_count (Dict): Initial population distribution (required).
                 Format: {sex: {genotype: counts_by_age}}
-            sperm_storage: Optional initial sperm storage state.
-        
+            sperm_storage (Optional[Dict]): Optional initial sperm storage state.
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         self.initial_individual_count = individual_count
         if sperm_storage is not None:
@@ -795,15 +922,15 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure survival rates and related parameters.
-        
+
         Args:
-            female_rates: Per-age female survival rates.
-            male_rates: Per-age male survival rates.
-            generation_time: Optional time scale for generation (overlaps with age_structure).
-            equilibrium_distribution: Optional equilibrium distribution (overlaps with age_structure and competition).
-        
+            female_age_based_survival_rates (Optional[Any]): Per-age female survival rates.
+            male_age_based_survival_rates (Optional[Any]): Per-age male survival rates.
+            generation_time (Optional[int]): Optional time scale for generation.
+            equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         if female_age_based_survival_rates is not None:
             self.female_age_based_survival_rates = female_age_based_survival_rates
@@ -827,19 +954,19 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         sperm_displacement_rate: float = 0.05
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure reproduction parameters including mating, fertility, and sperm storage.
-        
+
         Args:
-            female_mating_rates: Per-age female mating rates.
-            male_mating_rates: Per-age male mating rates.
-            female_fertility: Optional per-age relative fertility multiplier for females.
-            eggs_per_female: Baseline eggs (or offspring) per adult female.
-            use_fixed_egg_count: If True, egg count is fixed; else Poisson distributed.
-            sex_ratio: Proportion of offspring that are female (0-1).
-            use_sperm_storage: Whether to model sperm storage mechanics.
-            sperm_displacement_rate: Rate of sperm displacement upon remating (0-1).
-        
+            female_age_based_mating_rates (Optional[Union[List, NDArray]]): Female mating rates.
+            male_age_based_mating_rates (Optional[Union[List, NDArray]]): Male mating rates.
+            female_age_based_relative_fertility (Optional[Union[List, NDArray]]): Fertility weights.
+            eggs_per_female (float): Baseline eggs per adult female.
+            use_fixed_egg_count (bool): If True, egg count is fixed; else Poisson.
+            sex_ratio (float): Proportion of offspring that are female (0-1).
+            use_sperm_storage (bool): Whether to model sperm storage.
+            sperm_displacement_rate (float): Rate of sperm displacement (0-1).
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         if female_age_based_mating_rates is not None:
             self.female_age_based_mating_rates = np.array(female_age_based_mating_rates)
@@ -864,17 +991,17 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure competition, carrying capacity, and density-dependent parameters.
-        
+
         Args:
-            competition_strength: Intensity of density-dependent competition.
-            juvenile_growth_mode: Growth model ("logistic", "fixed", "concave", etc.).
-            low_density_growth_rate: Growth rate at low density (intrinsic lambda).
-            old_juvenile_carrying_capacity: Optional carrying capacity for older juveniles.
-            expected_num_adult_females: Optional equilibrium number of adult females.
-            equilibrium_distribution: Optional equilibrium distribution (overlaps with other categories).
-        
+            competition_strength (float): Intensity of competition factor.
+            juvenile_growth_mode (Union[int, str]): Growth model ("logistic", etc.).
+            low_density_growth_rate (float): Growth rate at low density.
+            old_juvenile_carrying_capacity (Optional[int]): Capacity for older juveniles.
+            expected_num_adult_females (Optional[int]): Equilibrium number of adult females.
+            equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         self.relative_competition_factor = competition_strength
         self.juvenile_growth_mode = juvenile_growth_mode
@@ -894,12 +1021,12 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         modifiers, and other modifications. They are applied first, then
         overridden by explicit fitness(), modifiers(), and hooks() settings
         if provided.
-        
+
         Args:
-            *preset_list: Variable number of preset objects to apply.
-        
+            *preset_list (Any): Variable number of preset objects to apply.
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         if preset_list:
             self._presets = list(preset_list)
@@ -919,29 +1046,19 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         presets to set base fitness values which can then be overridden.
         
         Args:
-            viability: Dict mapping genotype -> {sex: value} or genotype -> value.
+            viability (Optional[Dict]): Mapping genotype -> {sex: value} or genotype -> value.
                 If value is a dict with 'female'/'male' keys, applies per-sex.
-                If value is a float, applies to both sexes.
-                - Example: {'WT|WT': 1.0, 'Drive|WT': {'female': 0.9, 'male': 0.8}}
-            
-            fecundity: Dict mapping genotype -> fitness value (float or dict).
+            fecundity (Optional[Dict]): Mapping genotype -> fitness value (float or dict).
                 - Float: Applies to both sexes.
                 - Dict: {sex: value} applies per-sex.
-                - Example: {'WT|WT': 1.0, 'Drive|WT': {'female': 0.5, 'male': 1.0}}
-            
-            sexual_selection: Nested mapping of female_selector -> {male_selector: value}.
+            sexual_selection (Optional[Dict]): Nested mapping of female_selector -> {male_selector: value}.
                 - female_selector can be omitted by passing flat form {male_selector: value},
                     which applies to all female genotypes.
-                - selectors support Genotype, exact genotype string, pattern string,
-                    and tuple unions of these.
-                - Example nested: {'WT|WT': {'WT|WT': 1.0, 'Drive|WT': 0.8}}
-                - Example all-female: {'Drive|WT': 0.8}
-            
-            mode: Scaling mode. 'replace' (default) overwrites existing values.
+            mode (str): Scaling mode. 'replace' (default) overwrites existing values.
                 'multiply' scales existing values by the provided factor.
         
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         if viability is not None:
             self._fitness_operations.append(('viability', (viability,), {'mode': mode}))
@@ -958,7 +1075,14 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     def _iter_sexual_selection_entries(
         sexual_selection: Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]
     ) -> Iterable[Tuple[GenotypeSelector, GenotypeSelector, float]]:
-        """Normalize sexual selection mapping into (female_selector, male_selector, value)."""
+        """Normalize sexual selection mapping into (female_selector, male_selector, value).
+
+        Args:
+            sexual_selection (Dict): The sexual selection mapping to iterate over.
+
+        Yields:
+            Tuple[GenotypeSelector, GenotypeSelector, float]: Resolved selection entries.
+        """
         if not sexual_selection:
             return []
 
@@ -990,13 +1114,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         
         Modifiers are registered AFTER presets are applied, allowing presets
         to establish base state which can then be modified.
-        
+
         Args:
-            gamete_modifiers: List of (hook_id, name, modifier_func) tuples for gamete phase.
-            zygote_modifiers: List of (hook_id, name, modifier_func) tuples for zygote phase.
-        
+            gamete_modifiers (Optional[List]): (hook_id, name, modifier_func) for gametes.
+            zygote_modifiers (Optional[List]): (hook_id, name, modifier_func) for zygotes.
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         if gamete_modifiers is not None:
             self.gamete_modifiers = gamete_modifiers
@@ -1009,13 +1133,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         *hook_items: Union[Callable, Dict[str, List[Tuple[Callable, Optional[str], Optional[int]]]]]
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure event hook registrations.
-        
+
         Args:
-            *hook_items: Functions decorated with @hook or mappings of event names 
+            *hook_items (Union[Callable, Dict]): Functions decorated with @hook or mappings 
                 to hook registrations.
-        
+
         Returns:
-            Self for chaining.
+            AgeStructuredPopulationBuilder: Self for chaining.
         """
         for item in hook_items:
             if isinstance(item, dict):
@@ -1046,23 +1170,16 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     def build(self) -> 'AgeStructuredPopulation':
         """Build and return the configured AgeStructuredPopulation.
         
-        Execution order:
-          1. Validates required configuration
-          2. Creates PopulationConfig via PopulationConfigBuilder
-          3. Creates AgeStructuredPopulation with PopulationConfig
-          4. Applies all presets in order
-          5. Applies fitness settings directly to PopulationConfig tensors
-          6. Returns fully configured population
-        
         Notes:
             PopulationConfig is immutable after population creation.
             Fitness must be set during build phase via this method.
-        
+            Required configuration like initial_individual_count must be set.
+
         Returns:
-            Initialized AgeStructuredPopulation instance.
+            AgeStructuredPopulation: Initialized AgeStructuredPopulation instance.
         
         Raises:
-            ValueError: If required config is missing (e.g., initial_individual_count).
+            ValueError: If required config like initial_individual_count is missing.
         """
         # Import here to avoid circular imports
         from natal.age_structured_population import AgeStructuredPopulation
@@ -1267,10 +1384,10 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Add preset preset packages (applied during build).
 
         Args:
-            *preset_list: Variable number of preset objects to apply.
+            *preset_list (Any): Variable number of preset objects to apply.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         if preset_list:
             self._presets = list(preset_list)
@@ -1286,13 +1403,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Configure fitness via population methods (applied after presets).
 
         Args:
-            viability: Mapping from genotype selectors to scalar or per-sex values.
-            fecundity: Mapping from genotype selectors to fecundity values (scalar or per-sex).
-            sexual_selection: Flat or nested mating preference mapping.
-            mode: 'replace' or 'multiply'.
+            viability (Optional[Dict]): Genotype selectors to scalar or per-sex values.
+            fecundity (Optional[Dict]): Genotype selectors to fecundity values.
+            sexual_selection (Optional[Dict]): Flat or nested mating preference mapping.
+            mode (str): 'replace' or 'multiply'.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         if viability is not None:
             self._fitness_operations.append(("viability", (viability,), {'mode': mode}))
@@ -1309,7 +1426,14 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
     def _iter_sexual_selection_entries(
         sexual_selection: Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]
     ) -> Iterable[Tuple[GenotypeSelector, GenotypeSelector, float]]:
-        """Normalize sexual selection mapping into (female_selector, male_selector, value)."""
+        """Normalize sexual selection mapping into (female_selector, male_selector, value).
+
+        Args:
+            sexual_selection (Dict): The sexual selection mapping to iterate over.
+
+        Yields:
+            Tuple[GenotypeSelector, GenotypeSelector, float]: Resolved selection entries.
+        """
         if not sexual_selection:
             return []
 
@@ -1339,11 +1463,11 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Configure custom modifier functions.
 
         Args:
-            gamete_modifiers: List of (hook_id, name, modifier_func) tuples for gamete phase.
-            zygote_modifiers: List of (hook_id, name, modifier_func) tuples for zygote phase.
+            gamete_modifiers (Optional[List]): (hook_id, name, modifier_func) for gametes.
+            zygote_modifiers (Optional[List]): (hook_id, name, modifier_func) for zygotes.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         if gamete_modifiers is not None:
             self.gamete_modifiers = gamete_modifiers
@@ -1359,15 +1483,15 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         use_fixed_egg_count: bool = False
     ) -> 'DiscreteGenerationPopulationBuilder':
         """Configure basic population settings.
-        
+
         Args:
-            name: Human-readable population name.
-            stochastic: Whether to use stochastic sampling.
-            use_dirichlet_sampling: If True, use Dirichlet; else Binomial/Multinomial sampling.
-            use_fixed_egg_count: If True, egg count is fixed; if False, Poisson distributed.
+            name (str): Human-readable population name.
+            stochastic (bool): Whether to use stochastic sampling.
+            use_dirichlet_sampling (bool): If True, use Dirichlet; else standard sampling.
+            use_fixed_egg_count (bool): If True, egg count is fixed; if False, Poisson.
         
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         self.name = name
         self.is_stochastic = stochastic
@@ -1388,12 +1512,11 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Configure the initial population state.
 
         Args:
-            individual_count: Initial abundance mapping grouped by sex and genotype.
-                The innermost value can be an age-indexed sequence/map, or a scalar
-                (``int``/``float``) interpreted by the discrete-generation initializer.
+            individual_count (Dict): Initial abundance mapping grouped by sex and genotype.
+                Value can be an age-indexed sequence/map or a scalar.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         self.initial_individual_count = individual_count
         return self
@@ -1408,17 +1531,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Configure reproduction and mating parameters.
 
         Args:
-            eggs_per_female: Expected offspring produced per adult female.
-                Defaults to ``50.0``.
-            sex_ratio: Proportion of female offspring in ``[0, 1]``.
-                Defaults to ``0.5``.
-            female_adult_mating_rate: Adult female mating participation rate.
-                Defaults to ``1.0``.
-            male_adult_mating_rate: Adult male mating participation rate.
-                Defaults to ``1.0``.
+            eggs_per_female (float): Expected offspring produced per adult female.
+            sex_ratio (float): Proportion of female offspring in [0, 1].
+            female_adult_mating_rate (float): Adult female mating rate.
+            male_adult_mating_rate (float): Adult male mating rate.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         self.expected_eggs_per_female = eggs_per_female
         self.sex_ratio = sex_ratio
@@ -1435,15 +1554,12 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Configure survival probabilities for juvenile and adult stages.
 
         Args:
-            female_age0_survival: Female survival probability from age-0 stage.
-                Defaults to ``1.0``.
-            male_age0_survival: Male survival probability from age-0 stage.
-                Defaults to ``1.0``.
-            adult_survival: Adult survival probability to the next step.
-                Defaults to ``0.0`` for non-overlapping generations.
+            female_age0_survival (float): Female survival probability from age-0 stage.
+            male_age0_survival (float): Male survival probability from age-0 stage.
+            adult_survival (float): Adult survival probability to the next step.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         self.female_age0_survival = female_age0_survival
         self.male_age0_survival = male_age0_survival
@@ -1459,15 +1575,12 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Configure juvenile growth mode and density-dependence parameters.
 
         Args:
-            juvenile_growth_mode: Growth model identifier (int constant or mode string,
-                such as ``"logistic"``). Defaults to ``"logistic"``.
-            low_density_growth_rate: Per-step growth factor at low density.
-                Defaults to ``1.0``.
-            carrying_capacity: Optional carrying capacity used by density-dependent
-                juvenile growth models. Defaults to ``None``.
+            juvenile_growth_mode (Union[int, str]): Growth model identifier.
+            low_density_growth_rate (float): Per-step growth factor at low density.
+            carrying_capacity (Optional[int]): Optional carrying capacity.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         self.juvenile_growth_mode = juvenile_growth_mode
         self.low_density_growth_rate = low_density_growth_rate
@@ -1481,11 +1594,11 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Register lifecycle hooks for simulation events.
 
         Args:
-            *hook_items: Functions decorated with @hook or mappings of event names 
+            *hook_items (Union[Callable, Dict]): Functions decorated with @hook or mappings 
                 to hook registrations.
 
         Returns:
-            Self for chaining.
+            DiscreteGenerationPopulationBuilder: Self for chaining.
         """
         for item in hook_items:
             if isinstance(item, dict):
@@ -1514,6 +1627,14 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         return self
 
     def build(self) -> "DiscreteGenerationPopulation":
+        """Build and return the configured DiscreteGenerationPopulation.
+
+        Returns:
+            DiscreteGenerationPopulation: A fully configured population instance.
+
+        Raises:
+            ValueError: If initial_individual_count is not set.
+        """
         from natal.discrete_generation_population import DiscreteGenerationPopulation
 
         if self.initial_individual_count is None:

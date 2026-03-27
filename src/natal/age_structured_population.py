@@ -1,12 +1,15 @@
+# -*- coding: utf-8 -*-
 """Age-structured population models.
 
 This module implements age-structured (overlapping generation) population
 models and utilities for survival, reproduction, juvenile recruitment, and
 fitness management.
 
-Primary class:
-    ``AgeStructuredPopulation``: An age-structured population model built on
-    ``BasePopulation`` and ``PopulationState``.
+Attributes:
+    __all__ (list[str]): List of public symbols exported by this module.
+
+.. _Google Python Style Guide:
+   http://google.github.io/styleguide/pyguide.html
 """
 
 from typing import Dict, List, Optional, Union, Tuple, Callable, Set, TYPE_CHECKING
@@ -35,9 +38,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     juvenile recruitment modes, optional sperm-storage mechanics, and a
     hook/modifier system for user extensions.
 
-    The constructor accepts explicit configuration for ages, survival
-    schedules, mating and recruitment behavior, and user-provided
-    modifiers/hooks. See ``__init__`` for the full parameter list.
+    Attributes:
+        snapshots (dict): Storage for custom state snapshots.
     """
     
     def __init__(
@@ -51,17 +53,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     ):
         """Initialize an age-structured population instance using a PopulationConfig.
 
-        This constructor directly accepts a PopulationConfig created by PopulationConfigBuilder.
-        For building via the high-level API, use the builder() class method instead.
-
         Args:
-            species (Species): Species object describing genetic architecture.
-            population_config (PopulationConfig): Fully initialized PopulationConfig instance.
-            name (Optional[str]): Human-readable population name. If None, uses "AgeStructuredPop".
-            initial_individual_count (Optional[Dict]): Initial population distribution (required unless pre-initialized).
+            species: Species object describing genetic architecture.
+            population_config: Fully initialized PopulationConfig instance.
+            name: Human-readable population name. If None, uses "AgeStructuredPop".
+            initial_individual_count: Initial population distribution.
                 Format: {sex: {genotype: counts_by_age}}
-            initial_sperm_storage (Optional[Dict]): Initial sperm storage state (if supported).
-            hooks (Dict): Event hook registrations to apply.
+            initial_sperm_storage: Initial sperm storage state (if supported).
+            hooks: Event hook registrations to apply.
 
         Example:
             >>> pop_config = PopulationConfigBuilder.build(species, ...)
@@ -71,18 +70,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             ...     name="MyPop",
             ...     initial_individual_count={...}
             ... )
-
-        Raises:
-            ValueError: If configuration is invalid (e.g., empty initial_individual_count).
         """
-        # Set population name
         if name is None:
             name = "AgeStructuredPop"
         
-        # Initialize parent with hooks
         super().__init__(species, name, hooks=hooks)
         
-        # Store configuration
         config_hook_slot = int(getattr(population_config, "hook_slot", 0))
         if config_hook_slot <= 0:
             config_hook_slot = self.hook_slot
@@ -91,17 +84,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
         
-        # Create IndexRegistry for genotype and gamete label mapping
         self._initialize_registry()
         
-        # Create PopulationState
         self._state = PopulationState.create(
             n_genotypes=population_config.n_genotypes,
             n_sexes=population_config.n_sexes,
             n_ages=population_config.n_ages,
         )
 
-        # Preferred path: initialize from builder-injected config arrays.
+        # Initialize from builder-injected config arrays if available.
         cfg_init_ind = population_config.get_scaled_initial_individual_count()
         if cfg_init_ind.shape == self._state.individual_count.shape:
             self._state.individual_count[:] = cfg_init_ind
@@ -109,15 +100,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if cfg_init_sperm.shape == self._state.sperm_storage.shape:
             self._state.sperm_storage[:] = cfg_init_sperm
         
-        # Initialize snapshot tracking
         self.snapshots = {}
         
-        # Backward-compatible override path from constructor args.
         if initial_individual_count is not None:
             self._state.individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
         
-        # Backward-compatible override path from constructor args.
         if initial_sperm_storage is not None:
             # TODO: add population_config.use_sperm_storage
             self._distribute_initial_sperm_storage(species, initial_sperm_storage)
@@ -128,7 +116,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             None,
         )
         
-        # Initialize registry using Template Method Pattern
         self._initialize_registry()
         self._finalize_hooks()
     
@@ -144,16 +131,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     ) -> 'AgeStructuredPopulationBuilder':
         """Create and preconfigure an age-structured population builder.
 
-        This is a convenience forwarding entry point. Parameter semantics and
-        defaults are the same as ``AgeStructuredPopulationBuilder.setup``.
-
         Args:
             species: Species definition used to initialize the builder.
-            name: Population name passed through to ``builder.setup``.
-            stochastic: Passed through to ``builder.setup``.
-            use_dirichlet_sampling: Passed through to ``builder.setup``.
-            gamete_labels: Passed through to ``builder.setup``.
-            use_fixed_egg_count: Passed through to ``builder.setup``.
+            name: Population name.
+            stochastic: Whether to use stochastic sampling.
+            use_dirichlet_sampling: Whether to use Dirichlet sampling.
+            gamete_labels: Optional labels for gamete tracking.
+            use_fixed_egg_count: Whether egg count is deterministic.
 
         Returns:
             A configured ``AgeStructuredPopulationBuilder`` for fluent chaining.
@@ -180,6 +164,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Args:
             distribution: Format {sex: {genotype: age_counts}}
                 where age_counts can be a list or dict of age -> count.
+
+        Raises:
+            ValueError: If sex key is invalid.
+            TypeError: If age data is not a list or dict.
         """
         self._state.individual_count.fill(0.0)
         for sex_key, genotype_dist in distribution.items():
@@ -213,7 +201,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     ) -> None:
         """Populate the internal sperm storage from user-provided initial distribution.
 
-        Supported formats for age_data (innermost value):
+        Note:
+            Supported formats for age_data (innermost value):
             - Dict[int, float]: Sparse mapping {age: count, ...}
             - List[float]: Dense list [count_age0, count_age1, ...]
             - float/int: Scalar value applied to all adult ages (>= new_adult_age)
@@ -221,11 +210,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Args:
             species: Species object for genotype parsing.
             sperm_storage_dist: Mapping of {female_genotype: {male_genotype: age_data}}.
-                Genotype keys can be Genotype objects or strings.
+
+        Raises:
+            TypeError: If genotype keys or age data have incorrect types.
+            ValueError: If sperm counts or ages are out of range.
         """
         self._state.sperm_storage.fill(0.0)
         for female_key, male_dict in sperm_storage_dist.items():
-            # 解析雌性基因型
             if isinstance(female_key, str):
                 female_genotype = species.get_genotype_from_str(female_key)
             elif isinstance(female_key, Genotype):
@@ -236,7 +227,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             female_idx = self._registry.genotype_to_index[female_genotype]
             
             for male_key, age_data in male_dict.items():
-                # 解析雄性基因型
+                # Parse male genotype
                 if isinstance(male_key, str):
                     male_genotype = species.get_genotype_from_str(male_key)
                 elif isinstance(male_key, Genotype):
@@ -246,9 +237,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 
                 male_idx = self._registry.genotype_to_index[male_genotype]
                 
-                # 解析 age_data：支持多种格式
+                # Parse age_data: supports multiple formats
                 if isinstance(age_data, dict):
-                    # Dict 格式：{age: count, ...}
+                    # Dict format: {age: count, ...}
                     for age, count in age_data.items():
                         if not isinstance(age, int):
                             raise TypeError(f"Age must be int, got {type(age)}")
@@ -260,7 +251,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             self._state.sperm_storage[age, female_idx, male_idx] = float(count)
                             
                 elif isinstance(age_data, (list, tuple)):
-                    # List 格式：[count_age0, count_age1, ...]
+                    # List format: [count_age0, count_age1, ...]
                     for age, count in enumerate(age_data):
                         if age >= self.n_ages:
                             break
@@ -270,7 +261,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             self._state.sperm_storage[age, female_idx, male_idx] = float(count)
                             
                 elif isinstance(age_data, (int, float)) and not isinstance(age_data, bool):
-                    # 标量格式：应用到所有成年年龄
+                    # Scalar format: apply to all adult ages
                     if age_data < 0:
                         raise ValueError(f"Sperm count must be non-negative, got {age_data}")
                     if age_data > 0:
@@ -281,18 +272,20 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     
     @property
     def state(self) -> PopulationState:
-        """Population state data container."""
+        """PopulationState: The current state container for the population."""
         return self._state
     
     def reset(self) -> None:
-        """Reset the population to its initial state."""
+        """Reset the population to its initial state.
+
+        Restores individual counts and sperm storage to original values.
+        """
         self._tick = 0
         self._history = []
         self._finished = False
         if hasattr(self, '_initial_population_snapshot') and self._initial_population_snapshot is not None:
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
             
-            # Recreate state with initial data
             self._state = PopulationState.create(
                 n_genotypes=self._config.n_genotypes,
                 n_sexes=self._config.n_sexes,
@@ -304,24 +297,36 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     @property
     def n_ages(self) -> int:
-        """Number of age classes in this population."""
+        """int: Number of age classes in this population."""
         return self._config.n_ages
     
     @property
     def new_adult_age(self) -> int:
-        """Minimum age at which individuals are considered adults."""
+        """int: Minimum age at which individuals are considered adults."""
         return self._config.new_adult_age
     
     def get_total_count(self) -> int:
-        """Return the total number of individuals in the population."""
+        """Return the total number of individuals in the population.
+
+        Returns:
+            float: Grand total across all sexes, ages, and genotypes.
+        """
         return self._state.individual_count.sum()
     
     def get_female_count(self) -> int:
-        """Return the total number of female individuals."""
+        """Return the total number of female individuals.
+
+        Returns:
+            float: Sum of all female individual counts.
+        """
         return self._state.individual_count[Sex.FEMALE.value, :, :].sum()
     
     def get_male_count(self) -> int:
-        """Return the total number of male individuals."""
+        """Return the total number of male individuals.
+
+        Returns:
+            float: Sum of all male individual counts.
+        """
         return self._state.individual_count[Sex.MALE.value, :, :].sum()
     
     def get_adult_count(self, sex: str = 'both') -> int:
@@ -331,7 +336,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             sex: One of ``'female'``, ``'male'``, or ``'both'`` (aliases accepted).
 
         Returns:
-            int: Total number of adults for the requested sex(es).
+            float: Total number of adults for the requested sex(es).
+
+        Raises:
+            ValueError: If the sex identifier is not recognized.
         """
         if sex not in ('female', 'male', 'both', 'F', 'M'):
             raise ValueError(f"sex must be 'female', 'male', or 'both', got '{sex}'")
@@ -348,13 +356,29 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     
 
     def _get_fecundity(self, genotype: Genotype, sex: Sex) -> float:
-        """Internal helper: return fecundity for a genotype and sex."""
+        """Internal helper: return fecundity for a genotype and sex.
+
+        Args:
+            genotype: Target genotype.
+            sex: Target sex.
+
+        Returns:
+            float: The fecundity fitness value.
+        """
         genotype_idx = self._registry.genotype_to_index[genotype]
         sex_idx = int(sex.value)
         return self._config.fecundity_fitness[sex_idx, genotype_idx]
     
     def _get_sexual_preference(self, female_genotype: Genotype, male_genotype: Genotype) -> float:
-        """Internal helper: return sexual preference value for a genotype pair."""
+        """Internal helper: return sexual preference value for a genotype pair.
+
+        Args:
+            female_genotype: Genotype of the female.
+            male_genotype: Genotype of the male.
+
+        Returns:
+            float: The sexual selection fitness weight.
+        """
         f_idx = self._registry.genotype_to_index[female_genotype]
         m_idx = self._registry.genotype_to_index[male_genotype]
         return self._config.sexual_selection_fitness[f_idx, m_idx]
@@ -364,10 +388,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     # ========================================================================
     
     def export_config(self) -> 'PopulationConfig':
-        """导出种群配置到 Config jitclass。
+        """Export population configuration to Config jitclass.
         
         Returns:
-            PopulationStatic: A copy of the population configuration.
+            PopulationConfig: A copy of the current population configuration.
         """
         return self._config
     
@@ -377,14 +401,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Args:
             config: Config jitclass instance
         """
-        # 配置通常是只读的（通过 run_tick 使用），这里仅为完整性保留
-        # 实际上很少需要导入配置，除非在高级用途下
+        # Configuration is usually read-only (used by run_tick), 
+        # kept here for completeness.
         self._config = config
     
     def create_history_snapshot(self) -> None:
-        """记录当前状态到历史记录。
+        """Record current state to history records.
         
-        将当前 tick 和 state 的展平副本保存到 _history。
+        Saves the current tick and a flattened copy of state to _history.
         """
         flattened = self._state.flatten_all()
         self._history.append((self._tick, flattened.copy()))
@@ -402,21 +426,21 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if len(self._history) == 0:
             raise ValueError("No history recorded")
         
-        # 堆叠所有快照的展平数据
+        # Stack flattened data of all snapshots
         flat_array = np.array([rec[1] for rec in self._history], dtype=np.float64)
         return flat_array
     
     def clear_history(self) -> None:
-        """清空历史记录。"""
+        """Clear history records."""
         self._history.clear()
     
     def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
-        """导出种群状态为展平数组。
+        """Export population state as a flattened array.
         
         Returns:
-            Tuple containing:
-            - state_flat: flattened 1D array [n_tick, individual_count.ravel(), sperm_storage.ravel()]
-            - history: optional numpy array of shape (n_snapshots, flatten_size) or None
+            Tuple[NDArray, Optional[NDArray]]: (state_flat, history).
+                state_flat: [n_tick, ind_count.ravel(), sperm_storage.ravel()]
+                history: Optional array of shape (n_snapshots, flatten_size).
         """
         state_flat = self._state.flatten_all()
         history = self.get_history() if self._history else None
@@ -424,22 +448,17 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     
     def import_state(self, state: Union['PopulationState', NDArray[np.float64], Dict[str, np.ndarray]], 
                      history: Optional[np.ndarray] = None) -> None:
-        """导入状态、可选的历史记录。
+        """Import state and optional history records.
         
         Args:
-            state: 可以是以下格式之一：
-                - NDArray: 展平状态数组 [n_tick, ind_count.ravel(), sperm_storage.ravel()]
-                - PopulationState: PopulationState 实例
-                - Dict: {'individual_count': ..., 'sperm_storage': ...} 字典
-            history: 可选的历史记录 2D 数组 (n_snapshots, flatten_size)
+            state: Flattened array, PopulationState object, or data dictionary.
+            history: Optional history 2D array.
         """
         from natal.population_state import PopulationState, parse_flattened_state
         
         if isinstance(state, np.ndarray):
-            # 从展平数组重建状态
-            n_sexes = self._state.individual_count.shape[0]
-            n_ages = self._state.individual_count.shape[1]
-            n_genotypes = self._state.individual_count.shape[2]
+            # Reconstruct state from flattened array
+            n_sexes, n_ages, n_genotypes = self._state.individual_count.shape
             state_obj = parse_flattened_state(state, n_sexes, n_ages, n_genotypes)
             self._state.individual_count[:] = state_obj.individual_count
             self._state.sperm_storage[:] = state_obj.sperm_storage
@@ -449,11 +468,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 sperm_storage=self._state.sperm_storage,
             )
         elif isinstance(state, dict):
-            # 从字典重建状态
             self._state.individual_count[:] = state['individual_count']
             self._state.sperm_storage[:] = state['sperm_storage']
         elif isinstance(state, PopulationState):
-            # 直接使用 PopulationState
             self._state.individual_count[:] = state.individual_count
             self._state.sperm_storage[:] = state.sperm_storage
             self._state = PopulationState(
@@ -462,11 +479,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 sperm_storage=self._state.sperm_storage,
             )
         else:
-            # 兼容旧的元组格式
             self._state.individual_count[:] = state[0]
             self._state.sperm_storage[:] = state[1]
         
-        # 导入历史记录（如果提供）
         if history is not None and history.shape[0] > 0:
             self.clear_history()
             for row_idx in range(history.shape[0]):
@@ -479,13 +494,16 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     # ========================================================================
     
     def get_history_as_objects(self, indices: Optional[List[int]] = None) -> List[Tuple[int, PopulationState]]:
-        """将选定的展平快照转换回 PopulationState 对象。
+        """Convert selected flattened snapshots back to PopulationState objects.
         
         Args:
-            indices: 要转换的快照索引列表。如果为 None，转换所有快照。
+            indices: List of snapshot indices to convert. If None, converts all.
         
         Returns:
-            (tick, PopulationState) 元组的列表
+            List[Tuple[int, PopulationState]]: List of (tick, state) tuples.
+
+        Raises:
+            IndexError: If an index is out of range.
         """
         if indices is None:
             indices = list(range(len(self._history)))
@@ -497,7 +515,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 raise IndexError(f"History index {idx} out of range [0, {len(self._history)})")
             
             tick, flattened = self._history[idx]
-            # 使用 parse_flattened_state 重构 PopulationState
             state = parse_flattened_state(
                 flattened,
                 n_sexes=2,
@@ -508,19 +525,18 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return result
     
     def restore_checkpoint(self, tick: int) -> None:
-        """将种群恢复到特定的历史 tick。
+        """Restore the population to a specific history tick.
         
         Args:
-            tick: 目标 tick 号
+            tick: The target tick number.
         
         Raises:
-            ValueError: 如果找不到指定 tick 的历史记录
+            ValueError: If no record is found for the specified tick.
         """
         from natal.population_state import parse_flattened_state
         
         for t, flattened in self._history:
             if t == tick:
-                # 使用 parse_flattened_state 重构状态
                 state = parse_flattened_state(
                     flattened,
                     n_sexes=2,
@@ -536,17 +552,18 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         raise ValueError(f"No history record found for tick {tick}")
     
     # ========================================================================
-    # Hooks 系统
+    # Hooks system
     # ========================================================================
 
-    # 允许的 Hook 事件
+    # [Allowed hook events]
     #
     #     Before simulation:  [initialization]
     #                                |
     #                                v
     #     For tick in T:    |-------------------------------------------------------------------------|
-    #                       |     [first] -> [reproduction] --> [early] --> [survival] --> [late]     |
-    #                       |        |<-------------------------------------------------------|       |
+    #                       |     [first] -->  reproduction  --> [early] -->  survival  --> [late]    |
+    #                       |        ^                                                         |      |
+    #                       |        |<--------------------------------------------------------|      |
     #                       |-------------------------------------------------------------------------| 
     #                                |
     #                                v
@@ -558,12 +575,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     # ========================================================================
     
     def _get_kernel_config(self) -> tuple:
-        """Build configuration tuple for simulation_kernels.
+        """Build configuration tuple for simulation kernels.
         
         Returns:
-            tuple: Configuration in the format expected by simulation_kernels.
+            tuple: A Numba-compatible configuration tuple.
         """
-        return sk.export_config(self)
+        return sk.export_config(self)  # type: ignore
     
     def run(
         self,
@@ -572,24 +589,16 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         finish: bool = False,
         clear_history_on_start: bool = False
     ) -> 'AgeStructuredPopulation':
-        """
-        运行多步演化（使用 simulation_kernels 加速）。
-        
-        如果种群定义了 hooks（特别是提前终止条件），hooks 会在演化过程中执行。
-        若某个 hook 触发了终止条件，演化会提前结束，并自动设置 is_finished=True。
+        """Run multi-step evolution using optimized simulation kernels.
         
         Args:
-            n_steps: 要运行的步数
-            record_every: 每隔多少步记录一次快照（0 表示不记录）
-            finish: 是否在运行完成后标记为 finished
-                如果为 True，运行完成后会触发 'finish' 事件，
-                并将种群标记为已完成，之后无法再运行 run_tick()
-            clear_history_on_start: 是否在开始时清空现有历史记录
-                如果为 True，会清空所有旧的快照，只保留本次 run() 的结果
-                如果为 False，本次 run() 的快照会累积到现有历史中
+            n_steps: Number of steps to evolve.
+            record_every: Interval for recording snapshots (0 to disable).
+            finish: Whether to mark the population as finished after the run.
+            clear_history_on_start: Whether to clear existing history before starting.
         
         Returns:
-            self（支持链式调用）
+            AgeStructuredPopulation: Self for chaining.
         
         Raises:
             RuntimeError: 如果种群已 finish，无法继续运行
@@ -601,18 +610,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 "Cannot run() again after finish=True."
             )
         
-        # 获取核心配置
         config = sk.export_config(self)
         
-        # 获取编译后的事件 hooks
         hooks = self.get_compiled_event_hooks()
         
-        # run_fn 和 registry 总是由 get_compiled_event_hooks() 初始化的
-        # 但类型检查器可能看不到这个保证，所以我们显式地处理
+        # run_fn and registry are always initialized by get_compiled_event_hooks()
         assert hooks.run_fn is not None, "hooks.run_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
         
-        run_fn = hooks.run_fn
+        run_fn: Callable = hooks.run_fn
         registry = hooks.registry
 
         # 直接调用固定签名 runner 执行多步演化
@@ -624,7 +630,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             record_interval=record_every,
         )
         
-        # 处理最终状态（tuple 格式：ind_count, sperm, tick）
+        # Process final state (tuple format: ind_count, sperm, tick)
         self._state = PopulationState(
             n_tick=int(final_state_tuple[2]),
             individual_count=final_state_tuple[0],
@@ -632,36 +638,28 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         )
         self._tick = int(final_state_tuple[2])
         
-        # 处理历史记录
-        # history_new 是 2D NDArray (n_snapshots, history_size)，其中每行是 [tick_val, ind_count_flat..., sperm_storage_flat...]
+        # history_new is a 2D NDArray (n_snapshots, history_size)
         self._process_kernel_history(history_new, clear_history_on_start)
         
-        # 如果因 hooks 提前终止，设置 _finished 标志
+        # If terminated early by hooks, set _finished flag
         if was_stopped:
             self._finished = True
             self.trigger_event("finish")
         elif finish:
-            # 否则，如果 finish 参数为 True，则主动触发完成
+            # Otherwise, if finish parameter is True, actively trigger finish
             self.finish_simulation()
         
         return self
     
     def run_tick(self) -> 'AgeStructuredPopulation':
         """
-        执行单个 tick 的演化（便捷方法）。
-        
-        等价于 run(n_steps=1, record_every=1)，但更简洁。
+        Execute a single tick of evolution.
         
         Returns:
-            self（支持链式调用）
+            AgeStructuredPopulation: Self for chaining.
         
         Raises:
             RuntimeError: 如果种群已 finish，无法继续运行
-        
-        Example:
-            >>> pop.run_tick()  # 执行一个演化步骤
-            >>> pop.tick  # 查看当前 tick 数
-            1
         """
         return self.run(n_steps=1, record_every=self.record_every, clear_history_on_start=False)
     
@@ -672,12 +670,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             sex: One of ``'female'``, ``'male'``, or ``'both'``.
 
         Returns:
-            np.ndarray: Age distribution array with shape ``(n_ages,)``.
+            NDArray[np.float64]: Age distribution array with shape (n_ages,).
+
+        Raises:
+            ValueError: If sex identifier is invalid.
         """
         if sex not in ('female', 'male', 'both', 'F', 'M'):
             raise ValueError(f"sex must be 'female', 'male', or 'both', got '{sex}'")
         
-        # 直接从 PopulationState 访问
+        # Access directly from PopulationState
         if sex in ('female', 'F'):
             return self._state.individual_count[Sex.FEMALE.value, :, :].sum(axis=1)
         elif sex in ('male', 'M'):
@@ -701,7 +702,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     
     @property
     def genotypes_present(self) -> Set[Genotype]:
-        """Return the set of genotypes currently present in the population."""
+        """Set[Genotype]: Returns the set of genotypes with count > 0."""
         present = set()
         for genotype_idx, genotype in enumerate(self._registry.index_to_genotype):
             total_count = self._state.individual_count[:, :, genotype_idx].sum()

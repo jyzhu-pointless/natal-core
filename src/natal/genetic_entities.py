@@ -8,7 +8,7 @@ Responsibilities
 - Represent concrete instances such as genes, haplotypes, haploid genomes, and genotypes.
 - Maintain references to their corresponding genetic structures for architectural context.
 - Enforce consistency by validating against the connected structure during creation.
-- **Auto-register** themselves with the structure upon creation ("创建即注册").
+- **Auto-register** themselves with the structure upon creation ("register upon creation").
 
 Design Notes
 ------------
@@ -55,7 +55,7 @@ class GeneticEntity(Generic[S]):
     
     Core Rules (from requirement.md):
     1. Entity MUST be bound to a Structure (mandatory)
-    2. Entity auto-registers with Structure upon creation ("创建即注册")
+    2. Entity auto-registers with Structure upon creation ("register upon creation")
     3. Entity with same name under same Structure returns the same instance (singleton per structure+name)
     
     Example:
@@ -154,7 +154,7 @@ class GeneticEntity(Generic[S]):
         self.name = name
         self.structure = structure
 
-        # Auto-register with the structure ("创建即注册")
+        # Auto-register with the structure ("register upon creation")
         structure.register(self)
         
         # Mark as initialized
