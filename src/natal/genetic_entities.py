@@ -290,7 +290,7 @@ class Haplotype(GeneticEntity[Chromosome]):
                 )
         
         # Check 2: No duplicate loci (each locus can only have one gene)
-        seen_loci = set()
+        seen_loci: set[Locus] = set()
         for gene in genes:
             if gene.locus in seen_loci:
                 raise ValueError(
@@ -387,7 +387,7 @@ class HaploidGenotype(GeneticEntity[Species]):
                 )
         
         # Check 2: No duplicate chromosomes (each chromosome can only have one haplotype)
-        seen_chroms = set()
+        seen_chroms: set[Chromosome] = set()
         for hap in haplotypes:
             if hap.chromosome in seen_chroms:
                 raise ValueError(
