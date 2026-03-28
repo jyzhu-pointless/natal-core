@@ -322,7 +322,7 @@ def from_plain_population_config(plain: PopulationConfig) -> PopulationConfig:
 def build_population_config(
     n_genotypes: int = 0,
     n_haploid_genotypes: int = 0,
-    n_sexes: int = 2,
+    n_sexes: Optional[int] = None,
     n_ages: int = 2,
     n_glabs: int = 1,
     is_stochastic: bool = True,

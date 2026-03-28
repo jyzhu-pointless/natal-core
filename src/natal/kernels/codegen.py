@@ -7,7 +7,7 @@ import importlib.util
 import sys
 import threading
 from pathlib import Path
-from typing import Callable, Tuple, List, Any
+from typing import Callable, Tuple, Any
 
 from natal.numba_utils import get_numba_cache_dir
 

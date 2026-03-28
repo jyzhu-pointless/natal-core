@@ -124,18 +124,18 @@ def binomial_btpe(n: int, p: float) -> int:
             break # Fallback acceptance, goto Step60
             
         else:
-            # Corresponds to precise factorial multiplication F in lower half of Step50
+            # Corresponds to precise factorial multiplication f in lower half of Step50
             s = r / q
             a = s * (n + 1)
-            F = 1.0
+            f = 1.0
             if m < y:
                 for i in range(m + 1, y + 1):
-                    F *= (a / i - s)
+                    f *= (a / i - s)
             elif m > y:
                 for i in range(y + 1, m + 1):
-                    F /= (a / i - s)
+                    f /= (a / i - s)
 
-            if v > F:
+            if v > f:
                 continue # goto Step10
             break # goto Step60
 

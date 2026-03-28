@@ -122,7 +122,7 @@ def continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: N
             # If probability is extremely low, set to 0 directly
             val = 0.0
         else:
-            val = np.random.gamma(alpha, 1.0)
+            val = float(np.random.gamma(alpha, 1.0))  # pyright: ignore
         
         out_counts[i] = val
         sum_gamma += val
@@ -563,7 +563,7 @@ def fertilize_with_mating_genotype(
                 if use_dirichlet_sampling:
                     n_viable_eggs[i] = continuous_binomial(n_total, p_surv)
                 else:
-                    n_viable_eggs[i] = float(nbc.binomial(int(round(n_total)), p_surv))
+                    n_viable_eggs[i] = float(nbc.binomial(int(round(n_total)), p_surv))  # pyright: ignore
 
         # 2. Sample offspring genotypes (Multinomial)
         # Use normalized P_matrix_norm conditional distribution to allocate viable eggs to each genotype.

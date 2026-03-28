@@ -16,6 +16,7 @@ import re
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
 import numpy as np
+from numpy.typing import NDArray
 
 from .types import (
     HookOp,
@@ -291,7 +292,7 @@ def _resolve_genotypes(
     if isinstance(selector, str):
         selector = [selector]
 
-    indices = []
+    indices: List[int] = []
     for item in selector:
         if isinstance(item, int):
             indices.append(item)
@@ -609,33 +610,33 @@ def compile_declarative_hook(
     # These will be packed into parallel arrays for efficient runtime execution
     
     # 1. Operation type stream - stores the operation code for each hook
-    op_types_list = []
+    op_types_list: List[int] = []
     
     # 2. Genotype selection data (CSR format)
     # gidx_offsets: CSR offsets defining genotype index ranges for each operation
     # gidx_data: Flattened list of all genotype indices across all operations
-    gidx_offsets = [0]  # Start with offset 0 for the first operation
-    gidx_data_list = []
+    gidx_offsets: List[int] = [0]  # Start with offset 0 for the first operation
+    gidx_data_list: List[int] = []
     
     # 3. Age selection data (CSR format)  
     # age_offsets: CSR offsets defining age index ranges for each operation
     # age_data: Flattened list of all age indices across all operations
-    age_offsets = [0]  # Start with offset 0 for the first operation
-    age_data_list = []
+    age_offsets: List[int] = [0]  # Start with offset 0 for the first operation
+    age_data_list: List[int] = []
     
     # 4. Sex selection and operation parameters
     # sex_masks: Boolean masks for male/female selection (2D array: [op][sex])
     # params: Numeric parameters for each operation (e.g., fitness values)
-    sex_masks_list = []
-    params_list = []
+    sex_masks_list: List[NDArray[np.bool_]] = []
+    params_list: List[float] = []
     
     # 5. Condition expression data (CSR format)
     # condition_offsets: CSR offsets defining condition token ranges for each operation
     # condition_types: Flattened list of condition operation types
     # condition_params: Flattened list of condition parameters
-    condition_offsets = [0]  # Start with offset 0 for the first operation
-    condition_types_list = []
-    condition_params_list = []
+    condition_offsets: List[int] = [0]  # Start with offset 0 for the first operation
+    condition_types_list: List[int] = []
+    condition_params_list: List[int] = []
 
     # Process each hook operation and compile it into the packed arrays
     for op in ops:

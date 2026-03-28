@@ -307,11 +307,8 @@ class GameteConversionRuleSet:
 
     def add_rule(self, rule: _GameteRuleType) -> 'GameteConversionRuleSet':
         """Append a rule (allele-level or HaploidGenotype-level).  Returns *self*."""
-        if not isinstance(rule, (GameteAlleleConversionRule, GameteHaploidGenomeConversionRule)):
-            raise TypeError(
-                "rule must be a GameteAlleleConversionRule or "
-                "GameteHaploidGenomeConversionRule"
-            )
+        assert isinstance(rule, (GameteAlleleConversionRule, GameteHaploidGenomeConversionRule)), \
+                "rule must be an instance of GameteAlleleConversionRule or GameteHaploidGenomeConversionRule"
         self.rules.append(rule)
         return self
 
@@ -408,12 +405,12 @@ class GameteConversionRuleSet:
         """
         rules = self.rules
         
-        def gamete_modifier_func() -> Dict[Tuple[int, int], Dict[int, float]]:
+        def gamete_modifier_func(*_args: object, **_kwargs: object) -> Dict[Tuple[int, int], Dict[int, float]]:
             """Apply all conversion rules to gamete frequencies.
             
             Returns dict mapping (sex_idx, genotype_idx) -> {compressed_hg_glab_idx -> freq}.
             """
-            result = {}
+            result: Dict[Tuple[int, int], Dict[int, float]] = {}
             
             n_glabs = int(population.config.n_glabs)
             genotype_to_gametes_map = population.config.genotype_to_gametes_map
@@ -519,6 +516,9 @@ def _compute_converted_gamete_freqs(
     current_freqs = initial_freqs.copy()
 
     for rule, src_glab_idx, tgt_glab_idx in resolved_rules:
+        assert isinstance(rule, (GameteAlleleConversionRule, GameteHaploidGenomeConversionRule)), \
+                "Resolved rules must be instances of GameteAlleleConversionRule or GameteHaploidGenomeConversionRule"
+
         # Check rule-level conditions (does it apply to this sex / diploid genotype?)
         if not rule.applies_to_sex(sex_idx) or not rule.applies_to_genotype(genotype):
             continue
@@ -560,7 +560,7 @@ def _compute_converted_gamete_freqs(
                 )
 
             # --- Allele-level rule ---
-            elif isinstance(rule, GameteAlleleConversionRule):
+            else:  # isinstance(rule, GameteAlleleConversionRule)
                 # Attempt to convert inside the haploid genotype.
                 # Returns (original, converted, prob) if the target allele is present.
                 converted = _convert_haploid_genotype(

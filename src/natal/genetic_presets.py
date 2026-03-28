@@ -24,7 +24,7 @@ The module also provides a generic allele conversion rule system:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, Union, TYPE_CHECKING, List, TypeGuard
+from typing import Dict, Any, Optional, Tuple, Union, TYPE_CHECKING, List, TypeGuard, Mapping, cast
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.genetic_entities import Gene, Genotype
 from natal.genetic_structures import Species
@@ -158,12 +158,89 @@ def _calculate_allele_effect(
 
 def _is_effect_scale(value: object) -> TypeGuard[Union[float, Tuple[float, float]]]:
     """Narrow runtime config value to the scale type accepted by _calculate_allele_effect."""
-    return isinstance(value, (int, float)) or (
-        isinstance(value, tuple)
-        and len(value) == 2
-        and isinstance(value[0], (int, float))
-        and isinstance(value[1], (int, float))
-    )
+    if isinstance(value, (int, float)):
+        return True
+    if not isinstance(value, tuple):
+        return False
+    pair = _as_pair(cast(object, value))
+    if pair is None:
+        return False
+    return isinstance(pair[0], (int, float)) and isinstance(pair[1], (int, float))
+
+
+def _is_viability_age_map(config: Mapping[object, object]) -> TypeGuard[Dict[Age, Union[float, Tuple[float, float]]]]:
+    return all(isinstance(age_key, int) and _is_effect_scale(scale) for age_key, scale in config.items())
+
+
+def _is_simple_age_scale_map(config: Mapping[object, object]) -> TypeGuard[Dict[int, Union[int, float]]]:
+    return all(isinstance(age_key, int) and isinstance(scale, (int, float)) for age_key, scale in config.items())
+
+
+def _as_pair(value: object) -> Optional[Tuple[object, object]]:
+    if not isinstance(value, tuple):
+        return None
+    items = cast(Tuple[object, ...], value)
+    if len(items) != 2:
+        return None
+    return items[0], items[1]
+
+
+def _coerce_sex_specifier(value: object) -> _SexSpecifier:
+    if isinstance(value, (Sex, int, str)):
+        return value
+    raise TypeError(f"Invalid sex key type: {type(value).__name__}")
+
+
+def _coerce_selector(value: object) -> Union[Genotype, str, Tuple[Union[Genotype, str], ...]]:
+    if isinstance(value, (Genotype, str)):
+        return value
+    if isinstance(value, tuple):
+        tuple_value = cast(Tuple[object, ...], value)
+        if all(isinstance(v, (Genotype, str)) for v in tuple_value):
+            return cast(Tuple[Union[Genotype, str], ...], tuple_value)
+    raise TypeError(f"Invalid selector type: {type(cast(object, value)).__name__}")
+
+
+def _split_config_mode(value: object) -> Tuple[object, str]:
+    pair = _as_pair(value)
+    if pair is not None and isinstance(pair[1], str):
+        return pair[0], pair[1]
+    return value, "multiplicative"
+
+
+def _is_viability_scaling_config(value: object) -> TypeGuard[_ViabilityScalingConfig]:
+    if isinstance(value, (int, float)) or _is_effect_scale(value):
+        return True
+    if not isinstance(value, Mapping):
+        return False
+    config_map = cast(Mapping[object, object], value)
+    if _is_viability_age_map(config_map):
+        return True
+    for sex_key, sex_config in config_map.items():
+        if not isinstance(sex_key, (Sex, int, str)):
+            return False
+        if _is_effect_scale(sex_config):
+            continue
+        if isinstance(sex_config, Mapping) and _is_viability_age_map(cast(Mapping[object, object], sex_config)):
+            continue
+        return False
+    return True
+
+
+def _is_fecundity_scaling_config(value: object) -> TypeGuard[_FecundityScalingConfig]:
+    if isinstance(value, (int, float)) or _is_effect_scale(value):
+        return True
+    if not isinstance(value, Mapping):
+        return False
+    config_map = cast(Mapping[object, object], value)
+    return all(isinstance(sex_key, (Sex, int, str)) and _is_effect_scale(scale) for sex_key, scale in config_map.items())
+
+
+def _is_sexual_selection_scaling_config(value: object) -> TypeGuard[_SexualSelectionScalingConfig]:
+    if isinstance(value, (int, float)):
+        return True
+    pair = _as_pair(value)
+    return pair is not None and isinstance(pair[0], (int, float)) and isinstance(pair[1], (int, float))
 
 def _make_fitness_patch_given_allele_scaling(
     allele_name: Union[str, List[str], Tuple[str, ...]],
@@ -210,7 +287,7 @@ def _apply_viability_allele_scaling(
     default_age = int(population.config.new_adult_age) - 1
     
     # Resolve one or more alleles
-    target_genes = []
+    target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
     for name in names:
@@ -235,36 +312,30 @@ def _apply_viability_allele_scaling(
                 population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
             continue
 
-        if not isinstance(config, dict):
-            raise TypeError(f"Invalid viability allele config for '{allele_name}': {type(config).__name__}")
-        
-        if config:
-            # Age-map branch:
-            # config treated as {age: scale} for both sexes.
-            for age, scale in config.items():
-                assert _is_effect_scale(scale)
-                if not isinstance(age, int):
-                    raise TypeError(
-                        f"Invalid viability age key for '{allele_name}': {type(age).__name__}"
-                    )
+        config_map = cast(Mapping[object, object], config)
+
+        if _is_viability_age_map(config_map):
+            # Age-map branch: config treated as {age: scale} for both sexes.
+            for age, scale in config_map.items():
                 factor = _calculate_allele_effect(scale, copies, mode)
                 for sex_idx in (0, 1):
-                    current = float(viability_arr[sex_idx, int(age), genotype_idx])
-                    population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
+                    current = float(viability_arr[sex_idx, age, genotype_idx])
+                    population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, age)
             continue
 
-        for sex_key, sex_config in config.items():
+        for sex_key, sex_config in config_map.items():
             # Sex-map branch:
             # sex_config can be either:
             #   - direct scale for default age
             #   - nested {age: scale}
-            sex_idx = _normalize_sex_key(sex_key)
+            sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
             if _is_effect_scale(sex_config):
                 factor = _calculate_allele_effect(sex_config, copies, mode)
                 current = float(viability_arr[sex_idx, default_age, genotype_idx])
                 population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
-            elif isinstance(sex_config, dict):
-                for age, scale in sex_config.items():
+            elif isinstance(sex_config, Mapping):
+                sex_age_map = cast(Mapping[object, object], sex_config)
+                for age, scale in sex_age_map.items():
                     if not isinstance(age, int):
                         raise TypeError(
                             f"Invalid viability sex-age key for '{allele_name}', sex '{sex_key}': {type(age).__name__}"
@@ -297,7 +368,7 @@ def _apply_fecundity_allele_scaling(
     fecundity_arr = population.config.fecundity_fitness
     
     # Resolve one or more alleles
-    target_genes = []
+    target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
     for name in names:
@@ -320,12 +391,14 @@ def _apply_fecundity_allele_scaling(
                 population.config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
             continue
 
-        if not isinstance(config, dict):
-            raise TypeError(f"Invalid fecundity allele config for '{allele_name}': {type(config).__name__}")
-
-        for sex_key, scale in config.items():
+        config_map = cast(Mapping[object, object], config)
+        for sex_key, scale in config_map.items():
             # Sex-specific branch.
-            sex_idx = _normalize_sex_key(sex_key)
+            sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+            if not _is_effect_scale(scale):
+                raise TypeError(
+                    f"Invalid fecundity sex scale for '{allele_name}', sex '{sex_key}': {type(scale).__name__}"
+                )
             factor = _calculate_allele_effect(scale, copies, mode)
             current = float(fecundity_arr[sex_idx, genotype_idx])
             population.config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
@@ -348,7 +421,7 @@ def _apply_sexual_selection_allele_scaling(
     sex_sel_arr = population.config.sexual_selection_fitness
     
     # Resolve one or more alleles
-    target_genes = []
+    target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
     for name in names:
@@ -415,23 +488,26 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
                 population.config.set_viability_fitness(1, genotype_idx, float(config))
                 continue
 
-            if not isinstance(config, dict):
-                raise TypeError(f"Invalid viability config for selector '{selector}': {type(config).__name__}")
-
             # age-specific for both sexes: {age: scale}
-            if config and all(isinstance(age_key, int) for age_key in config.keys()):
-                for age, scale in config.items():
+            config_map = cast(Mapping[object, object], config)
+            if _is_simple_age_scale_map(config_map):
+                for age, scale in config_map.items():
                     population.config.set_viability_fitness(0, genotype_idx, float(scale), int(age))
                     population.config.set_viability_fitness(1, genotype_idx, float(scale), int(age))
                 continue
 
             # sex-specific: {sex: float | {age: scale}}
-            for sex_key, sex_config in config.items():
-                sex_idx = _normalize_sex_key(sex_key)
+            for sex_key, sex_config in config_map.items():
+                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
                 if isinstance(sex_config, (int, float)):
                     population.config.set_viability_fitness(sex_idx, genotype_idx, float(sex_config))
-                elif isinstance(sex_config, dict):
-                    for age, scale in sex_config.items():
+                elif isinstance(sex_config, Mapping):
+                    sex_age_map = cast(Mapping[object, object], sex_config)
+                    for age, scale in sex_age_map.items():
+                        if not isinstance(age, int) or not isinstance(scale, (int, float)):
+                            raise TypeError(
+                                f"Invalid viability sex-age config for selector '{selector}', sex '{sex_key}'"
+                            )
                         population.config.set_viability_fitness(sex_idx, genotype_idx, float(scale), int(age))
                 else:
                     raise TypeError(
@@ -461,11 +537,13 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
                 population.config.set_fecundity_fitness(1, genotype_idx, float(config))
                 continue
 
-            if not isinstance(config, dict):
-                raise TypeError(f"Invalid fecundity config for selector '{selector}': {type(config).__name__}")
-
-            for sex_key, scale in config.items():
-                sex_idx = _normalize_sex_key(sex_key)
+            config_map = cast(Mapping[object, object], config)
+            for sex_key, scale in config_map.items():
+                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                if not isinstance(scale, (int, float)):
+                    raise TypeError(
+                        f"Invalid fecundity sex scale for selector '{selector}', sex '{sex_key}'"
+                    )
                 population.config.set_fecundity_fitness(sex_idx, genotype_idx, float(scale))
 
     # ----------------------------------------------------------------------
@@ -487,17 +565,15 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
         if isinstance(male_config, (int, float)):
             male_map = {'*': float(male_config)}
         else:
-            male_map = male_config
-
-        if not isinstance(male_map, dict):
-            raise TypeError(
-                f"Invalid sexual_selection config for female selector '{female_selector}': "
-                f"{type(male_config).__name__}"
-            )
+            male_map = cast(Mapping[object, object], male_config)
 
         for male_selector, scale in male_map.items():
+            if not isinstance(scale, (int, float)):
+                raise TypeError(
+                    f"Invalid sexual_selection scale for female selector '{female_selector}'"
+                )
             male_matched = population.species.resolve_genotype_selectors(
-                selector=male_selector,
+                selector=_coerce_selector(male_selector),
                 all_genotypes=all_genotypes,
                 context='preset.sexual_selection(male)',
             )
@@ -518,26 +594,23 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
     # ----------------------------------------------------------------------
     viability_allele_patch = patch.get('viability_allele', {})
     for allele_name, val in viability_allele_patch.items():
-        if isinstance(val, tuple) and len(val) == 2:
-            config, mode = val
-        else:
-            config, mode = val, "multiplicative"
+        config, mode = _split_config_mode(val)
+        if not _is_viability_scaling_config(config):
+            raise TypeError(f"Invalid viability_allele config for '{allele_name}'")
         _apply_viability_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
     fecundity_allele_patch = patch.get('fecundity_allele', {})
     for allele_name, val in fecundity_allele_patch.items():
-        if isinstance(val, tuple) and len(val) == 2:
-            config, mode = val
-        else:
-            config, mode = val, "multiplicative"
+        config, mode = _split_config_mode(val)
+        if not _is_fecundity_scaling_config(config):
+            raise TypeError(f"Invalid fecundity_allele config for '{allele_name}'")
         _apply_fecundity_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
     sexual_selection_allele_patch = patch.get('sexual_selection_allele', {})
     for allele_name, val in sexual_selection_allele_patch.items():
-        if isinstance(val, tuple) and len(val) == 2:
-            config, mode = val
-        else:
-            config, mode = val, "multiplicative"
+        config, mode = _split_config_mode(val)
+        if not _is_sexual_selection_scaling_config(config):
+            raise TypeError(f"Invalid sexual_selection_allele config for '{allele_name}'")
         _apply_sexual_selection_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
 def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'GeneticPreset') -> None:
@@ -717,10 +790,7 @@ class GeneticPreset(ABC):
         """Helper to resolve allele inputs to their string names."""
         if isinstance(allele, Gene):
             return allele.name
-        elif isinstance(allele, str):
-            return allele
-        else:
-            raise TypeError("Allele must be a Gene instance or a string name.")
+        return allele
 
     def _resolve_rates(
         self, rate: _SexSpecificRates
@@ -728,16 +798,13 @@ class GeneticPreset(ABC):
         """Helper to resolve rate inputs into a tuple of (female_rate, male_rate)."""
         if isinstance(rate, (int, float)):
             return (rate, rate)
-        elif isinstance(rate, tuple):
+        if isinstance(rate, tuple):
             return rate
-        elif isinstance(rate, dict):
-            female_rate = rate.get(Sex.FEMALE) or rate.get("female") or rate.get("f") or rate.get("F") or 0.0
-            male_rate = rate.get(Sex.MALE) or rate.get("male") or rate.get("m") or rate.get("M") or 0.0
-            return (female_rate, male_rate)
-        else:
-            raise TypeError("Rate must be a float, tuple of floats, or dict with sex keys.")
+        female_rate = rate.get(Sex.FEMALE) or rate.get("female") or rate.get("f") or rate.get("F") or 0.0
+        male_rate = rate.get(Sex.MALE) or rate.get("male") or rate.get("m") or rate.get("M") or 0.0
+        return (female_rate, male_rate)
 
-    def apply(self, population) -> None:
+    def apply(self, population: 'BasePopulation[Any]') -> None:
         """Register this preset onto a population (DEPRECATED).
         
         .. deprecated:: 

@@ -33,7 +33,7 @@ GameteLabel: TypeAlias = str  # Gamete label represented as a string
 GlabIndex: TypeAlias = int  # Gamete-label index represented as an integer
 GameteType: TypeAlias = Tuple[Sex, HaploidGenotypeIndex, GlabIndex]  # (sex, haplotype_index, glab_index)
 
-def make_individual_type(sex: Sex, age: Age, genotype_index: GenotypeIndex) -> IndividualType:
+def make_individual_type(sex: object, age: Age, genotype_index: GenotypeIndex) -> IndividualType:
     """Create and normalize an :data:`IndividualType` tuple.
 
     This helper accepts flexible ``sex`` inputs (either a ``Sex`` enum or an
@@ -48,18 +48,18 @@ def make_individual_type(sex: Sex, age: Age, genotype_index: GenotypeIndex) -> I
     Returns:
         IndividualType: Normalized tuple ``(Sex, int(age), int(genotype_index))``.
     """
-    # Normalize sex input to a `Sex` instance.
+    assert isinstance(sex, (Sex, int)), f"invalid sex value: {sex!r}"
+
     if isinstance(sex, Sex):
         sex_val = sex
     else:
-        # Accept ints or objects that can be cast to int (e.g., numpy integers)
         try:
-            sex_val = Sex(int(sex))
-        except Exception as e:
+            sex_val = Sex(sex)
+        except ValueError as e:
             raise TypeError(f"invalid sex value: {sex!r}") from e
     return (sex_val, int(age), int(genotype_index))
 
-def make_gamete_type(sex: Sex, haplo_idx: HaploidGenotypeIndex, glab_idx: GlabIndex) -> GameteType:
+def make_gamete_type(sex: object, haplo_idx: HaploidGenotypeIndex, glab_idx: GlabIndex) -> GameteType:
     """Create and normalize a :data:`GameteType` tuple.
 
     Ensures ``sex`` is a :class:`Sex` enum and that numeric fields are plain
@@ -73,14 +73,14 @@ def make_gamete_type(sex: Sex, haplo_idx: HaploidGenotypeIndex, glab_idx: GlabIn
     Returns:
         GameteType: Normalized tuple ``(Sex, int(haplo_idx), int(glab_idx))``.
     """
-    # Normalize sex input to a `Sex` instance.
+    assert isinstance(sex, (Sex, int)), f"invalid sex value: {sex!r}"
+
     if isinstance(sex, Sex):
         sex_val = sex
     else:
-        # Accept ints or objects that can be cast to int (e.g., numpy integers)
         try:
-            sex_val = Sex(int(sex))
-        except Exception as e:
+            sex_val = Sex(sex)
+        except ValueError as e:
             raise TypeError(f"invalid sex value: {sex!r}") from e
     return (sex_val, int(haplo_idx), int(glab_idx))
 

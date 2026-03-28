@@ -4,7 +4,7 @@
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import Tuple, TYPE_CHECKING
+from typing import Tuple, Optional, TYPE_CHECKING
 import natal.algorithms as alg
 from natal.numba_utils import njit_switch
 from natal.population_state import PopulationState
@@ -32,7 +32,7 @@ def import_config(pop: 'AgeStructuredPopulation', config: 'PopulationConfig') ->
     pop.import_config(config)
 
 
-def export_state(pop: 'AgeStructuredPopulation') -> tuple:
+def export_state(pop: 'AgeStructuredPopulation') -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
     """导出种群状态。推荐直接使用 pop.export_state()。"""
     return pop.export_state()
 
@@ -460,8 +460,8 @@ def run_discrete_survival(
             for g in range(n_gen):
                 nf = int(round(f_rec[g]))
                 nm = int(round(m_rec[g]))
-                f_surv[g] = float(binomial(nf, s_combined_0_f[g]))
-                m_surv[g] = float(binomial(nm, s_combined_0_m[g]))
+                f_surv[g] = float(binomial(nf, s_combined_0_f[g]))  # pyright: ignore
+                m_surv[g] = float(binomial(nm, s_combined_0_m[g]))  # pyright: ignore
     else:
         f_surv = f_rec * s_combined_0_f
         m_surv = m_rec * s_combined_0_m

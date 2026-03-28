@@ -283,6 +283,24 @@ class BasePopulation(ABC, Generic[T_State]):
         if self._config is None:
             raise AttributeError("Population config has not been initialized.")
         return self._config
+
+    def _require_registry(self) -> IndexRegistry:
+        """Return the initialized registry or raise a clear initialization error."""
+        if self._registry is None:
+            raise AttributeError("Index registry has not been initialized.")
+        return self._registry
+
+    def _require_config(self) -> PopulationConfig:
+        """Return the initialized config or raise a clear initialization error."""
+        if self._config is None:
+            raise AttributeError("Population config has not been initialized.")
+        return self._config
+
+    def _require_state(self) -> T_State:
+        """Return the initialized state or raise a clear initialization error."""
+        if self._state is None:
+            raise AttributeError("Population state has not been initialized.")
+        return self._state
     
     @property
     def state(self) -> T_State:

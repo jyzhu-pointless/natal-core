@@ -18,9 +18,8 @@ Todo:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 from natal.genetic_entities import Genotype, HaploidGenotype
-
 
 from natal.numba_utils import njit_switch
 
@@ -336,14 +335,14 @@ class IndexRegistry:
     def resolve_hg_glab_part(
         self,
         haploid_genotypes: Sequence[HaploidGenotype],
-        part: Any,
+        part: Union[Tuple[int, int], Tuple[HaploidGenotype, Union[int, str]], int, str],
         n_glabs: int,
     ) -> Tuple[int, int]:
         """Resolve a haploid/genetic part into an (hg_idx, glab_idx) pair.
 
         Accepted input formats for ``part``:
             - (int, int): already (hg_idx, glab_idx)
-            - (HaploidGenotype, glab): where ``glab`` is int or string label
+            - (HaploidGenotype, Union[int, str]): where ``Union[int, str]`` is int or string gamete label
             - HaploidGenotype object: maps to (idx, 0)
             - int: treated as compressed index and decompressed
             - str: matched against ``haploid.to_string()`` and returns (idx, 0)
@@ -359,13 +358,15 @@ class IndexRegistry:
         Raises:
             KeyError: If resolution fails.
         """
+        pair_part = _as_pair(part)
+
         # tuple of ints (already decompressed)
-        if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], int) and isinstance(part[1], int):
-            return (int(part[0]), int(part[1]))
+        if pair_part is not None and isinstance(pair_part[0], int) and isinstance(pair_part[1], int):
+            return (int(pair_part[0]), int(pair_part[1]))
 
         # (str, glab) where first element is haploid string representation
-        if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], str):
-            name, lab = part
+        if pair_part is not None and isinstance(pair_part[0], str):
+            name, lab = pair_part
             found_idx = None
             for i, hg in enumerate(haploid_genotypes):
                 try:
@@ -393,8 +394,8 @@ class IndexRegistry:
             return (found_idx, glab_idx)
 
         # (HaploidGenotype, glab)
-        if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], HaploidGenotype):
-            hg_obj, lab = part
+        if pair_part is not None and isinstance(pair_part[0], HaploidGenotype):
+            hg_obj, lab = pair_part
             try:
                 idx_hg = int(haploid_genotypes.index(hg_obj))
             except ValueError:
@@ -466,8 +467,9 @@ class IndexRegistry:
             return int(comp_key)
 
         # tuple (hg_part, glab_part)
-        if isinstance(comp_key, tuple) and len(comp_key) == 2:
-            part_hg, part_glab = comp_key
+        pair_comp = _as_pair(comp_key)
+        if pair_comp is not None:
+            part_hg, part_glab = pair_comp
             # resolve hg part
             if isinstance(part_hg, int):
                 idx_hg = int(part_hg)
@@ -533,8 +535,17 @@ class IndexRegistry:
             return None
 
         if strict:
-            raise KeyError(f"Unsupported comp_map key type: {type(comp_key)}")
+            raise KeyError(f"Unsupported comp_map key type: {type(cast(object, comp_key))}")
         return None
+
+
+def _as_pair(value: object) -> Optional[Tuple[object, object]]:
+    if not isinstance(value, tuple):
+        return None
+    tuple_value = cast(Tuple[object, ...], value)
+    if len(tuple_value) != 2:
+        return None
+    return tuple_value[0], tuple_value[1]
 
     # ---------- maintenance ----------
     def compact(self) -> Dict[int, int]:

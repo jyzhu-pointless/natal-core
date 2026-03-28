@@ -263,10 +263,8 @@ class ZygoteConversionRuleSet:
     # ------------------------------------------------------------------
     def add_rule(self, rule: _RuleType) -> "ZygoteConversionRuleSet":
         """Append a rule (genotype-level or allele-level).  Returns *self*."""
-        if not isinstance(rule, (ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule)):
-            raise TypeError(
-                "rule must be a ZygoteGenotypeConversionRule or ZygoteAlleleConversionRule"
-            )
+        assert isinstance(rule, (ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule)), \
+                "rule must be an instance of ZygoteGenotypeConversionRule or ZygoteAlleleConversionRule"
         self.rules.append(rule)
         return self
 
@@ -364,7 +362,7 @@ class ZygoteConversionRuleSet:
         """
         rules = self.rules
 
-        def zygote_modifier_func() -> Dict[
+        def zygote_modifier_func(*_args: object, **_kwargs: object) -> Dict[
             Tuple[int, int], Dict[int, float]
         ]:
             n_glabs = int(population.config.n_glabs)
@@ -400,6 +398,8 @@ class ZygoteConversionRuleSet:
                 # Each rule receives the entire probability distribution from the previous rule,
                 # splitting it further based on its conversion rates.
                 for rule, mat_glab_req, pat_glab_req in resolved_rules:
+                    assert isinstance(rule, (ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule)), \
+                    "Resolved rules must be instances of ZygoteGenotypeConversionRule or ZygoteAlleleConversionRule"
                     # glab filters on maternal (c1) and/or paternal (c2) gamete tags
                     if mat_glab_req is not None and mat_glab != mat_glab_req:
                         continue
@@ -426,7 +426,7 @@ class ZygoteConversionRuleSet:
                                 next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
 
                         # ----- Allele-level rule -----
-                        elif isinstance(rule, ZygoteAlleleConversionRule):
+                        else:
                             # The rule targets specific alleles. It will mathematically expand all combinations
                             # of allele conversions based on diploid zygosity (homozygous/heterozygous).
                             if rule.applies_to_genotype(gt):

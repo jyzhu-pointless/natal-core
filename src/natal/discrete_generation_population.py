@@ -11,7 +11,7 @@ first hook -> reproduction -> early hook -> survival -> late hook -> aging
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Union, Tuple, TYPE_CHECKING, Any
+from typing import Callable, Dict, List, Optional, Union, Tuple, TYPE_CHECKING, Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -31,11 +31,6 @@ __all__ = ["DiscreteGenerationPopulation"]
 
 class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     """Population with strict non-overlapping generations."""
-    
-    # Type overrides: ensure these are never None in this subclass
-    _state: DiscretePopulationState
-    _registry: 'IndexRegistry'
-    _config: PopulationConfig
     
     def __init__(
         self,
@@ -67,9 +62,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._initialize_registry()
 
-        n_sexes = self._config.n_sexes
-        n_genotypes = self._config.n_genotypes
-        n_ages = self._config.n_ages
+        n_sexes = self._config_nn.n_sexes
+        n_genotypes = self._config_nn.n_genotypes
+        n_ages = self._config_nn.n_ages
 
         self._state = DiscretePopulationState.create(
             n_sexes=n_sexes,
@@ -79,20 +74,20 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             individual_count=np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64),
         )
 
-        cfg_init_ind = self._config.get_scaled_initial_individual_count()
-        if cfg_init_ind.shape == self._state.individual_count.shape:
-            self._state.individual_count[:] = cfg_init_ind
+        cfg_init_ind = self._config_nn.get_scaled_initial_individual_count()
+        if cfg_init_ind.shape == self._state_nn.individual_count.shape:
+            self._state_nn.individual_count[:] = cfg_init_ind
 
         self._history_shape = (
             1 + n_sexes * n_ages * n_genotypes,
         )
 
         if initial_individual_count is not None:
-            self._state.individual_count.fill(0.0)
+            self._state_nn.individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
 
         self._initial_population_snapshot = (
-            self._state.individual_count.copy(),
+            self._state_nn.individual_count.copy(),
             None,
             None,
         )
@@ -165,21 +160,18 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 f"Discrete initial list must have length <= 2, got {len(age_data)}"
             )
 
-        if isinstance(age_data, dict):
-            unsupported_keys = [k for k in age_data.keys() if k not in (0, 1)]
-            if unsupported_keys:
-                raise ValueError(
-                    f"Discrete initial dict supports only age keys 0 and 1, got {unsupported_keys}"
-                )
-            return float(age_data.get(0, 0.0)), float(age_data.get(1, 0.0))
-
-        raise TypeError(f"Unsupported age_data type: {type(age_data)}")
+        unsupported_keys = [k for k in age_data.keys() if k not in (0, 1)]
+        if unsupported_keys:
+            raise ValueError(
+                f"Discrete initial dict supports only age keys 0 and 1, got {unsupported_keys}"
+            )
+        return float(age_data.get(0, 0.0)), float(age_data.get(1, 0.0))
 
     def _distribute_initial_population(
         self,
         distribution: Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]],
     ) -> None:
-        self._state.individual_count.fill(0.0)
+        self._state_nn.individual_count.fill(0.0)
 
         for sex_key, genotype_dist in distribution.items():
             sex_key_norm = sex_key.lower().strip()
@@ -192,19 +184,19 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
             for genotype_key, age_data in genotype_dist.items():
                 genotype = self._resolve_genotype_key(genotype_key)
-                genotype_idx = self._registry.genotype_to_index[genotype]
+                genotype_idx = self._registry_nn.genotype_to_index[genotype]
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
-                self._state.individual_count[sex_idx, 0, genotype_idx] = age0_count
-                self._state.individual_count[sex_idx, 1, genotype_idx] = age1_count
+                self._state_nn.individual_count[sex_idx, 0, genotype_idx] = age0_count
+                self._state_nn.individual_count[sex_idx, 1, genotype_idx] = age1_count
 
     def _step_reproduction(self) -> None:
-        self._state.individual_count[:] = sk.run_discrete_reproduction(self._state.individual_count, self._config)
+        self._state_nn.individual_count[:] = sk.run_discrete_reproduction(self._state_nn.individual_count, self._config_nn)
 
     def _step_survival(self) -> None:
-        self._state.individual_count[:] = sk.run_discrete_survival(self._state.individual_count, self._config)
+        self._state_nn.individual_count[:] = sk.run_discrete_survival(self._state_nn.individual_count, self._config_nn)
 
     def _step_aging(self) -> None:
-        self._state.individual_count[:] = sk.run_discrete_aging(self._state.individual_count)
+        self._state_nn.individual_count[:] = sk.run_discrete_aging(self._state_nn.individual_count)
 
     def run(
         self,
@@ -225,12 +217,15 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         assert hooks.run_discrete_fn is not None, "hooks.run_discrete_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
         
-        run_fn = hooks.run_discrete_fn
+        run_fn = cast(
+            Callable[..., Tuple[Tuple[NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]],
+            hooks.run_discrete_fn,
+        )
         registry = hooks.registry
 
         final_state_tuple, history_new, was_stopped = run_fn(
-            state=self._state,
-            config=self._config,
+            state=self._state_nn,
+            config=self._config_nn,
             registry=registry,
             n_ticks=n_steps,
             record_interval=record_every,
@@ -265,26 +260,26 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._tick = 0
         self._history = []
         self._finished = False
-        if hasattr(self, '_initial_population_snapshot') and self._initial_population_snapshot is not None:
+        if hasattr(self, '_initial_population_snapshot'):
             ind_copy, _, _ = self._initial_population_snapshot
             
             # Recreate state with initial data
             self._state = DiscretePopulationState.create(
-                n_sexes=self._config.n_sexes,
-                n_ages=self._config.n_ages,
-                n_genotypes=self._config.n_genotypes,
+                n_sexes=self._config_nn.n_sexes,
+                n_ages=self._config_nn.n_ages,
+                n_genotypes=self._config_nn.n_genotypes,
                 n_tick=0,
-                individual_count=ind_copy.copy() if ind_copy is not None else None,
+                individual_count=ind_copy.copy(),
             )
 
     def get_total_count(self) -> int:
-        return int(round(np.sum(self._state.individual_count)))
+        return int(round(np.sum(self._state_nn.individual_count)))
 
     def get_female_count(self) -> int:
-        return int(round(np.sum(self._state.individual_count[int(Sex.FEMALE.value)])))
+        return int(round(np.sum(self._state_nn.individual_count[int(Sex.FEMALE.value)])))
 
     def get_male_count(self) -> int:
-        return int(round(np.sum(self._state.individual_count[int(Sex.MALE.value)])))
+        return int(round(np.sum(self._state_nn.individual_count[int(Sex.MALE.value)])))
 
     def get_history(self) -> np.ndarray:
         if len(self._history) == 0:
@@ -295,17 +290,32 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._history.clear()
 
     def create_history_snapshot(self) -> None:
-        flattened = self._state.flatten_all()
+        flattened = self._state_nn.flatten_all()
         self._history.append((self._tick, flattened.copy()))
         self._enforce_history_limit()
 
     def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
-        state_flat = self._state.flatten_all()
+        state_flat = self._state_nn.flatten_all()
         history = self.get_history() if self._history else None
         return state_flat, history
 
     def export_config(self) -> PopulationConfig:
-        return self._config
+        return self._config_nn
+
+    @property
+    def _state_nn(self) -> DiscretePopulationState:
+        """Non-optional state accessor for subclass internals."""
+        return self._require_state()
+
+    @property
+    def _config_nn(self) -> PopulationConfig:
+        """Non-optional config accessor for subclass internals."""
+        return self._require_config()
+
+    @property
+    def _registry_nn(self) -> "IndexRegistry":
+        """Non-optional registry accessor for subclass internals."""
+        return self._require_registry()
 
     def __repr__(self) -> str:
         status = "Finished" if self._finished else "Active"

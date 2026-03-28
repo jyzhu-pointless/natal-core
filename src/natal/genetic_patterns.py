@@ -11,7 +11,7 @@ This module provides regex-like pattern matching for genetic sequences:
 """
 
 from abc import ABC, abstractmethod as abstract_method
-from typing import Optional, Set, List, Dict, Tuple, Callable, Union, Literal, Sequence, Any
+from typing import Optional, Set, List, Dict, Tuple, Callable, Union, Literal, Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -246,7 +246,7 @@ class ChromosomePairPattern:
                 self.paternal_pattern.matches(pat_hap)
             )
     
-    def to_filter(self) -> Callable[..., Any]:
+    def to_filter(self) -> Callable[[Tuple['Haplotype', 'Haplotype']], bool]:
         """Convert to a filter function.
         
         Returns:
@@ -454,8 +454,8 @@ class GenotypePatternParser:
         Returns:
             List of substrings split by semicolons outside parentheses.
         """
-        result = []
-        current = []
+        result: List[str] = []
+        current: List[str] = []
         depth = 0
         
         for char in s:
@@ -567,8 +567,8 @@ class GenotypePatternParser:
         """
         locus_pair_strs = [s.strip() for s in inner.split(";") if s.strip()]
         
-        maternal_locus_patterns = []
-        paternal_locus_patterns = []
+        maternal_locus_patterns: List[PatternElement] = []
+        paternal_locus_patterns: List[PatternElement] = []
         has_unordered = False
         
         for locus_pair_str in locus_pair_strs:
@@ -620,7 +620,7 @@ class GenotypePatternParser:
         # Split by / to get individual loci
         locus_strs = haplotype_str.split("/")
         
-        locus_patterns = []
+        locus_patterns: List[PatternElement] = []
         for locus_str in locus_strs:
             pattern_elem = self._parse_allele_element(locus_str.strip())
             locus_patterns.append(pattern_elem)
@@ -643,7 +643,7 @@ class GenotypePatternParser:
         """
         locus_strs = [s.strip() for s in inner.split(";") if s.strip()]
         
-        locus_patterns = []
+        locus_patterns: List[PatternElement] = []
         for locus_str in locus_strs:
             # Each locus_str is a single allele pattern (A1, *, {A,B}, !A, etc.)
             pattern_elem = self._parse_allele_element(locus_str)
@@ -669,7 +669,7 @@ class GenotypePatternParser:
             # Split by semicolon to get loci from all chromosomes
             chr_strs = [s.strip() for s in pattern_str.split(";") if s.strip()]
             
-            all_locus_patterns = []
+            all_locus_patterns: List[PatternElement] = []
             for chr_str in chr_strs:
                 subbandloci = chr_str.split("/")
                 for locus_str in subbandloci:
@@ -816,7 +816,7 @@ class GenotypePatternParser:
     
     def _get_all_allele_names(self) -> List[str]:
         """Get all allele names in the species."""
-        allele_names = set()
+        allele_names: set[str] = set()
         for chromosome in self.species.chromosomes:
             for locus in chromosome.loci:
                 for allele in locus.alleles:

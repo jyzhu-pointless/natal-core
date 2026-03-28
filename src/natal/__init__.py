@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Genetic Simulation Utilities
 ============================
@@ -9,6 +10,7 @@ import pkgutil
 import importlib
 import ast
 from pathlib import Path
+from typing import Any, Dict, List, cast
 
 # Maps exported symbol names to the module that defines them.
 #
@@ -16,7 +18,7 @@ from pathlib import Path
 # It only builds a name index up front, for example:
 # {"Sex": "type_def", "AgeStructuredPopulation": "age_structured_population"}
 # When code first accesses natal.Sex, the matching module is imported on demand.
-_lazy_map = {}
+_lazy_map: Dict[str, str] = {}
 
 
 def _extract_module_exports(module_file: Path) -> list[str]:
@@ -64,8 +66,14 @@ def _extract_module_exports(module_file: Path) -> list[str]:
         except Exception:
             return []
 
-        if isinstance(exports, (list, tuple)) and all(isinstance(item, str) for item in exports):
-            return list(exports)
+        if isinstance(exports, list):
+            list_exports = cast(List[object], exports)
+            if all(isinstance(item, str) for item in list_exports):
+                return [cast(str, item) for item in list_exports]
+        if isinstance(exports, tuple):
+            tuple_exports = cast(tuple[object, ...], exports)
+            if all(isinstance(item, str) for item in tuple_exports):
+                return [cast(str, item) for item in tuple_exports]
         return []
 
     return []
@@ -105,7 +113,7 @@ for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lam
 __all__ = list(_lazy_map)  # type: ignore  # TODO
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     # When code accesses natal.<name> and that attribute is not present yet,
     # Python calls the module-level __getattr__. Import the owning child module
     # here so the symbol is loaded only on first access.
@@ -119,6 +127,6 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
-def __dir__():
+def __dir__() -> list[str]:
     # Expose lazily exported names to dir() and completion tools.
-    return sorted(set(globals()) | set(__all__))
+    return sorted(set(globals().keys()) | set(__all__))

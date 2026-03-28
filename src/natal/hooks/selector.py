@@ -10,27 +10,38 @@ symbols once at registration time and then provides two execution paths:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Sequence, TypeAlias
 
 import numpy as np
 import inspect
+from numpy.typing import NDArray
 
 from .types import (
     DemeSelector,
-    _hash_key,
-    _is_numba_dispatcher,
-    _load_codegen_module,
-    _stable_callable_identity,
-    _validate_numba_hook_required,
-    _write_codegen_module,
+    hash_key,
+    is_numba_dispatcher,
+    load_codegen_module,
+    stable_callable_identity,
+    validate_numba_hook_required,
+    write_codegen_module,
     CompiledHookDescriptor,
 )
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
+    from natal.genetic_entities import Genotype
+    from natal.index_registry import IndexRegistry
 
 
-def _resolve_selector_to_array(spec: Any, index_registry, diploid_genotypes: List[Any]) -> np.ndarray:
+SelectorItem: TypeAlias = int | str | "Genotype"
+SelectorSpec: TypeAlias = SelectorItem | range | List[SelectorItem] | tuple[SelectorItem, ...]
+
+
+def _resolve_selector_to_array(
+    spec: SelectorSpec,
+    index_registry: "IndexRegistry",
+    diploid_genotypes: Sequence["Genotype"],
+) -> NDArray[np.int32]:
     """Resolve one selector spec into an int32 index array.
 
     We normalize all accepted selector forms to a single representation so the
@@ -51,7 +62,7 @@ def _resolve_selector_to_array(spec: Any, index_registry, diploid_genotypes: Lis
         return np.array([idx], dtype=np.int32)
 
     if isinstance(spec, (list, tuple)):
-        indices = []
+        indices: List[int] = []
         for item in spec:
             if isinstance(item, int):
                 indices.append(item)
@@ -76,9 +87,9 @@ def _resolve_selector_to_array(spec: Any, index_registry, diploid_genotypes: Lis
 
 def compile_selector_hook(
     func: Callable[..., Any],
-    pop: "BasePopulation",
+    pop: "BasePopulation[Any]",
     event: str,
-    selectors_spec: Dict[str, Any],
+    selectors_spec: Dict[str, SelectorSpec],
     priority: int = 0,
     numba_mode: bool = False,
     deme_selector: DemeSelector = "*",
@@ -88,11 +99,7 @@ def compile_selector_hook(
     ``resolved`` stores canonical selector arrays and is reused by both
     execution paths.
     """
-    index_registry = getattr(pop, "_index_registry", None)
-    if index_registry is None:
-        index_registry = getattr(pop, "_index_core", None)
-    if index_registry is None:
-        raise AttributeError("Population must expose _index_registry (or legacy _index_core)")
+    index_registry = pop.registry
     diploid_genotypes = index_registry.index_to_genotype
 
     # Resolve selectors exactly once during registration.
@@ -103,12 +110,12 @@ def compile_selector_hook(
 
     meta = {
         "n_genotypes": index_registry.num_genotypes(),
-        "n_ages": pop._config.n_ages,
+        "n_ages": pop.config.n_ages,
     }
 
     from ..numba_utils import NUMBA_ENABLED
 
-    is_njit_fn = _is_numba_dispatcher(func)
+    is_njit_fn = is_numba_dispatcher(func)
 
     if NUMBA_ENABLED and not (numba_mode or is_njit_fn):
         raise TypeError(
@@ -119,7 +126,7 @@ def compile_selector_hook(
     if numba_mode or is_njit_fn:
         # Numba path: generate a thin wrapper with literal selector args.
         if numba_mode:
-            _validate_numba_hook_required(func, func.__name__, "selector numba_mode=True")
+            validate_numba_hook_required(func, func.__name__, "selector numba_mode=True")
 
         # Handle signature normalization for user function (2 or 3 args before selectors)
         py_func = getattr(func, "py_func", func)
@@ -139,7 +146,7 @@ def compile_selector_hook(
         )
 
     # Python path: pass scalar for length-1 selectors, full array otherwise.
-    def py_wrapper(population):
+    def py_wrapper(population: "BasePopulation[Any]") -> None:
         kwargs = _build_selector_python_kwargs(resolved)
         func(population, **kwargs)
 
@@ -156,7 +163,7 @@ def compile_selector_hook(
 
 def _compile_selector_njit_wrapper(
     user_fn: Callable[..., Any], 
-    resolved_selectors: Dict[str, np.ndarray],
+    resolved_selectors: Dict[str, NDArray[np.int32]],
     has_deme_id: bool,
 ) -> Callable[..., Any]:
     """Generate a Numba wrapper with selector constants baked in.
@@ -168,12 +175,12 @@ def _compile_selector_njit_wrapper(
 
     # Build deterministic identity key so repeated registrations reuse the same
     # generated module file and compiled cache entry.
-    selector_parts = ["selector", _stable_callable_identity(user_fn)]
+    selector_parts = ["selector", stable_callable_identity(user_fn)]
     for key in sorted(resolved_selectors.keys()):
         values = ",".join(str(int(v)) for v in resolved_selectors[key].tolist())
         selector_parts.append(f"{key}={values}")
 
-    key = _hash_key(selector_parts)
+    key = hash_key(selector_parts)
     fn_name = f"_selector_wrapper_{key}"
     module_stem = f"selector_wrapper_{key}"
 
@@ -197,15 +204,15 @@ def _compile_selector_njit_wrapper(
     )
     code = "\n".join(code_lines)
 
-    module_path = _write_codegen_module(module_stem, code)
-    module = _load_codegen_module(module_stem, module_path)
+    module_path = write_codegen_module(module_stem, code)
+    module = load_codegen_module(module_stem, module_path)
     setattr(module, "_USER_FN", user_fn)
     for name, value in _build_selector_njit_runtime_values(resolved_selectors).items():
         setattr(module, f"_SEL_{name}", value)
     return getattr(module, fn_name)
 
 
-def _build_selector_python_kwargs(resolved_selectors: Dict[str, np.ndarray]) -> Dict[str, Any]:
+def _build_selector_python_kwargs(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, Any]:
     """Convert internal selector arrays into user-facing kwargs."""
     kwargs: Dict[str, Any] = {}
     for key, values in resolved_selectors.items():
@@ -213,7 +220,7 @@ def _build_selector_python_kwargs(resolved_selectors: Dict[str, np.ndarray]) -> 
     return kwargs
 
 
-def _build_selector_njit_literal_args(resolved_selectors: Dict[str, np.ndarray]) -> str:
+def _build_selector_njit_literal_args(resolved_selectors: Dict[str, NDArray[np.int32]]) -> str:
     """Build keyword argument list for generated njit wrapper source code.
 
     Args are bound to generated module-level globals (``_SEL_<name>``) so we
@@ -221,13 +228,13 @@ def _build_selector_njit_literal_args(resolved_selectors: Dict[str, np.ndarray])
     - ``int`` for single-value selectors
     - ``np.ndarray[int32]`` for multi-value selectors
     """
-    arg_lines = []
+    arg_lines: List[str] = []
     for name in resolved_selectors.keys():
         arg_lines.append(f"{name}=_SEL_{name}")
     return ", ".join(arg_lines)
 
 
-def _build_selector_njit_runtime_values(resolved_selectors: Dict[str, np.ndarray]) -> Dict[str, Any]:
+def _build_selector_njit_runtime_values(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, Any]:
     """Build runtime values injected into generated selector wrapper module."""
     values: Dict[str, Any] = {}
     for name, indices in resolved_selectors.items():

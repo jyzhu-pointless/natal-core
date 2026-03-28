@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026.3.28.c
+add type annotations
+
 ## 2026.3.28.b
 add tests
 

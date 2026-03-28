@@ -18,7 +18,7 @@ callables that operate on NumPy tensors.
 """
 
 from __future__ import annotations
-from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Mapping
+from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Mapping, TypeGuard, cast
 import inspect
 import numpy as np
 from natal.helpers import resolve_sex_label
@@ -58,7 +58,7 @@ class GameteModifier(Protocol):
     The result writes frequency distributions for compressed indices directly
     back into numeric tensors.
     """
-    def __call__(self, *args, **kwargs) -> Mapping[Any, Mapping[int, float]]: ...
+    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Mapping[Any, float]]: ...
 
 
 class ZygoteModifier(Protocol):
@@ -84,14 +84,14 @@ class ZygoteModifier(Protocol):
 
         Dict[Any, Union[int, Genotype, Dict[int, float]]]
     """
-    def __call__(self, *args, **kwargs) -> Mapping[Any, Union[int, Genotype, Mapping[int, float]]]: ...
+    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Union[int, Genotype, Mapping[Any, float]]]: ...
 
 
 # ============================================================================
 # HELPER FUNCTIONS FOR MODIFIER CONSTRUCTION
 # ============================================================================
 
-def _invoke_modifier(mod: Callable[..., Any], population: Any = None) -> Mapping[Any, Any]:
+def _invoke_modifier(mod: Callable[..., Any], population: Any = None) -> object:
     """Invoke a modifier callable, supporting both 0-arg and 1-arg signatures.
 
     Args:
@@ -113,8 +113,6 @@ def _resolve_sex_name(key: str) -> Optional[int]:
 
     Returns None for unknown keys.
     """
-    if not isinstance(key, str):
-        return None
     try:
         return resolve_sex_label(key)
     except (TypeError, ValueError):
@@ -139,17 +137,16 @@ def evaluate_genotype_filter(
     if callable(genotype_filter):
         return genotype_filter(genotype), compiled_filter
 
-    if isinstance(genotype_filter, str):
-        if compiled_filter is None:
-            from natal.genetic_patterns import GenotypePatternParser
-            try:
-                pattern = GenotypePatternParser(genotype.species).parse(genotype_filter)
-            except Exception as exc:
-                raise ValueError(
-                    f"Invalid genotype_filter pattern: {genotype_filter}"
-                ) from exc
-            compiled_filter = pattern.to_filter()
-        return compiled_filter(genotype), compiled_filter
+    if compiled_filter is None:
+        from natal.genetic_patterns import GenotypePatternParser
+        try:
+            pattern = GenotypePatternParser(genotype.species).parse(genotype_filter)
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid genotype_filter pattern: {genotype_filter}"
+            ) from exc
+        compiled_filter = pattern.to_filter()
+    return compiled_filter(genotype), compiled_filter
 
     raise TypeError("genotype_filter must be a callable, pattern string, or None")
 
@@ -214,32 +211,57 @@ def wrap_gamete_modifier(
         modified = tensor.copy()
         n_sexes, n_genotypes, n_hg_glabs = modified.shape
 
-        bulk = _invoke_modifier(mod, population)
+        bulk_obj = _invoke_modifier(mod, population)
 
-        if not isinstance(bulk, Mapping):
+        if not isinstance(bulk_obj, Mapping):
             raise TypeError("Gamete modifier must return a mapping from keys to compressed-index->freq mappings")
+        bulk = cast(Mapping[object, object], bulk_obj)
 
         for key, val in bulk.items():
             # Case A: top-level sex-name ('male'/'female')
             sex_idx = _resolve_sex_name(key) if isinstance(key, str) else None
-            if sex_idx is not None and isinstance(val, dict):
-                for gk, comp_map in val.items():
+            if sex_idx is not None and isinstance(val, Mapping):
+                sex_val = cast(Mapping[object, object], val)
+                for gk, comp_map in sex_val.items():
                     try:
                         gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
                     except KeyError:
                         continue
                     if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
                         continue
-                    _apply_comp_map(modified, sex_idx, gidx, comp_map, index_registry, haploid_genotypes, n_glabs, n_hg_glabs)
+                    if isinstance(comp_map, Mapping):
+                        _apply_comp_map(
+                            modified,
+                            sex_idx,
+                            gidx,
+                            cast(Mapping[object, object], comp_map),
+                            index_registry,
+                            haploid_genotypes,
+                            n_glabs,
+                            n_hg_glabs,
+                        )
                 continue
 
             # Case B: explicit (sex_idx, genotype_key) tuple
-            if isinstance(key, tuple) and len(key) == 2:
-                sex_idx, gk = key
+            key_tuple = _as_pair(key)
+            if key_tuple is not None:
+                sex_obj, gk = key_tuple
+                if not isinstance(sex_obj, int):
+                    continue
+                sex_idx = sex_obj
                 gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
                 if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
                     continue
-                _apply_comp_map(modified, sex_idx, gidx, val, index_registry, haploid_genotypes, n_glabs, n_hg_glabs)
+                _apply_comp_map(
+                    modified,
+                    sex_idx,
+                    gidx,
+                    cast(Mapping[object, object], val),
+                    index_registry,
+                    haploid_genotypes,
+                    n_glabs,
+                    n_hg_glabs,
+                )
                 continue
 
             # Case C: key is genotype_key applied to all sexes
@@ -247,10 +269,19 @@ def wrap_gamete_modifier(
                 gidx = key if isinstance(key, int) else index_registry.resolve_genotype_index(diploid_genotypes, key, strict=True)
             except KeyError:
                 continue
-            if not isinstance(val, dict):
+            if not isinstance(val, Mapping):
                 continue
             for sex_idx in range(n_sexes):
-                _apply_comp_map(modified, sex_idx, gidx, val, index_registry, haploid_genotypes, n_glabs, n_hg_glabs)
+                _apply_comp_map(
+                    modified,
+                    sex_idx,
+                    gidx,
+                    cast(Mapping[object, object], val),
+                    index_registry,
+                    haploid_genotypes,
+                    n_glabs,
+                    n_hg_glabs,
+                )
 
         return modified
     return tensor_modifier
@@ -283,10 +314,11 @@ def wrap_zygote_modifier(
     def tensor_modifier(tensor: np.ndarray) -> np.ndarray:
         modified = tensor.copy()
 
-        bulk = _invoke_modifier(mod, population)
+        bulk_obj = _invoke_modifier(mod, population)
 
-        if not isinstance(bulk, Mapping):
+        if not isinstance(bulk_obj, Mapping):
             raise TypeError("Zygote modifier must return a mapping from keys to replacements")
+        bulk = cast(Mapping[object, object], bulk_obj)
 
         for key, val in bulk.items():
             c1, c2 = _parse_zygote_key(key, index_registry, haploid_genotypes, n_glabs)
@@ -305,7 +337,7 @@ def build_modifier_wrappers(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-) -> Tuple[List[Callable[..., Any]], List[Callable[..., Any]]]:
+) -> Tuple[List[Callable[[np.ndarray], np.ndarray]], List[Callable[[np.ndarray], np.ndarray]]]:
     """Wrap high-level gamete/zygote modifiers into tensor-level callables.
 
     This is the shared implementation used by BasePopulation and any external
@@ -324,8 +356,8 @@ def build_modifier_wrappers(
         Tuple of (gamete_modifier_funcs, zygote_modifier_funcs), each a list
         of callables that accept and return NumPy tensors.
     """
-    gamete_modifier_funcs = []
-    zygote_modifier_funcs = []
+    gamete_modifier_funcs: List[Callable[[np.ndarray], np.ndarray]] = []
+    zygote_modifier_funcs: List[Callable[[np.ndarray], np.ndarray]] = []
 
     for _, _, mod in zygote_modifiers:
         zygote_modifier_funcs.append(
@@ -348,7 +380,7 @@ def _apply_comp_map(
     modified: np.ndarray,
     sex_idx: int,
     gidx: int,
-    comp_map: Any,
+    comp_map: Mapping[object, object],
     index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     n_glabs: int,
@@ -367,9 +399,9 @@ def _apply_comp_map(
         n_hg_glabs: Total number of compressed haploid entries.
     """
     modified[sex_idx, gidx, :] = 0.0
-    if not isinstance(comp_map, Mapping):
-        return
     for comp_key, freq in comp_map.items():
+        if not isinstance(freq, (int, float)):
+            continue
         comp_idx = index_registry.resolve_comp_idx(haploid_genotypes, n_glabs, comp_key, strict=False)
         if comp_idx is None:
             continue
@@ -395,9 +427,12 @@ def _parse_zygote_key(
     Returns:
         A tuple of two compressed indices (c1, c2).
     """
-    if isinstance(key, tuple) and len(key) == 2 and all(isinstance(x, int) for x in key):
+    if _is_int_pair(key):
         return key[0], key[1]
-    part1, part2 = key
+    key_tuple = _as_pair(key)
+    if key_tuple is None:
+        raise TypeError("Zygote modifier key must be a 2-tuple")
+    part1, part2 = key_tuple
     idx_hg1, glab1 = index_registry.resolve_hg_glab_part(haploid_genotypes, part1, n_glabs, strict=True)
     idx_hg2, glab2 = index_registry.resolve_hg_glab_part(haploid_genotypes, part2, n_glabs, strict=True)
     from natal.index_registry import compress_hg_glab
@@ -424,8 +459,9 @@ def _normalize_zygote_val(
     mapping: Dict[int, float] = {}
 
     # single tuple (idx_or_genotype, prob)
-    if isinstance(val, tuple) and len(val) == 2 and isinstance(val[1], (int, float)):
-        idx_candidate, prob = val
+    pair_val = _as_idx_prob_pair(val)
+    if pair_val is not None:
+        idx_candidate, prob = pair_val
         if isinstance(idx_candidate, int):
             idx = int(idx_candidate)
         else:
@@ -435,7 +471,10 @@ def _normalize_zygote_val(
 
     # distribution dict
     if isinstance(val, Mapping):
-        for idx_candidate, prob in val.items():
+        val_map = cast(Mapping[object, object], val)
+        for idx_candidate, prob in val_map.items():
+            if not isinstance(prob, (int, float)):
+                raise TypeError("Zygote replacement probabilities must be numeric")
             if not isinstance(idx_candidate, int):
                 idx_candidate = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
             mapping[int(idx_candidate)] = float(prob)
@@ -464,6 +503,27 @@ def _write_zygote_mapping(
     modified[c1, c2, :] = 0.0
     for idx_mod, prob in mapping.items():
         modified[c1, c2, int(idx_mod)] = float(prob)
+
+
+def _as_pair(value: object) -> Optional[Tuple[object, object]]:
+    if not isinstance(value, tuple):
+        return None
+    items = cast(Tuple[object, ...], value)
+    if len(items) != 2:
+        return None
+    return items[0], items[1]
+
+
+def _is_int_pair(value: object) -> TypeGuard[Tuple[int, int]]:
+    pair = _as_pair(value)
+    return pair is not None and isinstance(pair[0], int) and isinstance(pair[1], int)
+
+
+def _as_idx_prob_pair(value: object) -> Optional[Tuple[object, float]]:
+    pair = _as_pair(value)
+    if pair is None or not isinstance(pair[1], (int, float)):
+        return None
+    return pair[0], float(pair[1])
 
 
 # Public aliases for cross-module helper reuse.
