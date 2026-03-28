@@ -48,6 +48,9 @@ def _empty_program() -> HookProgram:
         condition_offsets_data=np.array([0], dtype=np.int32),
         condition_types_data=np.array([], dtype=np.int32),
         condition_params_data=np.array([], dtype=np.int32),
+        deme_selector_types=np.array([], dtype=np.int32),
+        deme_selector_offsets=np.array([0], dtype=np.int32),
+        deme_selector_data=np.array([], dtype=np.int32),
     )
 
 
@@ -82,8 +85,8 @@ def test_executor_filters_py_wrapper_by_deme_selector():
 def test_executor_filters_njit_like_hook_by_deme_selector():
     calls = []
 
-    def fake_njit(ind_count, tick):
-        _ = (ind_count, tick)
+    def fake_njit(ind_count, tick, deme_id):
+        _ = (ind_count, tick, deme_id)
         calls.append("run")
         return RESULT_CONTINUE
 
