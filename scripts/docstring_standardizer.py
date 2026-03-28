@@ -9,7 +9,7 @@ It ensures all public APIs have proper English documentation.
 import ast
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Tuple, Optional
 
 # Comprehensive Chinese to English translation mapping
 CHINESE_TO_ENGLISH = {

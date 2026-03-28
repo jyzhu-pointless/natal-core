@@ -1,8 +1,6 @@
 """Tests for the corrected continuous binomial concentration parameter."""
 
 import numpy as np
-import pytest
-from natal.algorithms import continuous_binomial
 
 
 def _concentration(n: float) -> float:

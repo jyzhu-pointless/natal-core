@@ -1,5 +1,4 @@
 import natal as nt
-import numpy as np
 import time
 
 sp = nt.Species.from_dict(

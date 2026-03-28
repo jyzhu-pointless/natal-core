@@ -15,13 +15,10 @@
 # Both create a GameteModifier that modifies genotype_to_gametes_map
 # during gamete production.
 
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Set, Literal
-import numpy as np
+from typing import Any, Dict, Optional, Tuple, Callable, Union, TYPE_CHECKING, List
 from natal.type_def import Sex
 from natal.modifiers import (
     GameteModifier,
-    ZygoteModifier,
     GenotypeFilter,
     evaluate_genotype_filter,
     resolve_optional_glab_index,
@@ -33,8 +30,6 @@ from natal.index_registry import compress_hg_glab
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
-    from natal.genetic_structures import Species
-    from natal.genetic_entities import Haplotype, HaploidGenome
 
 __all__ = [
     "GameteAlleleConversionRule", 
@@ -395,7 +390,7 @@ class GameteConversionRuleSet:
     
     def to_gamete_modifier(
         self,
-        population: 'BasePopulation'
+        population: 'BasePopulation[Any]'
     ) -> GameteModifier:
         """Convert the ruleset to a GameteModifier for population integration.
         
@@ -420,15 +415,15 @@ class GameteConversionRuleSet:
             """
             result = {}
             
-            n_glabs = int(population._config.n_glabs)
-            genotype_to_gametes_map = population._config.genotype_to_gametes_map
-            haploid_genotypes = population._registry.index_to_haplo
+            n_glabs = int(population.config.n_glabs)
+            genotype_to_gametes_map = population.config.genotype_to_gametes_map
+            haploid_genotypes = population.registry.index_to_haplo
             
             # Resolve glab names to indices for all rules (once)
             resolved_rules = _resolve_rule_glabs(rules, population)
 
-            for sex_idx in range(population._config.n_sexes):
-                for genotype_idx, genotype in enumerate(population._registry.index_to_genotype):
+            for sex_idx in range(population.config.n_sexes):
+                for genotype_idx, genotype in enumerate(population.registry.index_to_genotype):
                     if not any(rule.applies_to_sex(sex_idx) and 
                               rule.applies_to_genotype(genotype) 
                               for rule in rules):
@@ -459,7 +454,7 @@ class GameteConversionRuleSet:
                         # Convert (HaploidGenotype, glab_idx) -> compressed index
                         compressed_freqs: Dict[int, float] = {}
                         for (hg, glab_idx), freq in converted_freqs.items():
-                            hg_idx = population._registry.haplo_to_index.get(hg)
+                            hg_idx = population.registry.haplo_to_index.get(hg)
                             if hg_idx is not None and freq > 0:
                                 cidx = compress_hg_glab(hg_idx, glab_idx, n_glabs)
                                 compressed_freqs[cidx] = compressed_freqs.get(cidx, 0.0) + freq
@@ -485,7 +480,7 @@ _ResolvedGameteRule = Tuple[
 
 def _resolve_rule_glabs(
     rules: List[_GameteRuleType],
-    population: 'BasePopulation',
+    population: 'BasePopulation[Any]',
 ) -> List[_ResolvedGameteRule]:
     """Resolve string glab names in rules to integer indices.
 
@@ -496,7 +491,7 @@ def _resolve_rule_glabs(
     Returns:
         List of ``(rule, resolved_source_glab_idx, resolved_target_glab_idx)``.
     """
-    glab_map = population._index_registry.glab_to_index
+    glab_map = population.index_registry.glab_to_index
     resolved: List[_ResolvedGameteRule] = []
     for rule in rules:
         src_idx = resolve_optional_glab_index(rule.source_glab, glab_map)
@@ -509,7 +504,7 @@ def _compute_converted_gamete_freqs(
     genotype: Genotype,
     resolved_rules: List[_ResolvedGameteRule],
     sex_idx: int,
-    population: 'BasePopulation',
+    population: 'BasePopulation[Any]',
     initial_freqs: Dict[Tuple[HaploidGenotype, int], float],
 ) -> Dict[Tuple[HaploidGenotype, int], float]:
     """Compute gamete frequencies after applying conversion rules (glab-aware).
@@ -524,9 +519,6 @@ def _compute_converted_gamete_freqs(
     current_freqs = initial_freqs.copy()
 
     for rule, src_glab_idx, tgt_glab_idx in resolved_rules:
-        if sex_idx == 1 and isinstance(rule, GameteHaploidGenomeConversionRule):
-            sex_filter = rule.sex_filter
-
         # Check rule-level conditions (does it apply to this sex / diploid genotype?)
         if not rule.applies_to_sex(sex_idx) or not rule.applies_to_genotype(genotype):
             continue
@@ -629,7 +621,7 @@ def _convert_haploid_genotype(
         ``None`` if *from_allele* is not present in the genome, otherwise
         ``(original_hg, converted_hg, conversion_rate)``.
     """
-    from natal.genetic_entities import Gene, Haplotype
+    from natal.genetic_entities import Haplotype
     
     species = haploid_genome.species
     

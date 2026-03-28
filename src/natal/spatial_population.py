@@ -6,7 +6,7 @@ Each deme is represented by one concrete ``BasePopulation`` subclass instance.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -26,7 +26,7 @@ class SpatialPopulation:
 
     def __init__(
         self,
-        demes: Sequence[BasePopulation],
+        demes: Sequence[BasePopulation[Any]],
         *,
         topology: Optional[GridTopology] = None,
         adjacency: Optional[NDArray[np.float64]] = None,
@@ -36,10 +36,7 @@ class SpatialPopulation:
         if not demes:
             raise ValueError("demes must contain at least one BasePopulation instance")
 
-        self._demes: List[BasePopulation] = list(demes)
-        for idx, deme in enumerate(self._demes):
-            if not isinstance(deme, BasePopulation):
-                raise TypeError(f"deme[{idx}] must be a BasePopulation subclass instance")
+        self._demes: List[BasePopulation[Any]] = list(demes)
 
         first_species = self._demes[0].species
         for idx, deme in enumerate(self._demes[1:], start=1):
@@ -83,7 +80,7 @@ class SpatialPopulation:
         return self._name
 
     @property
-    def demes(self) -> Sequence[BasePopulation]:
+    def demes(self) -> Sequence[BasePopulation[Any]]:
         return tuple(self._demes)
 
     @property
@@ -91,7 +88,7 @@ class SpatialPopulation:
         return len(self._demes)
 
     @property
-    def species(self):
+    def species(self) -> Any:
         return self._demes[0].species
 
     @property
@@ -106,7 +103,7 @@ class SpatialPopulation:
     def migration_rate(self, value: float) -> None:
         self._migration_rate = float(value)
 
-    def deme(self, idx: int) -> BasePopulation:
+    def deme(self, idx: int) -> BasePopulation[Any]:
         return self._demes[idx]
 
     @property
@@ -117,12 +114,12 @@ class SpatialPopulation:
         ind_all = np.stack([deme.state.individual_count for deme in self._demes], axis=0)
         
         # Handle potential absence of sperm_storage (e.g. DiscreteGenerationPopulation)
-        sperm_list = []
+        sperm_list: List[NDArray[np.float64]] = []
         for deme in self._demes:
             s = getattr(deme.state, "sperm_storage", None)
             if s is None:
                 # Create a dummy array if storage is missing
-                cfg = deme._config
+                cfg = deme.config
                 s = np.zeros((cfg.n_ages, cfg.n_genotypes, cfg.n_genotypes), dtype=np.float64)
             sperm_list.append(s)
         
@@ -171,10 +168,9 @@ class SpatialPopulation:
         assert hooks.run_spatial_tick_fn is not None, "hooks.run_spatial_tick_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
 
-        run_tick_fn = hooks.run_spatial_tick_fn
+        run_tick_fn = cast(Callable[..., Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], int]], hooks.run_spatial_tick_fn)
         registry = hooks.registry
         config = self._shared_config()
-        has_sperm = hasattr(self._demes[0].state, "sperm_storage")
         ind_all, sperm_all = self._stack_deme_state_arrays()
 
         final_state_tuple, result = run_tick_fn(
@@ -213,7 +209,7 @@ class SpatialPopulation:
         assert hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
 
-        run_fn = hooks.run_spatial_fn
+        run_fn = cast(Callable[..., Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], NDArray[np.float64], bool]], hooks.run_spatial_fn)
         registry = hooks.registry
         config = self._shared_config()
         ind_all, sperm_all = self._stack_deme_state_arrays()

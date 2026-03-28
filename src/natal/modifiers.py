@@ -18,9 +18,7 @@ callables that operate on NumPy tensors.
 """
 
 from __future__ import annotations
-from abc import ABC, abstractmethod
-from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Sequence, Mapping
-from typing import TypeVar, cast
+from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Mapping
 import inspect
 import numpy as np
 from natal.helpers import resolve_sex_label
@@ -93,7 +91,7 @@ class ZygoteModifier(Protocol):
 # HELPER FUNCTIONS FOR MODIFIER CONSTRUCTION
 # ============================================================================
 
-def _invoke_modifier(mod: Callable, population: Any = None) -> Mapping[Any, Any]:
+def _invoke_modifier(mod: Callable[..., Any], population: Any = None) -> Mapping[Any, Any]:
     """Invoke a modifier callable, supporting both 0-arg and 1-arg signatures.
 
     Args:
@@ -307,7 +305,7 @@ def build_modifier_wrappers(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-) -> Tuple[List[Callable], List[Callable]]:
+) -> Tuple[List[Callable[..., Any]], List[Callable[..., Any]]]:
     """Wrap high-level gamete/zygote modifiers into tensor-level callables.
 
     This is the shared implementation used by BasePopulation and any external
@@ -466,3 +464,10 @@ def _write_zygote_mapping(
     modified[c1, c2, :] = 0.0
     for idx_mod, prob in mapping.items():
         modified[c1, c2, int(idx_mod)] = float(prob)
+
+
+# Public aliases for cross-module helper reuse.
+apply_comp_map = _apply_comp_map
+parse_zygote_key = _parse_zygote_key
+normalize_zygote_val = _normalize_zygote_val
+write_zygote_mapping = _write_zygote_mapping

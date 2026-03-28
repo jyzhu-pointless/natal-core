@@ -24,14 +24,12 @@ The module also provides a generic allele conversion rule system:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Set, Literal, TypeGuard
-import numpy as np
+from typing import Dict, Any, Optional, Tuple, Union, TYPE_CHECKING, List, TypeGuard
 from natal.modifiers import GameteModifier, ZygoteModifier
-from natal.genetic_entities import Gene, Genotype, HaploidGenotype
+from natal.genetic_entities import Gene, Genotype
 from natal.genetic_structures import Species
-from natal.population_config import extract_gamete_frequencies
-from natal.gamete_allele_conversion import GameteAlleleConversionRule, GameteConversionRuleSet
-from natal.zygote_allele_conversion import ZygoteAlleleConversionRule, ZygoteConversionRuleSet
+from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 from natal.type_def import Sex, Age
 from natal.helpers import resolve_sex_label
 
@@ -111,6 +109,10 @@ def _count_allele_copies(genotype: Genotype, target_gene: Gene) -> int:
     """
     mat_gene, pat_gene = genotype.get_alleles_at_locus(target_gene.locus)
     return int(mat_gene is target_gene) + int(pat_gene is target_gene)
+
+
+# Public alias for cross-function and cross-module reuse.
+count_allele_copies = _count_allele_copies
 
 def _count_combined_allele_copies(genotype: Genotype, target_genes: List[Gene]) -> int:
     """Count total copies of a list of alleles in a genotype."""
@@ -193,7 +195,7 @@ def _make_fitness_patch_given_allele_scaling(
     return patch
 
 def _apply_viability_allele_scaling(
-    population: 'BasePopulation',
+    population: 'BasePopulation[Any]',
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
     config: _ViabilityScalingConfig,
@@ -204,8 +206,8 @@ def _apply_viability_allele_scaling(
     #   viability_fitness[sex_idx, age_idx, genotype_idx]
     # This function multiplies existing values in-place via setter calls,
     # so multiple presets/patches compose multiplicatively.
-    viability_arr = population._config.viability_fitness
-    default_age = int(population._config.new_adult_age) - 1
+    viability_arr = population.config.viability_fitness
+    default_age = int(population.config.new_adult_age) - 1
     
     # Resolve one or more alleles
     target_genes = []
@@ -218,7 +220,7 @@ def _apply_viability_allele_scaling(
         target_genes.append(gene)
 
     for genotype in all_genotypes:
-        genotype_idx = population._index_registry.genotype_to_index[genotype]
+        genotype_idx = population.index_registry.genotype_to_index[genotype]
         copies = _count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             # No target allele copies in this genotype: no effect.
@@ -230,7 +232,7 @@ def _apply_viability_allele_scaling(
             factor = _calculate_allele_effect(config, copies, mode)
             for sex_idx in (0, 1):
                 current = float(viability_arr[sex_idx, default_age, genotype_idx])
-                population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
+                population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
             continue
 
         if not isinstance(config, dict):
@@ -248,7 +250,7 @@ def _apply_viability_allele_scaling(
                 factor = _calculate_allele_effect(scale, copies, mode)
                 for sex_idx in (0, 1):
                     current = float(viability_arr[sex_idx, int(age), genotype_idx])
-                    population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
+                    population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
             continue
 
         for sex_key, sex_config in config.items():
@@ -260,7 +262,7 @@ def _apply_viability_allele_scaling(
             if _is_effect_scale(sex_config):
                 factor = _calculate_allele_effect(sex_config, copies, mode)
                 current = float(viability_arr[sex_idx, default_age, genotype_idx])
-                population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
+                population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
             elif isinstance(sex_config, dict):
                 for age, scale in sex_config.items():
                     if not isinstance(age, int):
@@ -274,7 +276,7 @@ def _apply_viability_allele_scaling(
                         )
                     factor = _calculate_allele_effect(scale, copies, mode)
                     current = float(viability_arr[sex_idx, int(age), genotype_idx])
-                    population._config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
+                    population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
             else:
                 raise TypeError(
                     f"Invalid viability allele sex config for '{allele_name}', sex '{sex_key}': "
@@ -282,7 +284,7 @@ def _apply_viability_allele_scaling(
                 )
 
 def _apply_fecundity_allele_scaling(
-    population: 'BasePopulation',
+    population: 'BasePopulation[Any]',
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
     config: _FecundityScalingConfig,
@@ -292,7 +294,7 @@ def _apply_fecundity_allele_scaling(
     # fecundity tensor layout:
     #   fecundity_fitness[sex_idx, genotype_idx]
     # As with viability, this function multiplies current values.
-    fecundity_arr = population._config.fecundity_fitness
+    fecundity_arr = population.config.fecundity_fitness
     
     # Resolve one or more alleles
     target_genes = []
@@ -305,7 +307,7 @@ def _apply_fecundity_allele_scaling(
         target_genes.append(gene)
 
     for genotype in all_genotypes:
-        genotype_idx = population._index_registry.genotype_to_index[genotype]
+        genotype_idx = population.index_registry.genotype_to_index[genotype]
         copies = _count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             continue
@@ -315,7 +317,7 @@ def _apply_fecundity_allele_scaling(
             factor = _calculate_allele_effect(config, copies, mode)
             for sex_idx in (0, 1):
                 current = float(fecundity_arr[sex_idx, genotype_idx])
-                population._config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
+                population.config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
             continue
 
         if not isinstance(config, dict):
@@ -326,10 +328,10 @@ def _apply_fecundity_allele_scaling(
             sex_idx = _normalize_sex_key(sex_key)
             factor = _calculate_allele_effect(scale, copies, mode)
             current = float(fecundity_arr[sex_idx, genotype_idx])
-            population._config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
+            population.config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
 
 def _apply_sexual_selection_allele_scaling(
-    population: 'BasePopulation',
+    population: 'BasePopulation[Any]',
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
     config: _SexualSelectionScalingConfig,
@@ -343,7 +345,7 @@ def _apply_sexual_selection_allele_scaling(
     # sexual-selection tensor layout:
     #   sexual_selection_fitness[female_genotype_idx, male_genotype_idx]
     # Effect is computed from male allele copies, then applied per pair.
-    sex_sel_arr = population._config.sexual_selection_fitness
+    sex_sel_arr = population.config.sexual_selection_fitness
     
     # Resolve one or more alleles
     target_genes = []
@@ -356,9 +358,9 @@ def _apply_sexual_selection_allele_scaling(
         target_genes.append(gene)
 
     for f_genotype in all_genotypes:
-        f_idx = population._index_registry.genotype_to_index[f_genotype]
+        f_idx = population.index_registry.genotype_to_index[f_genotype]
         for m_genotype in all_genotypes:
-            m_idx = population._index_registry.genotype_to_index[m_genotype]
+            m_idx = population.index_registry.genotype_to_index[m_genotype]
             copies = _count_combined_allele_copies(m_genotype, target_genes)
 
             if isinstance(config, tuple):
@@ -374,9 +376,9 @@ def _apply_sexual_selection_allele_scaling(
                 factor = _calculate_allele_effect(config, copies, mode)
 
             current = float(sex_sel_arr[f_idx, m_idx])
-            population._config.set_sexual_selection_fitness(f_idx, m_idx, current * factor)
+            population.config.set_sexual_selection_fitness(f_idx, m_idx, current * factor)
 
-def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitnessPatch) -> None:
+def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
     Patch schema (all keys optional):
@@ -387,10 +389,7 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
     if not patch:
         return
 
-    if population._config is None:
-        return
-
-    all_genotypes = list(population._index_registry.genotype_to_index.keys())
+    all_genotypes = list(population.index_registry.genotype_to_index.keys())
 
     # ----------------------------------------------------------------------
     # 1) Selector-based viability patch
@@ -408,12 +407,12 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
             context='preset.viability',
         )
         for genotype in matched:
-            genotype_idx = population._index_registry.genotype_to_index[genotype]
+            genotype_idx = population.index_registry.genotype_to_index[genotype]
 
             # scalar: both sexes at default viability age
             if isinstance(config, (int, float)):
-                population._config.set_viability_fitness(0, genotype_idx, float(config))
-                population._config.set_viability_fitness(1, genotype_idx, float(config))
+                population.config.set_viability_fitness(0, genotype_idx, float(config))
+                population.config.set_viability_fitness(1, genotype_idx, float(config))
                 continue
 
             if not isinstance(config, dict):
@@ -422,18 +421,18 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
             # age-specific for both sexes: {age: scale}
             if config and all(isinstance(age_key, int) for age_key in config.keys()):
                 for age, scale in config.items():
-                    population._config.set_viability_fitness(0, genotype_idx, float(scale), int(age))
-                    population._config.set_viability_fitness(1, genotype_idx, float(scale), int(age))
+                    population.config.set_viability_fitness(0, genotype_idx, float(scale), int(age))
+                    population.config.set_viability_fitness(1, genotype_idx, float(scale), int(age))
                 continue
 
             # sex-specific: {sex: float | {age: scale}}
             for sex_key, sex_config in config.items():
                 sex_idx = _normalize_sex_key(sex_key)
                 if isinstance(sex_config, (int, float)):
-                    population._config.set_viability_fitness(sex_idx, genotype_idx, float(sex_config))
+                    population.config.set_viability_fitness(sex_idx, genotype_idx, float(sex_config))
                 elif isinstance(sex_config, dict):
                     for age, scale in sex_config.items():
-                        population._config.set_viability_fitness(sex_idx, genotype_idx, float(scale), int(age))
+                        population.config.set_viability_fitness(sex_idx, genotype_idx, float(scale), int(age))
                 else:
                     raise TypeError(
                         f"Invalid viability sex config for selector '{selector}', sex '{sex_key}': "
@@ -455,11 +454,11 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
             context='preset.fecundity',
         )
         for genotype in matched:
-            genotype_idx = population._index_registry.genotype_to_index[genotype]
+            genotype_idx = population.index_registry.genotype_to_index[genotype]
 
             if isinstance(config, (int, float)):
-                population._config.set_fecundity_fitness(0, genotype_idx, float(config))
-                population._config.set_fecundity_fitness(1, genotype_idx, float(config))
+                population.config.set_fecundity_fitness(0, genotype_idx, float(config))
+                population.config.set_fecundity_fitness(1, genotype_idx, float(config))
                 continue
 
             if not isinstance(config, dict):
@@ -467,7 +466,7 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
 
             for sex_key, scale in config.items():
                 sex_idx = _normalize_sex_key(sex_key)
-                population._config.set_fecundity_fitness(sex_idx, genotype_idx, float(scale))
+                population.config.set_fecundity_fitness(sex_idx, genotype_idx, float(scale))
 
     # ----------------------------------------------------------------------
     # 3) Selector-based sexual-selection patch
@@ -503,10 +502,10 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
                 context='preset.sexual_selection(male)',
             )
             for f_genotype in female_matched:
-                f_idx = population._index_registry.genotype_to_index[f_genotype]
+                f_idx = population.index_registry.genotype_to_index[f_genotype]
                 for m_genotype in male_matched:
-                    m_idx = population._index_registry.genotype_to_index[m_genotype]
-                    population._config.set_sexual_selection_fitness(f_idx, m_idx, float(scale))
+                    m_idx = population.index_registry.genotype_to_index[m_genotype]
+                    population.config.set_sexual_selection_fitness(f_idx, m_idx, float(scale))
 
     # ----------------------------------------------------------------------
     # 4) Allele-based patches
@@ -541,7 +540,7 @@ def _apply_preset_fitness_patch(population: 'BasePopulation', patch: PresetFitne
             config, mode = val, "multiplicative"
         _apply_sexual_selection_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
-def apply_preset_to_population(population: 'BasePopulation', preset: 'GeneticPreset') -> None:
+def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'GeneticPreset') -> None:
     """Apply a genetic preset to a population by registering its modifiers and fitness effects.
     
     This function handles the mechanical application of a preset to a population,
@@ -585,7 +584,7 @@ def apply_preset_to_population(population: 'BasePopulation', preset: 'GeneticPre
         )
 
     if gamete_mod is not None or zygote_mod is not None:
-        population._refresh_modifier_maps()
+        population.refresh_modifier_maps()
 
     # Preferred path: declarative fitness patch
     patch = preset.fitness_patch()
@@ -675,7 +674,7 @@ class GeneticPreset(ABC):
         return gene
     
     @abstractmethod
-    def gamete_modifier(self, population: 'BasePopulation') -> Optional[GameteModifier]:
+    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Return a gamete modifier or None.
         
         The modifier should return:
@@ -688,7 +687,7 @@ class GeneticPreset(ABC):
         return None
     
     @abstractmethod
-    def zygote_modifier(self, population: 'BasePopulation') -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
         """Return a zygote modifier or None.
         
         The modifier should return:
@@ -910,7 +909,7 @@ class HomingDrive(GeneticPreset):
         
         return patch
     
-    def _instantiate_allele(self, allele_name: str, population: 'BasePopulation') -> Gene:
+    def _instantiate_allele(self, allele_name: str, population: 'BasePopulation[Any]') -> Gene:
         """Helper to get Gene object for an allele name from the population's species."""
         gene = population.species.gene_index.get(allele_name)
         if gene is None:
@@ -943,16 +942,17 @@ class HomingDrive(GeneticPreset):
             return None
         return self._resolve_bound_gene(self._str_cas9_allele)
 
-    def gamete_modifier(self, population: 'BasePopulation') -> Optional[GameteModifier]:
+    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Implement homing in heterozygous parents, germline resistance, and Cas9 deposition.
         
         In heterozygotes (drive/wild-type), gametes are biased towards drive.
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
-            from natal.genetic_presets import _count_allele_copies
-            has_drive = _count_allele_copies(gt, self.drive_allele) > 0
+            from natal.genetic_presets import count_allele_copies
+
+            has_drive = count_allele_copies(gt, self.drive_allele) > 0
             if self.cas9_allele:
-                has_cas9 = _count_allele_copies(gt, self.cas9_allele) > 0
+                has_cas9 = count_allele_copies(gt, self.cas9_allele) > 0
                 return has_drive and has_cas9
             return has_drive
         
@@ -1031,7 +1031,7 @@ class HomingDrive(GeneticPreset):
         
         return rule_set.to_gamete_modifier(population) if rule_set.rules else None
     
-    def zygote_modifier(self, population: 'BasePopulation') -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
         """Implement embryo resistance.
         
         Cleavage in the embryo (due to deposited Cas9 or zygotic expression) 
@@ -1041,9 +1041,10 @@ class HomingDrive(GeneticPreset):
 
         def zygote_has_cas9(gt: Genotype) -> bool:
             """Check if the zygote itself carries the Cas9 source (somatic cleavage)."""
-            from natal.genetic_presets import _count_allele_copies
+            from natal.genetic_presets import count_allele_copies
+
             target = self.cas9_allele if self.cas9_allele else self.drive_allele
-            return _count_allele_copies(gt, target) > 0
+            return count_allele_copies(gt, target) > 0
 
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = self.embryo_resistance_formation_rate[sex]

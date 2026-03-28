@@ -5,7 +5,6 @@ from pathlib import Path
 import inspect
 import sys
 
-import numpy as np
 import pytest  # type: ignore
 
 ROOT = Path(__file__).resolve().parents[1]

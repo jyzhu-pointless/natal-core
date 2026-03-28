@@ -13,14 +13,14 @@ import threading
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Literal, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 
 from natal.numba_utils import get_numba_cache_dir
 
 if TYPE_CHECKING:
-    from natal.index_registry import IndexRegistry
+    pass
 
 
 class OpType(IntEnum):
@@ -66,7 +66,7 @@ _HOOK_CODEGEN_DIR = Path(get_numba_cache_dir()) / "hook_codegen"
 _HOOK_CODEGEN_LOCK = threading.Lock()
 
 
-def _stable_callable_identity(fn: Callable) -> str:
+def _stable_callable_identity(fn: Callable[..., object]) -> str:
     """Build a stable identity string for a callable across process runs."""
     py_fn = getattr(fn, "py_func", fn)
     module_name = getattr(py_fn, "__module__", "<unknown>")
@@ -109,12 +109,12 @@ def _load_codegen_module(stem: str, module_path: Path):
     return module
 
 
-def _is_numba_dispatcher(fn: Callable) -> bool:
+def _is_numba_dispatcher(fn: Callable[..., object]) -> bool:
     """Return True when callable is a numba dispatcher (has ``py_func``)."""
     return hasattr(fn, "py_func")
 
 
-def _validate_numba_hook_required(fn, hook_name: str, reason: str) -> None:
+def _validate_numba_hook_required(fn: Callable[..., object], hook_name: str, reason: str) -> None:
     from ..numba_utils import NUMBA_ENABLED
 
     if NUMBA_ENABLED and not _is_numba_dispatcher(fn):
@@ -126,12 +126,37 @@ def _validate_numba_hook_required(fn, hook_name: str, reason: str) -> None:
         )
 
 
-def is_njit_function(fn) -> bool:
+# Public wrappers for helpers that may be reused across modules.
+def stable_callable_identity(fn: Callable[..., object]) -> str:
+    return _stable_callable_identity(fn)
+
+
+def hash_key(parts: List[str]) -> str:
+    return _hash_key(parts)
+
+
+def is_numba_dispatcher(fn: Callable[..., object]) -> bool:
+    return _is_numba_dispatcher(fn)
+
+
+def write_codegen_module(stem: str, source: str) -> Path:
+    return _write_codegen_module(stem, source)
+
+
+def load_codegen_module(stem: str, module_path: Path):
+    return _load_codegen_module(stem, module_path)
+
+
+def validate_numba_hook_required(fn: Callable[..., object], hook_name: str, reason: str) -> None:
+    _validate_numba_hook_required(fn, hook_name, reason)
+
+
+def is_njit_function(fn: Callable[..., object]) -> bool:
     """Back-compatible alias for checking Numba dispatcher callables."""
     return _is_numba_dispatcher(fn)
 
 
-def validate_hook_for_numba(hook, hook_name: str = "hook") -> None:
+def validate_hook_for_numba(hook: Callable[..., object], hook_name: str = "hook") -> None:
     """Back-compatible hook validator for Numba-enabled mode."""
     _validate_numba_hook_required(hook, hook_name, "hook registration")
 
@@ -185,7 +210,7 @@ class CompiledHookPlan:
     condition_types: np.ndarray
     condition_params: np.ndarray
 
-    def to_tuple(self) -> Tuple:
+    def to_tuple(self) -> Tuple[object, ...]:
         return (
             self.n_ops,
             self.op_types,
@@ -201,6 +226,14 @@ class CompiledHookPlan:
         )
 
 
+def _empty_selector_map() -> Dict[str, np.ndarray]:
+    return {}
+
+
+def _empty_meta_map() -> Dict[str, int]:
+    return {}
+
+
 @dataclass
 class CompiledHookDescriptor:
     """Unified descriptor for all hook modes.
@@ -214,11 +247,11 @@ class CompiledHookDescriptor:
     priority: int = 0
     deme_selector: DemeSelector = "*"
     plan: Optional[CompiledHookPlan] = None
-    selectors: Dict[str, np.ndarray] = field(default_factory=dict)
+    selectors: Dict[str, np.ndarray] = field(default_factory=_empty_selector_map)
     static_arrays: Tuple[np.ndarray, ...] = field(default_factory=tuple)
-    meta: Dict[str, int] = field(default_factory=dict)
-    njit_fn: Optional[Callable] = None
-    py_wrapper: Optional[Callable] = None
+    meta: Dict[str, int] = field(default_factory=_empty_meta_map)
+    njit_fn: Optional[Callable[..., object]] = None
+    py_wrapper: Optional[Callable[..., object]] = None
     ops: Optional[List[HookOp]] = None
 
 

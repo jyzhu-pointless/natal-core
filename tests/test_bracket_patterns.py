@@ -105,7 +105,7 @@ def test_important_distinction():
     
     try:
         gt_pattern = TEST_SPECIES.parse_genotype_pattern('(A1::A2; B1/B1); C1|C1')
-        print(f"✓ Genotype pattern parsed: (A1::A2; B1/B1); C1|C1")
+        print("✓ Genotype pattern parsed: (A1::A2; B1/B1); C1|C1")
     except Exception as e:
         print(f"✗ Genotype pattern failed: {e}")
     
@@ -116,7 +116,7 @@ def test_important_distinction():
     
     try:
         hg_pattern = TEST_SPECIES.parse_haploid_genome_pattern('(A1; B1); C1')
-        print(f"✓ HaploidGenome pattern parsed: (A1; B1); C1")
+        print("✓ HaploidGenome pattern parsed: (A1; B1); C1")
     except Exception as e:
         print(f"✗ HaploidGenome pattern failed: {e}")
 

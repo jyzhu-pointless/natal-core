@@ -6,7 +6,7 @@ as visual representations (SVG, colors, etc.).
 """
 
 import hashlib
-from typing import Any, Optional, Union
+from typing import Any
 
 __all__ = ["get_allele_color", "render_cell_svg"]
 
@@ -58,7 +58,7 @@ def render_cell_svg(entity: Any, species_def: Any, size: int = 100) -> str:
     
     # SVG container and cell membrane
     svg = [f'<svg width="{size}" height="{size}" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">']
-    svg.append(f'<circle cx="50" cy="50" r="48" fill="#f8fafc" stroke="#334155" stroke-width="2"/>')
+    svg.append('<circle cx="50" cy="50" r="48" fill="#f8fafc" stroke="#334155" stroke-width="2"/>')
     
     # Layout calculations
     padding_x = 20

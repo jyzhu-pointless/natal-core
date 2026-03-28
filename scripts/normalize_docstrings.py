@@ -9,7 +9,7 @@ It focuses on standardizing the format while preserving technical content.
 import ast
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Tuple
 
 # Chinese to English translation mapping for common terms
 CHINESE_TO_ENGLISH = {

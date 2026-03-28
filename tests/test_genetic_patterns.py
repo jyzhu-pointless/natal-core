@@ -1,6 +1,5 @@
 """Unit tests for natal.genetic_patterns.GenotypePatternParser."""
 
-import pytest # type: ignore
 import natal as nt
 from natal.genetic_entities import Gene, Haplotype, HaploidGenotype, Genotype
 

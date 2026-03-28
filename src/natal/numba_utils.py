@@ -6,7 +6,7 @@ Provides configurable Numba JIT compilation for functions (@njit_switch) and
 classes (@jitclass_switch) with a single global control switch.
 """
 
-from typing import Callable, Optional
+from typing import Callable, Optional, TypeVar, ParamSpec, overload, cast, Any, TypedDict
 from contextlib import contextmanager
 from functools import wraps
 import threading
@@ -53,19 +53,52 @@ _NUMBA_COMPILE_CONTEXT = threading.local()
 _NUMBA_LOG_IO_LOCK = threading.Lock()
 _CACHE_FUNC_RE = re.compile(r"\.([^.\\/]+)-\d+\.py\d+\.")
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+# TypedDict for compile feedback tracking
+class CompileFeedback(TypedDict, total=False):
+    """Feedback dict for compile progress tracking."""
+    fn_name: str
+    prefix: str
+    is_tty: bool
+    is_nested: bool
+    depth: int
+    stop_event: Optional[threading.Event]
+    thread: Optional[threading.Thread]
+    spinner_active: bool
+    frozen_for_nested: bool
+    cache_hit: bool
+    cache_stored: bool
+    parent_feedback: Optional["CompileFeedback"]
+    feedback: Optional["CompileFeedback"]
+    seen_child_functions: set[str]
+
+
+# TypedDict for compile context in stack
+class CompileContext(TypedDict, total=False):
+    """Context for tracking compilation in progress."""
+    fn_name: str
+    cache_hit: bool
+    cache_stored: bool
+    feedback: Optional[CompileFeedback]
+    before_sigs: tuple[str, ...]
+    seen_child_functions: set[str]
+
 
 def get_numba_cache_dir() -> str:
     """Return the active Numba cache directory."""
     return NUMBA_CACHE_DIR
 
 
-def _log_print(*args, **kwargs) -> None:
+def _log_print(*args: Any, **kwargs: Any) -> None:
     """Thread-safe print for interleaved spinner/cache output."""
     with _NUMBA_LOG_IO_LOCK:
         print(*args, **kwargs)
 
 
-def _freeze_spinner_for_nested_output(feedback: Optional[dict]) -> None:
+def _freeze_spinner_for_nested_output(feedback: Optional[CompileFeedback]) -> None:
     """Stop active top-level spinner and place cursor on a clean line."""
     if feedback is None or not feedback.get("is_tty"):
         return
@@ -88,7 +121,7 @@ def _freeze_spinner_for_nested_output(feedback: Optional[dict]) -> None:
     feedback["frozen_for_nested"] = True
 
 
-def _append_or_print(feedback: Optional[dict], line: str) -> None:
+def _append_or_print(feedback: Optional[CompileFeedback], line: str) -> None:
     """Print child logs immediately (real-time)."""
     _log_print(line, flush=True)
 
@@ -104,7 +137,7 @@ def _apply_numba_cache_dir() -> None:
     os.environ["NUMBA_CACHE_DIR"] = str(cache_dir)
 
     try:
-        from numba.core import config as numba_config
+        from numba.core import config as numba_config  # pyright: ignore
         setattr(numba_config, "CACHE_DIR", str(cache_dir))
     except Exception:
         pass
@@ -113,7 +146,7 @@ def _apply_numba_cache_dir() -> None:
 _apply_numba_cache_dir()
 
 
-def _start_compile_feedback(fn_name: str) -> Optional[dict]:
+def _start_compile_feedback(fn_name: str) -> Optional[CompileFeedback]:
     """Emit immediate compile start feedback and animate a TTY spinner on one line."""
     if not NUMBA_LOG_ENABLED:
         return None
@@ -157,8 +190,8 @@ def _start_compile_feedback(fn_name: str) -> Optional[dict]:
 def _start_nested_compile_feedback(
     fn_name: str,
     depth: int,
-    parent_feedback: Optional[dict] = None,
-) -> Optional[dict]:
+    parent_feedback: Optional[CompileFeedback] = None,
+) -> Optional[CompileFeedback]:
     """Emit start feedback for nested JIT compilation calls (same style as top-level)."""
     if not NUMBA_LOG_ENABLED:
         return None
@@ -178,7 +211,7 @@ def _start_nested_compile_feedback(
     }
 
 
-def _finish_compile_feedback(feedback: Optional[dict], cached: bool, elapsed: float) -> None:
+def _finish_compile_feedback(feedback: Optional[CompileFeedback], cached: bool, elapsed: float) -> None:
     """Finalize compile feedback with cached/done result."""
     if not NUMBA_LOG_ENABLED or feedback is None:
         return
@@ -215,9 +248,9 @@ def _finish_compile_feedback(feedback: Optional[dict], cached: bool, elapsed: fl
         _log_print(f"✅ Done in {elapsed:.2f} s", flush=True)
 
 
-def _get_compile_context_stack() -> list:
+def _get_compile_context_stack() -> list[CompileContext]:
     """Get per-thread compile context stack for associating cache events."""
-    stack = getattr(_NUMBA_COMPILE_CONTEXT, "stack", None)
+    stack = cast(Optional[list[CompileContext]], getattr(_NUMBA_COMPILE_CONTEXT, "stack", None))
     if stack is None:
         stack = []
         _NUMBA_COMPILE_CONTEXT.stack = stack
@@ -232,7 +265,7 @@ def _extract_cached_function_name(rendered_cache_msg: str) -> Optional[str]:
     return match.group(1)
 
 
-def _emit_signature_trace(fn_name: str, depth: int, new_sigs: list[str], args) -> None:
+def _emit_signature_trace(fn_name: str, depth: int, new_sigs: list[str], args: tuple[Any, ...]) -> None:
     """Emit optional diagnostics for newly created JIT specializations."""
     if not NUMBA_SIGNATURE_TRACE_ENABLED:
         return
@@ -261,17 +294,17 @@ def _install_cache_log_formatter() -> None:
             return
 
         try:
-            from numba.core import caching as numba_caching
+            from numba.core import caching as numba_caching  # pyright: ignore
         except Exception:
             return
 
         if not hasattr(numba_caching, "_cache_log"):
             return
 
-        original_cache_log = numba_caching._cache_log
+        original_cache_log = getattr(numba_caching, "_cache_log")
 
         @wraps(original_cache_log)
-        def _formatted_cache_log(msg, *args):
+        def _formatted_cache_log(msg: Any, *args: Any) -> None:
             if not NUMBA_LOG_ENABLED:
                 return
 
@@ -316,8 +349,8 @@ def _install_cache_log_formatter() -> None:
                                 f"{child_indent}💡 Compiling function: `{cached_fn}`... ✅ Cache Stored",
                             )
 
-        numba_caching._cache_log = _formatted_cache_log
-        _NUMBA_CACHE_LOG_PATCHED = True
+        setattr(numba_caching, "_cache_log", _formatted_cache_log)
+        _NUMBA_CACHE_LOG_PATCHED = True  # pyright: ignore[reportConstantRedefinition]
 
 
 def _install_dispatcher_compile_formatter() -> None:
@@ -332,7 +365,7 @@ def _install_dispatcher_compile_formatter() -> None:
             return
 
         try:
-            from numba.core import dispatcher as numba_dispatcher
+            from numba.core import dispatcher as numba_dispatcher  # pyright: ignore
         except Exception:
             return
 
@@ -340,10 +373,10 @@ def _install_dispatcher_compile_formatter() -> None:
             return
 
         dispatcher_cls = numba_dispatcher.Dispatcher
-        original_compile_for_args = dispatcher_cls._compile_for_args
+        original_compile_for_args = getattr(dispatcher_cls, "_compile_for_args")
 
         @wraps(original_compile_for_args)
-        def _formatted_compile_for_args(self, *args, **kwargs):
+        def _formatted_compile_for_args(self: Any, *args: Any, **kwargs: Any) -> Any:
             if not NUMBA_LOG_ENABLED:
                 return original_compile_for_args(self, *args, **kwargs)
 
@@ -357,14 +390,14 @@ def _install_dispatcher_compile_formatter() -> None:
                 root_seen_child_functions: set[str] = set()
             else:
                 root_context = stack[0] if stack else None
-                root_seen_child_functions = root_context.get("seen_child_functions", set()) if root_context else set()
+                root_seen_child_functions = cast(set[str], root_context.get("seen_child_functions", set())) if root_context else set()
                 should_log_nested = fn_name not in root_seen_child_functions
                 if should_log_nested:
                     root_seen_child_functions.add(fn_name)
                 parent_feedback = stack[-1].get("feedback") if stack else None
                 feedback = _start_nested_compile_feedback(fn_name, compile_depth, parent_feedback) if should_log_nested else None
 
-            context = {
+            context: CompileContext = {
                 "fn_name": fn_name,
                 "cache_hit": False,
                 "cache_stored": False,
@@ -387,8 +420,8 @@ def _install_dispatcher_compile_formatter() -> None:
 
             return result
 
-        dispatcher_cls._compile_for_args = _formatted_compile_for_args
-        _NUMBA_DISPATCHER_PATCHED = True
+        setattr(dispatcher_cls, "_compile_for_args", _formatted_compile_for_args)
+        _NUMBA_DISPATCHER_PATCHED = True  # pyright: ignore[reportConstantRedefinition]
 
 
 def is_numba_enabled() -> bool:
@@ -414,14 +447,38 @@ def is_numba_signature_trace_enabled() -> bool:
 # @njit_switch Decorator (Function-level)
 # ============================================================================
 
+@overload
 def njit_switch(
-    func: Optional[Callable] = None,
+    func: Callable[P, R],
     *,
     cache: bool = True,
     parallel: bool = False,
     fastmath: bool = False,
-    **njit_kwargs
-) -> Callable:
+    **njit_kwargs: Any,
+) -> Callable[P, R]:
+    ...
+
+
+@overload
+def njit_switch(
+    func: None = None,
+    *,
+    cache: bool = True,
+    parallel: bool = False,
+    fastmath: bool = False,
+    **njit_kwargs: Any,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    ...
+
+
+def njit_switch(
+    func: Optional[Callable[P, R]] = None,
+    *,
+    cache: bool = True,
+    parallel: bool = False,
+    fastmath: bool = False,
+    **njit_kwargs: Any,
+) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Numba @njit decorator for functions (controlled by global NUMBA_ENABLED flag).
     
@@ -444,13 +501,13 @@ def njit_switch(
         ```
     """
     
-    def decorator(fn: Callable) -> Callable:
-        numba_func = None
+    def decorator(fn: Callable[P, R]) -> Callable[P, R]:
+        numba_func: Optional[Callable[P, R]] = None
         
         if NUMBA_ENABLED:
             try:
-                from numba import njit
-                from numba.core import config as numba_config
+                from numba import njit  # pyright: ignore
+                from numba.core import config as numba_config  # pyright: ignore
 
                 _apply_numba_cache_dir()
 
@@ -459,12 +516,15 @@ def njit_switch(
                 _install_cache_log_formatter()
                 _install_dispatcher_compile_formatter()
 
-                numba_func = njit(
-                    fn,
-                    cache=cache,
-                    parallel=parallel,
-                    fastmath=fastmath,
-                    **njit_kwargs
+                numba_func = cast(
+                    Callable[P, R],
+                    njit(
+                        fn,
+                        cache=cache,
+                        parallel=parallel,
+                        fastmath=fastmath,
+                        **njit_kwargs,
+                    ),
                 )
             except ImportError:
                 pass
@@ -490,16 +550,16 @@ def disable_numba():
     Note: Numba is ENABLED by default.
     """
     global NUMBA_ENABLED
-    NUMBA_ENABLED = False
+    NUMBA_ENABLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
 def disable_numba_log():
     """Disable all formatted Numba JIT/cache status output."""
     global NUMBA_LOG_ENABLED
-    NUMBA_LOG_ENABLED = False
+    NUMBA_LOG_ENABLED = False  # pyright: ignore[reportConstantRedefinition]
 
     try:
-        from numba.core import config as numba_config
+        from numba.core import config as numba_config  # pyright: ignore
         setattr(numba_config, "DEBUG_CACHE", 0)
     except Exception:
         pass
@@ -508,7 +568,7 @@ def disable_numba_log():
 def disable_numba_signature_trace():
     """Disable signature diagnostics for newly created Numba specializations."""
     global NUMBA_SIGNATURE_TRACE_ENABLED
-    NUMBA_SIGNATURE_TRACE_ENABLED = False
+    NUMBA_SIGNATURE_TRACE_ENABLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
 def enable_numba():
@@ -518,17 +578,17 @@ def enable_numba():
     Call this to restore Numba after it was disabled.
     """
     global NUMBA_ENABLED
-    NUMBA_ENABLED = True
+    NUMBA_ENABLED = True  # pyright: ignore[reportConstantRedefinition]
     _apply_numba_cache_dir()
 
 
 def enable_numba_log():
     """Enable formatted Numba JIT/cache status output (default state)."""
     global NUMBA_LOG_ENABLED
-    NUMBA_LOG_ENABLED = True
+    NUMBA_LOG_ENABLED = True  # pyright: ignore[reportConstantRedefinition]
 
     try:
-        from numba.core import config as numba_config
+        from numba.core import config as numba_config  # pyright: ignore
         setattr(numba_config, "DEBUG_CACHE", 1)
         _install_cache_log_formatter()
         _install_dispatcher_compile_formatter()
@@ -539,7 +599,7 @@ def enable_numba_log():
 def enable_numba_signature_trace():
     """Enable signature diagnostics for newly created Numba specializations."""
     global NUMBA_SIGNATURE_TRACE_ENABLED
-    NUMBA_SIGNATURE_TRACE_ENABLED = True
+    NUMBA_SIGNATURE_TRACE_ENABLED = True  # pyright: ignore[reportConstantRedefinition]
 
 
 @contextmanager
@@ -561,11 +621,11 @@ def numba_disabled():
     """
     global NUMBA_ENABLED
     original_state = NUMBA_ENABLED
-    NUMBA_ENABLED = False
+    NUMBA_ENABLED = False  # pyright: ignore[reportConstantRedefinition]
     try:
         yield
     finally:
-        NUMBA_ENABLED = original_state
+        NUMBA_ENABLED = original_state  # pyright: ignore[reportConstantRedefinition]
 
 
 @contextmanager
@@ -586,14 +646,14 @@ def numba_enabled():
     """
     global NUMBA_ENABLED
     original_state = NUMBA_ENABLED
-    NUMBA_ENABLED = True
+    NUMBA_ENABLED = True  # pyright: ignore[reportConstantRedefinition]
     try:
         yield
     finally:
-        NUMBA_ENABLED = original_state
+        NUMBA_ENABLED = original_state  # pyright: ignore[reportConstantRedefinition]
 
 
-def with_numba_disabled(func: Callable) -> Callable:
+def with_numba_disabled(func: Callable[P, R]) -> Callable[P, R]:
     """Decorator to run a function with Numba disabled (pure Python).
     
     Useful for testing functions with pure Python, which provides better
@@ -613,13 +673,13 @@ def with_numba_disabled(func: Callable) -> Callable:
         # Numba automatically restored after
         ```
     """
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         with numba_disabled():
             return func(*args, **kwargs)
     return wrapper
 
 
-def with_numba_enabled(func: Callable) -> Callable:
+def with_numba_enabled(func: Callable[P, R]) -> Callable[P, R]:
     """Decorator to ensure a function runs with Numba enabled (default state).
     
     Since Numba is enabled by default, this is primarily useful for ensuring
@@ -638,7 +698,7 @@ def with_numba_enabled(func: Callable) -> Callable:
         # Original state is restored after
         ```
     """
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         with numba_enabled():
             return func(*args, **kwargs)
     return wrapper

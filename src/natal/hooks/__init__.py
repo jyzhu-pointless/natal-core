@@ -1,7 +1,7 @@
 """Hook subsystem public API."""
 
 from .compiler import (
-    _njit_switch,
+    hook_njit_switch as njit_switch,
     CompiledEventHooks,
     compile_combined_hook,
     hook,
@@ -9,12 +9,12 @@ from .compiler import (
 )
 from .declarative import (
     Op,
-    _parse_condition,
+    parse_condition,
     compile_declarative_hook,
 )
 from .executor import (
     HookExecutor,
-    _eval_csr_condition_program,
+    eval_csr_condition_program,
     build_hook_program,
     deme_selector_matches,
     execute_csr_event_arrays,
@@ -89,7 +89,7 @@ __all__ = [
     "NUM_EVENTS",
     "RESULT_CONTINUE",
     "RESULT_STOP",
-    "_njit_switch",
-    "_parse_condition",
-    "_eval_csr_condition_program",
+    "njit_switch",
+    "parse_condition",
+    "eval_csr_condition_program",
 ]

@@ -24,9 +24,6 @@ __all__ = [
     "binomial_2d", "multinomial_rows", "multinomial", "set_numba_seed"
 ]
 
-from numba import njit
-import numpy as np
-import time
 
 # The original binomial implementation in Numba (numba.cpython.randomimpl) has a performance issue 
 # for large n*p due to a fallback to a slower algorithm (BTPE not implemented).

@@ -1,6 +1,5 @@
 """Unit tests for AgeStructuredPopulation."""
 
-import pytest  # type: ignore
 import numpy as np
 import natal as nt
 

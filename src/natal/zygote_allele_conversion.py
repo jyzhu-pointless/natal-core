@@ -22,9 +22,8 @@
 #   - Cas9/gRNA-mediated cleavage + repair in the zygote
 
 from typing import (
-    Dict, Any, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Literal,
+    Any, Dict, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Literal,
 )
-import numpy as np
 from natal.modifiers import (
     ZygoteModifier,
     GenotypeFilter,
@@ -36,7 +35,6 @@ from natal.index_registry import compress_hg_glab
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
-    from natal.genetic_structures import Species
 
 __all__ = [
     "ZygoteAlleleConversionRule",
@@ -345,7 +343,7 @@ class ZygoteConversionRuleSet:
     # ------------------------------------------------------------------
     def to_zygote_modifier(
         self,
-        population: "BasePopulation",
+        population: "BasePopulation[Any]",
     ) -> ZygoteModifier:
         """Convert the rule-set into a ``ZygoteModifier``.
 
@@ -369,9 +367,9 @@ class ZygoteConversionRuleSet:
         def zygote_modifier_func() -> Dict[
             Tuple[int, int], Dict[int, float]
         ]:
-            n_glabs = int(population._config.n_glabs)
-            haploid_genotypes = population._registry.index_to_haplo
-            diploid_genotypes = population._registry.index_to_genotype
+            n_glabs = int(population.config.n_glabs)
+            haploid_genotypes = population.registry.index_to_haplo
+            diploid_genotypes = population.registry.index_to_genotype
 
             # Build genotype index lookup
             genotype_index = {gt: idx for idx, gt in enumerate(diploid_genotypes)}
@@ -483,7 +481,7 @@ _ResolvedRule = Tuple[
 
 def _resolve_zygote_rule_glabs(
     rules: List[Union[ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule]],
-    population: "BasePopulation",
+    population: "BasePopulation[Any]",
 ) -> List[_ResolvedRule]:
     """Resolve ``maternal_glab`` / ``paternal_glab`` strings to int indices.
 
@@ -494,7 +492,7 @@ def _resolve_zygote_rule_glabs(
     Returns:
         List of ``(rule, resolved_maternal_glab_idx, resolved_paternal_glab_idx)``.
     """
-    glab_map = population._index_registry.glab_to_index
+    glab_map = population.index_registry.glab_to_index
     resolved: List[_ResolvedRule] = []
     for rule in rules:
         mat_idx = resolve_optional_glab_index(rule.maternal_glab, glab_map)
@@ -507,7 +505,7 @@ def _build_hg_glab_genotype_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
-    population: "BasePopulation",
+    population: "BasePopulation[Any]",
 ) -> Dict[Tuple[int, int], Optional[Genotype]]:
     """Map every (c1, c2) compressed gamete pair to its baseline Genotype.
 

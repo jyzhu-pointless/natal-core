@@ -300,7 +300,7 @@ def test_combined_features():
     if passed == len(test_genotypes):
         print("✓ PASS\n")
     else:
-        print(f"⚠ Some patterns may not be fully supported yet\n")
+        print("⚠ Some patterns may not be fully supported yet\n")
 
 
 # ============================================================================

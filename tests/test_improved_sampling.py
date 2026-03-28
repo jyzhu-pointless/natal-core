@@ -1,9 +1,7 @@
 """Tests for small-sample continuous binomial sampling methods."""
 
 import numpy as np
-import pytest
 from natal.algorithms import continuous_binomial
-from natal import numba_compat as nbc
 
 
 def _continuous_binomial_min_concentration(n: float, p: float) -> float:

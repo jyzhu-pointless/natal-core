@@ -1,20 +1,20 @@
 # 快速开始：15 分钟上手 NATAL
 
-本章基于 `mosquito_population.py` 示例，带你快速上手 NATAL 框架。
+本指南将通过一个典型的蚊媒种群模拟示例，带你快速熟悉 NATAL 的核心建模流程与可视化分析工具。
 
 ## 前置要求
 
 - Python >= 3.9
-- NumPy >= 1.21
-- Numba >= 0.55
-
-```bash
-pip install numpy numba
-```
+- NumPy >= 2.0.0
+- Numba >= 0.60.0
+- Pandas >= 2.1.0
+- Plotly >= 6.0.0
+- SciPy >= 1.10.0
+- NiceGUI[highcharts] >= 3.0.0
 
 ## 1️⃣ 第一步：定义遗传架构（2 分钟）
 
-NATAL 采用 **声明式** 的方式定义遗传架构。使用 `Species.from_dict()` 方法：
+NATAL 采用**声明式**语法定义遗传架构。你可以通过 `Species.from_dict()` 快速描述复杂的位点、染色体以及配子标记：
 
 ```python
 from natal.genetic_structures import Species
@@ -60,7 +60,7 @@ print(f"WT|Drive: {wt_drive}")
 
 ## 2️⃣ 第二步：初始化种群（3 分钟）
 
-初始化是最关键的一步，这里会进行"编译"——生成用于数值计算的映射矩阵。使用Builder模式：
+初始化是模型构建的关键。在此阶段，NATAL 会执行“编译”过程，将高层对象转换为高效的数值映射矩阵。推荐使用 **Builder 模式**进行直观的链式配置：
 
 ```python
 from natal.population_builder import AgeStructuredPopulationBuilder
@@ -76,7 +76,6 @@ pop = (AgeStructuredPopulationBuilder(sp)
     .initial_state({
         "female": {
             "WT|WT":    [0, 600, 600, 500, 400, 300, 200, 100],
-            "WT|Drive": [0, 100, 100, 80, 60, 40, 20, 10],
         },
         "male": {
             "WT|WT":    [0, 300, 300, 200, 100, 0, 0, 0],
@@ -86,8 +85,8 @@ pop = (AgeStructuredPopulationBuilder(sp)
     
     # === 生存率 ===
     .survival(
-        female_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
     
     # === 繁殖相关 ===
@@ -95,13 +94,12 @@ pop = (AgeStructuredPopulationBuilder(sp)
         eggs_per_female=100,           # 每只雌性产卵数
         sex_ratio=0.5,                 # 后代性别比例
         use_sperm_storage=True,        # 启用精子存储机制
-        gamete_labels=["default", "Cas9_deposited"]  # 配子标签
     )
     
     # === 幼体竞争 ===
     .competition(
         juvenile_growth_mode=1,        # 1: 固定竞争模式
-        carrying_capacity=1200         # 幼体承载量
+        old_juvenile_carrying_capacity=1200 # 幼体承载量
     )
     
     .build())  # 构建最终种群实例
@@ -145,9 +143,9 @@ print(f"初始种群: {pop.get_total_count()}")
 | 适用场景 | 自然种群、混合笼养种群 | 实验室连续传代种群 |
 | 复杂度 | 较高 | 较低 |
 
-### 初始化做了什么？（"编译"过程）
+### 深入理解：初始化时的“编译”过程
 
-高层看起来只是构造函数，但底层发生了很多事：
+虽然高层代码直观易读，但底层在 `build()` 时完成了一系列复杂操作：
 
 1. **索引注册**: 所有基因型被分配整数索引，存储在 `pop.registry` (IndexRegistry)
 2. **映射矩阵生成**: 生成两个关键矩阵：
@@ -162,7 +160,7 @@ print(f"初始种群: {pop.get_total_count()}")
 
 ## 3️⃣ 第三步：使用遗传预设系统（2 分钟）
 
-对于常见的遗传修饰（如基因驱动、突变等），推荐使用**遗传预设系统**而不是手动编写modifier函数。预设系统提供了更简洁的API。
+针对基因驱动、点突变等常见的遗传现象，NATAL 提供了**遗传预设（Genetic Presets）**系统。相比手动编写底层的映射修饰函数，预设系统更加简洁、可重用且易于维护。
 
 ### 使用基因驱动预设
 
@@ -221,7 +219,7 @@ pop = (AgeStructuredPopulationBuilder(sp)
 
 ## 4️⃣ 第四步：定义模拟逻辑 - Hook（2 分钟）
 
-Hook 允许你在模拟的特定阶段注入自定义逻辑。使用声明式 Hook 最简单：
+**Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观：
 
 ```python
 from natal.hook_dsl import hook, Op
@@ -234,6 +232,7 @@ def release_drive_males():
         Op.add(
             genotypes='WT|Drive',  # 选择 WT|Drive 基因型
             ages=[2, 3, 4, 5, 6, 7],  # 成年年龄
+            sex='male',  # 仅释放雄性
             delta=500,  # 增加 500 只
             when='tick == 10'  # 条件
         )
@@ -247,7 +246,7 @@ release_drive_males.register(pop)
 
 ---
 
-## 6️⃣ 第六步：运行模拟（1 分钟）
+## 5️⃣ 第五步：运行模拟与结果分析（1 分钟）
 
 ```python
 # 运行 100 个时间步，每 10 步记录一次历史
@@ -294,7 +293,8 @@ sp = Species.from_dict(
     name="AnophelesGambiae",
     structure={
         "chr1": {"A": ["WT", "Drive", "Resistance"]}
-    }
+    },
+    gamete_labels=["default", "Cas9_deposited"]
 )
 
 # === 第二步：使用Builder模式创建和配置种群 ===
@@ -313,16 +313,15 @@ pop = (AgeStructuredPopulationBuilder(sp)
     
     # 生存率配置
     .survival(
-        female_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
     
     # 繁殖配置
     .reproduction(
         eggs_per_female=100,
         sex_ratio=0.5,
-        use_sperm_storage=True,
-        gamete_labels=["default", "Cas9_deposited"]
+        use_sperm_storage=True
     )
     
     # 添加基因驱动预设（替代手动modifier）

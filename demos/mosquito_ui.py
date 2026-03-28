@@ -1,6 +1,4 @@
 import natal as nt
-import numpy as np
-import time
 
 from natal.ui import launch
 
@@ -52,9 +50,9 @@ initial_distribution = {
 initial_sperm = {
     # 格式1: Dict - 稀疏映射 {age: count}
     "WT|WT": {
-        "WT|WT": {2: 500.0, 3: 400.0, 4: 300.0, 5: 200.0, 6: 100.0},
+        "WT|WT": {2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0},
         # 格式2: List - 密集列表
-        "WT|Dr": [0, 0, 3.0, 2.0, 1.0, 0, 0, 0],
+        "WT|Dr": [0, 0, 0, 0, 0, 0, 0],
     },
 }
 
@@ -70,7 +68,7 @@ pop = nt.AgeStructuredPopulation\
         new_adult_age=2,
     ) \
     .initial_state(
-        individual_count=initial_distribution # type: ignore
+        individual_count=initial_distribution
         # TODO: 类型检查未通过，需要调整！
     ) \
     .reproduction(

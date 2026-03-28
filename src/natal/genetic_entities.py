@@ -27,9 +27,7 @@ Naming Conventions
 from __future__ import annotations
 import numpy as np
 from typing import (
-    Generic, TypeVar, Union, Optional, Any,
-    Dict, List, Set, Tuple, Iterable, Callable, 
-    get_args, TYPE_CHECKING, Literal
+    Generic, TypeVar, Optional, Dict, List, Tuple, Any
 )
 
 import itertools
@@ -65,6 +63,7 @@ class GeneticEntity(Generic[S]):
         >>> assert gene is gene2
     """
     structure_type: type = GeneticStructure  # Override in subclass
+    structure_type: type[GeneticStructure] = GeneticStructure  # Override in subclass
     # Cache: {(species_id, structure_type, structure_name, entity_class, entity_name): entity_instance}
     _instance_cache: Dict[Tuple[int, type, str, type, str], object] = {}
     # Late-bound during __new__/__init__. Annotations only (no defaults) so hasattr checks keep working.
@@ -74,11 +73,14 @@ class GeneticEntity(Generic[S]):
     def __new__(
         cls: type[E],
         name: str,
-        structure: Optional[S] = None,
-        **kwargs: object
+        structure: Any = None,
+        **kwargs: Any
     ) -> E:
         # For subclasses that use different parameter names (e.g., locus, chromosome, species)
         # We need to extract the structure from kwargs
+        # If structure is not provided as positional arg, check kwargs
+        if structure is None:
+            structure = kwargs.pop('structure', None)
         actual_structure = structure
         if actual_structure is None:
             # Check common parameter names (new and old names)
@@ -129,8 +131,6 @@ class GeneticEntity(Generic[S]):
         if hasattr(self, "_initialized") and self._initialized:
             return
         
-        if not isinstance(name, str):
-            raise TypeError("Entity name must be a string.")
         if name.strip() == "":
             raise ValueError("Entity name cannot be empty.")
         
@@ -140,8 +140,6 @@ class GeneticEntity(Generic[S]):
                 f"Please provide a valid structure parameter."
             )
         
-        if not isinstance(structure, GeneticStructure):
-            raise TypeError("structure must be a GeneticStructure instance.")
         
         # Validate structure type using class attribute
         expected_type = self.__class__.structure_type
@@ -181,6 +179,13 @@ class GeneticEntity(Generic[S]):
         Clear all entity instance caches.
         """
         GeneticEntity._instance_cache.clear()
+
+    @classmethod
+    def clear_species_cache(cls, species_id: int) -> None:
+        """Clear entity cache entries that belong to one species id."""
+        keys_to_remove = [k for k in GeneticEntity._instance_cache if k[0] == species_id]
+        for key in keys_to_remove:
+            del GeneticEntity._instance_cache[key]
     
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.name!r}, structure={self.structure.name!r})"
@@ -203,7 +208,7 @@ class Gene(GeneticEntity[Locus]):
     """
     structure_type = Locus  # Gene must be bound to a Locus
 
-    def __new__(cls, name: str, locus: Optional[Locus] = None, **kwargs) -> "Gene":
+    def __new__(cls, name: str, locus: Optional[Locus] = None, **kwargs: Any) -> "Gene":
         # Pass locus to parent __new__ via kwargs
         return super().__new__(cls, name, locus=locus, **kwargs)
 
@@ -211,7 +216,7 @@ class Gene(GeneticEntity[Locus]):
         self, 
         name: str,
         locus: Locus,
-        **kwargs
+        **kwargs: Any
     ):
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
@@ -219,8 +224,6 @@ class Gene(GeneticEntity[Locus]):
         
         if locus is None:
             raise TypeError("Gene must be bound to a Locus. Please provide locus parameter.")
-        if not isinstance(locus, Locus):
-            raise TypeError("locus must be a Locus instance.")
 
         # Set locus alias
         self.locus = locus
@@ -252,7 +255,7 @@ class Haplotype(GeneticEntity[Chromosome]):
     """
     structure_type = Chromosome  # Haplotype must be bound to a Chromosome
 
-    def __new__(cls, chromosome: Optional[Chromosome] = None, genes: Optional[List[Gene]] = None, **kwargs) -> "Haplotype":
+    def __new__(cls, chromosome: Optional[Chromosome] = None, genes: Optional[List[Gene]] = None, **kwargs: Any) -> "Haplotype":
         # Generate name from genes for caching (ignore any passed 'name' parameter)
         kwargs.pop('name', None)  # Remove 'name' if present to avoid conflicts
         if genes:
@@ -265,7 +268,7 @@ class Haplotype(GeneticEntity[Chromosome]):
         self,
         chromosome: Chromosome,
         genes: List[Gene],
-        **kwargs
+        **kwargs: Any
     ):
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
@@ -273,17 +276,9 @@ class Haplotype(GeneticEntity[Chromosome]):
         
         if chromosome is None:
             raise TypeError("Haplotype must be bound to a Chromosome. Please provide chromosome parameter.")
-        if not isinstance(chromosome, Chromosome):
-            raise TypeError("chromosome must be a Chromosome instance.")
-        if not isinstance(genes, list):
-            raise TypeError("genes must be a list of Gene instances.")
-        for gene in genes:
-            if not isinstance(gene, Gene):
-                raise TypeError("All items in genes must be Gene instances.")
         
         # Validate completeness and uniqueness
         chrom_loci = chromosome.loci  # List of loci in chromosome
-        gene_loci = [gene.locus for gene in genes]
         
         # Check 1: All genes must belong to this chromosome
         chrom_loci_set = set(chrom_loci)
@@ -378,17 +373,9 @@ class HaploidGenotype(GeneticEntity[Species]):
         
         if species is None:
             raise TypeError("HaploidGenotype must be bound to a Species. Please provide species parameter.")
-        if not isinstance(species, Species):
-            raise TypeError("species must be a Species instance.")
-        if not isinstance(haplotypes, list):
-            raise TypeError("haplotypes must be a list of Haplotype instances.")
-        for hap in haplotypes:
-            if not isinstance(hap, Haplotype):
-                raise TypeError("All items in haplotypes must be Haplotype instances.")
         
         # Validate completeness and uniqueness
         species_chroms = species.chromosomes  # List of chromosomes
-        hap_chroms = [hap.chromosome for hap in haplotypes]
         
         # Check 1: All haplotypes must belong to this species
         species_chroms_set = set(species_chroms)
@@ -410,9 +397,10 @@ class HaploidGenotype(GeneticEntity[Species]):
             seen_chroms.add(hap.chromosome)
         
         # Check 3: Completeness - must cover required chromosomes (with exceptions)
-        # Get sex chromosome groups (use Species's method if available, fallback to attribute)
-        if hasattr(species, '_get_sex_chromosome_groups'):
-            sex_chr_groups = species._get_sex_chromosome_groups()
+        # Prefer public API; keep a compatibility fallback for legacy objects.
+        get_groups = getattr(species, 'get_sex_chromosome_groups', None)
+        if callable(get_groups):
+            sex_chr_groups = get_groups()
         else:
             sex_chr_groups = getattr(species, '_sex_chromosome_groups', None)
         
@@ -556,7 +544,7 @@ class Genotype:
                 mat_hap = None
                 pat_hap = None
 
-            def hap_allele_str(hap):
+            def hap_allele_str(hap: Optional['Haplotype']) -> str:
                 if hap is None:
                     return ""
                 names = []
@@ -599,12 +587,7 @@ class Genotype:
         if hasattr(self, '_initialized') and self._initialized:
             return
         
-        if not isinstance(species, Species):
-            raise TypeError("species must be a Species instance.")
-        if not isinstance(maternal, HaploidGenotype):
-            raise TypeError("maternal must be a HaploidGenotype instance.")
-        if not isinstance(paternal, HaploidGenotype):
-            raise TypeError("paternal must be a HaploidGenotype instance.")
+
         
         # Validate both haploid genomes are bound to the same species
         if maternal.species is not species or paternal.species is not species:
@@ -708,7 +691,7 @@ class Genotype:
         chromosome_gamete_frequencies = []
         
         # For each chromosome, compute possible haplotypes and their frequencies
-        for chrom_idx, chromosome in enumerate(self.species.chromosomes):
+        for chromosome in self.species.chromosomes:
             mat_haplotype = self.maternal.get_haplotype_for_chromosome(chromosome)
             pat_haplotype = self.paternal.get_haplotype_for_chromosome(chromosome)
             
@@ -773,7 +756,7 @@ class Genotype:
             mat_hap = self.maternal.get_haplotype_for_chromosome(chrom)
             pat_hap = self.paternal.get_haplotype_for_chromosome(chrom)
 
-            def hap_allele_str(hap):
+            def hap_allele_str(hap: Optional['Haplotype']) -> str:
                 if hap is None:
                     return ""
                 names = []

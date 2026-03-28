@@ -5,7 +5,6 @@ This module remains as a stable compatibility layer for existing imports.
 """
 
 from natal.hooks import *  # noqa: F401,F403
-from natal.hooks.compiler import _njit_switch
 
 __all__ = [
 	# Core types

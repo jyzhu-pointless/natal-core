@@ -19,11 +19,11 @@ from numpy.typing import NDArray
 from natal.base_population import BasePopulation, Species, Genotype, Sex
 from natal.population_state import DiscretePopulationState
 from natal.population_config import PopulationConfig
-from natal.index_registry import IndexRegistry
 import natal.kernels.simulation_kernels as sk
 
 if TYPE_CHECKING:
     from natal.population_builder import DiscreteGenerationPopulationBuilder
+    from natal.index_registry import IndexRegistry
 
 
 __all__ = ["DiscreteGenerationPopulation"]
@@ -31,6 +31,12 @@ __all__ = ["DiscreteGenerationPopulation"]
 
 class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     """Population with strict non-overlapping generations."""
+    
+    # Type overrides: ensure these are never None in this subclass
+    _state: DiscretePopulationState
+    _registry: 'IndexRegistry'
+    _config: PopulationConfig
+    
     def __init__(
         self,
         species: Species,

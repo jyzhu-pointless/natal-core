@@ -75,7 +75,7 @@ def _resolve_selector_to_array(spec: Any, index_registry, diploid_genotypes: Lis
 
 
 def compile_selector_hook(
-    func: Callable,
+    func: Callable[..., Any],
     pop: "BasePopulation",
     event: str,
     selectors_spec: Dict[str, Any],
@@ -155,10 +155,10 @@ def compile_selector_hook(
 
 
 def _compile_selector_njit_wrapper(
-    user_fn: Callable, 
+    user_fn: Callable[..., Any], 
     resolved_selectors: Dict[str, np.ndarray],
     has_deme_id: bool,
-) -> Callable:
+) -> Callable[..., Any]:
     """Generate a Numba wrapper with selector constants baked in.
 
     The generated module imports ``_njit_switch`` from ``hook_dsl`` so wrapper

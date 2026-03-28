@@ -7,7 +7,7 @@ import importlib.util
 import sys
 import threading
 from pathlib import Path
-from typing import Callable, Tuple
+from typing import Callable, Tuple, List, Any
 
 from natal.numba_utils import get_numba_cache_dir
 
@@ -20,7 +20,7 @@ _KERNEL_CODEGEN_DIR = Path(get_numba_cache_dir()) / "kernel_codegen"
 _KERNEL_CODEGEN_LOCK = threading.Lock()
 
 
-def _stable_callable_identity(fn: Callable) -> str:
+def _stable_callable_identity(fn: Callable[..., Any]) -> str:
     """Build a deterministic identity string for hashing wrapper modules."""
     py_fn = getattr(fn, "py_func", fn)
     module_name = getattr(py_fn, "__module__", "<unknown>")
@@ -90,10 +90,10 @@ def _render_spatial_kernel_wrapper_source(
 
 
 def compile_kernel_bound_wrappers(
-    first_fn: Callable,
-    early_fn: Callable,
-    late_fn: Callable,
-) -> Tuple[Callable, Callable, Callable, Callable]:
+    first_fn: Callable[..., Any],
+    early_fn: Callable[..., Any],
+    late_fn: Callable[..., Any],
+) -> Tuple[Callable[..., Any], Callable[..., Any], Callable[..., Any], Callable[..., Any]]:
     """Compile fixed-signature wrapper kernels bound to one event-hook set.
 
     The returned callables are:
@@ -134,10 +134,10 @@ def compile_kernel_bound_wrappers(
 
 
 def compile_spatial_kernel_bound_wrappers(
-    first_fn: Callable,
-    early_fn: Callable,
-    late_fn: Callable,
-) -> Tuple[Callable, Callable]:
+    first_fn: Callable[..., Any],
+    early_fn: Callable[..., Any],
+    late_fn: Callable[..., Any],
+) -> Tuple[Callable[..., Any], Callable[..., Any]]:
     """Compile spatial wrappers bound to one event-hook set.
 
     The returned callables are ``(run_spatial_tick_fn, run_spatial_fn)``.

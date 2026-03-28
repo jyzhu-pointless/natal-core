@@ -14,11 +14,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from natal.genetic_structures import Species
-from natal.genetic_entities import Genotype, HaploidGenome
 from natal.genetic_patterns import (
-    GenotypePatternParser, 
-    HaploidGenomePattern,
-    GenotypePattern
+    GenotypePatternParser
 )
 
 

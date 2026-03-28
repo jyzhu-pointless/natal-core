@@ -1,7 +1,6 @@
 """Tests for sampling consistency between discrete and continuous distributions."""
 
 import numpy as np
-import pytest
 from natal.algorithms import continuous_binomial, continuous_multinomial
 from natal import numba_compat as nbc
 

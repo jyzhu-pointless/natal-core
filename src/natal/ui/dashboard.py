@@ -7,11 +7,8 @@ from a simulation script. It runs in a separate thread (or manages the main loop
 and accesses the population object directly in memory.
 """
 
-import threading
 import time
-import webbrowser
-from typing import Optional, TYPE_CHECKING, List, Dict, Tuple
-import pandas as pd
+from typing import Any, Optional, TYPE_CHECKING, List, Dict, Tuple
 import numpy as np
 import inspect
 import json
@@ -24,7 +21,6 @@ except ImportError:
     HAS_NICEGUI = False
 
 from natal.visualization import render_cell_svg, get_allele_color
-from natal.index_registry import decompress_hg_glab
 from natal.population_state import parse_flattened_state, parse_flattened_discrete_state, PopulationState
 from natal.population_config import NO_COMPETITION, FIXED, LINEAR, CONCAVE
 from natal.age_structured_population import AgeStructuredPopulation
@@ -38,7 +34,7 @@ class Dashboard:
     A real-time dashboard for controlling and visualizing a NATAL population.
     """
     
-    def __init__(self, population: 'BasePopulation'):
+    def __init__(self, population: 'BasePopulation[Any]'):
         if not HAS_NICEGUI:
             raise ImportError("NiceGUI is required. Please install it with: pip install nicegui")
         
@@ -1338,7 +1334,7 @@ class Dashboard:
         self.chart_allele.run_method('zoomOut')
 
 
-def launch(population: 'BasePopulation', port: int = 8080, title: str = "NATAL Dashboard"):
+def launch(population: 'BasePopulation[Any]', port: int = 8080, title: str = "NATAL Dashboard"):
     """
     Launch the embedded dashboard.
     
@@ -1360,6 +1356,6 @@ def launch(population: 'BasePopulation', port: int = 8080, title: str = "NATAL D
     # In a script usage, we typically want this to block so the script keeps running
     # and serving the UI.
     print(f"🚀 Starting Dashboard at http://localhost:{port}")
-    print(f"📖 Click Ctrl+C to stop the dashboard")
+    print("📖 Click Ctrl+C to stop the dashboard")
     title = f"{population.name} - NATAL Dashboard" if population.name else "NATAL Dashboard"
     ui.run(title=title, port=port, show=False, reload=False, favicon='natal.svg')

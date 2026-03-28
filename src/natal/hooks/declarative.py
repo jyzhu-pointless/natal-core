@@ -13,7 +13,7 @@ The resulting plan is pure data and can be executed inside njit kernels.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
@@ -581,10 +581,13 @@ def _parse_condition(condition: Optional[str]) -> Tuple[np.ndarray, np.ndarray]:
     tokens = _tokenize_condition_expr(condition)
     return _to_rpn_condition(tokens)
 
+# Public alias for external callers.
+parse_condition = _parse_condition
+
 
 def compile_declarative_hook(
     ops: List[HookOp],
-    pop: "BasePopulation",
+    pop: "BasePopulation[Any]",
     event: str,
     priority: int = 0,
     deme_selector: DemeSelector = "*",
@@ -597,10 +600,10 @@ def compile_declarative_hook(
     data and avoid Python object usage in runtime kernels.
     """
     # Get population configuration and registry for resolving genotype/age indices
-    index_registry = pop._index_registry
+    index_registry = pop.index_registry
     diploid_genotypes = index_registry.index_to_genotype
     n_genotypes = index_registry.num_genotypes()
-    n_ages = pop._config.n_ages
+    n_ages = pop.config.n_ages
 
     # Initialize data structures for storing compiled hook operations
     # These will be packed into parallel arrays for efficient runtime execution

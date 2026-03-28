@@ -13,7 +13,7 @@ while NumPy arrays can be mutated in place.
 from __future__ import annotations
 
 import numpy as np
-from typing import Optional, Callable, List, NamedTuple
+from typing import Optional, Callable, List, NamedTuple, Any
 from numpy.typing import NDArray
 
 from natal.type_def import *
@@ -617,7 +617,7 @@ def initialize_zygote_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    zygote_modifiers: Optional[List[Callable]] = None
+    zygote_modifiers: Optional[List[Callable[..., Any]]] = None
 ) -> NDArray[np.float64]:
     """Initialize the ``gametes_to_zygote_map`` tensor.
 
@@ -680,7 +680,7 @@ def initialize_gamete_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    gamete_modifiers: Optional[List[Callable]] = None
+    gamete_modifiers: Optional[List[Callable[..., Any]]] = None
 ) -> NDArray[np.float64]:
     """Create and return a ``genotype_to_gametes_map`` tensor.
 
@@ -776,7 +776,7 @@ def extract_gamete_frequencies(
     
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
-            hg_idx, glab_idx = decompress_hg_glab(compressed_idx, n_glabs)
+            hg_idx, _glab_idx = decompress_hg_glab(compressed_idx, n_glabs)
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 # Aggregate frequencies across all glab variants

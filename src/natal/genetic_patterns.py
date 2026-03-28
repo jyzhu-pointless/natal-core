@@ -11,7 +11,7 @@ This module provides regex-like pattern matching for genetic sequences:
 """
 
 from abc import ABC, abstractmethod as abstract_method
-from typing import Optional, Set, List, Dict, Tuple, Callable, Union, Literal, Sequence
+from typing import Optional, Set, List, Dict, Tuple, Callable, Union, Literal, Sequence, Any
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -246,7 +246,7 @@ class ChromosomePairPattern:
                 self.paternal_pattern.matches(pat_hap)
             )
     
-    def to_filter(self) -> Callable:
+    def to_filter(self) -> Callable[..., Any]:
         """Convert to a filter function.
         
         Returns:

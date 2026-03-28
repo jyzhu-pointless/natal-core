@@ -4,12 +4,11 @@
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import Tuple, List, TYPE_CHECKING
+from typing import Tuple, TYPE_CHECKING
 import natal.algorithms as alg
-from natal.type_def import Sex
 from natal.numba_utils import njit_switch
 from natal.population_state import PopulationState
-from natal.population_config import PopulationConfig, NO_COMPETITION, FIXED, LOGISTIC, BEVERTON_HOLT
+from natal.population_config import PopulationConfig, NO_COMPETITION, FIXED, LOGISTIC
 from natal.numba_compat import binomial
 
 if TYPE_CHECKING:

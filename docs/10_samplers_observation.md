@@ -1,5 +1,9 @@
 # Samplers：观察过滤系统
 
+::: warning
+此模块目前位于 NATAL Inferencer，预计后续才会迁移至 NATAL Core。
+:::
+
 本章介绍 `samplers.observation` 模块，用于从种群状态中提取和聚合数据。这是进行数据同化 (PMCMC) 和统计推断的关键组件。
 
 ## 目录

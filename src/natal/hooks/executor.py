@@ -11,7 +11,7 @@ The hot loop is intentionally array-driven and avoids Python objects.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 
@@ -50,8 +50,7 @@ def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
         return selector == deme_id
     if isinstance(selector, range):
         return deme_id in selector
-    if isinstance(selector, (list, tuple)):
-        return deme_id in selector
+    return deme_id in selector
     raise TypeError(f"Unsupported deme selector type: {type(selector).__name__}")
 
 
@@ -78,7 +77,7 @@ def njit_deme_selector_matches(sel_type: int, start: int, end: int, data: np.nda
 
 
 @njit_switch(cache=True)
-def _check_csr_condition(cond_type, cond_param, tick):
+def _check_csr_condition(cond_type: int, cond_param: int, tick: int) -> bool:
     """Evaluate one atomic condition token.
 
     Logical operators are not handled here and are expected to be evaluated by
@@ -108,7 +107,13 @@ def _check_csr_condition(cond_type, cond_param, tick):
 
 
 @njit_switch(cache=True)
-def _eval_csr_condition_program(cond_types, cond_params, cond_start, cond_end, tick):
+def _eval_csr_condition_program(
+    cond_types: np.ndarray,
+    cond_params: np.ndarray,
+    cond_start: int,
+    cond_end: int,
+    tick: int,
+) -> bool:
     """Evaluate an RPN condition program span for one operation.
 
     The condition program is stored in flattened arrays; ``cond_start`` and
@@ -165,8 +170,17 @@ def _eval_csr_condition_program(cond_types, cond_params, cond_start, cond_end, t
     return stack[0] != 0
 
 
+# Public alias for tests/interop layers.
+eval_csr_condition_program = _eval_csr_condition_program
+
+
 @njit_switch(cache=True)
-def _sample_survivors(n_base, survival_prob, stochastic_flag, dirichlet_flag):
+def _sample_survivors(
+    n_base: float,
+    survival_prob: float,
+    stochastic_flag: bool,
+    dirichlet_flag: bool,
+) -> float:
     """Sample survivors using deterministic or stochastic policy."""
     if n_base <= 0.0:
         return 0.0
@@ -178,7 +192,12 @@ def _sample_survivors(n_base, survival_prob, stochastic_flag, dirichlet_flag):
 
 
 @njit_switch(cache=True)
-def _apply_target_without_sperm(current_count, target_count, stochastic_flag, dirichlet_flag):
+def _apply_target_without_sperm(
+    current_count: float,
+    target_count: float,
+    stochastic_flag: bool,
+    dirichlet_flag: bool,
+) -> float:
     """Apply target count update for male branch or no-sperm populations."""
     if target_count >= current_count:
         return target_count
@@ -189,7 +208,13 @@ def _apply_target_without_sperm(current_count, target_count, stochastic_flag, di
 
 
 @njit_switch(cache=True)
-def _apply_target_with_sperm(current_count, target_count, sperm_row, stochastic_flag, dirichlet_flag):
+def _apply_target_with_sperm(
+    current_count: float,
+    target_count: float,
+    sperm_row: np.ndarray,
+    stochastic_flag: bool,
+    dirichlet_flag: bool,
+) -> float:
     """Apply target update for female branch while keeping sperm row consistent.
 
     When reducing female count, we scale or sample sperm categories with the
@@ -212,10 +237,6 @@ def _apply_target_with_sperm(current_count, target_count, sperm_row, stochastic_
         return target_count
 
     n_f_raw = float(current_count)
-    if dirichlet_flag:
-        n_f = n_f_raw
-    else:
-        n_f = float(int(round(n_f_raw)))
 
     total_sperm_count = 0.0
     for gm_idx in range(sperm_row.shape[0]):
@@ -251,33 +272,33 @@ def _apply_target_with_sperm(current_count, target_count, sperm_row, stochastic_
 
 @njit_switch(cache=True)
 def execute_csr_event_arrays(
-    n_events,
-    n_hooks,
-    hook_offsets,
-    n_ops_list,
-    op_offsets,
-    op_types_data,
-    gidx_offsets_data,
-    gidx_data,
-    age_offsets_data,
-    age_data,
-    sex_masks_data,
-    params_data,
-    condition_offsets_data,
-    condition_types_data,
-    condition_params_data,
-    deme_selector_types,
-    deme_selector_offsets,
-    deme_selector_data,
-    event_id,
-    individual_count,
-    sperm_storage,
-    has_sperm_storage,
-    tick,
-    is_stochastic,
-    use_dirichlet_sampling,
-    deme_id,
-):
+    n_events: int | np.integer[Any],
+    n_hooks: int | np.integer[Any],
+    hook_offsets: np.ndarray,
+    n_ops_list: np.ndarray,
+    op_offsets: np.ndarray,
+    op_types_data: np.ndarray,
+    gidx_offsets_data: np.ndarray,
+    gidx_data: np.ndarray,
+    age_offsets_data: np.ndarray,
+    age_data: np.ndarray,
+    sex_masks_data: np.ndarray,
+    params_data: np.ndarray,
+    condition_offsets_data: np.ndarray,
+    condition_types_data: np.ndarray,
+    condition_params_data: np.ndarray,
+    deme_selector_types: np.ndarray,
+    deme_selector_offsets: np.ndarray,
+    deme_selector_data: np.ndarray,
+    event_id: int,
+    individual_count: np.ndarray,
+    sperm_storage: np.ndarray,
+    has_sperm_storage: bool,
+    tick: int,
+    is_stochastic: bool,
+    use_dirichlet_sampling: bool,
+    deme_id: int,
+) -> int:
     """Execute one event from flattened CSR arrays.
 
     Inputs are plain arrays extracted from ``HookProgram``. This function is
@@ -417,15 +438,15 @@ def build_hook_program(program: HookProgram) -> HookProgram:
 @njit_switch(cache=True)
 def execute_csr_event_program_with_state(
     program: HookProgram,
-    event_id,
-    individual_count,
-    sperm_storage,
-    tick,
-    is_stochastic,
-    has_sperm_storage,
-    use_dirichlet_sampling,
-    deme_id=0,
-):
+    event_id: int,
+    individual_count: np.ndarray,
+    sperm_storage: np.ndarray,
+    tick: int,
+    is_stochastic: bool,
+    has_sperm_storage: bool,
+    use_dirichlet_sampling: bool,
+    deme_id: int = 0,
+) -> int:
     """Execute event directly from ``HookProgram`` while exposing state flags."""
     return execute_csr_event_arrays(
         program.n_events,
@@ -458,7 +479,12 @@ def execute_csr_event_program_with_state(
 
 
 @njit_switch(cache=True)
-def execute_csr_event_program(program: HookProgram, event_id, individual_count, tick):
+def execute_csr_event_program(
+    program: HookProgram,
+    event_id: int,
+    individual_count: np.ndarray,
+    tick: int,
+) -> int:
     """Compatibility wrapper with deterministic defaults and no sperm storage."""
     dummy_sperm = np.zeros((0, 0, 0), dtype=np.float64)
     return execute_csr_event_program_with_state(
@@ -481,7 +507,11 @@ class HookExecutor:
     callback hooks must coexist around the declarative CSR core.
     """
 
-    def __init__(self, registry, hooks_by_event):
+    def __init__(
+        self,
+        registry: HookProgram,
+        hooks_by_event: Dict[int, List[CompiledHookDescriptor]],
+    ) -> None:
         self.registry = registry
         self.hooks_by_event = hooks_by_event
 
@@ -493,7 +523,7 @@ class HookExecutor:
         """Group descriptors by event and sort by priority."""
         from collections import defaultdict
 
-        hooks_by_event = defaultdict(list)
+        hooks_by_event: Dict[int, List[CompiledHookDescriptor]] = defaultdict(list)
         for desc in compiled_hooks:
             event_id = EVENT_ID_MAP.get(desc.event)
             if event_id is not None:
@@ -505,7 +535,13 @@ class HookExecutor:
 
         return HookExecutor(registry, dict(hooks_by_event))
 
-    def execute_event(self, event_id: int, population: "BasePopulation", tick: int, deme_id: int = 0) -> int:
+    def execute_event(
+        self,
+        event_id: int,
+        population: "BasePopulation[Any]",
+        tick: int,
+        deme_id: int = 0,
+    ) -> int:
         """Run one event with phase ordering: CSR -> njit -> Python.
 
         ``deme_id`` is only used for hook descriptor filtering (``deme_selector``).

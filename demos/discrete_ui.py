@@ -1,6 +1,4 @@
 import natal as nt
-import numpy as np
-import time
 from natal.ui import launch
 
 

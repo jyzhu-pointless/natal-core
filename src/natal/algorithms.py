@@ -7,7 +7,7 @@ offspring distributions, and other population genetics operations. All
 functions are written to be shape-defensive and to integrate with the
 `PopulationState` data structures.
 """
-from typing import Tuple, Annotated, Optional, Union
+from typing import Tuple, Annotated, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -714,33 +714,33 @@ def apply_survival_rates_deterministic(
         Tuple[female_new, male_new]: Population multiplied by survival rates
     """
     female, male = population
-    F = np.asarray(female).copy()
-    M = np.asarray(male).copy()
+    f_result = np.asarray(female).copy()
+    m_result = np.asarray(male).copy()
     s_f = np.asarray(female_survival_rates)
     s_m = np.asarray(male_survival_rates)
     
-    assert F.shape == (n_ages, n_genotypes)
-    assert M.shape == (n_ages, n_genotypes)
+    assert f_result.shape == (n_ages, n_genotypes)
+    assert m_result.shape == (n_ages, n_genotypes)
     
     if s_f.ndim == 1:
         # 1D array: Apply by age
         assert s_f.shape == (n_ages,)
-        F = F * s_f[:, None]
+        f_result = f_result * s_f[:, None]
     else:
         # 2D array: Direct application
         assert s_f.shape == (n_ages, n_genotypes)
-        F = F * s_f
+        f_result = f_result * s_f
     
     if s_m.ndim == 1:
         # 1D array: Apply by age
         assert s_m.shape == (n_ages,)
-        M = M * s_m[:, None]
+        m_result = m_result * s_m[:, None]
     else:
         # 2D array: Direct application
         assert s_m.shape == (n_ages, n_genotypes)
-        M = M * s_m
+        m_result = m_result * s_m
     
-    return F, M
+    return f_result, m_result
 
 
 @njit_switch(cache=True)
@@ -878,11 +878,6 @@ def sample_survival_with_sperm_storage(
         for g in range(n_genotypes):
             # ===== Sample females and their sperm storage =====
             n_f_raw = float(F[age, g])
-            if use_dirichlet_sampling:
-                n_f = n_f_raw
-            else:
-                # Discrete sampling needs to be converted to integer, same below
-                n_f = float(int(round(n_f_raw)))
                 
             g_idx_f = g % s_f_2d.shape[1]
             p_f = _clamp01(float(s_f_2d[age, g_idx_f]))
@@ -1019,10 +1014,8 @@ def sample_viability_with_sperm_storage(
     for g in range(n_genotypes):
         n_f_raw = float(F[target_age, g])
         if use_dirichlet_sampling:
-            n_f_val = n_f_raw
             n_m_val = M[target_age, g]
         else:
-            n_f_val = float(int(round(n_f_raw)))
             n_m_val = float(int(round(M[target_age, g])))
         
         p_f_val = _clamp01(float(v_f[g]))
@@ -1128,26 +1121,26 @@ def recruit_juveniles_sampling(
     female_0, male_0 = age_0_juvenile_counts
     # Ensure inputs are treated as flattened counts
     if use_dirichlet_sampling:
-        F = np.asarray(female_0)
-        M = np.asarray(male_0)
+        female_arr = np.asarray(female_0)
+        male_arr = np.asarray(male_0)
     else:
-        F = np.rint(np.asarray(female_0))
-        M = np.rint(np.asarray(male_0))
+        female_arr = np.rint(np.asarray(female_0))
+        male_arr = np.rint(np.asarray(male_0))
 
-    assert F.shape == (n_genotypes,)
-    assert M.shape == (n_genotypes,)
+    assert female_arr.shape == (n_genotypes,)
+    assert male_arr.shape == (n_genotypes,)
 
-    total = float(F.sum() + M.sum())
+    total = float(female_arr.sum() + male_arr.sum())
     K = float(carrying_capacity)
 
     if total <= 0:
-        return np.zeros_like(F), np.zeros_like(M)
+        return np.zeros_like(female_arr), np.zeros_like(male_arr)
 
     if total <= K:
-        return F.copy(), M.copy()
+        return female_arr.copy(), male_arr.copy()
 
     # Flatten to vector of length 2g for probability weights
-    counts = np.concatenate((F, M))
+    counts = np.concatenate((female_arr, male_arr))
     probs = counts / total
 
     if is_stochastic:
@@ -1197,18 +1190,18 @@ def recruit_juveniles_given_scaling_factor_sampling(
     """
     female_0, male_0 = age_0_juvenile_counts
     if use_dirichlet_sampling:
-        F = np.asarray(female_0)
-        M = np.asarray(male_0)
+        female_arr = np.asarray(female_0)
+        male_arr = np.asarray(male_0)
     else:
-        F = np.rint(np.asarray(female_0))
-        M = np.rint(np.asarray(male_0))
+        female_arr = np.rint(np.asarray(female_0))
+        male_arr = np.rint(np.asarray(male_0))
 
-    assert F.shape == (n_genotypes,)
-    assert M.shape == (n_genotypes,)
+    assert female_arr.shape == (n_genotypes,)
+    assert male_arr.shape == (n_genotypes,)
 
-    total = float(F.sum() + M.sum())
+    total = float(female_arr.sum() + male_arr.sum())
     if total <= 0:
-        return np.zeros_like(F), np.zeros_like(M)
+        return np.zeros_like(female_arr), np.zeros_like(male_arr)
 
     if use_dirichlet_sampling:
         desired = total * float(scaling_factor)
@@ -1216,9 +1209,9 @@ def recruit_juveniles_given_scaling_factor_sampling(
         desired = float(int(round(total * float(scaling_factor))))
     
     if desired <= 0:
-        return np.zeros_like(F), np.zeros_like(M)
+        return np.zeros_like(female_arr), np.zeros_like(male_arr)
 
-    counts = np.concatenate((F, M))
+    counts = np.concatenate((female_arr, male_arr))
     # Key fix: Ensure division uses Python float scalar instead of 0-d array
     # counts.sum() may return 0-d array, causing Numba type inference issues
     total_counts = float(counts.sum())

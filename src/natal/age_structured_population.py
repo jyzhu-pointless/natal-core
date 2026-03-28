@@ -12,20 +12,22 @@ Attributes:
    http://google.github.io/styleguide/pyguide.html
 """
 
-from typing import Dict, List, Optional, Union, Tuple, Callable, Set, TYPE_CHECKING
+from typing import Dict, List, Optional, Union, Tuple, Callable, Set, TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
-from natal.base_population import BasePopulation, Species, Genotype, Sex, HaploidGenome
+from natal.base_population import BasePopulation, Species, Genotype, Sex
 from natal.population_state import PopulationState
-from natal.population_config import PopulationConfig, initialize_gamete_map, initialize_zygote_map
-from natal.index_registry import IndexRegistry
+from natal.population_config import PopulationConfig
 import natal.kernels.simulation_kernels as sk
 
 if TYPE_CHECKING:
     from natal.population_builder import AgeStructuredPopulationBuilder
+    from natal.index_registry import IndexRegistry
 
 __all__ = ["AgeStructuredPopulation"]
 
+# Type alias for hooks
+HookCallback = Callable[..., None]
 # =============================================================================
 # Age-structured population model (based on BasePopulation)
 # =============================================================================
@@ -42,6 +44,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         snapshots (dict): Storage for custom state snapshots.
     """
     
+    # Type overrides: ensure these are always set (never None) in this subclass
+    _state: PopulationState
+    _registry: 'IndexRegistry'
+    _config: PopulationConfig
+    
     def __init__(
         self,
         species: Species,
@@ -49,7 +56,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         name: Optional[str] = None,
         initial_individual_count: Optional[Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
         initial_sperm_storage: Optional[Dict[Union[Genotype, str], Dict[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
-        hooks: Dict[str, List[Tuple[Callable, Optional[str], Optional[int]]]] = {},
+            hooks: Dict[str, List[Tuple[HookCallback, Optional[str], Optional[int]]]] = {},
     ):
         """Initialize an age-structured population instance using a PopulationConfig.
 
@@ -618,7 +625,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         assert hooks.run_fn is not None, "hooks.run_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
         
-        run_fn: Callable = hooks.run_fn
+        run_fn: Callable[..., Any] = hooks.run_fn
         registry = hooks.registry
 
         # 直接调用固定签名 runner 执行多步演化

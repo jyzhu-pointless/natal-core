@@ -18,10 +18,9 @@ Todo:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from natal.genetic_entities import Genotype, HaploidGenotype
 
-import numpy as np
 
 from natal.numba_utils import njit_switch
 
