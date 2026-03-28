@@ -40,6 +40,10 @@ Issues = "https://github.com/jyzhu-pointless/natal-core/issues"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
 [tool.hatch.build]
 include = [
     "src/natal/kernels/templates/*.tmpl",

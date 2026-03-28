@@ -330,13 +330,18 @@ class ChildStructureRegistry(RegistryBase[S]):
         """
         Create a new child structure and register it.
         This is a convenience method: create + register.
-        
+
+        If a child with the same *name* already exists in this registry, the
+        cached instance is returned immediately.  This makes ``add`` idempotent
+        and consistent with ``GeneticStructure.__new__``, which also returns
+        cached instances rather than creating duplicates.
+
         Uses Species-level caching to ensure uniqueness within the same Species.
         """
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Child structure name must be a non-empty string.")
         if name in self._storage:
-            raise ValueError(f"Child structure '{name}' already exists.")
+            return self._storage[name]
         expected_type = self._expected_type
         if expected_type is None:
             raise ValueError("expected_type not set, cannot construct child structure.")
