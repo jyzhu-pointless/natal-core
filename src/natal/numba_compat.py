@@ -30,7 +30,7 @@ __all__ = [
 # This is a custom, efficient implementation of the BTPE algorithm (adapted from numba.np.random) 
 # for binomial sampling.
 @njit_switch(cache=True)
-def binomial_btpe(n, p):
+def binomial_btpe(n: int, p: float) -> int:
     # C source code initialization
     r = min(p, 1.0 - p)
     q = 1.0 - r
@@ -146,7 +146,7 @@ def binomial_btpe(n, p):
 
 # Usage Example
 @njit_switch(cache=True)
-def fast_binomial(n, p):
+def fast_binomial(n: int, p: float) -> int:
     # 1. Exception handling: validate p range
     if not (0.0 <= p <= 1.0):
         raise ValueError("fast_binomial(): p outside of [0, 1]")
