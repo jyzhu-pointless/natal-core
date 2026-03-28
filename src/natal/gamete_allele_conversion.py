@@ -151,8 +151,8 @@ class GameteHaploidGenomeConversionRule:
         try:
             target_sex_idx = resolve_sex_label(self.sex_filter)
             return sex_idx == target_sex_idx
-        except (ValueError, TypeError):
-            raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid sex_filter: {self.sex_filter}") from e
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given diploid genotype."""
@@ -169,13 +169,13 @@ class GameteHaploidGenomeConversionRule:
 
 class GameteAlleleConversionRule:
     """Defines a single allele conversion rule: from_allele -> to_allele with probability.
-    
+
     This is a pure data container specifying:
       - source allele (from_allele)
       - target allele (to_allele)
       - conversion probability (rate)
       - optional context constraints (sex, genotype filters)
-    
+
     Example:
         rule = GameteAlleleConversionRule(from_allele="A", to_allele="B", rate=0.5)
         # In heterozygotes carrying A, 50% of gametes convert A -> B
@@ -193,7 +193,7 @@ class GameteAlleleConversionRule:
         target_glab: Optional[Union[str, int]] = None,
     ):
         """Initialize an allele conversion rule.
-        
+
         Args:
             from_allele: Source allele (string identifier or Gene object).
             to_allele: Target allele (string identifier or Gene object).
@@ -208,7 +208,7 @@ class GameteAlleleConversionRule:
             target_glab: Optional gamete label for converted gametes. If specified,
                         the converted gamete will be tagged with this label.
                         If None, the converted gamete retains the source's glab.
-        
+
         Raises:
             ValueError: If rate is not in [0, 1].
             TypeError: If from_allele and to_allele types don't match.
@@ -239,11 +239,11 @@ class GameteAlleleConversionRule:
 
     def applies_to_sex(self, sex_idx: _SexSpecifier, sex_name: Optional[str] = None) -> bool:
         """Check if rule applies to a given sex.
-        
+
         Args:
             sex_idx: Integer sex index (0 for first sex, 1 for second, etc.).
             sex_name: Optional sex name for clarity ("female", "male").
-        
+
         Returns:
             True if rule applies to this sex.
         """
@@ -252,17 +252,17 @@ class GameteAlleleConversionRule:
         try:
             target_sex_idx = resolve_sex_label(self.sex_filter)
             return sex_idx == target_sex_idx
-        except (ValueError, TypeError):
-            raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid sex_filter: {self.sex_filter}") from e
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given genotype.
-        
+
         If no filter is set, rule applies to all genotypes.
-        
+
         Args:
             genotype: The Genotype to check.
-        
+
         Returns:
             True if rule should apply to this genotype.
         """
@@ -391,16 +391,16 @@ class GameteConversionRuleSet:
         population: 'BasePopulation[Any]'
     ) -> GameteModifier:
         """Convert the ruleset to a GameteModifier for population integration.
-        
+
         The returned modifier will:
           1. Iterate over all genotypes in the population
           2. For each genotype, extract glab-aware gamete frequencies
           3. Apply conversion rules respecting source_glab/target_glab constraints
           4. Return compressed-index frequency mappings
-        
+
         Args:
             population: The BasePopulation that will use this modifier.
-        
+
         Returns:
             A callable that implements GameteModifier protocol.
         """
@@ -408,7 +408,7 @@ class GameteConversionRuleSet:
 
         def gamete_modifier_func(*_args: object, **_kwargs: object) -> Dict[Tuple[int, int], Dict[int, float]]:
             """Apply all conversion rules to gamete frequencies.
-            
+
             Returns dict mapping (sex_idx, genotype_idx) -> {compressed_hg_glab_idx -> freq}.
             """
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
@@ -509,8 +509,8 @@ def _compute_converted_gamete_freqs(
 
     Handles both :class:`GameteAlleleConversionRule` and
     :class:`GameteHaploidGenomeConversionRule`. Rules are applied serially
-    (Sequential cascade framework), allowing multiple rules to act conditionally 
-    on the same gamete pool. This means the outcome of Rule N becomes the input 
+    (Sequential cascade framework), allowing multiple rules to act conditionally
+    on the same gamete pool. This means the outcome of Rule N becomes the input
     pool for Rule N+1.
     """
     # current_freqs holds the state of the gamete pool before evaluating the current rule.
@@ -606,18 +606,18 @@ def _convert_haploid_genotype(
     conversion_rate: float,
 ) -> Optional[Tuple[HaploidGenotype, HaploidGenotype, float]]:
     """Attempt to convert a haploid genome by replacing one allele.
-    
+
     Scans every gene in *haploid_genome*. If a gene whose name matches
     *from_allele* is found, a new ``HaploidGenotype`` is constructed with
     that gene replaced by the corresponding *to_allele* ``Gene`` at the
     same ``Locus`` (the target Gene must already be registered).
-    
+
     Args:
         haploid_genome: The haploid genome to potentially convert.
         from_allele: Name of the source allele to look for.
         to_allele: Name of the target allele to substitute.
         conversion_rate: Probability of successful conversion (0–1).
-    
+
     Returns:
         ``None`` if *from_allele* is not present in the genome, otherwise
         ``(original_hg, converted_hg, conversion_rate)``.

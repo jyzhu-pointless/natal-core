@@ -1,5 +1,5 @@
-"""Simulation helpers used by cohort-based (absolute population size) 
-population simulations. 
+"""Simulation helpers used by cohort-based (absolute population size)
+population simulations.
 
 This module provides Numba-accelerated helper functions for computing
 mating/sperm matrices, updating sperm storage and occupancy, generating
@@ -33,13 +33,13 @@ def _clamp01(x: float) -> float:
 @njit_switch(cache=True)
 def continuous_poisson(lam: float) -> float:
     """Use Gamma distribution to continuousize Poisson distribution.
-    
+
     Moments matching: Poisson(λ) -> Gamma(λ, 1)
     Mean and variance are both λ.
-    
+
     Args:
         lam: Poisson parameter λ
-        
+
     Returns:
         Value sampled from Gamma(λ, 1)
     """
@@ -51,14 +51,14 @@ def continuous_poisson(lam: float) -> float:
 @njit_switch(cache=True)
 def continuous_binomial(n: float, p: float) -> float:
     """Use Beta distribution to continuousize Binomial distribution.
-    
+
     Moments matching: Binomial(n, p) -> Beta((n-1)*p, (n-1)*(1-p))
     Multiply the sampled proportion by n to get "continuous count".
-    
+
     Args:
         n: Binomial sample size
         p: Binomial success probability (0 < p < 1)
-        
+
     Returns:
         Continuous count value (float between 0 and n)
     """
@@ -92,11 +92,11 @@ def continuous_binomial(n: float, p: float) -> float:
 @njit_switch(cache=True)
 def continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: NDArray[np.float64]) -> None:
     """Use Dirichlet distribution to continuousize Multinomial distribution.
-    
+
     Moments matching: Multinomial(n, p) -> Dirichlet((n-1)*p)
     Use Gamma component-wise method to generate Dirichlet, avoiding direct calls that may allocate memory.
     Results are stored in pre-allocated array out_counts (in-place operation).
-    
+
     Args:
         n: Multinomial total count
         p_array: Probability vector with shape (k,)
@@ -213,12 +213,12 @@ def sample_mating(
     use_dirichlet_sampling: bool = False,
 ) -> Annotated[NDArray[np.float64], "shape=(A,g,g)"]:
     """Vectorized version: batch sampling of mating events (monogamous). (67.0x speedup)
-    
+
     Assumption: Each female mates at most once per tick.
     Sampling process consists of two steps:
     1. Determine how many females of each genotype participate in mating (Binomial)
     2. These mating females choose which male genotype to mate with (Multinomial)
-    
+
     Args:
         female_counts: Female counts array with shape (A, g) where A is number of ages
         sperm_store: Sperm storage array with shape (A, g, g) tracking mated females by male genotype
@@ -359,7 +359,7 @@ def fertilize_with_mating_genotype(
        will be applied first to reduce egg counts. This is Pre-competition (Hard Selection) filtering.
     3. Use np.random.multinomial() directly to sample offspring genotypes
     4. Vectorized accumulation (instead of individual accumulation)
-    
+
     Args:
         female_counts: Female counts array with shape (A, g)
         sperm_storage_by_male_genotype: Sperm storage array with shape (A, g, g)
@@ -643,12 +643,12 @@ def compute_age_based_survival_rates(
     n_ages: int,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,)"], Annotated[NDArray[np.float64], "shape=(A,)"]]:
     """Return age-specific survival rate arrays (no sampling).
-    
+
     Args:
         female_survival_rates: Female survival rates shape (n_ages,)
         male_survival_rates: Male survival rates shape (n_ages,)
         n_ages: Number of ages
-        
+
     Returns:
         Tuple[survival_rates_f, survival_rates_m]: Two arrays with shape (n_ages,)
     """
@@ -664,14 +664,14 @@ def compute_viability_survival_rates(
     n_ages: int,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]]:
     """Return viability survival rate matrices (non-zero only at target age).
-    
+
     Args:
         female_viability_rates: Female viability genotype-specific rates shape (g,)
         male_viability_rates: Male viability genotype-specific rates shape (g,)
         n_genotypes: Number of genotypes
         target_age: Age index where viability is applied
         n_ages: Total number of ages
-        
+
     Returns:
         Tuple[survival_rates_f, survival_rates_m]: Two matrices with shape (n_ages, n_genotypes),
             all rows are 1.0 except target_age row
@@ -699,18 +699,18 @@ def apply_survival_rates_deterministic(
     n_ages: int,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]]:
     """Deterministically apply survival rates (direct multiplication, no sampling).
-    
+
     Supports two input formats:
     - 1D array shape (A,): Apply by age, broadcast to all genotypes
     - 2D array shape (A,g): Directly apply to each (age, genotype)
-    
+
     Args:
         population: (female, male) tuple
         female_survival_rates: Female survival rates
         male_survival_rates: Male survival rates
         n_genotypes: Number of genotypes
         n_ages: Number of ages
-        
+
     Returns:
         Tuple[female_new, male_new]: Population multiplied by survival rates
     """
@@ -754,9 +754,9 @@ def apply_survival_rates_deterministic_with_sperm_storage(
     n_ages: int,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
     """Deterministically apply survival rates with consistent scaling of sperm storage (no sampling).
-    
+
     Key: sperm storage is scaled by the same survival rates.
-    
+
     Args:
         population: (female, male) tuple
         sperm_store: Sperm storage array shape (n_ages, n_genotypes, n_genotypes)
@@ -764,7 +764,7 @@ def apply_survival_rates_deterministic_with_sperm_storage(
         male_survival_rates: Male survival rates (supports 1D or 2D)
         n_genotypes: Number of genotypes
         n_ages: Number of ages
-        
+
     Returns:
         Tuple[female_new, male_new, sperm_store_new]
     """
@@ -826,9 +826,9 @@ def sample_survival_with_sperm_storage(
     use_dirichlet_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
     """Randomly apply survival rates with consistent sampling of sperm storage.
-    
+
     Key: For each (age, gf) pair, use the **same sampling result** to update individual counts and sperm storage.
-    
+
     Args:
         population: (female, male) tuple
         sperm_store: Sperm storage array shape (n_ages, n_genotypes, n_genotypes)
@@ -838,7 +838,7 @@ def sample_survival_with_sperm_storage(
         use_dirichlet_sampling: If True, use Dirichlet distribution instead of discrete sampling.
             Currently not implemented (will use discrete).
         n_ages: Number of ages
-        
+
     Returns:
         Tuple[female_new, male_new, sperm_store_new]
 
@@ -978,9 +978,9 @@ def sample_viability_with_sperm_storage(
     use_dirichlet_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
     """Randomly apply viability with consistent sampling of sperm storage (only at target_age).
-    
+
     Similar to apply_viability_sampling, but also returns updated sperm_store.
-    
+
     Args:
         population: (female, male) tuple
         sperm_store: Sperm storage array shape (n_ages, n_genotypes, n_genotypes)
@@ -990,7 +990,7 @@ def sample_viability_with_sperm_storage(
         n_ages: Number of ages
         target_age: Age index where viability is applied
         use_dirichlet_sampling: If True, use Dirichlet distribution instead of discrete sampling.
-        
+
     Returns:
         Tuple[female_new, male_new, sperm_store_new]
 
@@ -1104,7 +1104,7 @@ def recruit_juveniles_sampling(
 
     If total juveniles <= carrying_capacity, returns float copies. If
     greater, deterministically scale down to K while preserving genotype proportions
-    (with remainder distribution), unless `is_stochastic` is True in which case 
+    (with remainder distribution), unless `is_stochastic` is True in which case
     exactly `K` juveniles are sampled by multinomial.
     Returns float64 arrays (containing integral values if stochastic).
 
@@ -1254,9 +1254,9 @@ def compute_equilibrium_metrics(
     equilibrium_individual_count: Optional[NDArray[np.float64]] = None, # (sex, age, genotype_sum)
 ) -> Tuple[float, float]:
     """Calculate competition strength and survival rate metrics under equilibrium.
-    
+
     These metrics are used for LOGISTIC and BEVERTON_HOLT density-dependent modes.
-    
+
     Args:
         carrying_capacity: Total carrying capacity K based on age=1
         expected_eggs_per_female: Basic offspring count
@@ -1268,7 +1268,7 @@ def compute_equilibrium_metrics(
         new_adult_age: Adult starting age
         n_ages: Total number of ages
         equilibrium_individual_count: Optional user-provided equilibrium distribution (2, n_ages)
-        
+
     Returns:
         Tuple[expected_competition_strength, expected_survival_rate]
     """
@@ -1363,13 +1363,13 @@ def compute_scaling_factor_fixed(
     carrying_capacity: float,
 ) -> float:
     """Calculate scaling factor for FIXED mode.
-    
+
     When total_age_0 > K, scale down proportionally to K; otherwise keep unchanged.
-    
+
     Args:
         total_age_0: Total age-0 larvae count
         carrying_capacity: Carrying capacity K
-        
+
     Returns:
         scaling_factor = min(1.0, K / total)
     """

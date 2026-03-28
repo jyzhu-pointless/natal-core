@@ -56,14 +56,14 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create a scaling operation that multiplies counts by a factor.
-        
+
         Args:
             genotypes: Genotype selector ("*" for all, specific genotype, or list)
             ages: Age selector ("*" for all, specific age, range, or list)
             sex: Sex selector ("female", "male", or "both")
             factor: Scaling factor (e.g., 0.5 halves the count, 2.0 doubles it)
             when: Optional condition expression (e.g., "tick >= 100")
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -78,14 +78,14 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create an operation that sets counts to a specific value.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             value: Target count value (individuals will be added/removed to match)
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -100,14 +100,14 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create an operation that adds a fixed number of individuals.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             delta: Number of individuals to add (can be negative to remove)
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -122,14 +122,14 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create an operation that subtracts a fixed number of individuals.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             delta: Number of individuals to subtract
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -144,17 +144,17 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create a probabilistic killing operation.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             prob: Probability of killing each selected individual (0.0 to 1.0)
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
-            
+
         Raises:
             ValueError: If probability is not in [0, 1]
         """
@@ -171,14 +171,14 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create a sampling operation that selects individuals without replacement.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             size: Number of individuals to sample
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -192,13 +192,13 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create an operation that stops the simulation if selected count reaches zero.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -213,14 +213,14 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create an operation that stops the simulation if count falls below threshold.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             threshold: Minimum count threshold
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -235,14 +235,14 @@ class Op:
         when: Optional[str] = None,
     ) -> HookOp:
         """Create an operation that stops the simulation if count exceeds threshold.
-        
+
         Args:
             genotypes: Genotype selector
             ages: Age selector
             sex: Sex selector
             threshold: Maximum count threshold
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -251,10 +251,10 @@ class Op:
     @staticmethod
     def stop_if_extinction(when: Optional[str] = None) -> HookOp:
         """Create an operation that stops the simulation if total population goes extinct.
-        
+
         Args:
             when: Optional condition expression
-            
+
         Returns:
             HookOp: Operation descriptor for compilation
         """
@@ -273,16 +273,16 @@ def _resolve_genotypes(
     - ``"*"``
     - one label (``"AA"``) or a label list
     - raw integer index or index list
-    
+
     Args:
         selector: Genotype selector expression
         index_registry: Registry for genotype name resolution
         diploid_genotypes: List of all diploid genotypes in the population
         n_genotypes: Total number of genotypes
-        
+
     Returns:
         np.ndarray: Array of genotype indices (int32)
-        
+
     Raises:
         ValueError: If genotype cannot be resolved
     """
@@ -308,11 +308,11 @@ def _resolve_genotypes(
 
 def _resolve_ages(selector: Union[int, List[int], range, Literal["*"]], n_ages: int) -> np.ndarray:
     """Resolve age selector syntax to an int32 index vector.
-    
+
     Args:
         selector: Age selector ("*" for all, integer, list, or range)
         n_ages: Total number of age classes in the population
-        
+
     Returns:
         np.ndarray: Array of age indices (int32)
     """
@@ -327,13 +327,13 @@ def _resolve_ages(selector: Union[int, List[int], range, Literal["*"]], n_ages: 
 
 def _resolve_sex(selector: Literal["female", "male", "both"]) -> np.ndarray:
     """Encode sex selector as a two-slot boolean mask: [female, male].
-    
+
     Args:
         selector: Sex selector ("female", "male", or "both")
-        
+
     Returns:
         np.ndarray: Boolean mask array [female_selected, male_selected]
-        
+
     Raises:
         ValueError: If selector is not recognized
     """
@@ -352,13 +352,13 @@ def _parse_atomic_condition(atom: str) -> Tuple[int, int]:
     Example:
     - ``tick % 10 == 0`` -> ``(COND_TICK_MOD, 10)``
     - ``tick >= 5`` -> ``(COND_TICK_GE, 5)``
-    
+
     Args:
         atom: Atomic condition string (e.g., "tick >= 5")
-        
+
     Returns:
         Tuple[int, int]: Condition type and parameter
-        
+
     Raises:
         ValueError: If condition syntax is not supported
     """
@@ -396,13 +396,13 @@ def _tokenize_condition_expr(condition: str) -> List[Tuple[int, int]]:
 
     Parentheses are encoded as negative sentinels so we can reuse one compact
     token representation all the way to the shunting-yard stage.
-    
+
     Args:
         condition: Condition expression string (e.g., "tick >= 5 and tick % 10 == 0")
-        
+
     Returns:
         List[Tuple[int, int]]: List of tokens (type, parameter)
-        
+
     Raises:
         ValueError: If condition syntax is invalid
     """
@@ -467,13 +467,13 @@ def _to_rpn_condition(tokens: List[Tuple[int, int]]) -> Tuple[np.ndarray, np.nda
     Why RPN:
     - the runtime kernel can evaluate RPN with a tiny fixed-size stack
     - no recursion, no Python objects, and predictable control flow in njit
-    
+
     Args:
         tokens: List of tokens from _tokenize_condition_expr
-        
+
     Returns:
         Tuple[np.ndarray, np.ndarray]: RPN token types and parameters
-        
+
     Raises:
         ValueError: If condition expression is malformed
     """
@@ -566,13 +566,13 @@ def _to_rpn_condition(tokens: List[Tuple[int, int]]) -> Tuple[np.ndarray, np.nda
 
 def _parse_condition(condition: Optional[str]) -> Tuple[np.ndarray, np.ndarray]:
     """Compile optional condition string into runtime token arrays.
-    
+
     Args:
         condition: Optional condition string (None means always true)
-        
+
     Returns:
         Tuple[np.ndarray, np.ndarray]: RPN token types and parameters
-        
+
     Raises:
         ValueError: If condition syntax is invalid
     """

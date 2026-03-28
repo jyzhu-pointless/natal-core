@@ -77,7 +77,7 @@ initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygo
 
 class PopulationConfigBuilder:
     """Internal builder for constructing PopulationConfig.
-    
+
     Handles all low-level configuration details and array initialization. It
     encapsulating the complexity of converting builder parameters.
     """
@@ -772,7 +772,7 @@ class PopulationBuilderBase:
 
     def __init__(self, species: Species):
         """Initialize builder with required species.
-        
+
         Args:
             species (Species): Genetic architecture for the population.
         """
@@ -781,7 +781,7 @@ class PopulationBuilderBase:
 
     def add_preset(self, preset: Any) -> 'PopulationBuilderBase':
         """Add a gene drive preset to apply during build.
-        
+
         Presets are applied in the order they are added.
 
         Args:
@@ -804,7 +804,7 @@ class PopulationBuilderBase:
 
 class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     """Builder for AgeStructuredPopulation with organized group methods.
-    
+
     Notes:
         Fitness and modifiers are applied AFTER presets during build().
         This allows presets to set base values, which can then be overridden.
@@ -812,7 +812,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
     def __init__(self, species: Species):
         """Initialize builder.
-        
+
         Args:
             species (Species): Genetic architecture for the population.
         """
@@ -1057,7 +1057,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
     def presets(self, *preset_list: Any) -> 'AgeStructuredPopulationBuilder':
         """Add preset preset packages (applied during build).
-        
+
         Presets are preset configurations that may include fitness tensors,
         modifiers, and other modifications. They are applied first, then
         overridden by explicit fitness(), modifiers(), and hooks() settings
@@ -1081,11 +1081,11 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         mode: str = "replace",
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure fitness via population methods (applied after presets).
-        
+
         Fitness is set using the population's set_viability(), set_fecundity(),
         and set_sexual_selection() methods AFTER presets are applied. This allows
         presets to set base fitness values which can then be overridden.
-        
+
         Args:
             viability (Optional[Dict]): Mapping genotype -> {sex: value} or genotype -> value.
                 If value is a dict with 'female'/'male' keys, applies per-sex.
@@ -1097,7 +1097,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     which applies to all female genotypes.
             mode (str): Scaling mode. 'replace' (default) overwrites existing values.
                 'multiply' scales existing values by the provided factor.
-        
+
         Returns:
             AgeStructuredPopulationBuilder: Self for chaining.
         """
@@ -1152,7 +1152,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         zygote_modifiers: Optional[List[ModifierSpec]] = None,
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure custom modifier functions (applied after presets).
-        
+
         Modifiers are registered AFTER presets are applied, allowing presets
         to establish base state which can then be modified.
 
@@ -1176,7 +1176,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         """Configure event hook registrations.
 
         Args:
-            *hook_items (Union[Callable, Dict]): Functions decorated with @hook or mappings 
+            *hook_items (Union[Callable, Dict]): Functions decorated with @hook or mappings
                 to hook registrations.
 
         Returns:
@@ -1211,7 +1211,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
     def build(self) -> 'AgeStructuredPopulation':
         """Build and return the configured AgeStructuredPopulation.
-        
+
         Notes:
             PopulationConfig is immutable after population creation.
             Fitness must be set during build phase via this method.
@@ -1219,7 +1219,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
         Returns:
             AgeStructuredPopulation: Initialized AgeStructuredPopulation instance.
-        
+
         Raises:
             ValueError: If required config like initial_individual_count is missing.
         """
@@ -1383,7 +1383,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
 class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
     """Builder for DiscreteGenerationPopulation.
-    
+
     For populations with discrete, non-overlapping generations.
 
     Notes:
@@ -1539,7 +1539,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             stochastic (bool): Whether to use stochastic sampling.
             use_dirichlet_sampling (bool): If True, use Dirichlet; else standard sampling.
             use_fixed_egg_count (bool): If True, egg count is fixed; if False, Poisson.
-        
+
         Returns:
             DiscreteGenerationPopulationBuilder: Self for chaining.
         """
@@ -1644,7 +1644,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """Register lifecycle hooks for simulation events.
 
         Args:
-            *hook_items (Union[Callable, Dict]): Functions decorated with @hook or mappings 
+            *hook_items (Union[Callable, Dict]): Functions decorated with @hook or mappings
                 to hook registrations.
 
         Returns:

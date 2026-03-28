@@ -13,7 +13,7 @@ Each preset can modify population genetics through three mechanisms:
 
 Presets are applied to populations using the preferred API:
   population.apply_preset(preset)  # Modern API
-  
+
 Legacy API (deprecated):
   preset.apply(population)  # For backwards compatibility
 
@@ -627,24 +627,24 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
 
 def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'GeneticPreset') -> None:
     """Apply a genetic preset to a population by registering its modifiers and fitness effects.
-    
+
     This function handles the mechanical application of a preset to a population,
     including:
     1. Species binding and validation
     2. Registration of gamete modifiers
-    3. Registration of zygote modifiers  
+    3. Registration of zygote modifiers
     4. Application of fitness patches
-    
+
     Args:
         population: The BasePopulation instance to modify.
         preset: The GeneticPreset instance to apply.
-    
+
     Note:
         This is typically called through the modern API:
         ``population.apply_preset(preset)``
-        
+
         The legacy API ``preset.apply(population)`` is deprecated but still supported.
-    
+
     Raises:
         ValueError: If preset is bound to a different species than the population
         RuntimeError: If preset has no bound species
@@ -679,25 +679,25 @@ def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'Genet
 
 class GeneticPreset(ABC):
     """Abstract base for genetic modification presets including gene drives, mutations, and allele conversions.
-    
+
     A preset bundles gamete modifiers, zygote modifiers, and fitness effects
     that form a cohesive genetic system. This can include:
     - Gene drives (e.g., CRISPR/Cas9 homing drives)
     - General mutations (point mutations, insertions, deletions)
     - Complex allele conversion systems
-    
+
     Presets should implement:
       - gamete_modifier(): returns GameteModifier callable or None
-      - zygote_modifier(): returns ZygoteModifier callable or None  
+      - zygote_modifier(): returns ZygoteModifier callable or None
       - fitness_patch(): returns declarative fitness configuration dict or None
-    
+
     All methods are optional (can return None). At least one method should be implemented
     for the preset to have any effect.
-    
+
     Usage:
         # Modern API (recommended)
         population.apply_preset(preset)
-        
+
         # Legacy API (deprecated)
         preset.apply(population)
     """
@@ -708,7 +708,7 @@ class GeneticPreset(ABC):
         species: Optional[Species] = None,
     ):
         """Initialize the preset.
-        
+
         Args:
             name: Optional human-readable name for the preset.
             species: Optional species bound at construction time. If provided,
@@ -761,11 +761,11 @@ class GeneticPreset(ABC):
     @abstractmethod
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Return a gamete modifier or None.
-        
+
         The modifier should return:
-        
+
             Dict[(sex_idx, genotype_idx) -> Dict[compressed_hg_glab_idx -> freq]]
-        
+
         where compressed_hg_glab_idx is an integer index into the compressed
         haploid genotype space.
         """
@@ -774,11 +774,11 @@ class GeneticPreset(ABC):
     @abstractmethod
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
         """Return a zygote modifier or None.
-        
+
         The modifier should return:
-        
+
             Dict[(c1, c2) -> (idx_modified | Genotype | Dict[idx -> prob])]
-        
+
         where c1, c2 are compressed coordinate pairs representing the parental
         diploid genotypes.
         """
@@ -787,12 +787,12 @@ class GeneticPreset(ABC):
     @abstractmethod
     def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Return a declarative fitness patch dict to modify population config tensors.
-        
+
         The patch can specify modifications to viability, fecundity, and sexual
         selection fitness using a structured schema. This allows the framework
         to apply complex fitness effects without requiring the preset to directly
         manipulate config tensors.
-        
+
         If a patch is provided, it takes precedence over legacy tensor modifier
         methods (viability_fitness_modifier, etc.) for fitness effect
         """
@@ -818,14 +818,14 @@ class GeneticPreset(ABC):
 
     def apply(self, population: 'BasePopulation[Any]') -> None:
         """Register this preset onto a population (DEPRECATED).
-        
-        .. deprecated:: 
+
+        .. deprecated::
             Use population.apply_preset(preset) instead.
             This method is kept for backwards compatibility and may be removed in future versions.
-        
+
         Args:
             population: The BasePopulation instance to modify.
-            
+
         See Also:
             :meth:`natal.base_population.BasePopulation.apply_preset` - Preferred modern API
         """
@@ -833,11 +833,11 @@ class GeneticPreset(ABC):
 
 class HomingDrive(GeneticPreset):
     """Homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
-    
+
     This preset implements a homing gene drive that spreads through homology-directed
     repair (HDR) converting wild-type alleles into drive alleles in heterozygotes.
     It can also generate resistance alleles through non-homologous end joining (NHEJ).
-    
+
     Key features:
     - Drive conversion in heterozygotes (WT → Drive)
     - Germline resistance formation (WT → Resistance)
@@ -845,12 +845,12 @@ class HomingDrive(GeneticPreset):
     - Maternal/paternal Cas9 deposition
     - Functional vs non-functional resistance alleles
     - Sex-specific rates for all processes
-    
+
     The drive operates through a sequential cascade:
     1. Homing conversion (WT → Drive)
     2. Resistance formation in remaining WT alleles
     3. Optional functional resistance split
-    
+
     Usage:
         drive = HomingDrive(
             name="MyDrive",
@@ -886,28 +886,28 @@ class HomingDrive(GeneticPreset):
         use_paternal_deposition: bool = False,
     ):
         """Initialize a homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
-    
+
         This drive spreads via homology-directed repair (HDR) converting wild-type alleles into drive alleles in heterozygotes.
         It can also generate resistance alleles through non-homologous end joining (NHEJ).
-        
+
         Args:
             name (str): Name of the gene drive.
             drive_allele (str or Gene): The allele carrying the drive cassette.
             target_allele (str or Gene): The wild-type allele targeted by the drive.
             resistance_allele (str or Gene, optional): The non-functional resistance allele formed by NHEJ.
-            functional_resistance_allele (str or Gene, optional): The functional resistance allele 
+            functional_resistance_allele (str or Gene, optional): The functional resistance allele
                 formed by in-frame NHEJ. If not provided, assume no functional resistance.
             cas9_allele (str or Gene, optional): The allele carrying Cas9 for cleavage, used
                 when modeling a split drive where Cas9 is separate from the drive locus.
             drive_conversion_rate (float or dict): Probability of drive conversion caused by Cas9 cleavage
-                and homology-directed repair in heterozygotes. Can be a single float (applies to both sexes), 
+                and homology-directed repair in heterozygotes. Can be a single float (applies to both sexes),
                 a dict with sex keys, or a tuple (female_rate, male_rate) for sex-specific rates.
-            late_germline_resistance_formation_rate (float or dict): Probability of resistance formation 
-                *after* drive conversion in the germline. Can be a single float (applies to both sexes), 
+            late_germline_resistance_formation_rate (float or dict): Probability of resistance formation
+                *after* drive conversion in the germline. Can be a single float (applies to both sexes),
                 a dict with sex keys, or a tuple (female_rate, male_rate) for sex-specific rates.
-            embryo_resistance_formation_rate (float or dict): Probability of resistance formation 
+            embryo_resistance_formation_rate (float or dict): Probability of resistance formation
                 in embryos due to maternal/paternal Cas9 deposition. Can be a single float, dict, or tuple.
-            functional_resistance_ratio (float): Proportion of resistance alleles that are functional 
+            functional_resistance_ratio (float): Proportion of resistance alleles that are functional
                 (in-frame mutations). Range: 0.0 (all non-functional) to 1.0 (all functional).
             fecundity_scaling (float or dict): Fitness cost multiplier for drive carriers affecting fecundity.
                 Applied multiplicatively based on allele copy number.
@@ -923,16 +923,16 @@ class HomingDrive(GeneticPreset):
                 Note: if sexual_selection_scaling is a tuple, mode is ignored.
             cas9_deposition_glab (str, optional): Gamete label for Cas9 deposition tracking.
                 Used for maternal/paternal effect modeling.
-            species (Species, optional): Species to bind at construction time. If None, 
+            species (Species, optional): Species to bind at construction time. If None,
                 will be bound when applied to population.
             use_paternal_deposition (bool): Whether to enable paternal Cas9 deposition.
                 If True, fathers can deposit Cas9 in embryos.
-        
+
         Example:
             >>> drive = HomingDrive(
             ...     name="MyDrive",
             ...     drive_allele="Drive",
-            ...     target_allele="WT", 
+            ...     target_allele="WT",
             ...     resistance_allele="R2",
             ...     drive_conversion_rate=0.95,
             ...     late_germline_resistance_formation_rate=0.03
@@ -1023,7 +1023,7 @@ class HomingDrive(GeneticPreset):
 
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Implement homing in heterozygous parents, germline resistance, and Cas9 deposition.
-        
+
         In heterozygotes (drive/wild-type), gametes are biased towards drive.
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
@@ -1112,8 +1112,8 @@ class HomingDrive(GeneticPreset):
 
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
         """Implement embryo resistance.
-        
-        Cleavage in the embryo (due to deposited Cas9 or zygotic expression) 
+
+        Cleavage in the embryo (due to deposited Cas9 or zygotic expression)
         converts wild-type alleles into resistance alleles.
         """
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoResistance")
@@ -1188,10 +1188,10 @@ class HomingDrive(GeneticPreset):
 
 class ToxinAntidoteDrive(GeneticPreset):
     """Toxin-Antidote gene drive (e.g., TARE, TADE, TADS).
-    
-    This preset implements a toxin-antidote gene drive system where a "toxin" allele causes lethality or sterility, 
+
+    This preset implements a toxin-antidote gene drive system where a "toxin" allele causes lethality or sterility,
     and an "antidote" allele rescues carriers from the toxin's effects. The drive spreads by biasing inheritance of the antidote.
-    
+
     Key features:
     - Toxin allele that disrupts viability or fecundity
     - Antidote allele that rescues carriers from toxin effects

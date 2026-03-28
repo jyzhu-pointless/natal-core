@@ -122,9 +122,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             species: Species definition used to initialize the builder.
             name: Population name passed through to ``builder.setup``.
             stochastic: Whether to use stochastic sampling. Passed through to ``builder.setup``.
-            use_dirichlet_sampling: If True, use Dirichlet; else Binomial/Multinomial sampling. 
+            use_dirichlet_sampling: If True, use Dirichlet; else Binomial/Multinomial sampling.
                 Passed through to ``builder.setup``.
-            use_fixed_egg_count: If True, egg count is fixed; if False, Poisson distributed. 
+            use_fixed_egg_count: If True, egg count is fixed; if False, Poisson distributed.
                 Passed through to ``builder.setup``.
 
         Returns:

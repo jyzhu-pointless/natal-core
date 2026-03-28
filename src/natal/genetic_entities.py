@@ -49,12 +49,12 @@ __all__ = [
 class GeneticEntity(Generic[S]):
     """
     Base class for genetic entities bound to genetic structures.
-    
+
     Core Rules (from requirement.md):
     1. Entity MUST be bound to a Structure (mandatory)
     2. Entity auto-registers with Structure upon creation ("register upon creation")
     3. Entity with same name under same Structure returns the same instance (singleton per structure+name)
-    
+
     Example:
         >>> gene = Gene("A1", locus=locus_A)  # ✅ Required locus
         >>> assert gene in locus_A.all_entities  # ✅ Auto-registered
@@ -205,12 +205,12 @@ class GeneticEntity(Generic[S]):
 class Gene(GeneticEntity[Locus]):
     """
     Represents a single allele at a genetic locus.
-    
+
     A Gene must be bound to a Locus and is automatically registered
     upon creation. Same name under same Locus returns the same instance.
-        
+
     Aliases: Allele
-    
+
     Basic usage:
         >>> locus = Locus("A")
         >>> gene1 = Gene("A1", locus=locus)  # ✅ Auto-registered
@@ -259,7 +259,7 @@ class Gene(GeneticEntity[Locus]):
 class Haplotype(GeneticEntity[Chromosome]):
     """
     Represents a haplotype - genes on a single chromosome from one parent.
-    
+
     A Haplotype is bound to a Chromosome structure and contains a list of Genes,
     one for each Locus in the Chromosome. Same gene combination under same
     Chromosome structure returns the same instance.
@@ -317,7 +317,7 @@ class Haplotype(GeneticEntity[Chromosome]):
         if missing_loci:
             # Check if this is allowed (e.g., sex chromosomes)
             if not getattr(chromosome, '_allow_incomplete_haplotype', False):
-                missing_names = [l.name for l in missing_loci]
+                missing_names = [locus.name for locus in missing_loci]
                 raise ValueError(
                     f"Incomplete haplotype for chromosome {chromosome.name!r}. "
                     f"Missing genes for loci: {missing_names}. "
@@ -356,11 +356,11 @@ class Haplotype(GeneticEntity[Chromosome]):
 class HaploidGenotype(GeneticEntity[Species]):
     """
     Represents a complete haploid genome - all haplotypes from one parent.
-    
+
     A HaploidGenotype is bound to a Species and contains one Haplotype
     for each Chromosome in the Species. Same haplotype combination under
     same Species returns the same instance.
-    
+
     Aliases: HaploidGenome
     """
     structure_type = Species  # HaploidGenotype must be bound to a Species
@@ -516,14 +516,14 @@ class HaploidGenotype(GeneticEntity[Species]):
 class Genotype:
     """
     Represents a diploid genotype consisting of two haploid genomes.
-    
+
     A Genotype pairs two HaploidGenotypes (maternal and paternal) that are
-    both bound to the same Species structure. The distinction between 
+    both bound to the same Species structure. The distinction between
     maternal and paternal origin is preserved for modeling phenomena like
     maternal effects, cytoplasmic inheritance, and genomic imprinting.
-    
+
     Aliases: Genome, DiploidGenome, DiploidGenotype
-    
+
     Note: Genotype uses identity comparison (is) since instances are cached.
     """
 
@@ -537,10 +537,10 @@ class Genotype:
     def __new__(cls, species: Species, maternal: HaploidGenotype, paternal: HaploidGenotype) -> Genotype:
         """
         Create or retrieve a cached Genotype instance.
-        
+
         Caching ensures that the same maternal+paternal combination
         always returns the exact same object (singleton per Species).
-        
+
         Maternal and paternal origin are preserved for advanced modeling.
         """
         # Ensure species cache dictionary exists
@@ -560,11 +560,14 @@ class Genotype:
                 mat_hap = None
                 pat_hap = None
 
-            def hap_allele_str(hap: Optional[Haplotype]) -> str:
+            def hap_allele_str(
+                hap: Optional[Haplotype],
+                loci: List[Locus] = chrom.loci,
+            ) -> str:
                 if hap is None:
                     return ""
                 names: List[str] = []
-                for locus in chrom.loci:
+                for locus in loci:
                     gene = hap.get_gene_at_locus(locus)
                     names.append(gene.name if gene is not None else "")
                 return "/".join(names)
@@ -642,7 +645,7 @@ class Genotype:
     def get_alleles_at_locus(self, locus: Locus) -> Tuple[Optional[Gene], Optional[Gene]]:
         """
         Get the pair of alleles at a specific locus.
-        
+
         Returns:
             Tuple of (maternal_allele, paternal_allele)
         """
@@ -664,36 +667,36 @@ class Genotype:
         """
         Generate all possible gametes (haploid genotypes) from this diploid genotype,
         along with their theoretical Mendelian frequencies.
-        
+
         This method computes pure Mendelian segregation based on recombination rates.
         No gene drives or other modifiers are applied - this is the baseline calculation.
-        
+
         For gene drives, gamete selection, or other modifications, use Population-level
         gamete modifiers via `Population.set_gamete_modifier()`.
-        
+
         Recombination behavior is controlled by the Species's RecombinationMap:
         - If recombination rates are defined and non-zero, recombinant haplotypes
           will be generated with appropriate frequencies.
         - If recombination rates are zero or undefined, only parental haplotypes
           are produced (simple Mendelian segregation).
-        
-        For chromosomes where maternal and paternal haplotypes are identical, 
+
+        For chromosomes where maternal and paternal haplotypes are identical,
         produces only 1 gamete (the identical haplotype) with frequency 1.0.
-        
+
         Returns:
             Dict mapping HaploidGenotype instances to their theoretical frequencies.
             All frequencies sum to 1.0.
-        
+
         Example:
             >>> # Get Mendelian gamete frequencies
             >>> gametes = genotype.produce_gametes()
             >>> sum(gametes.values())  # → 1.0
             >>> for haploid_genotype, freq in gametes.items():
             ...     print(f"{haploid_genotype}: {freq:.3f}")
-        
+
         Note:
             Results are cached for performance. Each genotype has one cached result.
-            
+
             If you modify the recombination rates after calling this method,
             you must manually clear the cache by setting `self._gamete_cache = None`.
             Best practice: set recombination rates during Chromosome construction.
@@ -772,11 +775,14 @@ class Genotype:
             mat_hap = self.maternal.get_haplotype_for_chromosome(chrom)
             pat_hap = self.paternal.get_haplotype_for_chromosome(chrom)
 
-            def hap_allele_str(hap: Optional[Haplotype]) -> str:
+            def hap_allele_str(
+                hap: Optional[Haplotype],
+                loci: List[Locus] = chrom.loci,
+            ) -> str:
                 if hap is None:
                     return ""
                 names: List[str] = []
-                for locus in chrom.loci:
+                for locus in loci:
                     gene = hap.get_gene_at_locus(locus)
                     names.append(gene.name if gene is not None else "")
                 return "/".join(names)
@@ -790,14 +796,14 @@ class Genotype:
     def _should_use_recombination(self, chromosome: Chromosome) -> bool:
         """
         Quickly determine if recombination computation is needed for this chromosome.
-        
+
         Returns False (use simple 0.5/0.5 segregation) if:
         - Single locus (no recombination possible)
         - No recombination map defined
         - All recombination rates are zero
-        
+
         Returns True (compute full recombination patterns) otherwise.
-        
+
         This early check avoids expensive pattern enumeration for common cases.
         """
         # Single locus - no recombination possible
@@ -828,18 +834,18 @@ class Genotype:
     ) -> Dict[Haplotype, float]:
         """
         Compute all recombinant haplotypes for a heterozygous chromosome.
-        
+
         Uses a high-level decorator to automatically select between Numba-accelerated
         and pure Python implementations based on problem size.
-        
+
         This method is only called when _should_use_recombination() returns True,
         i.e., when the chromosome has >1 locus and non-zero recombination rates.
-        
+
         Args:
             mat_haplotype: Maternal haplotype
             pat_haplotype: Paternal haplotype
             chromosome: The chromosome structure
-        
+
         Returns:
             Dict mapping Haplotype (including recombinants) to frequency
         """
@@ -888,11 +894,11 @@ class Genotype:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Compute recombination patterns, selecting implementation.
-        
+
         Args:
             n_loci: Number of loci
             recomb_rates: Recombination rates between adjacent loci
-        
+
         Returns:
             (patterns, frequencies) tuple
         """
@@ -911,21 +917,21 @@ def compute_recombinant_haplotypes(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute all possible recombinant haplotype patterns and their frequencies.
-    
+
     Abstract problem: Given a sequence of loci [0, 1, 2, ..., n_loci-1] with
     recombination rates between adjacent loci, enumerate all crossover patterns
     and produce the resulting haplotype pattern (which chain at each locus).
-    
+
     Args:
         n_loci: Number of loci (>= 1)
         recombination_rates: Shape (n_loci - 1,). recombination_rates[i] = rate between locus i and i+1
         start_maternal: If True, start from maternal chain (0); else paternal (1)
-    
+
     Returns:
         haplotype_patterns: Shape (2^(n_loci-1), n_loci). Each row is 01 sequence:
                             0=maternal allele at that locus, 1=paternal allele
         frequencies: Shape (2^(n_loci-1),). Frequency of each pattern.
-    
+
     Example:
         >>> n_loci = 3
         >>> recomb_rates = np.array([0.1, 0.2])  # rate between 0-1 and 1-2
@@ -982,17 +988,17 @@ def compute_recombinant_haplotypes_with_alleles(
 ) -> Dict[str, float]:
     """
     Compute recombinant haplotypes with actual allele symbols.
-    
+
     Given maternal and paternal allele sequences, compute all recombinant
     haplotypes considering recombination rates, and return them as strings
     mapped to their frequencies.
-    
+
     Args:
         maternal_alleles: List of allele symbols at each locus (maternal chain)
         paternal_alleles: List of allele symbols at each locus (paternal chain)
         recombination_rates: Recombination rates between adjacent loci
         start_maternal: Start from maternal (Arue) or paternal (False)
-    
+
     Returns:
         Dict mapping haplotype string (e.g., "A1/a2/A3") to frequency
     """
@@ -1023,11 +1029,11 @@ def create_haplotype_from_allele_names(
 ) -> Haplotype:
     """
     Create a Haplotype from allele names.
-    
+
     Args:
         chromosome: The Chromosome structure this haplotype belongs to.
         allele_names: List of allele names, one per locus in order.
-    
+
     Returns:
         A new Haplotype instance.
     """

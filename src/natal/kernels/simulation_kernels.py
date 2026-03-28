@@ -53,12 +53,12 @@ def run_reproduction(
     config: PopulationConfig,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """执行繁殖阶段：计算交配、更新精子存储、生成后代。
-    
+
     Args:
         ind_count: 个体计数数组 (n_sexes, n_ages, n_genotypes)
         sperm_store: 精子存储数组 (n_ages, n_genotypes, n_genotypes)
         config: PopulationConfig 对象
-        
+
     Returns:
         Tuple[ind_count, sperm_store]: 更新后的数组
     """
@@ -143,17 +143,17 @@ def run_survival(
     config: PopulationConfig,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """执行生存阶段：应用生存率、viability、遗传漂变、幼虫招募。
-    
+
     新架构：
     1. 计算各个生存率组件（返回生存率数组）
     2. 一次性应用所有生存率（stochastic 或 deterministic）
     3. 对幼虫进行密度依赖招募
-    
+
     Args:
         ind_count: 个体计数数组 (n_sexes, n_ages, n_genotypes)
         sperm_store: 精子存储数组 (n_ages, n_genotypes, n_genotypes)
         config: PopulationConfig 实例
-        
+
     Returns:
         Tuple[ind_count, sperm_store]: 更新后的个体计数和精子存储
     """
@@ -285,12 +285,12 @@ def run_aging(
     config: PopulationConfig,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """执行衰老阶段：年龄推进。
-    
+
     Args:
         ind_count: 个体计数数组 (n_sexes, n_ages, n_genotypes)
         sperm_store: 精子存储数组
         config: PopulationConfig 实例
-        
+
     Returns:
         Tuple[ind_count, sperm_store]: 更新后的数组
     """

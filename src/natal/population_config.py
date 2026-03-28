@@ -19,7 +19,7 @@ from numpy.typing import NDArray
 import natal.algorithms as alg
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.index_registry import compress_hg_glab, decompress_hg_glab
-from natal.type_def import *
+from natal.type_def import Sex
 
 __all__ = [
     'NO_COMPETITION', 'FIXED', 'LOGISTIC', 'LINEAR', 'CONCAVE', 'BEVERTON_HOLT',
@@ -228,19 +228,19 @@ class PopulationConfig(NamedTuple):
         """
         gen_times = np.zeros(self.n_sexes, dtype=np.float64)
         for sex in range(self.n_sexes):
-            l = np.ones(self.n_ages, dtype=np.float64)
+            cumulative_survival = np.ones(self.n_ages, dtype=np.float64)
             for age in range(1, self.n_ages):
-                l[age] = l[age - 1] * self.age_based_survival_rates[sex, age - 1]
+                cumulative_survival[age] = cumulative_survival[age - 1] * self.age_based_survival_rates[sex, age - 1]
 
             numerator = 0.0
             denominator = 0.0
             for age in range(self.n_ages):
-                m_x = self.age_based_mating_rates[sex, age]
-                if sex == 0:
-                    m_x *= self.female_age_based_relative_fertility[age]
-                if m_x > 0:
-                    numerator += age * l[age] * m_x
-                    denominator += l[age] * m_x
+                cumulative_mating_value = self.age_based_mating_rates[sex, age]
+                if sex == Sex.FEMALE:
+                    cumulative_mating_value *= self.female_age_based_relative_fertility[age]
+                if cumulative_mating_value > 0:
+                    numerator += age * cumulative_survival[age] * cumulative_mating_value
+                    denominator += cumulative_survival[age] * cumulative_mating_value
 
             if denominator > 0:
                 gen_times[sex] = numerator / denominator

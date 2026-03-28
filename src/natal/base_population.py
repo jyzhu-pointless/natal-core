@@ -1385,7 +1385,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             CompiledEventHooks: Container with combined @njit hooks per event.
                                 Access via .first, .early, .late, .finish
-        
+                                
         Example:
             >>> hooks = pop.get_compiled_event_hooks()
             >>> hooks.run_fn is not None

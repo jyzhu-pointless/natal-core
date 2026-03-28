@@ -586,7 +586,7 @@ class HookExecutor:
                     if result == RESULT_STOP:
                         return RESULT_STOP
                 except Exception as e:
-                    raise RuntimeError(f"Error in njit hook '{desc.name}': {e}")
+                    raise RuntimeError(f"Error in njit hook '{desc.name}': {e}") from e
 
         from ..numba_utils import NUMBA_ENABLED
 
@@ -602,7 +602,7 @@ class HookExecutor:
                 try:
                     desc.py_wrapper(population)
                 except Exception as e:
-                    raise RuntimeError(f"Error in py_wrapper hook '{desc.name}': {e}")
+                    raise RuntimeError(f"Error in py_wrapper hook '{desc.name}': {e}") from e
 
         return RESULT_CONTINUE
 

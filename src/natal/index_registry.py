@@ -400,7 +400,7 @@ class IndexRegistry:
             try:
                 idx_hg = int(haploid_genotypes.index(hg_obj))
             except ValueError:
-                raise KeyError(f"Unknown haploid object: {hg_obj}")
+                raise KeyError(f"Unknown haploid object: {hg_obj}") from ValueError
 
             if isinstance(lab, int):
                 glab_idx = int(lab)
@@ -415,14 +415,14 @@ class IndexRegistry:
             try:
                 return (int(haploid_genotypes.index(part)), 0)
             except ValueError:
-                raise KeyError(f"Unknown haploid object: {part}")
+                raise KeyError(f"Unknown haploid object: {part}") from ValueError
 
         # compressed integer
         if isinstance(part, int):
             try:
                 return self.decompress_hg_glab(part, n_glabs)
             except Exception:
-                raise KeyError(f"Unknown compressed index: {part}")
+                raise KeyError(f"Unknown compressed index: {part}") from Exception
 
         # string matching to_string()
         if isinstance(part, str):
@@ -479,7 +479,7 @@ class IndexRegistry:
                     idx_hg = int(haploid_genotypes.index(part_hg))
                 except ValueError:
                     if strict:
-                        raise KeyError(f"Cannot resolve haploid object: {part_hg}")
+                        raise KeyError(f"Cannot resolve haploid object: {part_hg}") from ValueError
                     return None
             elif isinstance(part_hg, str):
                 found = False
@@ -519,7 +519,7 @@ class IndexRegistry:
                 idx_hg = int(haploid_genotypes.index(comp_key))
             except ValueError:
                 if strict:
-                    raise KeyError(f"Unknown haploid object: {comp_key}")
+                    raise KeyError(f"Unknown haploid object: {comp_key}") from ValueError
                 return None
             return self.compress_hg_glab(idx_hg, 0, n_glabs)
 

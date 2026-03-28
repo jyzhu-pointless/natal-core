@@ -68,7 +68,7 @@ noop_hook = _noop_hook
 
 def _normalize_njit_fn(fn: HookFn) -> HookFn:
     """Ensure an njit hook matches the internal (ind_count, tick, deme_id) signature.
-    
+
     If the user provided a 2-arg function, wrap it.
     """
     py_fn = getattr(fn, "py_func", fn)

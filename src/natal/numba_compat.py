@@ -12,7 +12,7 @@ The correct implementation is selected at **import time** based on the global Nu
 
 Usage:
     from natal.numba_compat import binomial_2d, fancy_index_3d_to_2d
-    
+
     # These work in both @njit functions and regular Python with optimal performance
     result = binomial_2d(n_array, p_array, n_rows, n_cols)
 """

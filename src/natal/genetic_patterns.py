@@ -3,7 +3,7 @@ Genetic pattern matching system for genotypes and haploid genomes.
 
 This module provides regex-like pattern matching for genetic sequences:
 - PatternElement: Base class for allele-level matching
-- HaplotypePath: Pattern for a single DNA strand of one chromosome  
+- HaplotypePath: Pattern for a single DNA strand of one chromosome
 - ChromosomePairPattern: Pattern for a pair of homologous chromosomes
 - GenotypePattern: Pattern for a complete diploid genotype
 - HaploidGenomePattern: Pattern for a complete haploid genome
@@ -43,10 +43,10 @@ class PatternElement(ABC):
     @abstract_method
     def matches(self, gene: Optional['Gene']) -> bool:
         """Check if a single allele matches this pattern element.
-        
+
         Args:
             gene: The Gene object to match, or None.
-        
+
         Returns:
             True if the gene matches this pattern element.
         """
@@ -87,7 +87,7 @@ class SetPattern(PatternElement):
 
     def __init__(self, alleles: Set[str], negate: bool = False):
         """Initialize a set pattern.
-        
+
         Args:
             alleles: Set of allele names to match.
             negate: If True, match alleles NOT in this set.
@@ -116,7 +116,7 @@ class LocusPattern:
         unordered: bool = False
     ):
         """Initialize a locus pattern.
-        
+
         Args:
             maternal_pattern: PatternElement for maternal allele.
             paternal_pattern: PatternElement for paternal allele.
@@ -128,11 +128,11 @@ class LocusPattern:
 
     def matches(self, mat_gene: Optional['Gene'], pat_gene: Optional['Gene']) -> bool:
         """Check if a pair of alleles matches this locus pattern.
-        
+
         Args:
             mat_gene: Maternal allele.
             pat_gene: Paternal allele.
-        
+
         Returns:
             True if the allele pair matches.
         """
@@ -164,7 +164,7 @@ class HaplotypePath:
 
     def __init__(self, locus_patterns: Sequence[PatternElement]):
         """Initialize a haplotype pattern.
-        
+
         Args:
             locus_patterns: Sequence of PatternElement for each locus in order.
                            Each PatternElement matches a single allele at that locus.
@@ -173,10 +173,10 @@ class HaplotypePath:
 
     def matches(self, haplotype: 'Haplotype') -> bool:
         """Check if a haplotype matches this pattern.
-        
+
         Args:
             haplotype: The Haplotype to match.
-        
+
         Returns:
             True if all loci match.
         """
@@ -195,7 +195,7 @@ class HaplotypePath:
 
     def to_filter(self) -> Callable[['Haplotype'], bool]:
         """Convert to a filter function.
-        
+
         Returns:
             A callable that takes a Haplotype and returns bool.
         """
@@ -216,7 +216,7 @@ class ChromosomePairPattern:
         explicit_grouping: bool = False
     ):
         """Initialize a chromosome pair pattern.
-        
+
         Args:
             maternal_pattern: HaplotypePath for maternal haplotype.
             paternal_pattern: HaplotypePath for paternal haplotype.
@@ -230,10 +230,10 @@ class ChromosomePairPattern:
 
     def matches(self, haplotype_pair: Tuple['Haplotype', 'Haplotype']) -> bool:
         """Check if a pair of haplotypes (one chromosome pair) matches.
-        
+
         Args:
             haplotype_pair: Tuple of (maternal_haplotype, paternal_haplotype).
-        
+
         Returns:
             True if the haplotype pair matches.
         """
@@ -259,7 +259,7 @@ class ChromosomePairPattern:
 
     def to_filter(self) -> Callable[[Tuple['Haplotype', 'Haplotype']], bool]:
         """Convert to a filter function.
-        
+
         Returns:
             A callable that takes a haplotype pair and returns bool.
         """
@@ -275,7 +275,7 @@ class GenotypePattern:
 
     def __init__(self, chromosome_patterns: List[Optional[ChromosomePairPattern]]):
         """Initialize a complete genotype pattern.
-        
+
         Args:
             chromosome_patterns: List of ChromosomePairPattern (or None for omitted chromosomes).
                                None means that chromosome is not constrained by the pattern.
@@ -284,10 +284,10 @@ class GenotypePattern:
 
     def matches(self, genotype: 'Genotype') -> bool:
         """Check if a genotype matches this pattern.
-        
+
         Args:
             genotype: The Genotype to match.
-        
+
         Returns:
             True if the genotype matches all specified chromosome patterns.
         """
@@ -313,7 +313,7 @@ class GenotypePattern:
 
     def to_filter(self) -> Callable[['Genotype'], bool]:
         """Convert to a filter function for use in rules.
-        
+
         Returns:
             A callable that takes a Genotype and returns bool.
         """
@@ -328,7 +328,7 @@ class HaploidGenomePattern:
 
     def __init__(self, haplotype_patterns: List[Optional[HaplotypePath]]):
         """Initialize a haploid genome pattern.
-        
+
         Args:
             haplotype_patterns: List of HaplotypePath for each chromosome.
                                None means that chromosome is not constrained.
@@ -337,10 +337,10 @@ class HaploidGenomePattern:
 
     def matches(self, haploid_genome: 'HaploidGenome') -> bool:
         """Check if a haploid genome matches this pattern.
-        
+
         Args:
             haploid_genome: The HaploidGenome to match.
-        
+
         Returns:
             True if the haploid genome matches all specified patterns.
         """
@@ -365,7 +365,7 @@ class HaploidGenomePattern:
 
     def to_filter(self) -> Callable[['HaploidGenome'], bool]:
         """Convert to a filter function.
-        
+
         Returns:
             A callable that takes a HaploidGenome and returns bool.
         """
@@ -381,7 +381,7 @@ class GenotypePatternParser:
 
     def __init__(self, species: 'Species'):
         """Initialize parser for a specific species.
-        
+
         Args:
             species: The Species object to use for validation and context.
         """
@@ -389,7 +389,7 @@ class GenotypePatternParser:
 
     def parse(self, pattern_str: str) -> GenotypePattern:
         """Parse a pattern string into a GenotypePattern.
-        
+
         Syntax:
             - `;` separates chromosomes (outside parentheses)
             - `|` separates maternal (left) and paternal (right)
@@ -400,13 +400,13 @@ class GenotypePatternParser:
             - `::` matches unordered pair (A::B matches A|B or B|A)
             - `()` groups loci within a chromosome, `;` inside () separates loci
             - Omitted chromosomes default to wildcard matching (optional)
-        
+
         Args:
             pattern_str: The pattern string to parse.
-        
+
         Returns:
             A GenotypePattern object.
-        
+
         Raises:
             PatternParseError: If the pattern is invalid.
         """
@@ -454,14 +454,14 @@ class GenotypePatternParser:
         except PatternParseError:
             raise
         except Exception as e:
-            raise PatternParseError(f"Failed to parse pattern '{pattern_str}': {e}")
+            raise PatternParseError(f"Failed to parse pattern '{pattern_str}'") from e
 
     def _split_by_semicolon_respecting_parens(self, s: str) -> List[str]:
         """Split by semicolon, but ignore semicolons inside parentheses.
-        
+
         Args:
             s: String to split.
-        
+
         Returns:
             List of substrings split by semicolons outside parentheses.
         """
@@ -493,12 +493,12 @@ class GenotypePatternParser:
 
     def _parse_chromosome_pair(self, chr_str: str) -> Union[ChromosomePairPattern, Literal["WILDCARD_CHROMOSOME"]]:
         """Parse a single chromosome pair pattern string.
-        
+
         For genotypes:
         - `(...)` brackets represent a pair of haplotypes with locus pairs
         - Inside brackets, `;` separates locus pairs like A1::A2 or B1|B1
         - Outside brackets, `|` separates two haplotypes, `::` for unordered
-        
+
         Returns:
             ChromosomePairPattern or the string "WILDCARD_CHROMOSOME" for * patterns.
         """
@@ -557,22 +557,22 @@ class GenotypePatternParser:
 
     def _parse_bracketed_chromosome_pair(self, inner: str) -> ChromosomePairPattern:
         """Parse chromosome pair pattern inside parentheses.
-        
+
         Format: (A1::A2; B1|B1; ...)
-        
+
         Inside brackets, `;` separates different loci on the chromosome.
         Within each locus item, `|` or `::` separates the two homologous chromosomes:
         - `|` means ordered (maternal | paternal)
         - `::` means unordered (can match either way)
-        
+
         Each section becomes a locus pair in the HaplotypePath.
-        
+
         Args:
             inner: String inside the brackets.
-        
+
         Returns:
             ChromosomePairPattern with the two HaplotypePaths.
-        
+
         Raises:
             PatternParseError: If the pattern is invalid.
         """
@@ -621,10 +621,10 @@ class GenotypePatternParser:
 
     def _parse_haplotype_path(self, haplotype_str: str) -> HaplotypePath:
         """Parse a haplotype pattern string into HaplotypePath.
-        
+
         Args:
             haplotype_str: Pattern string like "A1/B1" or "A1/*"
-        
+
         Returns:
             HaplotypePath object.
         """
@@ -640,15 +640,15 @@ class GenotypePatternParser:
 
     def _parse_bracketed_haplotype_path(self, inner: str) -> HaplotypePath:
         """Parse haplotype pattern inside parentheses (for haploid genomes only).
-        
+
         For HaploidGenomePattern, brackets represent a single haplotype (one DNA strand)
         with multiple loci separated by semicolons.
         Format: A1; B1; C1
         Each part is a single allele pattern element.
-        
+
         Args:
             inner: String inside the brackets.
-        
+
         Returns:
             HaplotypePath representing all loci in this haplotype.
         """
@@ -664,13 +664,13 @@ class GenotypePatternParser:
 
     def parse_haplotype_pattern(self, pattern_str: str) -> HaplotypePath:
         """Parse a complete haplotype pattern.
-        
+
         Args:
             pattern_str: Pattern string for a single haplotype (e.g., "A1/B1; C1")
-        
+
         Returns:
             HaplotypePath object with all loci patterns combined.
-        
+
         Raises:
             PatternParseError: If the pattern is invalid.
         """
@@ -692,23 +692,23 @@ class GenotypePatternParser:
         except PatternParseError:
             raise
         except Exception as e:
-            raise PatternParseError(f"Failed to parse haplotype pattern '{pattern_str}': {e}")
+            raise PatternParseError(f"Failed to parse haplotype pattern '{pattern_str}'") from e
 
     def parse_haploid_genome_pattern(self, pattern_str: str) -> HaploidGenomePattern:
         """Parse a haploid genome pattern (single DNA strand of individual).
-        
+
         For haploid genomes:
         - `;` at top level separates different chromosomes
         - `()` brackets represent a single haplotype (one DNA strand)
         - Inside brackets, `;` separates different loci on that strand
         - `/` is not used inside brackets for haploid (it's only for diploid)
-        
+
         Args:
             pattern_str: Pattern string (e.g., "A1/B1; C1" or "(A1; B1); C1")
-        
+
         Returns:
             HaploidGenomePattern object.
-        
+
         Raises:
             PatternParseError: If the pattern is invalid.
         """
@@ -757,14 +757,14 @@ class GenotypePatternParser:
         except PatternParseError:
             raise
         except Exception as e:
-            raise PatternParseError(f"Failed to parse haploid genome pattern '{pattern_str}': {e}")
+            raise PatternParseError(f"Failed to parse haploid genome pattern '{pattern_str}'") from e
 
     def _parse_allele_element(self, allele_str: str) -> PatternElement:
         """Parse a single allele pattern element.
-        
+
         Returns:
             An appropriate PatternElement subclass.
-        
+
         Raises:
             PatternParseError: If the pattern is invalid.
         """
@@ -805,10 +805,10 @@ class GenotypePatternParser:
 
     def get_allowed_alleles(self, pattern_element: PatternElement) -> List[str]:
         """Get all allowed allele names for a pattern element.
-        
+
         Args:
             pattern_element: The PatternElement to analyze.
-        
+
         Returns:
             List of allowed allele names.
         """
