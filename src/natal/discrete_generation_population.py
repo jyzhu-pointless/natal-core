@@ -27,9 +27,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal.kernels.simulation_kernels as sk
-from natal.base_population import BasePopulation, Genotype, Sex, Species
+from natal.base_population import BasePopulation
+from natal.genetic_entities import Genotype
+from natal.genetic_structures import Species
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState
+from natal.type_def import Sex
 
 if TYPE_CHECKING:
     from natal.index_registry import IndexRegistry

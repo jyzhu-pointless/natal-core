@@ -45,7 +45,6 @@ from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
-from natal.type_def import *
 
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
@@ -95,7 +94,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self,
         species: Species,
         name: str = "Population",
-        hooks: HookRegistrationMap = {},
+        hooks: Optional[HookRegistrationMap] = None,
     ):
         """Initialize the base population.
 
@@ -161,8 +160,9 @@ class BasePopulation(ABC, Generic[T_State]):
         # 注册 hooks
         # 注意：如果 hook 带有 @hook 元数据，此时可能无法编译（IndexRegistry未完全设置）
         # 普通函数可以直接注册，带 @hook 的函数会被添加到 _pending_hooks 延迟编译
-        if hooks:
-            for event_name, hooks_list in hooks.items():
+        hooks_map: HookRegistrationMap = hooks or {}
+        if hooks_map:
+            for event_name, hooks_list in hooks_map.items():
                 for hook_info in hooks_list:
                     func, hook_name, hook_id = hook_info
 
@@ -177,7 +177,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _finalize_hooks(self) -> None:
         """Compile pending hooks after subclass initialization is complete.
-        
+
         Called by subclasses after their __init__ completes. This allows hooks
         with @hook metadata to be compiled with the now-initialized IndexRegistry.
         """
@@ -192,13 +192,13 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _initialize_registry(self) -> None:
         """Template method: Initialize registry and register all genotypes.
-        
+
         This method uses the Template Method Pattern to orchestrate
         initialization in a consistent sequence:
           1. Call _create_registry() to get a registry instance
           2. Register all genotypes from _get_genotypes()
           3. Attempt to get haplogenotypes and register them (if available)
-        
+
         Subclasses customize behavior via _create_registry() and _get_genotypes().
         This method should be called once during subclass __init__,
         after super().__init__() but before other initialization.
@@ -351,7 +351,7 @@ class BasePopulation(ABC, Generic[T_State]):
         clear_history_on_start: bool
     ) -> None:
         """Process and append history array returned from simulation kernels.
-        
+
         Handles duplication checking (overlapping start/end ticks) and enforces limit.
         """
         if history_new is None or history_new.shape[0] == 0:
@@ -510,24 +510,24 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def apply_preset(self, preset: GeneticPreset) -> None:
         """Apply a genetic preset to this population.
-        
+
         This is the preferred API for registering presets. The preset's
         gamete modifiers, zygote modifiers, and fitness effects are
         registered in the correct order.
-        
+
         Args:
             preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
-        
+
         Example:
             >>> from natal.genetic_presets import HomingDrive
             >>> drive = HomingDrive(
             ...     name="MyDrive",
-            ...     drive_allele="Drive", 
+            ...     drive_allele="Drive",
             ...     target_allele="WT",
             ...     drive_conversion_rate=0.95
             ... )
             >>> population.apply_preset(drive)
-        
+
         See Also:
             :class:`natal.genetic_presets.GeneticPreset` - Base class for creating custom presets
             :class:`natal.genetic_presets.HomingDrive` - Built-in gene drive preset
@@ -538,15 +538,15 @@ class BasePopulation(ABC, Generic[T_State]):
     @classmethod
     def builder(cls, species: Species) -> Any:
         """Create a builder for this population type.
-        
+
         This is the recommended way to construct populations with presets.
-        
+
         Args:
             species: Genetic architecture for the population.
-        
+
         Returns:
             A builder instance for this population type.
-        
+
         Example:
             >>> pop = (AgeStructuredPopulation.builder(species)
             ...     .set_age_structure(n_ages=10)
@@ -561,7 +561,7 @@ class BasePopulation(ABC, Generic[T_State]):
         This prepares precomputed maps such as ``gametes_to_zygote_map`` and
         ``genotype_to_gametes_map`` and wraps high-level modifiers so they can
         be applied at tensor-level during simulation steps.
-        
+
         Note:
             Ensures registry is initialized before proceeding.
         """
@@ -629,8 +629,8 @@ class BasePopulation(ABC, Generic[T_State]):
         # Normalize and validate input
         try:
             seq = list(labels)
-        except Exception:
-            raise TypeError("labels must be a sequence of strings")
+        except Exception as e:
+            raise TypeError("labels must be a sequence of strings") from e
 
         # Ensure provided labels are unique
         if len(set(seq)) != len(seq):
@@ -823,13 +823,13 @@ class BasePopulation(ABC, Generic[T_State]):
     def finish_simulation(self) -> None:
         """
         结束模拟，触发 'finish' 事件并锁定种群。
-        
+
         此方法可以被 hooks 调用以提前结束模拟。
         调用后，种群将无法再运行 step()/run_tick()/run()。
-        
+
         Raises:
             RuntimeError: 如果种群已经 finished
-        
+
         Example:
             >>> def check_extinction(pop):
             ...     if pop.get_total_count() == 0:
@@ -865,7 +865,7 @@ class BasePopulation(ABC, Generic[T_State]):
     def compute_allele_frequencies(self) -> Dict[str, float]:
         """
         计算种群中所有等位基因的频率（按位点归一化）。
-        
+
         Returns:
             Dict[str, float]: 映射 {allele_name: frequency}。
             频率是相对于该位点总等位基因数的比例 (0.0 - 1.0)。
@@ -938,12 +938,12 @@ class BasePopulation(ABC, Generic[T_State]):
         - numba hook -> njit_fn
 
         普通 Python 函数仍可直接注册到传统 `_hooks`（兼容路径）。
-        
+
         Args:
             event_name: 事件名称（必须在 ALLOWED_EVENTS 中）
             func: 回调函数，支持以下形式：
                   - 普通函数: func(population)
-                  - @hook 装饰的声明式函数: Returns [Op.scale(...), ...] 
+                  - @hook 装饰的声明式函数: Returns [Op.scale(...), ...]
                   - @hook(selectors={...}) 装饰的选择器函数
             hook_id: Hook 的数值优先级（可选，自动分配）
                      较小的 ID 先执行
@@ -952,20 +952,20 @@ class BasePopulation(ABC, Generic[T_State]):
             deme_selector: 可选的子种群选择器。
                 - None: 保持 panmictic Default行为（不显式覆写 selector）
                 - 非 None: 传给 hook 编译注册流程用于 spatial 过滤
-        
+
         Raises:
             ValueError: 如果事件不存在或 hook_id 已被使用
-        
+
         Example:
             >>> # 普通函数（向后兼容）
             >>> pop.set_hook('first', lambda p: print(f'Step {p.tick}'))
-            >>> 
+            >>>
             >>> # @hook 装饰的声明式函数（自动编译）
             >>> @hook()
             >>> def reduce_juveniles():
             ...     return [Op.scale(genotypes='AA', ages=[0, 1], factor=0.9)]
             >>> pop.set_hook('early', reduce_juveniles)
-            >>> 
+            >>>
             >>> # @hook 装饰的选择器函数（自动编译）
             >>> @hook(selectors={'target': 'AA'})
             >>> def release(pop, target):
@@ -1014,11 +1014,11 @@ class BasePopulation(ABC, Generic[T_State]):
         1. CSR操作（Numba快速路径）
         2. njit_fn hooks（用户自定义Numba函数）
         3. py_wrapper hooks（Python包装函数）
-        
+
         Args:
             event_name: 要触发的事件名称
             deme_id: 子种群 ID（可选，Default为 0）
-        
+
         Returns:
             int: RESULT_CONTINUE (0) 继续运行，RESULT_STOP (1) 请求停止
 
@@ -1027,7 +1027,7 @@ class BasePopulation(ABC, Generic[T_State]):
             - 若执行器未构建，降级到传统 `_hooks`（仅 Python 回调）
             - 在加速 run() 中，核心事件主要由 kernel 执行；trigger_event
               主要用于显式事件触发（如 finish）与兼容路径
-        
+
         Example:
             >>> result = pop.trigger_event('first')  # 执行所有 'first' hooks
             >>> if result == RESULT_STOP:
@@ -1053,10 +1053,10 @@ class BasePopulation(ABC, Generic[T_State]):
     def get_hooks(self, event_name: str) -> List[HookEntry]:
         """
         获取特定事件的所有已注册 hooks。
-        
+
         Args:
             event_name: 事件名称
-        
+
         Returns:
             [(hook_id, hook_name, hook_func), ...] 列表
         """
@@ -1065,11 +1065,11 @@ class BasePopulation(ABC, Generic[T_State]):
     def remove_hook(self, event_name: str, hook_id: int) -> bool:
         """
         删除指定事件的指定 hook。
-        
+
         Args:
             event_name: 事件名称
             hook_id: Hook 的 ID
-        
+
         Returns:
             删除成功Returns True，否则Returns False
         """
@@ -1087,10 +1087,10 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _register_compiled_hook(self, desc: Any) -> None:
         """Register a compiled hook descriptor.
-        
+
         Args:
             desc: CompiledHookDescriptor from hook_dsl module.
-        
+
         Note:
             To avoid maintaining two divergent hook sources, this method only
             mirrors compiled hooks into traditional ``_hooks`` when a real
@@ -1130,10 +1130,10 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def get_compiled_hooks(self, event: Optional[str] = None) -> List[Any]:
         """Get compiled hook descriptors, optionally filtered by event.
-        
+
         Args:
             event: Optional event name to filter by.
-        
+
         Returns:
             List of CompiledHookDescriptor sorted by priority.
         """
@@ -1150,18 +1150,18 @@ class BasePopulation(ABC, Generic[T_State]):
         name: str = "declarative_hook"
     ) -> Any:
         """Register a declarative hook from a list of operations.
-        
+
         This is an alternative to using the @hook decorator.
-        
+
         Args:
             event: Event name ('first', 'early', 'late', 'finish')
             ops: List of HookOp operations (from Op.scale, Op.add, etc.)
             priority: Execution priority (lower = earlier)
             name: Hook name for debugging
-        
+
         Returns:
             CompiledHookDescriptor: The compiled descriptor
-        
+
         Example:
             >>> from natal.hook_dsl import Op
             >>> pop.register_declarative_hook(
@@ -1186,10 +1186,10 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _build_hook_program(self) -> HookProgram:
         """Build HookProgram from compiled hooks.
-        
+
         This packs all compiled hooks into a Numba-compatible jitclass
         for efficient execution during simulation.
-        
+
         Returns:
             HookProgram: Compiled hook program data
         """
@@ -1312,12 +1312,12 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _build_hook_executor(self):
         """Build HookExecutor from compiled hooks and HookProgram.
-        
+
         HookExecutor is a Python-layer coordinator that manages:
         1. CSR operations via execute_csr_event_program()
         2. njit_fn hooks (user Numba functions)
         3. py_wrapper hooks (Python wrappers for selector mode)
-        
+
         Returns:
             HookExecutor: Executor instance, or None if no hooks compiled
         """
@@ -1343,7 +1343,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _create_empty_hook_program(self):
         """Create an empty HookProgram for non-CSR operations.
-        
+
         Used when there are no declarative Op.* operations,
         but there are njit_fn or py_wrapper hooks.
         """
@@ -1378,14 +1378,14 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def get_compiled_event_hooks(self) -> CompiledEventHooks:
         """Get compiled hooks for use with generated kernel wrappers.
-        
+
         This method collects all registered hooks and compiles them into
         Numba-friendly combined functions, one per event.
-        
+
         Returns:
             CompiledEventHooks: Container with combined @njit hooks per event.
                                 Access via .first, .early, .late, .finish
-                                
+
         Example:
             >>> hooks = pop.get_compiled_event_hooks()
             >>> hooks.run_fn is not None

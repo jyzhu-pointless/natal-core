@@ -29,10 +29,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal.kernels.simulation_kernels as sk
-from natal.base_population import BasePopulation, Genotype, Sex, Species
+from natal.base_population import BasePopulation, HookRegistrationMap
+from natal.genetic_entities import Genotype
+from natal.genetic_structures import Species
 from natal.index_registry import IndexRegistry
 from natal.population_config import PopulationConfig
 from natal.population_state import PopulationState
+from natal.type_def import Sex
 
 if TYPE_CHECKING:
     from natal.population_builder import AgeStructuredPopulationBuilder
@@ -64,7 +67,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         name: Optional[str] = None,
         initial_individual_count: Optional[Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
         initial_sperm_storage: Optional[Dict[Union[Genotype, str], Dict[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
-        hooks: Dict[str, List[Tuple[HookCallback, Optional[str], Optional[int]]]] = {},
+        hooks: Optional[HookRegistrationMap] = None,
     ):
         """Initialize an age-structured population instance using a PopulationConfig.
 
@@ -80,7 +83,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Example:
             >>> pop_config = PopulationConfigBuilder.build(species, ...)
             >>> pop = AgeStructuredPopulation(
-            ...     species, 
+            ...     species,
             ...     pop_config,
             ...     name="MyPop",
             ...     initial_individual_count={...}
@@ -89,7 +92,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if name is None:
             name = "AgeStructuredPop"
 
-        super().__init__(species, name, hooks=hooks)
+        hooks_map: HookRegistrationMap = hooks or {}
+        super().__init__(species, name, hooks=hooks_map)
 
         config_hook_slot = int(getattr(population_config, "hook_slot", 0))
         if config_hook_slot <= 0:
@@ -175,7 +179,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         distribution: Mapping[str, Mapping[Union[Genotype, str], object]]
     ) -> None:
         """Distribute initial population from a specification dictionary.
-        
+
         Args:
             distribution: Format {sex: {genotype: age_counts}}
                 where age_counts can be a list or dict of age -> count.
@@ -448,7 +452,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def export_config(self) -> 'PopulationConfig':
         """Export population configuration to Config jitclass.
-        
+
         Returns:
             PopulationConfig: A copy of the current population configuration.
         """
@@ -456,7 +460,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def import_config(self, config: 'PopulationConfig') -> None:
         """导入配置到种群。
-        
+
         Args:
             config: Config jitclass instance
         """
@@ -466,7 +470,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def create_history_snapshot(self) -> None:
         """Record current state to history records.
-        
+
         Saves the current tick and a flattened copy of state to _history.
         """
         flattened = self._state_nn.flatten_all()
@@ -474,11 +478,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def get_history(self) -> np.ndarray:
         """获取历史记录为 2D numpy 数组。
-        
+
         Returns:
             np.ndarray: 形状 (n_snapshots, 1 + n_sexes*n_ages*n_genotypes + n_ages*n_genotypes^2)
                 的 float64 数组，每行为一个快照的展平状态。
-        
+
         Raises:
             ValueError: 如果没有历史记录。
         """
@@ -495,7 +499,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
         """Export population state as a flattened array.
-        
+
         Returns:
             Tuple[NDArray, Optional[NDArray]]: (state_flat, history).
                 state_flat: [n_tick, ind_count.ravel(), sperm_storage.ravel()]
@@ -508,7 +512,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def import_state(self, state: Union['PopulationState', NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]],
                      history: Optional[np.ndarray] = None) -> None:
         """Import state and optional history records.
-        
+
         Args:
             state: Flattened array, PopulationState object, or data dictionary.
             history: Optional history 2D array.
@@ -554,10 +558,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def get_history_as_objects(self, indices: Optional[List[int]] = None) -> List[Tuple[int, PopulationState]]:
         """Convert selected flattened snapshots back to PopulationState objects.
-        
+
         Args:
             indices: List of snapshot indices to convert. If None, converts all.
-        
+
         Returns:
             List[Tuple[int, PopulationState]]: List of (tick, state) tuples.
 
@@ -585,10 +589,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def restore_checkpoint(self, tick: int) -> None:
         """Restore the population to a specific history tick.
-        
+
         Args:
             tick: The target tick number.
-        
+
         Raises:
             ValueError: If no record is found for the specified tick.
         """
@@ -635,7 +639,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def _get_kernel_config(self) -> Tuple[Any, ...]:
         """Build configuration tuple for simulation kernels.
-        
+
         Returns:
             tuple: A Numba-compatible configuration tuple.
         """
@@ -649,16 +653,16 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         clear_history_on_start: bool = False
     ) -> 'AgeStructuredPopulation':
         """Run multi-step evolution using optimized simulation kernels.
-        
+
         Args:
             n_steps: Number of steps to evolve.
             record_every: Interval for recording snapshots (0 to disable).
             finish: Whether to mark the population as finished after the run.
             clear_history_on_start: Whether to clear existing history before starting.
-        
+
         Returns:
             AgeStructuredPopulation: Self for chaining.
-        
+
         Raises:
             RuntimeError: 如果种群已 finish，无法继续运行
         """
@@ -713,10 +717,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def run_tick(self) -> 'AgeStructuredPopulation':
         """
         Execute a single tick of evolution.
-        
+
         Returns:
             AgeStructuredPopulation: Self for chaining.
-        
+
         Raises:
             RuntimeError: 如果种群已 finish，无法继续运行
         """
