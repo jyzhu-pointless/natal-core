@@ -215,7 +215,7 @@ class Gene(GeneticEntity[Locus]):
     def __init__(
         self, 
         name: str,
-        locus: Locus,
+        locus: Optional[Locus] = None,
         **kwargs: Any
     ):
         # Prevent re-initialization of cached instances
@@ -266,8 +266,8 @@ class Haplotype(GeneticEntity[Chromosome]):
 
     def __init__(
         self,
-        chromosome: Chromosome,
-        genes: List[Gene],
+        chromosome: Optional[Chromosome] = None,
+        genes: Optional[List[Gene]] = None,
         **kwargs: Any
     ):
         # Prevent re-initialization of cached instances
@@ -352,7 +352,7 @@ class HaploidGenotype(GeneticEntity[Species]):
     """
     structure_type = Species  # HaploidGenotype must be bound to a Species
 
-    def __new__(cls, species: Optional[Species] = None, haplotypes: Optional[List[Haplotype]] = None, **kwargs) -> "HaploidGenotype":
+    def __new__(cls, species: Optional[Species] = None, haplotypes: Optional[List[Haplotype]] = None, **kwargs: Any) -> "HaploidGenotype":
         # Generate name from haplotypes for caching (ignore any passed 'name' parameter)
         kwargs.pop('name', None)  # Remove 'name' if present to avoid conflicts
         if haplotypes:
@@ -363,9 +363,9 @@ class HaploidGenotype(GeneticEntity[Species]):
 
     def __init__(
         self,
-        species: Species,
-        haplotypes: List[Haplotype],
-        **kwargs
+        species: Optional[Species] = None,
+        haplotypes: Optional[List[Haplotype]] = None,
+        **kwargs: Any
     ):
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
