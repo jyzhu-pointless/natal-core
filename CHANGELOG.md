@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.3.28.b
+add tests
+
+## 2026.3.28
+`Species.from_dict` (and any repeated child-structure creation) crashed with `ValueError: Child structure '…' already exists` on a second call with the same name, even though `GeneticStructure.__new__` and `_single_register` already silently return cached instances. The fix makes the entire singleton chain consistent.
+
+### Changes
+
+- **`ChildStructureRegistry.add`** — return `_storage[name]` instead of raising when the name already exists. `add` is now idempotent, matching `__new__`/`_single_register` semantics.
+
+```python
+# Before: second call raises
+sp1 = Species.from_dict("Mosquito", {"chr1": {"loc": ["WT", "Dr"]}})
+sp2 = Species.from_dict("Mosquito", {"chr1": {"loc": ["WT", "Dr"]}})
+# → ValueError: Child structure 'chr1' already exists.
+
+# After: same cached instance returned
+assert sp1 is sp2  # ✓
+```
+
+- **`tests/conftest.py`** — removed all cache-clearing fixtures (`_GLOBAL_STRUCTURE_CACHE`, `GeneticEntity._instance_cache`, `Genotype._cache`). Clearing entity caches while live `Locus._entities` sets retained old references caused `EntityRegistry` (identity-based deduplication) to register fresh objects as duplicates, producing spurious extra alleles. The singleton chain is now coherent end-to-end without manual clearing.
+
+- **`tests/test_genetic_structures.py`** — two regression tests covering idempotent `from_dict` (same instance returned) and no chromosome duplication on repeated calls.
+
+- **`.gitignore`** — removed `tests/` and `test_*` entries that were suppressing test file tracking.
+
 ## 2026.3.27
 - 提升数值稳定性：修复了连续化抽样中的数值稳定性问题，当 $n \le 1$ 时退化为确定性
 - 初步重构文档和 docstring

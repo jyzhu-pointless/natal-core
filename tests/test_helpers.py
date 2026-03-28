@@ -1,6 +1,6 @@
 """Unit tests for natal.helpers."""
 
-import pytest
+import pytest  # type: ignore
 
 from natal.helpers import validate_name, resolve_sex_label
 from natal.type_def import Sex
@@ -90,8 +90,8 @@ class TestResolveSexLabel:
     # --- invalid types ---
     def test_float_raises(self):
         with pytest.raises(TypeError, match="Invalid sex label type"):
-            resolve_sex_label(3.14)
+            resolve_sex_label(3.14)  # type: ignore
 
     def test_none_raises(self):
         with pytest.raises(TypeError):
-            resolve_sex_label(None)
+            resolve_sex_label(None)  # type: ignore

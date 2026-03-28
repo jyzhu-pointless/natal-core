@@ -1,6 +1,6 @@
 """Unit tests for natal.genetic_entities."""
 
-import pytest
+import pytest  # type: ignore
 from natal.genetic_entities import Gene, Haplotype, HaploidGenotype, Genotype
 import natal as nt
 
@@ -115,6 +115,7 @@ class TestHaplotype:
         )
         chrom = sp.chromosomes[0]
         loc_a = sp.get_locus("locA")
+        assert loc_a is not None
         a1 = Gene("A1", locus=loc_a)
         with pytest.raises(ValueError, match="Incomplete haplotype"):
             Haplotype(chromosome=chrom, genes=[a1])
@@ -155,7 +156,9 @@ class TestHaploidGenotype:
             structure={"chr1": {"loc": ["WT"]}, "chr2": {"loc2": ["X"]}},
         )
         chrom1 = sp.get_chromosome("chr1")
+        assert chrom1 is not None
         loc1 = sp.get_locus("loc")
+        assert loc1 is not None
         wt = Gene("WT", locus=loc1)
         haplo1 = Haplotype(chromosome=chrom1, genes=[wt])
         with pytest.raises(ValueError, match="Incomplete haploid genotype"):

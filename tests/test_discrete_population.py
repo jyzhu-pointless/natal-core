@@ -1,6 +1,6 @@
 """Unit tests for DiscreteGenerationPopulation."""
 
-import pytest
+import pytest  # type: ignore
 import numpy as np
 import natal as nt
 

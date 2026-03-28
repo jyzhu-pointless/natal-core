@@ -1,6 +1,6 @@
 """Unit tests for natal.genetic_structures."""
 
-import pytest
+import pytest  # type: ignore
 import natal as nt
 from natal.genetic_structures import SexChromosomeType
 

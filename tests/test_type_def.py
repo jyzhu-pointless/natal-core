@@ -1,6 +1,6 @@
 """Unit tests for natal.type_def."""
 
-import pytest
+import pytest  # type: ignore
 import numpy as np
 
 from natal.type_def import (

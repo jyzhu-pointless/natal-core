@@ -1,6 +1,6 @@
 """Unit tests for natal.index_registry.IndexRegistry."""
 
-import pytest
+import pytest  # type: ignore
 from natal.index_registry import IndexRegistry
 
 
