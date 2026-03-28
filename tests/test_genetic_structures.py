@@ -122,6 +122,35 @@ class TestSpeciesFromDict:
         )
         assert len(sp.chromosomes) == 3
 
+    def test_idempotent_same_name_returns_same_instance(self):
+        """Calling from_dict twice with the same name must return the same object.
+
+        Previously ChildStructureRegistry.add raised ValueError when an
+        identically-named child was added a second time.  The API now silently
+        returns the cached instance so repeated construction is safe.
+        """
+        sp1 = nt.Species.from_dict(
+            name="S_idem",
+            structure={"chr1": {"loc": ["WT", "Dr"]}},
+        )
+        sp2 = nt.Species.from_dict(
+            name="S_idem",
+            structure={"chr1": {"loc": ["WT", "Dr"]}},
+        )
+        assert sp1 is sp2
+
+    def test_idempotent_chromosome_registry_unchanged(self):
+        """Repeated from_dict calls must not duplicate chromosomes."""
+        sp = nt.Species.from_dict(
+            name="S_idem_chr",
+            structure={"chr1": ["locA"]},
+        )
+        nt.Species.from_dict(
+            name="S_idem_chr",
+            structure={"chr1": ["locA"]},
+        )
+        assert len(sp.chromosomes) == 1
+
 
 class TestSpeciesQueries:
     def test_get_locus_found(self, simple_species):

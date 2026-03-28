@@ -2,8 +2,6 @@
 
 import pytest
 import natal as nt
-import natal.genetic_structures as _gs
-import natal.genetic_entities as _ge
 
 
 @pytest.fixture(autouse=True)
@@ -17,29 +15,13 @@ def disable_numba():
     yield
 
 
-@pytest.fixture(autouse=True)
-def clear_genetic_caches():
-    """Clear all genetic structure and entity caches before each test.
-
-    Species and Chromosome instances are globally cached by name. Without
-    clearing these caches between tests, a second attempt to create a
-    Species with the same name returns the *same* object, and subsequent
-    ``add_chromosome`` calls fail because the chromosome is already
-    registered. Clearing the caches gives each test a clean slate.
-    """
-    _gs._GLOBAL_STRUCTURE_CACHE.clear()
-    _ge.GeneticEntity._instance_cache.clear()
-    _ge.Genotype._cache.clear()
-    yield
-    # Clean up after the test as well so the next test starts fresh.
-    _gs._GLOBAL_STRUCTURE_CACHE.clear()
-    _ge.GeneticEntity._instance_cache.clear()
-    _ge.Genotype._cache.clear()
-
-
 @pytest.fixture
 def simple_species():
     """Return a minimal Species with one autosome, one locus and three alleles.
+
+    The genetic system is fully singleton-scoped: creating a Species with the
+    same name always returns the same cached object.  This fixture relies on
+    that guarantee, so no cache clearing between tests is required.
 
     Chromosome: chr1
     Locus: loc
