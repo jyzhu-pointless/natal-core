@@ -62,7 +62,6 @@ class GeneticEntity(Generic[S]):
         >>> gene2 = Gene("A1", locus=locus_A)  # ✅ Returns same instance
         >>> assert gene is gene2
     """
-    structure_type: type = GeneticStructure  # Override in subclass
     structure_type: type[GeneticStructure] = GeneticStructure  # Override in subclass
     # Cache: {(species_id, structure_type, structure_name, entity_class, entity_name): entity_instance}
     _instance_cache: Dict[Tuple[int, type, str, type, str], object] = {}
