@@ -1035,7 +1035,7 @@ class Locus(GeneticStructure['Gene']):
 
         Example:
             >>> locus = Locus.with_alleles("A", ["A1", "A2", "A3"])
-            >>> locus.alleles  # â†’ [Gene("A1"), Gene("A2"), Gene("A3")]
+            >>> locus.alleles  # -> [Gene("A1"), Gene("A2"), Gene("A3")]
         """
         return cls(name, position=position).add_alleles(alleles_or_allele_names)
 
@@ -1492,7 +1492,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                     of integer indices.
 
             Returns:
-                A single float for single‑locus or pair requests, otherwise a NumPy
+                A single float for single-locus or pair requests, otherwise a NumPy
                 array of rates.
 
             Raises:
@@ -1858,16 +1858,16 @@ class Species(GeneticStructure['HaploidGenome']):
 
         Rules:
         - XY system: X can come from either parent, Y is paternal only
-          â†’ Valid combinations: (X, X), (X, Y)
+                    -> Valid combinations: (X, X), (X, Y)
         - ZW system: Z can come from either parent, W is maternal only
-          â†’ Valid combinations: (Z, Z), (W, Z)
+                    -> Valid combinations: (Z, Z), (W, Z)
 
         Returns:
             List of valid (maternal_chrom, paternal_chrom) combinations
         """
         valid_combos: List[Tuple[Chromosome, Chromosome]] = []
 
-        # æŒ‰æ€§åˆ«å†³å®šç³»ç»Ÿåˆ†ç»„æŸ“è‰²ä½“
+        # Group chromosomes by sex determination system.
         system_chroms: Dict[str, Dict[str, Chromosome]] = {}
 
         for chrom in self.chromosomes:
@@ -1878,7 +1878,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 continue
             if system not in system_chroms:
                 system_chroms[system] = {}
-            # ç”¨æ€§æŸ“è‰²ä½“ç±»åž‹åç§°ä½œä¸º key
+            # Use sex chromosome type name as the key.
             system_chroms[system][chrom.sex_type.value] = chrom
 
         for system, chroms in system_chroms.items():
@@ -2618,7 +2618,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 pat_locus_combos.append(pat_alleles)
             pat_hap_combos: List[AlleleTuple] = list(iterproduct(*pat_locus_combos))
 
-            # All combinations for this chromosome (maternal Ã— paternal)
+            # All combinations for this chromosome (maternal x paternal)
             chr_combos: List[GenotypeChromosomeCombo] = [
                 (mat_hap_combo, pat_hap_combo)
                 for mat_hap_combo in mat_hap_combos
@@ -2854,24 +2854,24 @@ class Species(GeneticStructure['HaploidGenome']):
         return len(self.chromosomes)
 
     # ========================================================================
-    # åŸºå› åž‹æžšä¸¾å’Œè®¡æ•°
+    # Genotype enumeration and counting
     # ========================================================================
 
     def _get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]:
         """
-        èŽ·å–æ€§æŸ“è‰²ä½“ç»„é…ç½®ã€‚
+        Get sex chromosome group configuration.
 
-        ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®çš„ _sex_chromosome_groups å±žæ€§ï¼Œ
-        å¦åˆ™ä»Ž Chromosome.sex_type è‡ªåŠ¨æŽ¨æ–­ã€‚
+        Prefer explicit ``_sex_chromosome_groups`` when provided;
+        otherwise infer groups from ``Chromosome.sex_type``.
 
         Returns:
-            æ€§æŸ“è‰²ä½“ç»„å­—å…¸ï¼Œæˆ– Noneï¼ˆå¦‚æžœæ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼‰
+            Sex chromosome group mapping, or ``None`` when absent.
         """
-        # ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®
+        # Prefer explicit user-defined configuration first.
         if hasattr(self, '_sex_chromosome_groups') and self._sex_chromosome_groups:
             return self._sex_chromosome_groups
 
-        # è‡ªåŠ¨æŽ¨æ–­
+        # Fall back to automatic inference from chromosome metadata.
         groups = self._build_sex_chromosome_groups()
         return groups if groups else None
 
@@ -2881,28 +2881,28 @@ class Species(GeneticStructure['HaploidGenome']):
 
     def _get_valid_sex_genotypes(self) -> Optional[List[Tuple[Chromosome, Chromosome]]]:
         """
-        èŽ·å–æœ‰æ•ˆçš„æ€§æŸ“è‰²ä½“åŸºå› åž‹ç»„åˆã€‚
+        Get valid sex chromosome genotype combinations.
 
-        ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®çš„ _valid_sex_genotypes å±žæ€§ï¼Œ
-        å¦åˆ™ä»Ž Chromosome.sex_type è‡ªåŠ¨æŽ¨æ–­ã€‚
+        Prefer explicit ``_valid_sex_genotypes`` when provided;
+        otherwise infer combinations from ``Chromosome.sex_type``.
 
         Returns:
-            æœ‰æ•ˆçš„ (maternal_chrom, paternal_chrom) ç»„åˆåˆ—è¡¨ï¼Œæˆ– None
+            A list of valid ``(maternal_chrom, paternal_chrom)`` pairs, or ``None``.
         """
-        # ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®
+        # Prefer explicit user-defined configuration first.
         if hasattr(self, '_valid_sex_genotypes') and self._valid_sex_genotypes:
             return self._valid_sex_genotypes
 
-        # è‡ªåŠ¨æŽ¨æ–­
+        # Fall back to automatic inference from chromosome metadata.
         valid = self._build_valid_sex_genotypes()
         return valid if valid else None
 
     def count_alleles(self) -> int:
         """
-        è®¡ç®—æ‰€æœ‰ä½ç‚¹çš„ç­‰ä½åŸºå› æ€»æ•°ã€‚
+        Count the total number of alleles across all loci.
 
         Returns:
-            ç­‰ä½åŸºå› æ€»æ•°
+            Total allele count.
         """
         total = 0
         for chrom in self.chromosomes:
@@ -2920,10 +2920,10 @@ class Species(GeneticStructure['HaploidGenome']):
         Returns:
             Total number of possible haploid genomes
         """
-        # èŽ·å–æ€§æŸ“è‰²ä½“é…ç½®ï¼ˆä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®ï¼Œå¦åˆ™è‡ªåŠ¨æŽ¨æ–­ï¼‰
+        # Resolve sex chromosome grouping (explicit config first, otherwise inferred).
         sex_chr_groups = self._get_sex_chromosome_groups()
 
-        # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
+        # Collect all chromosomes that belong to any sex chromosome group.
         sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
@@ -2931,17 +2931,17 @@ class Species(GeneticStructure['HaploidGenome']):
 
         total = 1
 
-        # å¸¸æŸ“è‰²ä½“çš„ç­‰ä½åŸºå› æ•°ä¹˜ç§¯
+        # Multiply allele counts across autosomal loci.
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
-                continue  # è·³è¿‡æ€§æŸ“è‰²ä½“ï¼ŒåŽé¢å•ç‹¬å¤„ç†
+                continue  # Handle sex chromosomes separately below.
             for locus in chrom.loci:
                 n_alleles = len(locus.alleles)
                 if n_alleles > 0:
                     total *= n_alleles
 
-        # å¯¹äºŽæ€§æŸ“è‰²ä½“ç»„ï¼Œæ¯ä¸ªç»„å¯ä»¥é€‰æ‹©ç»„å†…ä»»ä¸€æŸ“è‰²ä½“
-        # æ¯ä¸ªæŸ“è‰²ä½“çš„ haplotype æ•°é‡ = å…¶ loci ç­‰ä½åŸºå› æ•°çš„ä¹˜ç§¯
+        # For each sex chromosome group, select one chromosome from the group.
+        # A chromosome's haplotype count is the product of allele counts at its loci.
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 group_total = 0
@@ -2969,17 +2969,16 @@ class Species(GeneticStructure['HaploidGenome']):
         Returns:
             Total number of possible genotypes
         """
-        # ä½¿ç”¨è¾…åŠ©æ–¹æ³•èŽ·å–é…ç½®ï¼ˆä¼˜å…ˆæ˜¾å¼è®¾ç½®ï¼Œå¦åˆ™è‡ªåŠ¨æŽ¨æ–­ï¼‰
+        # Resolve sex-system config (explicit settings first, otherwise inferred).
         sex_chr_groups = self._get_sex_chromosome_groups()
         valid_sex_gts = self._get_valid_sex_genotypes()
 
         if not sex_chr_groups:
-            # æ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼Œç®€å•çš„ n^2
+            # No sex chromosomes: diploid count is haploid_count^2.
             n_haploid = self.count_haploid_genotypes()
             return n_haploid * n_haploid
 
-        # æœ‰æ€§æŸ“è‰²ä½“æ—¶éœ€è¦ç‰¹æ®Šå¤„ç†
-        # å…ˆè®¡ç®—å¸¸æŸ“è‰²ä½“éƒ¨åˆ†çš„ç»„åˆæ•°
+        # With sex chromosomes, count autosomal and sex-system parts separately.
         sex_chroms: Set[Chromosome] = set()
         for group_chroms in sex_chr_groups.values():
             sex_chroms.update(group_chroms)
@@ -2993,10 +2992,10 @@ class Species(GeneticStructure['HaploidGenome']):
                 if n_alleles > 0:
                     autosome_haploid_count *= n_alleles
 
-        # å¸¸æŸ“è‰²ä½“çš„åŸºå› åž‹æ•° = autosome_haploid_count^2
+        # Autosomal diploid count = autosomal_haploid_count^2.
         autosome_genotype_count = autosome_haploid_count * autosome_haploid_count
 
-        # è®¡ç®—æ¯ä¸ªæŸ“è‰²ä½“çš„ haplotype æ•°
+        # Count haplotypes produced by a single chromosome.
         def count_chrom_haplotypes(chrom: Chromosome) -> int:
             count = 1
             for locus in chrom.loci:
@@ -3005,22 +3004,22 @@ class Species(GeneticStructure['HaploidGenome']):
                     count *= n_alleles
             return count
 
-        # å¯¹äºŽæ€§æŸ“è‰²ä½“ç»„ï¼Œè®¡ç®—æœ‰æ•ˆç»„åˆæ•°
+        # Count sex chromosome genotype combinations.
         if valid_sex_gts:
-            # ä½¿ç”¨æ˜¾å¼å®šä¹‰çš„æœ‰æ•ˆåŸºå› åž‹
+            # Use explicitly defined valid combinations.
             sex_genotype_count = 0
             for mat_chrom, pat_chrom in valid_sex_gts:
                 n_mat = count_chrom_haplotypes(mat_chrom)
                 n_pat = count_chrom_haplotypes(pat_chrom)
                 sex_genotype_count += n_mat * n_pat
         else:
-            # æ²¡æœ‰å®šä¹‰æœ‰æ•ˆåŸºå› åž‹ï¼Œé»˜è®¤æ‰€æœ‰ç»„åˆéƒ½æœ‰æ•ˆ
+            # If not constrained, all maternal/paternal pairings are treated as valid.
             sex_genotype_count = 1
             for group_chroms in sex_chr_groups.values():
                 group_total = 0
                 for chrom in group_chroms:
                     group_total += count_chrom_haplotypes(chrom)
-                # æ¯ä¸ªç»„çš„ maternal Ã— paternal
+                # Each group contributes maternal x paternal pairings.
                 sex_genotype_count *= group_total * group_total
 
         return autosome_genotype_count * sex_genotype_count
@@ -3045,17 +3044,17 @@ class Species(GeneticStructure['HaploidGenome']):
 
         sex_chr_groups = self._get_sex_chromosome_groups()
 
-        # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
+        # Collect all chromosomes that belong to any sex chromosome group.
         sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 sex_chroms.update(group_chroms)
 
-        # ä¸ºå¸¸æŸ“è‰²ä½“æ”¶é›†æ‰€æœ‰å¯èƒ½çš„ Haplotype
+        # Collect all possible haplotypes for autosomes.
         autosome_haplotypes: List[List[Haplotype]] = []
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
-                continue  # æ€§æŸ“è‰²ä½“å•ç‹¬å¤„ç†
+                continue  # Handle sex chromosomes separately.
 
             locus_alleles = [list(locus.alleles) for locus in chrom.loci]
             if not locus_alleles or any(len(a) == 0 for a in locus_alleles):
@@ -3067,8 +3066,8 @@ class Species(GeneticStructure['HaploidGenome']):
                 haps_for_chrom.append(hap)
             autosome_haplotypes.append(haps_for_chrom)
 
-        # ä¸ºæ€§æŸ“è‰²ä½“ç»„æ”¶é›†å¯èƒ½çš„ Haplotype é€‰é¡¹
-        # æ¯ä¸ªç»„å†…çš„æ‰€æœ‰æŸ“è‰²ä½“çš„ haplotype æ”¾åœ¨ä¸€ä¸ªåˆ—è¡¨ä¸­ï¼ˆé€‰å…¶ä¸€ï¼‰
+        # Collect haplotype options for each sex chromosome group.
+        # A group contains all haplotypes from all chromosomes in that group.
         sex_group_haplotypes: List[List[Haplotype]] = []
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
@@ -3083,13 +3082,13 @@ class Species(GeneticStructure['HaploidGenome']):
                 if group_haps:
                     sex_group_haplotypes.append(group_haps)
 
-        # åˆå¹¶å¸¸æŸ“è‰²ä½“å’Œæ€§æŸ“è‰²ä½“ç»„çš„ haplotype åˆ—è¡¨
+        # Combine autosomal and sex-group haplotype option lists.
         all_haplotype_options = autosome_haplotypes + sex_group_haplotypes
 
         if not all_haplotype_options:
             return
 
-        # æ‰€æœ‰ç»„åˆ -> HaploidGenome
+        # Convert Cartesian product combinations into HaploidGenome objects.
         for haplotype_combo in itertools.product(*all_haplotype_options):
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
 
@@ -3098,42 +3097,43 @@ class Species(GeneticStructure['HaploidGenome']):
         is_paternal: bool
     ) -> Iterable[HaploidGenome]:
         """
-        è¿­ä»£æŒ‡å®šäº²æœ¬ï¼ˆmaternal æˆ– paternalï¼‰å¯ç”¨çš„å•å€ä½“åŸºå› ç»„ã€‚
+        Iterate haploid genomes available to one parent role.
 
-        æ ¹æ® _valid_sex_genotypes ç¡®å®šæ¯ä¸ªäº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“ã€‚
+        Availability of sex chromosomes is constrained by
+        ``_valid_sex_genotypes`` when provided.
 
         Args:
-            is_paternal: True è¡¨ç¤º paternalï¼ŒFalse è¡¨ç¤º maternal
+            is_paternal: ``True`` for paternal, ``False`` for maternal.
 
         Yields:
-            HaploidGenome å®žä¾‹
+            HaploidGenome instances.
         """
         from natal.genetic_entities import HaploidGenome, Haplotype
 
         sex_chr_groups = self._get_sex_chromosome_groups()
         valid_sex_gts = self._get_valid_sex_genotypes()
 
-        # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
+        # Collect all chromosomes that belong to any sex chromosome group.
         sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 sex_chroms.update(group_chroms)
 
-        # ç¡®å®šè¯¥äº²æœ¬å¯ç”¨çš„æ€§æŸ“è‰²ä½“
+        # Determine sex chromosomes available to this parent role.
         available_sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             if valid_sex_gts:
-                # ä»Žæœ‰æ•ˆåŸºå› åž‹ä¸­æå–è¯¥äº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“
+                # Extract allowed chromosome side from each valid pair.
                 for mat_chrom, pat_chrom in valid_sex_gts:
                     if is_paternal:
                         available_sex_chroms.add(pat_chrom)
                     else:
                         available_sex_chroms.add(mat_chrom)
             else:
-                # æ²¡æœ‰é™åˆ¶ï¼Œæ‰€æœ‰æ€§æŸ“è‰²ä½“éƒ½å¯ç”¨
+                # No explicit constraint means all sex chromosomes are available.
                 available_sex_chroms = sex_chroms
 
-        # ä¸ºå¸¸æŸ“è‰²ä½“æ”¶é›†æ‰€æœ‰å¯èƒ½çš„ Haplotype
+        # Collect all possible haplotypes for autosomes.
         autosome_haplotypes: List[List[Haplotype]] = []
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
@@ -3149,13 +3149,13 @@ class Species(GeneticStructure['HaploidGenome']):
                 haps_for_chrom.append(hap)
             autosome_haplotypes.append(haps_for_chrom)
 
-        # ä¸ºæ€§æŸ“è‰²ä½“ç»„æ”¶é›†å¯èƒ½çš„ Haplotype é€‰é¡¹
+        # Collect haplotype options for each sex chromosome group.
         sex_group_haplotypes: List[List[Haplotype]] = []
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 group_haps: List[Haplotype] = []
                 for chrom in group_chroms:
-                    # åªåŒ…å«è¯¥äº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“
+                    # Include only chromosomes available to this parent role.
                     if chrom not in available_sex_chroms:
                         continue
 
@@ -3168,47 +3168,45 @@ class Species(GeneticStructure['HaploidGenome']):
                 if group_haps:
                     sex_group_haplotypes.append(group_haps)
 
-        # åˆå¹¶å¸¸æŸ“è‰²ä½“å’Œæ€§æŸ“è‰²ä½“ç»„çš„ haplotype åˆ—è¡¨
+        # Combine autosomal and sex-group haplotype option lists.
         all_haplotype_options = autosome_haplotypes + sex_group_haplotypes
 
         if not all_haplotype_options:
             return
 
-        # æ‰€æœ‰ç»„åˆ -> HaploidGenome
+        # Convert Cartesian product combinations into HaploidGenome objects.
         for haplotype_combo in itertools.product(*all_haplotype_options):
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
 
     def iter_maternal_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """
-        è¿­ä»£ maternalï¼ˆæ¯æœ¬ï¼‰å¯é—ä¼ çš„å•å€ä½“åŸºå› ç»„ã€‚
-
-        æ ¹æ® _valid_sex_genotypes ç¡®å®šå¯ç”¨çš„æ€§æŸ“è‰²ä½“ã€‚
+        Iterate maternal haploid genomes that can be transmitted.
 
         Yields:
-            HaploidGenome å®žä¾‹
+            HaploidGenome instances.
         """
         return self._iter_haploid_genotypes_for_parent(is_paternal=False)
 
     def iter_paternal_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """
-        è¿­ä»£ paternalï¼ˆçˆ¶æœ¬ï¼‰å¯é—ä¼ çš„å•å€ä½“åŸºå› ç»„ã€‚
-
-        æ ¹æ® _valid_sex_genotypes ç¡®å®šå¯ç”¨çš„æ€§æŸ“è‰²ä½“ã€‚
+        Iterate paternal haploid genomes that can be transmitted.
 
         Yields:
-            HaploidGenome å®žä¾‹
+            HaploidGenome instances.
         """
         return self._iter_haploid_genotypes_for_parent(is_paternal=True)
 
     def iter_genotypes(self) -> Iterable[Genotype]:
         """
-        è¿­ä»£æ‰€æœ‰å¯èƒ½çš„åŸºå› åž‹ (Genotype)ã€‚
+        Iterate all possible diploid genotypes.
 
-        åŒºåˆ† maternal å’Œ paternalï¼Œæ‰€ä»¥ (A|B) å’Œ (B|A) æ˜¯ä¸åŒçš„åŸºå› åž‹ã€‚
-        å¦‚æžœå®šä¹‰äº† _valid_sex_genotypes æˆ– Chromosome.sex_typeï¼Œåªç”Ÿæˆæœ‰æ•ˆçš„æ€§æŸ“è‰²ä½“ç»„åˆã€‚
+        Maternal and paternal sides are ordered, so ``(A|B)`` and ``(B|A)``
+        are distinct genotypes. When ``_valid_sex_genotypes`` or
+        ``Chromosome.sex_type`` constraints are present, only valid sex
+        chromosome pairings are emitted.
 
         Yields:
-            Genotype å®žä¾‹
+            Genotype instances.
 
         Example:
             >>> for gt in species.iter_genotypes():
@@ -3220,28 +3218,28 @@ class Species(GeneticStructure['HaploidGenome']):
         valid_sex_gts = self._get_valid_sex_genotypes()
 
         if not sex_chr_groups:
-            # æ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼Œç®€å•çš„ç¬›å¡å°”ç§¯
+            # No sex chromosomes: simple Cartesian product.
             all_haploid_genotypes = list(self.iter_haploid_genotypes())
             for maternal, paternal in itertools.product(all_haploid_genotypes, repeat=2):
                 yield Genotype(species=self, maternal=maternal, paternal=paternal)
         elif valid_sex_gts:
-            # æœ‰æ€§æŸ“è‰²ä½“ä¸”å®šä¹‰äº†æœ‰æ•ˆåŸºå› åž‹ï¼Œéœ€è¦éªŒè¯ç»„åˆ
+            # Validate pairings against the explicitly valid chromosome pairs.
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
 
-            # æž„å»ºæœ‰æ•ˆç»„åˆçš„ set ç”¨äºŽå¿«é€ŸæŸ¥æ‰¾
+            # Build a set for fast valid-pair lookup.
             valid_chrom_pairs: Set[Tuple[Chromosome, Chromosome]] = set(valid_sex_gts)
 
             for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
-                # èŽ·å– maternal å’Œ paternal çš„æ€§æŸ“è‰²ä½“
+                # Resolve selected maternal and paternal sex chromosomes.
                 mat_sex_chrom = self._get_sex_chromosome(maternal, sex_chr_groups)
                 pat_sex_chrom = self._get_sex_chromosome(paternal, sex_chr_groups)
 
-                # æ£€æŸ¥æ˜¯å¦æ˜¯æœ‰æ•ˆç»„åˆ
+                # Keep only valid pairings.
                 if (mat_sex_chrom, pat_sex_chrom) in valid_chrom_pairs:
                     yield Genotype(species=self, maternal=maternal, paternal=paternal)
         else:
-            # æœ‰æ€§æŸ“è‰²ä½“ä½†æ²¡æœ‰å®šä¹‰æœ‰æ•ˆåŸºå› åž‹ï¼Œæ‰€æœ‰ç»„åˆéƒ½æœ‰æ•ˆ
+            # With no explicit constraints, all pairings are valid.
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
 
@@ -3254,16 +3252,16 @@ class Species(GeneticStructure['HaploidGenome']):
         sex_chr_groups: Dict[str, List[Chromosome]]
     ) -> Optional[Chromosome]:
         """
-        èŽ·å– HaploidGenome ä¸­çš„æ€§æŸ“è‰²ä½“ã€‚
+        Get the selected sex chromosome from a haploid genome.
 
-        å‡è®¾æ¯ä¸ªæ€§æŸ“è‰²ä½“ç»„åªé€‰æ‹©ä¸€ä¸ªæŸ“è‰²ä½“ã€‚
+        Assumes each sex chromosome group contributes at most one chromosome.
 
         Args:
-            haploid_genome: å•å€ä½“åŸºå› ç»„
-            sex_chr_groups: æ€§æŸ“è‰²ä½“ç»„å®šä¹‰
+            haploid_genome: Haploid genome to inspect.
+            sex_chr_groups: Sex chromosome group definitions.
 
         Returns:
-            æ€§æŸ“è‰²ä½“ï¼Œå¦‚æžœæ²¡æœ‰åˆ™è¿”å›ž None
+            The selected sex chromosome, or ``None`` when absent.
         """
         sex_chroms: Set[Chromosome] = set()
         for group_chroms in sex_chr_groups.values():
@@ -3276,19 +3274,19 @@ class Species(GeneticStructure['HaploidGenome']):
 
     def get_all_haploid_genotypes(self) -> List[HaploidGenome]:
         """
-        èŽ·å–æ‰€æœ‰å¯èƒ½çš„å•å€ä½“åŸºå› ç»„åˆ—è¡¨ã€‚
+        Get a list of all possible haploid genomes.
 
         Returns:
-            æ‰€æœ‰ HaploidGenome å®žä¾‹çš„åˆ—è¡¨
+            List of all HaploidGenome instances.
         """
         return list(self.iter_haploid_genotypes())
 
     def get_all_genotypes(self) -> List[Genotype]:
         """
-        èŽ·å–æ‰€æœ‰å¯èƒ½çš„åŸºå› åž‹åˆ—è¡¨ã€‚
+        Get a list of all possible diploid genotypes.
 
         Returns:
-            æ‰€æœ‰ Genotype å®žä¾‹çš„åˆ—è¡¨
+            List of all Genotype instances.
         """
         return list(self.iter_genotypes())
 

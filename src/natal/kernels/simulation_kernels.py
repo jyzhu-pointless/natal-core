@@ -1,6 +1,4 @@
-"""
-纯函数化模拟核心——在 Population 外部运行、支持 Numba 加速。
-"""
+"""Pure-function simulation kernels run outside Population with Numba support."""
 
 from typing import TYPE_CHECKING, Optional, Tuple
 
@@ -21,30 +19,30 @@ __all__ = [
 ]
 
 # ============================================================================
-# 导出/导入（轻量级包装，直接使用种群方法）
+# Export/import helpers (lightweight wrappers; call population methods directly)
 # ============================================================================
 
 def export_config(pop: 'AgeStructuredPopulation') -> 'PopulationConfig':
-    """导出种群配置。推荐直接使用 pop.export_config()。"""
+    """Export population configuration. Prefer ``pop.export_config()`` directly."""
     return pop.export_config()
 
 
 def import_config(pop: 'AgeStructuredPopulation', config: 'PopulationConfig') -> None:
-    """导入配置到种群。推荐直接使用 pop.import_config()。"""
+    """Import configuration into population. Prefer ``pop.import_config()`` directly."""
     pop.import_config(config)
 
 
 def export_state(pop: 'AgeStructuredPopulation') -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
-    """导出种群状态。推荐直接使用 pop.export_state()。"""
+    """Export population state. Prefer ``pop.export_state()`` directly."""
     return pop.export_state()
 
 
 def import_state(pop: 'AgeStructuredPopulation', state: 'PopulationState') -> None:
-    """导入状态到种群。推荐直接使用 pop.import_state()。"""
+    """Import state into population. Prefer ``pop.import_state()`` directly."""
     pop.import_state(state)
 
 # ============================================================================
-# 核心：分离的阶段函数（繁殖、生存、衰老）
+# Core: separated stage functions (reproduction, survival, aging)
 # ============================================================================
 @njit_switch(cache=True)
 def run_reproduction(
@@ -52,15 +50,15 @@ def run_reproduction(
     sperm_store: NDArray[np.float64],
     config: PopulationConfig,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """执行繁殖阶段：计算交配、更新精子存储、生成后代。
+    """Run reproduction stage: mating, sperm-store update, and offspring generation.
 
     Args:
-        ind_count: 个体计数数组 (n_sexes, n_ages, n_genotypes)
-        sperm_store: 精子存储数组 (n_ages, n_genotypes, n_genotypes)
-        config: PopulationConfig 对象
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
+        sperm_store: Sperm-store array ``(n_ages, n_genotypes, n_genotypes)``.
+        config: PopulationConfig object.
 
     Returns:
-        Tuple[ind_count, sperm_store]: 更新后的数组
+        Tuple[ind_count, sperm_store]: Updated arrays.
     """
     ind_count = ind_count.copy()
     sperm_store = sperm_store.copy()  # Shape: (A, gf, gm)
@@ -71,7 +69,7 @@ def run_reproduction(
     is_stochastic = config.is_stochastic
     use_dirichlet_sampling = config.use_dirichlet_sampling
 
-    # 1. 提取成年雄性计数（加权考虑各年龄的交配率）
+    # 1. Extract effective adult male counts (weighted by age-specific mating rates).
     # effective_male_counts = Σ (male_counts[age] * male_mating_rate[age])
     effective_male_counts = np.zeros(n_gen, dtype=np.float64)
     for age in adult_ages:
@@ -83,15 +81,14 @@ def run_reproduction(
         # No males or no mating males, no new matings, no offspring
         return ind_count, sperm_store
 
-    # 2. 计算交配概率矩阵 (g, g)
-    # 使用有效雄性数量（已乘以交配率）计算概率
+    # 2. Compute mating probability matrix (g, g) from effective male counts.
     mating_prob = alg.compute_mating_probability_matrix(
         config.sexual_selection_fitness,
         effective_male_counts,
         n_gen
     )
 
-    # 3. 更新精子存储状态（也就是交配过程）
+    # 3. Update sperm-store state (the mating process).
     # alg.sample_mating updates sperm storage based on mating rates
     female_counts = ind_count[0, :, :] # (n_ages, n_genotypes)
 
@@ -108,7 +105,7 @@ def run_reproduction(
         use_dirichlet_sampling=use_dirichlet_sampling
     )
 
-    # 4. 生成后代 (fertilization)
+    # 4. Generate offspring (fertilization).
     n_0_female, n_0_male = alg.fertilize_with_mating_genotype(
         female_counts,
         sperm_store,
@@ -130,7 +127,7 @@ def run_reproduction(
         use_dirichlet_sampling=use_dirichlet_sampling
     )
 
-    # 注意：Sex.FEMALE = 0，Sex.MALE = 1
+    # Note: Sex.FEMALE = 0, Sex.MALE = 1.
     ind_count[0, 0, :] = n_0_female  # sex=0 is FEMALE
     ind_count[1, 0, :] = n_0_male    # sex=1 is MALE
 
@@ -142,20 +139,20 @@ def run_survival(
     sperm_store: NDArray[np.float64],
     config: PopulationConfig,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """执行生存阶段：应用生存率、viability、遗传漂变、幼虫招募。
+    """Run survival stage: apply survival/viability and juvenile recruitment.
 
-    新架构：
-    1. 计算各个生存率组件（返回生存率数组）
-    2. 一次性应用所有生存率（stochastic 或 deterministic）
-    3. 对幼虫进行密度依赖招募
+    New flow:
+    1. Compute survival components (as survival-rate arrays)
+    2. Apply all survival rates in one pass (stochastic or deterministic)
+    3. Perform density-dependent juvenile recruitment
 
     Args:
-        ind_count: 个体计数数组 (n_sexes, n_ages, n_genotypes)
-        sperm_store: 精子存储数组 (n_ages, n_genotypes, n_genotypes)
-        config: PopulationConfig 实例
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
+        sperm_store: Sperm-store array ``(n_ages, n_genotypes, n_genotypes)``.
+        config: PopulationConfig instance.
 
     Returns:
-        Tuple[ind_count, sperm_store]: 更新后的个体计数和精子存储
+        Tuple[ind_count, sperm_store]: Updated individual counts and sperm store.
     """
     ind_count = ind_count.copy()
     sperm_store = sperm_store.copy()
@@ -167,27 +164,27 @@ def run_survival(
     # =========================================================================
     # Firstly, apply density-dependent survival to age 0 individuals (juveniles) based on the configured growth mode.
     # =========================================================================
-    # 统一使用 recruit_juveniles_given_scaling_factor_sampling 接口
-    # Mode 常量: 0=NO_COMPETITION, 1=FIXED, 2=LOGISTIC/LINEAR, 3=BEVERTON_HOLT/CONCAVE
+    # Use the unified recruit_juveniles_given_scaling_factor_sampling API.
+    # Mode constants: 0=NO_COMPETITION, 1=FIXED, 2=LOGISTIC/LINEAR, 3=BEVERTON_HOLT/CONCAVE
     juvenile_growth_mode = config.juvenile_growth_mode
     new_adult_age = config.new_adult_age
 
-    # 计算 scaling_factor
+    # Compute scaling_factor.
     age_0_counts = (ind_count[0, 0, :], ind_count[1, 0, :])
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
 
     if juvenile_growth_mode == NO_COMPETITION:
-        # Mode 0: NO_COMPETITION - 不做密度依赖
+        # Mode 0: NO_COMPETITION - no density dependence.
         scaling_factor = 1.0
     elif juvenile_growth_mode == FIXED:
-        # Mode 1: FIXED - 超过 K 时按比例缩减
+        # Mode 1: FIXED - scale down proportionally when above K.
         scaling_factor = alg.compute_scaling_factor_fixed(
             total_age_0=total_age_0,
             carrying_capacity=config.carrying_capacity,
         )
     else:
-        # Mode 2 (LOGISTIC/LINEAR) 或 Mode 3 (BEVERTON_HOLT/CONCAVE)
-        # 获取各幼虫年龄的总数，计算实际总竞争强度指标
+        # Mode 2 (LOGISTIC/LINEAR) or Mode 3 (BEVERTON_HOLT/CONCAVE).
+        # Aggregate juvenile counts by age and compute actual competition strength.
         juvenile_counts = np.zeros(new_adult_age, dtype=np.float64)
         for age in range(new_adult_age):
             juvenile_counts[age] = float(ind_count[0, age, :].sum() + ind_count[1, age, :].sum())
@@ -213,7 +210,7 @@ def run_survival(
                 low_density_growth_rate=config.low_density_growth_rate,
             )
 
-    # 统一调用 recruit_juveniles_given_scaling_factor_sampling
+    # Unified call to recruit_juveniles_given_scaling_factor_sampling.
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         age_0_counts,
         scaling_factor,
@@ -229,14 +226,14 @@ def run_survival(
     # =========================================================================
 
     # 1 Compute age-specific survival rates
-    # 1.1 年龄特异性生存率 → shape (n_ages,)
+    # 1.1 Age-specific survival rates -> shape (n_ages,).
     s_age_f, s_age_m = alg.compute_age_based_survival_rates(
         config.age_based_survival_rates[0],
         config.age_based_survival_rates[1],
         n_ages
     )
 
-    # 1.2 Viability 生存率 → shape (n_ages, n_genotypes)
+    # 1.2 Viability survival rates -> shape (n_ages, n_genotypes).
     target_viability_age = config.new_adult_age - 1
     s_via_f, s_via_m = alg.compute_viability_survival_rates(
         config.viability_fitness[0, target_viability_age, :],
@@ -247,14 +244,14 @@ def run_survival(
     )
 
     # 2 Combine survival rates (age-specific × viability) → shape (n_ages, n_genotypes)
-    # 总生存率 = 年龄生存率 × viability 生存率
-    # 需要广播：s_age_f shape (n_ages,) 和 s_via_f shape (n_ages, n_genotypes)
+    # Total survival rate = age-based survival x viability survival.
+    # Broadcasting needed: s_age_f shape (n_ages,) and s_via_f shape (n_ages, n_genotypes).
     s_combined_f = s_age_f[:, None] * s_via_f  # (n_ages, n_genotypes)
     s_combined_m = s_age_m[:, None] * s_via_m  # (n_ages, n_genotypes)
 
     # 3 Apply combined survival rates to individuals
     if is_stochastic:
-        # 随机采样：保证 sperm_store 与个体计数同步更新
+        # Stochastic sampling: keep sperm_store and individual counts synchronized.
         f_surv, m_surv, sperm_store = alg.sample_survival_with_sperm_storage(
             (ind_count[0], ind_count[1]),
             sperm_store,
@@ -266,7 +263,7 @@ def run_survival(
         )
         ind_count[0], ind_count[1] = f_surv, m_surv
     else:
-        # 确定性缩放：同时更新个体计数和精子存储
+        # Deterministic scaling: update individual counts and sperm store together.
         ind_count[0], ind_count[1], sperm_store = alg.apply_survival_rates_deterministic_with_sperm_storage(
             (ind_count[0], ind_count[1]),
             sperm_store,
@@ -284,22 +281,22 @@ def run_aging(
     sperm_store: NDArray[np.float64],
     config: PopulationConfig,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """执行衰老阶段：年龄推进。
+    """Run aging stage: advance age classes.
 
     Args:
-        ind_count: 个体计数数组 (n_sexes, n_ages, n_genotypes)
-        sperm_store: 精子存储数组
-        config: PopulationConfig 实例
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
+        sperm_store: Sperm-store array.
+        config: PopulationConfig instance.
 
     Returns:
-        Tuple[ind_count, sperm_store]: 更新后的数组
+        Tuple[ind_count, sperm_store]: Updated arrays.
     """
     ind_count = ind_count.copy()
     sperm_store = sperm_store.copy()
 
     n_ages = config.n_ages
 
-    # 年龄推进
+    # Age advancement.
     for age in range(n_ages - 1, 0, -1):
         ind_count[:, age, :] = ind_count[:, age - 1, :]
         sperm_store[age, :, :] = sperm_store[age - 1, :, :]
@@ -319,7 +316,7 @@ def run_discrete_reproduction(
     ind_count: NDArray[np.float64],
     config: PopulationConfig,
 ) -> NDArray[np.float64]:
-    """执行繁殖阶段（离散世代）：直接受精，不使用长期精子存储。"""
+    """Run reproduction stage (discrete generation): direct fertilization without long-term sperm storage."""
     ind_count = ind_count.copy()
     n_gen = config.n_genotypes
     is_stochastic = config.is_stochastic
@@ -389,7 +386,7 @@ def run_discrete_survival(
     ind_count: NDArray[np.float64],
     config: PopulationConfig,
 ) -> NDArray[np.float64]:
-    """执行存活（离散世代）：幼虫密度竞争与存活率筛选。"""
+    """Run survival stage (discrete generation): juvenile competition and survival filtering."""
     ind_count = ind_count.copy()
     n_gen = config.n_genotypes
     is_stochastic = config.is_stochastic
@@ -450,7 +447,7 @@ def run_discrete_survival(
 
     if is_stochastic:
         if use_dirichlet_sampling:
-            # 连续化采样：使用 Beta 分布模拟 Binomial 筛选
+            # Continuous approximation: use Beta-based binomial emulation.
             f_surv = np.empty(n_gen, dtype=np.float64)
             m_surv = np.empty(n_gen, dtype=np.float64)
             for g in range(n_gen):
@@ -477,7 +474,7 @@ def run_discrete_survival(
 def run_discrete_aging(
     ind_count: NDArray[np.float64],
 ) -> NDArray[np.float64]:
-    """执行世代更替（离散世代）：幼虫晋升为成虫，旧成虫作废。"""
+    """Run generation turnover (discrete generation): juveniles become adults and old adults are discarded."""
     ind_count = ind_count.copy()
 
     ind_count[0, 1, :] = ind_count[0, 0, :]

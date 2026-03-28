@@ -81,7 +81,7 @@ class BasePopulation(ABC, Generic[T_State]):
         - ``_compiled_hooks``: Compiled event hooks for efficient execution.
     """
 
-    # 允许的 Hook 事件（子类可扩展此列表）
+    # Allowed hook events (subclasses may extend this list).
     ALLOWED_EVENTS = [
         "initialization",
         "first",
@@ -117,49 +117,50 @@ class BasePopulation(ABC, Generic[T_State]):
         self._index_registry: Optional[IndexRegistry] = None
         self._registry: Optional[IndexRegistry] = None
 
-        # 演化历史：(tick, flattened_array) 对的列表
+        # Evolution history as (tick, flattened_array) tuples.
         self._history: List[Tuple[int, np.ndarray]] = []
 
         # History config
         self.record_every: int = 1
         self.max_history: int = 5000  # Default rolling window size
 
-        # Hooks 系统：事件名 -> [(hook_id, hook_name, hook_func), ...]
+        # Hooks system: event_name -> [(hook_id, hook_name, hook_func), ...]
         self._hooks: Dict[str, List[HookEntry]] = {
             event: [] for event in self.ALLOWED_EVENTS
         }
 
-        # 统一的配子修饰器列表
+        # Unified gamete modifier list.
         self._gamete_modifiers: List[Tuple[int, Optional[str], GameteModifier]] = []
 
-        # 统一的合子修饰器列表
+        # Unified zygote modifier list.
         self._zygote_modifiers: List[Tuple[int, Optional[str], ZygoteModifier]] = []
 
-        # 编译后的 Hook Description符列表（用于 numba 加速）
+        # Compiled hook descriptors (for Numba-accelerated execution).
         self._compiled_hooks: List[Any] = []  # List[CompiledHookDescriptor]
 
-        # Hook 执行器（Python 层协调器，管理所有Type的 hooks）
+        # Hook executor (Python-side coordinator for all hook types).
         self._hook_executor: Optional[Any] = None  # HookExecutor
 
-        # 静态数据容器
+        # Static data container.
         self._config: Optional[PopulationConfig] = None
 
-        # PopulationState 容器
+        # PopulationState container.
         self._state: Optional[T_State] = None
 
-        # 演化状态：是否已完成（finish）
+        # Evolution status flag: whether simulation is finished.
         self._finished = False
 
-        # 防止递归调用的标志
+        # Re-entrancy guard flag.
         self._running = False
 
-        # 存储待延迟编译的 hooks（在子类初始化完成后编译）
-        # 格式: [(event_name, func, hook_name, hook_id), ...]
+        # Hooks queued for deferred compilation after subclass initialization.
+        # Format: [(event_name, func, hook_name, hook_id), ...]
         self._pending_hooks: List[PendingHook] = []
 
-        # 注册 hooks
-        # 注意：如果 hook 带有 @hook 元数据，此时可能无法编译（IndexRegistry未完全设置）
-        # 普通函数可以直接注册，带 @hook 的函数会被添加到 _pending_hooks 延迟编译
+        # Register hooks.
+        # If a hook carries @hook metadata, compilation may fail at this stage
+        # because IndexRegistry may not be fully initialized yet.
+        # Plain functions can be registered immediately; @hook functions are queued.
         hooks_map: HookRegistrationMap = hooks or {}
         if hooks_map:
             for event_name, hooks_list in hooks_map.items():
@@ -253,7 +254,7 @@ class BasePopulation(ABC, Generic[T_State]):
         return int(self._hook_slot)
 
     # ========================================================================
-    # 基础属性
+    # Basic properties
     # ========================================================================
 
     @property
@@ -371,7 +372,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self._enforce_history_limit()
 
     # ========================================================================
-    # Modifier 管理
+    # Modifier management
     # ========================================================================
     def _next_modifier_id(self, modifiers: Sequence[Tuple[int, Optional[str], Any]]) -> int:
         """Return the next auto-assigned modifier id."""
@@ -468,7 +469,7 @@ class BasePopulation(ABC, Generic[T_State]):
         if refresh:
             self._refresh_modifier_maps()
 
-    # 确保 set_zygote_modifier 方法与 ZygoteModifier 定义一致
+    # Keep set_zygote_modifier aligned with the ZygoteModifier contract.
     def set_zygote_modifier(
         self,
         modifier: ZygoteModifier,
@@ -488,7 +489,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
 
-        # 添加并排序
+        # Add and sort by priority id.
         self._zygote_modifiers.append((resolved_id, modifier_name, modifier))
         self._zygote_modifiers.sort(key=lambda x: x[0])
 
@@ -504,7 +505,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
 
-        # 添加并排序
+        # Add and sort by priority id.
         self._gamete_modifiers.append((resolved_id, modifier_name, modifier))
         self._gamete_modifiers.sort(key=lambda x: x[0])
 
@@ -569,15 +570,15 @@ class BasePopulation(ABC, Generic[T_State]):
         if self._index_registry is None:
             self._initialize_registry()
 
-        # 获取所有可能的单倍型和二倍型
+        # Retrieve all possible haploid and diploid genotypes.
         haploid_genotypes: List[HaploidGenotype] = self.species.get_all_haploid_genotypes()
         diploid_genotypes: List[Genotype] = self.species.get_all_genotypes()
 
         n_hg = len(haploid_genotypes)
         n_genotypes = len(diploid_genotypes)
-        n_glabs = 1  # 根据实际情况设置
+        n_glabs = 1  # TODO: configure based on use case.
 
-        # 创建静态数据容器
+        # Create static configuration container.
         self._config = build_population_config(
             n_genotypes=n_genotypes,
             n_haploid_genotypes=n_hg,
@@ -585,14 +586,14 @@ class BasePopulation(ABC, Generic[T_State]):
             n_glabs=n_glabs
         )
 
-        # 使用统一的 wrapper 生成器将高层 modifier 转换为 tensor-level modifier
+        # Convert high-level modifiers into tensor-level wrappers.
         gamete_modifier_funcs, zygote_modifier_funcs = self._build_modifier_wrappers(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs
         )
 
-        # 初始化 gametes_to_zygote_map 与 genotype_to_gametes_map
+        # Initialize gametes_to_zygote_map and genotype_to_gametes_map.
         gametes_to_zygote_map = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
@@ -743,7 +744,7 @@ class BasePopulation(ABC, Generic[T_State]):
         )
 
     # ========================================================================
-    # 核心方法
+    # Core methods
     # ========================================================================
 
     @abstractmethod
@@ -791,22 +792,22 @@ class BasePopulation(ABC, Generic[T_State]):
         pass
 
     # ========================================================================
-    # 通用方法（可被子类继承或覆写）
+    # Common methods (can be inherited or overridden by subclasses)
     # ========================================================================
 
     @property
     def total_population_size(self) -> int:
-        """种群总大小（get_total_count 的别名）"""
+        """Total population size (alias of ``get_total_count``)."""
         return self.get_total_count()
 
     @property
     def total_females(self) -> int:
-        """雌性总数（get_female_count 的别名）"""
+        """Total number of females (alias of ``get_female_count``)."""
         return self.get_female_count()
 
     @property
     def total_males(self) -> int:
-        """雄性总数（get_male_count 的别名）"""
+        """Total number of males (alias of ``get_male_count``)."""
         return self.get_male_count()
 
     @property
@@ -817,18 +818,18 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @property
     def is_finished(self) -> bool:
-        """检查种群是否已完成（finish=True）"""
+        """Whether the population is marked as finished (``finish=True``)."""
         return self._finished
 
     def finish_simulation(self) -> None:
         """
-        结束模拟，触发 'finish' 事件并锁定种群。
+        End simulation, trigger the ``finish`` event, and lock the population.
 
-        此方法可以被 hooks 调用以提前结束模拟。
-        调用后，种群将无法再运行 step()/run_tick()/run()。
+        This method may be called by hooks for early termination.
+        After calling it, ``step()``, ``run_tick()``, and ``run()`` cannot run again.
 
         Raises:
-            RuntimeError: 如果种群已经 finished
+            RuntimeError: If the population is already finished.
 
         Example:
             >>> def check_extinction(pop):
@@ -853,7 +854,7 @@ class BasePopulation(ABC, Generic[T_State]):
         finish: bool = False
     ) -> BasePopulation[Any]:
         """
-        运行多步演化。
+        Run multi-step evolution.
         """
         pass
 
@@ -864,16 +865,16 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def compute_allele_frequencies(self) -> Dict[str, float]:
         """
-        计算种群中所有等位基因的频率（按位点归一化）。
+        Compute frequencies of all alleles in the population, normalized per locus.
 
         Returns:
-            Dict[str, float]: 映射 {allele_name: frequency}。
-            频率是相对于该位点总等位基因数的比例 (0.0 - 1.0)。
+            Dict[str, float]: Mapping ``{allele_name: frequency}``.
+            Frequencies are per-locus proportions in the range ``[0.0, 1.0]``.
         """
         if self._state is None or self._registry is None:
             return {}
 
-        # 1. 初始化计数器
+        # 1. Initialize counters.
         allele_counts: Dict[str, float] = {}
         locus_totals: Dict[str, float] = {}  # locus_name -> total_count
 
@@ -883,9 +884,9 @@ class BasePopulation(ABC, Generic[T_State]):
                 for gene in locus.alleles:
                     allele_counts[gene.name] = 0.0
 
-        # 2. 聚合基因型计数
+        # 2. Aggregate genotype counts.
         # individual_count shape: (n_sexes, n_ages, n_genotypes)
-        # 对性别和年龄求和，得到每个基因型的总数
+        # Sum over sex and age to get total count per genotype.
         genotype_counts = self._state.individual_count.sum(axis=(0, 1))
 
         registry = self._registry
@@ -902,12 +903,12 @@ class BasePopulation(ABC, Generic[T_State]):
                             allele_counts[allele.name] += count
                             locus_totals[locus.name] += count
 
-        # 3. 计算频率
+        # 3. Compute frequencies.
         frequencies: Dict[str, float] = {}
         for allele_name, count in allele_counts.items():
-            # 找到该等位基因对应的 locus total
-            # (由于我们没有直接的 gene->locus 快速反查，这里稍微低效一点但安全)
-            # 实际上我们可以通过 self.species.gene_index 查找
+            # Lookup the locus total for this allele.
+            # We do not keep a direct fast gene->locus reverse index here,
+            # so we safely resolve via species.gene_index.
             gene = self.species.gene_index.get(allele_name)
             if gene and locus_totals[gene.locus.name] > 0:
                 frequencies[allele_name] = count / locus_totals[gene.locus.name]
@@ -917,7 +918,7 @@ class BasePopulation(ABC, Generic[T_State]):
         return frequencies
 
     # ========================================================================
-    # Hooks 系统
+    # Hooks system
     # ========================================================================
 
     def set_hook(
@@ -930,43 +931,45 @@ class BasePopulation(ABC, Generic[T_State]):
         deme_selector: Optional[DemeSelector] = None,
     ) -> None:
         """
-        注册事件 Hook，支持自动编译。
+        Register an event hook with optional automatic compilation.
 
-        当 `compile=True` 且函数带有 `@hook` 元数据时，会走 DSL 编译管线：
-        - 声明式 hook -> CSR 计划，进入 HookProgram（kernel 可执行）
-        - selector hook -> py_wrapper 或 njit_fn（取决于模式）
-        - numba hook -> njit_fn
+        When ``compile=True`` and the function carries ``@hook`` metadata,
+        it enters the DSL compilation pipeline:
+        - declarative hook -> CSR plan in HookProgram (kernel executable)
+        - selector hook -> ``py_wrapper`` or ``njit_fn`` (mode dependent)
+        - numba hook -> ``njit_fn``
 
-        普通 Python 函数仍可直接注册到传统 `_hooks`（兼容路径）。
+        Plain Python functions are still registered in traditional ``_hooks``
+        for backward-compatible execution.
 
         Args:
-            event_name: 事件名称（必须在 ALLOWED_EVENTS 中）
-            func: 回调函数，支持以下形式：
-                  - 普通函数: func(population)
-                  - @hook 装饰的声明式函数: Returns [Op.scale(...), ...]
-                  - @hook(selectors={...}) 装饰的选择器函数
-            hook_id: Hook 的数值优先级（可选，自动分配）
-                     较小的 ID 先执行
-            hook_name: Hook 的可读名称（可选，用于调试）
-            compile: 是否尝试编译 @hook 装饰的函数（Default True）
-            deme_selector: 可选的子种群选择器。
-                - None: 保持 panmictic Default行为（不显式覆写 selector）
-                - 非 None: 传给 hook 编译注册流程用于 spatial 过滤
+            event_name: Event name (must exist in ``ALLOWED_EVENTS``).
+            func: Callback function, supported forms include:
+                  - plain function: ``func(population)``
+                  - declarative ``@hook`` function: returns ``[Op.scale(...), ...]``
+                  - selector ``@hook(selectors={...})`` function
+            hook_id: Numeric execution priority (optional, auto-assigned if omitted).
+                     Lower IDs execute first.
+            hook_name: Optional human-readable name for debugging.
+            compile: Whether to try compiling ``@hook``-decorated functions (default ``True``).
+            deme_selector: Optional deme selector.
+                - ``None``: keep panmictic default behavior (no explicit selector override)
+                - non-``None``: passed into hook registration for spatial filtering
 
         Raises:
-            ValueError: 如果事件不存在或 hook_id 已被使用
+            ValueError: If event does not exist or hook_id is already in use.
 
         Example:
-            >>> # 普通函数（向后兼容）
+            >>> # Plain function (backward compatible)
             >>> pop.set_hook('first', lambda p: print(f'Step {p.tick}'))
             >>>
-            >>> # @hook 装饰的声明式函数（自动编译）
+            >>> # Declarative @hook function (auto-compiled)
             >>> @hook()
             >>> def reduce_juveniles():
             ...     return [Op.scale(genotypes='AA', ages=[0, 1], factor=0.9)]
             >>> pop.set_hook('early', reduce_juveniles)
             >>>
-            >>> # @hook 装饰的选择器函数（自动编译）
+            >>> # Selector @hook function (auto-compiled)
             >>> @hook(selectors={'target': 'AA'})
             >>> def release(pop, target):
             ...     pop.state.individual_count[1, 2, target] += 100
@@ -1003,39 +1006,41 @@ class BasePopulation(ABC, Generic[T_State]):
             raise ValueError(f"hook_id {hook_id} already exists in event '{event_name}'")
 
         self._hooks[event_name].append((hook_id, actual_name, func))
-        # 按 ID 排序保证执行顺序
+        # Sort by hook ID to preserve execution order.
         self._hooks[event_name].sort(key=lambda x: x[0])
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """
-        触发事件，执行所有已注册的 hooks。
+                Trigger an event and execute all registered hooks.
 
-        执行顺序：
-        1. CSR操作（Numba快速路径）
-        2. njit_fn hooks（用户自定义Numba函数）
-        3. py_wrapper hooks（Python包装函数）
+                Execution order:
+                1. CSR operations (Numba fast path)
+                2. ``njit_fn`` hooks (user-defined Numba functions)
+                3. ``py_wrapper`` hooks (Python wrapper functions)
 
         Args:
-            event_name: 要触发的事件名称
-            deme_id: 子种群 ID（可选，Default为 0）
+                        event_name: Event name to trigger.
+                        deme_id: Optional deme ID (default: 0).
 
         Returns:
-            int: RESULT_CONTINUE (0) 继续运行，RESULT_STOP (1) 请求停止
+                        int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1) to stop.
 
         Note:
-            - 优先走 HookExecutor（三层统一协调）
-            - 若执行器未构建，降级到传统 `_hooks`（仅 Python 回调）
-            - 在加速 run() 中，核心事件主要由 kernel 执行；trigger_event
-              主要用于显式事件触发（如 finish）与兼容路径
+                        - Prefer HookExecutor (unified three-layer coordination).
+                        - If executor is not built, fall back to traditional ``_hooks``
+                            (Python callbacks only).
+                        - In accelerated ``run()``, core events are mostly executed by kernels;
+                            ``trigger_event`` is used mainly for explicit events (for example ``finish``)
+                            and compatibility paths.
 
         Example:
-            >>> result = pop.trigger_event('first')  # 执行所有 'first' hooks
+                        >>> result = pop.trigger_event('first')  # Executes all 'first' hooks
             >>> if result == RESULT_STOP:
             ...     print("Simulation stopped by hook")
         """
         from natal.hook_dsl import RESULT_CONTINUE
 
-        # 优先使用 HookExecutor（如果已构建）
+        # Prefer HookExecutor when available.
         if self._hook_executor is not None:
             from natal.hook_dsl import EVENT_ID_MAP
             event_id = EVENT_ID_MAP.get(event_name)
@@ -1043,7 +1048,7 @@ class BasePopulation(ABC, Generic[T_State]):
                 result = self._hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)
                 return result
 
-        # 降级到传统 _hooks 系统（兼容性）
+        # Fallback to traditional _hooks for compatibility.
         for _, _, hook in self._hooks.get(event_name, []):
             hook(self)
 
@@ -1052,26 +1057,26 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def get_hooks(self, event_name: str) -> List[HookEntry]:
         """
-        获取特定事件的所有已注册 hooks。
+        Get all registered hooks for a specific event.
 
         Args:
-            event_name: 事件名称
+            event_name: Event name.
 
         Returns:
-            [(hook_id, hook_name, hook_func), ...] 列表
+            List of tuples ``[(hook_id, hook_name, hook_func), ...]``.
         """
         return list(self._hooks.get(event_name, []))
 
     def remove_hook(self, event_name: str, hook_id: int) -> bool:
         """
-        删除指定事件的指定 hook。
+        Remove a specific hook from an event.
 
         Args:
-            event_name: 事件名称
-            hook_id: Hook 的 ID
+            event_name: Event name.
+            hook_id: Hook ID.
 
         Returns:
-            删除成功Returns True，否则Returns False
+            True if removed successfully, otherwise False.
         """
         if event_name not in self._hooks:
             return False

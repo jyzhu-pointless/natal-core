@@ -462,7 +462,7 @@ class GameteConversionRuleSet:
 
             return result
 
-        return gamete_modifier_func  # TODO: protocol 有问题
+        return gamete_modifier_func  # TODO: protocol typing still needs cleanup.
 
     def __repr__(self) -> str:
         return f"{self.name} with {len(self.rules)} rules"

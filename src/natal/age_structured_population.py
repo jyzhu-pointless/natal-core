@@ -447,7 +447,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return self._config_nn.sexual_selection_fitness[f_idx, m_idx]
 
     # ========================================================================
-    # 状态导出/导入（与 simulation_kernels 接口）
+    # State export/import (simulation_kernels interface)
     # ========================================================================
 
     def export_config(self) -> 'PopulationConfig':
@@ -459,10 +459,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return self._config_nn
 
     def import_config(self, config: 'PopulationConfig') -> None:
-        """导入配置到种群。
+        """Import configuration into the population.
 
         Args:
-            config: Config jitclass instance
+            config: Config jitclass instance.
         """
         # Configuration is usually read-only (used by run_tick),
         # kept here for completeness.
@@ -477,14 +477,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._history.append((self._tick, flattened.copy()))
 
     def get_history(self) -> np.ndarray:
-        """获取历史记录为 2D numpy 数组。
+        """Return history records as a 2D NumPy array.
 
         Returns:
-            np.ndarray: 形状 (n_snapshots, 1 + n_sexes*n_ages*n_genotypes + n_ages*n_genotypes^2)
-                的 float64 数组，每行为一个快照的展平状态。
+            np.ndarray: Float64 array with shape
+                ``(n_snapshots, 1 + n_sexes*n_ages*n_genotypes + n_ages*n_genotypes^2)``,
+                where each row is a flattened snapshot state.
 
         Raises:
-            ValueError: 如果没有历史记录。
+            ValueError: If no history is recorded.
         """
         if len(self._history) == 0:
             raise ValueError("No history recorded")
@@ -553,7 +554,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 self._history.append((tick, flat.copy()))
 
     # ========================================================================
-    # 历史记录恢复工具
+    # History restoration helpers
     # ========================================================================
 
     def get_history_as_objects(self, indices: Optional[List[int]] = None) -> List[Tuple[int, PopulationState]]:
@@ -606,7 +607,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     n_ages=self._config_nn.n_ages,
                     n_genotypes=len(self._registry_nn.index_to_genotype)
                 )
-                # 直接复制状态数据
+                # Copy state data directly.
                 self._state_nn.individual_count[:] = state.individual_count
                 self._state_nn.sperm_storage[:] = state.sperm_storage
                 self._tick = tick
@@ -634,7 +635,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     #
 
     # ========================================================================
-    # 演化逻辑
+    # Evolution logic
     # ========================================================================
 
     def _get_kernel_config(self) -> Tuple[Any, ...]:
@@ -664,7 +665,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             AgeStructuredPopulation: Self for chaining.
 
         Raises:
-            RuntimeError: 如果种群已 finish，无法继续运行
+            RuntimeError: If the population is already finished and cannot continue.
         """
 
         if self._finished:
@@ -684,7 +685,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         run_fn: Callable[..., Any] = hooks.run_fn
         registry = hooks.registry
 
-        # 直接调用固定签名 runner 执行多步演化
+        # Directly call the fixed-signature runner for multi-step evolution.
         final_state_tuple, history_new, was_stopped = run_fn(
             state=self._state_nn,
             config=config,
@@ -722,7 +723,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             AgeStructuredPopulation: Self for chaining.
 
         Raises:
-            RuntimeError: 如果种群已 finish，无法继续运行
+            RuntimeError: If the population is already finished and cannot continue.
         """
         return self.run(n_steps=1, record_every=self.record_every, clear_history_on_start=False)
 

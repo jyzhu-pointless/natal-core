@@ -45,10 +45,10 @@ def __RUN_SPATIAL_TICK_NAME__(ind_count_all, sperm_store_all, configs, registry,
     ind = ind_count_all.copy()
     sperm = sperm_store_all.copy()
     n_demes = ind.shape[0]
-    # 此时 configs 可能是一个包含多个 PopulationConfig 的 List 或封装对象
+    # At this point, configs may be a list of PopulationConfig objects or a wrapper object.
 
     for deme_id in range(n_demes):
-        cfg = configs[deme_id] # 这里的索引是关键
+        cfg = configs[deme_id] # This index lookup is critical.
         result = _first_event(registry, ind[deme_id], sperm[deme_id], tick, cfg.is_stochastic, has_sperm, cfg.use_dirichlet_sampling, deme_id)
         if result != RESULT_CONTINUE:
             return (ind, sperm, tick), RESULT_STOP

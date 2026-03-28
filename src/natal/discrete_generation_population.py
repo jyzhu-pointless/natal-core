@@ -226,7 +226,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         hooks = self.get_compiled_event_hooks()
 
-        # run_discrete_fn 和 registry 总是由 get_compiled_event_hooks() 初始化的
+        # run_discrete_fn and registry are always initialized by get_compiled_event_hooks().
         assert hooks.run_discrete_fn is not None, "hooks.run_discrete_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
 
