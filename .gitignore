@@ -17,6 +17,9 @@ tmpdocs/
 
 site/*
 .github/*
+!.github/copilot-instructions.md
+!.github/instructions/
+!.github/instructions/**
 
 .vscode/*
 !.vscode/settings.json
