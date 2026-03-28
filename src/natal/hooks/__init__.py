@@ -1,7 +1,6 @@
 """Hook subsystem public API."""
 
 from .compiler import (
-    hook_njit_switch as njit_switch,
     CompiledEventHooks,
     compile_combined_hook,
     hook,
@@ -9,23 +8,20 @@ from .compiler import (
 )
 from .declarative import (
     Op,
-    parse_condition,
     compile_declarative_hook,
+    parse_condition,
 )
 from .executor import (
     HookExecutor,
-    eval_csr_condition_program,
     build_hook_program,
     deme_selector_matches,
+    eval_csr_condition_program,
     execute_csr_event_arrays,
     execute_csr_event_program,
     execute_csr_event_program_with_state,
 )
 from .selector import compile_selector_hook
 from .types import (
-    DemeSelector,
-        HookOp,
-        OpType,
     COND_ALWAYS,
     COND_OP_AND,
     COND_OP_NOT,
@@ -47,7 +43,10 @@ from .types import (
     RESULT_STOP,
     CompiledHookDescriptor,
     CompiledHookPlan,
+    DemeSelector,
+    HookOp,
     HookProgram,
+    OpType,
 )
 
 __all__ = [
@@ -89,7 +88,6 @@ __all__ = [
     "NUM_EVENTS",
     "RESULT_CONTINUE",
     "RESULT_STOP",
-    "njit_switch",
     "parse_condition",
     "eval_csr_condition_program",
 ]

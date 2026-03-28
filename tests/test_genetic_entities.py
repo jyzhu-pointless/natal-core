@@ -1,9 +1,9 @@
 """Unit tests for natal.genetic_entities."""
 
 import pytest  # type: ignore
-from natal.genetic_entities import Gene, Haplotype, HaploidGenotype, Genotype
-import natal as nt
 
+import natal as nt
+from natal.genetic_entities import Gene, Genotype, HaploidGenotype, Haplotype
 
 # ---------------------------------------------------------------------------
 # Helpers

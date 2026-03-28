@@ -52,34 +52,34 @@ def render_cell_svg(entity: Any, species_def: Any, size: int = 100) -> str:
     """
     # Determine ploidy based on attributes
     is_diploid = hasattr(entity, 'maternal') and hasattr(entity, 'paternal')
-    
+
     chromosomes = species_def.chromosomes
     n_chroms = len(chromosomes)
-    
+
     # SVG container and cell membrane
     svg = [f'<svg width="{size}" height="{size}" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">']
     svg.append('<circle cx="50" cy="50" r="48" fill="#f8fafc" stroke="#334155" stroke-width="2"/>')
-    
+
     # Layout calculations
     padding_x = 20
     avail_width = 100 - 2 * padding_x
     col_width = avail_width / max(1, n_chroms)
-    
+
     bar_width = 6
     bar_height = 50
     bar_y_start = (100 - bar_height) / 2
-    
+
     for i, chrom in enumerate(chromosomes):
         cx = padding_x + i * col_width + col_width / 2
         loci = chrom.loci
         n_loci = len(loci)
         seg_height = bar_height / max(1, n_loci)
-        
+
         def draw_chrom_bar(x: float, source_obj: Any) -> None:
             # Get haplotype for this chromosome
             if source_obj is None: # Missing chromosome
                 return
-            
+
             # Try to get haplotype (works for both Genotype via helper or HaploidGenotype direct access)
             # For Genotype, source_obj is a HaploidGenotype
             # For HaploidGenotype, source_obj is self
@@ -89,7 +89,7 @@ def render_cell_svg(entity: Any, species_def: Any, size: int = 100) -> str:
             for l_idx, locus in enumerate(loci):
                 gene = haplo.get_gene_at_locus(locus)
                 color = get_allele_color(gene.name) if gene else "#cbd5e1"
-                
+
                 y = bar_y_start + l_idx * seg_height
                 # Draw segment (rounded if single, or ends)
                 # Simplified rounding for visual cleanliness

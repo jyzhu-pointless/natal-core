@@ -24,14 +24,26 @@ The module also provides a generic allele conversion rule system:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, Union, TYPE_CHECKING, List, TypeGuard, Mapping, cast
-from natal.modifiers import GameteModifier, ZygoteModifier
+from collections.abc import Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypeGuard,
+    Union,
+    cast,
+)
+
+from natal.gamete_allele_conversion import GameteConversionRuleSet
 from natal.genetic_entities import Gene, Genotype
 from natal.genetic_structures import Species
-from natal.gamete_allele_conversion import GameteConversionRuleSet
-from natal.zygote_allele_conversion import ZygoteConversionRuleSet
-from natal.type_def import Sex, Age
 from natal.helpers import resolve_sex_label
+from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.type_def import Age, Sex
+from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -126,8 +138,8 @@ def _count_combined_allele_copies(genotype: Genotype, target_genes: List[Gene]) 
     return total
 
 def _calculate_allele_effect(
-    scale: Union[float, Tuple[float, float]], 
-    copies: int, 
+    scale: Union[float, Tuple[float, float]],
+    copies: int,
     mode: str = "multiplicative"
 ) -> float:
     """Calculate fitness factor based on allele copies and scaling mode."""
@@ -257,18 +269,18 @@ def _make_fitness_patch_given_allele_scaling(
         key = tuple(allele_name)
     else:
         key = allele_name
-        
+
     patch: PresetFitnessPatch = {}
-    
+
     if viability_scaling is not None:
         patch['viability_allele'] = {key: (viability_scaling, viability_mode)}
-    
+
     if fecundity_scaling is not None:
         patch['fecundity_allele'] = {key: (fecundity_scaling, fecundity_mode)}
-    
+
     if sexual_selection_scaling is not None:
         patch['sexual_selection_allele'] = {key: (sexual_selection_scaling, sexual_selection_mode)}
-    
+
     return patch
 
 def _apply_viability_allele_scaling(
@@ -285,7 +297,7 @@ def _apply_viability_allele_scaling(
     # so multiple presets/patches compose multiplicatively.
     viability_arr = population.config.viability_fitness
     default_age = int(population.config.new_adult_age) - 1
-    
+
     # Resolve one or more alleles
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
@@ -366,7 +378,7 @@ def _apply_fecundity_allele_scaling(
     #   fecundity_fitness[sex_idx, genotype_idx]
     # As with viability, this function multiplies current values.
     fecundity_arr = population.config.fecundity_fitness
-    
+
     # Resolve one or more alleles
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
@@ -419,7 +431,7 @@ def _apply_sexual_selection_allele_scaling(
     #   sexual_selection_fitness[female_genotype_idx, male_genotype_idx]
     # Effect is computed from male allele copies, then applied per pair.
     sex_sel_arr = population.config.sexual_selection_fitness
-    
+
     # Resolve one or more alleles
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
@@ -648,7 +660,7 @@ def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'Genet
             name=f"{preset.name}/gamete",
             refresh=False,
         )
-    
+
     if zygote_mod is not None:
         population.add_zygote_modifier(
             zygote_mod,
@@ -689,9 +701,9 @@ class GeneticPreset(ABC):
         # Legacy API (deprecated)
         preset.apply(population)
     """
-    
+
     def __init__(
-        self, 
+        self,
         name: str = "",
         species: Optional[Species] = None,
     ):
@@ -745,7 +757,7 @@ class GeneticPreset(ABC):
                 f"for preset '{self.name}'."
             )
         return gene
-    
+
     @abstractmethod
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Return a gamete modifier or None.
@@ -758,7 +770,7 @@ class GeneticPreset(ABC):
         haploid genotype space.
         """
         return None
-    
+
     @abstractmethod
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
         """Return a zygote modifier or None.
@@ -771,7 +783,7 @@ class GeneticPreset(ABC):
         diploid genotypes.
         """
         return None
-    
+
     @abstractmethod
     def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Return a declarative fitness patch dict to modify population config tensors.
@@ -785,7 +797,7 @@ class GeneticPreset(ABC):
         methods (viability_fitness_modifier, etc.) for fitness effect
         """
         return None
-    
+
     def _resolve_allele_name(self, allele: _AlleleSpecifier) -> str:
         """Helper to resolve allele inputs to their string names."""
         if isinstance(allele, Gene):
@@ -850,7 +862,7 @@ class HomingDrive(GeneticPreset):
         )
         population.apply_preset(drive)
     """
-    
+
     def __init__(
         self,
         name: str,
@@ -931,10 +943,10 @@ class HomingDrive(GeneticPreset):
         self._str_target_allele = self._resolve_allele_name(target_allele)
         self._str_resistance_allele = (self._resolve_allele_name(resistance_allele)
             if resistance_allele else None)
-        self._str_functional_resistance_allele = (self._resolve_allele_name(functional_resistance_allele) 
+        self._str_functional_resistance_allele = (self._resolve_allele_name(functional_resistance_allele)
             if functional_resistance_allele else None)
         self._str_cas9_allele = self._resolve_allele_name(cas9_allele) if cas9_allele else None
-        
+
         self.drive_conversion_rate = self._resolve_rates(drive_conversion_rate)
         self.late_germline_resistance_formation_rate = self._resolve_rates(late_germline_resistance_formation_rate)
         self.embryo_resistance_formation_rate = self._resolve_rates(embryo_resistance_formation_rate)
@@ -944,26 +956,26 @@ class HomingDrive(GeneticPreset):
         self.fecundity_scaling = fecundity_scaling
         self.viability_scaling = viability_scaling
         self.sexual_selection_scaling = sexual_selection_scaling
-        
+
         self.viability_mode = viability_mode
         self.fecundity_mode = fecundity_mode
         self.sexual_selection_mode = sexual_selection_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
-        
+
         super().__init__(name=name, species=species)
 
     def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for homing drive scaling configs."""
         # Combine drive and non-functional resistance alleles into a single group.
-        # This ensures that a "Drive|Resistance" genotype is treated as having 
+        # This ensures that a "Drive|Resistance" genotype is treated as having
         # 2 copies of the "disrupted" allele class, which is crucial for correct
         # dominant/recessive scaling logic.
         alleles = [self._str_drive_allele]
         if self._str_resistance_allele:
             alleles.append(self._str_resistance_allele)
-        
+
         patch = _make_fitness_patch_given_allele_scaling(
             alleles,
             self.viability_scaling,
@@ -973,9 +985,9 @@ class HomingDrive(GeneticPreset):
             self.fecundity_mode,
             self.sexual_selection_mode,
         )
-        
+
         return patch
-    
+
     def _instantiate_allele(self, allele_name: str, population: 'BasePopulation[Any]') -> Gene:
         """Helper to get Gene object for an allele name from the population's species."""
         gene = population.species.gene_index.get(allele_name)
@@ -1022,9 +1034,9 @@ class HomingDrive(GeneticPreset):
                 has_cas9 = count_allele_copies(gt, self.cas9_allele) > 0
                 return has_drive and has_cas9
             return has_drive
-        
+
         # RuleSet compiles these rules into a Sequential Cascade.
-        # This means the target pool shrinks after every rule. 
+        # This means the target pool shrinks after every rule.
         # So Rule 2 (Resistance) only acts on the targets that FAILED Rule 1 (Homing).
         rule_set = GameteConversionRuleSet(f"{self.name}_Homing")
         for sex in (Sex.FEMALE, Sex.MALE):
@@ -1041,14 +1053,14 @@ class HomingDrive(GeneticPreset):
                     sex_filter=sex,
                     genotype_filter=drive_carrier_filter,
                 )
-            
+
             # 2. Germline Resistance (Target -> Resistance)
             # This operates ON THE REMAINDER of the target alleles (e.g. the 30% that survived Homing).
             if res_rate > 0:
                 if self.functional_resistance_allele and self.functional_resistance_ratio > 0:
                     # 2a. Functional resistance
                     # Applying absolute `res_rate * func_res_ratio` directly works because GameteAlleleConversionRule
-                    # calculates rates against the *current* target pool. So if 30% targets are left, and this 
+                    # calculates rates against the *current* target pool. So if 30% targets are left, and this
                     # rate is 0.1, it converts 10% of that 30% (overall 3% of origin).
                     rule_set.add_allele_convert(
                         from_allele=self.target_allele,
@@ -1057,13 +1069,13 @@ class HomingDrive(GeneticPreset):
                         sex_filter=sex,
                         genotype_filter=drive_carrier_filter,
                     )
-                    
+
                     # 2b. Non-functional resistance
                     # The functional rule above removed `res_rate * func_res_ratio` from the available targets.
-                    # To hit the correct math for the *remaining* non-functional portion, we divide the 
+                    # To hit the correct math for the *remaining* non-functional portion, we divide the
                     # non-functional rate by whatever remains of the target pool after the functional edits.
                     target_remaining = 1.0 - (res_rate * self.functional_resistance_ratio)
-                    adjusted_nf_rate = ((res_rate * (1.0 - self.functional_resistance_ratio)) 
+                    adjusted_nf_rate = ((res_rate * (1.0 - self.functional_resistance_ratio))
                                         / target_remaining) if target_remaining > 0 else 0.0
                     if adjusted_nf_rate > 0:
                         rule_set.add_allele_convert(
@@ -1084,7 +1096,7 @@ class HomingDrive(GeneticPreset):
                     )
 
             # 3. Gamete labeling for maternal Cas9 deposition
-            # Instead of editing alleles, this tags the entire output gamete from drive-carrying females 
+            # Instead of editing alleles, this tags the entire output gamete from drive-carrying females
             # with `cas9_deposition_glab`. The zygote modifier will read this tag to apply embryo resistance.
             if sex == Sex.FEMALE or self.use_paternal_deposition:
                 rule_set.add_hg_convert(
@@ -1095,9 +1107,9 @@ class HomingDrive(GeneticPreset):
                     genotype_filter=drive_carrier_filter,
                     target_glab=self.cas9_deposition_glab
                 )
-        
+
         return rule_set.to_gamete_modifier(population) if rule_set.rules else None
-    
+
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
         """Implement embryo resistance.
         
@@ -1170,7 +1182,7 @@ class HomingDrive(GeneticPreset):
                         paternal_glab=p_glab,
                         genotype_filter=g_filter,
                     )
-            
+
         return rule_set.to_zygote_modifier(population) if rule_set.rules else None
 
 

@@ -2,19 +2,28 @@
 Numba Switchable Decorators
 ===========================
 
-Provides configurable Numba JIT compilation for functions (@njit_switch) and 
+Provides configurable Numba JIT compilation for functions (@njit_switch) and
 classes (@jitclass_switch) with a single global control switch.
 """
 
-from typing import Callable, Optional, TypeVar, ParamSpec, overload, cast, Any, TypedDict
-from contextlib import contextmanager
-from functools import wraps
+import os
+import re
+import sys
 import threading
 import time
-import sys
-import os
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
-import re
+from typing import (
+    Any,
+    Callable,
+    Optional,
+    ParamSpec,
+    TypedDict,
+    TypeVar,
+    cast,
+    overload,
+)
 
 __all__ = [
     "NUMBA_ENABLED", "is_numba_enabled", "enable_numba", "disable_numba",
@@ -138,7 +147,8 @@ def _apply_numba_cache_dir() -> None:
 
     try:
         from numba.core import config as numba_config  # pyright: ignore
-        setattr(numba_config, "CACHE_DIR", str(cache_dir))
+        config_obj: Any = numba_config
+        setattr(config_obj, "CACHE_DIR", str(cache_dir))  # noqa: B010
     except Exception:
         pass
 
@@ -298,10 +308,11 @@ def _install_cache_log_formatter() -> None:
         except Exception:
             return
 
-        if not hasattr(numba_caching, "_cache_log"):
+        caching_obj: Any = numba_caching
+        if not hasattr(caching_obj, "_cache_log"):
             return
 
-        original_cache_log = getattr(numba_caching, "_cache_log")
+        original_cache_log = cast(Callable[..., Any], getattr(caching_obj, "_cache_log"))  # noqa: B009
 
         @wraps(original_cache_log)
         def _formatted_cache_log(msg: Any, *args: Any) -> None:
@@ -349,7 +360,7 @@ def _install_cache_log_formatter() -> None:
                                 f"{child_indent}💡 Compiling function: `{cached_fn}`... ✅ Cache Stored",
                             )
 
-        setattr(numba_caching, "_cache_log", _formatted_cache_log)
+        setattr(caching_obj, "_cache_log", _formatted_cache_log)  # noqa: B010
         _NUMBA_CACHE_LOG_PATCHED = True  # pyright: ignore[reportConstantRedefinition]
 
 
@@ -373,7 +384,8 @@ def _install_dispatcher_compile_formatter() -> None:
             return
 
         dispatcher_cls = numba_dispatcher.Dispatcher
-        original_compile_for_args = getattr(dispatcher_cls, "_compile_for_args")
+        dispatcher_obj: Any = dispatcher_cls
+        original_compile_for_args = cast(Callable[..., Any], getattr(dispatcher_obj, "_compile_for_args"))  # noqa: B009
 
         @wraps(original_compile_for_args)
         def _formatted_compile_for_args(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -406,6 +418,7 @@ def _install_dispatcher_compile_formatter() -> None:
                 "seen_child_functions": root_seen_child_functions,
             }
             stack.append(context)
+            result: Any
             try:
                 result = original_compile_for_args(self, *args, **kwargs)
             finally:
@@ -420,14 +433,14 @@ def _install_dispatcher_compile_formatter() -> None:
 
             return result
 
-        setattr(dispatcher_cls, "_compile_for_args", _formatted_compile_for_args)
+        setattr(dispatcher_obj, "_compile_for_args", _formatted_compile_for_args)  # noqa: B010
         _NUMBA_DISPATCHER_PATCHED = True  # pyright: ignore[reportConstantRedefinition]
 
 
 def is_numba_enabled() -> bool:
     """
     Check if Numba JIT compilation is currently enabled.
-    
+
     Returns:
         bool: True if Numba is enabled (default), False if disabled
     """
@@ -481,29 +494,29 @@ def njit_switch(
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Numba @njit decorator for functions (controlled by global NUMBA_ENABLED flag).
-    
+
     Args:
         func: Function to decorate
         cache: Cache compiled functions (default: True)
         parallel: Enable automatic parallelization (default: False)
         fastmath: Enable fast math optimizations (default: False)
         **njit_kwargs: Additional arguments for numba.njit
-    
+
     Usage:
         ```python
         @njit_switch
         def my_func(x):
             ...
-        
+
         @njit_switch(parallel=True, fastmath=True)
         def my_parallel_func(x):
             ...
         ```
     """
-    
+
     def decorator(fn: Callable[P, R]) -> Callable[P, R]:
         numba_func: Optional[Callable[P, R]] = None
-        
+
         if NUMBA_ENABLED:
             try:
                 from numba import njit  # pyright: ignore
@@ -512,7 +525,8 @@ def njit_switch(
                 _apply_numba_cache_dir()
 
                 # Keep all JIT/cache output under one project switch.
-                setattr(numba_config, "DEBUG_CACHE", 1 if NUMBA_LOG_ENABLED else 0)
+                config_obj: Any = numba_config
+                setattr(config_obj, "DEBUG_CACHE", 1 if NUMBA_LOG_ENABLED else 0)  # noqa: B010
                 _install_cache_log_formatter()
                 _install_dispatcher_compile_formatter()
 
@@ -530,10 +544,10 @@ def njit_switch(
                 pass
             except Exception:
                 pass
-        
+
         # Return compiled or original function
         return numba_func if numba_func is not None else fn
-    
+
     # Support both @njit_switch and @njit_switch(...)
     if func is not None:
         return decorator(func)
@@ -545,7 +559,7 @@ def njit_switch(
 
 def disable_numba():
     """Disable Numba JIT compilation globally (use pure Python).
-    
+
     Useful for debugging or when you need Python-compatible error messages.
     Note: Numba is ENABLED by default.
     """
@@ -560,7 +574,8 @@ def disable_numba_log():
 
     try:
         from numba.core import config as numba_config  # pyright: ignore
-        setattr(numba_config, "DEBUG_CACHE", 0)
+        config_obj: Any = numba_config
+        setattr(config_obj, "DEBUG_CACHE", 0)  # noqa: B010
     except Exception:
         pass
 
@@ -573,7 +588,7 @@ def disable_numba_signature_trace():
 
 def enable_numba():
     """Re-enable Numba JIT compilation globally (default state).
-    
+
     Numba is enabled by default for maximum performance.
     Call this to restore Numba after it was disabled.
     """
@@ -589,7 +604,8 @@ def enable_numba_log():
 
     try:
         from numba.core import config as numba_config  # pyright: ignore
-        setattr(numba_config, "DEBUG_CACHE", 1)
+        config_obj: Any = numba_config
+        setattr(config_obj, "DEBUG_CACHE", 1)  # noqa: B010
         _install_cache_log_formatter()
         _install_dispatcher_compile_formatter()
     except Exception:
@@ -605,14 +621,14 @@ def enable_numba_signature_trace():
 @contextmanager
 def numba_disabled():
     """Context manager to temporarily disable Numba (use pure Python).
-    
+
     Useful for debugging within a specific block. Numba is enabled by default,
     so it will be automatically restored after exiting the context.
-    
+
     Usage:
         ```python
         from natal.numba_utils import numba_disabled
-        
+
         # Default: Numba enabled
         with numba_disabled():
             pop.run(n_steps=10)  # Temporarily uses pure Python
@@ -631,14 +647,14 @@ def numba_disabled():
 @contextmanager
 def numba_enabled():
     """Context manager to ensure Numba is enabled (default state).
-    
+
     Numba is enabled by default, but this can force re-enable it if temporarily
     disabled elsewhere. The original state is restored after exiting the context.
-    
+
     Usage:
         ```python
         from natal.numba_utils import numba_enabled
-        
+
         with numba_enabled():
             pop.run(n_steps=100)  # Guaranteed to run with JIT
         # Original state is restored after
@@ -655,20 +671,20 @@ def numba_enabled():
 
 def with_numba_disabled(func: Callable[P, R]) -> Callable[P, R]:
     """Decorator to run a function with Numba disabled (pure Python).
-    
+
     Useful for testing functions with pure Python, which provides better
     error messages and debugging capabilities. Numba is enabled by default,
     so this decorator will restore it after the function returns.
-    
+
     Usage:
         ```python
         from natal.numba_utils import with_numba_disabled
-        
+
         @with_numba_disabled
         def debug_version():
             pop.run(n_steps=10)
             # Runs with pure Python for easier debugging
-        
+
         debug_version()  # Temporarily disables Numba
         # Numba automatically restored after
         ```
@@ -681,19 +697,19 @@ def with_numba_disabled(func: Callable[P, R]) -> Callable[P, R]:
 
 def with_numba_enabled(func: Callable[P, R]) -> Callable[P, R]:
     """Decorator to ensure a function runs with Numba enabled (default state).
-    
+
     Since Numba is enabled by default, this is primarily useful for ensuring
     a function uses JIT even if Numba was temporarily disabled elsewhere.
-    
+
     Usage:
         ```python
         from natal.numba_utils import with_numba_enabled
-        
+
         @with_numba_enabled
         def performance_critical():
             pop.run(n_steps=1000)
             # Guaranteed to run with JIT for maximum speed
-        
+
         performance_critical()  # Numba guaranteed enabled
         # Original state is restored after
         ```

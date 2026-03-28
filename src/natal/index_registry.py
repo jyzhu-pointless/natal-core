@@ -18,9 +18,10 @@ Todo:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
-from natal.genetic_entities import Genotype, HaploidGenotype
+from collections.abc import Sequence
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
+from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.numba_utils import njit_switch
 
 

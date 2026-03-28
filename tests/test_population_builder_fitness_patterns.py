@@ -5,8 +5,8 @@ import uuid
 from unittest.mock import patch
 
 from natal.genetic_structures import Species
-from natal.population_builder import AgeStructuredPopulationBuilder
 from natal.helpers import resolve_sex_label
+from natal.population_builder import AgeStructuredPopulationBuilder
 
 
 def _make_simple_species() -> Species:
@@ -129,10 +129,20 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
 
             def apply_recipe(self, recipe) -> None:
                 return None
-            
+
             @property
             def new_adult_age(self):
                 return 2
+
+            @property
+            def config(self):
+                return self._config
+
+            @property
+            def index_registry(self):
+                return self._index_registry
+
+
 
         fake_config = _FakeConfig()
 

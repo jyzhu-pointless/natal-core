@@ -10,13 +10,15 @@ symbols once at registration time and then provides two execution paths:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Sequence, TypeAlias
+import inspect
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
 
 import numpy as np
-import inspect
 from numpy.typing import NDArray
 
 from .types import (
+    CompiledHookDescriptor,
     DemeSelector,
     hash_key,
     is_numba_dispatcher,
@@ -24,7 +26,6 @@ from .types import (
     stable_callable_identity,
     validate_numba_hook_required,
     write_codegen_module,
-    CompiledHookDescriptor,
 )
 
 if TYPE_CHECKING:
@@ -33,14 +34,15 @@ if TYPE_CHECKING:
     from natal.index_registry import IndexRegistry
 
 
-SelectorItem: TypeAlias = int | str | "Genotype"
-SelectorSpec: TypeAlias = SelectorItem | range | List[SelectorItem] | tuple[SelectorItem, ...]
+
+SelectorItem: TypeAlias = Union[int, str, "Genotype"]
+SelectorSpec: TypeAlias = Union[SelectorItem, range, List[SelectorItem], tuple[SelectorItem, ...]]
 
 
 def _resolve_selector_to_array(
     spec: SelectorSpec,
-    index_registry: "IndexRegistry",
-    diploid_genotypes: Sequence["Genotype"],
+    index_registry: IndexRegistry,
+    diploid_genotypes: Sequence[Genotype],
 ) -> NDArray[np.int32]:
     """Resolve one selector spec into an int32 index array.
 
@@ -87,7 +89,7 @@ def _resolve_selector_to_array(
 
 def compile_selector_hook(
     func: Callable[..., Any],
-    pop: "BasePopulation[Any]",
+    pop: BasePopulation[Any],
     event: str,
     selectors_spec: Dict[str, SelectorSpec],
     priority: int = 0,
@@ -133,7 +135,7 @@ def compile_selector_hook(
         sig = inspect.signature(py_func)
         # Check if user fn expects deme_id (3 positional args before kwargs)
         has_deme_id = len([p for p in sig.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]) >= 3
-        
+
         njit_fn = _compile_selector_njit_wrapper(func, resolved, has_deme_id)
         return CompiledHookDescriptor(
             name=func.__name__,
@@ -146,7 +148,7 @@ def compile_selector_hook(
         )
 
     # Python path: pass scalar for length-1 selectors, full array otherwise.
-    def py_wrapper(population: "BasePopulation[Any]") -> None:
+    def py_wrapper(population: BasePopulation[Any]) -> None:
         kwargs = _build_selector_python_kwargs(resolved)
         func(population, **kwargs)
 
@@ -162,13 +164,13 @@ def compile_selector_hook(
 
 
 def _compile_selector_njit_wrapper(
-    user_fn: Callable[..., Any], 
+    user_fn: Callable[..., Any],
     resolved_selectors: Dict[str, NDArray[np.int32]],
     has_deme_id: bool,
 ) -> Callable[..., Any]:
     """Generate a Numba wrapper with selector constants baked in.
 
-    The generated module imports ``_njit_switch`` from ``hook_dsl`` so wrapper
+    The generated module imports ``njit_switch`` from ``hook_dsl`` so wrapper
     compilation respects the same global Numba switch and cache configuration.
     """
     args_str = _build_selector_njit_literal_args(resolved_selectors)
@@ -186,17 +188,17 @@ def _compile_selector_njit_wrapper(
 
     selector_placeholders = [f"_SEL_{name}" for name in resolved_selectors.keys()]
     code_lines = [
-        "from natal.hook_dsl import _njit_switch",
+        "from natal.hook_dsl import njit_switch",
         "_USER_FN = None",
     ]
     code_lines.extend([f"{placeholder} = None" for placeholder in selector_placeholders])
-    
+
     call_args = "ind_count, tick, deme_id" if has_deme_id else "ind_count, tick"
-    
+
     code_lines.extend(
         [
             "",
-            "@_njit_switch(cache=True)",
+            "@njit_switch(cache=True)",
             f"def {fn_name}(ind_count, tick, deme_id=0):",
             f"    return _USER_FN({call_args}, {args_str})",
             "",
@@ -206,7 +208,7 @@ def _compile_selector_njit_wrapper(
 
     module_path = write_codegen_module(module_stem, code)
     module = load_codegen_module(module_stem, module_path)
-    setattr(module, "_USER_FN", user_fn)
+    setattr(module, "_USER_FN", user_fn)  # noqa: B010
     for name, value in _build_selector_njit_runtime_values(resolved_selectors).items():
         setattr(module, f"_SEL_{name}", value)
     return getattr(module, fn_name)

@@ -1,6 +1,7 @@
 """Tests for small-sample continuous binomial sampling methods."""
 
 import numpy as np
+
 from natal.algorithms import continuous_binomial
 
 

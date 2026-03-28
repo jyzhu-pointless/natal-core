@@ -22,16 +22,25 @@
 #   - Cas9/gRNA-mediated cleavage + repair in the zygote
 
 from typing import (
-    Any, Dict, Optional, Tuple, Callable, Union, TYPE_CHECKING, List, Literal,
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
 )
+
+from natal.genetic_entities import Gene, Genotype, HaploidGenotype
+from natal.index_registry import compress_hg_glab
 from natal.modifiers import (
-    ZygoteModifier,
     GenotypeFilter,
+    ZygoteModifier,
     evaluate_genotype_filter,
     resolve_optional_glab_index,
 )
-from natal.genetic_entities import Gene, Genotype, HaploidGenotype
-from natal.index_registry import compress_hg_glab
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -291,8 +300,8 @@ class ZygoteConversionRuleSet:
             *self* for chaining.
         """
         rule = ZygoteGenotypeConversionRule(
-            genotype_match, 
-            to_genotype, 
+            genotype_match,
+            to_genotype,
             rate,
             name=name,
             maternal_glab=maternal_glab,
@@ -327,8 +336,8 @@ class ZygoteConversionRuleSet:
             *self* for chaining.
         """
         rule = ZygoteAlleleConversionRule(
-            from_allele, 
-            to_allele, 
+            from_allele,
+            to_allele,
             rate,
             name=name,
             side=side,
@@ -440,7 +449,7 @@ class ZygoteConversionRuleSet:
                                     next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
                             else:
                                 next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
-                                
+
                     # The output of this rule becomes the input for the next rule.
                     # This enables tracking sequences like: Embyro edits -> CRISPR cutting -> NHEJ resistance.
                     current_freqs = next_freqs
@@ -448,13 +457,13 @@ class ZygoteConversionRuleSet:
                 # Clean up and map the final Genotype objects back to integer indices for the C-core array.
                 final_dist: Dict[int, float] = {}
                 base_idx = genotype_index[base_gt]
-                
+
                 for gt, prob in current_freqs.items():
                     if prob > 1e-12:
                         idx = genotype_index.get(gt)
                         if idx is not None:
                             final_dist[idx] = final_dist.get(idx, 0.0) + prob
-                            
+
                 # If there's a difference from pure baseline genotype
                 if not (len(final_dist) == 1 and final_dist.get(base_idx) == 1.0):
                     result[(c1, c2)] = final_dist

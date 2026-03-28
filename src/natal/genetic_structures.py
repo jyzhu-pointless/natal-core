@@ -17,27 +17,42 @@ Design Notes
 """
 
 from __future__ import annotations
-import numpy as np
-from typing import (
-    Generic, TypeVar, Union, Optional, Any, overload,
-    Dict, List, Set, Tuple, Iterable, Callable, 
-    TYPE_CHECKING, TypeGuard, Hashable, cast, Protocol
-)
-from numpy.typing import NDArray
-from abc import ABC, abstractmethod
-from enum import Enum
-import itertools
+
 import importlib
+import itertools
 import logging
+from abc import ABC, abstractmethod
+from collections.abc import Hashable, Iterable
+from enum import Enum
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Protocol,
+    Set,
+    Tuple,
+    TypeGuard,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
+
+import numpy as np
+from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from natal.genetic_entities import Gene, Haplotype, HaploidGenome, Genotype
+    from natal.genetic_entities import Gene, Genotype, HaploidGenome, Haplotype
     from natal.genetic_patterns import GenotypePattern, GenotypePatternParser
 
 __all__ = [
     "Locus",
     "Chromosome", "Linkage",
-    "Species", "GenomeTemplate", "Karyotype"    
+    "Species", "GenomeTemplate", "Karyotype"
 ]
 
 T = TypeVar("T")  # Generic type
@@ -75,7 +90,7 @@ logger = logging.getLogger(__name__)  # temp logger
 
 # Global fallback cache for structures created without a Species (backward compatibility)
 # Format: {structure_type: {name: instance}}
-_GLOBAL_STRUCTURE_CACHE: Dict[type, Dict[str, 'GeneticStructure[Any]']] = {}
+_GLOBAL_STRUCTURE_CACHE: Dict[type, Dict[str, GeneticStructure[Any]]] = {}
 
 def ensure_type(obj: Any, expected_type: type) -> None:
     """
@@ -111,12 +126,12 @@ class SexChromosomeType(Enum):
     Y = "Y"                # Y chromosome in XY system, paternal only
     Z = "Z"                # Z chromosome in ZW system
     W = "W"                # W chromosome in ZW system, maternal only
-    
+
     @property
     def is_sex_chromosome(self) -> bool:
         """Whether this is a sex chromosome"""
         return self != SexChromosomeType.AUTOSOME
-    
+
     @property
     def sex_system(self) -> Optional[str]:
         """Returns the sex determination system this chromosome belongs to"""
@@ -125,17 +140,17 @@ class SexChromosomeType(Enum):
         elif self in (SexChromosomeType.Z, SexChromosomeType.W):
             return "ZW"
         return None
-    
+
     @property
     def maternal_only(self) -> bool:
         """Whether it can only be inherited from mother"""
         return self == SexChromosomeType.W
-    
+
     @property
     def paternal_only(self) -> bool:
         """Whether it can only be inherited from father"""
         return self == SexChromosomeType.Y
-    
+
 class RegistryBase(ABC, Generic[T]):
     """
     Base class for registries. Provides common interface for register/unregister operations.
@@ -173,12 +188,12 @@ class RegistryBase(ABC, Generic[T]):
     def _get_key(self, item: T) -> Hashable:
         """Extract the key for deduplication. Override in subclass."""
         pass
-    
+
     @abstractmethod
     def _single_register(self, item: T) -> None:
         """Register a single item. Override in subclass."""
         pass
-    
+
     @abstractmethod
     def _single_unregister(self, item: T) -> None:
         """Unregister a single item. Override in subclass."""
@@ -287,7 +302,7 @@ class EntityRegistry(RegistryBase[E]):
 
     def _get_key(self, item: E) -> E:
         return item  # Use object identity
-    
+
     def _single_register(self, item: E) -> None:
         self._check_type(item)
         if item not in self._set:
@@ -331,8 +346,8 @@ class ChildStructureRegistry(RegistryBase[S]):
     Supports both register (existing) and add (create + register).
     """
     def __init__(
-        self, 
-        owner: 'GeneticStructure[Any]', 
+        self,
+        owner: GeneticStructure[Any],
         expected_type: Optional[type[GeneticStructure[E]]] = None
     ):
         super().__init__(expected_type)
@@ -348,7 +363,7 @@ class ChildStructureRegistry(RegistryBase[S]):
 
     def _get_key(self, item: S) -> str:
         return item.name
-    
+
     def _single_register(self, item: S) -> None:
         """Register an existing child structure."""
         self._check_type(item)
@@ -385,16 +400,16 @@ class ChildStructureRegistry(RegistryBase[S]):
         expected_type = self._expected_type
         if expected_type is None:
             raise ValueError("expected_type not set, cannot construct child structure.")
-        
+
         # Get the Species from the owner
-        species: Optional['Species'] = self._owner.species
-        
+        species: Optional[Species] = self._owner.species
+
         # Check if structure already exists in cache (Species-scoped or global)
         if species is not None:
             # Preferred path: Species-scoped cache (isolation between species).
             if expected_type not in species.structure_cache:
                 species.structure_cache[expected_type] = {}
-            
+
             cache = species.structure_cache[expected_type]
             if name in cache:
                 # Return cached instance
@@ -408,7 +423,7 @@ class ChildStructureRegistry(RegistryBase[S]):
                     f"Cached structure for '{name}' has wrong type: "
                     f"expected {expected_type.__name__}, got {type(cached_child).__name__}"
                 )
-            
+
             # Create new child with parent (species is inherited automatically)
             created_child = expected_type(name, parent=self._owner, **kwargs)
             if not self._is_expected_child(created_child):
@@ -417,7 +432,7 @@ class ChildStructureRegistry(RegistryBase[S]):
                     f"expected {expected_type.__name__}, got {type(created_child).__name__}"
                 )
             child = created_child
-            
+
             # Cache it in the Species
             cache[name] = child
         else:
@@ -425,7 +440,7 @@ class ChildStructureRegistry(RegistryBase[S]):
             # bound into a Species context.
             if expected_type not in _GLOBAL_STRUCTURE_CACHE:
                 _GLOBAL_STRUCTURE_CACHE[expected_type] = {}
-            
+
             cache = _GLOBAL_STRUCTURE_CACHE[expected_type]
             if name in cache:
                 # Return cached instance
@@ -439,7 +454,7 @@ class ChildStructureRegistry(RegistryBase[S]):
                     f"Cached structure for '{name}' has wrong type: "
                     f"expected {expected_type.__name__}, got {type(cached_child).__name__}"
                 )
-            
+
             # Create new child with parent (no species means orphan)
             created_child = expected_type(name, parent=self._owner, **kwargs)
             if not self._is_expected_child(created_child):
@@ -448,10 +463,10 @@ class ChildStructureRegistry(RegistryBase[S]):
                     f"expected {expected_type.__name__}, got {type(created_child).__name__}"
                 )
             child = created_child
-            
+
             # Cache it globally
             cache[name] = child
-        
+
         return child
 
     def get(self, name: str) -> S:
@@ -464,7 +479,7 @@ class ChildStructureRegistry(RegistryBase[S]):
         """Iterate over child structures."""
         return iter(self._storage.values())
 
-    def __contains__(self, name_or_item: Union[str, 'GeneticStructure[Any]']) -> bool:
+    def __contains__(self, name_or_item: Union[str, GeneticStructure[Any]]) -> bool:
         """Check if a child structure exists by name or instance."""
         name = name_or_item if isinstance(name_or_item, str) else name_or_item.name
         return name in self._storage
@@ -501,17 +516,17 @@ class GeneticStructure(Generic[E]):
         >>> assert locus1 is not locus3  # Different speciess allow same name
     """
     child_structure_type: Optional[type[GeneticStructure[Any]]] = None  # Child structure type per subclass
-    _species: Optional['Species']
+    _species: Optional[Species]
 
     @property
-    def species(self) -> Optional['Species']:
+    def species(self) -> Optional[Species]:
         """Public accessor for the bound Species."""
         return self._species
 
     def __new__(
         cls,
         name: str,
-        *args: Any, 
+        *args: Any,
         **kwargs: Any
     ):
         # Extract species and parent from kwargs
@@ -521,7 +536,7 @@ class GeneticStructure(Generic[E]):
         assert isinstance(name, str), "Structure name must be a string."
         if name.strip() == "":
             raise ValueError("Structure name cannot be empty.")
-        
+
         # Determine which cache to use
         target_species = None
         if species is not None:
@@ -530,7 +545,7 @@ class GeneticStructure(Generic[E]):
         elif parent is not None:
             assert isinstance(parent, GeneticStructure), "parent must be a GeneticStructure instance."
             target_species = parent.species
-        
+
         # Get the appropriate cache
         if target_species is not None:
             # Use Species-scoped cache
@@ -542,30 +557,30 @@ class GeneticStructure(Generic[E]):
             if cls not in _GLOBAL_STRUCTURE_CACHE:
                 _GLOBAL_STRUCTURE_CACHE[cls] = {}
             cache = _GLOBAL_STRUCTURE_CACHE[cls]
-        
+
         # Check if instance already exists in cache
         if name in cache:
             return cache[name]
-        
+
         # Create new instance (do NOT cache here - cache in __init__ after success)
         instance = super().__new__(cls)
-        
+
         return instance
 
     def __init__(
-        self, 
+        self,
         name: str,
-        parent: Optional['GeneticStructure[Any]'] = None,
-        species: Optional['Species'] = None
+        parent: Optional[GeneticStructure[Any]] = None,
+        species: Optional[Species] = None
     ):
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
             return
-        
+
         assert isinstance(name, str), "Structure name must be a string."
         if name.strip() == "":
             raise ValueError("Structure name cannot be empty.")
-        
+
         # Registry wiring:
         # - _entities tracks runtime-bound entity instances (Gene/Haplotype/...)
         # - child_structures (if enabled by subclass) tracks structural children
@@ -575,7 +590,7 @@ class GeneticStructure(Generic[E]):
         # circular imports with natal.genetic_entities.
         self.name = name
         self._entities: EntityRegistry[E] = EntityRegistry()
-        
+
         # Track the root Species for this structure
         if species is not None:
             self._species = species
@@ -585,15 +600,15 @@ class GeneticStructure(Generic[E]):
         else:
             # This is a Species itself
             self._species = None
-        
+
         # Initialize child structures registry if applicable
         cls = self.__class__
         if cls.child_structure_type:
             self.child_structures = ChildStructureRegistry[cls.child_structure_type](
-                owner=self, 
+                owner=self,
                 expected_type=cls.child_structure_type
             )
-        
+
         # Strict constraint: must be added to a parent unless top-level
         if parent is not None:
             assert isinstance(parent, GeneticStructure), \
@@ -602,14 +617,14 @@ class GeneticStructure(Generic[E]):
             assert parent.child_structures is not None, \
                 f"Parent {parent.__class__.__name__} does not support child structures."
             parent.child_structures.register(self)
-        
+
         # Mark as initialized, avoiding re-initialization when created from cache
         self._initialized = True
-        
+
         # Cache the instance AFTER successful initialization
         self._add_to_cache(self._species)
-    
-    def _get_cache_for_species(self, species: Optional['Species']) -> Dict[str, 'GeneticStructure[E]']:
+
+    def _get_cache_for_species(self, species: Optional[Species]) -> Dict[str, GeneticStructure[E]]:
         """Get the appropriate cache for the given species."""
         cls = self.__class__
         if species is not None:
@@ -620,18 +635,18 @@ class GeneticStructure(Generic[E]):
             if cls not in _GLOBAL_STRUCTURE_CACHE:
                 _GLOBAL_STRUCTURE_CACHE[cls] = {}
             return _GLOBAL_STRUCTURE_CACHE[cls]
-    
-    def _remove_from_cache(self, species: Optional['Species']) -> None:
+
+    def _remove_from_cache(self, species: Optional[Species]) -> None:
         """Remove this structure from the specified species's cache (or global cache)."""
         cache = self._get_cache_for_species(species)
         cache.pop(self.name, None)
-    
-    def _add_to_cache(self, species: Optional['Species']) -> None:
+
+    def _add_to_cache(self, species: Optional[Species]) -> None:
         """Add this structure to the specified species's cache (or global cache)."""
         cache = self._get_cache_for_species(species)
         cache[self.name] = self
-    
-    def _bind_to_species(self, new_species: Optional['Species']) -> None:
+
+    def _bind_to_species(self, new_species: Optional[Species]) -> None:
         """Change the species binding and update caches accordingly.
         
         Args:
@@ -645,19 +660,19 @@ class GeneticStructure(Generic[E]):
         if not hasattr(self, '_species'):
             # Not yet initialized, skip cache management
             return
-            
+
         old_species = self._species
-        
+
         # No change, do nothing
         if old_species is new_species:
             return
-        
+
         # Remove from old cache
         self._remove_from_cache(old_species)
-        
+
         # Update species reference
         self._species = new_species
-        
+
         # Add to new cache
         self._add_to_cache(new_species)
 
@@ -687,12 +702,12 @@ class GeneticStructure(Generic[E]):
         """
         global _GLOBAL_STRUCTURE_CACHE
         _GLOBAL_STRUCTURE_CACHE.clear()
-    
+
     def add(
         self,
         name_or_specs: Union[str, List[str], List[Tuple[str, Dict[str, Any]]]],
         **kwargs: Any,
-    ) -> Union['GeneticStructure[Any]', List['GeneticStructure[Any]']]:
+    ) -> Union[GeneticStructure[Any], List[GeneticStructure[Any]]]:
         """
         Add child structure(s) to this structure.
 
@@ -715,11 +730,11 @@ class GeneticStructure(Generic[E]):
 
         assert isinstance(name_or_specs, (str, list)), \
             f"Expected str, List[str], or List[Tuple[str, Dict]], got {type(name_or_specs).__name__}"
-        
+
         # Single name
         if isinstance(name_or_specs, str):
             return child_registry.add(name_or_specs, **kwargs)
-        
+
         # List of names or (name, kwargs) tuples
         else:
             results: List[GeneticStructure[Any]] = []
@@ -733,10 +748,10 @@ class GeneticStructure(Generic[E]):
                 else:
                     raise TypeError(f"Invalid item in list: {item}. Expected str or (str, dict) tuple.")
             return results
-    
+
     def remove(
         self,
-        name_or_child: Union[str, 'GeneticStructure[Any]', List[Union[str, 'GeneticStructure[Any]']]],
+        name_or_child: Union[str, GeneticStructure[Any], List[Union[str, GeneticStructure[Any]]]],
     ) -> None:
         """
         Remove child structure(s) from this structure.
@@ -757,7 +772,7 @@ class GeneticStructure(Generic[E]):
         # Delegate to registry - it handles both str and object
         child_registry.unregister(name_or_child)
 
-    def get_child(self, name: str) -> 'GeneticStructure[Any]':
+    def get_child(self, name: str) -> GeneticStructure[Any]:
         """
         Get a child structure by name.
         
@@ -774,22 +789,22 @@ class GeneticStructure(Generic[E]):
         return child_registry.get(name)
 
     @property
-    def children(self) -> List['GeneticStructure[Any]']:
+    def children(self) -> List[GeneticStructure[Any]]:
         """Returns all child structures."""
         if not hasattr(self, "child_structures"):
             return []
         child_registry = self.child_structures
         return child_registry.all
 
-    def _requirechild_structures_registry(self) -> ChildStructureRegistry['GeneticStructure[Any]']:
+    def _requirechild_structures_registry(self) -> ChildStructureRegistry[GeneticStructure[Any]]:
         if not hasattr(self, "child_structures"):
             raise AttributeError(f"{self.__class__.__name__} does not support child structures.")
         return self.child_structures
-    
+
     def register(
         self,
         entity_or_entities: Union[E, List[E], Tuple[E, ...], Set[E]]
-    ) -> 'GeneticStructure[E]':
+    ) -> GeneticStructure[E]:
         """
         Register a single entity or an iterable of entities with this structure.
         
@@ -804,11 +819,11 @@ class GeneticStructure(Generic[E]):
         # Delegate single/batch normalization and strict type-checking to EntityRegistry.
         self._entities.register(entity_or_entities)
         return self
-    
+
     def unregister(
         self,
         entity_or_entities: Union[E, str, List[Union[E, str]], Tuple[Union[E, str], ...], Set[Union[E, str]]]
-    ) -> 'GeneticStructure[E]':
+    ) -> GeneticStructure[E]:
         """
         Unregister a single entity or an iterable of entities from this structure.
 
@@ -820,14 +835,14 @@ class GeneticStructure(Generic[E]):
         """
         self._entities.unregister(entity_or_entities)
         return self
-    
+
     @property
     def all_entities(self) -> List[E]:
         """
         Returns a list of all entities currently registered to this structure.
         """
         return self._entities.all
-    
+
     @classmethod
     def with_entities(
         cls,
@@ -847,17 +862,17 @@ class GeneticStructure(Generic[E]):
         entity_type = structure.entity_type
         if entity_type is None:
             raise TypeError(f"{cls.__name__} has no entity type defined.")
-        
+
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
 
         entities = [entity_type(name=en, **entity_kwargs) for en in entity_ids]
         structure.register(entities)
         return structure
-    
+
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.name}, {self.entity_type}={self.all_entities})"
-    
+
 # Locus (model-level) -> Gene (entity-level)
 class Locus(GeneticStructure['Gene']):
     """
@@ -874,25 +889,25 @@ class Locus(GeneticStructure['Gene']):
     child_structure_type = None  # Locus has no child structures
 
     def __init__(
-        self, 
-        name: str, 
+        self,
+        name: str,
         position: Optional[Union[int, float]] = None,
-        chromosome: Optional['Chromosome'] = None,
-        parent: Optional['Chromosome'] = None,
+        chromosome: Optional[Chromosome] = None,
+        parent: Optional[Chromosome] = None,
         **kwargs: Any
     ):
         # Check if already initialized (cached instance)
         if hasattr(self, '_initialized') and self._initialized:
             return
-        
+
         # Parent is alias for chromosome
         if chromosome is None:
             chromosome = parent
-        
+
         # Save parent reference for cache invalidation
         self._parent_chromosome = chromosome
-        
-        # Compute default position before super().__init__ 
+
+        # Compute default position before super().__init__
         # (since parent.register may be called)
         if position is None:
             if chromosome is not None and hasattr(chromosome, 'child_structures') and len(chromosome.child_structures) > 0:
@@ -904,21 +919,21 @@ class Locus(GeneticStructure['Gene']):
                 position = max_pos + 1
             else:
                 position = 0
-        
+
         self._position = position
-        
+
         # Store custom parameters as attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
-        
+
         # Locus's species is automatically inherited from parent Chromosome
         super().__init__(name, parent=chromosome)
-    
+
     @property
     def position(self) -> Union[int, float]:
         """The linear position on the chromosome."""
         return self._position
-    
+
     @position.setter
     def position(self, value: Union[int, float]) -> None:
         """Set the position. Triggers cache invalidation in parent Linkage."""
@@ -935,8 +950,8 @@ class Locus(GeneticStructure['Gene']):
 
     def register(
         self,
-        entity_or_entities: Union['Gene', List['Gene'], Tuple['Gene', ...], Set['Gene']]
-    ) -> 'Locus':
+        entity_or_entities: Union[Gene, List[Gene], Tuple[Gene, ...], Set[Gene]]
+    ) -> Locus:
         """
         Register gene entities and invalidate species gene index cache.
         """
@@ -947,8 +962,8 @@ class Locus(GeneticStructure['Gene']):
 
     def unregister(
         self,
-        entity_or_entities: Union['Gene', str, List[Union['Gene', str]], Tuple[Union['Gene', str], ...], Set[Union['Gene', str]]]
-    ) -> 'Locus':
+        entity_or_entities: Union[Gene, str, List[Union[Gene, str]], Tuple[Union[Gene, str], ...], Set[Union[Gene, str]]]
+    ) -> Locus:
         """
         Unregister gene entities and invalidate species gene index cache.
         """
@@ -958,22 +973,22 @@ class Locus(GeneticStructure['Gene']):
         return self
 
     @property
-    def alleles(self) -> List['Gene']:
+    def alleles(self) -> List[Gene]:
         """Alias for all_entities - returns all registered alleles (genes)."""
         return self.all_entities
 
-    def register_allele(self, gene: 'Gene') -> 'Locus':
+    def register_allele(self, gene: Gene) -> Locus:
         """Alias for register - register a single allele."""
         return self.register(gene)
 
-    def unregister_allele(self, gene: 'Gene') -> 'Locus':
+    def unregister_allele(self, gene: Gene) -> Locus:
         """Alias for unregister - unregister a single allele."""
         return self.unregister(gene)
-    
+
     def add_alleles(
         self,
-        alleles_or_allele_names: Union[List[Union['Gene', str]], 'Gene', str],
-    ) -> 'Locus':
+        alleles_or_allele_names: Union[List[Union[Gene, str]], Gene, str],
+    ) -> Locus:
         """
         Add one or more alleles (genes) to this locus.
 
@@ -986,26 +1001,26 @@ class Locus(GeneticStructure['Gene']):
             with the register_allele/unregister_allele methods.
         """
         from natal.genetic_entities import Gene
-        
+
         if isinstance(alleles_or_allele_names, (Gene, str)):
             alleles_or_allele_names = [alleles_or_allele_names]
-        
+
         for item in alleles_or_allele_names:
             assert isinstance(item, (Gene, str)), f"Expected Gene or str, got {type(item).__name__} instead."
             if isinstance(item, Gene):
                 self.register(item)
             else:
                 Gene(item, locus=self)  # Auto-registers via Gene.__init__
-        
+
         return self
 
     @classmethod
     def with_alleles(
         cls,
         name: str,
-        alleles_or_allele_names: Union[List[Union['Gene', str]], 'Gene', str],
+        alleles_or_allele_names: Union[List[Union[Gene, str]], Gene, str],
         position: Optional[Union[int, float]] = None
-    ) -> 'Locus':
+    ) -> Locus:
         """
         Factory method to create a Locus and register alleles (genes) by names.
 
@@ -1023,7 +1038,7 @@ class Locus(GeneticStructure['Gene']):
             >>> locus.alleles  # â†’ [Gene("A1"), Gene("A2"), Gene("A3")]
         """
         return cls(name, position=position).add_alleles(alleles_or_allele_names)
-    
+
     def __repr__(self) -> str:
         allele_names = [g.name for g in self.alleles]
         return f"Locus({self.name!r}, position={self.position}, alleles={allele_names})"
@@ -1056,11 +1071,11 @@ class Chromosome(GeneticStructure['Haplotype']):
     child_structures: ChildStructureRegistry[Locus]
 
     def __init__(
-        self, 
-        name: str, 
+        self,
+        name: str,
         loci: Optional[List[Locus]] = None,
-        species: Optional['Species'] = None,
-        parent: Optional['Species'] = None,
+        species: Optional[Species] = None,
+        parent: Optional[Species] = None,
         recombination_rates: Optional[Union[List[float], np.ndarray]] = None,
         sex_type: Optional[Union[SexChromosomeType, str]] = None,
     ):
@@ -1070,7 +1085,7 @@ class Chromosome(GeneticStructure['Haplotype']):
             self._recombination_map: Optional[Chromosome.RecombinationMap] = None
             self._sorted_loci_cache: Optional[List[Locus]] = None  # Cache for sorted loci
             self._sex_type: SexChromosomeType = SexChromosomeType.AUTOSOME
-        
+
         # Check if already initialized (cached instance)
         if hasattr(self, '_initialized') and self._initialized:
             return
@@ -1078,17 +1093,17 @@ class Chromosome(GeneticStructure['Haplotype']):
         # Parent is alias for species
         if species is None:
             species = parent
-        
+
         # Set sex chromosome type
         self._set_sex_type(sex_type)
-        
+
         # Chromosome's species is automatically inherited from parent Species
         super().__init__(name, parent=species)
-        
+
         if loci:
             for locus in loci:
                 self.add_locus(locus)
-        
+
         # Initialize recombination map
         self._invalidate_recombination_map_cache()
 
@@ -1103,7 +1118,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 )
             for i, rate in enumerate(recombination_rates):
                 self.recombination_map[i] = rate
-    
+
     def _set_sex_type(self, sex_type: Optional[Union[SexChromosomeType, str]]) -> None:
         """Set sex chromosome type (internal method)"""
         assert isinstance(sex_type, (SexChromosomeType, str, type(None))), f"Expected SexChromosomeType or str, got {type(sex_type).__name__}"
@@ -1128,27 +1143,27 @@ class Chromosome(GeneticStructure['Haplotype']):
                     f"Unknown sex_type: {sex_type!r}. "
                     f"Valid values: 'X', 'Y', 'Z', 'W', 'autosome', or SexChromosomeType enum."
                 )
-    
+
     @property
     def sex_type(self) -> SexChromosomeType:
         """Returns the sex chromosome type"""
         return self._sex_type
-    
+
     @sex_type.setter
     def sex_type(self, value: Optional[Union[SexChromosomeType, str]]) -> None:
         """Set the sex chromosome type"""
         self._set_sex_type(value)
-    
+
     @property
     def is_sex_chromosome(self) -> bool:
         """Whether this is a sex chromosome"""
         return self._sex_type.is_sex_chromosome
-    
+
     @property
     def is_autosome(self) -> bool:
         """Whether this is an autosome"""
         return not self.is_sex_chromosome
-    
+
     @property
     def sex_system(self) -> Optional[str]:
         """Returns the sex determination system this chromosome belongs to ('XY', 'ZW', or None)"""
@@ -1165,18 +1180,18 @@ class Chromosome(GeneticStructure['Haplotype']):
         """Returns the list of loci in this chromosome, sorted by position (cached)."""
         if self._sorted_loci_cache is None:
             self._sorted_loci_cache = sorted(
-                self.child_structures.all, 
+                self.child_structures.all,
                 key=lambda l: l.position
             )
         return self._sorted_loci_cache
-    
+
     def _invalidate_recombination_map_cache(self) -> None:
         """Invalidate sorted loci cache and update recombination map."""
         self._sorted_loci_cache = None
         self._update_recombination_map()
-    
+
     @property
-    def recombination_map(self) -> 'Chromosome.RecombinationMap':
+    def recombination_map(self) -> Chromosome.RecombinationMap:
         """Returns the recombination map for this chromosome.
         
         The recombination map stores recombination rates between adjacent loci.
@@ -1188,15 +1203,15 @@ class Chromosome(GeneticStructure['Haplotype']):
         if self._recombination_map is None:
             raise ValueError("Recombination map is unavailable for chromosomes with fewer than 2 loci.")
         return self._recombination_map
-    
+
     # Backward compatibility alias
     @property
-    def recombination_matrix(self) -> 'Chromosome.RecombinationMap':
+    def recombination_matrix(self) -> Chromosome.RecombinationMap:
         """Deprecated: Use recombination_map instead."""
         return self.recombination_map
-    
+
     def add_locus(
-        self, 
+        self,
         locus_or_name: Union[Locus, str],
         position: Optional[Union[int, float]] = None,
         recombination_rate_with_previous: float = 0.0,
@@ -1223,7 +1238,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         # Get current sorted loci and old map before adding
         old_sorted_loci = self.loci.copy() if self._sorted_loci_cache else []
         old_map = self._recombination_map
-        
+
         assert isinstance(locus_or_name, (Locus, str)), \
             f"Expected Locus instance or str, got {type(locus_or_name).__name__}"
         if isinstance(locus_or_name, str):
@@ -1237,7 +1252,7 @@ class Chromosome(GeneticStructure['Haplotype']):
             # Register existing Locus if not already in registry
             if locus.name not in self.child_structures:
                 self.child_structures.register(locus)
-        
+
         # Invalidate cache and update recombination map with insertion handling
         self._sorted_loci_cache = None
         self._update_recombination_map_on_insert(
@@ -1246,7 +1261,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         if self._species is not None:
             self._species.invalidate_gene_index_cache()
         return locus
-    
+
     def remove_locus(self, locus_or_name: Union[Locus, str]) -> None:
         """
         Remove a locus from this chromosome.
@@ -1261,25 +1276,25 @@ class Chromosome(GeneticStructure['Haplotype']):
             name = locus_or_name
         else:
             name = locus_or_name.name
-        
+
         if name in self.child_structures:
             # Get old state
             old_sorted_loci = self.loci.copy()
             old_map = self._recombination_map
-            
+
             # Find the index of the locus to remove
             locus_to_remove = self.child_structures.get(name)
             remove_idx = old_sorted_loci.index(locus_to_remove)
-            
+
             # Unregister the locus
             self.child_structures.unregister(name)
             self._sorted_loci_cache = None
-            
+
             # Update recombination map
             self._update_recombination_map_on_remove(remove_idx, old_map)
             if self._species is not None:
                 self._species.invalidate_gene_index_cache()
-    
+
     def _update_recombination_map(self) -> None:
         """Create a fresh recombination map (all rates = 0)."""
         if len(self.child_structures) > 1:
@@ -1290,28 +1305,28 @@ class Chromosome(GeneticStructure['Haplotype']):
     def invalidate_recombination_map_cache(self) -> None:
         """Public wrapper for recombination-map cache invalidation."""
         self._invalidate_recombination_map_cache()
-    
+
     def _update_recombination_map_on_insert(
-        self, 
+        self,
         new_locus: Locus,
         old_sorted_loci: List[Locus],
-        old_map: Optional['Chromosome.RecombinationMap'],
+        old_map: Optional[Chromosome.RecombinationMap],
         recombination_rate_with_previous: float
     ) -> None:
         """Update recombination map when a new locus is inserted."""
         new_sorted_loci = self.loci
         n = len(new_sorted_loci)
-        
+
         if n <= 1:
             self._recombination_map = None
             return
-        
+
         # Find the new position of the inserted locus
         new_idx = new_sorted_loci.index(new_locus)
-        
+
         # Create new map
         new_rates = np.zeros(n - 1)
-        
+
         if old_map is not None and len(old_sorted_loci) > 1:
             # Copy old rates, adjusting for insertion
             for new_i in range(n - 1):
@@ -1335,16 +1350,16 @@ class Chromosome(GeneticStructure['Haplotype']):
         else:
             # First pair of loci, set the rate
             new_rates[0] = recombination_rate_with_previous
-        
+
         self._recombination_map = Chromosome.RecombinationMap(
-            loci=new_sorted_loci, 
+            loci=new_sorted_loci,
             rates=new_rates
         )
-    
+
     def _update_recombination_map_on_remove(
         self,
         remove_idx: int,
-        old_map: Optional['Chromosome.RecombinationMap']
+        old_map: Optional[Chromosome.RecombinationMap]
     ) -> None:
         """Update recombination map when a locus is removed.
         
@@ -1353,13 +1368,13 @@ class Chromosome(GeneticStructure['Haplotype']):
         """
         new_sorted_loci = self.loci
         n = len(new_sorted_loci)
-        
+
         if n <= 1:
             self._recombination_map = None
             return
-        
+
         new_rates = np.zeros(n - 1)
-        
+
         if old_map is not None:
             for new_i in range(n - 1):
                 if new_i < remove_idx - 1:
@@ -1375,12 +1390,12 @@ class Chromosome(GeneticStructure['Haplotype']):
                     # After the affected pair - shift by 1
                     old_idx = new_i + 1
                     new_rates[new_i] = old_map[old_idx] if old_idx < len(old_map) else 0.0
-        
+
         self._recombination_map = Chromosome.RecombinationMap(
             loci=new_sorted_loci,
             rates=new_rates
         )
-    
+
     def get_locus_index(self, name: str) -> int:
         """Get the index of a locus by name in the sorted loci list."""
         return self.recombination_map.name_to_index(name)
@@ -1439,7 +1454,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 return self._name_to_index(key.name)
             else:
                 return key
-            
+
         # ---------- Reading ----------
         @overload
         def __getitem__(self, key: _KeyType) -> float: ...
@@ -1566,7 +1581,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 # specifiers to integer indices first, then assign.
                 # Note: slice, list, array are passed directly to _rates; they must
                 # already contain integer indices (no str/Locus conversion needed).
-                idx = (self._normalize_single_key(key) if not isinstance(key, (slice, list, np.ndarray)) 
+                idx = (self._normalize_single_key(key) if not isinstance(key, (slice, list, np.ndarray))
                        else key)
                 self._rates[idx] = arr_val
 
@@ -1592,7 +1607,7 @@ class Chromosome(GeneticStructure['Haplotype']):
             if np.any(self._rates < 0) or np.any(self._rates > 0.5):
                 return False, "Values out of range [0, 0.5]."
             return True, "Map is valid."
-        
+
         def get_adjacent_loci(self, index: int) -> Tuple[str, str]:
             """Get the names of the two loci at the given rate index."""
             if index < 0 or index >= len(self):
@@ -1611,10 +1626,10 @@ class Chromosome(GeneticStructure['Haplotype']):
         @property
         def dtype(self):
             return self._rates.dtype
-    
+
     # Backward compatibility alias
     RecombinationMatrix = RecombinationMap
-    
+
     def set_recombination(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float):
         """
         Set the recombination rate between two adjacent loci.
@@ -1651,18 +1666,18 @@ class Chromosome(GeneticStructure['Haplotype']):
         """
         if self._recombination_map is not None:
             self._recombination_map[:] = value
-    
+
     # Backward compatibility alias
     def set_recombination_default(self, value: float):
         """Deprecated: Use set_recombination_all instead."""
         self.set_recombination_all(value)
-    
+
     def set_recombination_rate(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float):
         """
         Deprecated: Use set_recombination instead.
         """
         self.set_recombination(locus_a, locus_b, rate)
-    
+
     def set_recombination_rates(self, settings: Dict[Tuple[Union[Locus, str], Union[Locus, str]], float]):
         """
         Deprecated: Use set_recombination_bulk instead.
@@ -1671,10 +1686,10 @@ class Chromosome(GeneticStructure['Haplotype']):
 
     def __repr__(self):
         return f"Chromosome({self.name!r}, loci={[l.name for l in self.loci]})"
-    
+
     def __iter__(self):
         return iter(self.loci)
-    
+
     def __len__(self):
         return len(self.loci)
 
@@ -1690,25 +1705,25 @@ class Species(GeneticStructure['HaploidGenome']):
     """
     child_structure_type = Chromosome  # Species contains Chromosomes as children
     child_structures: ChildStructureRegistry[Chromosome]
-    _sex_chromosome_groups: Optional[Dict[str, List['Chromosome']]]
-    _valid_sex_genotypes: Optional[List[Tuple['Chromosome', 'Chromosome']]]
+    _sex_chromosome_groups: Optional[Dict[str, List[Chromosome]]]
+    _valid_sex_genotypes: Optional[List[Tuple[Chromosome, Chromosome]]]
 
     def __init__(
-        self, 
-        name: str, 
-        chromosomes: Optional[List['Chromosome']] = None,
+        self,
+        name: str,
+        chromosomes: Optional[List[Chromosome]] = None,
         gamete_labels: Optional[list[str]] = None
     ):
         # Initialize structure caches for this Species
         # Format: {structure_type: {name: instance}}
-        self._structure_cache: Dict[type, Dict[str, 'GeneticStructure[Any]']] = {}
-        self._gene_index_cache: Optional[Dict[str, 'Gene']] = None
-        
+        self._structure_cache: Dict[type, Dict[str, GeneticStructure[Any]]] = {}
+        self._gene_index_cache: Optional[Dict[str, Gene]] = None
+
         super().__init__(name, parent=None, species=None)  # Species is top-level, no parent
-        
+
         # Set self as the species
         self._species = self
-        
+
         # Add initial chromosomes if provided
         if chromosomes:
             for chrom in chromosomes:
@@ -1724,7 +1739,7 @@ class Species(GeneticStructure['HaploidGenome']):
     def gamete_labels(self) -> List[str]:
         """Return the list of gamete labels for this species."""
         return self._gamete_labels
-    
+
     @gamete_labels.setter
     def gamete_labels(self, labels: List[str]) -> None:
         self._gamete_labels = list(labels)
@@ -1744,10 +1759,10 @@ class Species(GeneticStructure['HaploidGenome']):
         self._invalidate_gene_index_cache()
 
     @property
-    def structure_cache(self) -> Dict[type, Dict[str, 'GeneticStructure[Any]']]:
+    def structure_cache(self) -> Dict[type, Dict[str, GeneticStructure[Any]]]:
         """Public accessor for species-scoped structure caches."""
         return self._structure_cache
-    
+
     def clear_entity_cache(self) -> None:
         """
         Clear all entity caches for this Species.
@@ -1755,7 +1770,7 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         from natal.genetic_entities import GeneticEntity
         GeneticEntity.clear_species_cache(id(self))
-    
+
     def clear_all_caches(self) -> None:
         """
         Clear both structure and entity caches for this Species.
@@ -1772,26 +1787,26 @@ class Species(GeneticStructure['HaploidGenome']):
         self._invalidate_gene_index_cache()
 
     @property
-    def chromosomes(self) -> List['Chromosome']:
+    def chromosomes(self) -> List[Chromosome]:
         """Returns the list of chromosomes in this species."""
         return self.child_structures.all
-    
+
     # Alias for backward compatibility
     @property
-    def linkages(self) -> List['Chromosome']:
+    def linkages(self) -> List[Chromosome]:
         """Alias for chromosomes (backward compatibility)."""
         return self.chromosomes
-    
+
     @property
-    def sex_chromosomes(self) -> List['Chromosome']:
+    def sex_chromosomes(self) -> List[Chromosome]:
         """Returns all sex chromosomes"""
         return [c for c in self.chromosomes if c.is_sex_chromosome]
-    
+
     @property
-    def autosomes(self) -> List['Chromosome']:
+    def autosomes(self) -> List[Chromosome]:
         """Returns all autosomes"""
         return [c for c in self.chromosomes if c.is_autosome]
-    
+
     @property
     def sex_system(self) -> Optional[str]:
         """
@@ -1803,7 +1818,7 @@ class Species(GeneticStructure['HaploidGenome']):
         for chrom in self.chromosomes:
             if chrom.sex_system:
                 systems.add(chrom.sex_system)
-        
+
         if len(systems) == 0:
             return None
         elif len(systems) == 1:
@@ -1813,31 +1828,31 @@ class Species(GeneticStructure['HaploidGenome']):
                 f"Multiple sex chromosome systems detected: {systems}. "
                 f"A species should only have one sex determination system."
             )
-    
+
     @property
-    def gene_index(self) -> Dict[str, 'Gene']:
+    def gene_index(self) -> Dict[str, Gene]:
         """Returns a mapping from gene names to gene instances."""
         return self._build_gene_index()
 
-    def _build_sex_chromosome_groups(self) -> Dict[str, List['Chromosome']]:
+    def _build_sex_chromosome_groups(self) -> Dict[str, List[Chromosome]]:
         """
         Automatically build _sex_chromosome_groups from Chromosome.sex_type.
         
         Returns:
             Sex chromosome group dictionary, keys are system names like 'XY' or 'ZW'
         """
-        groups: Dict[str, List['Chromosome']] = {}
-        
+        groups: Dict[str, List[Chromosome]] = {}
+
         for chrom in self.chromosomes:
             system = chrom.sex_system
             if system:
                 if system not in groups:
                     groups[system] = []
                 groups[system].append(chrom)
-        
+
         return groups
-    
-    def _build_valid_sex_genotypes(self) -> List[Tuple['Chromosome', 'Chromosome']]:
+
+    def _build_valid_sex_genotypes(self) -> List[Tuple[Chromosome, Chromosome]]:
         """
         Automatically infer valid sex chromosome genotype combinations from Chromosome.sex_type.
         
@@ -1850,11 +1865,11 @@ class Species(GeneticStructure['HaploidGenome']):
         Returns:
             List of valid (maternal_chrom, paternal_chrom) combinations
         """
-        valid_combos: List[Tuple['Chromosome', 'Chromosome']] = []
-        
+        valid_combos: List[Tuple[Chromosome, Chromosome]] = []
+
         # æŒ‰æ€§åˆ«å†³å®šç³»ç»Ÿåˆ†ç»„æŸ“è‰²ä½“
-        system_chroms: Dict[str, Dict[str, 'Chromosome']] = {}
-        
+        system_chroms: Dict[str, Dict[str, Chromosome]] = {}
+
         for chrom in self.chromosomes:
             if not chrom.is_sex_chromosome:
                 continue
@@ -1865,7 +1880,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 system_chroms[system] = {}
             # ç”¨æ€§æŸ“è‰²ä½“ç±»åž‹åç§°ä½œä¸º key
             system_chroms[system][chrom.sex_type.value] = chrom
-        
+
         for system, chroms in system_chroms.items():
             if system == 'XY':
                 x_chrom = chroms.get('X')
@@ -1876,7 +1891,7 @@ class Species(GeneticStructure['HaploidGenome']):
                     if y_chrom:
                         # XY (male) - X from maternal, Y from paternal
                         valid_combos.append((x_chrom, y_chrom))
-            
+
             elif system == 'ZW':
                 z_chrom = chroms.get('Z')
                 w_chrom = chroms.get('W')
@@ -1886,15 +1901,15 @@ class Species(GeneticStructure['HaploidGenome']):
                     if w_chrom:
                         # ZW (female) - W from maternal, Z from paternal
                         valid_combos.append((w_chrom, z_chrom))
-        
+
         return valid_combos
-    
+
     def add_chromosome(
-        self, 
-        chrom_or_name: Union['Chromosome', str],
+        self,
+        chrom_or_name: Union[Chromosome, str],
         loci: Optional[List[Locus]] = None,
         sex_type: Optional[Union[SexChromosomeType, str]] = None
-    ) -> 'Chromosome':
+    ) -> Chromosome:
         """
         Add a chromosome to this species.
         
@@ -1908,7 +1923,7 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         assert isinstance(chrom_or_name, (Chromosome, str)), \
             f"Expected Chromosome instance or str, got {type(chrom_or_name).__name__}"
-        
+
         if isinstance(chrom_or_name, str):
             # Create new Chromosome via base class add method
             created = self.add(chrom_or_name, loci=loci, sex_type=sex_type)
@@ -1923,20 +1938,20 @@ class Species(GeneticStructure['HaploidGenome']):
             # Register existing Chromosome if not already in registry
             if chrom.name not in self.child_structures:
                 self.child_structures.register(chrom)
-        
+
         self.invalidate_gene_index_cache()
         return chrom
-    
+
     # Alias for backward compatibility
     def add_linkage(
-        self, 
-        linkage_or_name: Union['Chromosome', str],
+        self,
+        linkage_or_name: Union[Chromosome, str],
         loci: Optional[List[Locus]] = None
-    ) -> 'Chromosome':
+    ) -> Chromosome:
         """Alias for add_chromosome (backward compatibility)."""
         return self.add_chromosome(linkage_or_name, loci=loci)
-    
-    def remove_chromosome(self, chrom_or_name: Union['Chromosome', str]) -> None:
+
+    def remove_chromosome(self, chrom_or_name: Union[Chromosome, str]) -> None:
         """
         Remove a chromosome from this species.
         
@@ -1947,30 +1962,30 @@ class Species(GeneticStructure['HaploidGenome']):
             name = chrom_or_name
         else:
             name = chrom_or_name.name
-        
+
         if name in self.child_structures:
             self.child_structures.unregister(name)
             self._invalidate_gene_index_cache()
-    
+
     # Alias for backward compatibility
-    def remove_linkage(self, linkage_or_name: Union['Chromosome', str]) -> None:
+    def remove_linkage(self, linkage_or_name: Union[Chromosome, str]) -> None:
         """Alias for remove_chromosome (backward compatibility)."""
         return self.remove_chromosome(linkage_or_name)
-    
+
     def get_all_loci(self) -> List[Locus]:
         """Returns all loci across all chromosomes."""
         all_loci: List[Locus] = []
         for chrom in self.chromosomes:
             all_loci.extend(chrom.loci)
         return all_loci
-    
+
     @classmethod
     def from_dict(
         cls,
         name: str,
         structure: Dict[str, Union[List[str], Dict[str, List[str]]]],
         gamete_labels: Optional[List[str]] = None
-    ) -> 'Species':
+    ) -> Species:
         """Create a Species with complete hierarchy from a dictionary specification.
         
         Args:
@@ -2007,12 +2022,12 @@ class Species(GeneticStructure['HaploidGenome']):
             ... })
         """
         from natal.genetic_entities import Gene
-        
+
         species = cls(name, gamete_labels=gamete_labels)
-        
+
         for chrom_name, loci_spec in structure.items():
             chrom = species.add_chromosome(chrom_name)
-            
+
             assert isinstance(loci_spec, (list, dict)), \
                 f"Invalid loci specification for chromosome '{chrom_name}'. " \
                 f"Expected list or dict, got {type(loci_spec).__name__}"
@@ -2027,9 +2042,9 @@ class Species(GeneticStructure['HaploidGenome']):
                     # Create alleles (genes)
                     for allele_name in allele_names:
                         Gene(allele_name, locus=locus)
-        
+
         return species
-    
+
     def get_locus(self, name: str) -> Optional[Locus]:
         """
         Get a locus by name across all chromosomes.
@@ -2045,8 +2060,8 @@ class Species(GeneticStructure['HaploidGenome']):
                 if locus.name == name:
                     return locus
         return None
-    
-    def get_chromosome(self, name: str) -> Optional['Chromosome']:
+
+    def get_chromosome(self, name: str) -> Optional[Chromosome]:
         """
         Get a chromosome by name.
         
@@ -2059,13 +2074,13 @@ class Species(GeneticStructure['HaploidGenome']):
         if name in self.child_structures:
             return self.child_structures.get(name)
         return None
-    
+
     # Alias for backward compatibility
-    def get_linkage(self, name: str) -> Optional['Chromosome']:
+    def get_linkage(self, name: str) -> Optional[Chromosome]:
         """Alias for get_chromosome (backward compatibility)."""
         return self.get_chromosome(name)
-    
-    def _build_gene_index(self) -> Dict[str, 'Gene']:
+
+    def _build_gene_index(self) -> Dict[str, Gene]:
         """
         Build a lookup index from gene name to Gene object.
         
@@ -2078,7 +2093,7 @@ class Species(GeneticStructure['HaploidGenome']):
         if self._gene_index_cache is not None:
             return self._gene_index_cache
 
-        gene_index: Dict[str, 'Gene'] = {}
+        gene_index: Dict[str, Gene] = {}
         for chrom in self.chromosomes:
             for locus in chrom.loci:
                 for gene in locus.alleles:
@@ -2091,12 +2106,12 @@ class Species(GeneticStructure['HaploidGenome']):
                     gene_index[gene.name] = gene
         self._gene_index_cache = gene_index
         return gene_index
-    
+
     def _parse_haplotype_segment_str(
-        self, 
-        hap_str: str, 
-        gene_index: Dict[str, 'Gene']
-    ) -> Tuple['Chromosome', List['Gene']]:
+        self,
+        hap_str: str,
+        gene_index: Dict[str, Gene]
+    ) -> Tuple[Chromosome, List[Gene]]:
         """
         Parse a haplotype segment string into (Chromosome, [Genes]).
         
@@ -2110,7 +2125,7 @@ class Species(GeneticStructure['HaploidGenome']):
         hap_str = hap_str.strip()
         if not hap_str:
             raise ValueError("Empty haplotype segment string")
-        
+
         # Parse gene names using intelligent detection:
         # 1. If contains '/', split by it
         # 2. If entire string is a valid gene name, treat as single gene
@@ -2130,9 +2145,9 @@ class Species(GeneticStructure['HaploidGenome']):
                     f"Use '/' to separate multi-character gene names. "
                     f"Available genes: {list(gene_index.keys())}"
                 )
-        
+
         # Lookup genes
-        genes: List['Gene'] = []
+        genes: List[Gene] = []
         for gname in gene_names:
             if gname not in gene_index:
                 raise ValueError(
@@ -2140,14 +2155,14 @@ class Species(GeneticStructure['HaploidGenome']):
                     f"Available genes: {list(gene_index.keys())}"
                 )
             genes.append(gene_index[gname])
-        
+
         # Resolve chromosome by intersecting all candidate chromosomes of each gene locus.
-        locus_to_chroms: Dict[Locus, List['Chromosome']] = {}
+        locus_to_chroms: Dict[Locus, List[Chromosome]] = {}
         for chrom in self.chromosomes:
             for locus in chrom.loci:
                 locus_to_chroms.setdefault(locus, []).append(chrom)
 
-        candidate_chroms: Optional[Set['Chromosome']] = None
+        candidate_chroms: Optional[Set[Chromosome]] = None
         for gene in genes:
             chroms_for_locus = locus_to_chroms.get(gene.locus, [])
             if not chroms_for_locus:
@@ -2175,25 +2190,25 @@ class Species(GeneticStructure['HaploidGenome']):
             )
 
         chrom = next(c for c in self.chromosomes if c in candidate_chroms)
-        
+
         # Verify we have one gene per locus in this chromosome
         loci_with_genes = set(gene.locus for gene in genes)
         expected_loci = set(chrom.loci)
-        
+
         if loci_with_genes != expected_loci:
             missing = expected_loci - loci_with_genes
             if missing:
                 raise ValueError(
                     f"Missing genes for loci: {[l.name for l in missing]} in chromosome '{chrom.name}'"
                 )
-        
+
         # Sort genes by locus order in chromosome
         locus_order = {locus: i for i, locus in enumerate(chrom.loci)}
         genes_sorted = sorted(genes, key=lambda g: locus_order[g.locus])
-        
+
         return chrom, genes_sorted
-    
-    def get_haploid_genome_from_str(self, haploid_str: str) -> 'HaploidGenome':
+
+    def get_haploid_genome_from_str(self, haploid_str: str) -> HaploidGenome:
         """
         Create or retrieve a HaploidGenome from a string representation.
         
@@ -2216,10 +2231,10 @@ class Species(GeneticStructure['HaploidGenome']):
             >>> hap = species.get_haploid_genome_from_str("ABC;XY")
             >>> hap = species.get_haploid_genome_from_str("a/b/c;x/y")  # equivalent
         """
-        from natal.genetic_entities import Haplotype, HaploidGenome
-        
+        from natal.genetic_entities import HaploidGenome, Haplotype
+
         gene_index = self._build_gene_index()
-        
+
         # Split by semicolon for different chromosomes
         hap_strs = [s.strip() for s in haploid_str.split(';') if s.strip()]
 
@@ -2243,34 +2258,34 @@ class Species(GeneticStructure['HaploidGenome']):
                 f"for sex groups: one per group), got {len(hap_strs)}. "
                 f"Chromosomes: {[c.name for c in self.chromosomes]}"
             )
-        
+
         # Parse each haplotype segment
-        haplotypes: List['Haplotype'] = []
-        chroms_used: Set['Chromosome'] = set()
-        
+        haplotypes: List[Haplotype] = []
+        chroms_used: Set[Chromosome] = set()
+
         for hap_str in hap_strs:
             chrom, genes = self._parse_haplotype_segment_str(hap_str, gene_index)
-            
+
             if chrom in chroms_used:
                 raise ValueError(
                     f"Chromosome '{chrom.name}' appears multiple times in haploid genome string"
                 )
             chroms_used.add(chrom)
-            
+
             hap = Haplotype(chromosome=chrom, genes=genes)
             haplotypes.append(hap)
-        
+
         # Sort haplotypes by chromosome order in species
         chrom_order = {chrom: i for i, chrom in enumerate(self.chromosomes)}
         haplotypes_sorted = sorted(haplotypes, key=lambda h: chrom_order[h.chromosome])
-        
+
         return HaploidGenome(species=self, haplotypes=haplotypes_sorted)
-    
-    def get_haploid_genotype_from_str(self, haplotype_str: str) -> 'HaploidGenome':
+
+    def get_haploid_genotype_from_str(self, haplotype_str: str) -> HaploidGenome:
         """Alias for get_haploid_genome_from_str."""
         return self.get_haploid_genome_from_str(haplotype_str)
-    
-    def get_genotype_from_str(self, genotype_str: str) -> 'Genotype':
+
+    def get_genotype_from_str(self, genotype_str: str) -> Genotype:
         """
         Create or retrieve a Genotype from a string representation.
         
@@ -2305,9 +2320,9 @@ class Species(GeneticStructure['HaploidGenome']):
             >>> gt = species.get_genotype_from_str("XY|xy;ABC|abc")  # Same result
         """
         from natal.genetic_entities import Genotype
-        
+
         genotype_str = genotype_str.strip()
-        
+
         # Split by semicolon first (different chromosomes)
         chrom_segments = [s.strip() for s in genotype_str.split(';') if s.strip()]
 
@@ -2328,11 +2343,11 @@ class Species(GeneticStructure['HaploidGenome']):
                 f"Expected {expected_segments} chromosome segments (separated by ;, and one per sex group when defined), "
                 f"got {len(chrom_segments)}. Chromosomes: {[c.name for c in self.chromosomes]}"
             )
-        
+
         # For each chromosome segment, split by | to get maternal/paternal
         maternal_hap_strs: List[str] = []
         paternal_hap_strs: List[str] = []
-        
+
         for segment in chrom_segments:
             parts = segment.split('|')
             if len(parts) != 2:
@@ -2342,26 +2357,26 @@ class Species(GeneticStructure['HaploidGenome']):
                 )
             maternal_hap_strs.append(parts[0].strip())
             paternal_hap_strs.append(parts[1].strip())
-        
+
         # Build haploid genome strings and parse
         maternal_str = ';'.join(maternal_hap_strs)
         paternal_str = ';'.join(paternal_hap_strs)
-        
+
         maternal = self.get_haploid_genome_from_str(maternal_str)
         paternal = self.get_haploid_genome_from_str(paternal_str)
-        
+
         return Genotype(species=self, maternal=maternal, paternal=paternal)
-    
+
     # ========================================================================
     # GENOTYPE PATTERN MATCHING
     # ========================================================================
 
     def _resolve_single_genotype_selector(
         self,
-        selector: Union['Genotype', str],
-        all_genotypes: Optional[Iterable['Genotype']] = None,
+        selector: Union[Genotype, str],
+        all_genotypes: Optional[Iterable[Genotype]] = None,
         context: str = 'selector'
-    ) -> List['Genotype']:
+    ) -> List[Genotype]:
         """Resolve a single genotype selector atom.
 
         Supports:
@@ -2402,10 +2417,10 @@ class Species(GeneticStructure['HaploidGenome']):
 
     def resolve_genotype_selectors(
         self,
-        selector: Union['Genotype', str, Tuple[Union['Genotype', str], ...]],
-        all_genotypes: Optional[Iterable['Genotype']] = None,
+        selector: Union[Genotype, str, Tuple[Union[Genotype, str], ...]],
+        all_genotypes: Optional[Iterable[Genotype]] = None,
         context: str = 'selector'
-    ) -> List['Genotype']:
+    ) -> List[Genotype]:
         """Resolve one or more genotype selectors into concrete ``Genotype`` objects.
 
         Args:
@@ -2440,7 +2455,7 @@ class Species(GeneticStructure['HaploidGenome']):
             if len(selector) == 0:
                 raise ValueError(f"{context} selector tuple cannot be empty")
 
-            merged: List['Genotype'] = []
+            merged: List[Genotype] = []
             for atom in selector:
                 matches = self._resolve_single_genotype_selector(
                     selector=atom,
@@ -2457,8 +2472,8 @@ class Species(GeneticStructure['HaploidGenome']):
             all_genotypes=all_genotypes,
             context=context,
         )
-    
-    def parse_genotype_pattern(self, pattern: str) -> Callable[['Genotype'], bool]:
+
+    def parse_genotype_pattern(self, pattern: str) -> Callable[[Genotype], bool]:
         """
         Parse a genotype pattern string and return a filter function.
         
@@ -2490,12 +2505,12 @@ class Species(GeneticStructure['HaploidGenome']):
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse(pattern)
         return pattern_obj.to_filter()
-    
+
     def filter_genotypes_by_pattern(
         self,
-        genotypes: Iterable['Genotype'],
+        genotypes: Iterable[Genotype],
         pattern: str
-    ) -> List['Genotype']:
+    ) -> List[Genotype]:
         """
         Filter a collection of genotypes by a pattern string.
         
@@ -2511,12 +2526,12 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         pattern_filter = self.parse_genotype_pattern(pattern)
         return [gt for gt in genotypes if pattern_filter(gt)]
-    
+
     def enumerate_genotypes_matching_pattern(
         self,
         pattern: str,
         max_count: Optional[int] = None
-    ) -> Iterable['Genotype']:
+    ) -> Iterable[Genotype]:
         """
         Enumerate all genotypes matching a pattern.
         
@@ -2540,20 +2555,20 @@ class Species(GeneticStructure['HaploidGenome']):
             PatternParseError: If the pattern is invalid.
         """
         from natal.genetic_patterns import GenotypePatternParser
-        
+
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse(pattern)
-        
+
         # For each chromosome pattern, extract allowed alleles
         count = 0
-        
+
         try:
             for genotype_combo in self._generate_genotype_combinations(
                 pattern_obj, parser
             ):
                 if max_count is not None and count >= max_count:
                     return
-                
+
                 try:
                     # Convert combination back to genotype
                     genotype_str = self._convert_combo_to_genotype_str(genotype_combo)
@@ -2566,7 +2581,7 @@ class Species(GeneticStructure['HaploidGenome']):
         except Exception:
             # Handle parsing or other errors gracefully
             return
-    
+
     def _generate_genotype_combinations(
         self,
         pattern_obj: GenotypePattern,
@@ -2578,31 +2593,31 @@ class Species(GeneticStructure['HaploidGenome']):
         and paternal HaplotypePath objects.
         """
         from itertools import product as iterproduct
-        
+
         pattern_like = cast(_GenotypePatternLike, pattern_obj)
         parser_like = cast(_PatternParserLike, parser)
 
         chromosome_combos: List[Tuple[int, List[GenotypeChromosomeCombo]]] = []
-        
+
         for chr_idx, chr_pattern in enumerate(pattern_like.chromosome_patterns):
             if chr_pattern is None:
                 # Omitted chromosome - skip it
                 continue
-            
+
             # Generate maternal haplotype combinations (for all loci on this chromosome)
             mat_locus_combos: List[List[str]] = []
             for locus_pattern in chr_pattern.maternal_pattern.locus_patterns:
                 mat_alleles = parser_like.get_allowed_alleles(locus_pattern)
                 mat_locus_combos.append(mat_alleles)
             mat_hap_combos: List[AlleleTuple] = list(iterproduct(*mat_locus_combos))
-            
+
             # Generate paternal haplotype combinations (for all loci on this chromosome)
             pat_locus_combos: List[List[str]] = []
             for locus_pattern in chr_pattern.paternal_pattern.locus_patterns:
                 pat_alleles = parser_like.get_allowed_alleles(locus_pattern)
                 pat_locus_combos.append(pat_alleles)
             pat_hap_combos: List[AlleleTuple] = list(iterproduct(*pat_locus_combos))
-            
+
             # All combinations for this chromosome (maternal Ã— paternal)
             chr_combos: List[GenotypeChromosomeCombo] = [
                 (mat_hap_combo, pat_hap_combo)
@@ -2610,7 +2625,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 for pat_hap_combo in pat_hap_combos
             ]
             chromosome_combos.append((chr_idx, chr_combos))
-        
+
         # Generate all combinations across chromosomes
         if chromosome_combos:
             chr_indices, chr_combo_lists = zip(*chromosome_combos)
@@ -2620,7 +2635,7 @@ class Species(GeneticStructure['HaploidGenome']):
         else:
             # No specified chromosomes - yield empty
             yield cast(GenotypeComboMap, {})
-    
+
     def _convert_combo_to_genotype_str(self, combo: GenotypeComboMap) -> str:
         """Convert a chromosome combination back to genotype string format.
         
@@ -2628,7 +2643,7 @@ class Species(GeneticStructure['HaploidGenome']):
         Output format: "A1/B1|A2/B2; C1/C1|..."
         """
         genotype_parts: List[str] = []
-        
+
         for chr_idx in range(len(self.chromosomes)):
             if chr_idx not in combo:
                 # Omitted chromosome - use wildcards
@@ -2638,19 +2653,19 @@ class Species(GeneticStructure['HaploidGenome']):
             else:
                 # Specified chromosome: combo[chr_idx] = (mat_alleles_tuple, pat_alleles_tuple)
                 mat_alleles_tuple, pat_alleles_tuple = combo[chr_idx]
-                
+
                 # Convert tuples to lists of strings
                 mat_str = "/".join(str(allele) for allele in mat_alleles_tuple)
                 pat_str = "/".join(str(allele) for allele in pat_alleles_tuple)
                 genotype_parts.append(f"{mat_str}|{pat_str}")
-        
+
         return ";".join(genotype_parts)
-    
+
     # ========================================================================
     # HAPLOIDGENOME PATTERN MATCHING
     # ========================================================================
-    
-    def parse_haploid_genome_pattern(self, pattern: str) -> Callable[['HaploidGenome'], bool]:
+
+    def parse_haploid_genome_pattern(self, pattern: str) -> Callable[[HaploidGenome], bool]:
         """
         Parse a haploid genome pattern string and return a filter function.
         
@@ -2682,12 +2697,12 @@ class Species(GeneticStructure['HaploidGenome']):
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse_haploid_genome_pattern(pattern)
         return pattern_obj.to_filter()
-    
+
     def filter_haploid_genomes_by_pattern(
         self,
-        haploid_genomes: Iterable['HaploidGenome'],
+        haploid_genomes: Iterable[HaploidGenome],
         pattern: str
-    ) -> List['HaploidGenome']:
+    ) -> List[HaploidGenome]:
         """
         Filter a collection of haploid genomes by a pattern string.
         
@@ -2703,12 +2718,12 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         pattern_filter = self.parse_haploid_genome_pattern(pattern)
         return [hg for hg in haploid_genomes if pattern_filter(hg)]
-    
+
     def enumerate_haploid_genomes_matching_pattern(
         self,
         pattern: str,
         max_count: Optional[int] = None
-    ) -> Iterable['HaploidGenome']:
+    ) -> Iterable[HaploidGenome]:
         """
         Enumerate all haploid genomes matching a pattern.
         
@@ -2732,20 +2747,20 @@ class Species(GeneticStructure['HaploidGenome']):
             PatternParseError: If the pattern is invalid.
         """
         from natal.genetic_patterns import GenotypePatternParser
-        
+
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse_haploid_genome_pattern(pattern)
-        
+
         # For each haplotype pattern, extract allowed alleles
         count = 0
-        
+
         try:
             for haploid_combo in self._generate_haploid_genome_combinations(
                 pattern_obj, parser
             ):
                 if max_count is not None and count >= max_count:
                     return
-                
+
                 try:
                     # Convert combination back to haploid genome
                     haploid_str = self._convert_haploid_combo_to_haploid_genome_str(haploid_combo)
@@ -2758,7 +2773,7 @@ class Species(GeneticStructure['HaploidGenome']):
         except Exception:
             # Handle parsing or other errors gracefully
             return
-    
+
     def _generate_haploid_genome_combinations(
         self,
         pattern_obj: object,
@@ -2770,27 +2785,27 @@ class Species(GeneticStructure['HaploidGenome']):
         patterns for one DNA strand.
         """
         from itertools import product as iterproduct
-        
+
         pattern_like = cast(_HaploidGenomePatternLike, pattern_obj)
         parser_like = cast(_PatternParserLike, parser)
 
         chromosome_combos: List[Tuple[int, List[AlleleTuple]]] = []
-        
+
         for chr_idx, haplotype_pattern in enumerate(pattern_like.haplotype_patterns):
             if haplotype_pattern is None:
                 # Omitted chromosome - skip it
                 continue
-            
+
             # Generate locus combinations for this haplotype
             locus_combos: List[List[str]] = []
             for locus_pattern in haplotype_pattern.locus_patterns:
                 alleles = parser_like.get_allowed_alleles(locus_pattern)
                 locus_combos.append(alleles)
-            
+
             # Cartesian product of all loci for this chromosome
             hap_combos: List[AlleleTuple] = list(iterproduct(*locus_combos))
             chromosome_combos.append((chr_idx, hap_combos))
-        
+
         # Generate all combinations across chromosomes
         if chromosome_combos:
             chr_indices, chr_combo_lists = zip(*chromosome_combos)
@@ -2800,7 +2815,7 @@ class Species(GeneticStructure['HaploidGenome']):
         else:
             # No specified chromosomes - yield empty
             yield cast(HaploidComboMap, {})
-    
+
     def _convert_haploid_combo_to_haploid_genome_str(self, combo: HaploidComboMap) -> str:
         """Convert a haplotype combination back to haploid genome string format.
         
@@ -2808,7 +2823,7 @@ class Species(GeneticStructure['HaploidGenome']):
         Output format: "A1/B1; C1"
         """
         haploid_parts: List[str] = []
-        
+
         for chr_idx in range(len(self.chromosomes)):
             if chr_idx not in combo:
                 # Omitted chromosome - use wildcards
@@ -2818,13 +2833,13 @@ class Species(GeneticStructure['HaploidGenome']):
             else:
                 # Specified chromosome: combo[chr_idx] = alleles_tuple
                 alleles_tuple = combo[chr_idx]
-                
+
                 # Convert tuple to string
                 allele_str = "/".join(str(allele) for allele in alleles_tuple)
                 haploid_parts.append(allele_str)
-        
+
         return ";".join(haploid_parts)
-    
+
     def __repr__(self):
         chrom_strs: List[str] = []
         for chrom in self.chromosomes:
@@ -2834,15 +2849,15 @@ class Species(GeneticStructure['HaploidGenome']):
 
     def __iter__(self):
         return iter(self.chromosomes)
-    
+
     def __len__(self):
         return len(self.chromosomes)
-    
+
     # ========================================================================
     # åŸºå› åž‹æžšä¸¾å’Œè®¡æ•°
     # ========================================================================
-    
-    def _get_sex_chromosome_groups(self) -> Optional[Dict[str, List['Chromosome']]]:
+
+    def _get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]:
         """
         èŽ·å–æ€§æŸ“è‰²ä½“ç»„é…ç½®ã€‚
         
@@ -2855,16 +2870,16 @@ class Species(GeneticStructure['HaploidGenome']):
         # ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®
         if hasattr(self, '_sex_chromosome_groups') and self._sex_chromosome_groups:
             return self._sex_chromosome_groups
-        
+
         # è‡ªåŠ¨æŽ¨æ–­
         groups = self._build_sex_chromosome_groups()
         return groups if groups else None
 
-    def get_sex_chromosome_groups(self) -> Optional[Dict[str, List['Chromosome']]]:
+    def get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]:
         """Public accessor for sex chromosome group configuration."""
         return self._get_sex_chromosome_groups()
-    
-    def _get_valid_sex_genotypes(self) -> Optional[List[Tuple['Chromosome', 'Chromosome']]]:
+
+    def _get_valid_sex_genotypes(self) -> Optional[List[Tuple[Chromosome, Chromosome]]]:
         """
         èŽ·å–æœ‰æ•ˆçš„æ€§æŸ“è‰²ä½“åŸºå› åž‹ç»„åˆã€‚
         
@@ -2877,11 +2892,11 @@ class Species(GeneticStructure['HaploidGenome']):
         # ä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®
         if hasattr(self, '_valid_sex_genotypes') and self._valid_sex_genotypes:
             return self._valid_sex_genotypes
-        
+
         # è‡ªåŠ¨æŽ¨æ–­
         valid = self._build_valid_sex_genotypes()
         return valid if valid else None
-    
+
     def count_alleles(self) -> int:
         """
         è®¡ç®—æ‰€æœ‰ä½ç‚¹çš„ç­‰ä½åŸºå› æ€»æ•°ã€‚
@@ -2894,7 +2909,7 @@ class Species(GeneticStructure['HaploidGenome']):
             for locus in chrom.loci:
                 total += len(locus.alleles)
         return total
-    
+
     def count_haploid_genotypes(self) -> int:
         """
         Calculate the total number of possible haploid genomes.
@@ -2907,15 +2922,15 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         # èŽ·å–æ€§æŸ“è‰²ä½“é…ç½®ï¼ˆä¼˜å…ˆä½¿ç”¨æ˜¾å¼è®¾ç½®ï¼Œå¦åˆ™è‡ªåŠ¨æŽ¨æ–­ï¼‰
         sex_chr_groups = self._get_sex_chromosome_groups()
-        
+
         # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
-        sex_chroms: Set['Chromosome'] = set()
+        sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 sex_chroms.update(group_chroms)
-        
+
         total = 1
-        
+
         # å¸¸æŸ“è‰²ä½“çš„ç­‰ä½åŸºå› æ•°ä¹˜ç§¯
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
@@ -2924,7 +2939,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 n_alleles = len(locus.alleles)
                 if n_alleles > 0:
                     total *= n_alleles
-        
+
         # å¯¹äºŽæ€§æŸ“è‰²ä½“ç»„ï¼Œæ¯ä¸ªç»„å¯ä»¥é€‰æ‹©ç»„å†…ä»»ä¸€æŸ“è‰²ä½“
         # æ¯ä¸ªæŸ“è‰²ä½“çš„ haplotype æ•°é‡ = å…¶ loci ç­‰ä½åŸºå› æ•°çš„ä¹˜ç§¯
         if sex_chr_groups:
@@ -2938,9 +2953,9 @@ class Species(GeneticStructure['HaploidGenome']):
                             chrom_total *= n_alleles
                     group_total += chrom_total
                 total *= group_total
-        
+
         return total
-    
+
     def count_genotypes(self) -> int:
         """
         Calculate the total number of possible diploid genotypes.
@@ -2957,18 +2972,18 @@ class Species(GeneticStructure['HaploidGenome']):
         # ä½¿ç”¨è¾…åŠ©æ–¹æ³•èŽ·å–é…ç½®ï¼ˆä¼˜å…ˆæ˜¾å¼è®¾ç½®ï¼Œå¦åˆ™è‡ªåŠ¨æŽ¨æ–­ï¼‰
         sex_chr_groups = self._get_sex_chromosome_groups()
         valid_sex_gts = self._get_valid_sex_genotypes()
-        
+
         if not sex_chr_groups:
             # æ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼Œç®€å•çš„ n^2
             n_haploid = self.count_haploid_genotypes()
             return n_haploid * n_haploid
-        
+
         # æœ‰æ€§æŸ“è‰²ä½“æ—¶éœ€è¦ç‰¹æ®Šå¤„ç†
         # å…ˆè®¡ç®—å¸¸æŸ“è‰²ä½“éƒ¨åˆ†çš„ç»„åˆæ•°
-        sex_chroms: Set['Chromosome'] = set()
+        sex_chroms: Set[Chromosome] = set()
         for group_chroms in sex_chr_groups.values():
             sex_chroms.update(group_chroms)
-        
+
         autosome_haploid_count = 1
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
@@ -2977,19 +2992,19 @@ class Species(GeneticStructure['HaploidGenome']):
                 n_alleles = len(locus.alleles)
                 if n_alleles > 0:
                     autosome_haploid_count *= n_alleles
-        
+
         # å¸¸æŸ“è‰²ä½“çš„åŸºå› åž‹æ•° = autosome_haploid_count^2
         autosome_genotype_count = autosome_haploid_count * autosome_haploid_count
-        
+
         # è®¡ç®—æ¯ä¸ªæŸ“è‰²ä½“çš„ haplotype æ•°
-        def count_chrom_haplotypes(chrom: 'Chromosome') -> int:
+        def count_chrom_haplotypes(chrom: Chromosome) -> int:
             count = 1
             for locus in chrom.loci:
                 n_alleles = len(locus.alleles)
                 if n_alleles > 0:
                     count *= n_alleles
             return count
-        
+
         # å¯¹äºŽæ€§æŸ“è‰²ä½“ç»„ï¼Œè®¡ç®—æœ‰æ•ˆç»„åˆæ•°
         if valid_sex_gts:
             # ä½¿ç”¨æ˜¾å¼å®šä¹‰çš„æœ‰æ•ˆåŸºå› åž‹
@@ -3007,10 +3022,10 @@ class Species(GeneticStructure['HaploidGenome']):
                     group_total += count_chrom_haplotypes(chrom)
                 # æ¯ä¸ªç»„çš„ maternal Ã— paternal
                 sex_genotype_count *= group_total * group_total
-        
+
         return autosome_genotype_count * sex_genotype_count
-    
-    def iter_haploid_genotypes(self) -> Iterable['HaploidGenome']:
+
+    def iter_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """
         Iterate over all possible haploid genomes (HaploidGenome).
         
@@ -3026,38 +3041,38 @@ class Species(GeneticStructure['HaploidGenome']):
             >>> for hg in species.iter_haploid_genotypes():
             ...     print(hg)
         """
-        from natal.genetic_entities import Haplotype, HaploidGenome
-        
+        from natal.genetic_entities import HaploidGenome, Haplotype
+
         sex_chr_groups = self._get_sex_chromosome_groups()
-        
+
         # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
-        sex_chroms: Set['Chromosome'] = set()
+        sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 sex_chroms.update(group_chroms)
-        
+
         # ä¸ºå¸¸æŸ“è‰²ä½“æ”¶é›†æ‰€æœ‰å¯èƒ½çš„ Haplotype
-        autosome_haplotypes: List[List['Haplotype']] = []
+        autosome_haplotypes: List[List[Haplotype]] = []
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
                 continue  # æ€§æŸ“è‰²ä½“å•ç‹¬å¤„ç†
-            
+
             locus_alleles = [list(locus.alleles) for locus in chrom.loci]
             if not locus_alleles or any(len(a) == 0 for a in locus_alleles):
                 continue
-            
-            haps_for_chrom: List['Haplotype'] = []
+
+            haps_for_chrom: List[Haplotype] = []
             for genes in itertools.product(*locus_alleles):
                 hap = Haplotype(chromosome=chrom, genes=list(genes))
                 haps_for_chrom.append(hap)
             autosome_haplotypes.append(haps_for_chrom)
-        
+
         # ä¸ºæ€§æŸ“è‰²ä½“ç»„æ”¶é›†å¯èƒ½çš„ Haplotype é€‰é¡¹
         # æ¯ä¸ªç»„å†…çš„æ‰€æœ‰æŸ“è‰²ä½“çš„ haplotype æ”¾åœ¨ä¸€ä¸ªåˆ—è¡¨ä¸­ï¼ˆé€‰å…¶ä¸€ï¼‰
-        sex_group_haplotypes: List[List['Haplotype']] = []
+        sex_group_haplotypes: List[List[Haplotype]] = []
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
-                group_haps: List['Haplotype'] = []
+                group_haps: List[Haplotype] = []
                 for chrom in group_chroms:
                     locus_alleles = [list(locus.alleles) for locus in chrom.loci]
                     if not locus_alleles or any(len(a) == 0 for a in locus_alleles):
@@ -3067,21 +3082,21 @@ class Species(GeneticStructure['HaploidGenome']):
                         group_haps.append(hap)
                 if group_haps:
                     sex_group_haplotypes.append(group_haps)
-        
+
         # åˆå¹¶å¸¸æŸ“è‰²ä½“å’Œæ€§æŸ“è‰²ä½“ç»„çš„ haplotype åˆ—è¡¨
         all_haplotype_options = autosome_haplotypes + sex_group_haplotypes
-        
+
         if not all_haplotype_options:
             return
-        
+
         # æ‰€æœ‰ç»„åˆ -> HaploidGenome
         for haplotype_combo in itertools.product(*all_haplotype_options):
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
-    
+
     def _iter_haploid_genotypes_for_parent(
-        self, 
+        self,
         is_paternal: bool
-    ) -> Iterable['HaploidGenome']:
+    ) -> Iterable[HaploidGenome]:
         """
         è¿­ä»£æŒ‡å®šäº²æœ¬ï¼ˆmaternal æˆ– paternalï¼‰å¯ç”¨çš„å•å€ä½“åŸºå› ç»„ã€‚
         
@@ -3093,19 +3108,19 @@ class Species(GeneticStructure['HaploidGenome']):
         Yields:
             HaploidGenome å®žä¾‹
         """
-        from natal.genetic_entities import Haplotype, HaploidGenome
-        
+        from natal.genetic_entities import HaploidGenome, Haplotype
+
         sex_chr_groups = self._get_sex_chromosome_groups()
         valid_sex_gts = self._get_valid_sex_genotypes()
-        
+
         # è¯†åˆ«æ€§æŸ“è‰²ä½“ç»„ä¸­çš„æ‰€æœ‰æŸ“è‰²ä½“
-        sex_chroms: Set['Chromosome'] = set()
+        sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
                 sex_chroms.update(group_chroms)
-        
+
         # ç¡®å®šè¯¥äº²æœ¬å¯ç”¨çš„æ€§æŸ“è‰²ä½“
-        available_sex_chroms: Set['Chromosome'] = set()
+        available_sex_chroms: Set[Chromosome] = set()
         if sex_chr_groups:
             if valid_sex_gts:
                 # ä»Žæœ‰æ•ˆåŸºå› åž‹ä¸­æå–è¯¥äº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“
@@ -3117,33 +3132,33 @@ class Species(GeneticStructure['HaploidGenome']):
             else:
                 # æ²¡æœ‰é™åˆ¶ï¼Œæ‰€æœ‰æ€§æŸ“è‰²ä½“éƒ½å¯ç”¨
                 available_sex_chroms = sex_chroms
-        
+
         # ä¸ºå¸¸æŸ“è‰²ä½“æ”¶é›†æ‰€æœ‰å¯èƒ½çš„ Haplotype
-        autosome_haplotypes: List[List['Haplotype']] = []
+        autosome_haplotypes: List[List[Haplotype]] = []
         for chrom in self.chromosomes:
             if chrom in sex_chroms:
                 continue
-            
+
             locus_alleles = [list(locus.alleles) for locus in chrom.loci]
             if not locus_alleles or any(len(a) == 0 for a in locus_alleles):
                 continue
-            
-            haps_for_chrom: List['Haplotype'] = []
+
+            haps_for_chrom: List[Haplotype] = []
             for genes in itertools.product(*locus_alleles):
                 hap = Haplotype(chromosome=chrom, genes=list(genes))
                 haps_for_chrom.append(hap)
             autosome_haplotypes.append(haps_for_chrom)
-        
+
         # ä¸ºæ€§æŸ“è‰²ä½“ç»„æ”¶é›†å¯èƒ½çš„ Haplotype é€‰é¡¹
-        sex_group_haplotypes: List[List['Haplotype']] = []
+        sex_group_haplotypes: List[List[Haplotype]] = []
         if sex_chr_groups:
             for group_chroms in sex_chr_groups.values():
-                group_haps: List['Haplotype'] = []
+                group_haps: List[Haplotype] = []
                 for chrom in group_chroms:
                     # åªåŒ…å«è¯¥äº²æœ¬å¯ç”¨çš„æŸ“è‰²ä½“
                     if chrom not in available_sex_chroms:
                         continue
-                    
+
                     locus_alleles = [list(locus.alleles) for locus in chrom.loci]
                     if not locus_alleles or any(len(a) == 0 for a in locus_alleles):
                         continue
@@ -3152,18 +3167,18 @@ class Species(GeneticStructure['HaploidGenome']):
                         group_haps.append(hap)
                 if group_haps:
                     sex_group_haplotypes.append(group_haps)
-        
+
         # åˆå¹¶å¸¸æŸ“è‰²ä½“å’Œæ€§æŸ“è‰²ä½“ç»„çš„ haplotype åˆ—è¡¨
         all_haplotype_options = autosome_haplotypes + sex_group_haplotypes
-        
+
         if not all_haplotype_options:
             return
-        
+
         # æ‰€æœ‰ç»„åˆ -> HaploidGenome
         for haplotype_combo in itertools.product(*all_haplotype_options):
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
-    
-    def iter_maternal_haploid_genotypes(self) -> Iterable['HaploidGenome']:
+
+    def iter_maternal_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """
         è¿­ä»£ maternalï¼ˆæ¯æœ¬ï¼‰å¯é—ä¼ çš„å•å€ä½“åŸºå› ç»„ã€‚
         
@@ -3173,8 +3188,8 @@ class Species(GeneticStructure['HaploidGenome']):
             HaploidGenome å®žä¾‹
         """
         return self._iter_haploid_genotypes_for_parent(is_paternal=False)
-    
-    def iter_paternal_haploid_genotypes(self) -> Iterable['HaploidGenome']:
+
+    def iter_paternal_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """
         è¿­ä»£ paternalï¼ˆçˆ¶æœ¬ï¼‰å¯é—ä¼ çš„å•å€ä½“åŸºå› ç»„ã€‚
         
@@ -3184,8 +3199,8 @@ class Species(GeneticStructure['HaploidGenome']):
             HaploidGenome å®žä¾‹
         """
         return self._iter_haploid_genotypes_for_parent(is_paternal=True)
-    
-    def iter_genotypes(self) -> Iterable['Genotype']:
+
+    def iter_genotypes(self) -> Iterable[Genotype]:
         """
         è¿­ä»£æ‰€æœ‰å¯èƒ½çš„åŸºå› åž‹ (Genotype)ã€‚
         
@@ -3200,10 +3215,10 @@ class Species(GeneticStructure['HaploidGenome']):
             ...     print(gt)
         """
         from natal.genetic_entities import Genotype
-        
+
         sex_chr_groups = self._get_sex_chromosome_groups()
         valid_sex_gts = self._get_valid_sex_genotypes()
-        
+
         if not sex_chr_groups:
             # æ²¡æœ‰æ€§æŸ“è‰²ä½“ï¼Œç®€å•çš„ç¬›å¡å°”ç§¯
             all_haploid_genotypes = list(self.iter_haploid_genotypes())
@@ -3213,15 +3228,15 @@ class Species(GeneticStructure['HaploidGenome']):
             # æœ‰æ€§æŸ“è‰²ä½“ä¸”å®šä¹‰äº†æœ‰æ•ˆåŸºå› åž‹ï¼Œéœ€è¦éªŒè¯ç»„åˆ
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
-            
+
             # æž„å»ºæœ‰æ•ˆç»„åˆçš„ set ç”¨äºŽå¿«é€ŸæŸ¥æ‰¾
-            valid_chrom_pairs: Set[Tuple['Chromosome', 'Chromosome']] = set(valid_sex_gts)
-            
+            valid_chrom_pairs: Set[Tuple[Chromosome, Chromosome]] = set(valid_sex_gts)
+
             for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
                 # èŽ·å– maternal å’Œ paternal çš„æ€§æŸ“è‰²ä½“
                 mat_sex_chrom = self._get_sex_chromosome(maternal, sex_chr_groups)
                 pat_sex_chrom = self._get_sex_chromosome(paternal, sex_chr_groups)
-                
+
                 # æ£€æŸ¥æ˜¯å¦æ˜¯æœ‰æ•ˆç»„åˆ
                 if (mat_sex_chrom, pat_sex_chrom) in valid_chrom_pairs:
                     yield Genotype(species=self, maternal=maternal, paternal=paternal)
@@ -3229,15 +3244,15 @@ class Species(GeneticStructure['HaploidGenome']):
             # æœ‰æ€§æŸ“è‰²ä½“ä½†æ²¡æœ‰å®šä¹‰æœ‰æ•ˆåŸºå› åž‹ï¼Œæ‰€æœ‰ç»„åˆéƒ½æœ‰æ•ˆ
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
-            
+
             for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
                 yield Genotype(species=self, maternal=maternal, paternal=paternal)
-    
+
     def _get_sex_chromosome(
-        self, 
-        haploid_genome: 'HaploidGenome',
-        sex_chr_groups: Dict[str, List['Chromosome']]
-    ) -> Optional['Chromosome']:
+        self,
+        haploid_genome: HaploidGenome,
+        sex_chr_groups: Dict[str, List[Chromosome]]
+    ) -> Optional[Chromosome]:
         """
         èŽ·å– HaploidGenome ä¸­çš„æ€§æŸ“è‰²ä½“ã€‚
         
@@ -3250,16 +3265,16 @@ class Species(GeneticStructure['HaploidGenome']):
         Returns:
             æ€§æŸ“è‰²ä½“ï¼Œå¦‚æžœæ²¡æœ‰åˆ™è¿”å›ž None
         """
-        sex_chroms: Set['Chromosome'] = set()
+        sex_chroms: Set[Chromosome] = set()
         for group_chroms in sex_chr_groups.values():
             sex_chroms.update(group_chroms)
-        
+
         for hap in haploid_genome.haplotypes:
             if hap.chromosome in sex_chroms:
                 return hap.chromosome
         return None
-    
-    def get_all_haploid_genotypes(self) -> List['HaploidGenome']:
+
+    def get_all_haploid_genotypes(self) -> List[HaploidGenome]:
         """
         èŽ·å–æ‰€æœ‰å¯èƒ½çš„å•å€ä½“åŸºå› ç»„åˆ—è¡¨ã€‚
         
@@ -3267,8 +3282,8 @@ class Species(GeneticStructure['HaploidGenome']):
             æ‰€æœ‰ HaploidGenome å®žä¾‹çš„åˆ—è¡¨
         """
         return list(self.iter_haploid_genotypes())
-    
-    def get_all_genotypes(self) -> List['Genotype']:
+
+    def get_all_genotypes(self) -> List[Genotype]:
         """
         èŽ·å–æ‰€æœ‰å¯èƒ½çš„åŸºå› åž‹åˆ—è¡¨ã€‚
         

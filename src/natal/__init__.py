@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Genetic Simulation Utilities
 ============================
@@ -6,9 +5,9 @@ Genetic Simulation Utilities
 Core components for genetic simulation: structures, entities, and population models.
 """
 
-import pkgutil
-import importlib
 import ast
+import importlib
+import pkgutil
 from pathlib import Path
 from typing import Any, Dict, List, cast
 

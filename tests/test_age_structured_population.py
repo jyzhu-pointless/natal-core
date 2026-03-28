@@ -1,6 +1,7 @@
 """Unit tests for AgeStructuredPopulation."""
 
 import numpy as np
+
 import natal as nt
 
 

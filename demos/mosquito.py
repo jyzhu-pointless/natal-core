@@ -1,5 +1,6 @@
-import natal as nt
 import time
+
+import natal as nt
 
 nt.enable_numba()
 

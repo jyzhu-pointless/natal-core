@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Population state containers based on NamedTuple.
 
 These containers keep scalar metadata immutable while allowing in-place mutation
@@ -7,8 +6,9 @@ of NumPy array contents, which remains compatible with Numba kernels.
 
 from __future__ import annotations
 
+from typing import NamedTuple, Optional, Union
+
 import numpy as np
-from typing import Optional, Union, NamedTuple
 from numpy.typing import NDArray
 
 __all__ = [
@@ -52,7 +52,7 @@ class PopulationState(NamedTuple):
         n_tick: int = 0,
         individual_count: Optional[NDArray[np.float64]] = None,
         sperm_storage: Optional[NDArray[np.float64]] = None,
-    ) -> "PopulationState":
+    ) -> PopulationState:
         """Create a PopulationState with optionally provided arrays.
 
         If arrays are not provided, they are initialised to zeros.
@@ -189,7 +189,7 @@ class DiscretePopulationState(NamedTuple):
         n_genotypes: int,
         n_tick: int = 0,
         individual_count: Optional[NDArray[np.float64]] = None,
-    ) -> "DiscretePopulationState":
+    ) -> DiscretePopulationState:
         """Create a DiscretePopulationState with optionally provided array.
 
         Args:

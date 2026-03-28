@@ -7,24 +7,28 @@ from a simulation script. It runs in a separate thread (or manages the main loop
 and accesses the population object directly in memory.
 """
 
-import time
-from typing import Any, Optional, TYPE_CHECKING, List, Dict, Tuple
-import numpy as np
+import bisect
 import inspect
 import json
-import bisect
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 try:
-    from nicegui import ui, app, run
+    from nicegui import app, run, ui
     HAS_NICEGUI = True
 except ImportError:
     HAS_NICEGUI = False
 
-from natal.visualization import render_cell_svg, get_allele_color
-from natal.population_state import parse_flattened_state, parse_flattened_discrete_state, PopulationState
-from natal.population_config import NO_COMPETITION, FIXED, LINEAR, CONCAVE
 from natal.age_structured_population import AgeStructuredPopulation
-
+from natal.population_config import CONCAVE, FIXED, LINEAR, NO_COMPETITION
+from natal.population_state import (
+    PopulationState,
+    parse_flattened_discrete_state,
+    parse_flattened_state,
+)
+from natal.visualization import get_allele_color, render_cell_svg
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -33,47 +37,47 @@ class Dashboard:
     """
     A real-time dashboard for controlling and visualizing a NATAL population.
     """
-    
+
     def __init__(self, population: 'BasePopulation[Any]'):
         if not HAS_NICEGUI:
             raise ImportError("NiceGUI is required. Please install it with: pip install nicegui")
-        
+
         self.pop = population
         self._is_age_structured_population = isinstance(population, AgeStructuredPopulation)
         self.is_running = False
         self.is_processing = False
         self._tick_timer = None
-        
+
         # UI Elements state
         self._chart_history: List[Dict] = []
         self._allele_freq_history: Dict[str, List[List]] = {}
         self.max_chart_points = 500  # Control total points for sparse display
-        
+
         # Reconstruct chart history from existing population history (fixes data loss on reload)
         self.view_min: Optional[float] = None
         self.view_max: Optional[float] = None
-        
+
         self._last_chart_tick = -1
         self._history_ticks: List[int] = []  # For efficient binary search in zoom
         self._rebuild_chart_history()
         self.inspected_tick: Optional[int] = None
         self.inspection_mode = False # False = Current, True = History
-        
+
     async def _run_step(self):
         """Execute one simulation step."""
         if self.is_processing:
             return
-            
+
         self.is_processing = True
         self.status_spinner.visible = True
         self.status_label.text = "Compiling/Running..."
-        
+
         # If we were inspecting history, switch back to live view on step
         if self.inspection_mode:
             self.inspection_mode = False
             self.inspected_tick = None
             self.tabs_main.set_value('inspection')
-        
+
         if not self.pop.is_finished:
             # Run blocking simulation step in a separate thread executor
             # This allows the UI loop (including spinner) to keep running
@@ -87,14 +91,14 @@ class Dashboard:
                     while time.time() - start < 0.1 and not self.pop.is_finished and ticks < 50:
                         self.pop.run_tick()
                         ticks += 1
-                
+
                 await run.io_bound(run_batch)
             else:
                 # Normal mode: Single tick
                 await run.io_bound(self.pop.run_tick)
-            
+
             self.refresh_ui()
-        
+
         if self.pop.is_finished:
             self.is_running = False
             self.btn_play.props('icon=play_arrow')
@@ -103,10 +107,10 @@ class Dashboard:
 
         if not self.pop.is_finished:
             self.status_label.text = "Ready"
-            
+
         self.status_spinner.visible = False
         self.is_processing = False
-            
+
     def _toggle_play(self):
         """Toggle auto-play."""
         self.is_running = not self.is_running
@@ -135,61 +139,61 @@ class Dashboard:
         n_sexes = config.n_sexes
         n_ages = config.n_ages
         n_genotypes = config.n_genotypes
-        
+
         # Determine indices
         # flat_state structure: [tick, individual_count(flattened), sperm_storage(flattened)...]
         start_idx = 1
         end_idx = 1 + n_sexes * n_ages * n_genotypes
-        
+
         # Extract individual_count
         if flat_state.size < end_idx:
             return 0, {} # Should not happen
-            
+
         ind_flat = flat_state[start_idx:end_idx]
         total_pop = int(np.sum(ind_flat))
-        
+
         # Compute allele frequencies
         # Reshape to (n_sexes, n_ages, n_genotypes) then sum to (n_genotypes,)
         ind_reshaped = ind_flat.reshape((n_sexes, n_ages, n_genotypes))
         genotype_counts = ind_reshaped.sum(axis=(0, 1))
-        
+
         freqs = {}
         # We can reuse BasePopulation logic but optimized for numpy
-        # Since we don't have easy access to gene maps here without looping, 
+        # Since we don't have easy access to gene maps here without looping,
         # we use the registry. This is slower than pure C but acceptable for UI.
         # To optimize, we could cache gene-to-genotype maps.
-        
+
         # Re-use the pop's logic by temporarily setting state? No, that's unsafe.
-        # For now, let's use the BasePopulation.compute_allele_frequencies logic 
+        # For now, let's use the BasePopulation.compute_allele_frequencies logic
         # but operating on our extracted genotype_counts.
-        
-        # For performance in "Turbo" mode, we might skip detailed allele freq 
+
+        # For performance in "Turbo" mode, we might skip detailed allele freq
         # on every single intermediate point if it's too slow, but let's try full fidelity first.
         # Calling the population method requires state injection. Let's reimplement lightweight version.
-        
+
         # Optimization: Just return total_pop for now, and rely on `pop.compute_allele_frequencies`
         # for the 'current' state in _update_charts if history parsing is too slow.
         # BUT the user wants ZOOM. So we must compute it.
-        
+
         # Let's map genotype_counts to allele counts
         allele_counts = {}
         locus_totals = {}
-        
+
         for g_idx, count in enumerate(genotype_counts):
             if count <= 0: continue
             gt = registry.index_to_genotype[g_idx]
-            
-            # We need to access alleles. 
+
+            # We need to access alleles.
             # This implies object access.
             for chrom in self.pop.species.chromosomes:
                 for locus in chrom.loci:
                     locus_totals.setdefault(locus.name, 0.0)
-                    
+
                     mat, pat = gt.get_alleles_at_locus(locus)
-                    if mat: 
+                    if mat:
                         allele_counts[mat.name] = allele_counts.get(mat.name, 0.0) + count
                         locus_totals[locus.name] += count
-                    if pat: 
+                    if pat:
                         allele_counts[pat.name] = allele_counts.get(pat.name, 0.0) + count
                         locus_totals[locus.name] += count
 
@@ -201,7 +205,7 @@ class Dashboard:
                 total = locus_totals.get(gene.locus.name, 0.0)
                 if total > 0:
                     freqs[allele] = count / total
-        
+
         return total_pop, freqs
 
     def _rebuild_chart_history(self):
@@ -211,10 +215,10 @@ class Dashboard:
         self._allele_freq_history = {}
         self._history_ticks = []
         self._last_chart_tick = -1
-        
+
         if not self.pop.history:
             return
-        
+
         # Collect all known alleles from species upfront (for handling 0-frequency cases)
         known_alleles = set()
         if hasattr(self.pop, 'species') and self.pop.species:
@@ -222,27 +226,27 @@ class Dashboard:
                 for locus in chrom.loci:
                     for gene in locus.alleles:
                         known_alleles.add(gene.name)
-            
+
         # We need to compute total counts and allele freqs from history snapshots.
         # This can be expensive if history is huge, but max_history limits it.
         # Only process every Nth point if history is huge to save UI load time
         # But max_history is usually small (5000), so process all.
-        
+
         for tick, flat_state in self.pop.history:
             total_pop, freqs = self._compute_metrics_from_flat(tick, flat_state)
             self._chart_history.append([tick, total_pop])
             self._history_ticks.append(tick)
-            
+
             # Allele Frequencies - add data for all known alleles (including those with freq=0)
             for allele in known_alleles:
                 freq = freqs.get(allele, None)
                 if freq is None:
                     freq = 0.0  # Use 0.0 for missing alleles
-                
+
                 if allele not in self._allele_freq_history:
                     self._allele_freq_history[allele] = []
                 self._allele_freq_history[allele].append([tick, freq])
-            
+
             if tick > self._last_chart_tick:
                 self._last_chart_tick = tick
 
@@ -266,7 +270,7 @@ class Dashboard:
                 for locus in chrom.loci:
                     for gene in locus.alleles:
                         known_alleles.add(gene.name)
-        
+
         # Initialize allele series structures if missing
         # (We do this early to ensure series order is stable)
         for allele in self._allele_freq_history.keys():
@@ -279,24 +283,24 @@ class Dashboard:
         # 1. Collect all NEW snapshots from population history into local full-resolution buffers
         # pop.history is a list of (tick, flat_state)
         # We need to find where new data starts.
-        # Optim: check last item. If matching, verify backwards? 
+        # Optim: check last item. If matching, verify backwards?
         # Simple approach: iterate history.
-        
+
         new_points = []
-        
+
         # Access private history for speed/consistency
-        history = self.pop._history 
-        
+        history = self.pop._history
+
         # Optimization: start search from the end or assume append-only
         # If history was cleared/rotated (max_history), we might need to handle gaps or full refresh
         # For now, just scan for tick > last.
-        
+
         for tick, flat_state in history:
             if tick > self._last_chart_tick:
                 total_pop, freqs = self._compute_metrics_from_flat(tick, flat_state)
                 new_points.append((tick, total_pop, freqs))
                 self._last_chart_tick = tick
-        
+
         # If current live state is newer than anything in history (e.g. record_every > 1), add it too
         if self.pop.tick > self._last_chart_tick:
             freqs = self.pop.compute_allele_frequencies()
@@ -308,13 +312,13 @@ class Dashboard:
             for tick, total, freqs in new_points:
                 self._chart_history.append([tick, total])
                 self._history_ticks.append(tick)
-                
+
                 # Add data for all known alleles (including those with freq=0)
                 for allele in known_alleles:
                     freq = freqs.get(allele, None)
                     if freq is None:
                         freq = 0.0  # Use 0.0 for missing alleles
-                    
+
                     if allele not in self._allele_freq_history:
                         self._allele_freq_history[allele] = []
                         # Add series if it appeared mid-simulation
@@ -326,7 +330,7 @@ class Dashboard:
         # 3. Downsample and update charts
         # We always replace the chart data with a strided view of the full history
         # This ensures the UI remains responsive (sparse display) even with huge datasets
-        
+
         if not self._chart_history:
             return
 
@@ -344,16 +348,16 @@ class Dashboard:
             idx_end = len(self._chart_history)
             count = idx_end
             stride = max(1, count // self.max_chart_points)
-            
+
         # Ensure valid range
         idx_start = max(0, idx_start)
         idx_end = min(len(self._chart_history), idx_end)
-        
+
         # Update Population Chart
         # Slicing with stride: [start:end:step]
         self.chart_pop.options['series'][0]['data'] = self._chart_history[idx_start:idx_end:stride]
         self.chart_pop.update()
-        
+
         # Update Allele Freq Chart
         for s in self.chart_allele.options['series']:
             allele = s['name']
@@ -365,12 +369,12 @@ class Dashboard:
                 # For simplicity, we assume the history lists are aligned.
                 s['data'] = full_allele_data[idx_start:idx_end:stride]
         self.chart_allele.update()
-        
+
     def _update_record_every(self, e):
         """Update population record_every setting."""
         if e.value is not None:
             self.pop.record_every = int(e.value)
-            
+
     def _update_max_history(self, e):
         """Update population max_history setting."""
         if e.value is not None:
@@ -382,13 +386,13 @@ class Dashboard:
         total = int(state.individual_count.sum())
         females = int(state.individual_count[0].sum())
         males = int(state.individual_count[1].sum())
-        
+
         self.lbl_tick.text = f"{tick}"
         self.lbl_total.text = f"{total}"
         self.lbl_females.text = f"{females}"
         self.lbl_males.text = f"{males}"
         self.lbl_history_count.text = f'(Current: {len(self.pop.history)} snapshots)'
-        
+
         if is_history:
             self.lbl_status_mode.text = f"INSPECTING HISTORY (Tick {tick})"
             self.lbl_status_mode.classes(add='text-orange-600', remove='text-green-600')
@@ -429,16 +433,16 @@ class Dashboard:
         # Update Genotype Cards
         # Clear existing
         self.genotype_container.clear()
-        
+
         config = self.pop.export_config()
         registry = self.pop.registry
         genotypes = registry.index_to_genotype
-        
+
         # Calculate counts for this specific state
         # individual_count: (n_sex, n_ages, n_genotypes)
         ind_count = state.individual_count
         n_ages = ind_count.shape[1]
-        
+
         # For fitness display
         conf = self.pop.export_config()
         target_age_fit = max(0, int(conf.new_adult_age) - 1)
@@ -448,14 +452,14 @@ class Dashboard:
                 # Compute total for card summary
                 total_f = int(ind_count[0, :, i].sum())
                 total_m = int(ind_count[1, :, i].sum())
-                
+
                 with ui.card().classes('items-center p-2 border rounded shadow-sm w-40'):
                     # SVG
                     svg = render_cell_svg(gt, self.pop.species, size=80)
                     ui.html(svg)
                     # Name
                     ui.label(str(gt)).classes('text-base font-bold mt-1 text-center leading-tight text-gray-800')
-                    
+
                     # Fitness (NEW)
                     fit_info = self._get_genotype_fitness(i, target_age_fit)
                     if fit_info:
@@ -469,7 +473,7 @@ class Dashboard:
                     with ui.row().classes('w-full justify-between px-1 mt-1'):
                         ui.label(f"F: {total_f}").classes('text-base font-bold text-pink-600')
                         ui.label(f"M: {total_m}").classes('text-base font-bold text-blue-600')
-                    
+
                     # Detailed age breakdown (skipping Age 0)
                     if self._is_age_structured_population:
                         with ui.column().classes('w-full gap-0 mt-1'):
@@ -488,7 +492,7 @@ class Dashboard:
         genotypes = registry.index_to_genotype
         # Typically viability selection happens at new_adult_age - 1 (late juvenile)
         target_age = max(0, int(config.new_adult_age) - 1)
-        
+
         data = []
         for g_idx, g_obj in enumerate(genotypes):
             f_val = config.viability_fitness[0, target_age, g_idx]
@@ -506,7 +510,7 @@ class Dashboard:
         config = self.pop.export_config()
         registry = self.pop.registry
         genotypes = registry.index_to_genotype
-        
+
         data = []
         for g_idx, g_obj in enumerate(genotypes):
             f_val = config.fecundity_fitness[0, g_idx]
@@ -526,7 +530,7 @@ class Dashboard:
         g2g = config.genotype_to_gametes_map
         n_glabs = config.n_glabs
         genotypes = registry.index_to_genotype
-        
+
         row_labels = [str(g) for g in genotypes]
         col_labels = []
         for hg_idx in range(config.n_haploid_genotypes):
@@ -536,7 +540,7 @@ class Dashboard:
                 if n_glabs > 1:
                     label += f" [{registry.index_to_glab[glab_idx]}]"
                 col_labels.append(label)
-        
+
         figs = []
         for sex_idx in range(config.n_sexes):
             sex_label = "Female" if sex_idx == 0 else "Male"
@@ -557,7 +561,7 @@ class Dashboard:
         g2z = config.gametes_to_zygote_map
         n_hg_glabs = int(config.n_haploid_genotypes * config.n_glabs)
         genotypes = registry.index_to_genotype
-        
+
         if n_hg_glabs > 40:
             return None
 
@@ -576,30 +580,30 @@ class Dashboard:
         # text_data: formatted string of all zygote outcomes (for display)
         z_data = np.full((n_hg_glabs, n_hg_glabs), np.nan)
         text_data = np.full((n_hg_glabs, n_hg_glabs), "", dtype=object)
-        
+
         for r in range(n_hg_glabs): # Maternal gamete
             for c in range(n_hg_glabs): # Paternal gamete
                 probs = g2z[r, c, :]
                 if probs.sum() < 1e-9:
                     continue
-                
+
                 # Sort outcomes by probability
                 indices = np.argsort(-probs)
                 primary_idx = indices[0]
                 z_data[r, c] = primary_idx
-                
+
                 outcomes = []
                 for idx in indices:
                     p = probs[idx]
                     if p < 0.01: break # Skip <1% outcomes
                     gt_str = str(genotypes[idx])
                     outcomes.append(f"{gt_str}<br>({p:.0%})")
-                
+
                 text_data[r, c] = "<br>".join(outcomes)
 
         fig = px.imshow(
-            z_data, 
-            x=labels, 
+            z_data,
+            x=labels,
             y=labels,
             labels=dict(x="Paternal Gamete", y="Maternal Gamete", color="Zygote ID"),
             color_continuous_scale="Viridis",
@@ -608,7 +612,7 @@ class Dashboard:
         # Show full text inside grid cells
         fig.update_traces(text=text_data, texttemplate="%{text}")
         fig.update_layout(
-            margin=dict(l=0, r=0, t=40, b=0), 
+            margin=dict(l=0, r=0, t=40, b=0),
             height=max(500, n_hg_glabs * 50),
             xaxis_tickangle=-45
         )
@@ -622,14 +626,14 @@ class Dashboard:
         self.inspected_tick = None
         self._last_chart_tick = -1
         self.tabs_main.set_value('inspection')
-        
+
         # Reset UI controls
         if hasattr(self, 'btn_play'):
             self.btn_play.props('icon=play_arrow')
             self.btn_play.text = "Play"
         if hasattr(self, 'status_label'):
             self.status_label.text = "Ready"
-        
+
         # Reset charts
         self.chart_pop.options['series'][0]['data'] = []
         self.chart_allele.options['series'] = []
@@ -637,7 +641,7 @@ class Dashboard:
         self._allele_freq_history = {}
         self.chart_pop.update()
         self.chart_allele.update()
-        
+
         # Refresh to show initial state
         self.refresh_ui()
         ui.notify("Population reset to initial state.")
@@ -871,7 +875,7 @@ class Dashboard:
         # e.point_x contains the tick value
         if e.point_x is None:
             return
-            
+
         tick = int(e.point_x)
         self.inspect_tick(tick)
 
@@ -982,12 +986,12 @@ class Dashboard:
     def _get_genotype_fitness(self, g_idx: int, target_age: int) -> dict:
         """Helper to get formatted fitness strings for a genotype."""
         config = self.pop.export_config()
-        
+
         v_f = config.viability_fitness[0, target_age, g_idx]
         v_m = config.viability_fitness[1, target_age, g_idx]
         f_f = config.fecundity_fitness[0, g_idx]
         f_m = config.fecundity_fitness[1, g_idx]
-        
+
         res = {}
         if v_f != 1.0 or v_m != 1.0:
             res['via'] = f"V: {v_f:.2g}(F)/{v_m:.2g}(M)"
@@ -1000,7 +1004,7 @@ class Dashboard:
         # e.args format for selection event:
         # { 'xAxis': [ {'min': float, 'max': float, ...} ], ... } if zooming
         # { ... } (no xAxis) if resetting zoom
-        
+
         # Highcharts on client side handles the visual zoom.
         # We update our internal view state and trigger a data refresh
         # to load higher resolution data for the selected range.
@@ -1014,7 +1018,7 @@ class Dashboard:
 
     def inspect_tick(self, tick: int):
         """Handle click on chart points to inspect history."""
-        
+
         # Case 1: Inspecting the current live state (e.g. Tick 0 after reset, or latest tick)
         if tick == self.pop.tick:
             self.inspection_mode = False
@@ -1027,26 +1031,26 @@ class Dashboard:
         # Case 2: Inspecting historical state
         self.inspected_tick = tick
         self.inspection_mode = True
-        
+
         # Try to find state in history
         # BasePopulation stores history as [(tick, flattened_array), ...]
         # We need to find the one matching tick
         history_record = next((rec for rec in self.pop._history if rec[0] == tick), None)
-        
+
         if history_record:
             flat_state = history_record[1]
             # Parse state
             n_sexes = self.pop._config.n_sexes
             n_ages = self.pop._config.n_ages
             n_genotypes = self.pop._config.n_genotypes
-            
+
             # Auto-detect state type based on flattened size
             expected_ind_size = int(n_sexes * n_ages * n_genotypes)
             if flat_state.size == 1 + expected_ind_size:
                 state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
             else:
                 state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
-            
+
             self._update_inspection_view(state_obj, tick, is_history=True)
             self.tabs_main.set_value('inspection')
             ui.notify(f"Inspecting Tick {tick}")
@@ -1055,7 +1059,7 @@ class Dashboard:
 
     def build_layout(self):
         """Construct the NiceGUI layout."""
-        
+
         # --- Header ---
         with ui.header().classes('items-center justify-between bg-slate-900 text-white'):
             ui.label('🧬 NATAL Dashboard').classes('text-2xl font-bold')
@@ -1064,25 +1068,25 @@ class Dashboard:
         # --- Left Drawer (Controls) ---
         with ui.left_drawer(value=True).classes('bg-gray-50 p-4 shadow-lg border-r').props('width=300'):
             ui.label('Control Panel').classes('text-xl font-bold text-gray-700 mb-4')
-            
+
             # Status
             with ui.row().classes('items-center gap-2 mb-4 p-2 bg-white rounded border'):
                 self.status_spinner = ui.spinner(size='sm').props('color=primary')
                 self.status_label = ui.label('Ready').classes('text-base font-medium text-gray-600')
                 self.status_spinner.visible = False
-            
+
             # Live Stats
             ui.label('Current State').classes('text-sm font-bold text-gray-400 uppercase mb-2')
             with ui.grid(columns=2).classes('w-full gap-y-2 gap-x-4 mb-6'):
                 ui.label('Tick:').classes('font-bold text-gray-600 text-lg')
                 self.lbl_tick = ui.label(str(self.pop.tick)).classes('text-right font-mono text-lg')
-                
+
                 ui.label('Total:').classes('font-bold text-gray-600 text-lg')
                 self.lbl_total = ui.label(str(self.pop.get_total_count())).classes('text-right font-mono text-lg')
-                
+
                 ui.label('Females:').classes('font-bold text-pink-600 text-lg')
                 self.lbl_females = ui.label(str(self.pop.get_female_count())).classes('text-right font-mono text-pink-600 text-lg')
-                
+
                 ui.label('Males:').classes('font-bold text-blue-600 text-lg')
                 self.lbl_males = ui.label(str(self.pop.get_male_count())).classes('text-right font-mono text-blue-600 text-lg')
 
@@ -1090,7 +1094,7 @@ class Dashboard:
             ui.label('Interval (s) (0=Unlimited)').classes('text-sm font-bold text-gray-400 uppercase mt-4 mb-2')
             self.slider_speed = ui.slider(min=0.0, max=0.2, value=0.05, step=0.005).props('label-always')
             self.slider_speed.on_value_change(self._update_timer_interval)
-            
+
             # History Control
             ui.label('History Settings').classes('text-sm font-bold text-gray-400 uppercase mt-4 mb-2')
             with ui.grid(columns=2).classes('w-full gap-2'):
@@ -1099,12 +1103,12 @@ class Dashboard:
             self.lbl_history_count = ui.label(f'(Current: {len(self.pop.history)} snapshots)').classes('text-sm text-gray-400 italic')
 
             ui.separator().classes('mb-4')
-            
+
             # Control Buttons
             with ui.column().classes('w-full gap-2'):
                 with ui.row().classes('w-full gap-2'):
                     ui.button('Step', on_click=self._run_step).props('icon=skip_next outline').classes('flex-grow')
-                    
+
                     def update_play_state(e):
                         self._toggle_play()
                         icon = "pause" if self.is_running else "play_arrow"
@@ -1117,7 +1121,7 @@ class Dashboard:
                 with ui.row().classes('w-full gap-2 mt-2'):
                     ui.button('Reset', on_click=self.reset_simulation).props('icon=restart_alt flat color=grey').classes('flex-grow')
                     ui.button('Export', on_click=self.show_export_dialog).props('icon=download flat color=grey').classes('flex-grow')
-                
+
                 def reset_zoom_and_update():
                     self.reset_zoom()
                     ui.notify("Zoom reset.")
@@ -1125,7 +1129,7 @@ class Dashboard:
 
         # --- Main Content ---
         with ui.column().classes('w-full p-4 gap-6'):
-            
+
             # --- Charts Row ---
             with ui.card().classes('w-full p-0 gap-0 border-none shadow-sm'):
                 with ui.row().classes('w-full no-wrap'):
@@ -1146,7 +1150,7 @@ class Dashboard:
                         }
                     }, on_point_click=self.handle_chart_click).classes('w-1/2 h-80') \
                     .on('selection', self.handle_chart_zoom, ['xAxis'])
-                    
+
                     # Allele Freq Chart
                     self.chart_allele = ui.highchart({
                         'title': {'text': 'Allele Frequencies'},
@@ -1164,7 +1168,7 @@ class Dashboard:
                         }
                     }, on_point_click=self.handle_chart_click).classes('w-1/2 h-80') \
                     .on('selection', self.handle_chart_zoom, ['xAxis'])
-            
+
             # --- Tabs Section ---
             with ui.tabs().classes('w-full justify-start border-b') as tabs:
                 self.tabs_main = tabs
@@ -1172,9 +1176,9 @@ class Dashboard:
                 tab_config = ui.tab('Configuration', icon='settings')
                 tab_hooks = ui.tab('Hooks', icon='extension')
                 tab_rules = ui.tab('Genetics', icon='biotech')
-            
+
             with ui.tab_panels(tabs, value='inspection').classes('w-full bg-transparent p-0'):
-                
+
                 # --- Tab 1: State Inspection ---
                 with ui.tab_panel(tab_inspect).classes('w-full'):
                     with ui.row().classes('items-center justify-between mb-4'):
@@ -1196,9 +1200,9 @@ class Dashboard:
                         # Container for Genotype Cards (right side)
                         with ui.column().classes('flex-1 min-w-0'):
                             self.genotype_container = ui.row().classes('w-full flex-wrap gap-4')
-                        
 
-                    
+
+
                 # --- Tab 2: Configuration ---
                 with ui.tab_panel(tab_config):
                     with ui.row().classes('w-full gap-8'):
@@ -1211,7 +1215,7 @@ class Dashboard:
                             mode_code = int(conf.juvenile_growth_mode)
                             ui.label(f"Growth Mode: {mode_code} ({self._growth_mode_name(mode_code)})").classes('text-base')
                             ui.label(f"Stochastic: {conf.is_stochastic}").classes('text-base')
-                        
+
                         # Fitness Tables
                         with ui.column().classes('flex-grow'):
                             with ui.expansion('Fitness Tables', icon='fitness_center').classes('w-full border rounded mb-2'):
@@ -1222,7 +1226,7 @@ class Dashboard:
                                         {'name': 'Female', 'label': 'Female', 'field': 'Female'},
                                         {'name': 'Male', 'label': 'Male', 'field': 'Male'},
                                     ], rows=self._get_viability_data()).props('dense flat').classes('mb-4 w-full')
-                                    
+
                                     ui.label('Fecundity Fitness').classes('font-bold text-gray-700 text-lg')
                                     ui.table(columns=[
                                         {'name': 'Genotype', 'label': 'Genotype', 'field': 'Genotype'},
@@ -1242,7 +1246,7 @@ class Dashboard:
                         type_name = str(op.op_type).split('.')[-1].lower()
 
                     parts = [f"<b>{type_name}</b>"]
-                    
+
                     # Genotypes
                     if op.genotypes == "*":
                         parts.append("ALL genotypes")
@@ -1250,11 +1254,11 @@ class Dashboard:
                         parts.append(f"genotypes {op.genotypes}")
                     else:
                         parts.append(f"genotype {op.genotypes}")
-                        
+
                     # Sex
                     if op.sex != "both":
                         parts.append(f"({op.sex} only)")
-                        
+
                     # Param
                     if op.op_type in (OpType.SCALE, OpType.KILL):
                         parts.append(f"by factor {op.param}")
@@ -1262,15 +1266,15 @@ class Dashboard:
                         parts.append(f"by {op.param}")
                     elif op.op_type == OpType.SET:
                         parts.append(f"to {op.param}")
-                    
+
                     # Ages
                     if op.ages != "*":
                         parts.append(f"at ages {op.ages}")
-                        
+
                     # Condition
                     if op.condition:
                         parts.append(f"WHEN <span class='text-blue-600 font-mono'>{op.condition}</span>")
-                        
+
                     return " ".join(parts)
 
                 with ui.tab_panel(tab_hooks):
@@ -1282,7 +1286,7 @@ class Dashboard:
                             with ui.expansion(f"{desc.name} ({desc.event})", icon='code').classes('w-full border rounded mb-2'):
                                 with ui.column().classes('p-2'):
                                     ui.label(f"Priority: {desc.priority}").classes('text-xs text-gray-500')
-                                    
+
                                     if desc.plan:
                                         if hasattr(desc, 'ops') and desc.ops:
                                             ui.label("Declarative Operations:").classes('font-bold text-base')
@@ -1309,7 +1313,7 @@ class Dashboard:
                         with ui.row().classes('w-full gap-4'):
                             for fig in figs:
                                 ui.plotly(fig).classes('flex-1 h-[600px] border rounded')
-                        
+
                         ui.label('Fertilization (Gametes -> Zygote)').classes('font-bold text-gray-700 text-xl mt-4')
                         fig_fert = self._create_fertilization_plot()
                         if fig_fert:
@@ -1345,13 +1349,13 @@ def launch(population: 'BasePopulation[Any]', port: int = 8080, title: str = "NA
     """
     # Reset NiceGUI state to avoid conflicts if re-run in same process
     # Note: NiceGUI is singleton-based, so multiple launches might need care.
-    
+
     @ui.page('/')
     def main_page():
         ui.add_head_html('<link rel="icon" href="natal.svg" type="image/svg+xml">')
         dashboard = Dashboard(population)
         dashboard.build_layout()
-        
+
     # Start server
     # In a script usage, we typically want this to block so the script keeps running
     # and serving the UI.

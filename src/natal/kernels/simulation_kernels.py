@@ -2,14 +2,16 @@
 纯函数化模拟核心——在 Population 外部运行、支持 Numba 加速。
 """
 
+from typing import TYPE_CHECKING, Optional, Tuple
+
 import numpy as np
 from numpy.typing import NDArray
-from typing import Tuple, Optional, TYPE_CHECKING
+
 import natal.algorithms as alg
-from natal.numba_utils import njit_switch
-from natal.population_state import PopulationState
-from natal.population_config import PopulationConfig, NO_COMPETITION, FIXED, LOGISTIC
 from natal.numba_compat import binomial
+from natal.numba_utils import njit_switch
+from natal.population_config import FIXED, LOGISTIC, NO_COMPETITION, PopulationConfig
+from natal.population_state import PopulationState
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
@@ -62,13 +64,13 @@ def run_reproduction(
     """
     ind_count = ind_count.copy()
     sperm_store = sperm_store.copy()  # Shape: (A, gf, gm)
-    
+
     n_ages = config.n_ages
     n_gen = config.n_genotypes
     adult_ages = config.adult_ages
     is_stochastic = config.is_stochastic
     use_dirichlet_sampling = config.use_dirichlet_sampling
-    
+
     # 1. 提取成年雄性计数（加权考虑各年龄的交配率）
     # effective_male_counts = Σ (male_counts[age] * male_mating_rate[age])
     effective_male_counts = np.zeros(n_gen, dtype=np.float64)
@@ -76,23 +78,23 @@ def run_reproduction(
         if age < n_ages:
             male_mating_rate_at_age = config.age_based_mating_rates[1, age]  # sex=1 is MALE
             effective_male_counts += ind_count[1, age, :] * male_mating_rate_at_age
-    
+
     if effective_male_counts.sum() == 0:
         # No males or no mating males, no new matings, no offspring
         return ind_count, sperm_store
-    
+
     # 2. 计算交配概率矩阵 (g, g)
     # 使用有效雄性数量（已乘以交配率）计算概率
     mating_prob = alg.compute_mating_probability_matrix(
-        config.sexual_selection_fitness, 
-        effective_male_counts, 
+        config.sexual_selection_fitness,
+        effective_male_counts,
         n_gen
     )
 
     # 3. 更新精子存储状态（也就是交配过程）
     # alg.sample_mating updates sperm storage based on mating rates
     female_counts = ind_count[0, :, :] # (n_ages, n_genotypes)
-    
+
     sperm_store = alg.sample_mating(
         female_counts,
         sperm_store,
@@ -127,11 +129,11 @@ def run_reproduction(
         is_stochastic=is_stochastic,
         use_dirichlet_sampling=use_dirichlet_sampling
     )
-    
+
     # 注意：Sex.FEMALE = 0，Sex.MALE = 1
     ind_count[0, 0, :] = n_0_female  # sex=0 is FEMALE
     ind_count[1, 0, :] = n_0_male    # sex=1 is MALE
-    
+
     return ind_count, sperm_store
 
 @njit_switch(cache=True)
@@ -169,11 +171,11 @@ def run_survival(
     # Mode 常量: 0=NO_COMPETITION, 1=FIXED, 2=LOGISTIC/LINEAR, 3=BEVERTON_HOLT/CONCAVE
     juvenile_growth_mode = config.juvenile_growth_mode
     new_adult_age = config.new_adult_age
-    
+
     # 计算 scaling_factor
     age_0_counts = (ind_count[0, 0, :], ind_count[1, 0, :])
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
-    
+
     if juvenile_growth_mode == NO_COMPETITION:
         # Mode 0: NO_COMPETITION - 不做密度依赖
         scaling_factor = 1.0
@@ -189,13 +191,13 @@ def run_survival(
         juvenile_counts = np.zeros(new_adult_age, dtype=np.float64)
         for age in range(new_adult_age):
             juvenile_counts[age] = float(ind_count[0, age, :].sum() + ind_count[1, age, :].sum())
-            
+
         actual_comp = alg.compute_actual_competition_strength(
             juvenile_counts_by_age=juvenile_counts,
             relative_competition_strength=config.age_based_relative_competition_strength,
             new_adult_age=new_adult_age
         )
-        
+
         if juvenile_growth_mode == LOGISTIC:
             scaling_factor = alg.compute_scaling_factor_logistic(
                 actual_competition_strength=actual_comp,
@@ -210,7 +212,7 @@ def run_survival(
                 expected_survival_rate=config.expected_survival_rate,
                 low_density_growth_rate=config.low_density_growth_rate,
             )
-    
+
     # 统一调用 recruit_juveniles_given_scaling_factor_sampling
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         age_0_counts,
@@ -221,11 +223,11 @@ def run_survival(
     )
     ind_count[0, 0, :] = f_rec
     ind_count[1, 0, :] = m_rec
-    
+
     # =========================================================================
     # Then, apply age-specific survival and viability selection to all individuals.
     # =========================================================================
-    
+
     # 1 Compute age-specific survival rates
     # 1.1 年龄特异性生存率 → shape (n_ages,)
     s_age_f, s_age_m = alg.compute_age_based_survival_rates(
@@ -233,7 +235,7 @@ def run_survival(
         config.age_based_survival_rates[1],
         n_ages
     )
-    
+
     # 1.2 Viability 生存率 → shape (n_ages, n_genotypes)
     target_viability_age = config.new_adult_age - 1
     s_via_f, s_via_m = alg.compute_viability_survival_rates(
@@ -243,13 +245,13 @@ def run_survival(
         target_viability_age,
         n_ages
     )
-    
+
     # 2 Combine survival rates (age-specific × viability) → shape (n_ages, n_genotypes)
     # 总生存率 = 年龄生存率 × viability 生存率
     # 需要广播：s_age_f shape (n_ages,) 和 s_via_f shape (n_ages, n_genotypes)
     s_combined_f = s_age_f[:, None] * s_via_f  # (n_ages, n_genotypes)
     s_combined_m = s_age_m[:, None] * s_via_m  # (n_ages, n_genotypes)
-    
+
     # 3 Apply combined survival rates to individuals
     if is_stochastic:
         # 随机采样：保证 sperm_store 与个体计数同步更新
@@ -273,7 +275,7 @@ def run_survival(
             n_gen,
             n_ages
         )
-    
+
     return ind_count, sperm_store
 
 @njit_switch(cache=True)
@@ -294,17 +296,17 @@ def run_aging(
     """
     ind_count = ind_count.copy()
     sperm_store = sperm_store.copy()
-    
+
     n_ages = config.n_ages
-    
+
     # 年龄推进
     for age in range(n_ages - 1, 0, -1):
         ind_count[:, age, :] = ind_count[:, age - 1, :]
         sperm_store[age, :, :] = sperm_store[age - 1, :, :]
-    
+
     ind_count[:, 0, :] = 0.0
     sperm_store[0, :, :] = 0.0
-    
+
     return ind_count, sperm_store
 
 
@@ -322,35 +324,35 @@ def run_discrete_reproduction(
     n_gen = config.n_genotypes
     is_stochastic = config.is_stochastic
     use_dirichlet_sampling = config.use_dirichlet_sampling
-    
+
     adult_age = 1
     female_adults = ind_count[0, adult_age, :]
     male_adults = ind_count[1, adult_age, :]
-    
+
     male_mating_rate = config.age_based_mating_rates[1, adult_age]
     effective_male_counts = male_adults * male_mating_rate
-    
+
     if effective_male_counts.sum() == 0 or female_adults.sum() == 0:
         return ind_count
-        
+
     mating_prob = alg.compute_mating_probability_matrix(
-        config.sexual_selection_fitness, 
-        effective_male_counts, 
+        config.sexual_selection_fitness,
+        effective_male_counts,
         n_gen
     )
-    
+
     temp_sperm_store = np.zeros((2, n_gen, n_gen), dtype=np.float64)
     temp_female_counts = np.zeros((2, n_gen), dtype=np.float64)
     temp_female_counts[adult_age, :] = female_adults
-    
+
     temp_sperm_store = alg.sample_mating(
         temp_female_counts,
         temp_sperm_store,
         mating_prob,
         config.age_based_mating_rates[0, :],  # female age-specific mating rates
-        1.0, 
+        1.0,
         adult_age,
-        2, 
+        2,
         n_gen,
         is_stochastic=is_stochastic,
         use_dirichlet_sampling=use_dirichlet_sampling
@@ -366,20 +368,20 @@ def run_discrete_reproduction(
         config.gametes_to_zygote_map,
         config.expected_eggs_per_female,
         adult_age,
-        2, 
+        2,
         n_gen,
         config.n_haploid_genotypes,
         config.n_glabs,
-        1.0, 
+        1.0,
         config.use_fixed_egg_count,
         config.sex_ratio,
         is_stochastic=is_stochastic,
         use_dirichlet_sampling=use_dirichlet_sampling
     )
-    
+
     ind_count[0, 0, :] = n_0_female
     ind_count[1, 0, :] = n_0_male
-    
+
     return ind_count
 
 @njit_switch(cache=True)
@@ -392,10 +394,10 @@ def run_discrete_survival(
     n_gen = config.n_genotypes
     is_stochastic = config.is_stochastic
     use_dirichlet_sampling = config.use_dirichlet_sampling
-    
+
     juvenile_growth_mode = config.juvenile_growth_mode
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
-    
+
     if juvenile_growth_mode == NO_COMPETITION:
         scaling_factor = 1.0
     elif juvenile_growth_mode == FIXED:
@@ -421,7 +423,7 @@ def run_discrete_survival(
                 expected_survival_rate=config.expected_survival_rate,
                 low_density_growth_rate=config.low_density_growth_rate,
             )
-            
+
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         (ind_count[0, 0, :], ind_count[1, 0, :]),
         scaling_factor,
@@ -429,7 +431,7 @@ def run_discrete_survival(
         is_stochastic=is_stochastic,
         use_dirichlet_sampling=use_dirichlet_sampling
     )
-    
+
     s_age_f, s_age_m = alg.compute_age_based_survival_rates(
         config.age_based_survival_rates[0],
         config.age_based_survival_rates[1],
@@ -439,13 +441,13 @@ def run_discrete_survival(
         config.viability_fitness[0, 0, :],
         config.viability_fitness[1, 0, :],
         n_gen,
-        target_age=0, 
+        target_age=0,
         n_ages=2
     )
-    
+
     s_combined_0_f = s_age_f[0] * s_via_f[0, :]
     s_combined_0_m = s_age_m[0] * s_via_m[0, :]
-    
+
     if is_stochastic:
         if use_dirichlet_sampling:
             # 连续化采样：使用 Beta 分布模拟 Binomial 筛选
@@ -468,7 +470,7 @@ def run_discrete_survival(
 
     ind_count[0, 0, :] = f_surv
     ind_count[1, 0, :] = m_surv
-    
+
     return ind_count
 
 @njit_switch(cache=True)
@@ -477,11 +479,11 @@ def run_discrete_aging(
 ) -> NDArray[np.float64]:
     """执行世代更替（离散世代）：幼虫晋升为成虫，旧成虫作废。"""
     ind_count = ind_count.copy()
-    
+
     ind_count[0, 1, :] = ind_count[0, 0, :]
     ind_count[0, 0, :] = 0.0
-    
+
     ind_count[1, 1, :] = ind_count[1, 0, :]
     ind_count[1, 0, :] = 0.0
-    
+
     return ind_count

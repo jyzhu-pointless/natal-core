@@ -13,25 +13,27 @@ import inspect
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
 
 import numpy as np
-import natal.kernels.codegen as _kernel_codegen
 
+import natal.kernels.codegen as _kernel_codegen
 from natal.numba_utils import njit_switch
+
 from . import declarative as _declarative
 from . import selector as _selector
 from .declarative import HookOp
 from .types import (
-    DemeSelector,
     EVENT_NAMES,
+    DemeSelector,
     HookProgram,
     hash_key,
+    load_codegen_module,
     stable_callable_identity,
     validate_numba_hook_required,
     write_codegen_module,
-    load_codegen_module,
 )
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
+
     from .types import CompiledHookDescriptor
 
 
@@ -42,10 +44,10 @@ SpatialKernelWrapperCompiler = Callable[[HookFn, HookFn, HookFn], Tuple[HookFn, 
 DeclarativeCompiler = Callable[..., "CompiledHookDescriptor"]
 SelectorCompiler = Callable[..., "CompiledHookDescriptor"]
 
-_compile_kernel_bound_wrappers: Any = getattr(_kernel_codegen, "compile_kernel_bound_wrappers")
-_compile_spatial_kernel_bound_wrappers: Any = getattr(_kernel_codegen, "compile_spatial_kernel_bound_wrappers")
-_compile_declarative_hook: Any = getattr(_declarative, "compile_declarative_hook")
-_compile_selector_hook: Any = getattr(_selector, "compile_selector_hook")
+_compile_kernel_bound_wrappers: Any = _kernel_codegen.compile_kernel_bound_wrappers
+_compile_spatial_kernel_bound_wrappers: Any = _kernel_codegen.compile_spatial_kernel_bound_wrappers
+_compile_declarative_hook: Any = _declarative.compile_declarative_hook
+_compile_selector_hook: Any = _selector.compile_selector_hook
 
 compile_kernel_bound_wrappers: KernelWrapperCompiler = cast(KernelWrapperCompiler, _compile_kernel_bound_wrappers)
 compile_spatial_kernel_bound_wrappers: SpatialKernelWrapperCompiler = cast(
@@ -55,14 +57,7 @@ compile_spatial_kernel_bound_wrappers: SpatialKernelWrapperCompiler = cast(
 compile_declarative_hook: DeclarativeCompiler = cast(DeclarativeCompiler, _compile_declarative_hook)
 compile_selector_hook: SelectorCompiler = cast(SelectorCompiler, _compile_selector_hook)
 
-
-# Internal alias used by generated wrapper modules.
-_njit_switch = njit_switch
-# Public alias for cross-module imports.
-hook_njit_switch = _njit_switch
-
-
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def _noop_hook(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> int:
     """Default hook implementation used for missing event handlers."""
     return 0
@@ -79,13 +74,13 @@ def _normalize_njit_fn(fn: HookFn) -> HookFn:
     py_fn = getattr(fn, "py_func", fn)
     sig = inspect.signature(py_fn)
     params = list(sig.parameters.values())
-    
+
     # If it already matches or has varargs, assume it handles 3 args.
     if len(params) >= 3:
         return fn
-        
+
     # Wrap 2-arg function: (ind_count, tick) -> (ind_count, tick, deme_id)
-    @_njit_switch(cache=True)
+    @njit_switch(cache=True)
     def wrapped(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> object:
         return fn(ind_count, tick)
     return wrapped
@@ -109,13 +104,13 @@ def compile_combined_hook(njit_fns: List[HookFn], name: str = "combined_hook") -
     module_stem = f"combined_hook_{key}"
 
     placeholder_names = [f"_FN_{i}" for i in range(len(njit_fns))]
-    # Generated module imports the same switch alias as the rest of hook DSL.
-    lines = ["from natal.hook_dsl import _njit_switch"]
+    # Generated module imports the same switch helper as the rest of hook DSL.
+    lines = ["from natal.hook_dsl import njit_switch"]
     lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
     lines.extend(
         [
             "",
-            "@_njit_switch(cache=True)",
+            "@njit_switch(cache=True)",
             f"def {fn_name}(ind_count, tick, deme_id=0):",
         ]
     )
@@ -175,7 +170,7 @@ class CompiledEventHooks:
         self.late = _noop_hook
         self.finish = _noop_hook
         self.registry = None
-        self._event_hooks = {name: _noop_hook for name in EVENT_NAMES}
+        self._event_hooks = dict.fromkeys(EVENT_NAMES, _noop_hook)
         self.run_tick_fn = None
         self.run_fn = None
         self.run_discrete_tick_fn = None
@@ -191,7 +186,7 @@ class CompiledEventHooks:
         setattr(self, event_name, hook_fn)
 
     @staticmethod
-    def from_compiled_hooks(compiled_hooks: List["CompiledHookDescriptor"], registry: Optional[HookProgram] = None):
+    def from_compiled_hooks(compiled_hooks: List[CompiledHookDescriptor], registry: Optional[HookProgram] = None):
         """Build event-wise combined callables from descriptors."""
         from ..numba_utils import NUMBA_ENABLED
 
@@ -260,7 +255,7 @@ def hook(
         func._hook_deme_selector = deme_selector  # type: ignore
 
         def register(
-            pop: "BasePopulation[Any]",
+            pop: BasePopulation[Any],
             event_override: Optional[str] = None,
             deme_selector_override: Optional[DemeSelector] = None,
         ):

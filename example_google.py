@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Example Google style docstrings.
 
 This module demonstrates documentation as specified by the `Google Python
@@ -77,7 +76,7 @@ def function_with_pep484_type_annotations(param1: int, param2: str) -> bool:
 
 
 def module_level_function(param1, param2=None, *args, **kwargs):
-    """This is an example of a module level function.
+    r"""This is an example of a module level function.
 
     Function parameters should be documented in the ``Args`` section. The name
     of each parameter is required. The type and description of each parameter
@@ -178,7 +177,7 @@ class ExampleError(Exception):
         self.code = code
 
 
-class ExampleClass(object):
+class ExampleClass:
     """The summary line for a class docstring should fit on one line.
 
     If the class has public attributes, they may be documented here

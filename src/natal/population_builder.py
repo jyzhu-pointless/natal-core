@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Builder for constructing population instances with fluent API.
 
 This module provides PopulationBuilder classes for streamlined, chainable
@@ -18,21 +17,39 @@ Example:
    http://google.github.io/styleguide/pyguide.html
 """
 
-from typing import Dict, List, Optional, Union, Any, Callable, Tuple, TYPE_CHECKING, Iterable, Literal, cast
 import inspect
+from collections.abc import Iterable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
+
 import numpy as np
 from numpy.typing import NDArray
-import natal.population_config as _population_config
 
-from natal.genetic_structures import Species
+import natal.population_config as _population_config
 from natal.genetic_entities import Genotype, HaploidGenome
-from natal.type_def import Sex
+from natal.genetic_structures import Species
 from natal.helpers import resolve_sex_label
 from natal.population_config import (
+    BEVERTON_HOLT,
+    CONCAVE,
+    FIXED,
+    LINEAR,
+    LOGISTIC,
+    NO_COMPETITION,
     PopulationConfig,
     build_population_config,
-    NO_COMPETITION, FIXED, LOGISTIC, CONCAVE, BEVERTON_HOLT, LINEAR
 )
+from natal.type_def import Sex
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
@@ -55,8 +72,8 @@ FitnessOperationName = Literal["viability", "fecundity", "sexual_selection"]
 FitnessOperation = Tuple[FitnessOperationName, Tuple[object], Dict[str, str]]
 
 InitializeMapFn = Callable[..., NDArray[np.float64]]
-initialize_gamete_map = cast(InitializeMapFn, getattr(_population_config, "initialize_gamete_map"))
-initialize_zygote_map = cast(InitializeMapFn, getattr(_population_config, "initialize_zygote_map"))
+initialize_gamete_map = cast(InitializeMapFn, _population_config.initialize_gamete_map)
+initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygote_map)
 
 class PopulationConfigBuilder:
     """Internal builder for constructing PopulationConfig.
@@ -64,7 +81,7 @@ class PopulationConfigBuilder:
     Handles all low-level configuration details and array initialization. It
     encapsulating the complexity of converting builder parameters.
     """
-    
+
     # TODO: initial 状态在哪里？
     @staticmethod
     def build(
@@ -149,17 +166,17 @@ class PopulationConfigBuilder:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")
         if new_adult_age < 0 or new_adult_age >= n_ages:
             raise ValueError(f"new_adult_age must be in [0, {n_ages}), got {new_adult_age}")
-        
+
         # ===== Extract genotypes =====
         raw_gamete_labels = cast(Optional[List[str]], getattr(species, "gamete_labels", None))
         gamete_labels = raw_gamete_labels or ["default"]
         genotypes = species.get_all_genotypes()
         haploid_genotypes = species.get_all_haploid_genotypes()
-        
+
         n_genotypes = len(genotypes)
         n_haplogenotypes = len(haploid_genotypes)
         n_glabs = len(gamete_labels)
-        
+
         gamete_tensor_mods, zygote_tensor_mods = PopulationConfigBuilder._setup_modifiers(gamete_modifiers, zygote_modifiers)
 
         # ===== Build genotype/gamete maps =====
@@ -169,27 +186,27 @@ class PopulationConfigBuilder:
             n_glabs=n_glabs,
             gamete_modifiers=gamete_tensor_mods
         )
-        
+
         zygote_map = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=genotypes,
             n_glabs=n_glabs,
             zygote_modifiers=zygote_tensor_mods
         )
-        
+
         # ===== Resolve survival rates =====
         _default_female = [1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0.0]
         _default_male = [1.0, 1.0, 2/3, 1/2, 0.0, 0.0, 0.0, 0.0]
-        
+
         female_survival = PopulationConfigBuilder._resolve_survival_param(
             female_age_based_survival_rates, n_ages, _default_female
         )
         male_survival = PopulationConfigBuilder._resolve_survival_param(
             male_age_based_survival_rates, n_ages, _default_male
         )
-        
+
         age_based_survival_rates = np.array([female_survival, male_survival], dtype=np.float64)
-        
+
         # ===== Mating rates =====
         if female_age_based_mating_rates is not None:
             if len(female_age_based_mating_rates) != n_ages:
@@ -200,7 +217,7 @@ class PopulationConfigBuilder:
         else:
             female_mating = np.zeros(n_ages, dtype=np.float64)
             female_mating[new_adult_age:] = 1.0
-        
+
         if male_age_based_mating_rates is not None:
             if len(male_age_based_mating_rates) != n_ages:
                 raise ValueError(
@@ -210,9 +227,9 @@ class PopulationConfigBuilder:
         else:
             male_mating = np.zeros(n_ages, dtype=np.float64)
             male_mating[new_adult_age:] = 1.0
-        
+
         age_based_mating_rates = np.array([female_mating, male_mating], dtype=np.float64)
-        
+
         # ===== Female fertility =====
         if female_age_based_relative_fertility is not None:
             if len(female_age_based_relative_fertility) != n_ages:
@@ -222,19 +239,19 @@ class PopulationConfigBuilder:
             female_fertility = np.array(female_age_based_relative_fertility, dtype=np.float64)
         else:
             female_fertility = np.ones(n_ages, dtype=np.float64)
-        
+
         # ===== Fitness tensors (default) =====
         viability_fitness = np.ones((2, n_ages, n_genotypes), dtype=np.float64)
         fecundity_fitness = np.ones((2, n_genotypes), dtype=np.float64)
         sexual_selection_fitness = np.ones((n_genotypes, n_genotypes), dtype=np.float64)
-        
+
         # ===== Competition strength =====
         age_based_relative_competition_strength = np.ones(n_ages, dtype=np.float64)
         if relative_competition_factor > 0:
             age_based_relative_competition_strength[0] = relative_competition_factor
             if n_ages > 1:
                 age_based_relative_competition_strength[1] = relative_competition_factor
-        
+
         # ===== Parse juvenile growth mode =====
         juvenile_growth_mode_int = PopulationConfigBuilder._resolve_growth_mode(juvenile_growth_mode)
 
@@ -284,7 +301,7 @@ class PopulationConfigBuilder:
         print("✅ Population configuration initialized")
 
         return cfg
-    
+
     @staticmethod
     def _setup_modifiers(
         gamete_modifiers: Optional[List[ModifierSpec]],
@@ -293,10 +310,10 @@ class PopulationConfigBuilder:
         """Helper to organize and build modifier tensors."""
         gamete_modifiers_list = list(gamete_modifiers) if gamete_modifiers else []
         zygote_modifiers_list = list(zygote_modifiers) if zygote_modifiers else []
-        
+
         gamete_modifiers_list.sort(key=lambda x: float(x[0]))
         zygote_modifiers_list.sort(key=lambda x: float(x[0]))
-        
+
         gamete_tensor_mods = PopulationConfigBuilder._build_modifier_tensors(gamete_modifiers_list, "gamete")
         zygote_tensor_mods = PopulationConfigBuilder._build_modifier_tensors(zygote_modifiers_list, "zygote")
         return gamete_tensor_mods, zygote_tensor_mods
@@ -345,7 +362,7 @@ class PopulationConfigBuilder:
             List[HaploidGenome]: A list of all haploid genotypes.
         """
         return list(species.iter_haploid_genotypes())
-    
+
     @staticmethod
     def _resolve_survival_param(
         param: Optional[Any],
@@ -566,7 +583,7 @@ class PopulationConfigBuilder:
             raise ValueError(f"Count must be non-negative, got {fcount}")
         if fcount <= 0:
             return {}
-        return {age: fcount for age in range(new_adult_age, n_ages)}
+        return dict.fromkeys(range(new_adult_age, n_ages), fcount)
 
         raise TypeError(
             f"Age data must be List/Tuple/NDArray, Dict, or numeric scalar, got {type(age_data)}"
@@ -728,7 +745,7 @@ class PopulationConfigBuilder:
                 out[sex_idx, 0, genotype_idx] += age0
                 out[sex_idx, 1, genotype_idx] += age1
         return out
-    
+
     @staticmethod
     def _build_modifier_tensors(modifiers: List[ModifierSpec], modifier_type: str) -> List[HookFn]:
         """Convert modifier tuples to tensor modifier format (placeholder).
@@ -752,7 +769,7 @@ class PopulationBuilderBase:
     Attributes:
         species (Species): Genetic architecture for the population.
     """
-    
+
     def __init__(self, species: Species):
         """Initialize builder with required species.
         
@@ -761,7 +778,7 @@ class PopulationBuilderBase:
         """
         self.species = species
         self._presets: List[Any] = []
-    
+
     def add_preset(self, preset: Any) -> 'PopulationBuilderBase':
         """Add a gene drive preset to apply during build.
         
@@ -775,7 +792,7 @@ class PopulationBuilderBase:
         """
         self._presets.append(preset)
         return self
-    
+
     def build(self) -> Any:
         """Build and return the configured Population.
 
@@ -792,7 +809,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         Fitness and modifiers are applied AFTER presets during build().
         This allows presets to set base values, which can then be overridden.
     """
-    
+
     def __init__(self, species: Species):
         """Initialize builder.
         
@@ -805,13 +822,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.is_stochastic: bool = True
         self.use_dirichlet_sampling: bool = False
         self.use_fixed_egg_count: bool = False
-        
+
         # Age structure
         self.n_ages: int = 8
         self.new_adult_age: int = 2
         self.generation_time: Optional[int] = None
         self.equilibrium_individual_distribution: Optional[ArrayF64] = None
-        
+
         # Initial state (required)
         self.initial_individual_count: Optional[
             Dict[
@@ -828,35 +845,35 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                 Dict[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], ArrayF64, int, float]],
             ]
         ] = None
-        
+
         # Survival and mating
         self.female_age_based_survival_rates: Optional[Any] = None
         self.male_age_based_survival_rates: Optional[Any] = None
         self.female_age_based_mating_rates: Optional[ArrayF64] = None
         self.male_age_based_mating_rates: Optional[ArrayF64] = None
         self.female_age_based_relative_fertility: Optional[ArrayF64] = None
-        
+
         # Reproduction
         self.expected_eggs_per_female: float = 50.0
         self.sex_ratio: float = 0.5
         self.use_sperm_storage: bool = False
         self.sperm_displacement_rate: float = 0.0
-        
+
         # Competition
         self.relative_competition_factor: float = 1.0
         self.juvenile_growth_mode: Union[int, str] = LOGISTIC
         self.low_density_growth_rate: float = 1.0
         self.old_juvenile_carrying_capacity: Optional[int] = None
         self.expected_num_adult_females: Optional[int] = None
-        
+
         # Fitness and modifiers (delayed until build)
         self._fitness_operations: List[FitnessOperation] = []
         self.gamete_modifiers: Optional[List[ModifierSpec]] = None
         self.zygote_modifiers: Optional[List[ModifierSpec]] = None
-        
+
         # Hooks
         self._hooks: HookMap = {}
-    
+
     def setup(
         self,
         name: str = "AgeStructuredPop",
@@ -880,7 +897,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.use_dirichlet_sampling = use_dirichlet_sampling
         self.use_fixed_egg_count = use_fixed_egg_count
         return self
-    
+
     def age_structure(
         self,
         n_ages: int = 8,
@@ -906,7 +923,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if equilibrium_distribution is not None:
             self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
         return self
-    
+
     def initial_state(
         self,
         individual_count: Dict[
@@ -937,7 +954,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if sperm_storage is not None:
             self.initial_sperm_storage = sperm_storage
         return self
-    
+
     def survival(
         self,
         female_age_based_survival_rates: Optional[Any] = None,
@@ -965,7 +982,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if equilibrium_distribution is not None:
             self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
         return self
-    
+
     def reproduction(
         self,
         female_age_based_mating_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
@@ -1004,7 +1021,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.use_sperm_storage = use_sperm_storage
         self.sperm_displacement_rate = sperm_displacement_rate
         return self
-    
+
     def competition(
         self,
         competition_strength: float = 5.0,
@@ -1037,7 +1054,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if equilibrium_distribution is not None:
             self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
         return self
-    
+
     def presets(self, *preset_list: Any) -> 'AgeStructuredPopulationBuilder':
         """Add preset preset packages (applied during build).
         
@@ -1055,7 +1072,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if preset_list:
             self._presets = list(preset_list)
         return self
-    
+
     def fitness(
         self,
         viability: Optional[ViabilityMap] = None,
@@ -1086,13 +1103,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         """
         if viability is not None:
             self._fitness_operations.append(('viability', (viability,), {'mode': mode}))
-        
+
         if fecundity is not None:
             self._fitness_operations.append(('fecundity', (fecundity,), {'mode': mode}))
-        
+
         if sexual_selection is not None:
             self._fitness_operations.append(('sexual_selection', (sexual_selection,), {'mode': mode}))
-        
+
         return self
 
     @staticmethod
@@ -1151,7 +1168,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         if zygote_modifiers is not None:
             self.zygote_modifiers = zygote_modifiers
         return self
-    
+
     def hooks(
         self,
         *hook_items: Union[HookFn, HookMap]
@@ -1180,18 +1197,18 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                         f"Hook '{getattr(item, '__name__', str(item))}' missing event. "
                         "Please specify with @hook(event='...')"
                     )
-                
+
                 priority = meta.get('priority', getattr(item, '_hook_priority', 0))
                 name = getattr(item, '__name__', None)
-                
+
                 if event not in self._hooks:
                     self._hooks[event] = []
                 self._hooks[event].append((item, name, priority))
             else:
                 raise TypeError(f"Unsupported hook type: {type(item)}")
-                
+
         return self
-    
+
     def build(self) -> 'AgeStructuredPopulation':
         """Build and return the configured AgeStructuredPopulation.
         
@@ -1208,14 +1225,14 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         """
         # Import here to avoid circular imports
         from natal.age_structured_population import AgeStructuredPopulation
-        
+
         # Validate required config
         if self.initial_individual_count is None:
             raise ValueError(
                 "initial_individual_count is required. "
                 "Use .initial_state() before .build()"
             )
-        
+
         initial_individual_count = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
             species=self.species,
             distribution=self.initial_individual_count,
@@ -1262,7 +1279,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             initial_individual_count=initial_individual_count,
             initial_sperm_storage=initial_sperm_storage,
         )
-        
+
         # 2️⃣ Create population with PopulationConfig and hooks
         pop = AgeStructuredPopulation(
             species=self.species,
@@ -1270,18 +1287,18 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             name=self.name,
             hooks=self._hooks
         )
-        
+
         # 3️⃣ Apply all presets in order
         pop_any = cast(Any, pop)
         for preset in self._presets:
             pop_any.apply_preset(preset)
-        
+
         # 4️⃣ Apply fitness settings directly to PopulationConfig (after presets)
         for operation in self._fitness_operations:
             method_name, args, kwargs = operation
             mode = kwargs.get('mode', 'replace')
             is_multiply = (mode == 'multiply')
-            
+
             if method_name == 'viability':
                 viability_map = cast(ViabilityMap, args[0])
                 for genotype_selector, values in viability_map.items():
@@ -1311,7 +1328,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                                     current = pop.config.viability_fitness[sex_idx, target_age, genotype_idx]
                                     val *= current
                                 pop.config.set_viability_fitness(sex_idx, genotype_idx, val)
-            
+
             elif method_name == 'fecundity':
                 fecundity_map = cast(FecundityMap, args[0])
                 for genotype_selector, values in fecundity_map.items():
@@ -1338,7 +1355,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                                     current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
                                     val *= current
                                 pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
-            
+
             elif method_name == 'sexual_selection':
                 preferences = cast(SexualSelectionMap, args[0])
                 for f_selector, m_selector, preference in self._iter_sexual_selection_entries(preferences):
@@ -1360,7 +1377,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                                 current = pop.config.sexual_selection_fitness[f_idx, m_idx]
                                 val *= current
                             pop.config.set_sexual_selection_fitness(f_idx, m_idx, val)
-        
+
         return pop
 
 
@@ -1482,7 +1499,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                 for male_selector, value in male_map.items():
                     entries.append((female_selector, male_selector, float(value)))
             return entries
-        
+
         for male_selector, value in sexual_selection.items():
             assert isinstance(value, float), "In flat sexual_selection form, values must be floats"
             entries.append(("*", male_selector, value))
@@ -1648,10 +1665,10 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                         f"Hook '{getattr(item, '__name__', str(item))}' missing event. "
                         "Please specify with @hook(event='...')"
                     )
-                
+
                 priority = meta.get('priority', getattr(item, '_hook_priority', 0))
                 name = getattr(item, '__name__', None)
-                
+
                 if event not in self._hooks:
                     self._hooks[event] = []
                 self._hooks[event].append((item, name, priority))
@@ -1750,7 +1767,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     for genotype in matched_genotypes:
                         genotype_idx = pop.index_registry.genotype_to_index[genotype]
                         target_age = 0 # Discrete generation only has age 0 selection
-                        
+
                         if isinstance(values, dict):
                             for sex_label, value in values.items():
                                 sex_idx = resolve_sex_label(sex_label)

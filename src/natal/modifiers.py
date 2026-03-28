@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Modifier system for population simulations.
 
 This module defines protocols and helper functions for constructing and
@@ -18,11 +17,26 @@ callables that operate on NumPy tensors.
 """
 
 from __future__ import annotations
-from typing import Protocol, Tuple, Optional, Dict, Any, Callable, Union, List, Mapping, TypeGuard, cast
+
 import inspect
+from collections.abc import Mapping
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    TypeGuard,
+    Union,
+    cast,
+)
+
 import numpy as np
-from natal.helpers import resolve_sex_label
+
 from natal.genetic_entities import Genotype, HaploidGenotype
+from natal.helpers import resolve_sex_label
 
 GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
 GlabSelector = Optional[Union[str, int]]

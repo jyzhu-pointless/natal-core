@@ -1,6 +1,6 @@
 # type: ignore
 import numpy as np
-from natal.hook_dsl import (_njit_switch, execute_csr_event_program_with_state, EVENT_FIRST, EVENT_EARLY, EVENT_LATE)
+from natal.hook_dsl import (njit_switch, execute_csr_event_program_with_state, EVENT_FIRST, EVENT_EARLY, EVENT_LATE)
 from natal.population_state import PopulationState, DiscretePopulationState
 from natal.kernels.simulation_kernels import (run_reproduction, run_survival, run_aging, run_discrete_reproduction, run_discrete_survival, run_discrete_aging)
 
@@ -11,28 +11,28 @@ _LATE_HOOK = None
 RESULT_CONTINUE = 0
 RESULT_STOP = 1
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
     result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _FIRST_HOOK(ind_count, tick)
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
     result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _EARLY_HOOK(ind_count, tick)
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
     result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _LATE_HOOK(ind_count, tick)
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def __RUN_TICK_NAME__(state, config, registry):
     ind_count = state.individual_count.copy()
     sperm_store = state.sperm_storage.copy()
@@ -51,7 +51,7 @@ def __RUN_TICK_NAME__(state, config, registry):
     ind_count, sperm_store = run_aging(ind_count, sperm_store, config)
     return (ind_count, sperm_store, np.int32(tick + 1)), RESULT_CONTINUE
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def __RUN_NAME__(state, config, registry, n_ticks, record_interval=0):
     was_stopped = False
     ind_count = state.individual_count.copy()
@@ -93,7 +93,7 @@ def __RUN_NAME__(state, config, registry, n_ticks, record_interval=0):
         history_result = None
     return (ind_count, sperm_store, tick), history_result, was_stopped
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def __RUN_DISCRETE_TICK_NAME__(state, config, registry):
     ind_count = state.individual_count.copy()
     tick = state.n_tick
@@ -112,7 +112,7 @@ def __RUN_DISCRETE_TICK_NAME__(state, config, registry):
     ind_count = run_discrete_aging(ind_count)
     return (ind_count, np.int32(tick + 1)), RESULT_CONTINUE
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def __RUN_DISCRETE_NAME__(state, config, registry, n_ticks, record_interval=0):
     was_stopped = False
     ind_count = state.individual_count.copy()

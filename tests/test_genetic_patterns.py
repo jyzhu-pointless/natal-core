@@ -1,7 +1,7 @@
 """Unit tests for natal.genetic_patterns.GenotypePatternParser."""
 
 import natal as nt
-from natal.genetic_entities import Gene, Haplotype, HaploidGenotype, Genotype
+from natal.genetic_entities import Gene, Genotype, HaploidGenotype, Haplotype
 
 
 def _build_genotype(sp, mat_allele: str, pat_allele: str) -> Genotype:

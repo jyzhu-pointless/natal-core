@@ -5,6 +5,7 @@ This module remains as a stable compatibility layer for existing imports.
 """
 
 from natal.hooks import *  # noqa: F401,F403
+from natal.numba_utils import njit_switch  # noqa: F401
 
 __all__ = [
 	# Core types
@@ -22,6 +23,7 @@ __all__ = [
 	'execute_csr_event_program_with_state',
 	'build_hook_program',
 	# Numba-friendly hook utilities
+    "njit_switch",
 	'noop_hook',
 	'compile_combined_hook',
 	'CompiledEventHooks',

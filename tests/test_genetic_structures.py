@@ -1,6 +1,7 @@
 """Unit tests for natal.genetic_structures."""
 
 import pytest  # type: ignore
+
 import natal as nt
 from natal.genetic_structures import SexChromosomeType
 
@@ -105,7 +106,7 @@ class TestSpeciesFromDict:
         assert sp.gamete_labels == []
 
     def test_invalid_spec_type_raises(self):
-        with pytest.raises(TypeError):
+        with pytest.raises(AssertionError):  # type: ignore
             nt.Species.from_dict(
                 name="S_bad",
                 structure={"chr1": 42},  # type: ignore[arg-type]
@@ -150,7 +151,6 @@ class TestSpeciesFromDict:
             structure={"chr1": ["locA"]},
         )
         assert len(sp.chromosomes) == 1
-
 
 class TestSpeciesQueries:
     def test_get_locus_found(self, simple_species):

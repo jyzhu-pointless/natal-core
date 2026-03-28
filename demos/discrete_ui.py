@@ -1,7 +1,6 @@
 import natal as nt
 from natal.ui import launch
 
-
 sp = nt.Species.from_dict(
     name="TestSpecies",
     structure={
@@ -37,7 +36,7 @@ def release_drive_carriers():
 
 pop = nt.DiscreteGenerationPopulation \
     .setup(
-        species=sp, 
+        species=sp,
         name="TestPop",
         stochastic=True,
     ) \

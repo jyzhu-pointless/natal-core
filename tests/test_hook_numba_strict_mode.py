@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Strict-mode and ABI checks for hook kernel integration."""
 
-from pathlib import Path
 import inspect
 import sys
+from pathlib import Path
 
 import pytest  # type: ignore
 
@@ -41,6 +41,19 @@ class _FakePop:
 
     def _register_compiled_hook(self, desc):
         self._registered.append(desc)
+
+    @property
+    def registry(self):
+        return self._index_core
+
+    @property
+    def n_ages(self):
+        return self._n_ages
+
+    @property
+    def config(self):
+        return self._config
+
 
 
 def test_selector_python_hook_rejected_when_numba_enabled():

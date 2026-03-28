@@ -7,10 +7,9 @@ import importlib.util
 import sys
 import threading
 from pathlib import Path
-from typing import Callable, Tuple, Any
+from typing import Any, Callable, Tuple
 
 from natal.numba_utils import get_numba_cache_dir
-
 
 _TEMPLATES_DIR = Path(__file__).with_suffix("").parent / "templates"
 _WRAPPER_TEMPLATE_PATH = _TEMPLATES_DIR / "kernel_wrappers.py.tmpl"
@@ -101,7 +100,7 @@ def compile_kernel_bound_wrappers(
     """
     key = _hash_key(
         [
-            "kernel_wrappers_v6",
+            "kernel_wrappers_v7",
             _stable_callable_identity(first_fn),
             _stable_callable_identity(early_fn),
             _stable_callable_identity(late_fn),
@@ -122,9 +121,9 @@ def compile_kernel_bound_wrappers(
     module_path = _write_codegen_module(module_stem, source)
     module = _load_codegen_module(module_stem, module_path)
     # Bind the compiled hook chains after module import to keep template static.
-    setattr(module, "_FIRST_HOOK", first_fn)
-    setattr(module, "_EARLY_HOOK", early_fn)
-    setattr(module, "_LATE_HOOK", late_fn)
+    setattr(module, "_FIRST_HOOK", first_fn)  # noqa: B010
+    setattr(module, "_EARLY_HOOK", early_fn)  # noqa: B010
+    setattr(module, "_LATE_HOOK", late_fn)    # noqa: B010
     return (
         getattr(module, run_tick_name),
         getattr(module, run_name),
@@ -146,7 +145,7 @@ def compile_spatial_kernel_bound_wrappers(
     """
     key = _hash_key(
         [
-            "spatial_kernel_wrappers_v1",
+            "spatial_kernel_wrappers_v2",
             _stable_callable_identity(first_fn),
             _stable_callable_identity(early_fn),
             _stable_callable_identity(late_fn),
@@ -162,9 +161,9 @@ def compile_spatial_kernel_bound_wrappers(
     )
     module_path = _write_codegen_module(module_stem, source)
     module = _load_codegen_module(module_stem, module_path)
-    setattr(module, "_FIRST_HOOK", first_fn)
-    setattr(module, "_EARLY_HOOK", early_fn)
-    setattr(module, "_LATE_HOOK", late_fn)
+    setattr(module, "_FIRST_HOOK", first_fn)   # noqa: B010
+    setattr(module, "_EARLY_HOOK", early_fn)   # noqa: B010
+    setattr(module, "_LATE_HOOK", late_fn)     # noqa: B010
     return (
         getattr(module, run_spatial_tick_name),
         getattr(module, run_spatial_name),

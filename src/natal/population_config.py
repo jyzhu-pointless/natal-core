@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Population configuration container and related utilities.
 
 This module defines the immutable configuration structure ``PopulationConfig``,
@@ -12,14 +11,15 @@ while NumPy arrays can be mutated in place.
 
 from __future__ import annotations
 
+from typing import Any, Callable, List, NamedTuple, Optional
+
 import numpy as np
-from typing import Optional, Callable, List, NamedTuple, Any
 from numpy.typing import NDArray
 
-from natal.type_def import *
+import natal.algorithms as alg
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.index_registry import compress_hg_glab, decompress_hg_glab
-import natal.algorithms as alg
+from natal.type_def import *
 
 __all__ = [
     'NO_COMPETITION', 'FIXED', 'LOGISTIC', 'LINEAR', 'CONCAVE', 'BEVERTON_HOLT',
@@ -168,7 +168,7 @@ class PopulationConfig(NamedTuple):
         """
         self.sexual_selection_fitness[female_geno_idx, male_geno_idx] = value
 
-    def set_population_scale(self, scale: float) -> "PopulationConfig":
+    def set_population_scale(self, scale: float) -> PopulationConfig:
         """Return a new config with the population scale factor updated.
 
         The carrying capacity is automatically scaled accordingly.
@@ -256,7 +256,7 @@ def _maybe_copy_array(arr: NDArray[np.float64], copy: bool) -> NDArray[np.float6
     return arr.copy() if copy else arr
 
 
-def to_plain_population_config(config: 'PopulationConfig', copy: bool = True) -> PopulationConfig:
+def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> PopulationConfig:
     """Convert config object to a plain (copied) PopulationConfig.
 
     If `copy` is True, all arrays are deep‑copied; otherwise they are referenced
@@ -648,10 +648,10 @@ def initialize_zygote_map(
         raise ValueError("diploid_genotypes must be non-empty")
     if n_glabs <= 0:
         raise ValueError("n_glabs must be positive")
-    
+
     # 1. Build baseline one-hot tensor according to Mendelian inheritance
     gametes_to_zygote_map: NDArray[np.float64] = np.zeros((n_hg_glabs, n_hg_glabs, n_genotypes), dtype=np.float64)
-    
+
     for idx_hg1, hg1 in enumerate(haploid_genotypes):
         for idx_hg2, hg2 in enumerate(haploid_genotypes):
             zygote_gt = Genotype(
@@ -659,7 +659,7 @@ def initialize_zygote_map(
                 maternal=hg1,
                 paternal=hg2
             )
-            
+
             if zygote_gt in diploid_genotypes:
                 idx_gt = diploid_genotypes.index(zygote_gt)
                 # Baseline: labels are equivalent — populate all (glab1, glab2)
@@ -668,7 +668,7 @@ def initialize_zygote_map(
                         compressed_idx1 = compress_hg_glab(idx_hg1, glab1, n_glabs)
                         compressed_idx2 = compress_hg_glab(idx_hg2, glab2, n_glabs)
                         gametes_to_zygote_map[compressed_idx1, compressed_idx2, idx_gt] = 1.0
-    
+
     # 2. Apply optional zygote modifiers
     if zygote_modifiers:
         for modifier in zygote_modifiers:
@@ -773,7 +773,7 @@ def extract_gamete_frequencies(
     """
     gamete_freqs_array = genotype_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[HaploidGenotype, float] = {}
-    
+
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
             hg_idx, _glab_idx = decompress_hg_glab(compressed_idx, n_glabs)
@@ -781,7 +781,7 @@ def extract_gamete_frequencies(
                 hg = haploid_genotypes[hg_idx]
                 # Aggregate frequencies across all glab variants
                 result[hg] = result.get(hg, 0.0) + freq
-    
+
     return result
 
 
@@ -817,14 +817,14 @@ def extract_gamete_frequencies_by_glab(
     """
     gamete_freqs_array = genotype_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[tuple[HaploidGenotype, int], float] = {}
-    
+
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:
             hg_idx, glab_idx = decompress_hg_glab(compressed_idx, n_glabs)
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 result[(hg, glab_idx)] = freq
-    
+
     return result
 
 
@@ -865,11 +865,11 @@ def extract_zygote_frequencies(
     """
     zygote_freqs_array = gametes_to_zygote_map[gamete1_compressed_idx, gamete2_compressed_idx, :]
     result: dict[Genotype, float] = {}
-    
+
     for genotype_idx, freq in enumerate(zygote_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
             if genotype_idx < len(diploid_genotypes):
                 genotype = diploid_genotypes[genotype_idx]
                 result[genotype] = result.get(genotype, 0.0) + freq
-    
+
     return result

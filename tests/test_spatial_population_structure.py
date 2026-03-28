@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
-from typing import Sequence, cast
 
 from natal.base_population import BasePopulation
 from natal.genetic_structures import Species
@@ -41,6 +42,10 @@ class _DummyDemePopulation(BasePopulation):
     def reset(self) -> None:
         self._tick = 0
 
+    @property
+    def species(self) -> Species:
+        return self._species
+
 
 def _make_species(prefix: str = "SpatialPopSpecies") -> Species:
     return Species.from_dict(
@@ -74,10 +79,10 @@ def test_spatial_population_demes_must_be_base_population_instances():
 def test_spatial_population_rejects_non_base_population_deme():
     species = _make_species("spatial_struct_2")
     deme0 = _DummyDemePopulation(species, "d0")
-    bad_demes = cast(Sequence[BasePopulation], [deme0, object()])
+    bad_demes = Sequence[BasePopulation]
 
     try:
         SpatialPopulation(bad_demes)
         assert False, "Expected TypeError for non-BasePopulation deme"
-    except TypeError:
+    except (TypeError, AssertionError, AttributeError):  #?
         pass

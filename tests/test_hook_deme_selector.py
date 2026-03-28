@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Unit tests for deme selector support in hook descriptors and executor."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from natal.hook_dsl import (  # noqa: E402
+    EVENT_EARLY,
+    RESULT_CONTINUE,
     CompiledHookDescriptor,
     HookExecutor,
     HookProgram,
-    EVENT_EARLY,
-    RESULT_CONTINUE,
 )
 from natal.numba_utils import numba_disabled  # noqa: E402
 

@@ -28,8 +28,8 @@ from .types import (
     RESULT_CONTINUE,
     RESULT_STOP,
     CompiledHookDescriptor,
-    HookProgram,
     DemeSelector,
+    HookProgram,
 )
 
 if TYPE_CHECKING:
@@ -519,7 +519,7 @@ class HookExecutor:
     def from_compiled_hooks(
         registry: HookProgram,
         compiled_hooks: List[CompiledHookDescriptor],
-    ) -> "HookExecutor":
+    ) -> HookExecutor:
         """Group descriptors by event and sort by priority."""
         from collections import defaultdict
 
@@ -538,7 +538,7 @@ class HookExecutor:
     def execute_event(
         self,
         event_id: int,
-        population: "BasePopulation[Any]",
+        population: BasePopulation[Any],
         tick: int,
         deme_id: int = 0,
     ) -> int:

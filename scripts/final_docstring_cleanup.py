@@ -8,14 +8,15 @@ It focuses on the most critical public API functions.
 
 from pathlib import Path
 
+
 def process_algorithms_file():
     """Process algorithms.py file with precise translations"""
-    
+
     file_path = Path(__file__).parent.parent / 'src' / 'natal' / 'algorithms.py'
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
+
+    with open(file_path, encoding='utf-8') as f:
         content = f.read()
-    
+
     # Define precise translations for specific docstrings
     translations = {
         # continuous_poisson function
@@ -28,7 +29,7 @@ def process_algorithms_file():
         lam: Poisson 的参数 λ
         
     Returns:
-        从 Gamma(λ, 1) 采样的值""": 
+        从 Gamma(λ, 1) 采样的值""":
         """Use Gamma distribution to continuousize Poisson distribution.
     
     Moments matching: Poisson(λ) -> Gamma(λ, 1)
@@ -39,7 +40,7 @@ def process_algorithms_file():
         
     Returns:
         Value sampled from Gamma(λ, 1)""",
-        
+
         # continuous_binomial function
         """用 Beta 分布连续化 Binomial 分布。
     
@@ -63,7 +64,7 @@ def process_algorithms_file():
         
     Returns:
         Continuous count value (float between 0 and n)""",
-        
+
         # continuous_multinomial function
         """用 Dirichlet 分布连续化 Multinomial 分布。
     
@@ -82,25 +83,25 @@ def process_algorithms_file():
     Args:
         n: Multinomial total count"""
     }
-    
+
     # Apply translations
     for old, new in translations.items():
         content = content.replace(old, new)
-    
+
     # Write back
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
-    
+
     return "Updated algorithms.py docstrings"
 
 def process_genetic_structures_file():
     """Process genetic_structures.py file"""
-    
+
     file_path = Path(__file__).parent.parent / 'src' / 'natal' / 'genetic_structures.py'
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
+
+    with open(file_path, encoding='utf-8') as f:
         content = f.read()
-    
+
     # Define translations for genetic_structures
     translations = {
         # SexChromosomeType enum
@@ -120,7 +121,7 @@ Defines common sex chromosome types and their inheritance properties:
 - Y: Mammalian Y chromosome, paternal only
 - Z: Bird/moth Z chromosome, can come from either parent
 - W: Bird/moth W chromosome, maternal only""",
-        
+
         # Chromosome class
         """Represents a chromosome structure with linkage information among loci.
 
@@ -147,20 +148,20 @@ Attributes:
     - 'Z': Z chromosome in ZW system
     - 'W': W chromosome in ZW system (maternal only)"""
     }
-    
+
     # Apply translations
     for old, new in translations.items():
         content = content.replace(old, new)
-    
+
     # Write back
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
-    
+
     return "Updated genetic_structures.py docstrings"
 
 def process_other_files():
     """Process other files that need cleanup"""
-    
+
     files_to_process = [
         'age_structured_population.py',
         'base_population.py',
@@ -172,16 +173,16 @@ def process_other_files():
         'population_config.py',
         'gamete_allele_conversion.py'
     ]
-    
+
     results = []
-    
+
     for filename in files_to_process:
         file_path = Path(__file__).parent.parent / 'src' / 'natal' / filename
-        
+
         if file_path.exists():
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 content = f.read()
-            
+
             # Simple translation of common patterns
             translations = {
                 '参数': 'Args',
@@ -191,37 +192,37 @@ def process_other_files():
                 '默认': 'Default',
                 '类型': 'Type'
             }
-            
+
             for old, new in translations.items():
                 content = content.replace(old, new)
-            
+
             # Write back
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-            
+
             results.append(f"Cleaned {filename}")
-    
+
     return results
 
 def main():
     """Main function"""
-    
+
     print("Starting final docstring cleanup...")
-    
+
     # Process key files
     results = []
-    
+
     results.append(process_algorithms_file())
     results.append(process_genetic_structures_file())
-    
+
     # Process other files
     other_results = process_other_files()
     results.extend(other_results)
-    
+
     print("\nCleanup results:")
     for result in results:
         print(f"  ✓ {result}")
-    
+
     print("\nFinal docstring cleanup complete!")
     print("\nNext steps:")
     print("1. Review the updated docstrings")

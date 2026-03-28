@@ -1,6 +1,6 @@
 # type: ignore
 import numpy as np
-from natal.hook_dsl import (_njit_switch, execute_csr_event_program_with_state, EVENT_FIRST, EVENT_EARLY, EVENT_LATE)
+from natal.hook_dsl import (njit_switch, execute_csr_event_program_with_state, EVENT_FIRST, EVENT_EARLY, EVENT_LATE)
 from natal.kernels.spatial_simulation_kernels import (
     run_spatial_reproduction,
     run_spatial_survival,
@@ -16,7 +16,7 @@ RESULT_CONTINUE = 0
 RESULT_STOP = 1
 
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id=0):
     result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id)
     if result != RESULT_CONTINUE:
@@ -24,7 +24,7 @@ def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sper
     return _FIRST_HOOK(ind_count, tick, deme_id)
 
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id=0):
     result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id)
     if result != RESULT_CONTINUE:
@@ -32,7 +32,7 @@ def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sper
     return _EARLY_HOOK(ind_count, tick, deme_id)
 
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id=0):
     result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id)
     if result != RESULT_CONTINUE:
@@ -40,7 +40,7 @@ def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm
     return _LATE_HOOK(ind_count, tick, deme_id)
 
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def __RUN_SPATIAL_TICK_NAME__(ind_count_all, sperm_store_all, configs, registry, tick, adjacency, migration_rate):
     ind = ind_count_all.copy()
     sperm = sperm_store_all.copy()
@@ -72,7 +72,7 @@ def __RUN_SPATIAL_TICK_NAME__(ind_count_all, sperm_store_all, configs, registry,
     return (ind, sperm, np.int32(tick + 1)), RESULT_CONTINUE
 
 
-@_njit_switch(cache=True)
+@njit_switch(cache=True)
 def __RUN_SPATIAL_NAME__(ind_count_all, sperm_store_all, config, registry, tick, n_ticks, adjacency, migration_rate, record_interval=0):
     was_stopped = False
     ind = ind_count_all.copy()

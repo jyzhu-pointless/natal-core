@@ -11,19 +11,29 @@ first hook -> reproduction -> early hook -> survival -> late hook -> aging
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Union, Tuple, TYPE_CHECKING, Any, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.base_population import BasePopulation, Species, Genotype, Sex
-from natal.population_state import DiscretePopulationState
-from natal.population_config import PopulationConfig
 import natal.kernels.simulation_kernels as sk
+from natal.base_population import BasePopulation, Genotype, Sex, Species
+from natal.population_config import PopulationConfig
+from natal.population_state import DiscretePopulationState
 
 if TYPE_CHECKING:
-    from natal.population_builder import DiscreteGenerationPopulationBuilder
     from natal.index_registry import IndexRegistry
+    from natal.population_builder import DiscreteGenerationPopulationBuilder
 
 
 __all__ = ["DiscreteGenerationPopulation"]
@@ -31,7 +41,7 @@ __all__ = ["DiscreteGenerationPopulation"]
 
 class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     """Population with strict non-overlapping generations."""
-    
+
     def __init__(
         self,
         species: Species,
@@ -102,7 +112,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         stochastic: bool = True,
         use_dirichlet_sampling: bool = False,
         use_fixed_egg_count: bool = False,
-    ) -> "DiscreteGenerationPopulationBuilder":
+    ) -> DiscreteGenerationPopulationBuilder:
         """Create and preconfigure a discrete-generation population builder.
 
         This is a convenience forwarding entry point. Parameter semantics and
@@ -204,7 +214,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         record_every: int = 1,
         finish: bool = False,
         clear_history_on_start: bool = False,
-    ) -> "DiscreteGenerationPopulation":
+    ) -> DiscreteGenerationPopulation:
         if self._finished:
             raise RuntimeError(
                 f"Population '{self.name}' has finished. "
@@ -212,11 +222,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             )
 
         hooks = self.get_compiled_event_hooks()
-        
+
         # run_discrete_fn 和 registry 总是由 get_compiled_event_hooks() 初始化的
         assert hooks.run_discrete_fn is not None, "hooks.run_discrete_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
-        
+
         run_fn = cast(
             Callable[..., Tuple[Tuple[NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]],
             hooks.run_discrete_fn,
@@ -247,7 +257,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         return self
 
-    def run_tick(self) -> "DiscreteGenerationPopulation":
+    def run_tick(self) -> DiscreteGenerationPopulation:
         """Execute a single simulation tick.
 
         Overrides BasePopulation.run_tick to use the accelerated run() pipeline
@@ -262,7 +272,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._finished = False
         if hasattr(self, '_initial_population_snapshot'):
             ind_copy, _, _ = self._initial_population_snapshot
-            
+
             # Recreate state with initial data
             self._state = DiscretePopulationState.create(
                 n_sexes=self._config_nn.n_sexes,
@@ -313,7 +323,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return self._require_config()
 
     @property
-    def _registry_nn(self) -> "IndexRegistry":
+    def _registry_nn(self) -> IndexRegistry:
         """Non-optional registry accessor for subclass internals."""
         return self._require_registry()
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT_DIR / "src" / "natal"
 OUTPUT_FILE = PACKAGE_DIR / "__init__.pyi"

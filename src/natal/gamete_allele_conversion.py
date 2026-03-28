@@ -15,25 +15,26 @@
 # Both create a GameteModifier that modifies genotype_to_gametes_map
 # during gamete production.
 
-from typing import Any, Dict, Optional, Tuple, Callable, Union, TYPE_CHECKING, List
-from natal.type_def import Sex
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+
+from natal.genetic_entities import Gene, Genotype, HaploidGenotype
+from natal.helpers import resolve_sex_label
+from natal.index_registry import compress_hg_glab
 from natal.modifiers import (
     GameteModifier,
     GenotypeFilter,
     evaluate_genotype_filter,
     resolve_optional_glab_index,
 )
-from natal.genetic_entities import Gene, Genotype, HaploidGenotype
 from natal.population_config import extract_gamete_frequencies_by_glab
-from natal.helpers import resolve_sex_label
-from natal.index_registry import compress_hg_glab
+from natal.type_def import Sex
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
 
 __all__ = [
-    "GameteAlleleConversionRule", 
-    "GameteHaploidGenomeConversionRule", 
+    "GameteAlleleConversionRule",
+    "GameteHaploidGenomeConversionRule",
     "GameteConversionRuleSet"
 ]
 
@@ -179,7 +180,7 @@ class GameteAlleleConversionRule:
         rule = GameteAlleleConversionRule(from_allele="A", to_allele="B", rate=0.5)
         # In heterozygotes carrying A, 50% of gametes convert A -> B
     """
-    
+
     def __init__(
         self,
         from_allele: Union[str, Gene],
@@ -214,11 +215,11 @@ class GameteAlleleConversionRule:
         """
         if not 0 <= rate <= 1:
             raise ValueError(f"rate must be in [0, 1], got {rate}")
-        
+
         # Normalize allele representations to strings for comparison
         self.from_allele_str = from_allele if isinstance(from_allele, str) else from_allele.name
         self.to_allele_str = to_allele if isinstance(to_allele, str) else to_allele.name
-        
+
         # Store original objects for reference
         self.from_allele = from_allele
         self.to_allele = to_allele
@@ -232,10 +233,10 @@ class GameteAlleleConversionRule:
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
         self.source_glab = source_glab
         self.target_glab = target_glab
-    
+
     def __repr__(self) -> str:
         return f"GameteAlleleConversionRule({self.name}, rate={self.rate})"
-    
+
     def applies_to_sex(self, sex_idx: _SexSpecifier, sex_name: Optional[str] = None) -> bool:
         """Check if rule applies to a given sex.
         
@@ -253,7 +254,7 @@ class GameteAlleleConversionRule:
             return sex_idx == target_sex_idx
         except (ValueError, TypeError):
             raise ValueError(f"Invalid sex_filter: {self.sex_filter}")
-    
+
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given genotype.
         
@@ -384,7 +385,7 @@ class GameteConversionRuleSet:
             target_glab=target_glab,
         )
         return self.add_rule(rule)
-    
+
     def to_gamete_modifier(
         self,
         population: 'BasePopulation[Any]'
@@ -404,28 +405,28 @@ class GameteConversionRuleSet:
             A callable that implements GameteModifier protocol.
         """
         rules = self.rules
-        
+
         def gamete_modifier_func(*_args: object, **_kwargs: object) -> Dict[Tuple[int, int], Dict[int, float]]:
             """Apply all conversion rules to gamete frequencies.
             
             Returns dict mapping (sex_idx, genotype_idx) -> {compressed_hg_glab_idx -> freq}.
             """
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
-            
+
             n_glabs = int(population.config.n_glabs)
             genotype_to_gametes_map = population.config.genotype_to_gametes_map
             haploid_genotypes = population.registry.index_to_haplo
-            
+
             # Resolve glab names to indices for all rules (once)
             resolved_rules = _resolve_rule_glabs(rules, population)
 
             for sex_idx in range(population.config.n_sexes):
                 for genotype_idx, genotype in enumerate(population.registry.index_to_genotype):
-                    if not any(rule.applies_to_sex(sex_idx) and 
-                              rule.applies_to_genotype(genotype) 
+                    if not any(rule.applies_to_sex(sex_idx) and
+                              rule.applies_to_genotype(genotype)
                               for rule in rules):
                         continue
-                    
+
                     # Extract glab-aware gamete frequencies
                     initial_freqs = extract_gamete_frequencies_by_glab(
                         genotype_to_gametes_map,
@@ -434,19 +435,19 @@ class GameteConversionRuleSet:
                         haploid_genotypes,
                         n_glabs
                     )
-                    
+
                     if not initial_freqs:
                         continue
-                    
+
                     # Compute converted frequencies at (HaploidGenotype, glab_idx) level
                     converted_freqs = _compute_converted_gamete_freqs(
-                        genotype, 
-                        resolved_rules, 
-                        sex_idx, 
+                        genotype,
+                        resolved_rules,
+                        sex_idx,
                         population,
                         initial_freqs=initial_freqs
                     )
-                    
+
                     if converted_freqs:
                         # Convert (HaploidGenotype, glab_idx) -> compressed index
                         compressed_freqs: Dict[int, float] = {}
@@ -455,14 +456,14 @@ class GameteConversionRuleSet:
                             if hg_idx is not None and freq > 0:
                                 cidx = compress_hg_glab(hg_idx, glab_idx, n_glabs)
                                 compressed_freqs[cidx] = compressed_freqs.get(cidx, 0.0) + freq
-                        
+
                         if compressed_freqs:
                             result[(sex_idx, genotype_idx)] = compressed_freqs
-            
+
             return result
-        
+
         return gamete_modifier_func  # TODO: protocol 有问题
-    
+
     def __repr__(self) -> str:
         return f"{self.name} with {len(self.rules)} rules"
 
@@ -522,36 +523,36 @@ def _compute_converted_gamete_freqs(
         # Check rule-level conditions (does it apply to this sex / diploid genotype?)
         if not rule.applies_to_sex(sex_idx) or not rule.applies_to_genotype(genotype):
             continue
-            
+
         # next_freqs will collect the newly partitioned frequencies after applying THIS rule.
         next_freqs: Dict[Tuple[HaploidGenotype, int], float] = {}
         for (hg, glab_idx), freq in current_freqs.items():
             if freq <= 1e-12:
                 continue
-            
+
             # source_glab filter: if set, only apply rule to gametes carrying this exact label.
             # Gametes failing the label pass untouched to next_freqs.
             if src_glab_idx is not None and glab_idx != src_glab_idx:
                 next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
                 continue
-            
+
             # --- HaploidGenotype-level rule ---
             if isinstance(rule, GameteHaploidGenomeConversionRule):
                 # If the gamete's genome does not match the rule's target pattern, pass untouched.
                 if not rule.matches(hg):
                     next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
                     continue
-                    
+
                 converted_hg = rule.replacement(hg)
                 prob = rule.rate
 
-                # The pool splits here: 
+                # The pool splits here:
                 # 1. The fraction that DID NOT convert (1 - prob) is preserved.
                 unconverted_key = (hg, glab_idx)
                 next_freqs[unconverted_key] = (
                     next_freqs.get(unconverted_key, 0.0) + freq * (1 - prob)
                 )
-                
+
                 # 2. The fraction that DID convert (prob) is mapped to the new haploid genome.
                 out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
                 converted_key = (converted_hg, out_glab)
@@ -569,30 +570,30 @@ def _compute_converted_gamete_freqs(
                     rule.to_allele_str,
                     rule.rate,
                 )
-                
+
                 if converted is not None:
                     original_hg, converted_hg, prob = converted
-                    
+
                     # Unconverted portion (1 - prob) keeps original genotype and glab
                     unconverted_key = (original_hg, glab_idx)
                     next_freqs[unconverted_key] = (
                         next_freqs.get(unconverted_key, 0.0) + freq * (1 - prob)
                     )
-                    
+
                     # Converted portion (prob): updates the genotype, and uses target_glab if specified.
                     out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
                     converted_key = (converted_hg, out_glab)
                     next_freqs[converted_key] = (
                         next_freqs.get(converted_key, 0.0) + freq * prob
-                    )   
+                    )
                 else:
                     # Allele not found in this gamete -> pass untouched.
                     next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
-                
+
         # Update the pool for the next rule in the pipeline.
         # This allows chained events! (e.g. Rule1: Target->Drive(70%); Rule2: (Target->R1)(from the remaining 30%)).
         current_freqs = next_freqs
-        
+
     final_freqs = {k: v for k, v in current_freqs.items() if v > 1e-12}
 
     return final_freqs
@@ -622,14 +623,14 @@ def _convert_haploid_genotype(
         ``(original_hg, converted_hg, conversion_rate)``.
     """
     from natal.genetic_entities import Haplotype
-    
+
     species = haploid_genome.species
-    
+
     for hap_idx, haplotype in enumerate(haploid_genome.haplotypes):
         for gene in haplotype.genes:
             if gene.name != from_allele:
                 continue
-            
+
             # Found the source allele — look up target Gene at the same Locus
             locus = gene.locus
             target_gene = None
@@ -637,11 +638,11 @@ def _convert_haploid_genotype(
                 if registered_gene.name == to_allele:
                     target_gene = registered_gene
                     break
-            
+
             if target_gene is None:
                 # Target allele not registered at this locus; skip
                 continue
-            
+
             # Build a new Haplotype with the replaced gene
             new_genes = [
                 target_gene if g is gene else g
@@ -651,7 +652,7 @@ def _convert_haploid_genotype(
                 chromosome=haplotype.chromosome,
                 genes=new_genes,
             )
-            
+
             # Build a new HaploidGenotype with the replaced haplotype
             new_haplotypes = [
                 new_haplotype if i == hap_idx else h
@@ -661,7 +662,7 @@ def _convert_haploid_genotype(
                 species=species,
                 haplotypes=new_haplotypes,
             )
-            
+
             return (haploid_genome, converted_hg, conversion_rate)
-    
+
     return None

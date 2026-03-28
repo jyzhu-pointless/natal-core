@@ -15,27 +15,43 @@ Docstring style: Google style (Args, Returns, Raises, Example).
 """
 
 from __future__ import annotations
-from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple, Callable, Any, Union, Sequence, TypeVar, Generic, TYPE_CHECKING, cast
+
 import hashlib
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
+
 import numpy as np
-from natal.genetic_structures import *
-from natal.genetic_entities import *
-from natal.index_registry import IndexRegistry
-from natal.type_def import *
-from natal.helpers import resolve_sex_label
-from natal.population_state import PopulationState, DiscretePopulationState
-from natal.population_config import PopulationConfig
-import natal.population_config as _population_config
+
 import natal.modifiers as _modifiers
-from natal.modifiers import GameteModifier, ZygoteModifier
+import natal.population_config as _population_config
+from natal.genetic_entities import Genotype, HaploidGenotype
+from natal.genetic_structures import Species
+from natal.helpers import resolve_sex_label
 from natal.hook_dsl import CompiledEventHooks
+from natal.index_registry import IndexRegistry
+from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.population_config import PopulationConfig
+from natal.population_state import DiscretePopulationState, PopulationState
+from natal.type_def import *
 
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
 if TYPE_CHECKING:
-    from natal.hook_dsl import HookProgram, DemeSelector, CompiledHookDescriptor
     from natal.genetic_presets import GeneticPreset
+    from natal.hook_dsl import CompiledHookDescriptor, DemeSelector, HookProgram
 
 HookCallback = Callable[..., object]
 HookEntry = Tuple[int, Optional[str], HookCallback]
@@ -44,10 +60,10 @@ HookRegistrationMap = Dict[str, List[HookRegistration]]
 PendingHook = Tuple[str, HookCallback, Optional[str], Optional[int]]
 ModifierWrapperBuilder = Callable[..., Tuple[List[HookCallback], List[HookCallback]]]
 MapInitializer = Callable[..., np.ndarray]
-build_modifier_wrappers = cast(ModifierWrapperBuilder, getattr(_modifiers, "build_modifier_wrappers"))
-initialize_gamete_map = cast(MapInitializer, getattr(_population_config, "initialize_gamete_map"))
-initialize_zygote_map = cast(MapInitializer, getattr(_population_config, "initialize_zygote_map"))
-build_population_config = cast(Callable[..., PopulationConfig], getattr(_population_config, "build_population_config"))
+build_modifier_wrappers = cast(ModifierWrapperBuilder, _modifiers.build_modifier_wrappers)
+initialize_gamete_map = cast(MapInitializer, _population_config.initialize_gamete_map)
+initialize_zygote_map = cast(MapInitializer, _population_config.initialize_zygote_map)
+build_population_config = cast(Callable[..., PopulationConfig], _population_config.build_population_config)
 
 class BasePopulation(ABC, Generic[T_State]):
     """Abstract base class for population models.
@@ -65,7 +81,7 @@ class BasePopulation(ABC, Generic[T_State]):
         - ``_hooks``: Event hook registry mapping event names to ordered hook lists.
         - ``_compiled_hooks``: Compiled event hooks for efficient execution.
     """
-    
+
     # 允许的 Hook 事件（子类可扩展此列表）
     ALLOWED_EVENTS = [
         "initialization",
@@ -104,11 +120,11 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # 演化历史：(tick, flattened_array) 对的列表
         self._history: List[Tuple[int, np.ndarray]] = []
-        
+
         # History config
         self.record_every: int = 1
         self.max_history: int = 5000  # Default rolling window size
-        
+
         # Hooks 系统：事件名 -> [(hook_id, hook_name, hook_func), ...]
         self._hooks: Dict[str, List[HookEntry]] = {
             event: [] for event in self.ALLOWED_EVENTS
@@ -122,7 +138,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # 编译后的 Hook Description符列表（用于 numba 加速）
         self._compiled_hooks: List[Any] = []  # List[CompiledHookDescriptor]
-        
+
         # Hook 执行器（Python 层协调器，管理所有Type的 hooks）
         self._hook_executor: Optional[Any] = None  # HookExecutor
 
@@ -134,14 +150,14 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # 演化状态：是否已完成（finish）
         self._finished = False
-        
+
         # 防止递归调用的标志
         self._running = False
-        
+
         # 存储待延迟编译的 hooks（在子类初始化完成后编译）
         # 格式: [(event_name, func, hook_name, hook_id), ...]
         self._pending_hooks: List[PendingHook] = []
-        
+
         # 注册 hooks
         # 注意：如果 hook 带有 @hook 元数据，此时可能无法编译（IndexRegistry未完全设置）
         # 普通函数可以直接注册，带 @hook 的函数会被添加到 _pending_hooks 延迟编译
@@ -149,7 +165,7 @@ class BasePopulation(ABC, Generic[T_State]):
             for event_name, hooks_list in hooks.items():
                 for hook_info in hooks_list:
                     func, hook_name, hook_id = hook_info
-                    
+
                     # Check if function has @hook metadata
                     hook_meta = getattr(func, '_hook_meta', None)
                     if hook_meta is not None:
@@ -158,7 +174,7 @@ class BasePopulation(ABC, Generic[T_State]):
                     else:
                         # Plain function, register immediately
                         self.set_hook(event_name, func, hook_id=hook_id, hook_name=hook_name, compile=False)
-    
+
     def _finalize_hooks(self) -> None:
         """Compile pending hooks after subclass initialization is complete.
         
@@ -169,11 +185,11 @@ class BasePopulation(ABC, Generic[T_State]):
         for event_name, func, hook_name, hook_id in self._pending_hooks:
             self.set_hook(event_name, func, hook_id=hook_id, hook_name=hook_name, compile=True)
         self._pending_hooks.clear()
-    
+
     # ========================================================================
     # Registry and Genotype Initialization
     # ========================================================================
-    
+
     def _initialize_registry(self) -> None:
         """Template method: Initialize registry and register all genotypes.
         
@@ -190,24 +206,24 @@ class BasePopulation(ABC, Generic[T_State]):
         # Step 1: Create registry
         self._index_registry = self._create_registry()
         self._registry = self._index_registry
-        
+
         # Step 2: Register genotypes
         genotypes = self._get_genotypes()
         for genotype in genotypes:
             self._index_registry.register_genotype(genotype)
-        
+
         # Step 3: Try to register haplogenotypes if available
         haplogenotypes = self._get_haplogenotypes()
         if haplogenotypes:
             for hg in haplogenotypes:
                 self._index_registry.register_haplogenotype(hg)
-        
+
         # Step 4: Register gamete labels if provided
         raw_glabs = cast(Optional[List[str]], getattr(self._species, "gamete_labels", None))
         glabs = raw_glabs or ["default"]
         for glab in glabs:
             self._index_registry.register_gamete_label(glab)
-    
+
     # Helpers
     def _create_registry(self) -> IndexRegistry:
         return IndexRegistry()
@@ -235,34 +251,34 @@ class BasePopulation(ABC, Generic[T_State]):
     @property
     def hook_slot(self) -> int:
         return int(self._hook_slot)
-    
+
     # ========================================================================
     # 基础属性
     # ========================================================================
-    
+
     @property
     def species(self) -> Species:
         """The species/genetic architecture for this population."""
         return self._species
-    
+
     @property
     def name(self) -> str:
         """The human-readable name of the population."""
         return self._name
-    
+
     @name.setter
     def name(self, value: str) -> None:
         self._name = value
-    
+
     @property
     def tick(self) -> int:
         """The current simulation tick or generation index."""
         return self._tick
-    
+
     @tick.setter
     def tick(self, value: int) -> None:
         self._tick = value
-    
+
     @property
     def registry(self) -> IndexRegistry:
         """IndexRegistry instance managing genotype, haplotype, and label indices."""
@@ -301,7 +317,7 @@ class BasePopulation(ABC, Generic[T_State]):
         if self._state is None:
             raise AttributeError("Population state has not been initialized.")
         return self._state
-    
+
     @property
     def state(self) -> T_State:
         """Return the current population state container.
@@ -312,12 +328,12 @@ class BasePopulation(ABC, Generic[T_State]):
         if self._state is None:
             raise AttributeError("Population state has not been initialized.")
         return self._state
-    
+
     @property
     def history(self) -> List[Tuple[int, np.ndarray]]:
         """A list of recorded historical states as ``(tick, flattened_array)`` tuples."""
         return list(self._history)
-    
+
     def _enforce_history_limit(self) -> None:
         """Ensure history size does not exceed max_history by dropping oldest entries."""
         if self.max_history > 0:
@@ -330,8 +346,8 @@ class BasePopulation(ABC, Generic[T_State]):
         pass
 
     def _process_kernel_history(
-        self, 
-        history_new: Optional[np.ndarray], 
+        self,
+        history_new: Optional[np.ndarray],
         clear_history_on_start: bool
     ) -> None:
         """Process and append history array returned from simulation kernels.
@@ -343,7 +359,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         if clear_history_on_start:
             self.clear_history()
-        
+
         for row_idx in range(history_new.shape[0]):
             row = history_new[row_idx, :]
             tick = int(row[0])
@@ -351,7 +367,7 @@ class BasePopulation(ABC, Generic[T_State]):
             if not clear_history_on_start and self._history and self._history[-1][0] == tick:
                 continue
             self._history.append((tick, row.copy()))
-        
+
         self._enforce_history_limit()
 
     # ========================================================================
@@ -411,11 +427,11 @@ class BasePopulation(ABC, Generic[T_State]):
     def refresh_modifier_maps(self) -> None:
         """Public wrapper that rebuilds modifier maps from registered modifiers."""
         self._refresh_modifier_maps()
-    
+
     def add_gamete_modifier(
-        self, 
-        modifier: GameteModifier, 
-        name: Optional[str] = None, 
+        self,
+        modifier: GameteModifier,
+        name: Optional[str] = None,
         modifier_id: Optional[int] = None,
         refresh: bool = True,
     ) -> None:
@@ -431,11 +447,11 @@ class BasePopulation(ABC, Generic[T_State]):
         self._gamete_modifiers.sort(key=lambda x: x[0])
         if refresh:
             self._refresh_modifier_maps()
-    
+
     def add_zygote_modifier(
-        self, 
-        modifier: ZygoteModifier, 
-        name: Optional[str] = None, 
+        self,
+        modifier: ZygoteModifier,
+        name: Optional[str] = None,
         modifier_id: Optional[int] = None,
         refresh: bool = True,
     ) -> None:
@@ -492,7 +508,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self._gamete_modifiers.append((resolved_id, modifier_name, modifier))
         self._gamete_modifiers.sort(key=lambda x: x[0])
 
-    def apply_preset(self, preset: "GeneticPreset") -> None:
+    def apply_preset(self, preset: GeneticPreset) -> None:
         """Apply a genetic preset to this population.
         
         This is the preferred API for registering presets. The preset's
@@ -518,9 +534,9 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         from natal.genetic_presets import apply_preset_to_population
         apply_preset_to_population(self, preset)
-    
+
     @classmethod
-    def builder(cls, species: 'Species') -> Any:
+    def builder(cls, species: Species) -> Any:
         """Create a builder for this population type.
         
         This is the recommended way to construct populations with presets.
@@ -552,15 +568,15 @@ class BasePopulation(ABC, Generic[T_State]):
         # ✅ Ensure registry is initialized
         if self._index_registry is None:
             self._initialize_registry()
-        
+
         # 获取所有可能的单倍型和二倍型
-        haploid_genotypes: List[HaploidGenome] = self.species.get_all_haploid_genotypes()
+        haploid_genotypes: List[HaploidGenotype] = self.species.get_all_haploid_genotypes()
         diploid_genotypes: List[Genotype] = self.species.get_all_genotypes()
-        
+
         n_hg = len(haploid_genotypes)
         n_genotypes = len(diploid_genotypes)
         n_glabs = 1  # 根据实际情况设置
-        
+
         # 创建静态数据容器
         self._config = build_population_config(
             n_genotypes=n_genotypes,
@@ -568,7 +584,7 @@ class BasePopulation(ABC, Generic[T_State]):
             n_sexes=2, # TODO
             n_glabs=n_glabs
         )
-        
+
         # 使用统一的 wrapper 生成器将高层 modifier 转换为 tensor-level modifier
         gamete_modifier_funcs, zygote_modifier_funcs = self._build_modifier_wrappers(
             haploid_genotypes=haploid_genotypes,
@@ -631,9 +647,9 @@ class BasePopulation(ABC, Generic[T_State]):
     # reduce cognitive complexity and improve testability.
     # ------------------------------------------------------------------
     def _resolve_hg_glab(
-        self, 
-        haploid_genotypes: List[HaploidGenotype], 
-        part: Any, 
+        self,
+        haploid_genotypes: List[HaploidGenotype],
+        part: Any,
         n_glabs: int
     ) -> Tuple[int, int]:
         """Resolve a flexible haploid/genotype+glab part into numeric indices.
@@ -729,9 +745,9 @@ class BasePopulation(ABC, Generic[T_State]):
     # ========================================================================
     # 核心方法
     # ========================================================================
-    
+
     @abstractmethod
-    def run_tick(self) -> 'BasePopulation[T_State]':
+    def run_tick(self) -> BasePopulation[T_State]:
         """Execute one simulation tick.
 
         Typical sequence:
@@ -755,55 +771,55 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         pass
 
-    def step(self) -> 'BasePopulation[T_State]':
+    def step(self) -> BasePopulation[T_State]:
         """Alias for `BasePopulation.run_tick()`"""
         return self.run_tick()
-    
+
     @abstractmethod
     def get_total_count(self) -> int:
         """Return the total number of individuals in the population."""
         pass
-    
+
     @abstractmethod
     def get_female_count(self) -> int:
         """Return the total number of female individuals."""
         pass
-    
+
     @abstractmethod
     def get_male_count(self) -> int:
         """Return the total number of male individuals."""
         pass
-    
+
     # ========================================================================
     # 通用方法（可被子类继承或覆写）
     # ========================================================================
-    
+
     @property
     def total_population_size(self) -> int:
         """种群总大小（get_total_count 的别名）"""
         return self.get_total_count()
-    
+
     @property
     def total_females(self) -> int:
         """雌性总数（get_female_count 的别名）"""
         return self.get_female_count()
-    
+
     @property
     def total_males(self) -> int:
         """雄性总数（get_male_count 的别名）"""
         return self.get_male_count()
-    
+
     @property
     def sex_ratio(self) -> float:
         """Return the female-to-male ratio, or ``np.inf`` when male count is zero."""
         males = self.get_male_count()
         return self.get_female_count() / males if males > 0 else np.inf
-    
+
     @property
     def is_finished(self) -> bool:
         """检查种群是否已完成（finish=True）"""
         return self._finished
-    
+
     def finish_simulation(self) -> None:
         """
         结束模拟，触发 'finish' 事件并锁定种群。
@@ -825,27 +841,27 @@ class BasePopulation(ABC, Generic[T_State]):
             raise RuntimeError(
                 f"Population '{self.name}' has already finished."
             )
-        
+
         self._finished = True
         self.trigger_event("finish")
-    
+
     @abstractmethod
     def run(
-        self, 
-        n_steps: int, 
+        self,
+        n_steps: int,
         record_every: int = 1,
         finish: bool = False
-    ) -> 'BasePopulation[Any]':
+    ) -> BasePopulation[Any]:
         """
         运行多步演化。
         """
         pass
-        
+
     @abstractmethod
     def reset(self) -> None:
         """Reset the population to its initial state."""
         pass
-    
+
     def compute_allele_frequencies(self) -> Dict[str, float]:
         """
         计算种群中所有等位基因的频率（按位点归一化）。
@@ -860,7 +876,7 @@ class BasePopulation(ABC, Generic[T_State]):
         # 1. 初始化计数器
         allele_counts: Dict[str, float] = {}
         locus_totals: Dict[str, float] = {}  # locus_name -> total_count
-        
+
         for chromosome in self.species.chromosomes:
             for locus in chromosome.loci:
                 locus_totals[locus.name] = 0.0
@@ -871,12 +887,12 @@ class BasePopulation(ABC, Generic[T_State]):
         # individual_count shape: (n_sexes, n_ages, n_genotypes)
         # 对性别和年龄求和，得到每个基因型的总数
         genotype_counts = self._state.individual_count.sum(axis=(0, 1))
-        
+
         registry = self._registry
         for g_idx, count in enumerate(genotype_counts):
             if count <= 0:
                 continue
-            
+
             genotype = registry.index_to_genotype[g_idx]
             for chrom in self.species.chromosomes:
                 for locus in chrom.loci:
@@ -897,13 +913,13 @@ class BasePopulation(ABC, Generic[T_State]):
                 frequencies[allele_name] = count / locus_totals[gene.locus.name]
             else:
                 frequencies[allele_name] = 0.0
-                
+
         return frequencies
-    
+
     # ========================================================================
     # Hooks 系统
     # ========================================================================
-    
+
     def set_hook(
         self,
         event_name: str,
@@ -911,7 +927,7 @@ class BasePopulation(ABC, Generic[T_State]):
         hook_id: Optional[int] = None,
         hook_name: Optional[str] = None,
         compile: bool = True,
-        deme_selector: Optional["DemeSelector"] = None,
+        deme_selector: Optional[DemeSelector] = None,
     ) -> None:
         """
         注册事件 Hook，支持自动编译。
@@ -958,10 +974,10 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         if event_name not in self.ALLOWED_EVENTS:
             raise ValueError(f"Event '{event_name}' not in {self.ALLOWED_EVENTS}")
-        
+
         # Check if function has @hook metadata and should be compiled
         hook_meta = getattr(func, '_hook_meta', None)
-        
+
         if compile and hook_meta is not None:
             # Use the hook's register method with event override
             register_fn = getattr(func, 'register', None)
@@ -974,22 +990,22 @@ class BasePopulation(ABC, Generic[T_State]):
                 # Compiled hooks are stored in _compiled_hooks.
                 # Only selector-mode hooks with py_wrapper are mirrored to _hooks.
                 return
-        
+
         # Traditional registration (no compilation)
         actual_name = hook_name or getattr(func, '__name__', None)
-        
+
         current_ids = [hid for hid, _, _ in self._hooks[event_name]]
-        
+
         if hook_id is None:
             hook_id = (max(current_ids) + 1) if current_ids else 0
-        
+
         if hook_id in current_ids:
             raise ValueError(f"hook_id {hook_id} already exists in event '{event_name}'")
-        
+
         self._hooks[event_name].append((hook_id, actual_name, func))
         # 按 ID 排序保证执行顺序
         self._hooks[event_name].sort(key=lambda x: x[0])
-    
+
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """
         触发事件，执行所有已注册的 hooks。
@@ -1018,7 +1034,7 @@ class BasePopulation(ABC, Generic[T_State]):
             ...     print("Simulation stopped by hook")
         """
         from natal.hook_dsl import RESULT_CONTINUE
-        
+
         # 优先使用 HookExecutor（如果已构建）
         if self._hook_executor is not None:
             from natal.hook_dsl import EVENT_ID_MAP
@@ -1026,14 +1042,14 @@ class BasePopulation(ABC, Generic[T_State]):
             if event_id is not None:
                 result = self._hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)
                 return result
-        
+
         # 降级到传统 _hooks 系统（兼容性）
         for _, _, hook in self._hooks.get(event_name, []):
             hook(self)
-        
+
         return RESULT_CONTINUE
-    
-    
+
+
     def get_hooks(self, event_name: str) -> List[HookEntry]:
         """
         获取特定事件的所有已注册 hooks。
@@ -1045,7 +1061,7 @@ class BasePopulation(ABC, Generic[T_State]):
             [(hook_id, hook_name, hook_func), ...] 列表
         """
         return list(self._hooks.get(event_name, []))
-    
+
     def remove_hook(self, event_name: str, hook_id: int) -> bool:
         """
         删除指定事件的指定 hook。
@@ -1059,16 +1075,16 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         if event_name not in self._hooks:
             return False
-        
+
         original_len = len(self._hooks[event_name])
         self._hooks[event_name] = [(hid, name, func) for hid, name, func in self._hooks[event_name]
                                     if hid != hook_id]
         return len(self._hooks[event_name]) < original_len
-    
+
     # ========================================================================
     # Compiled Hooks (DSL / Numba-friendly)
     # ========================================================================
-    
+
     def _register_compiled_hook(self, desc: Any) -> None:
         """Register a compiled hook descriptor.
         
@@ -1090,13 +1106,13 @@ class BasePopulation(ABC, Generic[T_State]):
                 f"Python py_wrapper hook '{desc.name}' is not allowed when Numba is enabled. "
                 "Please convert it to @njit or use declarative Op hooks."
             )
-        
+
         # Mirror only real Python wrappers for trigger_event compatibility.
         # Do not inject no-op placeholders for declarative/njit hooks.
         if desc.py_wrapper is None:
             return
         hook_func = desc.py_wrapper
-        
+
         # Register with traditional system
         event_name = desc.event
         if event_name in self._hooks:
@@ -1111,7 +1127,7 @@ class BasePopulation(ABC, Generic[T_State]):
     def register_compiled_hook(self, desc: Any) -> None:
         """Public wrapper for registering compiled hooks."""
         self._register_compiled_hook(desc)
-    
+
     def get_compiled_hooks(self, event: Optional[str] = None) -> List[Any]:
         """Get compiled hook descriptors, optionally filtered by event.
         
@@ -1125,7 +1141,7 @@ class BasePopulation(ABC, Generic[T_State]):
         if event is not None:
             hooks = [h for h in hooks if h.event == event]
         return sorted(hooks, key=lambda h: h.priority)
-    
+
     def register_declarative_hook(
         self,
         event: str,
@@ -1167,7 +1183,7 @@ class BasePopulation(ABC, Generic[T_State]):
         )
         self._register_compiled_hook(desc)
         return desc
-    
+
     def _build_hook_program(self) -> HookProgram:
         """Build HookProgram from compiled hooks.
         
@@ -1177,22 +1193,22 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             HookProgram: Compiled hook program data
         """
-        from natal.hook_dsl import HookProgram, EVENT_NAMES
-        
+        from natal.hook_dsl import EVENT_NAMES, HookProgram
+
         events = EVENT_NAMES
         n_events = len(events)
 
         # 1. Collect all hooks per event
         hook_offsets: List[int] = [0]
-        hook_list_by_event: List[List["CompiledHookDescriptor"]] = []
-        
+        hook_list_by_event: List[List[CompiledHookDescriptor]] = []
+
         for event_name in events:
             hooks = self.get_compiled_hooks(event_name)
             hook_list_by_event.append(hooks)
             hook_offsets.append(hook_offsets[-1] + len(hooks))
-        
+
         n_hooks = hook_offsets[-1]
-        
+
         # 2. Pack all operation data
         all_op_types: List[int] = []
         all_gidx_offsets: List[int] = [0]
@@ -1211,7 +1227,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         n_ops_list: List[int] = []
         op_offsets: List[int] = [0]
-        
+
         for hooks in hook_list_by_event:
             for hook in hooks:
                 plan = hook.plan
@@ -1219,12 +1235,12 @@ class BasePopulation(ABC, Generic[T_State]):
                     n_ops_list.append(0)
                     op_offsets.append(op_offsets[-1])
                     continue
-                
+
                 n_ops_list.append(plan.n_ops)
-                
+
                 # Pack operation data
                 all_op_types.extend(plan.op_types.tolist())
-                
+
                 # Handle gidx (adjust offsets for concatenation)
                 gidx_offset_base = len(all_gidx_data)
                 for i in range(plan.n_ops):
@@ -1232,7 +1248,7 @@ class BasePopulation(ABC, Generic[T_State]):
                         gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0]
                     )
                 all_gidx_data.extend(plan.gidx_data.tolist())
-                
+
                 # Handle age
                 age_offset_base = len(all_age_data)
                 for i in range(plan.n_ops):
@@ -1240,10 +1256,10 @@ class BasePopulation(ABC, Generic[T_State]):
                         age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0]
                     )
                 all_age_data.extend(plan.age_data.tolist())
-                
+
                 # Handle sex masks (flatten 2D -> 1D)
                 all_sex_masks.extend(plan.sex_masks.flatten().tolist())
-                
+
                 # Handle params, conditions
                 all_params.extend(plan.params.tolist())
                 cond_offset_base = len(all_cond_types)
@@ -1253,7 +1269,7 @@ class BasePopulation(ABC, Generic[T_State]):
                     )
                 all_cond_types.extend(plan.condition_types.tolist())
                 all_cond_params.extend(plan.condition_params.tolist())
-                
+
                 op_offsets.append(len(all_op_types))
 
                 # Pack deme selector from CompiledHookDescriptor
@@ -1271,7 +1287,7 @@ class BasePopulation(ABC, Generic[T_State]):
                     all_deme_sel_types.append(3)
                     all_deme_sel_data.extend([int(x) for x in sel])
                 all_deme_sel_offsets.append(len(all_deme_sel_data))
-        
+
         # 3. Create HookProgram
         return HookProgram(
             n_events=np.int32(n_events),
@@ -1293,7 +1309,7 @@ class BasePopulation(ABC, Generic[T_State]):
             deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
             deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
         )
-    
+
     def _build_hook_executor(self):
         """Build HookExecutor from compiled hooks and HookProgram.
         
@@ -1306,39 +1322,39 @@ class BasePopulation(ABC, Generic[T_State]):
             HookExecutor: Executor instance, or None if no hooks compiled
         """
         from natal.hook_dsl import HookExecutor
-        
+
         # Get or build HookProgram for CSR operations
         program = self._build_hook_program()
         program_available = True
-        
+
         # Get all compiled hooks
         compiled_hooks = self._compiled_hooks
         if not compiled_hooks:
             return None
-        
+
         # If no program (no CSR operations), create an empty one
         # so HookExecutor can still manage njit_fn and py_wrapper hooks
         if not program_available:
             program = self._create_empty_hook_program()
-        
+
         # Create executor
         executor = HookExecutor.from_compiled_hooks(program, compiled_hooks)
         return executor
-    
+
     def _create_empty_hook_program(self):
         """Create an empty HookProgram for non-CSR operations.
         
         Used when there are no declarative Op.* operations,
         but there are njit_fn or py_wrapper hooks.
         """
-        from natal.hook_dsl import HookProgram, NUM_EVENTS
-        
+        from natal.hook_dsl import NUM_EVENTS, HookProgram
+
         n_events = NUM_EVENTS
-        
+
         # Create empty CSR arrays
         hook_offsets = np.zeros(n_events + 1, dtype=np.int32)
         op_offsets = np.array([0], dtype=np.int32)
-        
+
         return HookProgram(
             n_events=np.int32(n_events),
             n_hooks=np.int32(0),
@@ -1360,7 +1376,7 @@ class BasePopulation(ABC, Generic[T_State]):
             deme_selector_data=np.array([], dtype=np.int32),
         )
 
-    def get_compiled_event_hooks(self) -> 'CompiledEventHooks':
+    def get_compiled_event_hooks(self) -> CompiledEventHooks:
         """Get compiled hooks for use with generated kernel wrappers.
         
         This method collects all registered hooks and compiles them into
@@ -1376,7 +1392,7 @@ class BasePopulation(ABC, Generic[T_State]):
             True
         """
         from natal.hook_dsl import CompiledEventHooks
-        
+
         registry = self._build_hook_program()
         return CompiledEventHooks.from_compiled_hooks(
             self._compiled_hooks,

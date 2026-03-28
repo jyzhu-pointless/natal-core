@@ -1,5 +1,6 @@
-import natal as nt
 import time
+
+import natal as nt
 
 sp = nt.Species.from_dict(
     name="TestSpecies",
@@ -34,7 +35,7 @@ def release_drive_carriers():
 
 pop = nt.DiscreteGenerationPopulation \
     .setup(
-        species=sp, 
+        species=sp,
         name="TestPop",
         stochastic=True,
     ) \
@@ -60,7 +61,7 @@ pop = nt.DiscreteGenerationPopulation \
     .hooks(release_drive_carriers) \
     .build()
 
-pop.run(5) 
+pop.run(5)
 
 start = time.perf_counter()
 pop.run(10000)

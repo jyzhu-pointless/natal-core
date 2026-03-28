@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """Smoke tests for hook DSL condition interpreter (and/or/not)."""
 
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from natal.hook_dsl import _parse_condition, _eval_csr_condition_program  # noqa: E402
+from natal.hook_dsl import eval_csr_condition_program, parse_condition  # noqa: E402
 
 
 def eval_expr(expr: str, tick: int) -> bool:
-    cond_types, cond_params = _parse_condition(expr)
-    return bool(_eval_csr_condition_program(cond_types, cond_params, 0, len(cond_types), tick))
+    cond_types, cond_params = parse_condition(expr)
+    return bool(eval_csr_condition_program(cond_types, cond_params, 0, len(cond_types), tick))
 
 
 def expect_true(expr: str, tick: int) -> None:
@@ -26,7 +25,7 @@ def expect_false(expr: str, tick: int) -> None:
 
 def expect_error(expr: str) -> None:
     try:
-        _parse_condition(expr)
+        parse_condition(expr)
     except ValueError:
         return
     raise AssertionError(f"Expected ValueError for expression: {expr}")

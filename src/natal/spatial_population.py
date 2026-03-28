@@ -6,7 +6,8 @@ Each deme is represented by one concrete ``BasePopulation`` subclass instance.
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional, Sequence, Tuple, cast
+from collections.abc import Sequence
+from typing import Any, Callable, List, Optional, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -112,7 +113,7 @@ class SpatialPopulation:
 
     def _stack_deme_state_arrays(self) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         ind_all = np.stack([deme.state.individual_count for deme in self._demes], axis=0)
-        
+
         # Handle potential absence of sperm_storage (e.g. DiscreteGenerationPopulation)
         sperm_list: List[NDArray[np.float64]] = []
         for deme in self._demes:
@@ -122,7 +123,7 @@ class SpatialPopulation:
                 cfg = deme.config
                 s = np.zeros((cfg.n_ages, cfg.n_genotypes, cfg.n_genotypes), dtype=np.float64)
             sperm_list.append(s)
-        
+
         sperm_all = np.stack(sperm_list, axis=0)
         return ind_all, sperm_all
 
@@ -134,7 +135,7 @@ class SpatialPopulation:
             }
             if hasattr(deme.state, "sperm_storage"):
                 new_fields["sperm_storage"] = sperm_all[deme_id]
-            
+
             deme._state = deme.state._replace(**new_fields)  # type: ignore[attr-defined]
             deme.tick = int(tick)
         self._tick = int(tick)
@@ -158,7 +159,7 @@ class SpatialPopulation:
                 )
         return cfg
 
-    def run_tick(self) -> "SpatialPopulation":
+    def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick via generated spatial wrapper."""
         for idx, deme in enumerate(self._demes):
             if getattr(deme, "_finished", False):
@@ -196,7 +197,7 @@ class SpatialPopulation:
         n_steps: int,
         record_every: int = 1,
         finish: bool = False,
-    ) -> "SpatialPopulation":
+    ) -> SpatialPopulation:
         """Run multiple spatial ticks via generated spatial wrapper."""
         if n_steps < 0:
             raise ValueError("n_steps must be >= 0")

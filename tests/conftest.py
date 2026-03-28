@@ -1,6 +1,7 @@
 """Shared pytest fixtures and configuration for the natal-core test suite."""
 
 import pytest  # type: ignore
+
 import natal as nt
 
 

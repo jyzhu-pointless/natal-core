@@ -25,7 +25,7 @@ def count_pyright_errors(report_path: str) -> Counter:
     counter = Counter()
     pattern = re.compile(r"\(report(\w+)\)")
 
-    with open(report_path, "r", encoding="utf-8") as f:
+    with open(report_path, encoding="utf-8") as f:
         for line in f:
             match = pattern.search(line)
             if match:

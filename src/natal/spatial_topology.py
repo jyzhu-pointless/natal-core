@@ -7,8 +7,9 @@ simulation without coupling to a specific population implementation.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, List, Literal, Sequence, Tuple
+from typing import List, Literal, Tuple
 
 import numpy as np
 

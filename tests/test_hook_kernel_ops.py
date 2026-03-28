@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Smoke tests for declarative kernel ops (KILL + STOP_IF_*)."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -10,12 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from natal.hook_dsl import (  # noqa: E402
-    OpType,
+    COND_ALWAYS,
     RESULT_CONTINUE,
     RESULT_STOP,
-    COND_ALWAYS,
-    _parse_condition,
+    OpType,
     execute_csr_event_arrays,
+    parse_condition,
 )
 
 
@@ -45,31 +45,35 @@ def run_single_op(
         cond_types = np.array([COND_ALWAYS], dtype=np.int32)
         cond_params = np.array([0], dtype=np.int32)
     else:
-        cond_types, cond_params = _parse_condition(condition)
+        cond_types, cond_params = parse_condition(condition)
 
     result = execute_csr_event_arrays(
-        np.int32(1),
-        np.int32(1),
-        np.array([0, 1], dtype=np.int32),
-        np.array([1], dtype=np.int32),
-        np.array([0, 1], dtype=np.int32),
-        np.array([op_type], dtype=np.int32),
-        np.array([0, 1], dtype=np.int32),
-        np.array([0], dtype=np.int32),
-        np.array([0, 1], dtype=np.int32),
-        np.array([0], dtype=np.int32),
-        np.array([True, True], dtype=np.bool_),
-        np.array([param], dtype=np.float64),
-        np.array([0, len(cond_types)], dtype=np.int32),
-        cond_types,
-        cond_params,
-        np.int32(0),
-        ind,
-        sperm,
-        True,
-        np.int32(10),
-        is_stochastic,
-        use_dirichlet_sampling,
+        n_events=np.int32(1),
+        n_hooks=np.int32(1),
+        hook_offsets=np.array([0, 1], dtype=np.int32),
+        n_ops_list=np.array([1], dtype=np.int32),
+        op_offsets=np.array([0, 1], dtype=np.int32),
+        op_types_data=np.array([op_type], dtype=np.int32),
+        gidx_offsets_data=np.array([0, 1], dtype=np.int32),
+        gidx_data=np.array([0], dtype=np.int32),
+        age_offsets_data=np.array([0, 1], dtype=np.int32),
+        age_data=np.array([0], dtype=np.int32),
+        sex_masks_data=np.array([True, True], dtype=np.bool_),
+        params_data=np.array([param], dtype=np.float64),
+        condition_offsets_data=np.array([0, len(cond_types)], dtype=np.int32),
+        condition_types_data=cond_types,
+        condition_params_data=cond_params,
+        deme_selector_types=np.array([0], dtype=np.int32),  # 0=ANY ("*")
+        deme_selector_offsets=np.array([0, 0], dtype=np.int32),
+        deme_selector_data=np.array([], dtype=np.int32),
+        event_id=0,
+        individual_count=ind,
+        sperm_storage=sperm,
+        has_sperm_storage=True,
+        tick=10,
+        is_stochastic=is_stochastic,
+        use_dirichlet_sampling=use_dirichlet_sampling,
+        deme_id=0
     )
     return int(result), ind, sperm
 

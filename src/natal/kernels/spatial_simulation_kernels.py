@@ -11,9 +11,9 @@ from typing import Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.kernels.simulation_kernels import run_aging, run_reproduction, run_survival
 from natal.numba_utils import njit_switch
 from natal.population_config import PopulationConfig
-from natal.kernels.simulation_kernels import run_aging, run_reproduction, run_survival
 
 __all__ = [
     # No user-facing API for now

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import unittest
 import uuid
+
 import numpy as np
 
-from natal.genetic_structures import Species
 from natal.genetic_presets import _apply_preset_fitness_patch
+from natal.genetic_structures import Species
 
 
 class _FakeConfig:
@@ -38,6 +39,15 @@ class _FakePopulation:
         all_genotypes = species.get_all_genotypes()
         self._index_registry = _FakeIndexCore(all_genotypes)
         self._config = _FakeConfig(len(all_genotypes))
+
+    @property
+    def index_registry(self):
+        return self._index_registry
+
+    @property
+    def config(self):
+        return self._config
+
 
 
 def _make_species() -> Species:

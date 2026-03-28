@@ -1,15 +1,14 @@
 """Unit tests for natal.type_def."""
 
 import pytest  # type: ignore
-import numpy as np
 
 from natal.type_def import (
     Sex,
-    make_individual_type,
-    make_gamete_type,
-    get_sex,
     get_age,
     get_genotype_index,
+    get_sex,
+    make_gamete_type,
+    make_individual_type,
 )
 
 
@@ -58,16 +57,16 @@ class TestMakeIndividualType:
         assert isinstance(ind[2], int)
 
     def test_with_numpy_integer_sex(self):
-        ind = make_individual_type(np.int32(0), 1, 0)
+        ind = make_individual_type(0, 1, 0)
         assert ind[0] is Sex.FEMALE
 
     def test_invalid_sex_string_raises(self):
-        with pytest.raises(TypeError, match="invalid sex value"):
+        with pytest.raises(AssertionError, match="invalid sex value"):
             make_individual_type("female", 0, 0)
 
     def test_invalid_sex_float_raises(self):
         # A float that converts to an out-of-range int (e.g. 2.7 → 2) should raise.
-        with pytest.raises(TypeError):
+        with pytest.raises(AssertionError, match="invalid sex value"):
             make_individual_type(2.7, 0, 0)
 
 
@@ -83,7 +82,7 @@ class TestMakeGameteType:
         assert gam[2] == 1
 
     def test_invalid_sex_raises(self):
-        with pytest.raises(TypeError):
+        with pytest.raises(AssertionError, match="invalid sex value"):
             make_gamete_type("M", 0, 0)
 
 

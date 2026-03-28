@@ -18,16 +18,17 @@ Usage:
 """
 
 import numpy as np
-from .numba_utils import njit_switch, is_numba_enabled
+
+from .numba_utils import is_numba_enabled, njit_switch
 
 __all__ = [
     "binomial_2d", "multinomial_rows", "multinomial", "set_numba_seed"
 ]
 
 
-# The original binomial implementation in Numba (numba.cpython.randomimpl) has a performance issue 
+# The original binomial implementation in Numba (numba.cpython.randomimpl) has a performance issue
 # for large n*p due to a fallback to a slower algorithm (BTPE not implemented).
-# This is a custom, efficient implementation of the BTPE algorithm (adapted from numba.np.random) 
+# This is a custom, efficient implementation of the BTPE algorithm (adapted from numba.np.random)
 # for binomial sampling.
 @njit_switch(cache=True)
 def binomial_btpe(n: int, p: float) -> int:
@@ -71,7 +72,7 @@ def binomial_btpe(n: int, p: float) -> int:
                 continue # goto Step10
             y = int(np.floor(x))
             # Continue to Step50 verification below
-            
+
         elif u <= p3:
             # Corresponds to Step30
             y = int(np.floor(xl + np.log(v) / laml))
@@ -79,7 +80,7 @@ def binomial_btpe(n: int, p: float) -> int:
                 continue # goto Step10
             v = v * (u - p2) * laml
             # Continue to Step50 verification below
-            
+
         else:
             # Corresponds to Step40
             y = int(np.floor(xr - np.log(v) / lamr))
@@ -96,7 +97,7 @@ def binomial_btpe(n: int, p: float) -> int:
             rho = (k / nrq) * ((k * (k / 3.0 + 0.625) + 0.16666666666666666) / nrq + 0.5)
             t = -k * k / (2.0 * nrq)
             A = np.log(v)
-            
+
             if A < (t - rho):
                 break # goto Step60
             if A > (t + rho):
@@ -120,9 +121,9 @@ def binomial_btpe(n: int, p: float) -> int:
                     (13680. - (462. - (132. - (99. - 140. / x2) / x2) / x2) / x2) / x1 / 166320. +
                     (13680. - (462. - (132. - (99. - 140. / w2) / w2) / w2) / w2) / w / 166320.):
                 continue # goto Step10
-                
+
             break # Fallback acceptance, goto Step60
-            
+
         else:
             # Corresponds to precise factorial multiplication f in lower half of Step50
             s = r / q
@@ -150,17 +151,17 @@ def fast_binomial(n: int, p: float) -> int:
     # 1. Exception handling: validate p range
     if not (0.0 <= p <= 1.0):
         raise ValueError("fast_binomial(): p outside of [0, 1]")
-        
+
     # 2. Exception handling: validate n range
     if n < 0:
         raise ValueError("fast_binomial(): n <= 0")
-        
+
     # 3. Extreme boundary cases (O(1) immediate return)
     if p == 0.0 or n == 0:
         return 0
     if p == 1.0:
         return n
-        
+
     # 4. Core routing logic
     # NumPy default uses inversion method (Inversion/BINV) when n * min(p, 1-p) <= 30
     # Because when n is small, BINV has fewer loop iterations, and the overhead is smaller than preparing BTPE constants
@@ -200,7 +201,7 @@ def _binomial_2d_numba(
     """Numba-compatible loop implementation."""
     result = np.empty((n_rows, n_cols), dtype=np.float64)
     p_is_1d = (p.ndim == 1)
-    
+
     for i in range(n_rows):
         for j in range(n_cols):
             n_val = int(n[i, j])
@@ -208,12 +209,12 @@ def _binomial_2d_numba(
                 p_val = float(p[i])
             else:
                 p_val = float(p[i, j])
-            
+
             if n_val > 0 and 0.0 <= p_val <= 1.0:
                 result[i, j] = fast_binomial(n_val, p_val)
             else:
                 result[i, j] = 0.0
-    
+
     return result
 
 
@@ -229,7 +230,7 @@ def _binomial_2d_numpy(
         p_broadcast = p[:, None]  # (A, 1) -> broadcasts to (A, G)
     else:
         p_broadcast = p
-    
+
     # NumPy's binomial supports array inputs natively
     return np.random.binomial(n.astype(np.int64), p_broadcast).astype(np.float64)
 
@@ -248,13 +249,13 @@ def _fancy_index_3d_to_2d_numba(
 ) -> np.ndarray:
     """Numba-compatible loop implementation."""
     result = np.empty((n_indices, last_dim), dtype=arr_3d.dtype)
-    
+
     for i in range(n_indices):
         i0 = int(idx0[i])
         i1 = int(idx1[i])
         for k in range(last_dim):
             result[i, k] = arr_3d[i0, i1, k]
-    
+
     return result
 
 
@@ -285,14 +286,14 @@ def _fancy_index_3d_flat_numba(
     """Numba-compatible loop implementation using flat indexing."""
     shape = arr_3d.shape
     d1, d2 = shape[1], shape[2]
-    
+
     arr_flat = arr_3d.ravel()
     result = np.empty(n_indices, dtype=arr_3d.dtype)
-    
+
     for i in range(n_indices):
         flat_idx = int(idx0[i]) * d1 * d2 + int(idx1[i]) * d2 + int(idx2[i])
         result[i] = arr_flat[flat_idx]
-    
+
     return result
 
 
@@ -320,7 +321,7 @@ def _multinomial_rows_numba(
 ) -> np.ndarray:
     """Numba-compatible loop implementation."""
     result = np.empty((n_rows, n_cols), dtype=np.int64)
-    
+
     for i in range(n_rows):
         n_trials = int(n_per_row[i])
         if n_trials > 0:
@@ -328,7 +329,7 @@ def _multinomial_rows_numba(
         else:
             for j in range(n_cols):
                 result[i, j] = 0
-    
+
     return result
 
 
@@ -340,14 +341,14 @@ def _multinomial_rows_numpy(
 ) -> np.ndarray:
     """NumPy implementation (still needs loop, but avoids Numba overhead)."""
     result = np.empty((n_rows, n_cols), dtype=np.int64)
-    
+
     for i in range(n_rows):
         n_trials = int(n_per_row[i])
         if n_trials > 0:
             result[i, :] = np.random.multinomial(n_trials, p_matrix[i, :])
         else:
             result[i, :] = 0
-    
+
     return result
 
 
@@ -380,20 +381,20 @@ def _multinomial_numba(
     """
     k = len(pvals)
     result = np.zeros(k, dtype=np.int64)
-    
+
     if n <= 0:
         return result
-    
+
     # Remaining trials and probability sum
     n_remaining = int(n)
     p_sum = 1.0
-    
+
     for j in range(k - 1):
         if n_remaining <= 0:
             break
-            
+
         p_j = float(pvals[j])
-        
+
         if p_sum > 0.0 and p_j > 0.0:
             # Conditional probability
             p_cond = p_j / p_sum
@@ -402,18 +403,18 @@ def _multinomial_numba(
                 p_cond = 1.0
             elif p_cond < 0.0:
                 p_cond = 0.0
-            
+
             # Sample from binomial
             n_j = fast_binomial(n_remaining, p_cond)
             result[j] = n_j
             n_remaining -= n_j
-        
+
         p_sum -= p_j
-    
+
     # Last category gets all remaining
     if n_remaining > 0:
         result[k - 1] = n_remaining
-    
+
     return result
 
 

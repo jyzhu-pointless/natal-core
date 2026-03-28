@@ -19,9 +19,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .types import (
-    HookOp,
-    OpType,
-    DemeSelector,
     COND_ALWAYS,
     COND_OP_AND,
     COND_OP_NOT,
@@ -34,6 +31,9 @@ from .types import (
     COND_TICK_MOD,
     CompiledHookDescriptor,
     CompiledHookPlan,
+    DemeSelector,
+    HookOp,
+    OpType,
 )
 
 if TYPE_CHECKING:
@@ -263,7 +263,7 @@ class Op:
 
 def _resolve_genotypes(
     selector: Union[str, List[str], Literal["*"]],
-    index_registry: "IndexRegistry",
+    index_registry: IndexRegistry,
     diploid_genotypes: List[Any],
     n_genotypes: int,
 ) -> np.ndarray:
@@ -588,7 +588,7 @@ parse_condition = _parse_condition
 
 def compile_declarative_hook(
     ops: List[HookOp],
-    pop: "BasePopulation[Any]",
+    pop: BasePopulation[Any],
     event: str,
     priority: int = 0,
     deme_selector: DemeSelector = "*",
@@ -608,28 +608,28 @@ def compile_declarative_hook(
 
     # Initialize data structures for storing compiled hook operations
     # These will be packed into parallel arrays for efficient runtime execution
-    
+
     # 1. Operation type stream - stores the operation code for each hook
     op_types_list: List[int] = []
-    
+
     # 2. Genotype selection data (CSR format)
     # gidx_offsets: CSR offsets defining genotype index ranges for each operation
     # gidx_data: Flattened list of all genotype indices across all operations
     gidx_offsets: List[int] = [0]  # Start with offset 0 for the first operation
     gidx_data_list: List[int] = []
-    
-    # 3. Age selection data (CSR format)  
+
+    # 3. Age selection data (CSR format)
     # age_offsets: CSR offsets defining age index ranges for each operation
     # age_data: Flattened list of all age indices across all operations
     age_offsets: List[int] = [0]  # Start with offset 0 for the first operation
     age_data_list: List[int] = []
-    
+
     # 4. Sex selection and operation parameters
     # sex_masks: Boolean masks for male/female selection (2D array: [op][sex])
     # params: Numeric parameters for each operation (e.g., fitness values)
     sex_masks_list: List[NDArray[np.bool_]] = []
     params_list: List[float] = []
-    
+
     # 5. Condition expression data (CSR format)
     # condition_offsets: CSR offsets defining condition token ranges for each operation
     # condition_types: Flattened list of condition operation types
@@ -670,27 +670,27 @@ def compile_declarative_hook(
     # Create the compiled execution plan with all packed arrays
     plan = CompiledHookPlan(
         n_ops=len(ops),  # Total number of operations
-        
+
         # Operation type stream - each element is an integer operation code
         op_types=np.array(op_types_list, dtype=np.int32),
-        
+
         # Genotype selection data in CSR format
         # gidx_offsets[i] to gidx_offsets[i+1] defines genotype indices for operation i
         gidx_offsets=np.array(gidx_offsets, dtype=np.int32),
         gidx_data=np.array(gidx_data_list, dtype=np.int32) if gidx_data_list else np.array([], dtype=np.int32),
-        
+
         # Age selection data in CSR format
         # age_offsets[i] to age_offsets[i+1] defines age indices for operation i
         age_offsets=np.array(age_offsets, dtype=np.int32),
         age_data=np.array(age_data_list, dtype=np.int32) if age_data_list else np.array([], dtype=np.int32),
-        
+
         # Sex selection masks - 2D boolean array [n_ops x 2]
         # Each row: [male_selected, female_selected]
         sex_masks=np.vstack(sex_masks_list) if sex_masks_list else np.zeros((0, 2), dtype=np.bool_),
-        
+
         # Operation parameters - numeric values for each operation
         params=np.array(params_list, dtype=np.float64),
-        
+
         # Condition expression data in CSR format
         # condition_offsets[i] to condition_offsets[i+1] defines condition tokens for operation i
         condition_offsets=np.array(condition_offsets, dtype=np.int32),

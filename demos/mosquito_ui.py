@@ -1,7 +1,5 @@
 import natal as nt
-
 from natal.ui import launch
-
 
 sp = nt.Species.from_dict(
     name="TestSpecies",

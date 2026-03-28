@@ -2,6 +2,7 @@
 
 from natal.type_def import Sex
 
+
 def resolve_sex_label(sex_label: object) -> int:
     """Convert sex label to PopulationConfig sex index.
 

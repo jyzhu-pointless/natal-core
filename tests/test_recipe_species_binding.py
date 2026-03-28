@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 import uuid
 
+from natal.genetic_presets import HomingDrive
 from natal.genetic_structures import Species
 from natal.population_builder import DiscreteGenerationPopulationBuilder
-from natal.genetic_presets import HomingDrive
 
 
 def _make_species(prefix: str = "PresetBindingSpecies") -> Species:
