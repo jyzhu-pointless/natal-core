@@ -27,7 +27,7 @@ Naming Conventions
 from __future__ import annotations
 import numpy as np
 from typing import (
-    Generic, TypeVar, Optional, Dict, List, Tuple, Any
+    Generic, TypeVar, Optional, Dict, List, Tuple, Any, cast
 )
 
 import itertools
@@ -36,8 +36,8 @@ import logging
 from natal.helpers import validate_name
 from natal.genetic_structures import GeneticStructure, Locus, Chromosome, Species
 
-S = TypeVar("S", bound=GeneticStructure)  # Genetic Structure Type
-E = TypeVar("E", bound="GeneticEntity")  # Concrete entity type for __new__
+S = TypeVar("S", bound="GeneticStructure[Any]")  # Genetic Structure Type
+E = TypeVar("E", bound="GeneticEntity[Any]")  # Concrete entity type for __new__
 logger = logging.getLogger(__name__)  # temp logger
 
 __all__ = [
@@ -62,12 +62,13 @@ class GeneticEntity(Generic[S]):
         >>> gene2 = Gene("A1", locus=locus_A)  # ✅ Returns same instance
         >>> assert gene is gene2
     """
-    structure_type: type[GeneticStructure] = GeneticStructure  # Override in subclass
+    structure_type: type[GeneticStructure[Any]] = GeneticStructure  # Override in subclass
     # Cache: {(species_id, structure_type, structure_name, entity_class, entity_name): entity_instance}
     _instance_cache: Dict[Tuple[int, type, str, type, str], object] = {}
     # Late-bound during __new__/__init__. Annotations only (no defaults) so hasattr checks keep working.
     _pending_cache_key: Tuple[int, type, str, type, str]
     _initialized: bool
+    structure: GeneticStructure[Any]
 
     def __new__(
         cls: type[E],
@@ -80,14 +81,16 @@ class GeneticEntity(Generic[S]):
         # If structure is not provided as positional arg, check kwargs
         if structure is None:
             structure = kwargs.pop('structure', None)
-        actual_structure = structure
+        actual_structure: Optional[GeneticStructure[Any]] = None
+        if isinstance(structure, GeneticStructure):
+            actual_structure = cast(GeneticStructure[Any], structure)
         if actual_structure is None:
             # Check common parameter names (new and old names)
             for key in ('locus', 'chromosome', 'species', 'linkage', 'genome'):
                 if key in kwargs:
                     candidate = kwargs[key]
                     if isinstance(candidate, GeneticStructure):
-                        actual_structure = candidate
+                        actual_structure = cast(GeneticStructure[Any], candidate)
                     break
         
         if actual_structure is None:
@@ -104,7 +107,13 @@ class GeneticEntity(Generic[S]):
         # Use Species-level entity cache
         # Cache key: (species id, structure type, structure name, entity class, entity name)
         # This ensures uniqueness within a Species
-        cache_key = (id(species), type(actual_structure), actual_structure.name, cls, name)
+        cache_key: Tuple[int, type[GeneticStructure[Any]], str, type[E], str] = (
+            id(species),
+            type(actual_structure),
+            str(actual_structure.name),
+            cls,
+            name,
+        )
         
         cached = GeneticEntity._instance_cache.get(cache_key)
         if cached is not None:
@@ -124,7 +133,8 @@ class GeneticEntity(Generic[S]):
     def __init__(
         self,
         name: str,
-        structure: S
+        structure: Any = None,
+        **kwargs: Any
     ):
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
@@ -138,6 +148,8 @@ class GeneticEntity(Generic[S]):
                 f"{self.__class__.__name__} must be bound to a structure. "
                 f"Please provide a valid structure parameter."
             )
+        structure = cast(GeneticStructure[Any], structure)
+        _ = kwargs  # keep constructor signature aligned with __new__
         
         
         # Validate structure type using class attribute
@@ -152,7 +164,8 @@ class GeneticEntity(Generic[S]):
         self.structure = structure
 
         # Auto-register with the structure ("register upon creation")
-        structure.register(self)
+        register_owner = cast(Any, structure)
+        register_owner.register(self)
         
         # Mark as initialized
         self._initialized = True
@@ -275,6 +288,8 @@ class Haplotype(GeneticEntity[Chromosome]):
         
         if chromosome is None:
             raise TypeError("Haplotype must be bound to a Chromosome. Please provide chromosome parameter.")
+        if genes is None:
+            raise TypeError("Haplotype requires a genes list. Please provide genes parameter.")
         
         # Validate completeness and uniqueness
         chrom_loci = chromosome.loci  # List of loci in chromosome
@@ -372,6 +387,8 @@ class HaploidGenotype(GeneticEntity[Species]):
         
         if species is None:
             raise TypeError("HaploidGenotype must be bound to a Species. Please provide species parameter.")
+        if haplotypes is None:
+            raise TypeError("HaploidGenotype requires haplotypes. Please provide haplotypes parameter.")
         
         # Validate completeness and uniqueness
         species_chroms = species.chromosomes  # List of chromosomes
@@ -404,6 +421,7 @@ class HaploidGenotype(GeneticEntity[Species]):
             sex_chr_groups = getattr(species, '_sex_chromosome_groups', None)
         
         if sex_chr_groups:
+            sex_chr_groups = cast(Dict[str, List[Chromosome]], sex_chr_groups)
             # For sex chromosomes: must have exactly one from each group
             for group_name, group_chroms in sex_chr_groups.items():
                 group_chroms_set = set(group_chroms)
@@ -534,7 +552,7 @@ class Genotype:
         # maternal/paternal haploid genotypes so the cache key matches
         # the instance `name`/`__str__` representation.
         # Build canonical genotype string as per-chromosome pairs: "A|a;B|b"
-        chrom_pairs = []
+        chrom_pairs: List[str] = []
         for chrom in species.chromosomes:
             try:
                 mat_hap = maternal.get_haplotype_for_chromosome(chrom)
@@ -546,7 +564,7 @@ class Genotype:
             def hap_allele_str(hap: Optional['Haplotype']) -> str:
                 if hap is None:
                     return ""
-                names = []
+                names: List[str] = []
                 for locus in chrom.loci:
                     gene = hap.get_gene_at_locus(locus)
                     names.append(gene.name if gene is not None else "")
@@ -687,7 +705,7 @@ class Genotype:
         
         # Dictionary to accumulate gamete frequencies
         # Key: chromosome_idx → Dict[haplotype, frequency]
-        chromosome_gamete_frequencies = []
+        chromosome_gamete_frequencies: List[Dict[Haplotype, float]] = []
         
         # For each chromosome, compute possible haplotypes and their frequencies
         for chromosome in self.species.chromosomes:
@@ -715,16 +733,16 @@ class Genotype:
         
         # Combine chromosome gametes using the multiplication rule
         # Each gamete is a combination of one haplotype per chromosome
-        gamete_combinations = list(itertools.product(
-            *[d.items() for d in chromosome_gamete_frequencies]
-        ))
+        gamete_combinations: List[Tuple[Tuple[Haplotype, float], ...]] = list(
+            itertools.product(*[tuple(d.items()) for d in chromosome_gamete_frequencies])
+        )
         
         # Build gamete frequencies: Dict[HaploidGenotype, float]
-        gamete_freqs = {}
+        gamete_freqs: Dict[HaploidGenotype, float] = {}
         for combination in gamete_combinations:
             # combination is a tuple of (haplotype, frequency) pairs per chromosome
             haplotypes = [hap for hap, _ in combination]
-            frequency = np.prod([freq for _, freq in combination])
+            frequency = float(np.prod([freq for _, freq in combination]))
             
             # Create HaploidGenotype from haplotypes
             haploid_genotype = HaploidGenotype(species=self.species, haplotypes=haplotypes)
@@ -750,7 +768,7 @@ class Genotype:
         species = self.species
 
         # For each chromosome produce "maternal_part|paternal_part"
-        chrom_pairs = []
+        chrom_pairs: List[str] = []
         for chrom in species.chromosomes:
             mat_hap = self.maternal.get_haplotype_for_chromosome(chrom)
             pat_hap = self.paternal.get_haplotype_for_chromosome(chrom)
@@ -758,7 +776,7 @@ class Genotype:
             def hap_allele_str(hap: Optional['Haplotype']) -> str:
                 if hap is None:
                     return ""
-                names = []
+                names: List[str] = []
                 for locus in chrom.loci:
                     gene = hap.get_gene_at_locus(locus)
                     names.append(gene.name if gene is not None else "")
@@ -788,13 +806,16 @@ class Genotype:
             return False
         
         # No recombination map defined
-        recomb_map = chromosome.recombination_map
-        if recomb_map is None or len(recomb_map) == 0:
+        try:
+            recomb_map = chromosome.recombination_map
+        except ValueError:
+            return False
+        if len(recomb_map) == 0:
             return False
         
         # Check if all rates are zero (common case: no linkage)
         # Note: recomb_map is already a numpy array, no need to convert
-        if np.all(recomb_map == 0):
+        if np.all(np.asarray(recomb_map) == 0):
             return False
         
         # Need full recombination computation
@@ -829,8 +850,11 @@ class Genotype:
             # Single locus or no loci: no recombination possible
             return {mat_haplotype: 0.5, pat_haplotype: 0.5}
         
-        recomb_map = chromosome.recombination_map
-        if recomb_map is None or len(recomb_map) == 0:
+        try:
+            recomb_map = chromosome.recombination_map
+        except ValueError:
+            return {mat_haplotype: 0.5, pat_haplotype: 0.5}
+        if len(recomb_map) == 0:
             # No recombination info: equal segregation
             return {mat_haplotype: 0.5, pat_haplotype: 0.5}
         
@@ -843,9 +867,9 @@ class Genotype:
         )
         
         # Convert patterns to actual Haplotype objects
-        result = {}
+        result: Dict[Haplotype, float] = {}
         for pattern_idx, pattern in enumerate(patterns):
-            genes = []
+            genes: List[Gene] = []
             for locus_idx, chain_id in enumerate(pattern):
                 locus = chromosome.loci[locus_idx]
                 gene = (mat_haplotype if chain_id == 0 else pat_haplotype).get_gene_at_locus(locus)
@@ -983,7 +1007,7 @@ def compute_recombinant_haplotypes_with_alleles(
     )
     
     # Convert patterns to haplotype strings
-    result = {}
+    result: Dict[str, float] = {}
     for pattern_idx, pattern in enumerate(patterns):
         alleles = [
             maternal_alleles[i] if chain == 0 else paternal_alleles[i]
@@ -1014,7 +1038,7 @@ def create_haplotype_from_allele_names(
             f"number of loci ({len(chromosome.loci)}) in chromosome."
         )
     
-    genes = []
+    genes: List[Gene] = []
     for locus, allele_name in zip(chromosome.loci, allele_names):
         # Find existing gene or raise error
         matching_genes = [g for g in locus.alleles if g.name == allele_name]
