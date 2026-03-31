@@ -62,6 +62,38 @@ drive = HomingDrive(
 
 ## 创建自定义预设
 
+### 与模式匹配结合（强烈推荐）
+
+当规则作用范围复杂时，建议不要用 `lambda gt: "X" in str(gt)` 这类脆弱字符串判断，而是使用物种提供的模式解析能力生成 `genotype_filter`。
+
+```python
+class PatternBasedPreset(GeneticPreset):
+    def __init__(self, pattern: str, conversion_rate: float = 0.95):
+        super().__init__(name="PatternBasedPreset")
+        self.pattern = pattern
+        self.conversion_rate = conversion_rate
+
+    def gamete_modifier(self, population):
+        from natal.gamete_allele_conversion import GameteConversionRuleSet
+
+        ruleset = GameteConversionRuleSet("PatternBased")
+        pattern_filter = population.species.parse_genotype_pattern(self.pattern)
+
+        ruleset.add_convert(
+            from_allele="WT",
+            to_allele="Drive",
+            rate=self.conversion_rate,
+            genotype_filter=pattern_filter,
+        )
+        return ruleset.to_gamete_modifier(population)
+```
+
+实践建议：
+
+1. 在配置文件中维护 pattern 字符串。
+2. Preset 内部负责编译 pattern。
+3. Observation 分组也使用同一 pattern 或由同一 pattern 展开，确保统计口径与规则口径一致。
+
 ### 基础模板
 
 所有自定义预设都应该继承自`GeneticPreset`：
@@ -404,7 +436,8 @@ class DebugPreset(GeneticPreset):
 ## 相关文档
 
 - [等位基因转换规则](allele_conversion_rules.md) - 详细的转换规则系统
-- [基因型模式匹配](genotype_pattern_matching_design.md) - 高级基因型过滤
+- [模式匹配与可扩展配置](genotype_pattern_matching_design.md) - 语法规则与 pattern 设计
+- [种群观测规则](observation_rules.md) - pattern 在观察分组中的使用
 - [Modifier机制](modifiers.md) - 底层修饰器原理
 - [快速开始](quickstart.md) - 基础使用教程
 

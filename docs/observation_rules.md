@@ -1,10 +1,6 @@
-# Samplers：观察过滤系统
+# 种群观测规则
 
-::: warnings
-此模块目前位于 NATAL Inferencer，预计后续才会迁移至 NATAL Core。
-:::
-
-本章介绍 `samplers.observation` 模块，用于从种群状态中提取和聚合数据。这是进行数据同化 (PMCMC) 和统计推断的关键组件。
+本章介绍 `observation` 模块，用于从种群状态中提取和聚合数据。这是进行数据分析、可视化和统计推断的关键组件。
 
 ---
 
@@ -29,7 +25,7 @@
 
 - **纯函数设计**: `apply_rule()` 是无副作用的 NumPy 操作
 - **灵活的选择器**: 支持多种格式指定基因型、年龄、性别
-- **无序基因型**: `unordered=True` 自动处理 "A|a" 和 "a|A" 等价性
+- **统一模式匹配**: genotype 选择已统一接入 GeneticPattern（支持 `|` 有序、`::` 无序）
 - **性能优化**: 全部用 NumPy 向量化操作，避免循环
 
 ---
@@ -130,6 +126,11 @@ rule, labels = filter.build_filter(pop, groups=groups)
 # 字符串（逗号分隔）
 {"genotype": "WT|WT"}
 
+# pattern 字符串（推荐）
+# | 代表有序匹配 Maternal|Paternal
+# :: 代表无序匹配（同源染色体两条拷贝可交换）
+{"genotype": "A1/B1|A2/B2; C1/D1::C2/D2"}
+
 # 字符串列表
 {"genotype": ["WT|WT", "WT|Drive", "Drive|Drive"]}
 
@@ -142,6 +143,29 @@ rule, labels = filter.build_filter(pop, groups=groups)
 # 不指定（默认所有基因型）
 {}
 ```
+
+#### 将模式匹配用于 Observation 分组（推荐）
+
+当目标群体较复杂时，不建议手写长基因型列表。更推荐直接在 `groups["genotype"]` 中传 pattern 字符串，让 Observation 内部统一解析。
+
+```python
+groups = {
+    "target_female": {
+        # 有序匹配 Maternal|Paternal
+        "genotype": "A1/B1|A2/B2; C1/D1|C2/D2",
+        "sex": "female",
+    },
+    "target_female_unordered": {
+        # 无序匹配（同源染色体两条拷贝可交换）
+        "genotype": "A1/B1::A2/B2; C1/D1::C2/D2",
+        "sex": "female",
+    }
+}
+
+rule, labels = filter.build_filter(pop, groups=groups)
+```
+
+这种写法可以让 Observation 与 Preset 共用同一套 pattern 语义，减少“规则作用对象”和“观测对象”定义不一致的问题。
 
 ##### sex
 
@@ -185,7 +209,15 @@ rule, labels = filter.build_filter(pop, groups=groups)
 
 ##### unordered
 
-处理无序基因型（"A|a" 和 "a|A" 视为等同）：
+`unordered` 为兼容参数。对于 pattern 字符串，建议优先使用 `::` 表达无序语义；`|` 保持有序语义（Maternal|Paternal）。
+
+```python
+# 推荐：在 pattern 中直接表达有序/无序
+{"genotype": "A|a"}      # 有序
+{"genotype": "A::a"}     # 无序
+```
+
+若使用非 pattern 的选择器对象，`unordered=True` 仍可作为补充选项：
 
 ```python
 # 启用无序匹配
@@ -256,8 +288,7 @@ rule, labels = filter.build_filter(pop, groups=groups)
 ```python
 groups = {
     "suppressed_hetero": {
-        "genotype": ["S|+"],
-        "unordered": True,  # 同时匹配 "S|+" 和 "+|S"
+        "genotype": "S::+",  # 推荐写法：直接无序语义
     },
     "suppressed_homo": {"genotype": ["S|S"]},
 }

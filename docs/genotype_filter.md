@@ -56,14 +56,49 @@ ruleset.add_convert(
 
 可把多个过滤器组合成与/或/非逻辑，保持规则可读。
 
-## 4. 设计过滤器的实践建议
+## 4. 与模式匹配语法联动（第13章）
+
+当规则条件复杂时，建议直接复用第13章的 pattern 语法，而不是手写字符串包含判断。
+
+```python
+def build_filter_from_pattern(species, pattern: str):
+    return species.parse_genotype_pattern(pattern)
+
+
+ruleset.add_convert(
+    from_allele="W",
+    to_allele="D",
+    rate=0.5,
+    genotype_filter=build_filter_from_pattern(
+        population.species,
+        "A1/B1|A2/B2; C1/D1|C2/D2",
+    ),
+)
+```
+
+这样做的好处：
+
+1. 语义统一：和 Observation 章节中的 pattern 展开规则一致。
+2. 可维护：pattern 可直接放进实验配置文件。
+3. 可测试：可以独立验证 pattern 命中集合。
+
+## 5. 设计过滤器的实践建议
 
 1. 过滤器应当“单一职责”。
 2. 先写最简单可读版本，再做性能优化。
 3. 对复杂过滤器做单元测试，避免误筛选。
 4. 在实验日志里记录过滤器名称和语义。
 
-## 5. 调试方法
+## 6. 与 Observation 保持统计口径一致
+
+推荐把同一个 pattern 同时用于：
+
+1. Preset 的 `genotype_filter`（决定谁会被规则影响）。
+2. Observation 的 `groups["genotype"]`（决定统计谁）。
+
+若两边使用不同定义，常见症状是“规则看起来生效了，但观测指标不动”或“观测变化与机制预期不一致”。
+
+## 7. 调试方法
 
 建议在小样本下做“命中率检查”：
 
@@ -73,7 +108,7 @@ ruleset.add_convert(
 
 这一步往往能提前避免大量无效模拟。
 
-## 6. 让规则更可维护
+## 8. 让规则更可维护
 
 当规则增多时，建议把过滤器按语义拆分：
 
@@ -83,7 +118,7 @@ ruleset.add_convert(
 
 再通过组合函数构建最终过滤器，而不是写一个巨型函数。
 
-## 7. 本章小结
+## 9. 本章小结
 
 你已经完成 Preset 设计的核心两步：
 
@@ -97,3 +132,5 @@ ruleset.add_convert(
 ## 下一章
 
 - [设计自己的 Preset（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
+- [模式匹配与可扩展配置](genotype_pattern_matching_design.md)
+- [种群观测规则](observation_rules.md)
