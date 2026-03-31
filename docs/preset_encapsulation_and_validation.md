@@ -95,9 +95,9 @@ pop = (
 
 恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 
-1. 规则定义（Gamete 与 Zygote 转换）- 第 1 章。
-2. 规则生效范围精细化（genotype_filter）- 第 2 章。
-3. Preset 工程化、验证与发布 - 第 3 章（本章）。
+1. 规则定义（Gamete 与 Zygote 转换）- 第 14 章。
+2. 规则生效范围精细化（genotype_filter）- 第 15 章。
+3. Preset 工程化、验证与发布 - 第 16 章（本章）。
 
 你现在已掌握从"脑海中的生物学假设"到"稳定可复现的 Preset 组件"的完整闭环。这三个步骤足以应对绝大多数遗传驱动系统的模拟需求。
 
@@ -116,8 +116,8 @@ pop = (
 
 如果想回顾前面的内容或深化理解：
 
-- [模式匹配与可扩展配置](genotype_pattern_matching_design.md) - 基础概念
-- [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
-- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter_implementation.md)
+- [模式匹配与可扩展配置](genotype_pattern_matching_design.md) - 第 13 章，基础概念
+- [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md) - 第 14 章
+- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter_implementation.md) - 第 15 章
 - [遗传预设使用指南](genetic_presets.md) - 了解 NATAL 内置预设
 - [Samplers：观察过滤系统](samplers_observation.md) - 如何观察和分析模拟结果
