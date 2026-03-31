@@ -96,4 +96,4 @@ pop = (
 
 ## 下一章
 
-- [设计自己的 Preset（4）：模式匹配与可扩展配置](16_genotype_pattern_matching_design.md)
+- [设计自己的 Preset（4）：模式匹配与可扩展配置](genotype_pattern_matching_design.md)

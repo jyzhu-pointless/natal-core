@@ -622,8 +622,8 @@ groups = {"old": {"age": [6, 7]}}
 ## 下一步
 
 - [API 入口](api/genetic_structures.md) - 查看完整的方法签名
-- [Hook 系统](09_hooks.md) - 在 Hook 中应用观察过滤
-- [Numba 优化](07_numba_optimization.md) - 性能调优
+- [Hook 系统](hooks.md) - 在 Hook 中应用观察过滤
+- [Numba 优化](numba_optimization.md) - 性能调优
 
 ---
 

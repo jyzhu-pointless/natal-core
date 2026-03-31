@@ -24,8 +24,8 @@ Builder 链式配置
 
 相关章节：
 
-- [PopulationState & PopulationConfig：编译与配置](05_population_state_config.md)
-- [Simulation Kernels 深度解析](06_simulation_kernels.md)
+- [PopulationState & PopulationConfig：编译与配置](population_state_config.md)
+- [Simulation Kernels 深度解析](simulation_kernels.md)
 
 ## 2. 两类 Builder
 
@@ -420,4 +420,4 @@ Builder 不是“语法糖”，而是把模型参数组织成可审查、可追
 2. 编译层：`build()` 固化为配置与状态。
 3. 执行层：模拟流程按阶段运行并消费这些参数。
 
-**下一章**：[IndexRegistry 索引机制](04_index_registry.md)
+**下一章**：[IndexRegistry 索引机制](index_registry.md)

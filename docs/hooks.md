@@ -164,7 +164,7 @@ Hook 系统为 NATAL 提供了稳定、可扩展的行为注入能力。
 
 ## 相关章节
 
-- [Modifier 机制](08_modifiers.md)
-- [Simulation Kernels 深度解析](06_simulation_kernels.md)
-- [Numba 优化指南](07_numba_optimization.md)
-- [快速开始](01_quickstart.md)
+- [Modifier 机制](modifiers.md)
+- [Simulation Kernels 深度解析](simulation_kernels.md)
+- [Numba 优化指南](numba_optimization.md)
+- [快速开始](quickstart.md)

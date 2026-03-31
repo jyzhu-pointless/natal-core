@@ -46,22 +46,22 @@ pip install natal-core
 
 ## 学习路径（按推荐顺序）
 
-1. [快速开始：15 分钟上手 NATAL](01_quickstart.md)
-2. [遗传结构与实体](02_genetic_structures.md)
-3. [Builder 系统详解](03_builder_system.md)
-4. [IndexRegistry 索引机制](04_index_registry.md)
-5. [PopulationState 与 PopulationConfig](05_population_state_config.md)
-6. [Simulation Kernels 深度解析](06_simulation_kernels.md)
-7. [Numba 优化指南](07_numba_optimization.md)
-8. [Modifier 机制](08_modifiers.md)
-9. [Hook 系统](09_hooks.md)
-10. [遗传预设使用指南](10_genetic_presets.md)
-11. [Spatial 模拟指南](11_spatial_simulation_guide.md)
-12. [Samplers：观察过滤系统](12_samplers_observation.md)
-13. [设计自己的 Preset（1）：从等位基因转换规则开始](13_allele_conversion_rules.md)
-14. [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](14_genotype_filter_implementation.md)
-15. [设计自己的 Preset（3）：封装、验证与发布前检查](15_filtering_api_reference.md)
-16. [设计自己的 Preset（4）：模式匹配与可扩展配置](16_genotype_pattern_matching_design.md)
+1. [快速开始：15 分钟上手 NATAL](quickstart.md)
+2. [遗传结构与实体](genetic_structures.md)
+3. [Builder 系统详解](builder_system.md)
+4. [IndexRegistry 索引机制](index_registry.md)
+5. [PopulationState 与 PopulationConfig](population_state_config.md)
+6. [Simulation Kernels 深度解析](simulation_kernels.md)
+7. [Numba 优化指南](numba_optimization.md)
+8. [Modifier 机制](modifiers.md)
+9. [Hook 系统](hooks.md)
+10. [遗传预设使用指南](genetic_presets.md)
+11. [Spatial 模拟指南](spatial_simulation_guide.md)
+12. [Samplers：观察过滤系统](samplers_observation.md)
+13. [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
+14. [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter_implementation.md)
+15. [设计自己的 Preset（3）：封装、验证与发布前检查](filtering_api_reference.md)
+16. [设计自己的 Preset（4）：模式匹配与可扩展配置](genotype_pattern_matching_design.md)
 
 ## API 文档
 

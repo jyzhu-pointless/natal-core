@@ -164,7 +164,7 @@ pop.import_state(state_flat, history=hist)
 
 ## 相关章节
 
-- [PopulationState 与 PopulationConfig](05_population_state_config.md)
-- [Numba 优化指南](07_numba_optimization.md)
-- [Modifier 机制](08_modifiers.md)
-- [Hook 系统](09_hooks.md)
+- [PopulationState 与 PopulationConfig](population_state_config.md)
+- [Numba 优化指南](numba_optimization.md)
+- [Modifier 机制](modifiers.md)
+- [Hook 系统](hooks.md)

@@ -75,7 +75,7 @@ print(f"WT|WT: {wt_wt}")
 print(f"WT|Drive: {wt_drive}")
 ```
 
-> 更多遗传架构的细节，见 [遗传结构与实体](02_genetic_structures.md)
+> 更多遗传架构的细节，见 [遗传结构与实体](genetic_structures.md)
 
 ---
 
@@ -221,7 +221,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **💡 提示**: 对于需要自定义复杂遗传规则的高级用户，可以参考[Modifier机制](08_modifiers.md)手动编写modifier函数。但对于大多数常见场景，预设系统更简单可靠。
+> **💡 提示**: 对于需要自定义复杂遗传规则的高级用户，可以参考[Modifier机制](modifiers.md)手动编写modifier函数。但对于大多数常见场景，预设系统更简单可靠。
 
 ---
 
@@ -257,7 +257,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以使用原生 Numba Hook。详见 [Hook 系统](09_hooks.md)
+> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以使用原生 Numba Hook。详见 [Hook 系统](hooks.md)
 
 ---
 
@@ -432,11 +432,11 @@ launch(pop, port=8080, title="My Simulation")
 
 现在你已经掌握了基础知识！接下来可以：
 
-1. **深入学习遗传预设系统**：[遗传预设系统](10_genetic_presets.md) - 学习如何创建自定义预设
-2. **理解遗传架构**：[遗传结构与实体](02_genetic_structures.md) - 深入了解Species、Chromosome等概念
-3. **掌握高级功能**：[Hook 系统](09_hooks.md) - 学习如何注入自定义模拟逻辑
-4. **需要自定义遗传规则**：[Modifier 机制](08_modifiers.md) - 手动编写gamete/zygote修饰器
-5. **性能优化**：[Numba 优化指南](07_numba_optimization.md) - 提升模拟性能
+1. **深入学习遗传预设系统**：[遗传预设系统](genetic_presets.md) - 学习如何创建自定义预设
+2. **理解遗传架构**：[遗传结构与实体](genetic_structures.md) - 深入了解Species、Chromosome等概念
+3. **掌握高级功能**：[Hook 系统](hooks.md) - 学习如何注入自定义模拟逻辑
+4. **需要自定义遗传规则**：[Modifier 机制](modifiers.md) - 手动编写gamete/zygote修饰器
+5. **性能优化**：[Numba 优化指南](numba_optimization.md) - 提升模拟性能
 
 ---
 
@@ -461,4 +461,4 @@ launch(pop, port=8080, title="My Simulation")
 
 ---
 
-**准备好更深入的学习了吗？** [前往下一章：遗传结构与实体 →](02_genetic_structures.md)
+**准备好更深入的学习了吗？** [前往下一章：遗传结构与实体 →](genetic_structures.md)

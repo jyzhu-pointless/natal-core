@@ -327,11 +327,11 @@ numpy 数组访问 individual_count[:, :, 5]
 
 ## 📚 相关章节
 
-- [遗传结构与实体](02_genetic_structures.md) - Genotype 对象的创建
-- [PopulationState & PopulationConfig](05_population_state_config.md) - 配置中的索引应用
-- [Modifier 机制](08_modifiers.md) - Modifier 中的 IndexRegistry 使用
-- [Hook 系统](09_hooks.md) - 高级 Hook 选择器模式
+- [遗传结构与实体](genetic_structures.md) - Genotype 对象的创建
+- [PopulationState & PopulationConfig](population_state_config.md) - 配置中的索引应用
+- [Modifier 机制](modifiers.md) - Modifier 中的 IndexRegistry 使用
+- [Hook 系统](hooks.md) - 高级 Hook 选择器模式
 
 ---
 
-**准备进入配置编译细节了吗？** [前往下一章：PopulationState & PopulationConfig →](05_population_state_config.md)
+**准备进入配置编译细节了吗？** [前往下一章：PopulationState & PopulationConfig →](population_state_config.md)

@@ -112,7 +112,7 @@ class PatternDrivenPreset(GeneticPreset):
 
 ## 回看与延伸
 
-- [设计自己的 Preset（1）：从等位基因转换规则开始](13_allele_conversion_rules.md)
-- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](14_genotype_filter_implementation.md)
-- [设计自己的 Preset（3）：封装、验证与发布前检查](15_filtering_api_reference.md)
-- [遗传预设使用指南](10_genetic_presets.md)
+- [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
+- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter_implementation.md)
+- [设计自己的 Preset（3）：封装、验证与发布前检查](filtering_api_reference.md)
+- [遗传预设使用指南](genetic_presets.md)

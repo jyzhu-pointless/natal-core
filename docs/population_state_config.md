@@ -215,7 +215,7 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 
 ## 相关章节
 
-- [Builder 系统](03_builder_system.md)
-- [Simulation Kernels 深度解析](06_simulation_kernels.md)
-- [Modifier 机制](08_modifiers.md)
-- [Hook 系统](09_hooks.md)
+- [Builder 系统](builder_system.md)
+- [Simulation Kernels 深度解析](simulation_kernels.md)
+- [Modifier 机制](modifiers.md)
+- [Hook 系统](hooks.md)

@@ -96,4 +96,4 @@ ruleset.add_convert(
 
 ## 下一章
 
-- [设计自己的 Preset（3）：封装、验证与发布前检查](15_filtering_api_reference.md)
+- [设计自己的 Preset（3）：封装、验证与发布前检查](filtering_api_reference.md)

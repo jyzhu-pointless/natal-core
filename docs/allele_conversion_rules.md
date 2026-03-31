@@ -89,4 +89,4 @@ ruleset.add_convert("W", "D", rate=0.8, sex_filter="male")
 
 ## 下一章
 
-- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](14_genotype_filter_implementation.md)
+- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter_implementation.md)

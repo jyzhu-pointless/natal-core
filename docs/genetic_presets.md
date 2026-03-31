@@ -403,10 +403,10 @@ class DebugPreset(GeneticPreset):
 
 ## 相关文档
 
-- [等位基因转换规则](13_allele_conversion_rules.md) - 详细的转换规则系统
-- [基因型模式匹配](16_genotype_pattern_matching_design.md) - 高级基因型过滤
-- [Modifier机制](08_modifiers.md) - 底层修饰器原理
-- [快速开始](01_quickstart.md) - 基础使用教程
+- [等位基因转换规则](allele_conversion_rules.md) - 详细的转换规则系统
+- [基因型模式匹配](genotype_pattern_matching_design.md) - 高级基因型过滤
+- [Modifier机制](modifiers.md) - 底层修饰器原理
+- [快速开始](quickstart.md) - 基础使用教程
 
 ## 参考实现
 

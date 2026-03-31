@@ -157,7 +157,7 @@ Spatial 模拟的核心是“局部演化 + 空间迁移”的耦合。
 
 ## 相关章节
 
-- [Simulation Kernels 深度解析](06_simulation_kernels.md)
-- [Hook 系统](09_hooks.md)
-- [Modifier 机制](08_modifiers.md)
-- [PopulationState 与 PopulationConfig](05_population_state_config.md)
+- [Simulation Kernels 深度解析](simulation_kernels.md)
+- [Hook 系统](hooks.md)
+- [Modifier 机制](modifiers.md)
+- [PopulationState 与 PopulationConfig](population_state_config.md)
