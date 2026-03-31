@@ -76,7 +76,7 @@ def normalize_docstring(docstring: str) -> str:
     # Standardize format markers
     normalized = re.sub(r'(参数|参数说明)\s*:', 'Args:', normalized)
     normalized = re.sub(r'(返回|返回值)\s*:', 'Returns:', normalized)
-    normalized = re.sub(r'(示例|例子)\s*:', 'Example:', normalized)
+    normalized = re.sub(r'(示例|例子)\s*:', 'Examples:', normalized)
 
     return normalized
 

@@ -519,7 +519,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Args:
             preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
 
-        Example:
+        Examples:
             >>> from natal.genetic_presets import HomingDrive
             >>> drive = HomingDrive(
             ...     name="MyDrive",
@@ -548,7 +548,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             A builder instance for this population type.
 
-        Example:
+        Examples:
             >>> pop = (AgeStructuredPopulation.builder(species)
             ...     .set_age_structure(n_ages=10)
             ...     .add_preset(HomingModificationDrive(...))
@@ -831,7 +831,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Raises:
             RuntimeError: If the population is already finished.
 
-        Example:
+        Examples:
             >>> def check_extinction(pop):
             ...     if pop.get_total_count() == 0:
             ...         print("Population extinct, finishing simulation.")
@@ -959,7 +959,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Raises:
             ValueError: If event does not exist or hook_id is already in use.
 
-        Example:
+        Examples:
             >>> # Plain function (backward compatible)
             >>> pop.set_hook('first', lambda p: print(f'Step {p.tick}'))
             >>>
@@ -1033,7 +1033,7 @@ class BasePopulation(ABC, Generic[T_State]):
                             ``trigger_event`` is used mainly for explicit events (for example ``finish``)
                             and compatibility paths.
 
-        Example:
+        Examples:
                         >>> result = pop.trigger_event('first')  # Executes all 'first' hooks
             >>> if result == RESULT_STOP:
             ...     print("Simulation stopped by hook")
@@ -1167,7 +1167,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             CompiledHookDescriptor: The compiled descriptor
 
-        Example:
+        Examples:
             >>> from natal.hook_dsl import Op
             >>> pop.register_declarative_hook(
             ...     event='early',
@@ -1391,7 +1391,7 @@ class BasePopulation(ABC, Generic[T_State]):
             CompiledEventHooks: Container with combined @njit hooks per event.
                                 Access via .first, .early, .late, .finish
 
-        Example:
+        Examples:
             >>> hooks = pop.get_compiled_event_hooks()
             >>> hooks.run_fn is not None
             True

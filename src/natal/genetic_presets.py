@@ -694,7 +694,7 @@ class GeneticPreset(ABC):
     All methods are optional (can return None). At least one method should be implemented
     for the preset to have any effect.
 
-    Usage:
+    Examples:
         # Modern API (recommended)
         population.apply_preset(preset)
 
@@ -839,19 +839,19 @@ class HomingDrive(GeneticPreset):
     It can also generate resistance alleles through non-homologous end joining (NHEJ).
 
     Key features:
-    - Drive conversion in heterozygotes (WT → Drive)
-    - Germline resistance formation (WT → Resistance)
+    - Drive conversion in heterozygotes (WT â†’ Drive)
+    - Germline resistance formation (WT â†’ Resistance)
     - Embryo resistance formation
     - Maternal/paternal Cas9 deposition
     - Functional vs non-functional resistance alleles
     - Sex-specific rates for all processes
 
     The drive operates through a sequential cascade:
-    1. Homing conversion (WT → Drive)
+    1. Homing conversion (WT â†’ Drive)
     2. Resistance formation in remaining WT alleles
     3. Optional functional resistance split
 
-    Usage:
+    Examples:
         drive = HomingDrive(
             name="MyDrive",
             drive_allele="Drive",
@@ -928,7 +928,7 @@ class HomingDrive(GeneticPreset):
             use_paternal_deposition (bool): Whether to enable paternal Cas9 deposition.
                 If True, fathers can deposit Cas9 in embryos.
 
-        Example:
+        Examples:
             >>> drive = HomingDrive(
             ...     name="MyDrive",
             ...     drive_allele="Drive",
@@ -1044,7 +1044,7 @@ class HomingDrive(GeneticPreset):
             res_rate = self.late_germline_resistance_formation_rate[sex]
 
             # 1. Homing (Target -> Drive)
-            # Example: If homing_rate is 0.7, 70% of targets become Drive. 30% pass to the next rule.
+            # Examples: If homing_rate is 0.7, 70% of targets become Drive. 30% pass to the next rule.
             if homing_rate > 0:
                 rule_set.add_allele_convert(
                     from_allele=self.target_allele,

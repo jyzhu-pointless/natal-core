@@ -8,6 +8,7 @@ This module provides regex-like pattern matching for genetic sequences:
 - GenotypePattern: Pattern for a complete diploid genotype
 - HaploidGenomePattern: Pattern for a complete haploid genome
 - GenotypePatternParser: Parser for pattern syntax strings
+- GenotypeSelector: Unified genotype selector for observation/filtering
 """
 
 from abc import ABC
@@ -15,8 +16,10 @@ from abc import abstractmethod as abstract_method
 from collections.abc import Sequence
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Dict,
+    Iterable,
     List,
     Literal,
     Optional,
@@ -29,7 +32,7 @@ if TYPE_CHECKING:
     from natal.genetic_entities import Gene, Genotype, HaploidGenome, Haplotype
     from natal.genetic_structures import Species
 
-__all__ = ["GenotypePatternParser"]
+__all__ = ["GenotypePatternParser", "GenotypeSelector"]
 
 
 class PatternParseError(Exception):
@@ -390,7 +393,7 @@ class GenotypePatternParser:
     def parse(self, pattern_str: str) -> GenotypePattern:
         """Parse a pattern string into a GenotypePattern.
 
-        Syntax:
+        Supported syntax includes:
             - `;` separates chromosomes (outside parentheses)
             - `|` separates maternal (left) and paternal (right)
             - `/` separates loci within a chromosome
@@ -833,3 +836,193 @@ class GenotypePatternParser:
                 for allele in locus.alleles:
                     allele_names.add(allele.name)
         return sorted(allele_names)
+
+
+class GenotypeSelector:
+    """Unified genotype selector for observation and filtering.
+
+    This class provides a unified interface for selecting genotypes using various
+    input formats, leveraging the existing pattern matching system.
+    """
+
+    def __init__(self, species: 'Species'):
+        """Initialize genotype selector for a specific species.
+
+        Args:
+            species: The Species object to use for pattern parsing.
+        """
+        self.species = species
+        self.parser = GenotypePatternParser(species)
+
+    def resolve_genotype_indices(
+        self,
+        gen_spec: Optional[Iterable[Any]],
+        diploid_genotypes: Optional[Sequence[Any]],
+        unordered: bool = False,
+    ) -> List[int]:
+        """Resolve genotype selectors into a list of indices.
+
+        This method provides the same functionality as observation.py's
+        _resolve_genotype_list() but uses the pattern matching system.
+
+        Args:
+            gen_spec: Genotype selector specification. Can be:
+                - None: select all genotypes
+                - int: genotype index
+                - str: genotype pattern string
+                - Genotype: genotype object
+                - Iterable of any of the above
+            diploid_genotypes: Sequence of diploid genotypes for resolution.
+            unordered: Whether to treat genotypes as unordered (A|a == a|A).
+
+        Returns:
+            List of resolved genotype indices.
+
+        Raises:
+            ValueError: If diploid_genotypes is required but missing.
+        """
+        if gen_spec is None:
+            if diploid_genotypes is None:
+                raise ValueError("diploid_genotypes required to enumerate genotypes")
+            return list(range(len(diploid_genotypes)))
+
+        # Handle single item vs iterable
+        if not isinstance(gen_spec, (list, tuple, set)):
+            gen_spec = [gen_spec]
+
+        resolved_indices: Set[int] = set()
+
+        for selector in gen_spec:
+            if isinstance(selector, int):
+                # Direct index
+                resolved_indices.add(selector)
+            elif isinstance(selector, str):
+                # Pattern string - use pattern matching system
+                pattern = self.parser.parse(selector)
+                if diploid_genotypes is None:
+                    raise ValueError("diploid_genotypes required for pattern matching")
+
+                for i, genotype in enumerate(diploid_genotypes):
+                    if pattern.matches(genotype):
+                        resolved_indices.add(i)
+            else:
+                # Assume it's a Genotype object or similar
+                if diploid_genotypes is None:
+                    raise ValueError("diploid_genotypes required for genotype matching")
+
+                for i, genotype in enumerate(diploid_genotypes):
+                    if self._genotypes_equal(selector, genotype, unordered):
+                        resolved_indices.add(i)
+
+        return sorted(resolved_indices)
+
+    def _genotypes_equal(
+        self,
+        gen1: Any,
+        gen2: Any,
+        unordered: bool = False
+    ) -> bool:
+        """Check if two genotypes are equal, with optional unordered matching.
+
+        Args:
+            gen1: First genotype.
+            gen2: Second genotype.
+            unordered: If True, consider genotypes equal regardless of maternal/paternal order.
+
+        Returns:
+            True if genotypes are equal.
+        """
+        if not unordered:
+            return gen1 == gen2
+
+        # For unordered matching, check both orderings
+        try:
+            # Try direct equality first
+            if gen1 == gen2:
+                return True
+
+            # Try reversed ordering if genotypes support it
+            if hasattr(gen1, 'reversed') and hasattr(gen2, 'reversed'):
+                return gen1.reversed() == gen2 or gen1 == gen2.reversed()
+
+            # Fallback: use string representation comparison
+            gen1_str = str(gen1)
+            gen2_str = str(gen2)
+
+            # Check if strings are equal when normalized for unordered matching
+            if "::" in gen1_str or "::" in gen2_str:
+                # Already using unordered notation
+                return gen1_str == gen2_str
+            else:
+                # Convert to unordered notation and compare
+                gen1_unordered = gen1_str.replace("|", "::")
+                gen2_unordered = gen2_str.replace("|", "::")
+                return gen1_unordered == gen2_unordered
+
+        except Exception:
+            # If any comparison fails, fall back to direct equality
+            return gen1 == gen2
+
+    def create_filter_function(
+        self,
+        gen_spec: Optional[Iterable[Any]],
+        unordered: bool = False
+    ) -> Callable[[Any], bool]:
+        """Create a filter function for genotype selection.
+
+        Args:
+            gen_spec: Genotype selector specification.
+            unordered: Whether to use unordered matching.
+
+        Returns:
+            A callable that takes a genotype and returns True if it matches.
+        """
+        if gen_spec is None:
+            # Match all genotypes
+            return lambda genotype: True
+
+        # Handle single item vs iterable
+        if not isinstance(gen_spec, (list, tuple, set)):
+            gen_spec = [gen_spec]
+
+        # Create pattern-based filters for string selectors
+        pattern_filters: List[Callable[[Any], bool]] = []
+        other_selectors: List[Any] = []
+
+        for selector in gen_spec:
+            if isinstance(selector, str):
+                pattern = self.parser.parse(selector)
+                pattern_filters.append(pattern.to_filter())
+            else:
+                other_selectors.append(selector)
+
+        def filter_func(genotype: Any) -> bool:
+            # Check pattern filters
+            for pattern_filter in pattern_filters:
+                if pattern_filter(genotype):
+                    return True
+
+            # Check other selectors
+            for selector in other_selectors:
+                if self._genotypes_equal(selector, genotype, unordered):
+                    return True
+
+            return False
+
+        return filter_func
+
+    def get_pattern_for_selector(self, selector: Any) -> Optional[GenotypePattern]:
+        """Convert a selector to a GenotypePattern if possible.
+
+        Args:
+            selector: Genotype selector.
+
+        Returns:
+            GenotypePattern if selector can be converted, None otherwise.
+        """
+        if isinstance(selector, str):
+            return self.parser.parse(selector)
+        elif isinstance(selector, GenotypePattern):
+            return selector
+        else:
+            return None

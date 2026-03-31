@@ -1,16 +1,14 @@
-"""
-Numba-Compatible Helper Functions (Dual Implementation)
-========================================================
+"""Numba-compatible helper functions with dual implementations.
 
-This module provides helper functions that work in both Numba-compiled and pure Python contexts,
-with **optimized implementations for each mode**:
+This module provides helper functions that work in both Numba-compiled and pure Python
+contexts, with optimized implementations for each mode:
 
 - Numba mode: Use explicit loops (fast when JIT-compiled)
 - Non-Numba mode: Use vectorized NumPy operations (fast in pure Python)
 
-The correct implementation is selected at **import time** based on the global Numba configuration.
+The correct implementation is selected at import time based on the global Numba configuration.
 
-Usage:
+Examples:
     from natal.numba_compat import binomial_2d, fancy_index_3d_to_2d
 
     # These work in both @njit functions and regular Python with optimal performance
@@ -459,3 +457,4 @@ else:
     multinomial = _multinomial_numpy
     binomial = np.random.binomial
     set_numba_seed = _set_numba_seed_numpy
+

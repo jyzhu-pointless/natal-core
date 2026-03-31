@@ -48,6 +48,8 @@ pyright
 ruff check src demos
 ```
 
+After these commands pass, review the `docs/` directory to determine whether the change requires accompanying documentation updates and add or mark the necessary updates before proposing completion.
+
 Recommended autofix command for lint issues:
 
 ```bash

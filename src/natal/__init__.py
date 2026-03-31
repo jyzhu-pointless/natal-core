@@ -14,7 +14,7 @@ from typing import Any, Dict, List, cast
 # Maps exported symbol names to the module that defines them.
 #
 # The package intentionally does not import any child modules during initialization.
-# It only builds a name index up front, for example:
+# It only builds a name index up front, for Examples:
 # {"Sex": "type_def", "AgeStructuredPopulation": "age_structured_population"}
 # When code first accesses natal.Sex, the matching module is imported on demand.
 _lazy_map: Dict[str, str] = {}
@@ -28,7 +28,7 @@ def _extract_module_exports(module_file: Path) -> list[str]:
     builds the export table; it does not execute child-module top-level code.
 
     This requires each child module's ``__all__`` to be a literal value that
-    ``ast.literal_eval`` can resolve, for example:
+    ``ast.literal_eval`` can resolve, for Examples:
 
         __all__ = ["Sex", "Age"]
 

@@ -349,7 +349,7 @@ def _resolve_sex(selector: Literal["female", "male", "both"]) -> np.ndarray:
 def _parse_atomic_condition(atom: str) -> Tuple[int, int]:
     """Parse one atomic predicate into ``(cond_type, parameter)``.
 
-    Example:
+    Examples:
     - ``tick % 10 == 0`` -> ``(COND_TICK_MOD, 10)``
     - ``tick >= 5`` -> ``(COND_TICK_GE, 5)``
 
@@ -644,13 +644,13 @@ def compile_declarative_hook(
         op_types_list.append(int(op.op_type))
 
         # 2) Genotype span - resolve genotype selectors to actual genotype indices
-        # Example: "A1/A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
+        # Examples: "A1/A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
         gidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_genotypes)
         gidx_data_list.extend(gidx_array.tolist())
         gidx_offsets.append(len(gidx_data_list))  # Record end offset for this operation
 
         # 3) Age span - resolve age selectors to actual age indices
-        # Example: "0-5" -> [0, 1, 2, 3, 4, 5], "*" -> [0, 1, ..., n_ages-1]
+        # Examples: "0-5" -> [0, 1, 2, 3, 4, 5], "*" -> [0, 1, ..., n_ages-1]
         age_array = _resolve_ages(op.ages, n_ages)
         age_data_list.extend(age_array.tolist())
         age_offsets.append(len(age_data_list))  # Record end offset for this operation

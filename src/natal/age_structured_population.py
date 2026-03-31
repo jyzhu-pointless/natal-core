@@ -80,7 +80,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             initial_sperm_storage: Initial sperm storage state (if supported).
             hooks: Event hook registrations to apply.
 
-        Example:
+        Examples:
             >>> pop_config = PopulationConfigBuilder.build(species, ...)
             >>> pop = AgeStructuredPopulation(
             ...     species,
@@ -161,7 +161,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             A configured ``AgeStructuredPopulationBuilder`` for fluent chaining.
 
-        Example:
+        Examples:
             ``AgeStructuredPopulation.setup(species).age_structure(...).initial_state(...).build()``
         """
         from natal.population_builder import AgeStructuredPopulationBuilder

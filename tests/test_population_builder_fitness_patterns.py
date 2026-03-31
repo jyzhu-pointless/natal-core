@@ -107,8 +107,14 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
                 self.fecundity_calls = []
                 self.sexual_selection_calls = []
 
-            def set_viability_fitness(self, sex_idx: int, genotype_idx: int, value: float) -> None:
-                self.viability_calls.append((sex_idx, genotype_idx, float(value)))
+            def set_viability_fitness(
+                self,
+                sex_idx: int,
+                genotype_idx: int,
+                value: float,
+                age: int = -1,
+            ) -> None:
+                self.viability_calls.append((sex_idx, age, genotype_idx, float(value)))
 
             def set_fecundity_fitness(self, sex_idx: int, genotype_idx: int, value: float) -> None:
                 self.fecundity_calls.append((sex_idx, genotype_idx, float(value)))
@@ -165,13 +171,88 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
         idx_a_bar_a = pop._registry.genotype_to_index[genotype_a_bar_a]
         idx_a_lower_bar_a_upper = pop._registry.genotype_to_index[genotype_a_lower_bar_a_upper]
 
-        self.assertIn((0, idx_a_bar_a, 0.25), fake_config.viability_calls)
-        self.assertIn((1, idx_a_bar_a, 0.75), fake_config.viability_calls)
+        self.assertIn((0, 1, idx_a_bar_a, 0.25), fake_config.viability_calls)
+        self.assertIn((1, 1, idx_a_bar_a, 0.75), fake_config.viability_calls)
 
         self.assertIn((0, idx_a_bar_a, 0.5), fake_config.fecundity_calls)
         self.assertIn((1, idx_a_bar_a, 0.5), fake_config.fecundity_calls)
 
         self.assertIn((idx_a_bar_a, idx_a_lower_bar_a_upper, 0.33), fake_config.sexual_selection_calls)
+
+    def test_viability_supports_age_specific_mapping(self) -> None:
+        class _FakeConfig:
+            def __init__(self) -> None:
+                self.viability_calls = []
+                self.fecundity_calls = []
+                self.sexual_selection_calls = []
+
+            def set_viability_fitness(
+                self,
+                sex_idx: int,
+                genotype_idx: int,
+                value: float,
+                age: int = -1,
+            ) -> None:
+                self.viability_calls.append((sex_idx, age, genotype_idx, float(value)))
+
+            def set_fecundity_fitness(self, sex_idx: int, genotype_idx: int, value: float) -> None:
+                self.fecundity_calls.append((sex_idx, genotype_idx, float(value)))
+
+            def set_sexual_selection_fitness(self, female_idx: int, male_idx: int, value: float) -> None:
+                self.sexual_selection_calls.append((female_idx, male_idx, float(value)))
+
+        class _FakeIndexCore:
+            def __init__(self, genotypes) -> None:
+                self.genotype_to_index = {gt: i for i, gt in enumerate(genotypes)}
+
+        class _FakePopulation:
+            def __init__(self, species, population_config, name=None, initial_individual_count=None, initial_sperm_storage=None, hooks=None) -> None:
+                self.species = species
+                self._config = population_config
+                self._registry = _FakeIndexCore(species.get_all_genotypes())
+                self._index_registry = self._registry
+
+            def apply_recipe(self, recipe) -> None:
+                return None
+
+            @property
+            def new_adult_age(self):
+                return 2
+
+            @property
+            def config(self):
+                return self._config
+
+            @property
+            def index_registry(self):
+                return self._index_registry
+
+        fake_config = _FakeConfig()
+        builder = AgeStructuredPopulationBuilder(self.simple_species)
+        builder.initial_state(individual_count={})
+        builder.fitness(
+            viability={
+                "A|a": {
+                    0: 0.9,
+                    "female": {2: 0.6},
+                }
+            }
+        )
+
+        with patch("natal.population_builder.PopulationConfigBuilder.build", return_value=fake_config):
+            with patch("natal.age_structured_population.AgeStructuredPopulation", _FakePopulation):
+                pop = builder.build()
+
+        self.assertIsNotNone(pop)
+
+        genotype_a_bar_a = self.simple_species.get_genotype_from_str("A|a")
+        idx_a_bar_a = pop._registry.genotype_to_index[genotype_a_bar_a]
+
+        # Age map applies to both sexes.
+        self.assertIn((0, 0, idx_a_bar_a, 0.9), fake_config.viability_calls)
+        self.assertIn((1, 0, idx_a_bar_a, 0.9), fake_config.viability_calls)
+        # Sex+age override applies only to specified sex/age.
+        self.assertIn((0, 2, idx_a_bar_a, 0.6), fake_config.viability_calls)
 
 
 if __name__ == "__main__":

@@ -7,10 +7,10 @@
 遗传学对象的世界 ↔ 整数索引的世界
 
 ```
-Genotype("A1|A2")  ↔  整数索引 5
-HaploidGenotype    ↔  整数索引 3
-"default"标签     ↔  整数索引 0
-"Cas9_deposited"   ↔  整数索引 1
+Genotype("Drive|WT")      ↔  整数索引 2
+HaploidGenotype("R1")     ↔  整数索引 3
+"default" (glab)          ↔  整数索引 0
+"Cas9_deposited" (glab)   ↔  整数索引 1
 ```
 
 **目的**：numpy 数组使用整数索引（效率高），但用户想用遗传学对象（直观）。IndexRegistry 负责在两者之间转换。
@@ -20,14 +20,14 @@ HaploidGenotype    ↔  整数索引 3
 ```python
 class IndexRegistry:
     """稳定的对象→整数索引注册表"""
-    
+
     # 映射字典
     genotype_to_index: Dict[Genotype, int] = {}
     index_to_genotype: List[Genotype] = []
-    
+
     haplo_to_index: Dict[HaploidGenotype, int] = {}
     index_to_haplo: List[HaploidGenotype] = []
-    
+
     glab_to_index: Dict[str, int] = {}
     index_to_glab: List[str] = []
 ```
@@ -128,10 +128,10 @@ ic = pop.registry
 
 for gt_idx in range(ic.num_genotypes()):
     gt = ic.index_to_genotype[gt_idx]
-    
+
     # 查看这个基因型的总个体数
     total = state.individual_count[:, :, gt_idx].sum()
-    
+
     print(f"{gt}: {total:.0f} individuals")
 ```
 
@@ -175,11 +175,11 @@ def gene_drive_modifier(pop):
     基因驱动 Modifier：Drive|WT 杂合子的驱动等位基因配子比例提高
     """
     ic = pop.registry
-    
+
     # 找到 Drive|WT 基因型的索引
     drive_wt = pop.species.get_genotype_from_str("Drive|WT")
     drive_wt_idx = ic.genotype_index(drive_wt)
-    
+
     # 返回映射：基因型 → {(配子, label): 频率}
     return {
         drive_wt: {
@@ -202,17 +202,17 @@ from numba import njit
 def my_hook(ind_count, tick):
     """
     Numba 兼容的 Hook——必须使用整数索引
-    
+
     注意：Hook 在编译时无法访问 IndexRegistry，
     所以需要在 Python 层确定索引，然后硬编码传入
     """
     if tick == 10:
         # 假设我们已经知道基因型 A1|A2 的索引是 5
         gt_idx = 5
-        
+
         # 杀死所有年龄 2-4 的该基因型雌性
         ind_count[1, 2:5, gt_idx] = 0
-    
+
     return 0  # 继续
 
 # 使用选择器模式避免硬编码（见 Hook 系统 章节）
@@ -220,7 +220,7 @@ def my_hook(ind_count, tick):
 
 ## 与 Modifier 的交互
 
-Modifier 返回的字典使用对象作为键，但内部会被转换为索引：
+Modifier 返回的字典可以使用对象作为键，框架会自动转换为索引：
 
 ```python
 # 用户编写的 Modifier（高层）
@@ -232,10 +232,10 @@ def my_modifier(pop):
         }
     }
 
-# 内部处理（低层，自动）
+# 框架处理（自动）
 for gt_key, gamete_dict in my_modifier(pop).items():
     gt_idx = pop.registry.genotype_index(gt_key)
-    
+
     for (allele_name, label), freq in gamete_dict.items():
         # 查询 allele_name 对应的单倍基因型索引
         # 查询 label 对应的标签索引
@@ -328,10 +328,10 @@ numpy 数组访问 individual_count[:, :, 5]
 ## 📚 相关章节
 
 - [遗传结构与实体](02_genetic_structures.md) - Genotype 对象的创建
-- [PopulationState & PopulationConfig](04_population_state_config.md) - 配置中的索引应用
-- [Modifier 机制](06_modifiers.md) - Modifier 中的 IndexRegistry 使用
-- [Hook 系统](07_hooks.md) - 高级 Hook 选择器模式
+- [PopulationState & PopulationConfig](05_population_state_config.md) - 配置中的索引应用
+- [Modifier 机制](08_modifiers.md) - Modifier 中的 IndexRegistry 使用
+- [Hook 系统](09_hooks.md) - 高级 Hook 选择器模式
 
 ---
 
-**准备修改遗传规则了吗？** [前往下一章：Modifier 机制 →](06_modifiers.md)
+**准备进入配置编译细节了吗？** [前往下一章：PopulationState & PopulationConfig →](05_population_state_config.md)

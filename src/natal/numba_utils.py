@@ -1,9 +1,7 @@
-"""
-Numba Switchable Decorators
-===========================
+"""Configurable Numba JIT compilation decorators.
 
-Provides configurable Numba JIT compilation for functions (@njit_switch) and
-classes (@jitclass_switch) with a single global control switch.
+This module provides configurable Numba JIT compilation for functions (@njit_switch)
+with a single global control switch.
 """
 
 import os
@@ -502,7 +500,7 @@ def njit_switch(
         fastmath: Enable fast math optimizations (default: False)
         **njit_kwargs: Additional arguments for numba.njit
 
-    Usage:
+    Examples:
         ```python
         @njit_switch
         def my_func(x):
@@ -625,7 +623,7 @@ def numba_disabled():
     Useful for debugging within a specific block. Numba is enabled by default,
     so it will be automatically restored after exiting the context.
 
-    Usage:
+    Examples:
         ```python
         from natal.numba_utils import numba_disabled
 
@@ -651,7 +649,7 @@ def numba_enabled():
     Numba is enabled by default, but this can force re-enable it if temporarily
     disabled elsewhere. The original state is restored after exiting the context.
 
-    Usage:
+    Examples:
         ```python
         from natal.numba_utils import numba_enabled
 
@@ -676,7 +674,7 @@ def with_numba_disabled(func: Callable[P, R]) -> Callable[P, R]:
     error messages and debugging capabilities. Numba is enabled by default,
     so this decorator will restore it after the function returns.
 
-    Usage:
+    Examples:
         ```python
         from natal.numba_utils import with_numba_disabled
 
@@ -701,7 +699,7 @@ def with_numba_enabled(func: Callable[P, R]) -> Callable[P, R]:
     Since Numba is enabled by default, this is primarily useful for ensuring
     a function uses JIT even if Numba was temporarily disabled elsewhere.
 
-    Usage:
+    Examples:
         ```python
         from natal.numba_utils import with_numba_enabled
 

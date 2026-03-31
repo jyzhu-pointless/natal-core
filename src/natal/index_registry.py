@@ -34,7 +34,7 @@ class IndexRegistry:
     to resolve flexible selector types (objects, ints, or string keys) into
     numeric indices suitable for numeric backends.
 
-    Example:
+    Examples:
         ic = IndexRegistry()
         gid = ic.register_genotype('g1')
         hid = ic.register_haplogenotype('h1')

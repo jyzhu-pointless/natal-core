@@ -4,7 +4,7 @@ This module provides PopulationBuilder classes for streamlined, chainable
 population construction. It separates configuration management from object
 instantiation, preventing parameter bloat and enabling clear, readable code.
 
-Example:
+Examples:
     Examples can be given using the ``AgeStructuredPopulation.builder`` entry point::
 
         pop = (AgeStructuredPopulation.builder(species)
@@ -65,7 +65,9 @@ ModifierSpec = Tuple[int, Optional[str], HookFn]
 HookRegistration = Tuple[HookFn, Optional[str], Optional[int]]
 HookMap = Dict[str, List[HookRegistration]]
 SexScalarMap = Dict[str, float]
-ViabilityMap = Dict[GenotypeSelector, Union[float, SexScalarMap]]
+AgeScalarMap = Dict[int, float]
+ViabilityNestedMap = Dict[Union[str, Sex, int], Union[float, AgeScalarMap]]
+ViabilityMap = Dict[GenotypeSelector, Union[float, ViabilityNestedMap]]
 FecundityMap = Dict[GenotypeSelector, Union[float, SexScalarMap]]
 SexualSelectionMap = Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]
 FitnessOperationName = Literal["viability", "fecundity", "sexual_selection"]
@@ -779,6 +781,88 @@ class PopulationBuilderBase:
         self.species = species
         self._presets: List[Any] = []
 
+    @staticmethod
+    def _resolve_viability_age(age_key: object, n_ages: int) -> int:
+        """Resolve and validate a viability age key.
+
+        Args:
+            age_key (object): Candidate age key.
+            n_ages (int): Number of available age classes.
+
+        Returns:
+            int: Validated age index.
+
+        Raises:
+            TypeError: If age key is not an integer.
+            ValueError: If age key is out of range.
+        """
+        if not isinstance(age_key, int) or isinstance(age_key, bool):
+            raise TypeError(f"viability age key must be int, got {type(age_key)}")
+        age = int(age_key)
+        if age < 0 or age >= n_ages:
+            raise ValueError(f"viability age {age} out of range [0, {n_ages})")
+        return age
+
+    @staticmethod
+    def _iter_viability_updates(
+        values: Union[float, ViabilityNestedMap],
+        n_ages: int,
+        default_age: int,
+    ) -> List[Tuple[int, int, float]]:
+        """Expand viability value specs into (sex_idx, age_idx, value) triples.
+
+        Supported forms:
+            - float: applies to both sexes at default_age.
+            - {"female": 0.9, "male": 0.8}: per-sex at default_age.
+            - {0: 0.95, 1: 0.85}: both sexes, age-specific.
+            - {"female": {0: 0.95}, "male": {1: 0.9}}: sex+age specific.
+
+        Args:
+            values (Union[float, ViabilityNestedMap]): Viability value specification.
+            n_ages (int): Number of age classes.
+            default_age (int): Fallback age when age is not provided.
+
+        Returns:
+            List[Tuple[int, int, float]]: Expanded updates.
+
+        Raises:
+            TypeError: If input structure is unsupported.
+            ValueError: If map is empty or age keys are invalid.
+        """
+        if not isinstance(values, dict):
+            scalar = float(values)
+            return [(0, default_age, scalar), (1, default_age, scalar)]
+
+        if not values:
+            raise ValueError("viability mapping cannot be empty")
+
+        updates: List[Tuple[int, int, float]] = []
+        for key, key_value in values.items():
+            if isinstance(key, int) and not isinstance(key, bool):
+                if isinstance(key_value, dict):
+                    raise TypeError("age-based viability values must be numeric")
+                age_idx = PopulationBuilderBase._resolve_viability_age(key, n_ages)
+                val = float(key_value)
+                updates.append((0, age_idx, val))
+                updates.append((1, age_idx, val))
+                continue
+
+            if isinstance(key, (str, Sex)):
+                sex_idx = int(key.value) if isinstance(key, Sex) else resolve_sex_label(key)
+                if isinstance(key_value, dict):
+                    for age_key, age_value in key_value.items():
+                        age_idx = PopulationBuilderBase._resolve_viability_age(age_key, n_ages)
+                        updates.append((sex_idx, age_idx, float(age_value)))
+                else:
+                    updates.append((sex_idx, default_age, float(key_value)))
+                continue
+
+            raise TypeError(
+                "viability map keys must be sex labels (str/Sex) or age indices (int)"
+            )
+
+        return updates
+
     def add_preset(self, preset: Any) -> 'PopulationBuilderBase':
         """Add a gene drive preset to apply during build.
 
@@ -805,7 +889,7 @@ class PopulationBuilderBase:
 class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     """Builder for AgeStructuredPopulation with organized group methods.
 
-    Notes:
+    Note:
         Fitness and modifiers are applied AFTER presets during build().
         This allows presets to set base values, which can then be overridden.
     """
@@ -1212,7 +1296,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     def build(self) -> 'AgeStructuredPopulation':
         """Build and return the configured AgeStructuredPopulation.
 
-        Notes:
+        Note:
             PopulationConfig is immutable after population creation.
             Fitness must be set during build phase via this method.
             Required configuration like initial_individual_count must be set.
@@ -1310,24 +1394,17 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     for genotype in matched_genotypes:
                         genotype_idx = pop.index_registry.genotype_to_index[genotype]
                         target_age = pop.new_adult_age - 1
-
-                        if isinstance(values, dict):
-                            # Per-sex values: {'female': 1.0, 'male': 0.9}
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.viability_fitness[sex_idx, target_age, genotype_idx]
-                                    val *= current
-                                pop.config.set_viability_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            # Single value for both sexes
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.viability_fitness[sex_idx, target_age, genotype_idx]
-                                    val *= current
-                                pop.config.set_viability_fitness(sex_idx, genotype_idx, val)
+                        viability_updates = self._iter_viability_updates(
+                            values=values,
+                            n_ages=self.n_ages,
+                            default_age=target_age,
+                        )
+                        for sex_idx, age_idx, raw_val in viability_updates:
+                            val = raw_val
+                            if is_multiply:
+                                current = pop.config.viability_fitness[sex_idx, age_idx, genotype_idx]
+                                val *= current
+                            pop.config.set_viability_fitness(sex_idx, genotype_idx, val, age=age_idx)
 
             elif method_name == 'fecundity':
                 fecundity_map = cast(FecundityMap, args[0])
@@ -1386,7 +1463,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
     For populations with discrete, non-overlapping generations.
 
-    Notes:
+    Note:
         This builder fixes ``n_ages=2`` and ``new_adult_age=1``.
         In discrete kernels, juvenile competition strength is computed from
         total age-0 abundance directly.
@@ -1766,23 +1843,19 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
                     for genotype in matched_genotypes:
                         genotype_idx = pop.index_registry.genotype_to_index[genotype]
-                        target_age = 0 # Discrete generation only has age 0 selection
-
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.viability_fitness[sex_idx, target_age, genotype_idx]
-                                    val *= current
-                                pop.config.set_viability_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.viability_fitness[sex_idx, target_age, genotype_idx]
-                                    val *= current
-                                pop.config.set_viability_fitness(sex_idx, genotype_idx, val)
+                        new_adult_age = 1
+                        target_age = new_adult_age - 1
+                        viability_updates = self._iter_viability_updates(
+                            values=values,
+                            n_ages=2,
+                            default_age=target_age,
+                        )
+                        for sex_idx, age_idx, raw_val in viability_updates:
+                            val = raw_val
+                            if is_multiply:
+                                current = pop.config.viability_fitness[sex_idx, age_idx, genotype_idx]
+                                val *= current
+                            pop.config.set_viability_fitness(sex_idx, genotype_idx, val, age=age_idx)
 
             elif method_name == 'fecundity':
                 fecundity_map = cast(FecundityMap, args[0])

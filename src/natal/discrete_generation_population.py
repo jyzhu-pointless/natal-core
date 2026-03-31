@@ -133,7 +133,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Returns:
             A configured ``DiscreteGenerationPopulationBuilder`` for fluent chaining.
 
-        Example:
+        Examples:
             ``DiscreteGenerationPopulation.setup(species).initial_state(...).build()``
         """
         from natal.population_builder import DiscreteGenerationPopulationBuilder
@@ -153,11 +153,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     ) -> Tuple[float, float]:
         """Resolve user-provided initial data into (age0, age1).
 
-        Rules:
-        - scalar x -> (0, x)
-        - [x] -> (0, x)
-        - [x0, x1] -> (x0, x1)
-        - {0: x0, 1: x1} -> (x0, x1), missing keys default to 0
+        Rules include:
+            - scalar x -> (0, x)
+            - [x] -> (0, x)
+            - [x0, x1] -> (x0, x1)
+            - {0: x0, 1: x1} -> (x0, x1), missing keys default to 0
         """
         if isinstance(age_data, (int, float)):
             return 0.0, float(age_data)

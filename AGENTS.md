@@ -20,6 +20,8 @@ For code changes, run and pass all of the following:
 - pyright
 - ruff check src demos
 
+After those commands complete, review `docs/` for any needed documentation updates and apply them before finalizing the change.
+
 If API exports changed, also run:
 - python scripts/generate_init_pyi.py
 

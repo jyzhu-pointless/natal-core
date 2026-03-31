@@ -396,7 +396,7 @@ individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_geno
 female_count_of_gt = individual_count[1, :, gt_idx]  # 某基因型所有年龄的雌性数量
 ```
 
-> 更多关于 IndexRegistry 的细节，见 [IndexRegistry 索引机制](05_index_registry.md)
+> 更多关于 IndexRegistry 的细节，见 [IndexRegistry 索引机制](04_index_registry.md)
 
 ## 常见操作速查
 
@@ -474,10 +474,10 @@ alleles_at_locus = gt.get_alleles_at_locus(locus)  # (mat_gene, pat_gene)
 ## 📚 相关章节
 
 - [快速开始：15 分钟上手 NATAL](01_quickstart.md) - 基本使用示例
-- [Simulation Kernels 深度解析](03_simulation_kernels.md) - 遗传学实体在计算中的应用
-- [IndexRegistry 索引机制](05_index_registry.md) - 对象索引的详细机制
-- [Modifier 机制](06_modifiers.md) - 如何基于 Genotype 定义遗传规则
+- [Builder 系统详解](03_builder_system.md) - 从 Species 到可运行种群的链式构建
+- [IndexRegistry 索引机制](04_index_registry.md) - 对象索引的详细机制
+- [Modifier 机制](08_modifiers.md) - 如何基于 Genotype 定义遗传规则
 
 ---
 
-**准备好深入数值计算了吗？** [前往下一章：Simulation Kernels 深度解析 →](03_simulation_kernels.md)
+**准备开始构建种群了吗？** [前往下一章：Builder 系统详解 →](03_builder_system.md)

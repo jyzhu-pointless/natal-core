@@ -1,27 +1,25 @@
-"""
-genetic_entities
-================
-Defines mutable biological entities bound to genetic structures.
+"""Defines mutable biological entities bound to genetic structures.
 
-Responsibilities
-----------------
-- Represent concrete instances such as genes, haplotypes, haploid genomes, and genotypes.
-- Maintain references to their corresponding genetic structures for architectural context.
-- Enforce consistency by validating against the connected structure during creation.
-- **Auto-register** themselves with the structure upon creation ("register upon creation").
+This module defines concrete biological entities such as genes, haplotypes,
+haploid genomes, and genotypes that are bound to genetic structures.
 
-Design Notes
-------------
-- Runtime dependency on `genetic_structures` for architecture definitions.
-- Entities should not modify their bound structures.
-- Entity must be bound to a Structure (mandatory binding rule).
+This module is responsible for:
 
-Naming Conventions
-------------------
-- Gene (Allele): A specific allele at a locus
-- Haplotype: Genes on a single chromosome (one per Chromosome structure)
-- HaploidGenotype (HaploidGenome): Complete set of haplotypes from one parent
-- Genotype (Genome, DiploidGenome): Two HaploidGenotypes (maternal + paternal)
+- Representing concrete instances such as genes, haplotypes, haploid genomes, and genotypes
+- Maintaining references to their corresponding genetic structures for architectural context
+- Enforcing consistency by validating against the connected structure during creation
+- **Auto-registering** themselves with the structure upon creation ("register upon creation")
+
+Note:
+    - Runtime dependency on `genetic_structures` for architecture definitions
+    - Entities should not modify their bound structures
+    - Entity must be bound to a Structure (mandatory binding rule)
+
+Naming Conventions:
+    - Gene (Allele): A specific allele at a locus
+    - Haplotype: Genes on a single chromosome (one per Chromosome structure)
+    - HaploidGenotype (HaploidGenome): Complete set of haplotypes from one parent
+    - Genotype (Genome, DiploidGenome): Two HaploidGenotypes (maternal + paternal)
 """
 
 from __future__ import annotations
@@ -55,11 +53,11 @@ class GeneticEntity(Generic[S]):
     2. Entity auto-registers with Structure upon creation ("register upon creation")
     3. Entity with same name under same Structure returns the same instance (singleton per structure+name)
 
-    Example:
-        >>> gene = Gene("A1", locus=locus_A)  # ✅ Required locus
-        >>> assert gene in locus_A.all_entities  # ✅ Auto-registered
-        >>> gene2 = Gene("A1", locus=locus_A)  # ✅ Returns same instance
-        >>> assert gene is gene2
+    Examples:
+            gene = Gene("A1", locus=locus_A)  # ✅ Required locus
+            assert gene in locus_A.all_entities  # ✅ Auto-registered
+            gene2 = Gene("A1", locus=locus_A)  # ✅ Returns same instance
+            assert gene is gene2
     """
     structure_type: type[GeneticStructure[Any]] = GeneticStructure  # Override in subclass
     # Cache: {(species_id, structure_type, structure_name, entity_class, entity_name): entity_instance}
@@ -206,16 +204,21 @@ class Gene(GeneticEntity[Locus]):
     """
     Represents a single allele at a genetic locus.
 
-    A Gene must be bound to a Locus and is automatically registered
-    upon creation. Same name under same Locus returns the same instance.
+    A `Gene` must be bound to a `Locus` and is automatically registered
+    upon creation. Same name under same `Locus` returns the same instance.
+    (Alias: `Allele`)
 
-    Aliases: Allele
+    Attributes:
+        name: The name of the gene.
+        locus: The `Locus` structure the gene is bound to.
 
-    Basic usage:
-        >>> locus = Locus("A")
-        >>> gene1 = Gene("A1", locus=locus)  # ✅ Auto-registered
-        >>> gene2 = Gene("A1", locus=locus)  # ✅ Returns same instance
-        >>> assert gene1 is gene2  # ✅ Same instance
+    Examples:
+        ```python
+        locus = Locus("A")
+        gene1 = Gene("A1", locus=locus)  # ✅ Auto-registered
+        gene2 = Gene("A1", locus=locus)  # ✅ Returns same instance
+        assert gene1 is gene2  # ✅ Same instance
+        ```
     """
     structure_type = Locus  # Gene must be bound to a Locus
 
@@ -687,7 +690,7 @@ class Genotype:
             Dict mapping HaploidGenotype instances to their theoretical frequencies.
             All frequencies sum to 1.0.
 
-        Example:
+        Examples:
             >>> # Get Mendelian gamete frequencies
             >>> gametes = genotype.produce_gametes()
             >>> sum(gametes.values())  # → 1.0
@@ -932,7 +935,7 @@ def compute_recombinant_haplotypes(
                             0=maternal allele at that locus, 1=paternal allele
         frequencies: Shape (2^(n_loci-1),). Frequency of each pattern.
 
-    Example:
+    Examples:
         >>> n_loci = 3
         >>> recomb_rates = np.array([0.1, 0.2])  # rate between 0-1 and 1-2
         >>> patterns, freqs = compute_recombinant_haplotypes(n_loci, recomb_rates, True)

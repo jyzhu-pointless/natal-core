@@ -16,7 +16,7 @@ CHINESE_TO_ENGLISH = {
     # Docstring sections
     "参数": "Args",
     "返回": "Returns",
-    "示例": "Example",
+    "示例": "Examples",
     "描述": "Description",
     "默认": "Default",
     "类型": "Type",
@@ -144,7 +144,7 @@ def standardize_docstring_format(docstring: str) -> str:
         # Standardize section headers
         line = re.sub(r'^参数\s*:$', 'Args:', line)
         line = re.sub(r'^返回\s*:$', 'Returns:', line)
-        line = re.sub(r'^示例\s*:$', 'Example:', line)
+        line = re.sub(r'^示例\s*:$', 'Examples:', line)
         line = re.sub(r'^注意\s*:$', 'Note:', line)
         line = re.sub(r'^警告\s*:$', 'Warning:', line)
 

@@ -1,18 +1,10 @@
 # Samplers：观察过滤系统
 
-::: warning
+::: warnings
 此模块目前位于 NATAL Inferencer，预计后续才会迁移至 NATAL Core。
 :::
 
 本章介绍 `samplers.observation` 模块，用于从种群状态中提取和聚合数据。这是进行数据同化 (PMCMC) 和统计推断的关键组件。
-
-## 目录
-
-- [核心概念](#核心概念)
-- [ObservationFilter API](#observationfilter-api)
-- [构建过滤规则](#构建过滤规则)
-- [应用规则](#应用规则)
-- [实际例子](#实际例子)
 
 ---
 
@@ -47,7 +39,7 @@
 ### 构造函数
 
 ```python
-from samplers.observation import ObservationFilter
+from natal.observation import ObservationFilter
 from natal.index_registry import IndexRegistry
 
 # 创建过滤器
@@ -212,7 +204,7 @@ rule, labels = filter.build_filter(pop, groups=groups)
 ### 示例 1：简单性别分组
 
 ```python
-from samplers.observation import ObservationFilter
+from natal.observation import ObservationFilter
 
 filter = ObservationFilter(pop.registry)
 
@@ -294,7 +286,7 @@ rule, labels = filter.build_filter(
 ### apply_rule 函数
 
 ```python
-from samplers.observation import apply_rule
+from natal.observation import apply_rule
 import numpy as np
 
 # 从规则 rule 和个体计数数组得到观察值
@@ -320,7 +312,7 @@ observed = apply_rule(pop.state.individual_count, rule)
 ### 完整工作流
 
 ```python
-from samplers.observation import ObservationFilter, apply_rule
+from natal.observation import ObservationFilter, apply_rule
 
 # 1. 创建过滤器
 filter = ObservationFilter(pop.registry)
@@ -356,7 +348,7 @@ observations = np.array(observations)  # shape: (100, 2, 2, 8)
 ### 例子 1：基因驱动扩散监测
 
 ```python
-from samplers.observation import ObservationFilter, apply_rule
+from natal.observation import ObservationFilter, apply_rule
 import numpy as np
 
 pop = AgeStructuredPopulation(
@@ -388,14 +380,14 @@ drive_freq = []
 for t in range(100):
     pop.step()
     observed = apply_rule(pop.state.individual_count, rule)
-    
+
     # observed shape: (3, 2)
     # 计算驱动等位基因频率
     het_count = observed[1].sum()  # 杂合体
     hom_count = observed[2].sum()  # 纯合体
     total_alleles = 2 * observed[0].sum() + het_count + 2 * hom_count
     drive_alleles = het_count + 2 * hom_count
-    
+
     drive_freq.append(drive_alleles / max(1, total_alleles))
     times.append(t)
 
@@ -424,12 +416,12 @@ rule, labels = filter.build_filter(pop, groups=groups)
 for t in range(100):
     pop.step()
     observed = apply_rule(pop.state.individual_count, rule)
-    
+
     # observed shape: (4, 2)
     # observed[0] = juvenile_WT females & males
     # observed[1] = juvenile_Drive females & males
     # ...
-    
+
     print(f"t={t}: juveniles={observed[:2].sum():.0f}, "
           f"adults={observed[2:].sum():.0f}")
 ```
@@ -437,7 +429,7 @@ for t in range(100):
 ### 例子 3：PMCMC 似然计算
 
 ```python
-from samplers.observation import ObservationFilter, apply_rule
+from natal.observation import ObservationFilter, apply_rule
 from scipy.stats import poisson
 
 # 假设我们有实际数据 observed_data
@@ -460,15 +452,15 @@ rule, labels = filter.build_filter(pop, groups=groups, collapse_age=True)
 log_likelihood = 0.0
 for t, data_t in enumerate(observed_data):
     pop.step()
-    
+
     # 获取模拟的观察值
     simulated = apply_rule(pop.state.individual_count, rule)
     # simulated shape: (2, 2) - 2 groups, 2 sexes
-    
+
     # 对每性别求和
     sim_females = simulated[0, 0] + simulated[1, 0]  # females
     sim_males = simulated[0, 1] + simulated[1, 1]    # males
-    
+
     # Poisson 似然
     log_likelihood += (
         poisson.logpmf(data_t[0], sim_females) +
@@ -629,10 +621,10 @@ groups = {"old": {"age": [6, 7]}}
 
 ## 下一步
 
-- [API 完整参考](09_api_reference.md) - 查看完整的方法签名
-- [Hook 系统](07_hooks.md) - 在 Hook 中应用观察过滤
-- [Numba 优化](08_numba_optimization.md) - 性能调优
+- [API 入口](api/genetic_structures.md) - 查看完整的方法签名
+- [Hook 系统](09_hooks.md) - 在 Hook 中应用观察过滤
+- [Numba 优化](07_numba_optimization.md) - 性能调优
 
 ---
 
-**返回到目录**: [完整文档索引](README.md)
+**返回到目录**: [完整文档索引](index.md)

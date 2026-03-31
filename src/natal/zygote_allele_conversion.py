@@ -1,25 +1,24 @@
-# ============================================================================
-# ZYGOTE ALLELE CONVERSION SYSTEM
-# ============================================================================
-# A generic system for defining genotype transformations at the zygote level.
-# This supports two flavours of rules:
-#
-# 1. Genotype-level (ZygoteGenotypeConversionRule):
-#      match a whole diploid genotype and replace it with another.
-#      convert(genotype_match=gt_AA, to_genotype=gt_Aa, rate=0.8)
-#
-# 2. Allele-level (ZygoteAlleleConversionRule):
-#      replace a single allele inside the diploid genotype.
-#      convert(from_allele="A", to_allele="B", rate=0.5, side="both")
-#
-# Both create a ZygoteModifier that modifies gametes_to_zygote_map after
-# fertilization.
-#
-# Typical use cases:
-#   - Maternal-effect lethality (certain maternal genotypes kill offspring)
-#   - Incompatibility systems (certain gamete combinations produce non-viable zygotes)
-#   - Post-zygotic gene conversion (somatic conversion in early embryo)
-#   - Cas9/gRNA-mediated cleavage + repair in the zygote
+"""Zygote allele conversion system.
+
+This module provides a generic system for defining genotype transformations at the zygote level.
+It supports two flavors of rules:
+
+1. Genotype-level (ZygoteGenotypeConversionRule):
+   Match a whole diploid genotype and replace it with another.
+   Examples: convert(genotype_match=gt_AA, to_genotype=gt_Aa, rate=0.8)
+
+2. Allele-level (ZygoteAlleleConversionRule):
+   Replace a single allele inside the diploid genotype.
+   Examples: convert(from_allele="A", to_allele="B", rate=0.5, side="both")
+
+Both create a ZygoteModifier that modifies gametes_to_zygote_map after fertilization.
+
+Typical use cases:
+- Maternal-effect lethality (certain maternal genotypes kill offspring)
+- Incompatibility systems (certain gamete combinations produce non-viable zygotes)
+- Post-zygotic gene conversion (somatic conversion in early embryo)
+- Cas9/gRNA-mediated cleavage + repair in the zygote
+"""
 
 from typing import (
     TYPE_CHECKING,
@@ -77,7 +76,7 @@ class ZygoteGenotypeConversionRule:
     The ``genotype_match`` predicate operates on the Genotype that would
     normally result from fertilization *before* the modifier is applied.
 
-    Example::
+    Examples:
 
         # Whenever the zygote would be AA, convert to Aa with 80% probability
         rule = ZygoteGenotypeConversionRule(
@@ -175,7 +174,7 @@ class ZygoteAlleleConversionRule:
     * ``"both"`` — both sides independently (can produce up to 4 outcome
       genotypes for a double-heterozygote).
 
-    Example::
+    Examples:
 
         # In the zygote, convert allele W→D on both sides with 95% each
         rule = ZygoteAlleleConversionRule("W", "D", rate=0.95, side="both")
@@ -250,7 +249,7 @@ class ZygoteConversionRuleSet:
     evaluated in insertion order; the first matching rule wins for each
     ``(c1, c2)`` pair.
 
-    Example::
+    Examples:
 
         ruleset = ZygoteConversionRuleSet()
         # genotype-level

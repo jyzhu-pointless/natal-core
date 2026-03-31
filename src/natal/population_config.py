@@ -759,7 +759,7 @@ def extract_gamete_frequencies(
         Dictionary mapping HaploidGenotype -> aggregated frequency across all glabs.
         Only includes haplotype types with non-zero frequency.
 
-    Example:
+    Examples:
         >>> config = population._config
         >>> hg_list = population._get_all_possible_haploid_genotypes()
         >>> freqs = extract_gamete_frequencies(
@@ -809,7 +809,7 @@ def extract_gamete_frequencies_by_glab(
         Dictionary mapping (HaploidGenotype, glab_idx) -> frequency.
         Only includes entries with non-zero frequency.
 
-    Example:
+    Examples:
         >>> freqs = extract_gamete_frequencies_by_glab(
         ...     config.genotype_to_gametes_map, 0, 5, hg_list, n_glabs=2
         ... )
@@ -851,7 +851,7 @@ def extract_zygote_frequencies(
         Dictionary mapping Genotype -> frequency. Only includes genotypes with
         non-zero frequency.
 
-    Example:
+    Examples:
         >>> config = population._config
         >>> genotypes = list(population._genotypes)
         >>> zygote_freqs = extract_zygote_frequencies(

@@ -1,19 +1,18 @@
-# ============================================================================
-# GAMETE ALLELE CONVERSION SYSTEM
-# ============================================================================
-# A generic system for defining transformations at the gamete level.
-# This supports two flavours of rules:
-#
-# 1. Allele-level (GameteAlleleConversionRule):
-#      replace a single allele inside a HaploidGenotype.
-#      convert(from_allele="A", to_allele="B", rate=0.5)
-#
-# 2. HaploidGenotype-level (GameteHaploidGenomeConversionRule):
-#      match a whole HaploidGenotype and replace it with another.
-#      convert(hg_match=hg_AB, to_haploid_genotype=hg_CD, rate=0.8)
-#
-# Both create a GameteModifier that modifies genotype_to_gametes_map
-# during gamete production.
+"""Gamete allele conversion system.
+
+This module provides a generic system for defining transformations at the gamete level.
+It supports two flavors of rules:
+
+1. Allele-level (GameteAlleleConversionRule):
+   Replace a single allele inside a HaploidGenotype.
+   Examples: convert(from_allele="A", to_allele="B", rate=0.5)
+
+2. HaploidGenotype-level (GameteHaploidGenomeConversionRule):
+   Match a whole HaploidGenotype and replace it with another.
+   Examples: convert(hg_match=hg_AB, to_haploid_genotype=hg_CD, rate=0.8)
+
+Both create a GameteModifier that modifies genotype_to_gametes_map during gamete production.
+"""
 
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -58,7 +57,7 @@ class GameteHaploidGenomeConversionRule:
     this rule matches an entire ``HaploidGenotype`` and replaces it with
     another ``HaploidGenotype`` (or a dynamically computed one).
 
-    Example::
+    Examples:
 
         # Replace haploid genome hg_AB with hg_CD at 80 % probability
         rule = GameteHaploidGenomeConversionRule(
@@ -176,7 +175,7 @@ class GameteAlleleConversionRule:
       - conversion probability (rate)
       - optional context constraints (sex, genotype filters)
 
-    Example:
+    Examples:
         rule = GameteAlleleConversionRule(from_allele="A", to_allele="B", rate=0.5)
         # In heterozygotes carrying A, 50% of gametes convert A -> B
     """
@@ -224,7 +223,7 @@ class GameteAlleleConversionRule:
         self.from_allele = from_allele
         self.to_allele = to_allele
         self.rate = rate
-        self.name = name or f"{self.from_allele_str}→{self.to_allele_str}({sex_filter or 'both'})"
+        self.name = name or f"{self.from_allele_str}â†’{self.to_allele_str}({sex_filter or 'both'})"
         if sex_filter is None:
             self.sex_filter = "both"
         else:
@@ -616,7 +615,7 @@ def _convert_haploid_genotype(
         haploid_genome: The haploid genome to potentially convert.
         from_allele: Name of the source allele to look for.
         to_allele: Name of the target allele to substitute.
-        conversion_rate: Probability of successful conversion (0–1).
+        conversion_rate: Probability of successful conversion (0â€“1).
 
     Returns:
         ``None`` if *from_allele* is not present in the genome, otherwise
@@ -631,7 +630,7 @@ def _convert_haploid_genotype(
             if gene.name != from_allele:
                 continue
 
-            # Found the source allele — look up target Gene at the same Locus
+            # Found the source allele â€” look up target Gene at the same Locus
             locus = gene.locus
             target_gene = None
             for registered_gene in locus.all_entities:

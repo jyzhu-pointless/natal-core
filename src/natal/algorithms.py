@@ -235,15 +235,13 @@ def sample_mating(
     Returns:
         Updated sperm storage array with shape (A, g, g) containing mated female allocations
 
-    Invariants:
+    Note:
         - `S[a, gf, :]` is interpreted as a partition of *mated* females of
           (age=a, female_genotype=gf) by male genotype.
         - Virgins are represented implicitly as:
           `virgins = female_count[a, gf] - sum_gm(S[a, gf, gm])`
         - To preserve this meaning, this function rebuilds adult rows each tick
           from current mating outcomes, rather than blending with previous rows.
-
-    Formula change:
         - Previous implementation used a single scalar mating rate for all
           adult ages. Now we use age-specific female mating rates:
           `p_mating(age) = female_mating_rates_by_age[age]`.
@@ -994,7 +992,7 @@ def sample_viability_with_sperm_storage(
     Returns:
         Tuple[female_new, male_new, sperm_store_new]
 
-    Notes:
+    Note:
         - This legacy path mirrors `sample_survival_with_sperm_storage`.
         - Negative `n_virgins_raw` is treated as invalid state and raises.
     """

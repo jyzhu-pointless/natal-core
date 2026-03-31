@@ -1,19 +1,17 @@
-"""
-genetic_structures
-==================
-Defines the immutable genetic architecture of the simulation.
+"""Defines the immutable genetic architecture of the simulation.
 
-Responsibilities
-----------------
-- Represent static, model-level genetic elements (loci, chromosomes, speciess).
-- Store configuration and rules such as locus order, recombination rates, and chromosome IDs.
-- Serve as the authoritative blueprint for creating and validating genetic entities.
-- Optionally track bound entities via internal registration mechanisms.
+This module defines static, model-level genetic elements (loci, chromosomes, species)
+that serve as the authoritative blueprint for creating and validating genetic entities.
 
-Design Notes
-------------
-- No runtime dependency on `genetic_entities` to avoid circular imports.
-- Modifications to a structure after binding entities are discouraged.
+This module is responsible for:
+- Representing static, model-level genetic elements (loci, chromosomes, species)
+- Storing configuration and rules such as locus order, recombination rates, and chromosome IDs
+- Serving as the authoritative blueprint for creating and validating genetic entities
+- Optionally tracking bound entities via internal registration mechanisms
+
+Note:
+- No runtime dependency on `genetic_entities` to avoid circular imports
+- Modifications to a structure after binding entities are discouraged
 """
 
 from __future__ import annotations
@@ -505,7 +503,7 @@ class GeneticStructure(Generic[E]):
     Structure uniqueness is now scoped to a Species, not globally.
     Within the same Species, structures of the same type must have unique names.
 
-    Example:
+    Examples:
         >>> species1 = Species("Species1")
         >>> locus1 = Locus("A", species=species1)
         >>> locus2 = Locus("A", species=species1)
@@ -721,7 +719,7 @@ class GeneticStructure(Generic[E]):
         Returns:
             Single child structure or list of child structures.
 
-        Example:
+        Examples:
             >>> linkage.add("LocusA", location=100)  # Single child
             >>> linkage.add(["LocusA", "LocusB"])    # Multiple children
             >>> linkage.add([("LocusA", {"location": 100}), ("LocusB", {"location": 200})])
@@ -762,7 +760,7 @@ class GeneticStructure(Generic[E]):
                 - GeneticStructure: Child instance to remove
                 - List: List of names or instances to remove
 
-        Example:
+        Examples:
             >>> linkage.remove("LocusA")           # Remove by name
             >>> linkage.remove(locus_a)            # Remove by instance
             >>> linkage.remove(["LocusA", "LocusB"])  # Remove multiple
@@ -1033,7 +1031,7 @@ class Locus(GeneticStructure['Gene']):
         Returns:
             Locus instance with registered alleles.
 
-        Example:
+        Examples:
             >>> locus = Locus.with_alleles("A", ["A1", "A2", "A3"])
             >>> locus.alleles  # -> [Gene("A1"), Gene("A2"), Gene("A3")]
         """
@@ -1059,7 +1057,7 @@ class Chromosome(GeneticStructure['Haplotype']):
             - 'Z': Z chromosome in ZW system
             - 'W': W chromosome in ZW system (maternal only)
 
-    Example:
+    Examples:
         >>> chr_x = Chromosome('X', sex_type='X')
         >>> chr_y = Chromosome('Y', sex_type='Y')
         >>> print(chr_x.is_sex_chromosome)  # True
@@ -1407,7 +1405,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         For n loci, the map has n-1 entries where entry i is the recombination
         rate between locus i and locus i+1 (in sorted order by position).
 
-        Example:
+        Examples:
             For loci [A, B, C, D], the map is [r(A,B), r(B,C), r(C,D)]
             where index i = rate between locus i and locus i+1.
         """
@@ -1555,7 +1553,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 KeyError: If the specifier does not correspond to a registered locus,
                     or if a pair of specifiers does not represent adjacent loci.
 
-            Warning:
+            Note:
                 Modifying recombination rates after `Genotype.produce_gametes()`
                 has been called will **not** invalidate the gamete cache. You must
                 manually clear the cache: `genotype._gamete_cache = None`.
@@ -1856,10 +1854,10 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         Automatically infer valid sex chromosome genotype combinations from Chromosome.sex_type.
 
-        Rules:
-        - XY system: X can come from either parent, Y is paternal only
+        Rules include:
+            - XY system: X can come from either parent, Y is paternal only
                     -> Valid combinations: (X, X), (X, Y)
-        - ZW system: Z can come from either parent, W is maternal only
+            - ZW system: Z can come from either parent, W is maternal only
                     -> Valid combinations: (Z, Z), (W, Z)
 
         Returns:
@@ -2003,7 +2001,7 @@ class Species(GeneticStructure['HaploidGenome']):
         Returns:
             Species instance with all Chromosomes and Loci created.
 
-        Example:
+        Examples:
             >>> # Simple: just loci names
             >>> species = Species.from_dict('Species', {
             ...     'Chr1': ['LocusA', 'LocusB'],
@@ -2212,7 +2210,7 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         Create or retrieve a HaploidGenome from a string representation.
 
-        Syntax:
+        Supported syntax includes:
             - Semicolon (;) separates different chromosomes
             - Slash (/) separates genes within a chromosome
             - If all genes are single characters, slash can be omitted
@@ -2223,7 +2221,7 @@ class Species(GeneticStructure['HaploidGenome']):
         Returns:
             HaploidGenome instance
 
-        Example:
+        Examples:
             >>> species = Species.from_dict("Test", {
             ...     "Chr1": {"A": ["A", "a"], "B": ["B", "b"], "C": ["C", "c"]},
             ...     "Chr2": {"X": ["X", "x"], "Y": ["Y", "y"]}
@@ -2289,7 +2287,7 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         Create or retrieve a Genotype from a string representation.
 
-        Syntax:
+        Supported syntax includes:
             - Pipe (|) separates maternal (left) and paternal (right) haploid genomes
             - Semicolon (;) separates different chromosomes
             - Slash (/) separates genes within a chromosome
@@ -2379,7 +2377,7 @@ class Species(GeneticStructure['HaploidGenome']):
     ) -> List[Genotype]:
         """Resolve a single genotype selector atom.
 
-        Supports:
+        Supported forms include:
             - Genotype object: exact match
             - String exact genotype syntax
             - String genotype pattern syntax
@@ -3036,7 +3034,7 @@ class Species(GeneticStructure['HaploidGenome']):
         Yields:
             HaploidGenome instances
 
-        Example:
+        Examples:
             >>> for hg in species.iter_haploid_genotypes():
             ...     print(hg)
         """
@@ -3208,7 +3206,7 @@ class Species(GeneticStructure['HaploidGenome']):
         Yields:
             Genotype instances.
 
-        Example:
+        Examples:
             >>> for gt in species.iter_genotypes():
             ...     print(gt)
         """
