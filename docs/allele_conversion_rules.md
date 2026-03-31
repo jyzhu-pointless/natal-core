@@ -151,10 +151,10 @@ ruleset.add_convert("W", "D", rate=0.8, sex_filter="male")
 - 把机制写成可执行规则。
 - 把规则绑定到 population。
 
-下一章会继续主线：**如何用模式匹配来精确描述和过滤基因型**，这是设计复杂 Preset 的关键基础。
+下一章会继续主线：**如何用 `genotype_filter` 把规则限制在你希望的人群上**。
 
 ---
 
 ## 下一章
 
-- [设计自己的 Preset（2）：模式匹配与可扩展配置](genotype_pattern_matching_design.md)
+- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter_implementation.md)
