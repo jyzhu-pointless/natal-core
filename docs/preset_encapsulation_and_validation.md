@@ -1,6 +1,12 @@
-# 设计自己的 Preset（3）：封装、验证与发布前检查
+# 设计自己的 Preset（4）：封装、验证与发布前检查
 
-本章继续主线，讲如何把前两章的规则与过滤逻辑封装为一个**可复用 Preset**。
+本章是"设计自己的 Preset"主线的最后一章。前三章你已经完成：
+
+1. 规则定义（Gamete 与 Zygote 转换）。
+2. 模式匹配与基因型描述。
+3. 规则生效范围的精细化控制。
+
+本章讲如何把这些内容封装为一个**可复用 Preset**、进行充分验证，最后发布。
 
 ## 1. 为什么要封装成 Preset
 
@@ -88,12 +94,23 @@ pop = (
 
 ## 7. 本章小结
 
-现在你已经能把规则设计变成可复用 Preset，并在 Builder 中稳定应用。
+恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 
-下一章将给出主线最后一步：**如何用模式匹配把 Preset 做成可扩展的规则模板**。
+1. 规则定义（Gamete 与 Zygote 转换）- 第 1 章。
+2. 模式匹配与基因型描述 - 第 2 章。
+3. 规则生效范围精细化（genotype_filter）- 第 3 章。
+4. Preset 工程化、验证与发布 - 第 4 章（本章）。
+
+你现在已掌握从"脑海中的生物学假设"到"稳定可复现的 Preset 组件"的完整闭环。这四个步骤足以应对绝大多数遗传驱动系统的模拟需求。
 
 ---
 
-## 下一章
+## 回顾与延伸
 
-- [设计自己的 Preset（4）：模式匹配与可扩展配置](genotype_pattern_matching_design.md)
+如果想回顾前面的内容或深化理解：
+
+- [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
+- [设计自己的 Preset（2）：模式匹配与可扩展配置](genotype_pattern_matching_design.md)
+- [设计自己的 Preset（3）：用 genotype_filter 控制规则生效范围](genotype_filter_implementation.md)
+- [遗传预设使用指南](genetic_presets.md) - 了解 NATAL 内置预设
+- [Samplers：观察过滤系统](samplers_observation.md) - 如何观察和分析模拟结果
