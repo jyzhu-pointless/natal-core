@@ -20,7 +20,7 @@ def my_filter(genotype):
     return True  # 或 False
 ```
 
-## 2. 主线示例：只在 W/D 杂合子中发生 W->D
+## 2. 主线示例：只在 W|D 杂合子中发生 W->D
 
 ```python
 from natal.gamete_allele_conversion import GameteConversionRuleSet
