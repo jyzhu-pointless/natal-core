@@ -4,160 +4,180 @@
 # Do not edit it manually; re-run the generator after changing public exports.
 
 from .age_structured_population import AgeStructuredPopulation
+
 from .discrete_generation_population import DiscreteGenerationPopulation
+
 from .gamete_allele_conversion import (
     GameteAlleleConversionRule,
-    GameteConversionRuleSet,
     GameteHaploidGenomeConversionRule,
+    GameteConversionRuleSet,
 )
+
 from .genetic_entities import (
-    Allele,
-    DiploidGenome,
-    DiploidGenotype,
     Gene,
-    Genome,
-    Genotype,
+    Allele,
+    Haplotype,
     HaploidGenome,
     HaploidGenotype,
-    Haplotype,
+    Genotype,
+    Genome,
+    DiploidGenotype,
+    DiploidGenome,
 )
-from .genetic_patterns import GenotypePatternParser
+
+from .genetic_patterns import GenotypePatternParser, GenotypeSelector
+
 from .genetic_presets import GeneticPreset, HomingDrive, apply_preset_to_population
+
 from .genetic_structures import (
+    Locus,
     Chromosome,
+    Linkage,
+    Species,
     GenomeTemplate,
     Karyotype,
-    Linkage,
-    Locus,
-    Species,
 )
+
 from .hook_dsl import (
+    OpType,
+    DemeSelector,
+    deme_selector_matches,
+    HookOp,
+    Op,
+    CompiledHookPlan,
+    CompiledHookDescriptor,
+    HookProgram,
+    HookExecutor,
+    execute_csr_event_arrays,
+    execute_csr_event_program,
+    execute_csr_event_program_with_state,
+    build_hook_program,
+    njit_switch,
+    noop_hook,
+    compile_combined_hook,
+    CompiledEventHooks,
+    hook,
+    compile_declarative_hook,
+    compile_selector_hook,
     COND_ALWAYS,
     COND_TICK_EQ,
+    COND_TICK_MOD,
     COND_TICK_GE,
     COND_TICK_GT,
     COND_TICK_LE,
     COND_TICK_LT,
-    COND_TICK_MOD,
-    EVENT_EARLY,
-    EVENT_FINISH,
     EVENT_FIRST,
-    EVENT_ID_MAP,
+    EVENT_EARLY,
     EVENT_LATE,
+    EVENT_FINISH,
     EVENT_NAMES,
+    EVENT_ID_MAP,
     RESULT_CONTINUE,
     RESULT_STOP,
-    CompiledEventHooks,
-    CompiledHookDescriptor,
-    CompiledHookPlan,
-    DemeSelector,
-    HookExecutor,
-    HookOp,
-    HookProgram,
-    Op,
-    OpType,
-    build_hook_program,
-    compile_combined_hook,
-    compile_declarative_hook,
-    compile_selector_hook,
-    deme_selector_matches,
-    execute_csr_event_arrays,
-    execute_csr_event_program,
-    execute_csr_event_program_with_state,
-    hook,
-    noop_hook,
 )
-from .numba_compat import binomial_2d, multinomial, multinomial_rows, set_numba_seed
+
+from .numba_compat import binomial_2d, multinomial_rows, multinomial, set_numba_seed
+
 from .numba_utils import (
-    NUMBA_CACHE_DIR,
     NUMBA_ENABLED,
-    NUMBA_LOG_ENABLED,
-    NUMBA_SIGNATURE_TRACE_ENABLED,
-    disable_numba,
-    disable_numba_log,
-    disable_numba_signature_trace,
-    enable_numba,
-    enable_numba_log,
-    enable_numba_signature_trace,
-    get_numba_cache_dir,
     is_numba_enabled,
+    enable_numba,
+    disable_numba,
+    NUMBA_LOG_ENABLED,
     is_numba_log_enabled,
+    enable_numba_log,
+    disable_numba_log,
+    NUMBA_SIGNATURE_TRACE_ENABLED,
     is_numba_signature_trace_enabled,
+    enable_numba_signature_trace,
+    disable_numba_signature_trace,
+    NUMBA_CACHE_DIR,
+    get_numba_cache_dir,
     njit_switch,
     numba_disabled,
     numba_enabled,
     with_numba_disabled,
     with_numba_enabled,
 )
+
 from .population_builder import (
     AgeStructuredPopulationBuilder,
     DiscreteGenerationPopulationBuilder,
 )
+
 from .population_config import (
-    BEVERTON_HOLT,
-    CONCAVE,
-    FIXED,
-    LINEAR,
-    LOGISTIC,
     NO_COMPETITION,
-    PlainPopulationConfig,
+    FIXED,
+    LOGISTIC,
+    LINEAR,
+    CONCAVE,
+    BEVERTON_HOLT,
     PopulationConfig,
     build_population_config,
+    PlainPopulationConfig,
+    to_plain_population_config,
+    from_plain_population_config,
     extract_gamete_frequencies,
     extract_gamete_frequencies_by_glab,
     extract_zygote_frequencies,
-    from_plain_population_config,
-    to_plain_population_config,
 )
+
 from .population_state import (
-    DiscretePopulationState,
-    PlainDiscretePopulationState,
-    PlainPopulationState,
     PopulationState,
-    from_plain_discrete_population_state,
-    from_plain_population_state,
-    parse_flattened_discrete_state,
-    parse_flattened_state,
-    to_plain_discrete_population_state,
+    DiscretePopulationState,
+    PlainPopulationState,
+    PlainDiscretePopulationState,
     to_plain_population_state,
+    to_plain_discrete_population_state,
+    from_plain_population_state,
+    from_plain_discrete_population_state,
+    parse_flattened_state,
+    parse_flattened_discrete_state,
 )
+
 from .simulation_kernels import (
     export_config,
-    export_state,
     import_config,
+    export_state,
     import_state,
-    run_aging,
-    run_discrete_aging,
-    run_discrete_reproduction,
-    run_discrete_survival,
     run_reproduction,
     run_survival,
+    run_aging,
+    run_discrete_reproduction,
+    run_discrete_survival,
+    run_discrete_aging,
 )
+
 from .spatial_population import SpatialPopulation
+
 from .spatial_simulation_kernels import (
+    run_spatial_tick,
+    run_spatial_tick_with_migration,
+    run_spatial_tick_with_adjacency_migration,
     apply_spatial_adjacency_migration,
-    run_spatial_aging,
-    run_spatial_migration,
     run_spatial_reproduction,
     run_spatial_survival,
-    run_spatial_tick,
-    run_spatial_tick_with_adjacency_migration,
-    run_spatial_tick_with_migration,
+    run_spatial_aging,
+    run_spatial_migration,
 )
+
 from .spatial_topology import (
     GridTopology,
-    HexGrid,
     SquareGrid,
+    HexGrid,
+    build_adjacency_matrix,
     apply_migration_adjacency,
     apply_migration_convolution,
-    build_adjacency_matrix,
 )
-from .type_def import Age, GameteLabel, Sex
+
+from .type_def import Sex, Age, GameteLabel
+
 from .visualization import get_allele_color, render_cell_svg
+
 from .zygote_allele_conversion import (
     ZygoteAlleleConversionRule,
-    ZygoteConversionRuleSet,
     ZygoteGenotypeConversionRule,
+    ZygoteConversionRuleSet,
 )
 
 __all__ = [
@@ -201,6 +221,7 @@ __all__ = [
     "GenomeTemplate",
     "Genotype",
     "GenotypePatternParser",
+    "GenotypeSelector",
     "GridTopology",
     "HaploidGenome",
     "HaploidGenotype",
@@ -275,6 +296,7 @@ __all__ = [
     "is_numba_signature_trace_enabled",
     "multinomial",
     "multinomial_rows",
+    "njit_switch",
     "njit_switch",
     "noop_hook",
     "numba_disabled",
