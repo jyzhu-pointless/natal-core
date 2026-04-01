@@ -7,13 +7,18 @@ Each deme is represented by one concrete ``BasePopulation`` subclass instance.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Callable, List, Optional, Tuple, cast
+from typing import Any, Callable, List, Literal, Optional, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
-from natal.spatial_topology import GridTopology, build_adjacency_matrix
+from natal.population_state import PopulationState
+from natal.spatial_topology import (
+    GridTopology,
+    apply_migration_convolution,
+    build_adjacency_matrix,
+)
 
 __all__ = ["SpatialPopulation"]
 
@@ -23,6 +28,21 @@ class SpatialPopulation:
 
     This class models spatial structure via composition: every deme is one
     already-initialized ``BasePopulation`` subclass instance.
+
+    Attributes:
+        name (str): Human-readable name for the spatial container.
+        demes (Sequence[BasePopulation[Any]]): Immutable view of managed demes.
+        n_demes (int): Number of demes in the spatial system.
+        species (Any): Shared species object used by all demes.
+        topology (GridTopology | None): Spatial topology used by the landscape.
+        adjacency (NDArray[np.float64]): Outbound migration matrix between demes
+            when migration mode is ``"adjacency"``.
+        migration_mode (Literal["adjacency", "kernel"]): Active migration backend.
+        migration_kernel (NDArray[np.float64] | None): Migration kernel used when
+            ``migration_mode`` is ``"kernel"``.
+        migration_rate (float): Fraction of each deme that participates in
+            migration on each tick.
+        tick (int): Current shared simulation tick across all demes.
     """
 
     def __init__(
@@ -31,9 +51,33 @@ class SpatialPopulation:
         *,
         topology: Optional[GridTopology] = None,
         adjacency: Optional[NDArray[np.float64]] = None,
+        migration_kernel: Optional[NDArray[np.float64]] = None,
+        kernel_include_center: bool = False,
         migration_rate: float = 0.0,
         name: str = "SpatialPopulation",
     ) -> None:
+        """Initialize a spatial population container from existing demes.
+
+        Args:
+            demes: Sequence of already-initialized deme populations.
+            topology: Optional grid topology used to derive adjacency when
+                ``adjacency`` is not provided.
+            adjacency: Optional explicit migration matrix with shape
+                ``(n_demes, n_demes)``.
+            migration_kernel: Optional odd-shaped 2D kernel used for topology-
+                aware migration. When provided, ``topology`` is required and
+                migration runs in kernel mode.
+            kernel_include_center: Whether kernel migration includes the kernel
+                center as an outbound target for the source deme.
+            migration_rate: Fraction of each deme that migrates each tick.
+            name: Human-readable container name.
+
+        Raises:
+            ValueError: If ``demes`` is empty, demes do not share the same
+                species object, topology size does not match the number of
+                demes, adjacency shape is invalid, migration kernel is invalid,
+                or deme ticks do not match.
+        """
         if not demes:
             raise ValueError("demes must contain at least one BasePopulation instance")
 
@@ -47,14 +91,23 @@ class SpatialPopulation:
                 )
 
         n_demes = len(self._demes)
+        if topology is not None and topology.n_demes != n_demes:
+            raise ValueError(
+                f"topology.n_demes ({topology.n_demes}) must match number of demes ({n_demes})"
+            )
+
+        migration_mode: Literal["adjacency", "kernel"] = "kernel" if migration_kernel is not None else "adjacency"
+        if migration_mode == "kernel":
+            if topology is None:
+                raise ValueError("topology is required when migration_kernel is provided")
+            migration_kernel = np.asarray(migration_kernel, dtype=np.float64)
+            if migration_kernel.ndim != 2 or migration_kernel.shape[0] % 2 == 0 or migration_kernel.shape[1] % 2 == 0:
+                raise ValueError("migration_kernel must be a 2D array with odd dimensions")
+
         if adjacency is None:
             if topology is None:
                 adjacency = np.eye(n_demes, dtype=np.float64)
             else:
-                if topology.n_demes != n_demes:
-                    raise ValueError(
-                        f"topology.n_demes ({topology.n_demes}) must match number of demes ({n_demes})"
-                    )
                 adjacency = build_adjacency_matrix(topology)
         else:
             adjacency = np.asarray(adjacency, dtype=np.float64)
@@ -67,6 +120,9 @@ class SpatialPopulation:
         self._name = name
         self._topology = topology
         self._adjacency = adjacency
+        self._migration_mode: Literal["adjacency", "kernel"] = migration_mode
+        self._migration_kernel = migration_kernel
+        self._kernel_include_center = bool(kernel_include_center)
         self._migration_rate = float(migration_rate)
         self._tick = int(self._demes[0].tick)
 
@@ -78,26 +134,47 @@ class SpatialPopulation:
 
     @property
     def name(self) -> str:
+        """str: Human-readable name for the spatial container."""
         return self._name
 
     @property
     def demes(self) -> Sequence[BasePopulation[Any]]:
+        """Sequence[BasePopulation[Any]]: Immutable view of all managed demes."""
         return tuple(self._demes)
 
     @property
     def n_demes(self) -> int:
+        """int: Number of demes in the spatial system."""
         return len(self._demes)
 
     @property
     def species(self) -> Any:
+        """Any: Shared species object used by all demes."""
         return self._demes[0].species
 
     @property
     def adjacency(self) -> NDArray[np.float64]:
+        """NDArray[np.float64]: Outbound migration matrix between demes."""
         return self._adjacency
 
     @property
+    def topology(self) -> GridTopology | None:
+        """GridTopology | None: Landscape topology used by the spatial model."""
+        return self._topology
+
+    @property
+    def migration_mode(self) -> Literal["adjacency", "kernel"]:
+        """Literal["adjacency", "kernel"]: Active migration backend."""
+        return self._migration_mode
+
+    @property
+    def migration_kernel(self) -> NDArray[np.float64] | None:
+        """NDArray[np.float64] | None: Kernel used by topology-aware migration."""
+        return self._migration_kernel
+
+    @property
     def migration_rate(self) -> float:
+        """float: Fraction of each deme that migrates on each tick."""
         return self._migration_rate
 
     @migration_rate.setter
@@ -105,13 +182,140 @@ class SpatialPopulation:
         self._migration_rate = float(value)
 
     def deme(self, idx: int) -> BasePopulation[Any]:
+        """Return one deme by positional index.
+
+        Args:
+            idx: Zero-based deme index.
+
+        Returns:
+            The deme population at ``idx``.
+        """
         return self._demes[idx]
 
     @property
     def tick(self) -> int:
+        """int: Shared simulation tick across all demes."""
         return self._tick
 
+    def get_total_count(self) -> int:
+        """Return the total count across all demes."""
+        return int(sum(deme.get_total_count() for deme in self._demes))
+
+    def get_female_count(self) -> int:
+        """Return the total female count across all demes."""
+        return int(sum(deme.get_female_count() for deme in self._demes))
+
+    def get_male_count(self) -> int:
+        """Return the total male count across all demes."""
+        return int(sum(deme.get_male_count() for deme in self._demes))
+
+    def aggregate_individual_count(self) -> NDArray[np.float64]:
+        """Return the total individual-count tensor summed over all demes."""
+        return np.sum(
+            np.stack([deme.state.individual_count for deme in self._demes], axis=0),
+            axis=0,
+        )
+
+    def aggregate_state(self) -> PopulationState:
+        """Build one aggregate state for global summaries across all demes."""
+        ind_all, sperm_all = self._stack_deme_state_arrays()
+        return PopulationState(
+            n_tick=int(self._tick),
+            individual_count=np.sum(ind_all, axis=0),
+            sperm_storage=np.sum(sperm_all, axis=0),
+        )
+
+    def compute_allele_frequencies(self) -> dict[str, float]:
+        """Compute allele frequencies from the aggregate multi-deme state."""
+        allele_counts: dict[str, float] = {}
+        locus_totals: dict[str, float] = {}
+        genotype_counts = self.aggregate_individual_count().sum(axis=(0, 1))
+        registry = self._demes[0].registry
+
+        for chromosome in self.species.chromosomes:
+            for locus in chromosome.loci:
+                locus_totals[locus.name] = 0.0
+                for gene in locus.alleles:
+                    allele_counts[gene.name] = 0.0
+
+        for genotype_idx, count in enumerate(genotype_counts):
+            if count <= 0:
+                continue
+            genotype = registry.index_to_genotype[genotype_idx]
+            for chromosome in self.species.chromosomes:
+                for locus in chromosome.loci:
+                    mat, pat = genotype.get_alleles_at_locus(locus)
+                    for allele in (mat, pat):
+                        if allele is not None:
+                            allele_counts[allele.name] += float(count)
+                            locus_totals[locus.name] += float(count)
+
+        frequencies: dict[str, float] = {}
+        for allele_name, count in allele_counts.items():
+            gene = self.species.gene_index.get(allele_name)
+            if gene is None:
+                frequencies[allele_name] = 0.0
+                continue
+            total = locus_totals[gene.locus.name]
+            frequencies[allele_name] = 0.0 if total <= 0.0 else count / total
+        return frequencies
+
+    def migration_row(self, source_idx: int) -> NDArray[np.float64]:
+        """Return normalized outbound migration weights for one source deme."""
+        if self._migration_mode == "adjacency":
+            return self._adjacency[source_idx].copy()
+
+        assert self._topology is not None, "topology is required for kernel migration"
+        assert self._migration_kernel is not None, "migration_kernel is required for kernel migration"
+
+        weights = np.zeros(self.n_demes, dtype=np.float64)
+        src_coord = self._topology.from_index(source_idx)
+        kernel = self._migration_kernel
+        kr = kernel.shape[0] // 2
+        kc = kernel.shape[1] // 2
+
+        for row in range(kernel.shape[0]):
+            for col in range(kernel.shape[1]):
+                if not self._kernel_include_center and row == kr and col == kc:
+                    continue
+                weight = float(kernel[row, col])
+                if weight <= 0.0:
+                    continue
+                mapped = self._topology.normalize_coord(
+                    src_coord[0] + row - kr,
+                    src_coord[1] + col - kc,
+                )
+                if mapped is None:
+                    continue
+                weights[self._topology.to_index(mapped)] += weight
+
+        total = float(weights.sum())
+        if total > 0.0:
+            weights /= total
+        return weights
+
+    def _apply_kernel_migration(
+        self,
+        ind_all: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Apply kernel-based migration to stacked individual counts."""
+        assert self._topology is not None, "topology is required for kernel migration"
+        assert self._migration_kernel is not None, "migration_kernel is required for kernel migration"
+        return apply_migration_convolution(
+            ind_all,
+            self._topology,
+            self._migration_kernel,
+            float(self._migration_rate),
+            include_center=self._kernel_include_center,
+        )
+
     def _stack_deme_state_arrays(self) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Stack per-deme state arrays along a new deme axis.
+
+        Returns:
+            A tuple ``(ind_all, sperm_all)`` where each array has deme as its
+            leading axis.
+        """
         ind_all = np.stack([deme.state.individual_count for deme in self._demes], axis=0)
 
         # Handle potential absence of sperm_storage (e.g. DiscreteGenerationPopulation)
@@ -128,6 +332,13 @@ class SpatialPopulation:
         return ind_all, sperm_all
 
     def _apply_stacked_state(self, ind_all: NDArray[np.float64], sperm_all: NDArray[np.float64], tick: int) -> None:
+        """Write one stacked spatial state back into each managed deme.
+
+        Args:
+            ind_all: Stacked individual-count array with deme as the first axis.
+            sperm_all: Stacked sperm-storage array with deme as the first axis.
+            tick: Tick value to assign to each deme and this container.
+        """
         for deme_id, deme in enumerate(self._demes):
             new_fields = {
                 "n_tick": int(tick),
@@ -144,6 +355,13 @@ class SpatialPopulation:
         """Return one shared config for spatial kernels.
 
         Current spatial kernel wrappers expect one config object for all demes.
+
+        Returns:
+            The shared exported config object used by every deme.
+
+        Raises:
+            TypeError: If a deme does not implement ``export_config``.
+            ValueError: If demes export different config objects.
         """
         export_fn = getattr(self._demes[0], "export_config", None)
         if not callable(export_fn):
@@ -160,7 +378,14 @@ class SpatialPopulation:
         return cfg
 
     def run_tick(self) -> SpatialPopulation:
-        """Run one spatial tick via generated spatial wrapper."""
+        """Run one spatial tick via the generated spatial wrapper.
+
+        Returns:
+            This spatial population instance after in-place state update.
+
+        Raises:
+            RuntimeError: If any deme has already finished.
+        """
         for idx, deme in enumerate(self._demes):
             if getattr(deme, "_finished", False):
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial tick")
@@ -174,6 +399,8 @@ class SpatialPopulation:
         config = self._shared_config()
         ind_all, sperm_all = self._stack_deme_state_arrays()
 
+        compiled_migration_rate = 0.0 if self._migration_mode == "kernel" else float(self._migration_rate)
+
         final_state_tuple, result = run_tick_fn(
             ind_all,
             sperm_all,
@@ -181,10 +408,14 @@ class SpatialPopulation:
             registry,
             int(self._tick),
             self._adjacency,
-            float(self._migration_rate),
+            compiled_migration_rate,
         )
 
-        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
+        ind_next = final_state_tuple[0]
+        if self._migration_mode == "kernel" and self._migration_rate > 0.0:
+            ind_next = self._apply_kernel_migration(ind_next)
+
+        self._apply_stacked_state(ind_next, final_state_tuple[1], int(final_state_tuple[2]))
 
         if int(result) != 0:
             for deme in self._demes:
@@ -198,13 +429,38 @@ class SpatialPopulation:
         record_every: int = 1,
         finish: bool = False,
     ) -> SpatialPopulation:
-        """Run multiple spatial ticks via generated spatial wrapper."""
+        """Run multiple spatial ticks via the generated spatial wrapper.
+
+        Args:
+            n_steps: Number of ticks to execute.
+            record_every: History recording interval forwarded to the compiled
+                spatial kernel.
+            finish: Whether to mark all demes finished when the run completes
+                without an early stop event.
+
+        Returns:
+            This spatial population instance after in-place state update.
+
+        Raises:
+            ValueError: If ``n_steps`` is negative.
+            RuntimeError: If any deme has already finished.
+        """
         if n_steps < 0:
             raise ValueError("n_steps must be >= 0")
 
         for idx, deme in enumerate(self._demes):
             if getattr(deme, "_finished", False):
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial simulation")
+
+        if self._migration_mode == "kernel":
+            for _ in range(n_steps):
+                if any(getattr(deme, "_finished", False) for deme in self._demes):
+                    break
+                self.run_tick()
+            if finish and not any(getattr(deme, "_finished", False) for deme in self._demes):
+                for deme in self._demes:
+                    deme.finish_simulation()
+            return self
 
         hooks = self._demes[0].get_compiled_event_hooks()
         assert hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"

@@ -1,5 +1,7 @@
 # Spatial 模拟指南
 
+<!-- TODO: 写得太抽象 -->
+
 本章面向建模用户，介绍如何在 NATAL 中组织空间结构模拟。
 
 阅读完成后，你应当能够：
@@ -68,6 +70,30 @@ spatial_pop.run_tick()
 spatial_pop.run(n_steps=50, record_every=10)
 ```
 
+如果希望使用基于卷积核的迁移，而不是显式构造整个邻接矩阵，也可以这样写：
+
+```python
+import numpy as np
+from natal.spatial_population import SpatialPopulation
+from natal.spatial_topology import SquareGrid
+
+grid = SquareGrid(rows=3, cols=3, neighborhood="von_neumann", wrap=False)
+
+spatial_pop = SpatialPopulation(
+    demes=demes,
+    topology=grid,
+    migration_kernel=np.array(
+        [
+            [0.05, 0.10, 0.05],
+            [0.10, 0.00, 0.10],
+            [0.05, 0.10, 0.05],
+        ],
+        dtype=float,
+    ),
+    migration_rate=0.2,
+)
+```
+
 ## 4. 运行语义
 
 ### 4.1 `run_tick()`
@@ -83,6 +109,23 @@ spatial_pop.run(n_steps=50, record_every=10)
 - 开发期先用 `run_tick()` 验证规则。
 - 实验期改用 `run(...)` 并设置合适 `record_every`。
 
+## 4.3 WebUI 调试
+
+Spatial 模型现在可以直接复用 `natal.ui.launch(...)` 启动专用 dashboard：
+
+```python
+from natal.ui import launch
+
+launch(spatial_pop, port=8080, title="Spatial Debug Dashboard")
+```
+
+当前 spatial dashboard 适合开发期调试，重点能力包括：
+
+- 查看 square / hex landscape
+- 查看全局 total population 与 allele frequency
+- 点击单个 deme，下钻观察该 deme 的状态
+- 查看当前选中 deme 的迁移权重
+
 ## 5. migration_rate 如何理解
 
 `migration_rate` 表示每步中参与跨 deme 流动的人口比例。
@@ -95,7 +138,270 @@ spatial_pop.run(n_steps=50, record_every=10)
 
 这通常是空间扩散速度与混合程度的关键参数。
 
-## 6. Hook 在 Spatial 中的使用
+## 6. 拓扑如何选
+
+NATAL 目前提供两类规则网格拓扑：
+
+1. `SquareGrid`
+2. `HexGrid`
+
+两者都可以配合 `wrap=True/False` 使用，但它们的几何含义不同。
+
+如果只想快速选型，可以先看下面这张表：
+
+| 拓扑 | 每个内部 deme 的典型邻居数 | 坐标复杂度 | 适合场景 |
+|---|---:|---|---|
+| `SquareGrid(von_neumann)` | 4 | 低 | 只关心上下左右扩散 |
+| `SquareGrid(moore)` | 8 | 低 | 希望把对角扩散也算作近邻 |
+| `HexGrid` | 6 | 中 | 希望邻居方向更均匀、各向同性更强 |
+
+可以先按一个简单经验选择：
+
+1. 只想快速建模，用 `SquareGrid`。
+2. 更在意六方向均匀扩散，用 `HexGrid`。
+
+### 6.1 SquareGrid：方格拓扑
+
+`SquareGrid` 比较直接，因为它的存储坐标 `(row, col)` 和几何直觉基本一致。
+
+常见邻域有两种：
+
+1. `von_neumann`
+   - 只连上下左右四个方向
+2. `moore`
+   - 连上下左右以及四个对角，总共八个方向
+
+可以粗略理解为：
+
+```text
+von_neumann           moore
+
+  ●                    ● ● ●
+● ○ ●                  ● ○ ●
+  ●                    ● ● ●
+```
+
+这里：
+
+- `○` 是当前 deme
+- `●` 是邻居
+
+对 `SquareGrid` 来说，几何并不复杂：
+
+- `(row, col)` 本身就足够表达邻接
+- 不需要像 HexGrid 那样再引入另一套计算坐标
+
+因此在阅读和调试上，`SquareGrid` 通常是更直接的起点。
+
+### 6.2 HexGrid：六边形拓扑
+
+`HexGrid` 的邻接更适合模拟“每个位置有六个近邻”的扩散系统。
+
+和 `SquareGrid` 相比，它的难点不在于邻居数量，而在于：
+
+- 六边形很难直接无失真地塞进规则矩形数组
+- 因此实现上需要区分“存储坐标”和“计算坐标”
+
+如果你觉得 `HexGrid` 看起来更复杂，原因基本都来自这一点：同一个 deme 需要同时用“好存储”的坐标和“好计算”的坐标来表达。
+
+### 6.3 HexGrid 的三层表示
+
+可以把 `HexGrid` 理解成三层表示协同工作。
+
+#### 6.3.1 Axial `(q, r)`：计算层
+
+- 这是六边形网格最自然的计算坐标之一。
+- 它不是普通直角网格，而是适配六边形邻接关系的斜坐标表示。
+- 在这个坐标系里，六个邻居方向始终固定为：
+  - `(1, 0)`
+  - `(1, -1)`
+  - `(0, -1)`
+  - `(-1, 0)`
+  - `(-1, 1)`
+  - `(0, 1)`
+
+因此：
+
+- 邻居查找适合在 axial 中做。
+- 路径、距离、扩散方向等“运动逻辑”也适合在 axial 中做。
+
+#### 6.3.2 Offset `(row, col)`：存储层
+
+- 这是把 hex grid 放进二维数组时最方便的表示。
+- 好处是每一行长度相同，可以直接用 `grid[row][col]` 这样的方式存放。
+- 缺点是它不是几何上最自然的坐标系，需要额外处理行错位。
+
+因此：
+
+- offset 更适合存储
+- axial 更适合计算
+
+这是理解后面所有实现细节的关键分工。
+
+#### 6.3.3 Odd-r：当前项目使用的 offset 布局
+
+- odd-r 是 offset 坐标的一种具体布局。
+- `r` 表示按“行”组织。
+- `odd` 表示奇数行在几何上相对偶数行右移半格。
+
+示意如下：
+
+```text
+● ● ● ●
+  ● ● ● ●
+● ● ● ●
+  ● ● ● ●
+```
+
+更具体一点，可以想成：
+
+```text
+row=0     (0,0)   (0,1)   (0,2)   (0,3)
+row=1       (1,0)   (1,1)   (1,2)   (1,3)
+row=2     (2,0)   (2,1)   (2,2)   (2,3)
+row=3       (3,0)   (3,1)   (3,2)   (3,3)
+```
+
+可以看到：
+
+- 偶数行（0, 2, ...）不偏移
+- 奇数行（1, 3, ...）在几何上向右错半格
+
+### 6.4 HexGrid 的核心计算流程
+
+`HexGrid` 最核心的一句话是：
+
+```text
+offset -> axial -> 计算 -> offset
+```
+
+也就是：
+
+1. 先把 `(row, col)` 转成 axial `(q, r)`
+2. 在 axial 坐标里做六方向计算
+3. 再把结果转回 `(row, col)`
+4. 最后再处理边界条件
+
+这条路线比“直接在 `(row, col)` 上分别处理奇偶行邻居”更稳定，也更容易验证。
+
+axial 坐标里的 6 个标准方向可以画成：
+
+```text
+            (-1, 1)   (0, 1)
+        (-1, 0)   [center]   (1, 0)
+            (0, -1)   (1, -1)
+```
+
+### 6.5 为什么 HexGrid 不会“走偏”
+
+一个常见疑问是：
+
+- 如果不断沿某个方向移动，会不会因为 odd-r 的错位而逐渐漂移？
+
+答案是：当前实现不会，因为真正的方向推进发生在 axial 层，而不是 offset 层。
+
+例如，在 axial 中连续沿 `(0, 1)` 移动：
+
+```text
+(q, r)
+-> (q, r + 1)
+-> (q, r + 2)
+```
+
+这在计算语义里是一致的，不会因为 odd-r 的行错位而累积误差。
+
+所以更准确地说：
+
+- odd-r 的“错半格”只是一种存储和显示效果
+- 实际邻居关系与运动方向由 axial 层保证
+
+### 6.6 `sqrt(3) / 2` 是做什么的
+
+实现里会出现：
+
+```text
+y = (sqrt(3) / 2) * r
+```
+
+它只用于几何映射，不参与邻居计算。
+
+它的作用是：
+
+- 把 axial 坐标映射到二维平面
+- 保持相邻 hex center 距离为 1
+- 保持正六边形的几何比例
+
+它主要用于：
+
+- `to_xy()`
+- `neighbor_direction_vectors()`
+
+因此可以把三层结构总结为：
+
+```text
+几何层: (x, y)
+  - 用于几何可视化和方向向量
+
+计算层: axial (q, r)
+  - 用于邻居、路径、方向、迁移
+
+存储层: offset (row, col)
+  - 用于矩形数组存储
+```
+
+如果只记一句话，可以记：
+
+`SquareGrid` 基本直接在 `(row, col)` 上理解；`HexGrid` 则要分清“存储层”和“计算层”。
+
+## 7. wrap 如何理解
+
+`wrap` 用来控制网格边界是否采用周期边界条件。
+
+可以把它理解为：当一个 deme 的邻居越过网格边界时，是否从对侧重新进入。
+
+### 7.1 `wrap=False`
+
+- 越界邻居会被直接丢弃
+- 边界和角落的 deme 邻居数量会少于内部 deme
+- 这种设置适合表示真实有限区域，有明显边界效应
+
+以 `SquareGrid(rows=3, cols=3, neighborhood="von_neumann")` 为例，左上角 `(0, 0)`：
+
+- 不 wrapping 时，它只有两个邻居：`(1, 0)` 和 `(0, 1)`
+
+### 7.2 `wrap=True`
+
+- 越界邻居会按取模规则折回另一侧
+- 左右边界相连，上下边界也相连
+- 这种设置适合弱化边界效应，把有限网格近似成“重复平铺”的空间
+
+同样以上面的 `SquareGrid` 为例，左上角 `(0, 0)`：
+
+- wrapping 后，向上越界会连接到最后一行
+- 向左越界会连接到最后一列
+- 因此它会得到四个邻居：`(2, 0)`、`(1, 0)`、`(0, 2)`、`(0, 1)`
+
+### 7.3 HexGrid 中的 `wrap`
+
+对 `HexGrid` 来说，`wrap` 的语义与 `SquareGrid` 相同，区别只在于邻居不是直接在 `(row, col)` 上硬算，而是：
+
+1. 先按 axial 的六个方向生成候选邻居
+2. 再把结果转回 `(row, col)`
+3. 最后对越界坐标做 wrap
+
+因此：
+
+- `wrap=False` 时，边界 hex deme 的邻居数可能少于 6
+- `wrap=True` 时，边界 hex deme 仍然可以保持 6 个邻居
+
+举例说，若某个候选邻居最终得到 `(-1, 0)` 或 `(0, -1)`：
+
+- `wrap=False` 时会被丢弃
+- `wrap=True` 时会被折回，如：
+  - `(-1, 0) -> (rows - 1, 0)`
+  - `(0, -1) -> (0, cols - 1)`
+
+## 8. Hook 在 Spatial 中的使用
 
 用户使用方式与普通 population 一致：定义 Hook、注册 Hook、运行模拟。
 
@@ -105,7 +411,7 @@ spatial_pop.run(n_steps=50, record_every=10)
 2. 再迁移到 Spatial 场景观察整体效应。
 3. 对关键事件（release、suppression、stop 条件）保留可读命名。
 
-## 7. 常见错误与排查
+## 9. 常见错误与排查
 
 ### 错误 1：deme 类型错误
 
@@ -125,14 +431,14 @@ spatial_pop.run(n_steps=50, record_every=10)
 
 排查：检查每个 deme 的运行状态；必要时重新初始化。
 
-## 8. 参数设置建议
+## 10. 参数设置建议
 
 1. 从小规模拓扑开始（2x2 或 3x3），先确认动力学方向正确。
 2. 再增加 deme 数量，观察迁移是否造成预期的空间梯度。
 3. 把 `migration_rate` 作为独立灵敏度分析参数，不要与其他参数同时大幅波动。
 4. 使用固定随机种子进行重复实验，避免把随机波动误判为机制差异。
 
-## 9. 结果分析建议
+## 11. 结果分析建议
 
 Spatial 模型建议至少输出三类结果：
 
@@ -142,7 +448,7 @@ Spatial 模型建议至少输出三类结果：
 
 如果仅看全局总量，容易忽略“局部爆发 + 全局平衡”的空间特征。
 
-## 10. 本章小结
+## 12. 本章小结
 
 Spatial 模拟的核心是“局部演化 + 空间迁移”的耦合。
 
