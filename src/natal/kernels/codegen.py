@@ -145,7 +145,7 @@ def compile_spatial_kernel_bound_wrappers(
     """
     key = _hash_key(
         [
-            "spatial_kernel_wrappers_v2",
+            "spatial_kernel_wrappers_v4",
             _stable_callable_identity(first_fn),
             _stable_callable_identity(early_fn),
             _stable_callable_identity(late_fn),

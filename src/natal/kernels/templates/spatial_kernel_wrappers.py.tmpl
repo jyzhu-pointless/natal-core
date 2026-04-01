@@ -41,29 +41,55 @@ def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm
 
 
 @njit_switch(cache=True)
-def __RUN_SPATIAL_TICK_NAME__(ind_count_all, sperm_store_all, configs, registry, tick, adjacency, migration_rate):
+def __RUN_SPATIAL_TICK_NAME__(ind_count_all, sperm_store_all, config, registry, tick, adjacency, migration_rate):
     ind = ind_count_all.copy()
     sperm = sperm_store_all.copy()
     n_demes = ind.shape[0]
-    # At this point, configs may be a list of PopulationConfig objects or a wrapper object.
+    has_sperm_storage = True
 
     for deme_id in range(n_demes):
-        cfg = configs[deme_id] # This index lookup is critical.
-        result = _first_event(registry, ind[deme_id], sperm[deme_id], tick, cfg.is_stochastic, has_sperm, cfg.use_dirichlet_sampling, deme_id)
+        result = _first_event(
+            registry,
+            ind[deme_id],
+            sperm[deme_id],
+            tick,
+            config.is_stochastic,
+            has_sperm_storage,
+            config.use_dirichlet_sampling,
+            deme_id,
+        )
         if result != RESULT_CONTINUE:
             return (ind, sperm, tick), RESULT_STOP
 
     ind, sperm = run_spatial_reproduction(ind, sperm, config)
 
     for deme_id in range(n_demes):
-        result = _early_event(registry, ind[deme_id], sperm[deme_id], tick, config.is_stochastic, has_sperm, config.use_dirichlet_sampling, deme_id)
+        result = _early_event(
+            registry,
+            ind[deme_id],
+            sperm[deme_id],
+            tick,
+            config.is_stochastic,
+            has_sperm_storage,
+            config.use_dirichlet_sampling,
+            deme_id,
+        )
         if result != RESULT_CONTINUE:
             return (ind, sperm, tick), RESULT_STOP
 
     ind, sperm = run_spatial_survival(ind, sperm, config)
 
     for deme_id in range(n_demes):
-        result = _late_event(registry, ind[deme_id], sperm[deme_id], tick, config.is_stochastic, has_sperm, config.use_dirichlet_sampling, deme_id)
+        result = _late_event(
+            registry,
+            ind[deme_id],
+            sperm[deme_id],
+            tick,
+            config.is_stochastic,
+            has_sperm_storage,
+            config.use_dirichlet_sampling,
+            deme_id,
+        )
         if result != RESULT_CONTINUE:
             return (ind, sperm, tick), RESULT_STOP
 

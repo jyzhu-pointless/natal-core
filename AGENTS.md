@@ -20,6 +20,9 @@ For code changes, run and pass all of the following:
 - pyright
 - ruff check src demos
 
+Activate the repository virtual environment before running `pyright` so it uses
+the project-installed dependencies and configuration.
+
 After those commands complete, review `docs/` for any needed documentation updates and apply them before finalizing the change.
 
 If API exports changed, also run:
