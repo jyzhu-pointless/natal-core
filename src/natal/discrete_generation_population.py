@@ -31,7 +31,10 @@ from natal.base_population import BasePopulation
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
 from natal.population_config import PopulationConfig
-from natal.population_state import DiscretePopulationState
+from natal.population_state import (
+    DiscretePopulationState,
+    parse_flattened_discrete_state,
+)
 from natal.type_def import Sex
 
 if TYPE_CHECKING:
@@ -44,6 +47,27 @@ __all__ = ["DiscreteGenerationPopulation"]
 
 class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     """Population with strict non-overlapping generations."""
+
+    @staticmethod
+    def _normalize_config(population_config: PopulationConfig) -> PopulationConfig:
+        """Normalize configuration fields required by the discrete model.
+
+        Args:
+            population_config: Source configuration to normalize.
+
+        Returns:
+            A configuration fixed to two age classes with age-1 adults.
+        """
+        config_hook_slot = int(getattr(population_config, "hook_slot", 0))
+        if config_hook_slot <= 0:
+            config_hook_slot = int(population_config.hook_slot)
+
+        return population_config._replace(
+            n_ages=2,
+            new_adult_age=1,
+            adult_ages=np.array([1], dtype=np.int64),
+            hook_slot=np.int32(config_hook_slot),
+        )
 
     def __init__(
         self,
@@ -60,15 +84,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         super().__init__(species, name, hooks=hooks or {})
 
-        config_hook_slot = int(getattr(population_config, "hook_slot", 0))
-        if config_hook_slot <= 0:
-            config_hook_slot = self.hook_slot
-        self._config = population_config._replace(
-            n_ages=2,
-            new_adult_age=1,
-            adult_ages=np.array([1], dtype=np.int64),
-            hook_slot=np.int32(config_hook_slot),
-        )
+        self._config = self._normalize_config(population_config)
 
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
@@ -308,12 +324,74 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._enforce_history_limit()
 
     def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
+        """Export the current state and optional history.
+
+        Returns:
+            A tuple of ``(state_flat, history)`` where ``state_flat`` contains
+            tick and individual counts, and ``history`` is either ``None`` or a
+            stacked history array.
+        """
         state_flat = self._state_nn.flatten_all()
         history = self.get_history() if self._history else None
         return state_flat, history
 
     def export_config(self) -> PopulationConfig:
+        """Export the current population configuration.
+
+        Returns:
+            The active ``PopulationConfig`` used by the population.
+        """
         return self._config_nn
+
+    def import_config(self, config: PopulationConfig) -> None:
+        """Import a population configuration into the discrete model.
+
+        Args:
+            config: Configuration object to install.
+        """
+        self._config = self._normalize_config(config)
+
+    def import_state(
+        self,
+        state: Union[DiscretePopulationState, NDArray[np.float64], Dict[str, np.ndarray]],
+        history: Optional[NDArray[np.float64]] = None,
+    ) -> None:
+        """Import state and optional history records.
+
+        Args:
+            state: ``DiscretePopulationState``, flattened state array, or a mapping
+                containing ``individual_count``.
+            history: Optional 2D history array previously returned by ``export_state``.
+        """
+        assert isinstance(state, (np.ndarray, DiscretePopulationState, dict)), \
+            "state must be a DiscretePopulationState, flattened ndarray, or dict"
+        if isinstance(state, np.ndarray):
+            state_obj = parse_flattened_discrete_state(
+                state,
+                n_sexes=self._config_nn.n_sexes,
+                n_ages=self._config_nn.n_ages,
+                n_genotypes=self._config_nn.n_genotypes,
+            )
+        elif isinstance(state, DiscretePopulationState):
+            state_obj = state
+        else:
+            state_obj = DiscretePopulationState(
+                n_tick=int(state.get("n_tick", self._tick)),
+                individual_count=np.asarray(state["individual_count"], dtype=np.float64),
+            )
+
+        self._state = DiscretePopulationState(
+            n_tick=int(state_obj.n_tick),
+            individual_count=state_obj.individual_count.copy(),
+        )
+        self._tick = int(state_obj.n_tick)
+
+        if history is not None and history.shape[0] > 0:
+            self.clear_history()
+            for row_idx in range(history.shape[0]):
+                flat = history[row_idx, :]
+                tick = int(flat[0])
+                self._history.append((tick, flat.copy()))
 
     @property
     def _state_nn(self) -> DiscretePopulationState:

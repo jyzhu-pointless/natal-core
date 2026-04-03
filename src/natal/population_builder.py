@@ -18,7 +18,7 @@ Examples:
 """
 
 import inspect
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -161,7 +161,7 @@ class PopulationConfigBuilder:
             TypeError: If input types are incorrect.
 
         """
-        print("⏳ Building population config...")
+        # print("⏳ Building population config...")
 
         # ===== Validation =====
         if n_ages <= 1:
@@ -262,7 +262,7 @@ class PopulationConfigBuilder:
             carrying_capacity, old_juvenile_carrying_capacity, expected_num_adult_females, expected_eggs_per_female
         )
 
-        print("🔧 Initializing population configuration...")
+        # print("🔧 Initializing population configuration...")
 
         # ===== Create and return PopulationConfig =====
         cfg = build_population_config(
@@ -300,7 +300,7 @@ class PopulationConfigBuilder:
         if initial_sperm_storage is not None:
             cfg = cfg._replace(initial_sperm_storage=initial_sperm_storage.copy())
 
-        print("✅ Population configuration initialized")
+        # print("✅ Population configuration initialized")
 
         return cfg
 
@@ -594,7 +594,7 @@ class PopulationConfigBuilder:
     @staticmethod
     def resolve_age_structured_initial_individual_count(
         species: Species,
-        distribution: Dict[str, Dict[Union[Genotype, str], Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float]]],
+        distribution: Mapping[str, Mapping[Union[Genotype, str], Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float]]],
         n_ages: int,
         new_adult_age: int,
     ) -> NDArray[np.float64]:
@@ -629,9 +629,9 @@ class PopulationConfigBuilder:
     @staticmethod
     def resolve_age_structured_initial_sperm_storage(
         species: Species,
-        sperm_storage: Dict[
+        sperm_storage: Mapping[
             Union[Genotype, str],
-            Dict[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
+            Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
         ],
         n_ages: int,
         new_adult_age: int,
@@ -915,18 +915,18 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
         # Initial state (required)
         self.initial_individual_count: Optional[
-            Dict[
+            Mapping[
                 str,
-                Dict[
+                Mapping[
                     Union[Genotype, str],
                     Union[List[float], Tuple[float, ...], ArrayF64, Dict[int, float], int, float],
                 ],
             ]
         ] = None
         self.initial_sperm_storage: Optional[
-            Dict[
+            Mapping[
                 Union[Genotype, str],
-                Dict[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], ArrayF64, int, float]],
+                Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], ArrayF64, int, float]],
             ]
         ] = None
 
@@ -1010,17 +1010,17 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
     def initial_state(
         self,
-        individual_count: Dict[
+        individual_count: Mapping[
             str,
-            Dict[
+            Mapping[
                 Union[Genotype, str],
                 Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
             ],
         ],
         sperm_storage: Optional[
-            Dict[
+            Mapping[
                 Union[Genotype, str],
-                Dict[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
+                Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
             ]
         ] = None
     ) -> 'AgeStructuredPopulationBuilder':

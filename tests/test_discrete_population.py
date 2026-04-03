@@ -3,6 +3,7 @@
 import numpy as np
 
 import natal as nt
+from natal.population_state import DiscretePopulationState
 
 
 def _make_species(name: str = "DiscSp"):
@@ -95,6 +96,63 @@ class TestDeterminism:
         arr1 = pop1._state.individual_count
         arr2 = pop2._state.individual_count
         np.testing.assert_array_equal(arr1, arr2)
+
+
+class TestStateAndConfigInterop:
+    def test_export_and_import_state_roundtrip(self):
+        sp = _make_species("Disc_state_roundtrip")
+        pop = _minimal_pop(sp, pop_name="Disc_state_roundtrip_pop")
+        pop.create_history_snapshot()
+
+        state_flat, history = pop.export_state()
+        original_counts = pop._state.individual_count.copy()
+
+        pop._state.individual_count.fill(0.0)
+        pop._tick = 9
+        pop.clear_history()
+
+        pop.import_state(state_flat, history)
+
+        np.testing.assert_array_equal(pop._state.individual_count, original_counts)
+        assert pop._tick == int(state_flat[0])
+        assert history is not None
+        np.testing.assert_array_equal(pop.get_history(), history)
+
+    def test_import_state_accepts_state_object(self):
+        sp = _make_species("Disc_state_object")
+        pop = _minimal_pop(sp, pop_name="Disc_state_object_pop")
+
+        custom_counts = np.full_like(pop._state.individual_count, 7.0)
+        custom_state = DiscretePopulationState.create(
+            n_sexes=pop._config_nn.n_sexes,
+            n_ages=pop._config_nn.n_ages,
+            n_genotypes=pop._config_nn.n_genotypes,
+            n_tick=11,
+            individual_count=custom_counts,
+        )
+
+        pop.import_state(custom_state)
+
+        np.testing.assert_array_equal(pop._state.individual_count, custom_counts)
+        assert pop._tick == 11
+
+    def test_import_config_normalizes_age_settings(self):
+        sp = _make_species("Disc_config_roundtrip")
+        pop = _minimal_pop(sp, pop_name="Disc_config_roundtrip_pop")
+
+        updated = pop.export_config()._replace(
+            n_ages=5,
+            new_adult_age=3,
+            adult_ages=np.array([3, 4], dtype=np.int64),
+        )
+
+        pop.import_config(updated)
+
+        cfg = pop.export_config()
+        assert cfg.n_ages == 2
+        assert cfg.new_adult_age == 1
+        np.testing.assert_array_equal(cfg.adult_ages, np.array([1], dtype=np.int64))
+        assert cfg.n_genotypes == updated.n_genotypes
 
 
 class TestMixedGenotypes:

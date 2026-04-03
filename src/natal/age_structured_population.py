@@ -65,8 +65,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         species: Species,
         population_config: PopulationConfig,
         name: Optional[str] = None,
-        initial_individual_count: Optional[Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
-        initial_sperm_storage: Optional[Dict[Union[Genotype, str], Dict[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
+        initial_individual_count: Optional[Mapping[str, Mapping[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
+        initial_sperm_storage: Optional[Mapping[Union[Genotype, str], Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
         hooks: Optional[HookRegistrationMap] = None,
     ):
         """Initialize an age-structured population instance using a PopulationConfig.
@@ -225,7 +225,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def _distribute_initial_sperm_storage(
         self,
         species: Species,
-        sperm_storage_dist: Mapping[Any, Mapping[Any, object]]
+        sperm_storage_dist: Mapping[
+            Union[Genotype, str],
+            Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], float, int]],
+        ]
     ) -> None:
         """Populate the internal sperm storage from user-provided initial distribution.
 
@@ -245,25 +248,29 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         self._state_nn.sperm_storage.fill(0.0)
         for female_key, male_dict in sperm_storage_dist.items():
+            assert isinstance(female_key, (str, Genotype)), \
+                f"Female genotype key must be Genotype or str, got {type(female_key)}"
+
             if isinstance(female_key, str):
                 female_genotype = species.get_genotype_from_str(female_key)
-            elif isinstance(female_key, Genotype):
-                female_genotype = female_key
             else:
-                raise TypeError(f"Female genotype key must be Genotype or str, got {type(female_key)}")
+                female_genotype = female_key
 
             female_idx = self._registry_nn.genotype_to_index[female_genotype]
 
             for male_key, age_data in male_dict.items():
-                # Parse male genotype
+                assert isinstance(male_key, (str, Genotype)), \
+                    f"Male genotype key must be Genotype or str, got {type(male_key)}"
+
                 if isinstance(male_key, str):
                     male_genotype = species.get_genotype_from_str(male_key)
-                elif isinstance(male_key, Genotype):
-                    male_genotype = male_key
                 else:
-                    raise TypeError(f"Male genotype key must be Genotype or str, got {type(male_key)}")
+                    male_genotype = male_key
 
                 male_idx = self._registry_nn.genotype_to_index[male_genotype]
+
+                assert isinstance(age_data, (dict, list, tuple, int, float)), \
+                    f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
 
                 # Parse age_data: supports multiple formats
                 if isinstance(age_data, dict):
@@ -308,15 +315,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         if count > 0:
                             self._state_nn.sperm_storage[age, female_idx, male_idx] = count
 
-                elif isinstance(age_data, (int, float)) and not isinstance(age_data, bool):
+                else:
                     # Scalar format: apply to all adult ages
                     if age_data < 0:
                         raise ValueError(f"Sperm count must be non-negative, got {age_data}")
                     if age_data > 0:
                         for age in range(self.new_adult_age, self.n_ages):
                             self._state_nn.sperm_storage[age, female_idx, male_idx] = float(age_data)
-                else:
-                    raise TypeError(f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}")
 
     @property
     def state(self) -> PopulationState:

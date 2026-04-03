@@ -121,10 +121,12 @@ launch(spatial_pop, port=8080, title="Spatial Debug Dashboard")
 
 当前 spatial dashboard 适合开发期调试，重点能力包括：
 
-- 查看 square / hex landscape
+- 查看 square / hex 几何 landscape（颜色深浅映射 deme 人口规模）
 - 查看全局 total population 与 allele frequency
-- 点击单个 deme，下钻观察该 deme 的状态
+- 点击单个 deme，下钻观察该 deme 的状态（总量、性别、年龄分层、基因型与 fitness）
 - 查看当前选中 deme 的迁移权重
+
+当 grid 很大时，dashboard 会自动切换到按 `(row, col)` 展示的 heatmap 模式，而不是逐个 polygon 绘制 landscape。这样可以显著降低 Plotly trace 数量，避免例如 `50x50` 网格在浏览器端失去响应。
 
 ## 5. migration_rate 如何理解
 
@@ -137,6 +139,21 @@ launch(spatial_pop, port=8080, title="Spatial Debug Dashboard")
 - `0 < migration_rate < 1`：本地保留与跨 deme 迁移同时发生。
 
 这通常是空间扩散速度与混合程度的关键参数。
+
+### 5.1 migration 内核复杂度（实现细节）
+
+当前 migration 实现不是对每个 source 扫描全部 destination，而是先把每个 source 的路由行压缩为“稀疏 destination 列表”，再只遍历有效 destination：
+
+1. 先构建每个 source 的有效 destination 索引与概率。
+2. 对每个 source 的每个状态桶（individual/sperm）只在有效 destination 上分配 outbound 质量。
+3. stay 质量直接留在 source，不再经过 destination 全扫描。
+
+这意味着：
+
+- kernel 模式（邻域大小固定、`kernel_nonzero` 近似常数）下，复杂度接近 `O(n_demes * kernel_nonzero)`，可近似线性于 `n_demes`。
+- adjacency 模式下，复杂度接近 `O(total_nonzero_edges)`，取决于邻接矩阵稀疏度。
+
+换言之，只要迁移图是稀疏的，migration 阶段就不会再出现“每步全量 destination 扫描”的二次复杂度瓶颈。
 
 ## 6. 拓扑如何选
 

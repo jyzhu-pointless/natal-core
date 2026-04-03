@@ -16,7 +16,6 @@ from natal.base_population import BasePopulation
 from natal.population_state import PopulationState
 from natal.spatial_topology import (
     GridTopology,
-    apply_migration_convolution,
     build_adjacency_matrix,
 )
 
@@ -123,6 +122,7 @@ class SpatialPopulation:
         self._migration_mode: Literal["adjacency", "kernel"] = migration_mode
         self._migration_kernel = migration_kernel
         self._kernel_include_center = bool(kernel_include_center)
+        self._migration_mode_code = 0 if migration_mode == "adjacency" else 1
         self._migration_rate = float(migration_rate)
         self._tick = int(self._demes[0].tick)
 
@@ -209,6 +209,16 @@ class SpatialPopulation:
         """Return the total male count across all demes."""
         return int(sum(deme.get_male_count() for deme in self._demes))
 
+    def reset(self) -> None:
+        """Reset all demes and synchronize the container tick.
+
+        This resets each underlying deme using its own reset logic and then
+        updates the spatial container tick to match the demes.
+        """
+        for deme in self._demes:
+            deme.reset()
+        self._tick = int(self._demes[0].tick)
+
     def aggregate_individual_count(self) -> NDArray[np.float64]:
         """Return the total individual-count tensor summed over all demes."""
         return np.sum(
@@ -263,7 +273,11 @@ class SpatialPopulation:
     def migration_row(self, source_idx: int) -> NDArray[np.float64]:
         """Return normalized outbound migration weights for one source deme."""
         if self._migration_mode == "adjacency":
-            return self._adjacency[source_idx].copy()
+            weights = self._adjacency[source_idx].astype(np.float64, copy=True)
+            total = float(weights.sum())
+            if total > 0.0:
+                weights /= total
+            return weights
 
         assert self._topology is not None, "topology is required for kernel migration"
         assert self._migration_kernel is not None, "migration_kernel is required for kernel migration"
@@ -294,21 +308,6 @@ class SpatialPopulation:
             weights /= total
         return weights
 
-    def _apply_kernel_migration(
-        self,
-        ind_all: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
-        """Apply kernel-based migration to stacked individual counts."""
-        assert self._topology is not None, "topology is required for kernel migration"
-        assert self._migration_kernel is not None, "migration_kernel is required for kernel migration"
-        return apply_migration_convolution(
-            ind_all,
-            self._topology,
-            self._migration_kernel,
-            float(self._migration_rate),
-            include_center=self._kernel_include_center,
-        )
-
     def _stack_deme_state_arrays(self) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Stack per-deme state arrays along a new deme axis.
 
@@ -324,8 +323,12 @@ class SpatialPopulation:
             s = getattr(deme.state, "sperm_storage", None)
             if s is None:
                 # Create a dummy array if storage is missing
-                cfg = deme.config
-                s = np.zeros((cfg.n_ages, cfg.n_genotypes, cfg.n_genotypes), dtype=np.float64)
+                cfg = getattr(deme, "config", None)
+                if cfg is not None and hasattr(cfg, "n_ages") and hasattr(cfg, "n_genotypes"):
+                    s = np.zeros((cfg.n_ages, cfg.n_genotypes, cfg.n_genotypes), dtype=np.float64)
+                else:
+                    ind_shape = deme.state.individual_count.shape
+                    s = np.zeros((ind_shape[1], ind_shape[2], ind_shape[2]), dtype=np.float64)
             sperm_list.append(s)
 
         sperm_all = np.stack(sperm_list, axis=0)
@@ -377,6 +380,12 @@ class SpatialPopulation:
                 )
         return cfg
 
+    def _migration_kernel_array(self) -> NDArray[np.float64]:
+        """Return the migration kernel array expected by compiled kernels."""
+        if self._migration_kernel is not None:
+            return self._migration_kernel
+        return np.zeros((1, 1), dtype=np.float64)
+
     def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick via the generated spatial wrapper.
 
@@ -399,23 +408,23 @@ class SpatialPopulation:
         config = self._shared_config()
         ind_all, sperm_all = self._stack_deme_state_arrays()
 
-        compiled_migration_rate = 0.0 if self._migration_mode == "kernel" else float(self._migration_rate)
-
         final_state_tuple, result = run_tick_fn(
-            ind_all,
-            sperm_all,
-            config, # Note: wrapper template needs updating to handle has_sperm
-            registry,
-            int(self._tick),
-            self._adjacency,
-            compiled_migration_rate,
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            config=config,
+            registry=registry,
+            tick=int(self._tick),
+            adjacency=self._adjacency,
+            migration_mode=self._migration_mode_code,
+            topology_rows=0 if self._topology is None else int(self._topology.rows),
+            topology_cols=0 if self._topology is None else int(self._topology.cols),
+            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
+            migration_kernel=self._migration_kernel_array(),
+            kernel_include_center=bool(self._kernel_include_center),
+            migration_rate=float(self._migration_rate),
         )
 
-        ind_next = final_state_tuple[0]
-        if self._migration_mode == "kernel" and self._migration_rate > 0.0:
-            ind_next = self._apply_kernel_migration(ind_next)
-
-        self._apply_stacked_state(ind_next, final_state_tuple[1], int(final_state_tuple[2]))
+        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
 
         if int(result) != 0:
             for deme in self._demes:
@@ -452,16 +461,6 @@ class SpatialPopulation:
             if getattr(deme, "_finished", False):
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial simulation")
 
-        if self._migration_mode == "kernel":
-            for _ in range(n_steps):
-                if any(getattr(deme, "_finished", False) for deme in self._demes):
-                    break
-                self.run_tick()
-            if finish and not any(getattr(deme, "_finished", False) for deme in self._demes):
-                for deme in self._demes:
-                    deme.finish_simulation()
-            return self
-
         hooks = self._demes[0].get_compiled_event_hooks()
         assert hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
@@ -472,15 +471,21 @@ class SpatialPopulation:
         ind_all, sperm_all = self._stack_deme_state_arrays()
 
         final_state_tuple, _history, was_stopped = run_fn(
-            ind_all,
-            sperm_all,
-            config,
-            registry,
-            int(self._tick),
-            int(n_steps),
-            self._adjacency,
-            float(self._migration_rate),
-            int(record_every),
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            config=config,
+            registry=registry,
+            tick=int(self._tick),
+            n_ticks=int(n_steps),
+            adjacency=self._adjacency,
+            migration_mode=self._migration_mode_code,
+            topology_rows=0 if self._topology is None else int(self._topology.rows),
+            topology_cols=0 if self._topology is None else int(self._topology.cols),
+            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
+            migration_kernel=self._migration_kernel_array(),
+            kernel_include_center=bool(self._kernel_include_center),
+            migration_rate=float(self._migration_rate),
+            record_interval=int(record_every),
         )
 
         self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))

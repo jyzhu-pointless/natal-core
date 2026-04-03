@@ -5,7 +5,7 @@ from __future__ import annotations
 import natal as nt
 import numpy as np
 from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import SquareGrid, build_adjacency_matrix
+from natal.spatial_topology import HexGrid, SquareGrid, build_adjacency_matrix
 
 
 def _make_deme(species: nt.Species, name: str, adult_count: float) -> nt.AgeStructuredPopulation:
@@ -101,3 +101,98 @@ def test_spatial_population_kernel_migration_updates_state(simple_species: nt.Sp
     assert totals[1] < 200.0
     assert totals[2] > 0.0
     assert sum(totals) == 200.0
+
+
+def test_spatial_population_kernel_migration_row_renormalizes_border_weights(
+    simple_species: nt.Species,
+) -> None:
+    demes = [
+        _make_deme(simple_species, "deme_0", adult_count=100.0),
+        _make_deme(simple_species, "deme_1", adult_count=0.0),
+        _make_deme(simple_species, "deme_2", adult_count=0.0),
+    ]
+
+    shared_config = demes[0].export_config()
+    for deme in demes[1:]:
+        deme.import_config(shared_config)
+
+    spatial = SpatialPopulation(
+        demes=demes,
+        topology=SquareGrid(rows=1, cols=3, neighborhood="von_neumann", wrap=False),
+        migration_kernel=np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
+        migration_rate=1.0,
+    )
+
+    row = spatial.migration_row(0)
+    expected = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    assert np.allclose(row, expected)
+
+
+def test_spatial_population_hex_kernel_row_matches_valid_border_offsets(
+    simple_species: nt.Species,
+) -> None:
+    demes = [
+        _make_deme(simple_species, f"deme_{idx}", adult_count=0.0)
+        for idx in range(9)
+    ]
+
+    shared_config = demes[0].export_config()
+    for deme in demes[1:]:
+        deme.import_config(shared_config)
+
+    spatial = SpatialPopulation(
+        demes=demes,
+        topology=HexGrid(rows=3, cols=3, wrap=False),
+        migration_kernel=np.array(
+            [
+                [1.0, 1.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=np.float64,
+        ),
+        migration_rate=1.0,
+    )
+
+    row = spatial.migration_row(0)
+    expected = np.zeros(9, dtype=np.float64)
+    expected[spatial.topology.to_index((0, 1))] = 1.0 / 3.0
+    expected[spatial.topology.to_index((1, 0))] = 1.0 / 3.0
+    expected[spatial.topology.to_index((1, 1))] = 1.0 / 3.0
+    assert np.allclose(row, expected)
+
+
+def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
+    simple_species: nt.Species,
+) -> None:
+    demes = [
+        _make_deme(simple_species, f"deme_{idx}", adult_count=100.0 if idx == 0 else 0.0)
+        for idx in range(9)
+    ]
+
+    shared_config = demes[0].export_config()
+    for deme in demes[1:]:
+        deme.import_config(shared_config)
+
+    spatial = SpatialPopulation(
+        demes=demes,
+        topology=HexGrid(rows=3, cols=3, wrap=False),
+        migration_kernel=np.array(
+            [
+                [1.0, 1.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=np.float64,
+        ),
+        migration_rate=1.0,
+    )
+
+    spatial.run_tick()
+
+    totals = [float(deme.state.individual_count.sum()) for deme in spatial.demes]
+    assert np.isclose(totals[0], 0.0)
+    assert np.isclose(totals[1], 200.0 / 3.0)
+    assert np.isclose(totals[3], 200.0 / 3.0)
+    assert np.isclose(totals[4], 200.0 / 3.0)
+    assert np.isclose(sum(totals), 200.0)

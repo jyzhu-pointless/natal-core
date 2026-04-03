@@ -1,4 +1,8 @@
+from collections.abc import Mapping
+from typing import cast
+
 import natal as nt
+from natal.genetic_entities import Genotype
 from natal.ui import launch
 
 sp = nt.Species.from_dict(
@@ -36,10 +40,10 @@ drive = nt.HomingDrive(
 
 initial_distribution = {
     "female": {
-        "WT|WT":    [0, 60, 60, 50, 40, 30, 20, 10],
+        "WT|WT":    [0.0, 60.0, 60.0, 50.0, 40.0, 30.0, 20.0, 10.0],
     },
     "male": {
-        "WT|WT":    [0, 60, 60, 40, 20],
+        "WT|WT":    [0.0, 60.0, 60.0, 40.0, 20.0],
         # "Dr|WT": [0, 0, 120, 0, 0, 0, 0, 0],
     },
 }
@@ -50,9 +54,19 @@ initial_sperm = {
     "WT|WT": {
         "WT|WT": {2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0},
         # 格式2: List - 密集列表
-        "WT|Dr": [0, 0, 0, 0, 0, 0, 0],
+        "WT|Dr": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     },
 }
+
+IndividualDistribution = Mapping[
+    str,
+    Mapping[Genotype | str, list[float] | tuple[float, ...] | dict[int, float] | int | float],
+]
+
+SpermStorage = Mapping[
+    Genotype | str,
+    Mapping[Genotype | str, dict[int, float] | list[float] | tuple[float, ...] | int | float],
+]
 
 pop = nt.AgeStructuredPopulation\
     .setup(
@@ -66,8 +80,8 @@ pop = nt.AgeStructuredPopulation\
         new_adult_age=2,
     ) \
     .initial_state(
-        individual_count=initial_distribution
-        # TODO: 类型检查未通过，需要调整！
+        individual_count=cast(IndividualDistribution, initial_distribution),
+        sperm_storage=cast(SpermStorage, initial_sperm),
     ) \
     .reproduction(
         female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],

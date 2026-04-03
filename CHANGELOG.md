@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026.4.3
+implemented spatial population with stable numba cache & parallel computation
+
 ## 2026.3.28.c
 add type annotations
 
