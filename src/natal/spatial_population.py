@@ -22,6 +22,88 @@ from natal.spatial_topology import (
 __all__ = ["SpatialPopulation"]
 
 
+def _coerce_adjacency_dense(
+    adjacency: Any,
+    n_demes: int,
+) -> NDArray[np.float64]:
+    """Coerce dense or sparse-like adjacency input to a dense float64 matrix.
+
+    Supported forms:
+
+    - Dense ``np.ndarray`` with shape ``(n_demes, n_demes)``.
+    - CSR tuple ``(indptr, indices, data)``.
+    - Any object exposing ``toarray()`` (for example scipy sparse matrices).
+
+    Args:
+        adjacency: User-provided adjacency input.
+        n_demes: Number of demes expected on each matrix axis.
+
+    Returns:
+        A dense ``float64`` adjacency matrix.
+
+    Raises:
+        TypeError: If input type is unsupported.
+        ValueError: If shapes or sparse indices are invalid.
+    """
+    adjacency_obj = cast(object, adjacency)
+
+    if isinstance(adjacency_obj, np.ndarray):
+        dense = np.asarray(adjacency_obj, dtype=np.float64)
+    elif isinstance(adjacency_obj, tuple):
+        csr_items = cast(tuple[object, ...], adjacency_obj)
+        if len(csr_items) != 3:
+            raise TypeError(
+                "adjacency tuple input must be CSR (indptr, indices, data)"
+            )
+        csr_tuple = csr_items
+        indptr = np.asarray(csr_tuple[0], dtype=np.int64)
+        indices = np.asarray(csr_tuple[1], dtype=np.int64)
+        data = np.asarray(csr_tuple[2], dtype=np.float64)
+
+        if indptr.ndim != 1 or indices.ndim != 1 or data.ndim != 1:
+            raise ValueError("CSR adjacency tuple entries must be 1D arrays")
+        if indptr.shape[0] != n_demes + 1:
+            raise ValueError(
+                f"CSR indptr length mismatch: expected {n_demes + 1}, got {indptr.shape[0]}"
+            )
+        if indices.shape[0] != data.shape[0]:
+            raise ValueError(
+                f"CSR indices/data length mismatch: {indices.shape[0]} vs {data.shape[0]}"
+            )
+        if int(indptr[0]) != 0 or int(indptr[-1]) != indices.shape[0]:
+            raise ValueError("CSR indptr must start at 0 and end at nnz")
+        for pos in range(indptr.shape[0] - 1):
+            if int(indptr[pos + 1]) < int(indptr[pos]):
+                raise ValueError("CSR indptr must be non-decreasing")
+
+        dense = np.zeros((n_demes, n_demes), dtype=np.float64)
+        for src in range(n_demes):
+            start = int(indptr[src])
+            end = int(indptr[src + 1])
+            for item_idx in range(start, end):
+                dst = int(indices[item_idx])
+                if dst < 0 or dst >= n_demes:
+                    raise ValueError(
+                        f"CSR destination index out of range at position {item_idx}: {dst}"
+                    )
+                dense[src, dst] += data[item_idx]
+    else:
+        toarray_fn = getattr(adjacency_obj, "toarray", None)
+        if not callable(toarray_fn):
+            raise TypeError(
+                "adjacency must be a dense ndarray, a CSR tuple (indptr, indices, data), "
+                "or an object exposing toarray()"
+            )
+        dense = np.asarray(toarray_fn(), dtype=np.float64)
+
+    if dense.shape != (n_demes, n_demes):
+        raise ValueError(
+            f"adjacency shape mismatch: expected ({n_demes}, {n_demes}), got {dense.shape}"
+        )
+
+    return dense
+
+
 class SpatialPopulation:
     """Spatial container composed of per-deme population objects.
 
@@ -36,9 +118,17 @@ class SpatialPopulation:
         topology (GridTopology | None): Spatial topology used by the landscape.
         adjacency (NDArray[np.float64]): Outbound migration matrix between demes
             when migration mode is ``"adjacency"``.
+        migration_strategy (Literal["auto", "adjacency", "kernel", "hybrid"]):
+            Strategy selector for migration backend. ``"hybrid"`` is reserved
+            for future mixed routing and currently follows ``"auto"`` runtime
+            behavior.
         migration_mode (Literal["adjacency", "kernel"]): Active migration backend.
         migration_kernel (NDArray[np.float64] | None): Migration kernel used when
             ``migration_mode`` is ``"kernel"``.
+        kernel_bank (tuple[NDArray[np.float64], ...] | None): Optional bank of
+            per-pattern kernels reserved for future per-deme kernel routing.
+        deme_kernel_ids (NDArray[np.int64] | None): Optional per-deme kernel id
+            mapping into ``kernel_bank`` reserved for future mixed routing.
         migration_rate (float): Fraction of each deme that participates in
             migration on each tick.
         tick (int): Current shared simulation tick across all demes.
@@ -49,8 +139,11 @@ class SpatialPopulation:
         demes: Sequence[BasePopulation[Any]],
         *,
         topology: Optional[GridTopology] = None,
-        adjacency: Optional[NDArray[np.float64]] = None,
+        adjacency: Optional[object] = None,
         migration_kernel: Optional[NDArray[np.float64]] = None,
+        migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto",
+        kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
+        deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
         migration_rate: float = 0.0,
         name: str = "SpatialPopulation",
@@ -62,10 +155,20 @@ class SpatialPopulation:
             topology: Optional grid topology used to derive adjacency when
                 ``adjacency`` is not provided.
             adjacency: Optional explicit migration matrix with shape
-                ``(n_demes, n_demes)``.
+                ``(n_demes, n_demes)``. Supports dense ``ndarray``, CSR tuple
+                ``(indptr, indices, data)``, or sparse-like objects exposing
+                ``toarray()``.
             migration_kernel: Optional odd-shaped 2D kernel used for topology-
                 aware migration. When provided, ``topology`` is required and
                 migration runs in kernel mode.
+            migration_strategy: Backend selection policy. ``"auto"`` keeps
+                existing behavior (kernel when ``migration_kernel`` is set,
+                otherwise adjacency). ``"hybrid"`` is accepted as a forward-
+                compatible alias of ``"auto"`` for now.
+            kernel_bank: Optional kernel bank reserved for future per-deme
+                heterogeneous-kernel routing.
+            deme_kernel_ids: Optional per-deme kernel id array reserved for
+                future heterogeneous-kernel routing.
             kernel_include_center: Whether kernel migration includes the kernel
                 center as an outbound target for the source deme.
             migration_rate: Fraction of each deme that migrates each tick.
@@ -74,8 +177,9 @@ class SpatialPopulation:
         Raises:
             ValueError: If ``demes`` is empty, demes do not share the same
                 species object, topology size does not match the number of
-                demes, adjacency shape is invalid, migration kernel is invalid,
-                or deme ticks do not match.
+                demes, migration strategy is invalid, adjacency input is
+                invalid, migration kernel is invalid, or deme ticks do not
+                match.
         """
         if not demes:
             raise ValueError("demes must contain at least one BasePopulation instance")
@@ -95,10 +199,32 @@ class SpatialPopulation:
                 f"topology.n_demes ({topology.n_demes}) must match number of demes ({n_demes})"
             )
 
-        migration_mode: Literal["adjacency", "kernel"] = "kernel" if migration_kernel is not None else "adjacency"
+        if migration_strategy not in {"auto", "adjacency", "kernel", "hybrid"}:
+            raise ValueError(
+                "migration_strategy must be one of: auto, adjacency, kernel, hybrid"
+            )
+
+        if migration_strategy == "adjacency":
+            migration_mode: Literal["adjacency", "kernel"] = "adjacency"
+        elif migration_strategy == "kernel":
+            migration_mode = "kernel"
+        else:
+            # ``auto`` and ``hybrid`` currently share runtime behavior.
+            # TODO(spatial-migration/hybrid-dispatch): Implement true hybrid
+            # backend selection.
+            # Scope:
+            # - Add runtime branch policy for mixed routing (not alias to auto).
+            # - Allow per-run/per-tick decision between adjacency and kernel.
+            # Definition of done:
+            # - `migration_strategy="hybrid"` yields behavior distinguishable
+            #   from `auto` in at least one tested scenario.
+            migration_mode = "kernel" if migration_kernel is not None else "adjacency"
+
         if migration_mode == "kernel":
             if topology is None:
                 raise ValueError("topology is required when migration_kernel is provided")
+            if migration_kernel is None:
+                raise ValueError("migration_kernel is required when migration mode is kernel")
             migration_kernel = np.asarray(migration_kernel, dtype=np.float64)
             if migration_kernel.ndim != 2 or migration_kernel.shape[0] % 2 == 0 or migration_kernel.shape[1] % 2 == 0:
                 raise ValueError("migration_kernel must be a 2D array with odd dimensions")
@@ -108,19 +234,62 @@ class SpatialPopulation:
                 adjacency = np.eye(n_demes, dtype=np.float64)
             else:
                 adjacency = build_adjacency_matrix(topology)
-        else:
-            adjacency = np.asarray(adjacency, dtype=np.float64)
 
-        if adjacency.shape != (n_demes, n_demes):
-            raise ValueError(
-                f"adjacency shape mismatch: expected ({n_demes}, {n_demes}), got {adjacency.shape}"
-            )
+        adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
+
+        normalized_kernel_bank: tuple[NDArray[np.float64], ...] | None = None
+        if kernel_bank is not None:
+            if len(kernel_bank) == 0:
+                raise ValueError("kernel_bank must not be empty when provided")
+            kernels: List[NDArray[np.float64]] = []
+            for kernel_idx, kernel_value in enumerate(kernel_bank):
+                kernel_arr = np.asarray(kernel_value, dtype=np.float64)
+                if (
+                    kernel_arr.ndim != 2
+                    or kernel_arr.shape[0] % 2 == 0
+                    or kernel_arr.shape[1] % 2 == 0
+                ):
+                    raise ValueError(
+                        "kernel_bank entries must be 2D arrays with odd dimensions "
+                        f"(invalid at index {kernel_idx})"
+                    )
+                kernels.append(kernel_arr)
+            normalized_kernel_bank = tuple(kernels)
+
+        normalized_deme_kernel_ids: NDArray[np.int64] | None = None
+        if deme_kernel_ids is not None:
+            if normalized_kernel_bank is None:
+                raise ValueError("deme_kernel_ids requires kernel_bank to be provided")
+            normalized_deme_kernel_ids = np.asarray(deme_kernel_ids, dtype=np.int64)
+            if normalized_deme_kernel_ids.shape != (n_demes,):
+                raise ValueError(
+                    "deme_kernel_ids shape mismatch: expected "
+                    f"({n_demes},), got {normalized_deme_kernel_ids.shape}"
+                )
+            for deme_idx in range(n_demes):
+                kernel_id = int(normalized_deme_kernel_ids[deme_idx])
+                if kernel_id < 0 or kernel_id >= len(normalized_kernel_bank):
+                    raise ValueError(
+                        f"deme_kernel_ids[{deme_idx}]={kernel_id} out of range for kernel_bank size "
+                        f"{len(normalized_kernel_bank)}"
+                    )
 
         self._name = name
         self._topology = topology
-        self._adjacency = adjacency
+        self._adjacency = adjacency_dense
+        self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = migration_strategy
         self._migration_mode: Literal["adjacency", "kernel"] = migration_mode
         self._migration_kernel = migration_kernel
+        # TODO(spatial-migration/heterogeneous-kernel-wiring): Connect
+        # `kernel_bank` + `deme_kernel_ids` to compiled migration kernels.
+        # Scope:
+        # - Use per-source kernel id to select routing kernel at execution.
+        # - Preserve current behavior when bank/ids are not provided.
+        # Definition of done:
+        # - At least one test demonstrates two demes using different kernels
+        #   in a single tick with expected split differences.
+        self._kernel_bank = normalized_kernel_bank
+        self._deme_kernel_ids = normalized_deme_kernel_ids
         self._kernel_include_center = bool(kernel_include_center)
         self._migration_mode_code = 0 if migration_mode == "adjacency" else 1
         self._migration_rate = float(migration_rate)
@@ -168,9 +337,24 @@ class SpatialPopulation:
         return self._migration_mode
 
     @property
+    def migration_strategy(self) -> Literal["auto", "adjacency", "kernel", "hybrid"]:
+        """Literal["auto", "adjacency", "kernel", "hybrid"]: Strategy policy."""
+        return self._migration_strategy
+
+    @property
     def migration_kernel(self) -> NDArray[np.float64] | None:
         """NDArray[np.float64] | None: Kernel used by topology-aware migration."""
         return self._migration_kernel
+
+    @property
+    def kernel_bank(self) -> tuple[NDArray[np.float64], ...] | None:
+        """tuple[NDArray[np.float64], ...] | None: Reserved heterogeneous kernels."""
+        return self._kernel_bank
+
+    @property
+    def deme_kernel_ids(self) -> NDArray[np.int64] | None:
+        """NDArray[np.int64] | None: Reserved per-deme kernel ids."""
+        return self._deme_kernel_ids
 
     @property
     def migration_rate(self) -> float:
@@ -415,6 +599,11 @@ class SpatialPopulation:
             registry=registry,
             tick=int(self._tick),
             adjacency=self._adjacency,
+            # TODO(spatial-migration/wrapper-signature-run-tick): Extend
+            # wrapper signature to pass heterogeneous routing payloads.
+            # Scope:
+            # - Add explicit args for sparse cache and per-deme kernel routing.
+            # - Keep backward compatibility for existing generated wrappers.
             migration_mode=self._migration_mode_code,
             topology_rows=0 if self._topology is None else int(self._topology.rows),
             topology_cols=0 if self._topology is None else int(self._topology.cols),
@@ -478,6 +667,11 @@ class SpatialPopulation:
             tick=int(self._tick),
             n_ticks=int(n_steps),
             adjacency=self._adjacency,
+            # TODO(spatial-migration/wrapper-signature-run): Extend wrapper
+            # signature to pass heterogeneous routing payloads.
+            # Scope:
+            # - Mirror run_tick signature additions for batch run wrapper.
+            # - Ensure generated template and runtime call sites stay aligned.
             migration_mode=self._migration_mode_code,
             topology_rows=0 if self._topology is None else int(self._topology.rows),
             topology_cols=0 if self._topology is None else int(self._topology.cols),

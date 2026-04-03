@@ -86,3 +86,53 @@ def test_spatial_population_rejects_non_base_population_deme():
         assert False, "Expected TypeError for non-BasePopulation deme"
     except (TypeError, AssertionError, AttributeError):  #?
         pass
+
+
+def test_spatial_population_accepts_csr_tuple_adjacency():
+    species = _make_species("spatial_struct_sparse_csr")
+    deme0 = _DummyDemePopulation(species, "d0")
+    deme1 = _DummyDemePopulation(species, "d1")
+
+    # CSR for [[0, 1], [1, 0]]
+    indptr = np.array([0, 1, 2], dtype=np.int64)
+    indices = np.array([1, 0], dtype=np.int64)
+    data = np.array([1.0, 1.0], dtype=np.float64)
+
+    sp = SpatialPopulation(
+        [deme0, deme1],
+        adjacency=(indptr, indices, data),
+        migration_rate=0.25,
+    )
+
+    expected = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64)
+    assert np.allclose(sp.adjacency, expected)
+
+
+def test_spatial_population_hybrid_strategy_interface_and_kernel_bank():
+    species = _make_species("spatial_struct_hybrid_iface")
+    deme0 = _DummyDemePopulation(species, "d0")
+    deme1 = _DummyDemePopulation(species, "d1")
+
+    kernel = np.array(
+        [
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+    sp = SpatialPopulation(
+        [deme0, deme1],
+        adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
+        migration_strategy="hybrid",
+        kernel_bank=(kernel,),
+        deme_kernel_ids=np.array([0, 0], dtype=np.int64),
+        migration_rate=0.1,
+    )
+
+    assert sp.migration_strategy == "hybrid"
+    assert sp.kernel_bank is not None
+    assert len(sp.kernel_bank) == 1
+    assert sp.deme_kernel_ids is not None
+    assert np.array_equal(sp.deme_kernel_ids, np.array([0, 0], dtype=np.int64))

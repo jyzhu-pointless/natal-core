@@ -1,4 +1,5 @@
 {
-    "files.trimTrailingWhitespace": true,
-    "python.analysis.autoImportCompletions": true
+  "files.trimTrailingWhitespace": true,
+  "python.analysis.autoImportCompletions": true,
+  "C_Cpp_Runner.msvcBatchPath": ""
 }
