@@ -184,19 +184,23 @@ def compute_mating_probability_matrix(
     assert A.shape == (g, g)
     assert M.shape == (g,)
 
-    # Multiply columns of alpha by male_counts (equivalent to alpha @ diag(M))
-    # weighted[gf,gm] = sexual_pref(gf,gm) * effective_males(gm)
-    # Semantics: female genotype gf sees male genotype gm "optional weight".
-    weighted = A * M[None, :]  # shape (g,g)
+    # Allocate one output matrix and fill it in-place to avoid temporary
+    # weighted / row_sums arrays.
+    P = np.empty((g, g), dtype=np.float64)
+    for gf in range(g):
+        row_sum = 0.0
+        for gm in range(g):
+            val = A[gf, gm] * M[gm]
+            P[gf, gm] = val
+            row_sum += val
 
-    # Row-normalize weighted matrix
-    # row_sums[gf] = sum_gm weighted[gf,gm]
-    # After normalization, we get P(gm | gf).
-    row_sums = weighted.sum(axis=1).reshape(-1, 1)  # shape (g,1)
-    # avoid division by zero: leave zero rows as zeros
-    # Vectorized handling: replace zero row sums with 1.0 and compute P without a Python loop
-    row_sums = np.where(row_sums == 0.0, 1.0, row_sums)
-    P = weighted / row_sums
+        if row_sum > 0.0:
+            inv = 1.0 / row_sum
+            for gm in range(g):
+                P[gf, gm] *= inv
+        else:
+            for gm in range(g):
+                P[gf, gm] = 0.0
     return P
 
 @njit_switch(cache=True)
@@ -247,16 +251,12 @@ def sample_mating(
           `p_mating(age) = female_mating_rates_by_age[age]`.
     """
     S = sperm_store.copy()
-    F = female_counts.copy()
+    F = female_counts
     female_rates = np.asarray(female_mating_rates_by_age)
 
     # n_f_int = np.round(F).astype(np.int64)
     P = np.asarray(mating_prob)  # (g, g)
     assert female_rates.shape[0] == n_ages
-
-    # Extract adult individuals
-    adult_ages = np.arange(adult_start_idx, n_ages)
-    F_adults = F[adult_start_idx:, :]  # (n_adult, g)
 
     # NOTE:
     # sperm_store stores only mated-female allocations by male genotype.
@@ -267,13 +267,16 @@ def sample_mating(
     if is_stochastic:
         # ===== Monogamous random mode =====
         # Steps: (1) Determine mating count (2) Choose mating partner genotype
-        for a_idx, a in enumerate(adult_ages):
-            actual_matings = np.zeros((n_genotypes, n_genotypes), dtype=np.float64)
+        temp_mating = np.zeros(n_genotypes, dtype=np.float64)
+        draws_int = np.zeros(n_genotypes, dtype=np.int64)
+        for a in range(adult_start_idx, n_ages):
+            # Rebuild this age-slice from current outcomes.
+            S[a, :, :] = 0.0
 
             for gf in range(n_genotypes):
                 # Step 1: How many females of this genotype participate in mating?
                 # _n1: Current (age, gf) female count
-                _n1 = float(F_adults[a_idx, gf])
+                _n1 = float(F[a, gf])
                 # Age-specific female mating probability at age a.
                 _p1 = _clamp01(float(female_rates[a]))
 
@@ -290,42 +293,213 @@ def sample_mating(
                 if n_mating > EPS:
                     if use_dirichlet_sampling:
                         # Continuous sampling: use Dirichlet instead of Multinomial
-                        temp_mating = np.zeros(n_genotypes, dtype=np.float64)
                         continuous_multinomial(n_mating, P[gf, :], temp_mating)
-                        actual_matings[gf, :] = temp_mating
+                        S[a, gf, :] = temp_mating
                     else:
                         # Discrete sampling: standard Multinomial
                         # actual_matings[gf,gm]:
                         # Allocation of mated females gf paired with males gm.
-                        actual_matings[gf, :] = nbc.multinomial(int(round(n_mating)), P[gf, :]).astype(np.float64)
-
-            # Step 3: Update sperm store (rebuild entire row)
-            # sperm_store only records mated females, not virgins, so directly overwrite with current mating results.
-            for gf in range(n_genotypes):
-                for gm in range(n_genotypes):
-                    S[a, gf, gm] = actual_matings[gf, gm]
+                        draws_int = nbc.multinomial(int(round(n_mating)), P[gf, :])
+                        for gm in range(n_genotypes):
+                            S[a, gf, gm] = float(draws_int[gm])
 
         return S
 
     else:
         # ===== Monogamous deterministic mode =====
         # Mating count = female count * mating rate * P[gf, gm]
-        for a_idx, a in enumerate(adult_ages):
-            expected_gf_gm = np.zeros((n_genotypes, n_genotypes), dtype=np.float64)
-
+        for a in range(adult_start_idx, n_ages):
             for gf in range(n_genotypes):
                 # Deterministic version:
                 # E[n_mating(age)] = female_count(age) * mating_rate(age)
-                n_mating = F_adults[a_idx, gf] * _clamp01(float(female_rates[a]))
+                n_mating = F[a, gf] * _clamp01(float(female_rates[a]))
                 # E[matings(gf,gm)] = E[n_mating] * P(gm|gf)
-                expected_gf_gm[gf, :] = n_mating * P[gf, :]
-
-            # Update sperm store (consistent with random branch, rebuild entire row)
-            for gf in range(n_genotypes):
                 for gm in range(n_genotypes):
-                    S[a, gf, gm] = expected_gf_gm[gf, gm]
+                    S[a, gf, gm] = n_mating * P[gf, gm]
 
         return S
+
+@njit_switch(cache=True)
+def compute_offspring_probability_tensor(
+    meiosis_f: Annotated[NDArray[np.float64], "shape=(g,hl)"],
+    meiosis_m: Annotated[NDArray[np.float64], "shape=(g,hl)"],
+    haplo_to_genotype_map: Annotated[NDArray[np.float64], "shape=(hl,hl,g)"],
+    n_genotypes: int,
+    n_haplogenotypes: int,
+    n_glabs: int = 1,
+) -> Annotated[NDArray[np.float64], "shape=(g,g,g)"]:
+    """Precompute offspring genotype probabilities for all (gf, gm) pairs.
+
+    Args:
+        meiosis_f: Female meiosis probability matrix with shape ``(g, hl)``.
+        meiosis_m: Male meiosis probability matrix with shape ``(g, hl)``.
+        haplo_to_genotype_map: Haplotype-pair to genotype map with shape
+            ``(hl, hl, g)``.
+        n_genotypes: Number of diploid genotypes ``g``.
+        n_haplogenotypes: Number of haploid genotypes.
+        n_glabs: Number of gamete-label variants per haplotype.
+
+    Returns:
+        Offspring probability tensor with shape ``(g, g, g)`` where
+        ``out[gf, gm, g_off] = P(g_off | gf, gm)``.
+    """
+    G_f = np.asarray(meiosis_f, dtype=np.float64)
+    G_m = np.asarray(meiosis_m, dtype=np.float64)
+    H = np.asarray(haplo_to_genotype_map, dtype=np.float64)
+
+    hl = n_haplogenotypes * n_glabs
+    H_contig = np.ascontiguousarray(H)
+    H_flat = H_contig.reshape(hl * hl, n_genotypes)
+
+    G_f_expanded = G_f[:, None, :, None]      # (g, 1, hl, 1)
+    G_m_expanded = G_m[None, :, None, :]      # (1, g, 1, hl)
+    all_gamete_pairs = G_f_expanded * G_m_expanded  # (g, g, hl, hl)
+
+    all_gamete_pairs_flat = all_gamete_pairs.reshape(n_genotypes * n_genotypes, hl * hl)
+    P_offspring_flat = np.dot(all_gamete_pairs_flat, H_flat)
+    return P_offspring_flat.reshape(n_genotypes, n_genotypes, n_genotypes)
+
+
+@njit_switch(cache=True)
+def _fertilize_with_precomputed_offspring_probability(
+    sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
+    fertility_f: Annotated[NDArray[np.float64], "shape=(g,)"],
+    fertility_m: Annotated[NDArray[np.float64], "shape=(g,)"],
+    offspring_probability: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
+    average_eggs_per_wt_female: float,
+    adult_start_idx: int,
+    n_ages: int,
+    n_genotypes: int,
+    proportion_of_females_that_reproduce: float = 1.0,
+    fixed_eggs: bool = False,
+    sex_ratio: float = 0.5,
+    is_stochastic: bool = True,
+    use_dirichlet_sampling: bool = False,
+) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
+    """Generate offspring counts using precomputed offspring probabilities."""
+    S = np.asarray(sperm_storage_by_male_genotype, dtype=np.float64)
+    phi_f = np.asarray(fertility_f, dtype=np.float64)
+    phi_m = np.asarray(fertility_m, dtype=np.float64)
+    P_offspring = np.asarray(offspring_probability, dtype=np.float64)
+
+    n_offspring_by_geno = np.zeros(n_genotypes, dtype=np.float64)
+    p_norm = np.zeros(n_genotypes, dtype=np.float64)
+    temp_offspring = np.zeros(n_genotypes, dtype=np.float64)
+    draws_int = np.zeros(n_genotypes, dtype=np.int64)
+    p_reproduce = _clamp01(float(proportion_of_females_that_reproduce))
+
+    has_combo = False
+    for a in range(adult_start_idx, n_ages):
+        for gf in range(n_genotypes):
+            fertility_factor_f = phi_f[gf]
+            for gm in range(n_genotypes):
+                pair_count = float(S[a, gf, gm])
+                if pair_count <= 0.0:
+                    continue
+
+                has_combo = True
+
+                lambda_pair = average_eggs_per_wt_female * fertility_factor_f * phi_m[gm]
+                n_total = 0.0
+
+                if is_stochastic:
+                    if use_dirichlet_sampling:
+                        n_pairs_for_sampling = float(pair_count)
+                    else:
+                        n_pairs_for_sampling = float(np.round(pair_count))
+
+                    if proportion_of_females_that_reproduce < 1.0:
+                        if use_dirichlet_sampling:
+                            n_reproducing = float(continuous_binomial(n_pairs_for_sampling, p_reproduce))
+                        else:
+                            n_reproducing = float(nbc.binomial(int(n_pairs_for_sampling), p_reproduce))
+                    else:
+                        n_reproducing = float(n_pairs_for_sampling)
+
+                    total_lambda = float(n_reproducing * lambda_pair)
+
+                    if fixed_eggs:
+                        if use_dirichlet_sampling:
+                            n_total = float(total_lambda)
+                        else:
+                            n_total = float(np.round(total_lambda))
+                    else:
+                        if use_dirichlet_sampling:
+                            n_total = float(continuous_poisson(total_lambda))
+                        else:
+                            n_total = float(np.random.poisson(float(total_lambda)))
+                else:
+                    n_reproducing = float(pair_count * proportion_of_females_that_reproduce)
+                    n_total = float(n_reproducing * lambda_pair)
+
+                if n_total <= EPS:
+                    continue
+
+                p_surv = 0.0
+                for g_off in range(n_genotypes):
+                    p_surv += P_offspring[gf, gm, g_off]
+
+                if is_stochastic:
+                    if p_surv <= EPS:
+                        continue
+
+                    n_viable = 0.0
+
+                    if p_surv >= 1.0 - EPS:
+                        n_viable = float(n_total)
+                    else:
+                        if use_dirichlet_sampling:
+                            n_viable = float(continuous_binomial(n_total, p_surv))
+                        else:
+                            n_viable = float(nbc.binomial(int(round(n_total)), p_surv))
+
+                    if n_viable <= EPS:
+                        continue
+
+                    inv_surv = 1.0 / p_surv
+                    for g_off in range(n_genotypes):
+                        p_norm[g_off] = P_offspring[gf, gm, g_off] * inv_surv
+
+                    if use_dirichlet_sampling:
+                        continuous_multinomial(n_viable, p_norm, temp_offspring)
+                        for g_off in range(n_genotypes):
+                            n_offspring_by_geno[g_off] += temp_offspring[g_off]
+                    else:
+                        draws_int = nbc.multinomial(int(round(n_viable)), p_norm)
+                        for g_off in range(n_genotypes):
+                            n_offspring_by_geno[g_off] += float(draws_int[g_off])
+                else:
+                    for g_off in range(n_genotypes):
+                        n_offspring_by_geno[g_off] += n_total * P_offspring[gf, gm, g_off]
+
+    if not has_combo:
+        return np.zeros(n_genotypes), np.zeros(n_genotypes)
+
+    total_offspring = n_offspring_by_geno.sum()
+    if total_offspring > EPS:
+        if is_stochastic:
+            sex_ratio_scalar = _clamp01(float(sex_ratio))
+            if use_dirichlet_sampling:
+                n_females_total = continuous_binomial(total_offspring, sex_ratio_scalar)
+            else:
+                n_females_total = float(nbc.binomial(int(total_offspring), sex_ratio_scalar))
+        else:
+            n_females_total = total_offspring * sex_ratio
+
+        n_males_total = total_offspring - n_females_total
+        n_offspring_female = np.zeros(n_genotypes, dtype=np.float64)
+        n_offspring_male = np.zeros(n_genotypes, dtype=np.float64)
+
+        nonzero_mask = n_offspring_by_geno > 0
+        if nonzero_mask.any():
+            proportions = n_offspring_by_geno / n_offspring_by_geno.sum()
+            n_offspring_female = proportions * n_females_total
+            n_offspring_male = proportions * n_males_total
+
+        return n_offspring_female, n_offspring_male
+
+    return np.zeros(n_genotypes), np.zeros(n_genotypes)
+
 
 @njit_switch(cache=True)
 def fertilize_with_mating_genotype(
@@ -386,253 +560,94 @@ def fertilize_with_mating_genotype(
     """
 
     # F = np.asarray(female_counts, dtype=np.float64)
-    S = np.asarray(sperm_storage_by_male_genotype, dtype=np.float64)
-    phi_f = np.asarray(fertility_f, dtype=np.float64)
-    phi_m = np.asarray(fertility_m, dtype=np.float64)
-    G_f = np.asarray(meiosis_f, dtype=np.float64)
-    G_m = np.asarray(meiosis_m, dtype=np.float64)
-    H = np.asarray(haplo_to_genotype_map, dtype=np.float64)
+    P_offspring = compute_offspring_probability_tensor(
+        meiosis_f=meiosis_f,
+        meiosis_m=meiosis_m,
+        haplo_to_genotype_map=haplo_to_genotype_map,
+        n_genotypes=n_genotypes,
+        n_haplogenotypes=n_haplogenotypes,
+        n_glabs=n_glabs,
+    )
 
-    hl = n_haplogenotypes * n_glabs
+    return _fertilize_with_precomputed_offspring_probability(
+        sperm_storage_by_male_genotype=sperm_storage_by_male_genotype,
+        fertility_f=fertility_f,
+        fertility_m=fertility_m,
+        offspring_probability=P_offspring,
+        average_eggs_per_wt_female=average_eggs_per_wt_female,
+        adult_start_idx=adult_start_idx,
+        n_ages=n_ages,
+        n_genotypes=n_genotypes,
+        proportion_of_females_that_reproduce=proportion_of_females_that_reproduce,
+        fixed_eggs=fixed_eggs,
+        sex_ratio=sex_ratio,
+        is_stochastic=is_stochastic,
+        use_dirichlet_sampling=use_dirichlet_sampling,
+    )
 
-    # =========================================================================
-    # Step 1: Precompute offspring genotype probability matrix P_offspring[gf, gm, g_off] (vectorized version)
-    # =========================================================================
 
-    H_contig = np.ascontiguousarray(H)
-    H_flat = H_contig.reshape(hl * hl, n_genotypes)
+@njit_switch(cache=True)
+def fertilize_with_precomputed_offspring_probability(
+    female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
+    sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
+    fertility_f: Annotated[NDArray[np.float64], "shape=(g,)"],
+    fertility_m: Annotated[NDArray[np.float64], "shape=(g,)"],
+    offspring_probability: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
+    average_eggs_per_wt_female: float,
+    adult_start_idx: int,
+    n_ages: int,
+    n_genotypes: int,
+    n_haplogenotypes: int,
+    n_glabs: int = 1,
+    proportion_of_females_that_reproduce: float = 1.0,
+    fixed_eggs: bool = False,
+    sex_ratio: float = 0.5,
+    is_stochastic: bool = True,
+    use_dirichlet_sampling: bool = False,
+) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
+    """Fertilization wrapper using externally precomputed offspring probabilities.
 
-    # Use broadcasting multiplication to replace individual np.outer() calls
-    # G_f: (g, hl) → (g, 1, hl, 1)
-    # G_m: (g, hl) → (1, g, 1, hl)
-    # Broadcast: (g, g, hl, hl)
-    G_f_expanded = G_f[:, None, :, None]      # (g, 1, hl, 1)
-    G_m_expanded = G_m[None, :, None, :]      # (1, g, 1, hl)
-    all_gamete_pairs = G_f_expanded * G_m_expanded  # (g, g, hl, hl)
+    Args:
+        female_counts: Female counts array with shape (A, g). Reserved for API
+            compatibility with the non-precomputed variant.
+        sperm_storage_by_male_genotype: Sperm storage array with shape (A, g, g).
+        fertility_f: Female fertility rates with shape (g,).
+        fertility_m: Male fertility rates with shape (g,).
+        offspring_probability: Precomputed offspring tensor (g, g, g).
+        average_eggs_per_wt_female: Average eggs produced per wild-type female.
+        adult_start_idx: Starting age index for adults.
+        n_ages: Total number of age classes.
+        n_genotypes: Number of genotypes.
+        n_haplogenotypes: Unused here; kept for signature parity.
+        n_glabs: Unused here; kept for signature parity.
+        proportion_of_females_that_reproduce: Proportion of females that reproduce.
+        fixed_eggs: Whether to use fixed egg counts.
+        sex_ratio: Offspring female ratio.
+        is_stochastic: Whether to sample stochastically.
+        use_dirichlet_sampling: Whether to use continuous sampling.
 
-    # Flatten to (g*g, hl*hl) then matrix multiplication
-    all_gamete_pairs_flat = all_gamete_pairs.reshape(n_genotypes * n_genotypes, hl * hl)
-    P_offspring_flat = np.dot(all_gamete_pairs_flat, H_flat)  # (g*g, g)
-    P_offspring = P_offspring_flat.reshape(n_genotypes, n_genotypes, n_genotypes)
+    Returns:
+        Tuple containing female and male offspring counts with shape (g,).
+    """
+    _ = female_counts
+    _ = n_haplogenotypes
+    _ = n_glabs
+    return _fertilize_with_precomputed_offspring_probability(
+        sperm_storage_by_male_genotype=sperm_storage_by_male_genotype,
+        fertility_f=fertility_f,
+        fertility_m=fertility_m,
+        offspring_probability=offspring_probability,
+        average_eggs_per_wt_female=average_eggs_per_wt_female,
+        adult_start_idx=adult_start_idx,
+        n_ages=n_ages,
+        n_genotypes=n_genotypes,
+        proportion_of_females_that_reproduce=proportion_of_females_that_reproduce,
+        fixed_eggs=fixed_eggs,
+        sex_ratio=sex_ratio,
+        is_stochastic=is_stochastic,
+        use_dirichlet_sampling=use_dirichlet_sampling,
+    )
 
-    # NOTE:
-    # We intentionally do not pre-normalize P_offspring along offspring-genotype
-    # axis. If row sum < 1, the missing mass is interpreted as lethality and is
-    # handled later by viability filtering (n_viable_eggs sampling).
-    # Vectorized normalization (single sum, replacing 81 sums)
-    # P_sums_step1 = P_offspring.sum(axis=2)  # (g, g) single sum!
-    # P_sums_step1_safe = np.where(P_sums_step1 > 0, P_sums_step1, 1.0)
-    # P_offspring = P_offspring / P_sums_step1_safe[:, :, None]
-
-    # =========================================================================
-    # Step 2: Batch extract data for all (age, gf, gm) combinations (vectorized version)
-    # =========================================================================
-
-    S_adults = S[adult_start_idx:, :, :]  # (A_adult, g, g)
-
-    # Use np.nonzero() to find all non-zero elements at once (replacing triple for loop)
-    nonzero_mask = S_adults > 0
-    a_indices, gf_indices, gm_indices = np.nonzero(nonzero_mask)
-
-    if len(a_indices) == 0:
-        # No mating pairs
-        return np.zeros(n_genotypes), np.zeros(n_genotypes)
-
-    # Construct combo_indices and combo_pairs (vectorized)
-    # Numba does not support multi-dimensional fancy indexing, manually calculate flat indices
-    combo_indices = np.stack((a_indices, gf_indices, gm_indices), axis=1).astype(np.int32)
-
-    # Manually calculate flat indices: for array with shape=(D0, D1, D2), index(i,j,k) -> i*D1*D2 + j*D2 + k
-    S_adults_flat = S_adults.ravel()
-    shape = S_adults.shape
-    flat_indices = a_indices * shape[1] * shape[2] + gf_indices * shape[2] + gm_indices
-    combo_pairs = S_adults_flat[flat_indices]
-    n_combos = len(a_indices)
-
-    # =========================================================================
-    # Step 3: Batch calculate expected egg count (lambda)
-    # =========================================================================
-
-    gf_array = combo_indices[:, 1]  # (N_combos,)
-    gm_array = combo_indices[:, 2]  # (N_combos,)
-
-    # lambda_per_pair[i]:
-    # "Expected egg count" of a (gf,gm) pair in a single tick.
-    # = base egg count * female fertility fitness * male fertility fitness
-    # Dimension: eggs / pair / tick
-    #
-    # total_lambda[i] = lambda_per_pair[i] * n_reproducing_pairs[i]
-    # Dimension: eggs / tick
-    lambda_per_pair = average_eggs_per_wt_female * phi_f[gf_array] * phi_m[gm_array]  # (N_combos,)
-
-    if is_stochastic:
-        # Batch sample number of impregnated pairs (optimized version)
-        if use_dirichlet_sampling:
-            # Dirichlet mode: no rounding needed, maintain floating point continuity
-            n_pairs_for_sampling = combo_pairs
-        else:
-            # Traditional discrete mode: rounding needed
-            n_pairs_for_sampling = np.round(combo_pairs)
-
-        if proportion_of_females_that_reproduce < 1.0:
-            # Batch binomial sampling
-            # Explicitly convert to float to avoid Numba binomial type issues
-            p_reproduce = _clamp01(float(proportion_of_females_that_reproduce))
-            if use_dirichlet_sampling:
-                # Continuous sampling: use Beta instead of Binomial
-                n_reproducing = np.array([
-                    continuous_binomial(n_pairs_for_sampling[i], p_reproduce)
-                    for i in range(n_combos)
-                ], dtype=np.float64)
-            else:
-                # Discrete sampling: standard Binomial
-                n_reproducing = np.array([
-                    float(nbc.binomial(int(n_pairs_for_sampling[i]), p_reproduce))
-                    for i in range(n_combos)
-                ], dtype=np.float64)
-        else:
-            # Directly use n_pairs_for_sampling
-            n_reproducing = n_pairs_for_sampling.astype(np.float64)
-
-        # Calculate total expected egg count for each combo:
-        # total_lambda = n_reproducing * lambda_per_pair
-        total_lambda = n_reproducing.astype(np.float64) * lambda_per_pair  # (N_combos,)
-
-        # Batch sample egg count (key optimization!)
-        if fixed_eggs:
-            if use_dirichlet_sampling:
-                # Fixed egg count in Dirichlet mode does not need rounding
-                n_eggs_per_combo = total_lambda
-            else:
-                n_eggs_per_combo = np.round(total_lambda).astype(np.float64)
-        else:
-            # Single batch Poisson sampling for all combinations
-            if use_dirichlet_sampling:
-                # Continuous sampling: use Gamma instead of Poisson
-                n_eggs_per_combo = np.array([
-                    continuous_poisson(lam) for lam in total_lambda
-                ], dtype=np.float64)
-            else:
-                # Discrete sampling: standard Poisson
-                n_eggs_per_combo = np.array([
-                    np.random.poisson(lam) for lam in total_lambda
-                ], dtype=np.int64).astype(np.float64)
-
-    else:
-        # Deterministic mode: no rounding needed, maintain floating point precision
-        n_reproducing = combo_pairs
-        n_eggs_per_combo = n_reproducing * lambda_per_pair
-
-    # =========================================================================
-    # Step 4: Vectorized sampling of offspring genotypes (optimized version)
-    # =========================================================================
-
-    # Precompute genotype probability matrices and their normalization coefficients for all combos
-    # P_matrix[i, g_off] = P(offspring genotype = g_off | combo_i)
-    # Where combo_i represents some (age, gf, gm).
-    # Numba does not support multi-dimensional fancy indexing, use loops to extract probability matrices for each combo individually
-    P_matrix = np.empty((n_combos, n_genotypes), dtype=np.float64)
-    for i in range(n_combos):
-        P_matrix[i, :] = P_offspring[int(gf_array[i]), int(gm_array[i]), :]
-    # P_sums[i] = sum_g_off P_matrix[i, g_off]
-    # If < 1, the missing mass is interpreted as "embryo/zygote lethality" probability mass.
-    P_sums = P_matrix.sum(axis=1)   # shape (n_combos,)
-
-    # Avoid division by zero
-    P_sums_safe = np.where(P_sums > 0, P_sums, 1.0)
-    P_matrix_norm = P_matrix / P_sums_safe[:, None]  # shape (n_combos, n_genotypes)
-
-    if is_stochastic:
-        # ===== Random mode: sample individually but use precomputed normalized probabilities =====
-
-        # 1. Calculate viable zygote count (Pre-competition / Zygote Viability)
-        # If P_sums[i] < 1.0, it indicates partial zygote genotype lethality, need binomial filtering first
-        n_viable_eggs = np.zeros(n_combos, dtype=np.float64)
-
-        for i in range(n_combos):
-            n_total = n_eggs_per_combo[i]
-            # p_surv: probability mass that "can survive to subsequent typing step" for this combo
-            p_surv = P_sums[i]
-
-            if n_total <= EPS or p_surv <= EPS:
-                n_viable_eggs[i] = 0.0
-            elif p_surv >= 1.0 - EPS:
-                n_viable_eggs[i] = n_total
-            else:
-                if use_dirichlet_sampling:
-                    n_viable_eggs[i] = continuous_binomial(n_total, p_surv)
-                else:
-                    n_viable_eggs[i] = float(nbc.binomial(int(round(n_total)), p_surv))  # pyright: ignore
-
-        # 2. Sample offspring genotypes (Multinomial)
-        # Use normalized P_matrix_norm conditional distribution to allocate viable eggs to each genotype.
-        offspring_samples = np.empty((n_combos, n_genotypes), dtype=np.float64)
-        temp_offspring = np.zeros(n_genotypes, dtype=np.float64)  # Temporary array for Dirichlet
-
-        for i in range(n_combos):
-            n_eggs = n_viable_eggs[i]
-
-            if n_eggs > EPS:
-                if use_dirichlet_sampling:
-                    # Continuous sampling: use Dirichlet instead of Multinomial
-                    continuous_multinomial(n_eggs, P_matrix_norm[i, :], temp_offspring)
-                    offspring_samples[i, :] = temp_offspring
-                else:
-                    # Discrete sampling: standard Multinomial
-                    offspring_samples[i, :] = nbc.multinomial(
-                        int(round(n_eggs)),
-                        P_matrix_norm[i, :]
-                    ).astype(np.float64)
-            else:
-                offspring_samples[i, :] = 0.0
-
-        # Vectorized accumulation: sum offspring genotype counts for all combos by column
-        n_offspring_by_geno = offspring_samples.sum(axis=0).astype(np.float64)
-    else:
-        # ===== Deterministic mode: directly use expected values =====
-        # Contribution matrix: (n_combos, g)
-        # contributions[i,g] = eggs_i * P(offspring=g | combo_i)
-        contributions = n_eggs_per_combo[:, None] * P_matrix  # shape (n_combos, n_genotypes)
-        # Single sum operation
-        n_offspring_by_geno = contributions.sum(axis=0)
-
-    # =========================================================================
-    # Step 5: Sex allocation
-    # =========================================================================
-
-    total_offspring = n_offspring_by_geno.sum()
-    if total_offspring > EPS:
-        if is_stochastic:
-            # Explicitly convert to Python float to avoid Numba binomial type issues
-            # sex_ratio = P(female); total females ~ Binomial(total_offspring, sex_ratio)
-            sex_ratio_scalar = _clamp01(float(sex_ratio))
-            if use_dirichlet_sampling:
-                # Continuous sampling: use Beta instead of Binomial
-                n_females_total = continuous_binomial(total_offspring, sex_ratio_scalar)
-            else:
-                # Discrete sampling: standard Binomial
-                n_females_total = float(nbc.binomial(int(total_offspring), sex_ratio_scalar))
-        else:
-            # Deterministic mode: no rounding
-            n_females_total = total_offspring * sex_ratio
-
-        n_males_total = total_offspring - n_females_total
-
-        # Allocate to each genotype (proportionally):
-        # In the current implementation, sex allocation is done on the total first, then distributed by genotype proportion.
-        # i.e., default "genotype and sex allocation are independent".
-        n_offspring_female = np.zeros(n_genotypes, dtype=np.float64)
-        n_offspring_male = np.zeros(n_genotypes, dtype=np.float64)
-
-        nonzero_mask = n_offspring_by_geno > 0
-        if nonzero_mask.any():
-            proportions = n_offspring_by_geno / n_offspring_by_geno.sum()
-            n_offspring_female = proportions * n_females_total
-            n_offspring_male = proportions * n_males_total
-
-        return n_offspring_female, n_offspring_male
-    else:
-        return np.zeros(n_genotypes), np.zeros(n_genotypes)
 
 @njit_switch(cache=True)
 def compute_age_based_survival_rates(

@@ -24,7 +24,11 @@ except ImportError:
 
 import natal.algorithms as alg
 from natal import numba_compat as nbc
-from natal.kernels.simulation_kernels import run_aging, run_reproduction, run_survival
+from natal.kernels.simulation_kernels import (
+    run_aging,
+    run_reproduction_with_precomputed_offspring_probability,
+    run_survival,
+)
 from natal.numba_utils import njit_switch
 from natal.population_config import PopulationConfig
 
@@ -338,6 +342,472 @@ def _apply_spatial_adjacency_migration_stochastic_parallel(
 
 
 @njit_switch(cache=True)
+def _build_kernel_offset_table(
+    migration_kernel: NDArray[np.float64],
+    kernel_include_center: bool,
+) -> Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.float64], int]:
+    """Build compact non-zero kernel offsets once per migration call.
+
+    The migration kernel is source-relative. This helper converts kernel matrix
+    coordinates into flat offset vectors ``(d_row, d_col, weight)`` and drops
+    zero-weight entries (and optionally the center). The returned vectors are
+    reused for every source deme in the same migration call.
+
+    Args:
+        migration_kernel: Odd-sized kernel whose center corresponds to the
+            source deme.
+        kernel_include_center: Whether the center kernel cell contributes to
+            outbound routing.
+
+    Returns:
+        A tuple ``(d_row, d_col, weights, nnz)`` where:
+
+        - ``d_row`` stores row offsets relative to each source.
+        - ``d_col`` stores column offsets relative to each source.
+        - ``weights`` stores raw positive kernel weights.
+        - ``nnz`` is the number of valid entries in those arrays.
+    """
+    # Kernel shape and center index are used to convert matrix coordinates
+    # into source-relative offsets.
+    kernel_rows = migration_kernel.shape[0]
+    kernel_cols = migration_kernel.shape[1]
+    center_row = kernel_rows // 2
+    center_col = kernel_cols // 2
+    # The maximum possible non-zero count is the full kernel size.
+    max_nnz = kernel_rows * kernel_cols
+
+    # Preallocate compact vectors. Only the first ``nnz`` entries are valid.
+    d_row = np.zeros(max_nnz, dtype=np.int64)
+    d_col = np.zeros(max_nnz, dtype=np.int64)
+    weights = np.zeros(max_nnz, dtype=np.float64)
+
+    # Write cursor of the compact representation.
+    nnz = 0
+    for kernel_row in range(kernel_rows):
+        for kernel_col in range(kernel_cols):
+            # Optionally exclude self-loop from the kernel center.
+            if (not kernel_include_center) and kernel_row == center_row and kernel_col == center_col:
+                continue
+            # Ignore non-positive entries so sparse traversal stays compact.
+            weight = migration_kernel[kernel_row, kernel_col]
+            if weight <= 0.0:
+                continue
+
+            # Convert kernel coordinates into source-relative offsets.
+            d_row[nnz] = kernel_row - center_row
+            d_col[nnz] = kernel_col - center_col
+            weights[nnz] = weight
+            nnz += 1
+
+    return d_row, d_col, weights, nnz
+
+
+@njit_switch(cache=True)
+def _build_source_kernel_sparse_row(
+    source_idx: int,
+    topology_rows: int,
+    topology_cols: int,
+    topology_wrap: bool,
+    d_row: NDArray[np.int64],
+    d_col: NDArray[np.int64],
+    weights: NDArray[np.float64],
+    kernel_nnz: int,
+    row_dst_idx: NDArray[np.int64],
+    row_dst_prob: NDArray[np.float64],
+) -> int:
+    """Build one source row in compact sparse form from kernel offsets.
+
+    This helper applies the compact kernel offset table to exactly one source
+    deme. It resolves valid destination demes under either wrapped or clipped
+    borders, writes destination indices and raw weights, then normalizes the
+    row probabilities in place.
+
+    Args:
+        source_idx: Flattened source-deme index.
+        topology_rows: Number of rows in the topology grid.
+        topology_cols: Number of columns in the topology grid.
+        topology_wrap: Whether offsets wrap around topology borders.
+        d_row: Compact row offsets produced by
+            ``_build_kernel_offset_table``.
+        d_col: Compact column offsets produced by
+            ``_build_kernel_offset_table``.
+        weights: Compact raw kernel weights produced by
+            ``_build_kernel_offset_table``.
+        kernel_nnz: Number of valid compact offsets.
+        row_dst_idx: Preallocated destination-index output buffer.
+        row_dst_prob: Preallocated destination-probability output buffer.
+
+    Returns:
+        The number of valid destinations written into
+        ``row_dst_idx``/``row_dst_prob``.
+    """
+    # Clear output row so any unused tail slots remain deterministic.
+    for idx in range(row_dst_idx.shape[0]):
+        row_dst_idx[idx] = -1
+        row_dst_prob[idx] = 0.0
+
+    # Invalid topology or empty kernel means no outbound destinations.
+    if topology_rows <= 0 or topology_cols <= 0 or kernel_nnz <= 0:
+        return 0
+
+    # Decode flattened source index into grid coordinates.
+    src_row = source_idx // topology_cols
+    src_col = source_idx % topology_cols
+
+    # ``total`` tracks raw weight mass for later normalization.
+    total = 0.0
+    # ``count`` is the number of valid destinations written so far.
+    count = 0
+    for idx in range(kernel_nnz):
+        # Apply source-relative offset.
+        dst_row = src_row + int(d_row[idx])
+        dst_col = src_col + int(d_col[idx])
+
+        if topology_wrap:
+            # Periodic topology: wrap both axes.
+            dst_row %= topology_rows
+            dst_col %= topology_cols
+        elif dst_row < 0 or dst_row >= topology_rows or dst_col < 0 or dst_col >= topology_cols:
+            # Non-wrapping topology: drop out-of-bounds offsets.
+            continue
+
+        # Write one sparse destination entry.
+        row_dst_idx[count] = dst_row * topology_cols + dst_col
+        row_dst_prob[count] = weights[idx]
+        total += weights[idx]
+        count += 1
+
+    if total > 0.0:
+        # Normalize only the written prefix so row probabilities sum to one.
+        inv_total = 1.0 / total
+        for idx in range(count):
+            row_dst_prob[idx] *= inv_total
+
+    return count
+
+
+@njit_switch(cache=True, parallel=True)
+def _apply_spatial_kernel_migration_deterministic_parallel(
+    ind_count_all: NDArray[np.float64],
+    sperm_store_all: NDArray[np.float64],
+    topology_rows: int,
+    topology_cols: int,
+    topology_wrap: bool,
+    migration_kernel: NDArray[np.float64],
+    kernel_include_center: bool,
+    rate: float,
+    n_threads: int,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Apply deterministic migration in kernel/topology mode.
+
+    Unlike adjacency-mode kernels that may prebuild full sparse rows for all
+    source demes, this function constructs one sparse row on-the-fly per source
+    inside ``prange``. For fixed small kernels this keeps routing work close to
+    ``O(kernel_nnz * n_demes)``.
+
+    Args:
+        ind_count_all: Stacked individual-count tensor.
+        sperm_store_all: Stacked sperm-storage tensor.
+        topology_rows: Number of rows in the topology grid.
+        topology_cols: Number of columns in the topology grid.
+        topology_wrap: Whether topology wraps around borders.
+        migration_kernel: Odd-sized kernel interpreted as source-relative
+            offsets.
+        kernel_include_center: Whether center kernel cell contributes.
+        rate: Deterministic migration probability for each scalar bucket.
+        n_threads: Number of thread lanes used for thread-local accumulation.
+
+    Returns:
+        A tuple ``(ind_next, sperm_next)`` after one deterministic migration
+        step.
+    """
+    # Leading dimensions are read once for tighter inner loops.
+    n_demes = ind_count_all.shape[0]
+    n_sexes = ind_count_all.shape[1]
+    n_ages = ind_count_all.shape[2]
+    n_genotypes = ind_count_all.shape[3]
+
+    # Build compact kernel offsets once and reuse across all source demes.
+    d_row, d_col, weights, kernel_nnz = _build_kernel_offset_table(
+        migration_kernel=migration_kernel,
+        kernel_include_center=kernel_include_center,
+    )
+
+    # Use thread-local output tensors to avoid write races in ``prange``.
+    out_ind_by_thread = np.zeros((n_threads,) + ind_count_all.shape, dtype=np.float64)
+    out_sperm_by_thread = np.zeros((n_threads,) + sperm_store_all.shape, dtype=np.float64)
+    # Per-thread sparse-row buffers avoid cross-thread mutation conflicts.
+    row_dst_idx_by_thread = np.full((n_threads, max(1, kernel_nnz)), -1, dtype=np.int64)
+    row_dst_prob_by_thread = np.zeros((n_threads, max(1, kernel_nnz)), dtype=np.float64)
+    # Per-thread scratch vector for outbound destination split.
+    distributed_by_thread = np.zeros((n_threads, max(1, kernel_nnz)), dtype=np.float64)
+
+    for src in prange(n_demes):
+        # Resolve current thread lane and lane-local buffers.
+        thread_id = get_thread_id()
+        out_ind = out_ind_by_thread[thread_id]
+        out_sperm = out_sperm_by_thread[thread_id]
+        row_dst_idx = row_dst_idx_by_thread[thread_id]
+        row_dst_prob = row_dst_prob_by_thread[thread_id]
+        distributed = distributed_by_thread[thread_id]
+
+        # Build sparse outbound row for this source only.
+        src_nnz = _build_source_kernel_sparse_row(
+            source_idx=src,
+            topology_rows=topology_rows,
+            topology_cols=topology_cols,
+            topology_wrap=topology_wrap,
+            d_row=d_row,
+            d_col=d_col,
+            weights=weights,
+            kernel_nnz=kernel_nnz,
+            row_dst_idx=row_dst_idx,
+            row_dst_prob=row_dst_prob,
+        )
+
+        # Female buckets are split into virgin + sperm-coupled parts.
+        for age in range(n_ages):
+            for female_genotype in range(n_genotypes):
+                # Aggregate stored sperm to recover virgin female mass.
+                stored_total = 0.0
+                for male_genotype in range(n_genotypes):
+                    stored_total += sperm_store_all[src, age, female_genotype, male_genotype]
+
+                female_total = ind_count_all[src, 0, age, female_genotype]
+                virgin_count = female_total - stored_total
+                if virgin_count < 0.0 and abs(virgin_count) < 1e-9:
+                    # Clamp tiny numerical drift.
+                    virgin_count = 0.0
+
+                # Migrate virgin female scalar bucket.
+                _migrate_scalar_bucket(
+                    value=virgin_count,
+                    row_dst_idx=row_dst_idx,
+                    row_dst_prob=row_dst_prob,
+                    row_dst_count=src_nnz,
+                    rate=rate,
+                    is_stochastic=False,
+                    use_dirichlet_sampling=False,
+                    distributed=distributed,
+                    out_ind=out_ind,
+                    source_idx=src,
+                    sex_idx=0,
+                    age_idx=age,
+                    genotype_idx=female_genotype,
+                )
+
+                for male_genotype in range(n_genotypes):
+                    # Migrate sperm bucket and synchronized mated-female mass.
+                    _migrate_sperm_bucket(
+                        value=sperm_store_all[src, age, female_genotype, male_genotype],
+                        row_dst_idx=row_dst_idx,
+                        row_dst_prob=row_dst_prob,
+                        row_dst_count=src_nnz,
+                        rate=rate,
+                        is_stochastic=False,
+                        use_dirichlet_sampling=False,
+                        distributed=distributed,
+                        out_ind=out_ind,
+                        out_sperm=out_sperm,
+                        source_idx=src,
+                        age_idx=age,
+                        female_genotype_idx=female_genotype,
+                        male_genotype_idx=male_genotype,
+                    )
+
+        # Migrate remaining individual buckets (male and other sexes).
+        for sex in range(1, n_sexes):
+            for age in range(n_ages):
+                for genotype in range(n_genotypes):
+                    _migrate_scalar_bucket(
+                        value=ind_count_all[src, sex, age, genotype],
+                        row_dst_idx=row_dst_idx,
+                        row_dst_prob=row_dst_prob,
+                        row_dst_count=src_nnz,
+                        rate=rate,
+                        is_stochastic=False,
+                        use_dirichlet_sampling=False,
+                        distributed=distributed,
+                        out_ind=out_ind,
+                        source_idx=src,
+                        sex_idx=sex,
+                        age_idx=age,
+                        genotype_idx=genotype,
+                    )
+
+    # Deterministically merge thread-local partial tensors.
+    out_ind = np.zeros_like(ind_count_all)
+    out_sperm = np.zeros_like(sperm_store_all)
+    for thread_id in range(n_threads):
+        out_ind += out_ind_by_thread[thread_id]
+        out_sperm += out_sperm_by_thread[thread_id]
+
+    return out_ind, out_sperm
+
+
+@njit_switch(cache=True, parallel=True)
+def _apply_spatial_kernel_migration_stochastic_parallel(
+    ind_count_all: NDArray[np.float64],
+    sperm_store_all: NDArray[np.float64],
+    topology_rows: int,
+    topology_cols: int,
+    topology_wrap: bool,
+    migration_kernel: NDArray[np.float64],
+    kernel_include_center: bool,
+    rate: float,
+    use_dirichlet_sampling: bool,
+    n_threads: int,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Apply stochastic migration in kernel/topology mode.
+
+    This function uses the same on-the-fly sparse row construction as the
+    deterministic kernel path, but samples outbound mass for each scalar bucket
+    (discrete Binomial/Multinomial or continuous Beta/Dirichlet approximation
+    depending on flags).
+
+    Args:
+        ind_count_all: Stacked individual-count tensor.
+        sperm_store_all: Stacked sperm-storage tensor.
+        topology_rows: Number of rows in the topology grid.
+        topology_cols: Number of columns in the topology grid.
+        topology_wrap: Whether topology wraps around borders.
+        migration_kernel: Odd-sized kernel interpreted as source-relative
+            offsets.
+        kernel_include_center: Whether center kernel cell contributes.
+        rate: Migration probability for each scalar bucket.
+        use_dirichlet_sampling: Whether stochastic routing uses continuous
+            approximation samplers.
+        n_threads: Number of thread lanes used for thread-local accumulation.
+
+    Returns:
+        A tuple ``(ind_next, sperm_next)`` after one stochastic migration
+        step.
+    """
+    # Leading dimensions are read once for tighter inner loops.
+    n_demes = ind_count_all.shape[0]
+    n_sexes = ind_count_all.shape[1]
+    n_ages = ind_count_all.shape[2]
+    n_genotypes = ind_count_all.shape[3]
+
+    # Build compact kernel offsets once and reuse across all source demes.
+    d_row, d_col, weights, kernel_nnz = _build_kernel_offset_table(
+        migration_kernel=migration_kernel,
+        kernel_include_center=kernel_include_center,
+    )
+
+    # Use thread-local output tensors to avoid write races in ``prange``.
+    out_ind_by_thread = np.zeros((n_threads,) + ind_count_all.shape, dtype=np.float64)
+    out_sperm_by_thread = np.zeros((n_threads,) + sperm_store_all.shape, dtype=np.float64)
+    # Per-thread sparse-row buffers avoid cross-thread mutation conflicts.
+    row_dst_idx_by_thread = np.full((n_threads, max(1, kernel_nnz)), -1, dtype=np.int64)
+    row_dst_prob_by_thread = np.zeros((n_threads, max(1, kernel_nnz)), dtype=np.float64)
+    # Per-thread scratch vector for outbound destination split.
+    distributed_by_thread = np.zeros((n_threads, max(1, kernel_nnz)), dtype=np.float64)
+
+    for src in prange(n_demes):
+        # Resolve current thread lane and lane-local buffers.
+        thread_id = get_thread_id()
+        out_ind = out_ind_by_thread[thread_id]
+        out_sperm = out_sperm_by_thread[thread_id]
+        row_dst_idx = row_dst_idx_by_thread[thread_id]
+        row_dst_prob = row_dst_prob_by_thread[thread_id]
+        distributed = distributed_by_thread[thread_id]
+
+        # Build sparse outbound row for this source only.
+        src_nnz = _build_source_kernel_sparse_row(
+            source_idx=src,
+            topology_rows=topology_rows,
+            topology_cols=topology_cols,
+            topology_wrap=topology_wrap,
+            d_row=d_row,
+            d_col=d_col,
+            weights=weights,
+            kernel_nnz=kernel_nnz,
+            row_dst_idx=row_dst_idx,
+            row_dst_prob=row_dst_prob,
+        )
+
+        # Female buckets are split into virgin + sperm-coupled parts.
+        for age in range(n_ages):
+            for female_genotype in range(n_genotypes):
+                # Aggregate stored sperm to recover virgin female mass.
+                stored_total = 0.0
+                for male_genotype in range(n_genotypes):
+                    stored_total += sperm_store_all[src, age, female_genotype, male_genotype]
+
+                female_total = ind_count_all[src, 0, age, female_genotype]
+                virgin_count = female_total - stored_total
+                if virgin_count < 0.0 and abs(virgin_count) < 1e-9:
+                    # Clamp tiny numerical drift.
+                    virgin_count = 0.0
+
+                # Migrate virgin female scalar bucket with stochastic routing.
+                _migrate_scalar_bucket(
+                    value=virgin_count,
+                    row_dst_idx=row_dst_idx,
+                    row_dst_prob=row_dst_prob,
+                    row_dst_count=src_nnz,
+                    rate=rate,
+                    is_stochastic=True,
+                    use_dirichlet_sampling=use_dirichlet_sampling,
+                    distributed=distributed,
+                    out_ind=out_ind,
+                    source_idx=src,
+                    sex_idx=0,
+                    age_idx=age,
+                    genotype_idx=female_genotype,
+                )
+
+                for male_genotype in range(n_genotypes):
+                    # Migrate sperm bucket and synchronized mated-female mass.
+                    _migrate_sperm_bucket(
+                        value=sperm_store_all[src, age, female_genotype, male_genotype],
+                        row_dst_idx=row_dst_idx,
+                        row_dst_prob=row_dst_prob,
+                        row_dst_count=src_nnz,
+                        rate=rate,
+                        is_stochastic=True,
+                        use_dirichlet_sampling=use_dirichlet_sampling,
+                        distributed=distributed,
+                        out_ind=out_ind,
+                        out_sperm=out_sperm,
+                        source_idx=src,
+                        age_idx=age,
+                        female_genotype_idx=female_genotype,
+                        male_genotype_idx=male_genotype,
+                    )
+
+        # Migrate remaining individual buckets (male and other sexes).
+        for sex in range(1, n_sexes):
+            for age in range(n_ages):
+                for genotype in range(n_genotypes):
+                    _migrate_scalar_bucket(
+                        value=ind_count_all[src, sex, age, genotype],
+                        row_dst_idx=row_dst_idx,
+                        row_dst_prob=row_dst_prob,
+                        row_dst_count=src_nnz,
+                        rate=rate,
+                        is_stochastic=True,
+                        use_dirichlet_sampling=use_dirichlet_sampling,
+                        distributed=distributed,
+                        out_ind=out_ind,
+                        source_idx=src,
+                        sex_idx=sex,
+                        age_idx=age,
+                        genotype_idx=genotype,
+                    )
+
+    # Deterministically merge thread-local partial tensors.
+    out_ind = np.zeros_like(ind_count_all)
+    out_sperm = np.zeros_like(sperm_store_all)
+    for thread_id in range(n_threads):
+        out_ind += out_ind_by_thread[thread_id]
+        out_sperm += out_sperm_by_thread[thread_id]
+
+    return out_ind, out_sperm
+
+
+@njit_switch(cache=True)
 def apply_spatial_adjacency_migration(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
@@ -404,6 +874,35 @@ def apply_spatial_adjacency_migration(
     """
     if rate <= 0.0:
         return ind_count_all, sperm_store_all
+
+    # Kernel-topology mode can route with O(kernel_nnz * n_demes) complexity
+    # without building n_demes x n_demes sparse tables every tick.
+    if migration_mode == 1:
+        if not is_stochastic:
+            return _apply_spatial_kernel_migration_deterministic_parallel(
+                ind_count_all=ind_count_all,
+                sperm_store_all=sperm_store_all,
+                topology_rows=topology_rows,
+                topology_cols=topology_cols,
+                topology_wrap=topology_wrap,
+                migration_kernel=migration_kernel,
+                kernel_include_center=kernel_include_center,
+                rate=rate,
+                n_threads=numba_max_threads,
+            )
+
+        return _apply_spatial_kernel_migration_stochastic_parallel(
+            ind_count_all=ind_count_all,
+            sperm_store_all=sperm_store_all,
+            topology_rows=topology_rows,
+            topology_cols=topology_cols,
+            topology_wrap=topology_wrap,
+            migration_kernel=migration_kernel,
+            kernel_include_center=kernel_include_center,
+            rate=rate,
+            use_dirichlet_sampling=use_dirichlet_sampling,
+            n_threads=numba_max_threads,
+        )
 
     row_dst_idx, row_dst_prob, row_nnz, row_total = _build_sparse_migration_rows(
         adjacency=adjacency,
@@ -478,10 +977,29 @@ def _build_sparse_migration_rows(
     # Sum of positive weights in each source row.
     row_total = np.zeros(n_demes, dtype=np.float64)
 
-    # ``row_probs`` is a reusable dense scratch buffer for one source row.
-    # Dense scratch row used to collect one source row before compaction.
+    # ``row_probs`` is only needed when migration rows are synthesized from
+    # topology/kernel metadata. For dense adjacency mode we compact directly
+    # from ``adjacency[src, :]`` in a single pass.
     row_probs = np.zeros(n_demes, dtype=np.float64)
     for src in range(n_demes):
+        # Adjacency mode can be compacted in one pass: iterate dense row once
+        # and write non-zero destinations directly to sparse buffers.
+        if migration_mode == 0:
+            src_total = 0.0
+            src_nnz = 0
+            for dst in range(n_demes):
+                prob = adjacency[src, dst]
+                if prob <= 0.0:
+                    continue
+                row_dst_idx[src, src_nnz] = dst
+                row_dst_prob[src, src_nnz] = prob
+                src_nnz += 1
+                src_total += prob
+
+            row_nnz[src] = src_nnz
+            row_total[src] = src_total
+            continue
+
         # Fill dense row for this source according to migration backend.
         _populate_migration_row(
             adjacency=adjacency,
@@ -874,19 +1392,30 @@ def run_spatial_reproduction(
     Returns:
         A tuple ``(ind_next, sperm_next)`` after reproduction.
     """
-    ind = ind_count_all.copy()
-    sperm = sperm_store_all.copy()
-    for deme_id in prange(ind.shape[0]):
+    # Precompute offspring probability tensor (config-dependent, not deme-dependent)
+    # to avoid redundant recomputation in the prange loop
+    offspring_probability = alg.compute_offspring_probability_tensor(
+        meiosis_f=config.genotype_to_gametes_map[0],
+        meiosis_m=config.genotype_to_gametes_map[1],
+        haplo_to_genotype_map=config.gametes_to_zygote_map,
+        n_genotypes=config.n_genotypes,
+        n_haplogenotypes=config.n_haploid_genotypes,
+        n_glabs=config.n_glabs,
+    )
+    # Modify input arrays in-place within prange loop.
+    # Safe because callers do not expect inputs to remain unmodified.
+    for deme_id in prange(ind_count_all.shape[0]):
         # Each deme runs the ordinary single-population kernel independently,
         # then the stacked spatial state is rebuilt deme by deme.
-        ind_d, sperm_d = run_reproduction(
-            ind_count=ind[deme_id],
-            sperm_store=sperm[deme_id],
+        ind_d, sperm_d = run_reproduction_with_precomputed_offspring_probability(
+            ind_count=ind_count_all[deme_id],
+            sperm_store=sperm_store_all[deme_id],
             config=config,
+            offspring_probability=offspring_probability,
         )
-        ind[deme_id] = ind_d
-        sperm[deme_id] = sperm_d
-    return ind, sperm
+        ind_count_all[deme_id] = ind_d
+        sperm_store_all[deme_id] = sperm_d
+    return ind_count_all, sperm_store_all
 
 
 @njit_switch(cache=True, parallel=True)
@@ -905,19 +1434,19 @@ def run_spatial_survival(
     Returns:
         A tuple ``(ind_next, sperm_next)`` after survival.
     """
-    ind = ind_count_all.copy()
-    sperm = sperm_store_all.copy()
-    for deme_id in prange(ind.shape[0]):
+    # Modify input arrays in-place within prange loop.
+    # Safe because callers do not expect inputs to remain unmodified.
+    for deme_id in prange(ind_count_all.shape[0]):
         # Survival remains local to each deme; spatial coupling only happens
         # in the migration stage.
         ind_d, sperm_d = run_survival(
-            ind_count=ind[deme_id],
-            sperm_store=sperm[deme_id],
+            ind_count=ind_count_all[deme_id],
+            sperm_store=sperm_store_all[deme_id],
             config=config,
         )
-        ind[deme_id] = ind_d
-        sperm[deme_id] = sperm_d
-    return ind, sperm
+        ind_count_all[deme_id] = ind_d
+        sperm_store_all[deme_id] = sperm_d
+    return ind_count_all, sperm_store_all
 
 
 @njit_switch(cache=True, parallel=True)
@@ -936,19 +1465,19 @@ def run_spatial_aging(
     Returns:
         A tuple ``(ind_next, sperm_next)`` after aging.
     """
-    ind = ind_count_all.copy()
-    sperm = sperm_store_all.copy()
-    for deme_id in prange(ind.shape[0]):
+    # Modify input arrays in-place within prange loop.
+    # Safe because callers do not expect inputs to remain unmodified.
+    for deme_id in prange(ind_count_all.shape[0]):
         # Aging is also purely within-deme. Migration happens only after the
         # full local lifecycle has finished for the tick.
         ind_d, sperm_d = run_aging(
-            ind_count=ind[deme_id],
-            sperm_store=sperm[deme_id],
+            ind_count=ind_count_all[deme_id],
+            sperm_store=sperm_store_all[deme_id],
             config=config,
         )
-        ind[deme_id] = ind_d
-        sperm[deme_id] = sperm_d
-    return ind, sperm
+        ind_count_all[deme_id] = ind_d
+        sperm_store_all[deme_id] = sperm_d
+    return ind_count_all, sperm_store_all
 
 
 @njit_switch(cache=True)

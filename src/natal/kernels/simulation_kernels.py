@@ -45,10 +45,11 @@ def import_state(pop: 'AgeStructuredPopulation', state: 'PopulationState') -> No
 # Core: separated stage functions (reproduction, survival, aging)
 # ============================================================================
 @njit_switch(cache=True)
-def run_reproduction(
+def run_reproduction_with_precomputed_offspring_probability(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
     config: PopulationConfig,
+    offspring_probability: NDArray[np.float64],
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Run reproduction stage: mating, sperm-store update, and offspring generation.
 
@@ -56,16 +57,18 @@ def run_reproduction(
         ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
         sperm_store: Sperm-store array ``(n_ages, n_genotypes, n_genotypes)``.
         config: PopulationConfig object.
+        offspring_probability: Precomputed offspring tensor
+            ``P_offspring[gf, gm, g_off]`` reused across demes/ticks.
 
     Returns:
         Tuple[ind_count, sperm_store]: Updated arrays.
     """
-    ind_count = ind_count.copy()
-    sperm_store = sperm_store.copy()  # Shape: (A, gf, gm)
+    # Modify ind_count in-place; callers do not expect original to be preserved.
 
     n_ages = config.n_ages
     n_gen = config.n_genotypes
     adult_ages = config.adult_ages
+    adult_start_age = adult_ages[0] if len(adult_ages) > 0 else 0
     is_stochastic = config.is_stochastic
     use_dirichlet_sampling = config.use_dirichlet_sampling
 
@@ -98,7 +101,7 @@ def run_reproduction(
         mating_prob,
         config.age_based_mating_rates[0, :],  # female age-specific mating rates
         config.sperm_displacement_rate,
-        adult_ages[0] if len(adult_ages) > 0 else 0,
+        adult_start_age,
         n_ages,
         n_gen,
         is_stochastic=is_stochastic,
@@ -106,16 +109,14 @@ def run_reproduction(
     )
 
     # 4. Generate offspring (fertilization).
-    n_0_female, n_0_male = alg.fertilize_with_mating_genotype(
+    n_0_female, n_0_male = alg.fertilize_with_precomputed_offspring_probability(
         female_counts,
         sperm_store,
         config.fecundity_fitness[0], # sex=0 is FEMALE
         config.fecundity_fitness[1], # sex=1 is MALE
-        config.genotype_to_gametes_map[0], # sex=0 is FEMALE
-        config.genotype_to_gametes_map[1], # sex=1 is MALE
-        config.gametes_to_zygote_map,
+        offspring_probability,
         config.expected_eggs_per_female,
-        adult_ages[0] if len(adult_ages) > 0 else 0,
+        adult_start_age,
         n_ages,
         n_gen,
         config.n_haploid_genotypes,
@@ -132,6 +133,38 @@ def run_reproduction(
     ind_count[1, 0, :] = n_0_male    # sex=1 is MALE
 
     return ind_count, sperm_store
+
+
+@njit_switch(cache=True)
+def run_reproduction(
+    ind_count: NDArray[np.float64],
+    sperm_store: NDArray[np.float64],
+    config: PopulationConfig,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Run reproduction stage: mating, sperm-store update, and offspring generation.
+
+    Args:
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
+        sperm_store: Sperm-store array ``(n_ages, n_genotypes, n_genotypes)``.
+        config: PopulationConfig object.
+
+    Returns:
+        Tuple[ind_count, sperm_store]: Updated arrays.
+    """
+    offspring_probability = alg.compute_offspring_probability_tensor(
+        meiosis_f=config.genotype_to_gametes_map[0],
+        meiosis_m=config.genotype_to_gametes_map[1],
+        haplo_to_genotype_map=config.gametes_to_zygote_map,
+        n_genotypes=config.n_genotypes,
+        n_haplogenotypes=config.n_haploid_genotypes,
+        n_glabs=config.n_glabs,
+    )
+    return run_reproduction_with_precomputed_offspring_probability(
+        ind_count=ind_count,
+        sperm_store=sperm_store,
+        config=config,
+        offspring_probability=offspring_probability,
+    )
 
 @njit_switch(cache=True)
 def run_survival(

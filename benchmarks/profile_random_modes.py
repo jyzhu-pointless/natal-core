@@ -1,11 +1,16 @@
-"""Launch a hex-topology spatial dashboard demo.
+"""Profile spatial hex simulation under three randomness modes.
 
-This demo builds a 4x4 spatial population with heterogeneous initial demes and
-starts the NiceGUI spatial dashboard on a hex grid.
+Modes:
+- deterministic
+- discrete stochastic
+- dirichlet sampling
 """
 
 from __future__ import annotations
 
+import cProfile
+import io
+import pstats
 import time
 
 import numpy as np
@@ -21,11 +26,18 @@ def build_deme(
     name: str,
     wt_adults: float,
     drive_adults: float,
+    stochastic: bool,
+    use_dirichlet_sampling: bool,
 ) -> nt.AgeStructuredPopulation:
-    """Build one deterministic deme for the UI demo."""
+    """Build one deme with configurable randomness mode."""
     return (
         nt.AgeStructuredPopulation
-        .setup(species=species, name=name, stochastic=True, use_dirichlet_sampling=True)
+        .setup(
+            species=species,
+            name=name,
+            stochastic=stochastic,
+            use_dirichlet_sampling=use_dirichlet_sampling,
+        )
         .age_structure(n_ages=5, new_adult_age=1)
         .initial_state(
             individual_count={
@@ -64,8 +76,12 @@ def share_config(demes: list[nt.AgeStructuredPopulation]) -> None:
         deme.import_config(shared_config)
 
 
-def build_hex_spatial_population() -> SpatialPopulation:
-    """Construct the hex-grid spatial demo population."""
+def build_hex_spatial_population(
+    *,
+    stochastic: bool,
+    use_dirichlet_sampling: bool,
+) -> SpatialPopulation:
+    """Construct hex-grid spatial population for one mode."""
     species = nt.Species.from_dict(
         name="SpatialHexUiDemoSpecies",
         structure={
@@ -75,21 +91,20 @@ def build_hex_spatial_population() -> SpatialPopulation:
         },
     )
 
-    initial_pairs = [
-        (0.0, 255.0),
-    ]*10000
+    initial_pairs = [(0.0, 255.0)] * 10000
     demes = [
         build_deme(
             species,
             name=f"hex_deme_{idx}",
             wt_adults=wt_adults,
             drive_adults=drive_adults,
+            stochastic=stochastic,
+            use_dirichlet_sampling=use_dirichlet_sampling,
         )
         for idx, (wt_adults, drive_adults) in enumerate(initial_pairs)
     ]
     share_config(demes)
 
-    # Hex kernels still use a 3x3 matrix; valid offsets are interpreted by HexGrid.
     return SpatialPopulation(
         demes=demes,
         topology=HexGrid(rows=100, cols=100, wrap=False),
@@ -106,18 +121,43 @@ def build_hex_spatial_population() -> SpatialPopulation:
     )
 
 
-def main() -> None:
-    """Launch the hex-grid spatial UI demo."""
-    # nt.disable_numba()
-    spatial = build_hex_spatial_population()
-    # warm up
+def profile_mode(mode_name: str, stochastic: bool, use_dirichlet_sampling: bool) -> None:
+    """Profile one randomness mode and print top hotspots."""
+    print("\n" + "=" * 90)
+    print(
+        f"MODE: {mode_name} | stochastic={stochastic}, "
+        f"use_dirichlet_sampling={use_dirichlet_sampling}"
+    )
+    print("=" * 90)
+
+    spatial = build_hex_spatial_population(
+        stochastic=stochastic,
+        use_dirichlet_sampling=use_dirichlet_sampling,
+    )
+
+    # Warm up compilation and cache.
     spatial.run(1)
-    print("start")
+
+    profiler = cProfile.Profile()
+    profiler.enable()
     start = time.perf_counter()
     spatial.run(5)
     elapsed = time.perf_counter() - start
-    print("done")
+    profiler.disable()
+
     print(f"run(5) elapsed: {elapsed:.3f}s")
+
+    stats_stream = io.StringIO()
+    stats = pstats.Stats(profiler, stream=stats_stream).sort_stats("cumulative")
+    stats.print_stats(25)
+    print(stats_stream.getvalue())
+
+
+def main() -> None:
+    """Run profiling for three randomness modes."""
+    profile_mode("deterministic", stochastic=False, use_dirichlet_sampling=False)
+    profile_mode("discrete stochastic", stochastic=True, use_dirichlet_sampling=False)
+    profile_mode("dirichlet sampling", stochastic=True, use_dirichlet_sampling=True)
 
 
 if __name__ == "__main__":
