@@ -6,12 +6,8 @@ architectures). The base class defines common interfaces, hook management,
 modifier registration, and helpers that are implemented by concrete
 population classes.
 
-Design goals:
-- Provide a user-friendly high-level API using Python objects (e.g. ``Genotype``).
-- Store internal state in NumPy arrays for compatibility with Numba acceleration.
-- Separate logical indexing from storage via an index mapping layer.
-
-Docstring style: Google style (Args, Returns, Raises, Example).
+This module provides a common abstraction layer for population models while
+keeping internal state representations compatible with NumPy/Numba kernels.
 """
 
 from __future__ import annotations
@@ -72,13 +68,15 @@ class BasePopulation(ABC, Generic[T_State]):
     non-Wright-Fisher models). It manages the species/genetic architecture,
     indexing, hook registration, and modifier pipelines.
 
-    Core components:
-        - ``species``: Genetic architecture descriptor.
-        - ``registry``: ``IndexRegistry`` instance for managing genotype/haplotype indices.
-        - ``state``: Abstract property implemented by subclasses (``PopulationState`` or
-          age-structured variants).
-        - ``_hooks``: Event hook registry mapping event names to ordered hook lists.
-        - ``_compiled_hooks``: Compiled event hooks for efficient execution.
+    Attributes:
+        ALLOWED_EVENTS (List[str]): Event names supported by the hook system.
+        species (Species): Genetic architecture descriptor for this population.
+        name (str): Human-readable population name.
+        tick (int): Current simulation tick.
+        registry (IndexRegistry): Index registry for genotype/haplotype mappings.
+        config (PopulationConfig): Active static tensor/config container.
+        state (T_State): Active population state container.
+        history (List[Tuple[int, np.ndarray]]): Recorded state snapshots by tick.
     """
 
     # Allowed hook events (subclasses may extend this list).

@@ -46,7 +46,17 @@ __all__ = ["DiscreteGenerationPopulation"]
 
 
 class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
-    """Population with strict non-overlapping generations."""
+    """Population with strict non-overlapping generations.
+
+    Maintains exactly two age classes:
+    - age 0: newly produced offspring
+    - age 1: reproducing adults
+
+    Attributes:
+        state (DiscretePopulationState): Current discrete population state.
+        config (PopulationConfig): Active normalized configuration with two-age layout.
+        history (List[Tuple[int, np.ndarray]]): Flattened snapshots indexed by tick.
+    """
 
     @staticmethod
     def _normalize_config(population_config: PopulationConfig) -> PopulationConfig:

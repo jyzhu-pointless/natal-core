@@ -1,4 +1,4 @@
-""" Genetic presets for mutations, gene drives, and allele conversions.
+"""Genetic presets for mutations, gene drives, and allele conversions.
 
 This module provides a framework for defining reusable genetic modifications including:
 - Gene drives (e.g., CRISPR/Cas9 homing drives)
@@ -7,20 +7,9 @@ This module provides a framework for defining reusable genetic modifications inc
 - Complex genetic constructions
 
 Each preset can modify population genetics through three mechanisms:
-  - gamete_modifier: modifies gamete frequencies during gametogenesis
-  - zygote_modifier: modifies embryo genotypes after fertilization
-  - fitness_patch: declarative specification of viability/fecundity/sexual selection effects
-
-Presets are applied to populations using the preferred API:
-  population.apply_preset(preset)  # Modern API
-
-Legacy API (deprecated):
-  preset.apply(population)  # For backwards compatibility
-
-The module also provides a generic allele conversion rule system:
-  - GameteAlleleConversionRule: defines allele conversions with probabilities
-  - GameteConversionRuleSet: manages multiple conversion rules
-  - ZygoteAlleleConversionRule: defines conversions in embryos
+- gamete_modifier: modifies gamete frequencies during gametogenesis
+- zygote_modifier: modifies embryo genotypes after fertilization
+- fitness_patch: declarative specification of viability/fecundity/sexual selection effects
 """
 
 from abc import ABC, abstractmethod
@@ -698,11 +687,11 @@ class GeneticPreset(ABC):
     for the preset to have any effect.
 
     Examples:
-        # Modern API (recommended)
-        population.apply_preset(preset)
+        >>> population.apply_preset(preset)
 
-        # Legacy API (deprecated)
-        preset.apply(population)
+    Attributes:
+        name (str): Human-readable preset name.
+        hook_id (Optional[int]): Optional identifier used when registering modifiers.
     """
 
     def __init__(
@@ -841,18 +830,21 @@ class HomingDrive(GeneticPreset):
     repair (HDR) converting wild-type alleles into drive alleles in heterozygotes.
     It can also generate resistance alleles through non-homologous end joining (NHEJ).
 
-    Key features:
-    - Drive conversion in heterozygotes (WT â†’ Drive)
-    - Germline resistance formation (WT â†’ Resistance)
-    - Embryo resistance formation
-    - Maternal/paternal Cas9 deposition
-    - Functional vs non-functional resistance alleles
-    - Sex-specific rates for all processes
+    Key features include drive conversion in heterozygotes, germline/embryo
+    resistance formation, optional parental Cas9 deposition, and sex-specific
+    rate control.
 
     The drive operates through a sequential cascade:
     1. Homing conversion (WT â†’ Drive)
     2. Resistance formation in remaining WT alleles
     3. Optional functional resistance split
+
+    Attributes:
+        drive_conversion_rate (Tuple[float, float]): Female/male homing rates.
+        late_germline_resistance_formation_rate (Tuple[float, float]): Female/male
+            late germline resistance rates.
+        embryo_resistance_formation_rate (Tuple[float, float]): Female/male embryo
+            resistance rates.
 
     Examples:
         drive = HomingDrive(
@@ -1197,14 +1189,18 @@ class ToxinAntidoteDrive(GeneticPreset):
     typically carries a high fitness cost (the toxin effect), while the "drive"
     allele itself often provides a functional rescue (the antidote).
 
-    Key features:
-    - Germline disruption (Target -> Disrupted) in drive-carrying parents.
-    - Embryo disruption (Target -> Disrupted) via maternal/paternal Cas9 deposition.
-    - Configurable fitness costs for the disrupted allele (toxin effect).
+    Key features include germline disruption, embryo disruption, and
+    configurable fitness costs for the disrupted allele.
 
     In a typical TARE (Toxin-Antidote Recessive Embryo lethality) configuration,
     the disrupted allele is set to be recessive lethal (viability_scaling=0.0,
     viability_mode="recessive").
+
+    Attributes:
+        conversion_rate (Tuple[float, float]): Female/male germline disruption rates.
+        embryo_disruption_rate (Tuple[float, float]): Female/male embryo disruption rates.
+        viability_mode (_AlleleScalingMode): Scaling mode for viability effects.
+        fecundity_mode (_AlleleScalingMode): Scaling mode for fecundity effects.
     """
 
     def __init__(

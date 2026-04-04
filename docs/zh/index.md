@@ -1,4 +1,4 @@
-# NATAL Core 文档首页
+# NATAL Core 中文文档
 
 [![NATAL](https://img.shields.io/badge/NATAL-dev-purple.svg)](https://github.com/jyzhu-pointless/natal-core)
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)

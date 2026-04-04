@@ -3,23 +3,14 @@
 This module defines concrete biological entities such as genes, haplotypes,
 haploid genomes, and genotypes that are bound to genetic structures.
 
-This module is responsible for:
-
-- Representing concrete instances such as genes, haplotypes, haploid genomes, and genotypes
-- Maintaining references to their corresponding genetic structures for architectural context
-- Enforcing consistency by validating against the connected structure during creation
-- **Auto-registering** themselves with the structure upon creation ("register upon creation")
+This module represents concrete genetic instances such as genes, haplotypes,
+haploid genomes, and genotypes. Instances are validated against their bound
+structures and are registered to those structures at creation time.
 
 Note:
     - Runtime dependency on `genetic_structures` for architecture definitions
     - Entities should not modify their bound structures
     - Entity must be bound to a Structure (mandatory binding rule)
-
-Naming Conventions:
-    - Gene (Allele): A specific allele at a locus
-    - Haplotype: Genes on a single chromosome (one per Chromosome structure)
-    - HaploidGenotype (HaploidGenome): Complete set of haplotypes from one parent
-    - Genotype (Genome, DiploidGenome): Two HaploidGenotypes (maternal + paternal)
 """
 
 from __future__ import annotations
@@ -48,10 +39,16 @@ class GeneticEntity(Generic[S]):
     """
     Base class for genetic entities bound to genetic structures.
 
-    Core Rules (from requirement.md):
-    1. Entity MUST be bound to a Structure (mandatory)
-    2. Entity auto-registers with Structure upon creation ("register upon creation")
-    3. Entity with same name under same Structure returns the same instance (singleton per structure+name)
+    Entities follow three invariants:
+    1. An entity must be bound to a structure.
+    2. An entity auto-registers to its structure at creation time.
+    3. The same entity name under the same structure resolves to one cached instance.
+
+    Attributes:
+        structure_type (type[GeneticStructure[Any]]): Required bound structure type
+            for subclasses.
+        name (str): Entity identifier within its bound structure.
+        structure (GeneticStructure[Any]): Bound structure instance.
 
     Examples:
             gene = Gene("A1", locus=locus_A)  # ✅ Required locus
@@ -209,16 +206,14 @@ class Gene(GeneticEntity[Locus]):
     (Alias: `Allele`)
 
     Attributes:
-        name: The name of the gene.
-        locus: The `Locus` structure the gene is bound to.
+        name (str): The name of the gene.
+        locus (Locus): The locus structure this gene is bound to.
 
     Examples:
-        ```python
-        locus = Locus("A")
-        gene1 = Gene("A1", locus=locus)  # ✅ Auto-registered
-        gene2 = Gene("A1", locus=locus)  # ✅ Returns same instance
-        assert gene1 is gene2  # ✅ Same instance
-        ```
+        >>> locus = Locus("A")
+        >>> gene1 = Gene("A1", locus=locus)
+        >>> gene2 = Gene("A1", locus=locus)
+        >>> assert gene1 is gene2
     """
     structure_type = Locus  # Gene must be bound to a Locus
 
@@ -266,6 +261,11 @@ class Haplotype(GeneticEntity[Chromosome]):
     A Haplotype is bound to a Chromosome structure and contains a list of Genes,
     one for each Locus in the Chromosome. Same gene combination under same
     Chromosome structure returns the same instance.
+
+    Attributes:
+        chromosome (Chromosome): Bound chromosome structure.
+        genes (List[Gene]): One gene per locus in chromosome order.
+        linkage (Chromosome): Backward-compatible alias for chromosome.
     """
     structure_type = Chromosome  # Haplotype must be bound to a Chromosome
 
@@ -364,7 +364,13 @@ class HaploidGenotype(GeneticEntity[Species]):
     for each Chromosome in the Species. Same haplotype combination under
     same Species returns the same instance.
 
-    Aliases: HaploidGenome
+    Attributes:
+        species (Species): Bound species structure.
+        haplotypes (List[Haplotype]): One haplotype per required chromosome.
+        genome (Species): Backward-compatible alias for species.
+        chromosomes (List[Haplotype]): Backward-compatible alias for haplotypes.
+
+    This class is also exported as HaploidGenome for backward compatibility.
     """
     structure_type = Species  # HaploidGenotype must be bound to a Species
 
@@ -525,9 +531,16 @@ class Genotype:
     maternal and paternal origin is preserved for modeling phenomena like
     maternal effects, cytoplasmic inheritance, and genomic imprinting.
 
-    Aliases: Genome, DiploidGenome, DiploidGenotype
+    Attributes:
+        species (Species): Species shared by maternal and paternal haploid genomes.
+        maternal (HaploidGenotype): Maternal haploid genotype.
+        paternal (HaploidGenotype): Paternal haploid genotype.
+        genome (Species): Backward-compatible alias for species.
+        name (str): Canonical species-parsable genotype string.
 
     Note: Genotype uses identity comparison (is) since instances are cached.
+
+    This class is also exported as Genome, DiploidGenome, and DiploidGenotype.
     """
 
     # Cache: {species: {(maternal_id, paternal_id, name): instance}}

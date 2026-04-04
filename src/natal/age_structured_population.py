@@ -57,7 +57,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     hook/modifier system for user extensions.
 
     Attributes:
-        snapshots (dict): Storage for custom state snapshots.
+        snapshots (Dict[str, object]): Storage for custom state snapshots.
     """
 
     def __init__(

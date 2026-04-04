@@ -65,23 +65,33 @@ HaploidComboMap = Dict[int, AlleleTuple]
 
 
 class _LocusPatternLike(Protocol):
+    """Protocol for locus-level pattern containers."""
+
     locus_patterns: Iterable[object]
 
 
 class _ChromosomePairPatternLike(Protocol):
+    """Protocol for maternal/paternal chromosome-pair patterns."""
+
     maternal_pattern: _LocusPatternLike
     paternal_pattern: _LocusPatternLike
 
 
 class _GenotypePatternLike(Protocol):
+    """Protocol for genotype patterns composed of chromosome pairs."""
+
     chromosome_patterns: Iterable[Optional[_ChromosomePairPatternLike]]
 
 
 class _HaploidGenomePatternLike(Protocol):
+    """Protocol for haploid genome patterns composed of haplotype patterns."""
+
     haplotype_patterns: Iterable[Optional[_LocusPatternLike]]
 
 
 class _PatternParserLike(Protocol):
+    """Protocol for parser objects that resolve allowed alleles per locus pattern."""
+
     def get_allowed_alleles(self, locus_pattern: object) -> List[str]: ...
 
 logger = logging.getLogger(__name__)  # temp logger
@@ -112,12 +122,15 @@ class SexChromosomeType(Enum):
     """
     Sex chromosome type enumeration.
 
-    Defines common sex chromosome types and their inheritance properties:
-    - AUTOSOME: Autosome, not involved in sex determination
-    - X: Mammalian X chromosome, can come from either parent
-    - Y: Mammalian Y chromosome, paternal only
-    - Z: Bird/moth Z chromosome, can come from either parent
-    - W: Bird/moth W chromosome, maternal only
+    Defines common sex chromosome categories and inheritance constraints used
+    by chromosome-level sex-system logic.
+
+    Attributes:
+        AUTOSOME (SexChromosomeType): Autosome not involved in sex determination.
+        X (SexChromosomeType): X chromosome in the XY system; can come from either parent.
+        Y (SexChromosomeType): Y chromosome in the XY system; paternal only.
+        Z (SexChromosomeType): Z chromosome in the ZW system; can come from either parent.
+        W (SexChromosomeType): W chromosome in the ZW system; maternal only.
     """
     AUTOSOME = "autosome"  # Autosome
     X = "X"                # X chromosome in XY system
@@ -151,12 +164,14 @@ class SexChromosomeType(Enum):
 
 class RegistryBase(ABC, Generic[T]):
     """
-    Base class for registries. Provides common interface for register/unregister operations.
+    Base class for registries.
 
-    Subclasses must implement:
-        - _get_key(item): Extract the key used for deduplication
-        - _single_register(item): Register a single item
-        - _single_unregister(item): Unregister a single item
+    Provides the common interface for register/unregister operations while
+    delegating storage semantics to subclass hooks.
+
+    Attributes:
+        _expected_type (Optional[type[GeneticStructure[E]]]): Runtime type used to
+            validate registry items when provided.
     """
     # RegistryBase intentionally separates:
     # - "single item" primitives (_single_register/_single_unregister/_single_unregister_by_key)
@@ -289,6 +304,10 @@ class RegistryBase(ABC, Generic[T]):
 class EntityRegistry(RegistryBase[E]):
     """
     Registry for entity objects. Deduplication by object identity.
+
+    Attributes:
+        _storage (List[E]): Ordered storage for deterministic iteration.
+        _set (Set[E]): Identity-based membership set for O(1) deduplication checks.
     """
     # EntityRegistry is identity-based:
     # - _set provides O(1) membership uniqueness checks
@@ -342,6 +361,10 @@ class ChildStructureRegistry(RegistryBase[S]):
     """
     Registry for child structures. Keyed by name, preserves insertion order.
     Supports both register (existing) and add (create + register).
+
+    Attributes:
+        _owner (GeneticStructure[Any]): Parent structure that owns this registry.
+        _storage (Dict[str, S]): Name-to-child mapping for registered structures.
     """
     def __init__(
         self,
@@ -502,6 +525,13 @@ class GeneticStructure(Generic[E]):
 
     Structure uniqueness is now scoped to a Species, not globally.
     Within the same Species, structures of the same type must have unique names.
+
+    Attributes:
+        child_structure_type (Optional[type[GeneticStructure[Any]]]): Child structure
+            class used by subclasses, or None when no child structures are supported.
+        name (str): Structure identifier unique within the same structure type and species.
+        species (Optional[Species]): Species this structure is currently bound to.
+        all_entities (List[E]): Snapshot of currently registered runtime entities.
 
     Examples:
         >>> species1 = Species("Species1")
@@ -880,9 +910,10 @@ class Locus(GeneticStructure['Gene']):
     (alleles) can be bound to a single Locus.
 
     Attributes:
-        position: The linear position on the chromosome. Used for defining
+        position (Union[int, float]): The linear position on the chromosome. Used for defining
             recombination rates. If not specified, defaults to max(position) + 1
             among existing loci in the parent Linkage, or 0 if no parent.
+        alleles (List[Gene]): Registered allele entities bound to this locus.
     """
     child_structure_type = None  # Locus has no child structures
 
@@ -1050,12 +1081,19 @@ class Chromosome(GeneticStructure['Haplotype']):
     chromosome. It also stores the recombination rates between loci.
 
     Attributes:
-        sex_type: Sex chromosome type (SexChromosomeType or string).
+        sex_type (SexChromosomeType): Sex chromosome type.
             - None or 'autosome': Autosome (default)
             - 'X': X chromosome in XY system
             - 'Y': Y chromosome in XY system (paternal only)
             - 'Z': Z chromosome in ZW system
             - 'W': W chromosome in ZW system (maternal only)
+        loci (List[Locus]): Child loci sorted by position.
+        recombination_map (Chromosome.RecombinationMap): Adjacent-locus recombination map.
+        recombination_matrix (Chromosome.RecombinationMap): Backward-compatible alias
+            of recombination_map.
+        is_sex_chromosome (bool): Whether this chromosome participates in sex determination.
+        is_autosome (bool): Whether this chromosome is an autosome.
+        sex_system (Optional[str]): Sex system inferred from sex_type ('XY', 'ZW', or None).
 
     Examples:
         >>> chr_x = Chromosome('X', sex_type='X')
@@ -1063,7 +1101,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         >>> print(chr_x.is_sex_chromosome)  # True
         >>> print(chr_y.sex_type.paternal_only)  # True
 
-    Aliases: Linkage
+    This class is also exported as Linkage for backward compatibility.
     """
     child_structure_type = Locus  # Chromosome contains Loci as children
     child_structures: ChildStructureRegistry[Locus]
@@ -1405,6 +1443,10 @@ class Chromosome(GeneticStructure['Haplotype']):
         For n loci, the map has n-1 entries where entry i is the recombination
         rate between locus i and locus i+1 (in sorted order by position).
 
+        Attributes:
+            loci_names (List[str]): Locus names in sorted positional order.
+            _rates (np.ndarray): Adjacent-locus recombination rates with length n-1.
+
         Examples:
             For loci [A, B, C, D], the map is [r(A,B), r(B,C), r(C,D)]
             where index i = rate between locus i and locus i+1.
@@ -1699,7 +1741,13 @@ class Species(GeneticStructure['HaploidGenome']):
     A Species is the top-level structure that contains multiple Chromosomes,
     each representing a chromosome with its loci and recombination rates.
 
-    Aliases: GenomeTemplate
+    Attributes:
+        child_structures (ChildStructureRegistry[Chromosome]): Registry of chromosomes.
+        structure_cache (Dict[type, Dict[str, GeneticStructure[Any]]]): Species-scoped
+            structure cache grouped by structure type.
+        gamete_labels (List[str]): Optional labels used to identify gamete categories.
+
+    This class is also exported as GenomeTemplate for backward compatibility.
     """
     child_structure_type = Chromosome  # Species contains Chromosomes as children
     child_structures: ChildStructureRegistry[Chromosome]
