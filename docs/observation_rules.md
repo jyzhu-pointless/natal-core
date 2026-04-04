@@ -423,7 +423,7 @@ for t in range(100):
     drive_freq.append(drive_alleles / max(1, total_alleles))
     times.append(t)
 
-# Visualise
+# Visualize
 import matplotlib.pyplot as plt
 plt.plot(times, drive_freq)
 plt.xlabel("Time (generations)")
