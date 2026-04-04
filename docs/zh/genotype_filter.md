@@ -132,5 +132,5 @@ ruleset.add_convert(
 ## 下一章
 
 - [设计自己的 Preset（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
-- [基因型模式匹配](genotype_pattern_matching_design.md)
+- [基因型模式匹配](genotype_patterns.md)
 - [种群观测规则](observation_rules.md)

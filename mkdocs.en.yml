@@ -96,7 +96,7 @@ nav:
     - Genetic Presets: genetic_presets.md
     - Spatial Simulation Guide: spatial_simulation_guide.md
     - Observation Rules: observation_rules.md
-    - Genotype Pattern Matching: genotype_pattern_matching_design.md
+    - Genotype Pattern Matching: genotype_patterns.md
     - Allele Conversion Rules: allele_conversion_rules.md
     - Genotype Filter: genotype_filter.md
     - Preset Encapsulation Validation: preset_encapsulation_and_validation.md

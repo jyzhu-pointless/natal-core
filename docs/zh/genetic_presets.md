@@ -503,7 +503,7 @@ class DebugPreset(GeneticPreset):
 ## 相关章节
 
 - [等位基因转换规则](allele_conversion_rules.md) - 详细的转换规则系统
-- [基因型模式匹配](genotype_pattern_matching_design.md) - 语法规则与 pattern 设计
+- [基因型模式匹配](genotype_patterns.md) - 语法规则与 pattern 设计
 - [种群观测规则](observation_rules.md) - pattern 在观察分组中的使用
 - [Modifier 机制](modifiers.md) - 底层修饰器原理
 - [快速开始](quickstart.md) - 基础使用教程

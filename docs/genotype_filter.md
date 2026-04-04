@@ -132,5 +132,5 @@ The next chapter will engineer these concepts and explain how to encapsulate rul
 ## Next Chapters
 
 - [Designing Your Own Preset (3): Encapsulation, Validation, and Pre‑release Checks](preset_encapsulation_and_validation.md)
-- [Genotype Pattern Matching](genotype_pattern_matching_design.md)
+- [Genotype Pattern Matching](genotype_patterns.md)
 - [Population Observation Rules](observation_rules.md)

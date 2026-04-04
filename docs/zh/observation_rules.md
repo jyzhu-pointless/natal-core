@@ -699,7 +699,7 @@ print(obs_json[:240])
 
 ## 下一步
 
-- [API 入口](https://natal-core.readthedocs.io/en/latest/api/) - 查看完整的方法签名
+- [API 入口](api/index.md) - 查看完整的方法签名
 - [Hook 系统](hooks.md) - 在 Hook 中应用观察过滤
 - [Numba 优化](numba_optimization.md) - 性能调优
 

@@ -509,7 +509,7 @@ class DebugPreset(GeneticPreset):
 ## Related Chapters
 
 - [Allele Conversion Rules](allele_conversion_rules.md) – detailed conversion rule system
-- [Pattern Matching and Extensible Configuration](genotype_pattern_matching_design.md) – syntax rules and pattern design
+- [Pattern Matching and Extensible Configuration](genotype_patterns.md) – syntax rules and pattern design
 - [Observation Rules for Populations](observation_rules.md) – using patterns in observation groups
 - [Modifier Mechanism](modifiers.md) – low‑level modifier principles
 - [Quick Start](quickstart.md) – basic usage tutorial

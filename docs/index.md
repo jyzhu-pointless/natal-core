@@ -67,7 +67,7 @@ pip install natal-core
 10. [Genetic Presets Usage Guide](genetic_presets.md)
 11. [Spatial Simulation Guide](spatial_simulation_guide.md)
 12. [Population Observation Rules](observation_rules.md)
-13. [Pattern Matching and Extensible Configuration](genotype_pattern_matching_design.md)
+13. [Pattern Matching and Extensible Configuration](genotype_patterns.md)
 14. [Design Your Own Preset (1): Starting from Allele Conversion Rules](allele_conversion_rules.md)
 15. [Design Your Own Preset (2): Using genotype_filter to Control Rule Scope](genotype_filter.md)
 16. [Design Your Own Preset (3): Encapsulation, Validation, and Pre‑release Checks](preset_encapsulation_and_validation.md)

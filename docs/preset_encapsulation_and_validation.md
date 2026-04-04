@@ -107,7 +107,7 @@ You now master the complete loop from “biological hypothesis in your mind” t
 
 If you want to revisit previous content or deepen your understanding:
 
-- [Genotype Pattern Matching](genotype_pattern_matching_design.md) – Chapter 13, foundational concepts
+- [Genotype Pattern Matching](genotype_patterns.md) – Chapter 13, foundational concepts
 - [Designing Your Own Preset (1): Starting from Allele Conversion Rules](allele_conversion_rules.md) – Chapter 14
 - [Designing Your Own Preset (2): Using `genotype_filter` to Control Rule Scope](genotype_filter.md) – Chapter 15
 - [Genetic Presets Usage Guide](genetic_presets.md) – learn about built‑in presets in NATAL

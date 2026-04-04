@@ -72,9 +72,26 @@ nav:
     - 遗传预设: genetic_presets.md
     - 空间模拟指南: spatial_simulation_guide.md
     - 观测规则: observation_rules.md
-    - 基因型模式匹配: genotype_pattern_matching_design.md
+    - 基因型模式匹配: genotype_patterns.md
     - 等位基因转换规则: allele_conversion_rules.md
     - 基因型过滤: genotype_filter.md
     - 预设封装与验证: preset_encapsulation_and_validation.md
+  - API 参考:
+    - 总览: api/index.md
+    - genetic_structures: api/genetic_structures.md
+    - genetic_entities: api/genetic_entities.md
+    - population_state: api/population_state.md
+    - state_translation: api/state_translation.md
+    - population_config: api/population_config.md
+    - base_population: api/base_population.md
+    - age_structured_population: api/age_structured_population.md
+    - discrete_generation_population: api/discrete_generation_population.md
+    - algorithms: api/algorithms.md
+    - simulation_kernels: api/simulation_kernels.md
+    - population_builder: api/population_builder.md
+    - genetic_patterns: api/genetic_patterns.md
+    - modifiers: api/modifiers.md
+    - hook_dsl: api/hook_dsl.md
+    - genetic_presets: api/genetic_presets.md
 
 extra_css:

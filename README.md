@@ -1,5 +1,5 @@
-# NATAL Core
-Numba-Accelerated Toolkit for Analysis of Lifecycles.
+# ⚡️ NATAL Core
+**N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles.
 
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg)](https://pypi.org/project/natal-core/)
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -10,7 +10,9 @@ Numba-Accelerated Toolkit for Analysis of Lifecycles.
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-NATAL Core is a population genetics simulation engine focused on lifecycle-aware modeling. It supports age-structured and discrete-generation populations, sperm storage, gene drive presets, hook-based interventions, and high-performance Numba kernels.
+**NATAL Core** is a population genetics simulation engine focused on lifecycle-aware modeling. It supports age-structured and discrete-generation populations, sperm storage, gene drive presets, hook-based interventions, and high-performance Numba kernels.
+
+NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for parameter inference in population genetics models based on NATAL Core.
 
 ## Key Features
 

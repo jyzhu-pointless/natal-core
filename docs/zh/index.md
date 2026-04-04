@@ -67,7 +67,7 @@ pip install natal-core
 10. [遗传预设使用指南](genetic_presets.md)
 11. [Spatial 模拟指南](spatial_simulation_guide.md)
 12. [种群观测规则](observation_rules.md)
-13. [基因型模式匹配](genotype_pattern_matching_design.md)
+13. [基因型模式匹配](genotype_patterns.md)
 14. [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
 15. [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter.md)
 16. [设计自己的 Preset（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
