@@ -2,6 +2,8 @@ site_name: NATAL Core Documentation
 site_description: Numba-Accelerated Toolkit for Analysis of Lifecycles
 site_author: Jinyu Zhu
 
+docs_dir: docs/en
+
 repo_url: https://github.com/jyzhu-pointless/natal-core
 repo_name: jyzhu-pointless/natal-core
 
@@ -10,6 +12,7 @@ watch:
 
 theme:
   name: material
+  language: en
   features:
     - navigation.tabs
     - navigation.sections
@@ -52,6 +55,8 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 plugins:
+  - autorefs:
+      resolve_closest: true
   - search
   - mkdocstrings:
       handlers:

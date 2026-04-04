@@ -33,7 +33,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/jyzhu-pointless/natal-core"
-Documentation = "https://github.com/jyzhu-pointless/natal-core/tree/main/docs"
+Documentation = "https://natal-core.readthedocs.io/en/latest/"
 Repository = "https://github.com/jyzhu-pointless/natal-core"
 Issues = "https://github.com/jyzhu-pointless/natal-core/issues"
 

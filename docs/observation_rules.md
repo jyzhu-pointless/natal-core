@@ -1,54 +1,55 @@
-# 种群观测规则
+# Population Observation Rules
 
-本章介绍 `observation` 模块，用于从种群状态中提取和聚合数据。这是进行数据分析、可视化和统计推断的关键组件。
+This chapter introduces the `observation` module, which is used to extract and aggregate data from the population state. This is a key component for data analysis, visualisation, and statistical inference.
 
 ---
 
-## 核心概念
+## Core Concepts
 
-### 为什么需要 ObservationFilter？
+### Why is `ObservationFilter` needed?
 
-在模拟过程中，我们通常需要：
-1. 从完整的 `individual_count` 数组（全基因型、全性别、全年龄）中提取特定的子群体
-2. 将多维数据压缩为一维向量进行统计比较
-3. 支持灵活的分组（如"所有成年雌性"或"特定基因型的幼虫"）
+During a simulation, we often need to:
 
-### 三个关键对象
+1. Extract specific sub‑populations from the complete `individual_count` array (which includes all genotypes, sexes, and ages)
+2. Compress multi‑dimensional data into one‑dimensional vectors for statistical comparison
+3. Support flexible grouping (e.g., “all adult females” or “larvae of a specific genotype”)
 
-| 对象 | 作用 |
-|------|------|
-| **ObservationFilter** | 创建过滤规则和应用规则的主类 |
-| **规则 (rule)** | NumPy 掩码数组，shape: `(n_groups, n_sexes, [n_ages], n_genotypes)` |
-| **观察结果 (observed)** | 应用规则后的聚合数据，shape: `(n_groups, n_sexes, [n_ages])` |
+### Three Key Objects
 
-### 设计特点
+| Object | Purpose |
+|--------|---------|
+| **ObservationFilter** | The main class for creating filtering rules and applying them |
+| **Rule** | A NumPy mask array with shape `(n_groups, n_sexes, [n_ages], n_genotypes)` |
+| **Observed** | Aggregated data after applying the rule, shape `(n_groups, n_sexes, [n_ages])` |
 
-- **纯函数设计**: `apply_rule()` 是无副作用的 NumPy 操作
-- **灵活的选择器**: 支持多种格式指定基因型、年龄、性别
-- **统一模式匹配**: genotype 选择已统一接入 GeneticPattern（支持 `|` 有序、`::` 无序）
-- **性能优化**: 全部用 NumPy 向量化操作，避免循环
+### Design Features
+
+- **Pure function design**: `apply_rule()` is a side‑effect‑free NumPy operation
+- **Flexible selectors**: Supports multiple formats for specifying genotypes, ages, and sexes
+- **Unified pattern matching**: Genotype selection has been unified with `GeneticPattern` (supports ordered `|` and unordered `::`)
+- **Performance optimised**: All operations are vectorised with NumPy, avoiding explicit loops
 
 ---
 
 ## ObservationFilter API
 
-### 构造函数
+### Constructor
 
 ```python
 from natal.observation import ObservationFilter
 from natal.index_registry import IndexRegistry
 
-# 创建过滤器
-registry = pop.registry  # IndexRegistry 实例
+# Create a filter
+registry = pop.registry  # IndexRegistry instance
 filter = ObservationFilter(registry)
 ```
 
-**参数**：
-- `registry`: IndexRegistry 对象，用于基因型名称解析
+**Parameters**:
+- `registry`: An `IndexRegistry` object, used for resolving genotype names
 
-### build_filter 方法
+### `build_filter` Method
 
-主方法，构建过滤规则。
+The main method for constructing filtering rules.
 
 ```python
 def build_filter(
@@ -61,32 +62,32 @@ def build_filter(
 ) -> Tuple[np.ndarray, List[str]]
 ```
 
-**参数**：
+**Parameters**:
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `pop_or_state` | PopulationState \| BasePopulation | 种群对象或状态 |
-| `diploid_genotypes` | Sequence \| Species \| BasePopulation | 基因型列表（支持多种格式）|
-| `groups` | None \| List \| Dict | 分组规范 |
-| `collapse_age` | bool | 是否将所有年龄合并为一维 |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pop_or_state` | `PopulationState` \| `BasePopulation` | Population object or state |
+| `diploid_genotypes` | `Sequence` \| `Species` \| `BasePopulation` | List of genotypes (supports multiple formats) |
+| `groups` | `None` \| `List` \| `Dict` | Group specifications |
+| `collapse_age` | `bool` | Whether to collapse all ages into one dimension |
 
-**返回**：
+**Returns**:
 ```python
 (rule, labels)
 # rule: np.ndarray, shape (n_groups, n_sexes, [n_ages], n_genotypes)
-# labels: List[str], 每个分组的名称
+# labels: List[str], name of each group
 ```
 
-#### groups 格式
+#### `groups` Format
 
-##### 1. groups=None（默认，每个基因型一组）
+##### 1. `groups=None` (default, one group per genotype)
 
 ```python
 rule, labels = filter.build_filter(pop, diploid_genotypes=pop.species)
-# labels = ['g0', 'g1', 'g2', ...]，一个标签对应一个基因型
+# labels = ['g0', 'g1', 'g2', ...], one label per genotype
 ```
 
-##### 2. groups 是列表（无名分组）
+##### 2. `groups` as a list (unnamed groups)
 
 ```python
 groups = [
@@ -97,7 +98,7 @@ rule, labels = filter.build_filter(pop, groups=groups)
 # labels = ['group_0', 'group_1']
 ```
 
-##### 3. groups 是字典（有名分组）
+##### 3. `groups` as a dict (named groups)
 
 ```python
 groups = {
@@ -114,49 +115,49 @@ rule, labels = filter.build_filter(pop, groups=groups)
 # labels = ['all_females', 'adults', 'drive_carriers', 'juvenile_drive']
 ```
 
-#### 选择器格式 (Selector Specs)
+#### Selector Specifications
 
-在 groups 字典中，每个分组规范支持以下键：
+Within the `groups` dictionary, each group specification supports the following keys:
 
-##### genotype / genotypes
+##### `genotype` / `genotypes`
 
-指定基因型。支持多种格式：
+Specify genotypes. Supports multiple formats:
 
 ```python
-# 字符串（逗号分隔）
+# String (comma‑separated)
 {"genotype": "WT|WT"}
 
-# pattern 字符串（推荐）
-# | 代表有序匹配 Maternal|Paternal
-# :: 代表无序匹配（同源染色体两条拷贝可交换）
+# Pattern string (recommended)
+# | represents ordered match (Maternal|Paternal)
+# :: represents unordered match (the two copies of a homologous chromosome can be swapped)
 {"genotype": "A1/B1|A2/B2; C1/D1::C2/D2"}
 
-# 字符串列表
+# List of strings
 {"genotype": ["WT|WT", "WT|Drive", "Drive|Drive"]}
 
-# 整数索引
+# Integer indices
 {"genotype": [0, 2, 3]}
 
-# 通配符（所有基因型）
+# Wildcard (all genotypes)
 {"genotype": "*"}
 
-# 不指定（默认所有基因型）
+# Not specified (default: all genotypes)
 {}
 ```
 
-#### 将模式匹配用于 Observation 分组（推荐）
+##### Using Pattern Matching for Observation Groups (Recommended)
 
-当目标群体较复杂时，不建议手写长基因型列表。更推荐直接在 `groups["genotype"]` 中传 pattern 字符串，让 Observation 内部统一解析。
+When the target group is complex, it is not recommended to write long genotype lists by hand. It is better to pass a pattern string directly to `groups["genotype"]` and let the observation module parse it uniformly.
 
 ```python
 groups = {
     "target_female": {
-        # 有序匹配 Maternal|Paternal
+        # Ordered match: Maternal|Paternal
         "genotype": "A1/B1|A2/B2; C1/D1|C2/D2",
         "sex": "female",
     },
     "target_female_unordered": {
-        # 无序匹配（同源染色体两条拷贝可交换）
+        # Unordered match (the two copies of a homologous chromosome can be swapped)
         "genotype": "A1/B1::A2/B2; C1/D1::C2/D2",
         "sex": "female",
     }
@@ -165,75 +166,75 @@ groups = {
 rule, labels = filter.build_filter(pop, groups=groups)
 ```
 
-这种写法可以让 Observation 与 Preset 共用同一套 pattern 语义，减少“规则作用对象”和“观测对象”定义不一致的问题。
+This approach lets Observation and Preset share the same pattern semantics, reducing inconsistencies between “rule target” and “observation target”.
 
-##### sex
+##### `sex`
 
-指定性别。支持格式：
+Specify sex. Supports:
 
 ```python
-# 字符串
-{"sex": "female"}  或  {"sex": "male"}
-{"sex": "f"}       或  {"sex": "m"}
+# String
+{"sex": "female"}  or  {"sex": "male"}
+{"sex": "f"}       or  {"sex": "m"}
 
-# 整数（Sex.FEMALE = 0, Sex.MALE = 1）
-{"sex": 0}  或  {"sex": 1}
+# Integer (Sex.FEMALE = 0, Sex.MALE = 1)
+{"sex": 0}  or  {"sex": 1}
 
-# 列表
+# List
 {"sex": ["female", "male"]}
 
-# 不指定或 None（两性）
+# Not specified or None (both sexes)
 {}
 ```
 
-##### age
+##### `age`
 
-指定年龄。支持多种格式：
+Specify age. Supports multiple formats:
 
 ```python
-# 显式列表
+# Explicit list
 {"age": [2, 3, 4]}
 
-# 闭区间元组 [start, end]（包含）
+# Closed interval [start, end] (inclusive)
 {"age": [2, 7]}  # ages 2,3,4,5,6,7
 
-# 区间列表（并集）
+# List of intervals (union)
 {"age": [[0, 1], [4, 6]]}  # ages 0,1,4,5,6
 
-# 可调用对象（断言函数）
+# Callable (predicate function)
 {"age": lambda a: a >= 2}
 
-# 不指定（所有年龄）
+# Not specified (all ages)
 {}
 ```
 
-##### unordered
+##### `unordered`
 
-`unordered` 为兼容参数。对于 pattern 字符串，建议优先使用 `::` 表达无序语义；`|` 保持有序语义（Maternal|Paternal）。
+`unordered` is a compatibility parameter. For pattern strings, it is recommended to use `::` to express unordered semantics directly; `|` maintains ordered semantics (Maternal|Paternal).
 
 ```python
-# 推荐：在 pattern 中直接表达有序/无序
-{"genotype": "A|a"}      # 有序
-{"genotype": "A::a"}     # 无序
+# Recommended: express ordered/unordered directly in the pattern
+{"genotype": "A|a"}      # ordered
+{"genotype": "A::a"}     # unordered
 ```
 
-若使用非 pattern 的选择器对象，`unordered=True` 仍可作为补充选项：
+If you are using a non‑pattern selector object, `unordered=True` can still be used as a supplementary option:
 
 ```python
-# 启用无序匹配
+# Enable unordered matching
 {"genotype": ["A|a"], "unordered": True}
-# 会同时匹配 "A|a" 和 "a|A"
+# Matches both "A|a" and "a|A"
 
-# 禁用（默认）
+# Disable (default)
 {"genotype": ["A|a"], "unordered": False}
-# 只匹配 "A|a"
+# Matches only "A|a"
 ```
 
 ---
 
-## 构建过滤规则
+## Building Filtering Rules
 
-### 示例 1：简单性别分组
+### Example 1: Simple Sex Grouping
 
 ```python
 from natal.observation import ObservationFilter
@@ -252,10 +253,10 @@ rule, labels = filter.build_filter(
 )
 
 print(labels)  # ['females', 'males']
-print(rule.shape)  # (2, 2, 8, n_genotypes) if 8 ages
+print(rule.shape)  # (2, 2, 8, n_genotypes) if there are 8 ages
 ```
 
-### 示例 2：年龄分层
+### Example 2: Age Stratification
 
 ```python
 groups = {
@@ -267,10 +268,10 @@ groups = {
 rule, labels = filter.build_filter(pop, groups=groups)
 ```
 
-### 示例 3：基因型特异性观察
+### Example 3: Genotype‑Specific Observation
 
 ```python
-# 关注特定基因型的时间动态
+# Track the time dynamics of specific genotypes
 groups = {
     "WT_WT_all": {"genotype": ["WT|WT"]},
     "WT_WT_females": {"genotype": ["WT|WT"], "sex": "female"},
@@ -281,14 +282,14 @@ groups = {
 rule, labels = filter.build_filter(pop, groups=groups)
 ```
 
-### 示例 4：无序基因型（抑制/驱动系统）
+### Example 4: Unordered Genotypes (Suppression/Drive Systems)
 
-在抑制系统（如 CRISPR-based suppression）中，"S|+" 和 "+|S" 可能是等价的：
+In a suppression system (e.g., CRISPR‑based suppression), `"S|+"` and `"+|S"` may be equivalent:
 
 ```python
 groups = {
     "suppressed_hetero": {
-        "genotype": "S::+",  # 推荐写法：直接无序语义
+        "genotype": "S::+",  # Recommended: direct unordered semantics
     },
     "suppressed_homo": {"genotype": ["S|S"]},
 }
@@ -296,9 +297,9 @@ groups = {
 rule, labels = filter.build_filter(pop, groups=groups)
 ```
 
-### 示例 5：年龄合并
+### Example 5: Collapsing Age
 
-有时我们想忽略年龄维度，直接比较性别和基因型：
+Sometimes we want to ignore the age dimension and compare only sex and genotype directly:
 
 ```python
 rule, labels = filter.build_filter(
@@ -307,76 +308,76 @@ rule, labels = filter.build_filter(
     collapse_age=True
 )
 
-# rule.shape 会是 (1, 2, n_genotypes)，而不是 (1, 2, 8, n_genotypes)
+# rule.shape will be (1, 2, n_genotypes), not (1, 2, 8, n_genotypes)
 ```
 
 ---
 
-## 应用规则
+## Applying Rules
 
-### apply_rule 函数
+### `apply_rule` Function
 
 ```python
 from natal.observation import apply_rule
 import numpy as np
 
-# 从规则 rule 和个体计数数组得到观察值
+# Obtain observed values from a rule and the individual count array
 observed = apply_rule(pop.state.individual_count, rule)
 
-# observed shape: (n_groups, n_sexes, [n_ages]) 或 (n_groups, n_sexes)
+# observed shape: (n_groups, n_sexes, [n_ages]) or (n_groups, n_sexes)
 ```
 
-**工作原理**：
-1. 将规则数组（全为 0 或 1）与个体计数相乘
-2. 在基因型维度上求和，得到每组的个体总数
+**How it works**:
+1. Multiply the rule array (which contains only 0 or 1) by the individual count array
+2. Sum over the genotype dimension to obtain the total number of individuals in each group
 
-**示例**：
+**Example**:
 
 ```python
 # pop.state.individual_count shape: (2, 8, 50)
 # rule shape: (3, 2, 8, 50)
 # observed shape: (3, 2, 8)
 
-# observed[i, j, k] = 第 i 组、性别 j、年龄 k 的个体总数
+# observed[i, j, k] = total number of individuals in group i, sex j, age k
 ```
 
-### 完整工作流
+### Complete Workflow
 
 ```python
 from natal.observation import ObservationFilter, apply_rule
 
-# 1. 创建过滤器
+# 1. Create a filter
 filter = ObservationFilter(pop.registry)
 
-# 2. 定义分组（例如 PMCMC 似然计算）
+# 2. Define groups (e.g., for PMCMC likelihood calculation)
 groups = {
     "female_drive": {"genotype": ["WT|Drive", "Drive|Drive"], "sex": "female"},
     "male_drive": {"genotype": ["WT|Drive", "Drive|Drive"], "sex": "male"},
 }
 
-# 3. 构建规则
+# 3. Build the rule
 rule, labels = filter.build_filter(
     pop,
     diploid_genotypes=pop.species,
     groups=groups
 )
 
-# 4. 在每个时间步应用规则
+# 4. Apply the rule at each time step
 observations = []
 for _ in range(100):
     pop.step()
     observed = apply_rule(pop.state.individual_count, rule)
     observations.append(observed)
 
-# 5. 转换为数组用于统计
+# 5. Convert to an array for statistical analysis
 observations = np.array(observations)  # shape: (100, 2, 2, 8)
 ```
 
 ---
 
-## 实际例子
+## Practical Examples
 
-### 例子 1：基因驱动扩散监测
+### Example 1: Monitoring Gene Drive Spread
 
 ```python
 from natal.observation import ObservationFilter, apply_rule
@@ -388,7 +389,7 @@ pop = AgeStructuredPopulation(
     n_ages=8,
 )
 
-# 定义观察目标：监测驱动等位基因的频率
+# Define observation targets: monitor drive allele frequency
 filter = ObservationFilter(pop.registry)
 
 groups = {
@@ -401,10 +402,10 @@ rule, labels = filter.build_filter(
     pop,
     diploid_genotypes=pop.species,
     groups=groups,
-    collapse_age=True  # 不关心年龄分布
+    collapse_age=True  # we don't care about age distribution
 )
 
-# 记录时间序列
+# Record time series
 times = []
 drive_freq = []
 
@@ -413,16 +414,16 @@ for t in range(100):
     observed = apply_rule(pop.state.individual_count, rule)
 
     # observed shape: (3, 2)
-    # 计算驱动等位基因频率
-    het_count = observed[1].sum()  # 杂合体
-    hom_count = observed[2].sum()  # 纯合体
+    # Calculate drive allele frequency
+    het_count = observed[1].sum()  # heterozygotes
+    hom_count = observed[2].sum()  # homozygotes
     total_alleles = 2 * observed[0].sum() + het_count + 2 * hom_count
     drive_alleles = het_count + 2 * hom_count
 
     drive_freq.append(drive_alleles / max(1, total_alleles))
     times.append(t)
 
-# 可视化
+# Visualise
 import matplotlib.pyplot as plt
 plt.plot(times, drive_freq)
 plt.xlabel("Time (generations)")
@@ -430,10 +431,10 @@ plt.ylabel("Drive allele frequency")
 plt.show()
 ```
 
-### 例子 2：年龄特异性监测
+### Example 2: Age‑Specific Monitoring
 
 ```python
-# 关注不同年龄群体的基因型分布
+# Focus on genotype distributions across different age groups
 groups = {
     "juvenile_WT": {"age": [0, 1], "genotype": ["WT|WT"]},
     "juvenile_Drive": {"age": [0, 1], "genotype": ["WT|Drive", "Drive|Drive"]},
@@ -443,7 +444,7 @@ groups = {
 
 rule, labels = filter.build_filter(pop, groups=groups)
 
-# 观察每一步
+# Observe each step
 for t in range(100):
     pop.step()
     observed = apply_rule(pop.state.individual_count, rule)
@@ -457,13 +458,13 @@ for t in range(100):
           f"adults={observed[2:].sum():.0f}")
 ```
 
-### 例子 3：PMCMC 似然计算
+### Example 3: PMCMC Likelihood Calculation
 
 ```python
 from natal.observation import ObservationFilter, apply_rule
 from scipy.stats import poisson
 
-# 假设我们有实际数据 observed_data
+# Suppose we have actual data observed_data
 observed_data = np.array([
     [1000, 800],  # t=0: female, male counts
     [950, 750],
@@ -471,7 +472,7 @@ observed_data = np.array([
     # ...
 ])
 
-# 设置观察过滤
+# Set up the observation filter
 filter = ObservationFilter(pop.registry)
 groups = {
     "females": {"sex": "female"},
@@ -479,20 +480,20 @@ groups = {
 }
 rule, labels = filter.build_filter(pop, groups=groups, collapse_age=True)
 
-# 计算似然
+# Calculate likelihood
 log_likelihood = 0.0
 for t, data_t in enumerate(observed_data):
     pop.step()
 
-    # 获取模拟的观察值
+    # Get simulated observations
     simulated = apply_rule(pop.state.individual_count, rule)
     # simulated shape: (2, 2) - 2 groups, 2 sexes
 
-    # 对每性别求和
+    # Sum over groups for each sex
     sim_females = simulated[0, 0] + simulated[1, 0]  # females
     sim_males = simulated[0, 1] + simulated[1, 1]    # males
 
-    # Poisson 似然
+    # Poisson likelihood
     log_likelihood += (
         poisson.logpmf(data_t[0], sim_females) +
         poisson.logpmf(data_t[1], sim_males)
@@ -501,11 +502,9 @@ for t, data_t in enumerate(observed_data):
 print(f"Log-likelihood: {log_likelihood:.2f}")
 ```
 
-### 例子 4：与 PMCMC 参数管理集成（推荐）
+### Example 4: Integration with PMCMC Parameter Management (Recommended)
 
-当前 PMCMC 设计中，参数到模型配置的映射由 PMCMC 层统一管理，
-而不是在 particle filter 内部执行。推荐通过
-`params_to_model_fn` 回调进行更新。
+In the current PMCMC design, the mapping from parameters to model configuration is managed at the PMCMC layer, not inside the particle filter. It is recommended to update parameters via the `params_to_model_fn` callback.
 
 ```python
 import numpy as np
@@ -518,7 +517,7 @@ from samplers.likelihood import (
 )
 from samplers.parameter_mapping import make_fitness_config_applier
 
-# 已有: config, observations, obs_rule, shapes, state_flat, param_idx, geno_idx
+# Existing: config, observations, obs_rule, shapes, state_flat, param_idx, geno_idx
 init_sampler = make_init_sampler(state_flat, n_sexes=shapes[0][0], n_ages=shapes[0][1], n_genotypes=shapes[0][2])
 transition_fn, transition_args = make_transition_fn(config, shapes, param_idx=param_idx, geno_idx=geno_idx)
 obs_loglik_fn = make_obs_loglik_fn(10.0, obs_rule, apply_rule, shapes=shapes)
@@ -533,7 +532,7 @@ evaluator = LogLikelihoodEvaluator(
     obs_rule=obs_rule,
 )
 
-# 参数映射函数（可替换为自定义逻辑，修改任意 PopulationConfig 字段）
+# Parameter mapping function (can be replaced with custom logic to modify arbitrary PopulationConfig fields)
 params_to_model_fn = make_fitness_config_applier(
     config=config,
     param_idx=param_idx,
@@ -558,14 +557,14 @@ result = run_pmcmc(
 
 ---
 
-## 性能提示
+## Performance Tips
 
-### 1. 重用规则
+### 1. Reuse Rules
 
-如果在多次模拟中使用同一分组，提前构建并重用规则：
+If you use the same grouping across multiple simulations, build the rule once and reuse it:
 
 ```python
-# ✅ 推荐
+# ✅ Recommended
 rule, labels = filter.build_filter(pop, groups=groups)
 for particle in range(100):
     pop.reset()
@@ -573,89 +572,89 @@ for particle in range(100):
         pop.step()
         observed = apply_rule(pop.state.individual_count, rule)
 
-# ❌ 低效
+# ❌ Inefficient
 for particle in range(100):
     pop.reset()
-    rule, _ = filter.build_filter(pop, groups=groups)  # 重复构建
+    rule, _ = filter.build_filter(pop, groups=groups)  # rebuild each time
     for t in range(n_steps):
         pop.step()
         observed = apply_rule(pop.state.individual_count, rule)
 ```
 
-### 2. 矢量化 apply_rule
+### 2. Vectorise `apply_rule`
 
-`apply_rule` 支持批量应用：
+`apply_rule` supports batch application:
 
 ```python
-# 如果有多个规则
+# If you have multiple rules
 rules = [rule1, rule2, rule3]
 results = [apply_rule(pop.state.individual_count, r) for r in rules]
 ```
 
-### 3. 尽早合并年龄
+### 3. Collapse Age Early
 
-如果不需要年龄分辨率，使用 `collapse_age=True` 减少维度：
+If you do not need age resolution, use `collapse_age=True` to reduce dimensionality:
 
 ```python
-# 更快
+# Faster
 rule, _ = filter.build_filter(pop, groups=groups, collapse_age=True)
 
-# 较慢
+# Slower
 rule, _ = filter.build_filter(pop, groups=groups, collapse_age=False)
 ```
 
 ---
 
-## 常见错误
+## Common Errors
 
-### 错误 1：diploid_genotypes 为 None
+### Error 1: `diploid_genotypes` is `None`
 
 ```python
-# ❌ 错误
+# ❌ Wrong
 rule, labels = filter.build_filter(pop, groups=groups)
 
-# ✅ 正确
+# ✅ Correct
 rule, labels = filter.build_filter(
     pop,
-    diploid_genotypes=pop.species,  # 必须提供
+    diploid_genotypes=pop.species,  # must be provided
     groups=groups
 )
 ```
 
-### 错误 2：基因型字符串不匹配
+### Error 2: Genotype String Mismatch
 
 ```python
-# 假设 pop 的基因型是通过 to_string() 生成的
+# Suppose the population’s genotypes are generated via to_string()
 gt = pop.species.get_all_genotypes()[0]
-print(gt.to_string())  # 输出: "WT|WT"
+print(gt.to_string())  # Output: "WT|WT"
 
-# ❌ 不会匹配（拼写错误）
+# ❌ Will not match (typo)
 groups = {"target": {"genotype": ["wt|wt"]}}
 
-# ✅ 正确（区分大小写）
+# ✅ Correct (case‑sensitive)
 groups = {"target": {"genotype": ["WT|WT"]}}
 ```
 
-### 错误 3：年龄范围超出
+### Error 3: Age Range Out of Bounds
 
 ```python
-# 如果 pop.n_ages = 8（年龄 0-7）
+# If pop.n_ages = 8 (ages 0‑7)
 
-# ❌ 错误（年龄 8 不存在）
+# ❌ Wrong (age 8 does not exist)
 groups = {"old": {"age": [6, 8]}}
 
-# ✅ 正确
+# ✅ Correct
 groups = {"old": {"age": [6, 7]}}
 ```
 
 ---
 
-## 下一步
+## Next Steps
 
-- [API 入口](api/genetic_structures.md) - 查看完整的方法签名
-- [Hook 系统](hooks.md) - 在 Hook 中应用观察过滤
-- [Numba 优化](numba_optimization.md) - 性能调优
+- [API Entry](api/genetic_structures.md) – see complete method signatures
+- [Hook System](hooks.md) – apply observation filters inside Hooks
+- [Numba Optimization](numba_optimization.md) – performance tuning
 
 ---
 
-**返回到目录**: [完整文档索引](index.md)
+**Back to Contents**: [Full Documentation Index](index.md)

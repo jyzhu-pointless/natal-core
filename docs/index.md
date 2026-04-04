@@ -1,4 +1,4 @@
-# NATAL Core 文档首页
+# NATAL Core Documentation Home
 
 [![NATAL](https://img.shields.io/badge/NATAL-dev-purple.svg)](https://github.com/jyzhu-pointless/natal-core)
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -8,25 +8,25 @@
 
 ![logo](./natal-brand.svg)
 
-NATAL Core 是一个用于群体遗传动力学模拟的 Python 工具包，核心计算路径基于 Numba 加速。
+NATAL Core is a Python toolkit for simulating population genetic dynamics, with core computational paths accelerated by Numba.
 
-## 核心特性
+## Key Features
 
-- **🧬 遗传结构：** 支持定义完整的基因组-染色体-位点-基因层次化体系
-- **🪲 群体模型：** 支持年龄结构群体与离散世代群体，支持各类生态学和遗传学参数
-- **🌐 空间模拟：** 支持空间种群模拟，使用六边形和正方形网格的亚种群
-- **🚀 高性能内核：** Numba JIT 加速的模拟内核，空间种群下内置并行计算
-- **🧩 可扩展机制：** Modifier、Preset 和 Hook 多重扩展体系，内置常用基因驱动
-- **🔍 观测与筛选：** 支持灵活的模式匹配筛选机制，用于定义 Preset 和观测规则
+- **🧬 Genetic Architecture:** Support for defining a complete genome–chromosome–locus–gene hierarchical system.
+- **🪲 Population Models:** Age‑structured and discrete‑generation populations, supporting various ecological and genetic parameters.
+- **🌐 Spatial Simulation:** Spatially‑explicit population simulation using hexagonal and square grids for subpopulations.
+- **🚀 High‑Performance Kernels:** Numba JIT‑accelerated simulation kernels, with built‑in parallelism for spatial models.
+- **🧩 Extensibility:** Modifier, Preset, and Hook systems for flexible extension; built‑in common gene drives.
+- **🔍 Observation & Filtering:** Flexible pattern‑matching filters for defining Presets and observation rules.
 
-## 安装
+## Installation
 
-### 1. 创建并激活虚拟环境
+### 1. Create and activate a virtual environment
 
-推荐使用虚拟环境管理依赖，以下命令可任选其一。
+It is recommended to use a virtual environment to manage dependencies. Choose one of the following commands.
 
 ```bash
-# uv（推荐）
+# uv (recommended)
 uv venv --python 3.12 .venv
 source .venv/bin/activate      # Linux / macOS
 .venv\Scripts\activate         # Windows
@@ -45,40 +45,40 @@ conda create -n natal-env python=3.12
 conda activate natal-env
 ```
 
-### 2. 安装 NATAL Core
+### 2. Install NATAL Core
 
 ```bash
 uv pip install natal-core
-# 或
+# or
 pip install natal-core
 ```
 
-## 学习路径（按推荐顺序）
+## Learning Path (in recommended order)
 
-1. [快速开始：15 分钟上手 NATAL](quickstart.md)
-2. [遗传结构与实体](genetic_structures.md)
-3. [Builder 系统详解](builder_system.md)
-4. [IndexRegistry 索引机制](index_registry.md)
-5. [PopulationState 与 PopulationConfig](population_state_config.md)
-6. [Simulation Kernels 深度解析](simulation_kernels.md)
-7. [Numba 优化指南](numba_optimization.md)
-8. [Modifier 机制](modifiers.md)
-9. [Hook 系统](hooks.md)
-10. [遗传预设使用指南](genetic_presets.md)
-11. [Spatial 模拟指南](spatial_simulation_guide.md)
-12. [Samplers：观察过滤系统](observation_rules.md)
-13. [模式匹配与可扩展配置](genotype_pattern_matching_design.md)
-14. [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
-15. [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter.md)
-16. [设计自己的 Preset（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
+1. [Quick Start: 15 Minutes to NATAL](quickstart.md)
+2. [Genetic Structures and Entities](genetic_structures.md)
+3. [Builder System Explained](builder_system.md)
+4. [IndexRegistry Indexing Mechanism](index_registry.md)
+5. [PopulationState and PopulationConfig](population_state_config.md)
+6. [Deep Dive into Simulation Kernels](simulation_kernels.md)
+7. [Numba Optimization Guide](numba_optimization.md)
+8. [Modifier Mechanism](modifiers.md)
+9. [Hook System](hooks.md)
+10. [Genetic Presets Usage Guide](genetic_presets.md)
+11. [Spatial Simulation Guide](spatial_simulation_guide.md)
+12. [Population Observation Rules](observation_rules.md)
+13. [Pattern Matching and Extensible Configuration](genotype_pattern_matching_design.md)
+14. [Design Your Own Preset (1): Starting from Allele Conversion Rules](allele_conversion_rules.md)
+15. [Design Your Own Preset (2): Using genotype_filter to Control Rule Scope](genotype_filter.md)
+16. [Design Your Own Preset (3): Encapsulation, Validation, and Pre‑release Checks](preset_encapsulation_and_validation.md)
 
-## API 文档
+## API Documentation
 
 - [Genetic Structures API](api/genetic_structures.md)
 - [Population Builder API](api/population_builder.md)
 - [Simulation Kernels API](api/simulation_kernels.md)
-- [完整 API 目录](api/index.md)
+- [Full API Index](api/index.md)
 
-## 源码仓库
+## Source Repository
 
 - [GitHub: jyzhu-pointless/natal-core](https://github.com/jyzhu-pointless/natal-core)

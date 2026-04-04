@@ -1,52 +1,52 @@
-# Modifier 机制
+# Modifier Mechanism
 
-Modifier 用于在遗传流程中注入“规则级改变”。
+Modifiers are used to inject “rule‑level changes” into the genetic flow.
 
-如果你希望表达基因驱动、胚胎拯救、细胞质不兼容等机制，Modifier 是核心工具之一。
+If you want to model mechanisms such as gene drive, embryo rescue, or cytoplasmic incompatibility, modifiers are one of the core tools.
 
-> 对常见情形，优先考虑使用 [遗传预设系统](genetic_presets.md)。
-> 预设更简洁，Modifier 更灵活。
+> For common cases, prefer the [Genetic Preset System](genetic_presets.md).
+> Presets are more concise; modifiers are more flexible.
 
-## 1. Modifier 的作用位置
+## 1. Where Modifiers Act
 
-在模拟中，遗传结果通常由两类映射决定：
+In the simulation, genetic outcomes are typically determined by two types of mappings:
 
-1. 基因型到配子的映射。
-2. 配子结合到合子的映射。
+1. Genotype‑to‑gamete mapping.
+2. Gamete‑combination‑to‑zygote mapping.
 
-Modifier 的作用就是对这两类映射进行有控制的改写。
+Modifiers allow controlled modifications of these two mappings.
 
 ```text
-基因型
-  →（Gamete Modifier）→ 配子分布
-  →（Zygote Modifier）→ 合子分布
+Genotype
+  → (Gamete Modifier) → gamete distribution
+  → (Zygote Modifier) → zygote distribution
 ```
 
-## 2. 两类 Modifier
+## 2. Two Types of Modifiers
 
-### 2.1 Gamete Modifier（配子修饰器）
+### 2.1 Gamete Modifier
 
-用于改变某个亲本基因型产生配子的概率。
+Used to change the probability of producing certain gametes from a given parental genotype.
 
-典型用途：
+Typical use cases:
 
-- drive 等位基因的偏置分离
-- 特定配子类型的增强或抑制
-- 给配子附加标签（如沉积标记）
+- Biased segregation of a drive allele.
+- Enhancement or suppression of specific gamete types.
+- Attaching labels (e.g., deposition markers) to gametes.
 
-### 2.2 Zygote Modifier（合子修饰器）
+### 2.2 Zygote Modifier
 
-用于改变“母配子 + 父配子”组合后的后代基因型分布。
+Used to change the offspring genotype distribution after combining a maternal gamete and a paternal gamete.
 
-典型用途：
+Typical use cases:
 
-- 胚胎死亡或拯救
-- 细胞质不兼容
-- 非孟德尔比例的后代重分配
+- Embryo death or rescue.
+- Cytoplasmic incompatibility.
+- Non‑Mendelian offspring redistribution.
 
-## 3. 推荐接入方式（Builder）
+## 3. Recommended Integration via Builder
 
-在用户实践中，推荐在 Builder 阶段统一注册 Modifier：
+In practice, it is recommended to register modifiers at the Builder stage:
 
 ```python
 from natal.population_builder import AgeStructuredPopulationBuilder
@@ -71,11 +71,11 @@ pop = (
 )
 ```
 
-这样可以让模型配置、初始状态与遗传规则一次性组织完成。
+This allows the model configuration, initial state, and genetic rules to be organised in one go.
 
-## 4. Gamete Modifier 示例
+## 4. Gamete Modifier Examples
 
-### 4.1 基因驱动偏置
+### 4.1 Gene Drive Bias
 
 ```python
 def heg_drive_modifier(pop):
@@ -91,7 +91,7 @@ def heg_drive_modifier(pop):
     }
 ```
 
-### 4.2 标记配子
+### 4.2 Labelling Gametes
 
 ```python
 def cas9_deposition_modifier(pop):
@@ -110,9 +110,9 @@ def cas9_deposition_modifier(pop):
     }
 ```
 
-## 5. Zygote Modifier 示例
+## 5. Zygote Modifier Examples
 
-### 5.1 胚胎拯救
+### 5.1 Embryo Rescue
 
 ```python
 def embryo_rescue_modifier(pop):
@@ -125,29 +125,29 @@ def embryo_rescue_modifier(pop):
     }
 ```
 
-### 5.2 细胞质不兼容
+### 5.2 Cytoplasmic Incompatibility
 
 ```python
 def ci_modifier(pop):
     return {
         (("Allele1", "uninfected"), ("Allele1", "Wolbachia")): {
-            # 该组合可按模型需求映射为低存活或无后代
+            # This combination could be mapped to low viability or no offspring, depending on the model
         },
     }
 ```
 
-## 6. 配子标签（Gamete Labels）
+## 6. Gamete Labels
 
-配子标签用于表示“同一等位基因的不同生物学状态”，例如是否携带某种细胞质因子。
+Gamete labels are used to represent “different biological states of the same allele”, for example whether a cytoplasmic factor is present.
 
-例如：
+Examples:
 
 - `(A1, default)`
 - `(A1, Cas9_deposited)`
 
-两者等位基因相同，但标签不同，后续在合子阶段可能触发不同规则。
+Both have the same allele but different labels, which may trigger different rules at the zygote stage.
 
-### 6.1 配置标签
+### 6.1 Configuring Labels
 
 ```python
 pop = AgeStructuredPopulation(
@@ -156,57 +156,57 @@ pop = AgeStructuredPopulation(
 )
 ```
 
-## 7. 注册方式与优先级
+## 7. Registration and Priority
 
-### 7.1 动态注册
+### 7.1 Dynamic Registration
 
 ```python
 pop.set_gamete_modifier(my_gamete_modifier, hook_name="drive")
 pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
 ```
 
-### 7.2 优先级
+### 7.2 Priority
 
-当多个 Modifier 同时作用时，会按优先级顺序执行。
+When multiple modifiers act together, they are executed in order of priority.
 
 ```python
 pop.set_gamete_modifier(base_mod, priority=1, hook_name="base")
 pop.set_gamete_modifier(drive_mod, priority=2, hook_name="drive")
 ```
 
-实践上，建议把“基础规则”放在较低优先级，把“覆盖/修正规则”放在较高优先级。
+In practice, place “basic rules” at lower priority and “overriding/corrective rules” at higher priority.
 
-## 8. 建模建议
+## 8. Modelling Advice
 
-1. 先写最小规则，再逐步增加复杂机制。
-2. 每增加一个 Modifier，都做小规模可解释性测试。
-3. 对关键组合输出中间结果，验证概率是否归一化。
-4. 对复杂系统优先使用预设，只有在预设不足时再下沉到自定义 Modifier。
+1. Start with minimal rules, then gradually add complexity.
+2. For each added modifier, run small‑scale interpretability tests.
+3. Output intermediate results for critical combinations to verify that probabilities are normalised.
+4. Prefer presets for complex systems; only fall back to custom modifiers when presets are insufficient.
 
-## 9. 最小工作流
+## 9. Minimal Workflow
 
 ```python
-# 1) 定义 genetic architecture
-# 2) 写一个最小 gamete modifier
-# 3) 跑短程模拟并检查基因型频率变化
-# 4) 再叠加 zygote modifier
-# 5) 最后扩展到完整参数扫描
+# 1) Define the genetic architecture
+# 2) Write a minimal gamete modifier
+# 3) Run a short simulation and check genotype frequency changes
+# 4) Add a zygote modifier
+# 5) Expand to full parameter sweeps
 ```
 
-## 10. 本章小结
+## 10. Chapter Summary
 
-Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
+Modifiers are the core mechanism for expressing “rewritten genetic rules” in NATAL.
 
-- Gamete Modifier 关注“产什么配子”。
-- Zygote Modifier 关注“配子结合后产什么后代”。
+- Gamete modifiers focus on “which gametes are produced”.
+- Zygote modifiers focus on “which offspring are produced after gamete fusion”.
 
-把两者配合好，就能表达大多数高级遗传机制。
+Using them together allows you to model most advanced genetic mechanisms.
 
 ---
 
-## 相关章节
+## Related Chapters
 
-- [遗传预设系统](genetic_presets.md)
-- [Hook 系统](hooks.md)
-- [Simulation Kernels 深度解析](simulation_kernels.md)
-- [PopulationState 与 PopulationConfig](population_state_config.md)
+- [Genetic Preset System](genetic_presets.md)
+- [Hook System](hooks.md)
+- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [PopulationState and PopulationConfig](population_state_config.md)

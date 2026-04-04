@@ -1,30 +1,30 @@
-# Numba 优化指南
+# Numba Optimization Guide
 
-本章介绍 NATAL 中与 Numba 相关的实践要点，目标是帮助你在“可调试性”和“执行效率”之间做平衡。
+This chapter introduces practical points related to Numba in NATAL, with the goal of helping you balance “debuggability” and “execution efficiency”.
 
-本章不追求理论细节，而是聚焦使用层面最常见的问题：
+This chapter does not pursue theoretical details, but focuses on the most common issues from a user perspective:
 
-1. 什么时候默认就足够快。
-2. 什么时候应该暂时关闭 Numba 便于排查。
-3. 如何做可复现、可解释的性能测试。
+1. When the default configuration is fast enough.
+2. When you should temporarily disable Numba for easier debugging.
+3. How to run reproducible and interpretable performance tests.
 
-## 1. Numba 在 NATAL 中的角色
+## 1. The Role of Numba in NATAL
 
-NATAL 的核心阶段计算由数值内核完成，Numba 负责将这些内核 JIT 编译为高效机器码。
+The core stage computations in NATAL are performed by numerical kernels, and Numba is responsible for JIT‑compiling those kernels into efficient machine code.
 
-对用户而言，可以记住一句话：
+For users, a single rule of thumb:
 
-- 默认开启 Numba，通常就是推荐配置。
+- Numba is enabled by default, and that is usually the recommended configuration.
 
-你无需手动给框架内核加装饰器；只需要在调试阶段学会“临时关闭”，在生产阶段保持“默认开启”。
+You do not need to manually decorate framework kernels; you only need to learn how to “temporarily disable” Numba during debugging, and keep it “enabled by default” in production.
 
-## 2. 默认行为与开关方式
+## 2. Default Behaviour and How to Switch
 
-### 2.1 默认行为
+### 2.1 Default Behaviour
 
-项目默认启用 Numba，以便在常见规模下获得稳定性能。
+The project enables Numba by default, so you get stable performance at typical scales.
 
-### 2.2 临时关闭（推荐调试方式）
+### 2.2 Temporary Disable (Recommended for Debugging)
 
 ```python
 from natal.numba_utils import numba_disabled
@@ -33,9 +33,9 @@ with numba_disabled():
     pop.run(n_steps=10)
 ```
 
-这种方式作用域清晰，退出 `with` 后会自动恢复原状态。
+This method has a clear scope; exiting the `with` block automatically restores the original state.
 
-### 2.3 全局启用/禁用
+### 2.3 Global Enable / Disable
 
 ```python
 from natal.numba_utils import disable_numba, enable_numba
@@ -47,51 +47,51 @@ enable_numba()
 pop.run(n_steps=100)
 ```
 
-适用于批量调试，但请在调试结束后及时恢复。
+This is suitable for batch debugging, but remember to re‑enable Numba when you finish debugging.
 
-## 3. 何时需要关闭 Numba
+## 3. When to Disable Numba
 
-以下场景建议先关闭 Numba 再排查：
+Consider disabling Numba first in the following scenarios:
 
-1. 报错信息不够直观，难以定位到业务逻辑。
-2. 你在调试 Hook 或参数组合，希望先确认“逻辑正确性”。
-3. 你想快速打印中间变量，验证数值是否符合预期。
+1. Error messages are not intuitive and make it hard to locate the business logic.
+2. You are debugging a Hook or a combination of parameters and want to first confirm “logical correctness”.
+3. You want to quickly print intermediate variables to verify whether the values meet expectations.
 
-常见工作流：
+A typical workflow:
 
-1. 先在 `numba_disabled()` 中跑通小规模样例。
-2. 确认逻辑无误后恢复 Numba。
-3. 在正式规模下运行并记录性能。
+1. Run a small‑scale example inside `numba_disabled()` to ensure it works.
+2. After confirming the logic, re‑enable Numba.
+3. Run at production scale and record performance.
 
-## 4. 调试输出与常见写法
+## 4. Debugging Output and Common Patterns
 
-在数值内核语境下，尽量使用简单、稳定的输出方式。
+In the context of numerical kernels, prefer simple, stable output methods.
 
-示例：
+Example:
 
 ```python
-# 更稳妥的快速输出形式
+# A safer, quick output form
 print("x =", x)
 ```
 
-相比复杂字符串拼接，这种形式在不同执行路径下更容易保持一致行为。
+Compared to complex string concatenation, this form behaves more consistently across different execution paths.
 
-## 5. 做性能测试时的建议
+## 5. Advice for Performance Testing
 
-性能测试应当与“模型正确性验证”分开进行。
+Performance testing should be separated from “model correctness verification”.
 
-### 5.1 建议流程
+### 5.1 Suggested Workflow
 
-1. 固定模型参数与随机种子。
-2. 先做一次预热运行，避免首次编译影响统计。
-3. 再做正式计时，并记录环境信息（机器、Python 版本、依赖版本）。
+1. Fix model parameters and the random seed.
+2. Run a warm‑up pass first to avoid the impact of first‑time compilation.
+3. Then take the actual timing, and record environment information (machine, Python version, dependency versions).
 
-### 5.2 示例
+### 5.2 Example
 
 ```python
 import time
 
-# 预热
+# Warm‑up
 pop.run(n_steps=1, record_every=0)
 pop.reset()
 
@@ -102,72 +102,71 @@ elapsed = time.perf_counter() - start
 print(f"Elapsed: {elapsed:.3f}s, per tick: {elapsed / 200:.6f}s")
 ```
 
-## 6. 影响性能的主要因素
+## 6. Main Factors Affecting Performance
 
-在用户建模层，通常优先关注以下因素：
+At the user modelling level, focus primarily on:
 
-1. 状态空间规模（尤其是基因型数量与年龄层数）。
-2. Hook 的计算复杂度与触发频率。
-3. 历史记录密度（`record_every` 设置）。
+1. The size of the state space (especially the number of genotypes and age classes).
+2. The computational complexity and trigger frequency of Hooks.
+3. The history recording density (`record_every` setting).
 
-实际调优时，优先从“减少不必要记录”和“简化 Hook 计算”开始，往往比微调底层参数更直接。
+When tuning, starting with “reducing unnecessary recording” and “simplifying Hook computations” is often more direct than tweaking low‑level parameters.
 
-## 7. 关于缓存与首次运行
+## 7. About Caching and First Run
 
-JIT 编译会带来首次运行开销，这是正常现象。
+JIT compilation introduces an overhead on the first run – this is normal.
 
-常用实践：
+Common practice:
 
-- 在正式计时前先运行少量步数进行预热。
-- 如果环境或代码变化较大，重新预热后再比较性能数据。
+- Run a few steps as a warm‑up before taking official timings.
+- If the environment or code changes significantly, re‑warm‑up before comparing performance data.
 
-### 7.1 缓存状态会显著影响结论
+### 7.1 Cache State Can Significantly Affect Conclusions
 
-在 Spatial 大场景里，如果你拿“缓存状态不一致”的两组数据做对比，很容易得出错误结论。
+In large Spatial scenarios, comparing two sets of data with inconsistent cache states can easily lead to wrong conclusions.
 
-实践中建议把“测量口径”写死：
+In practice, it is recommended to fix the measurement protocol:
 
-1. 明确是否比较“首次运行”（含编译）还是“稳态运行”（不含首次编译）。
-2. 在每组对比里保持一致的缓存策略（例如都先预热，或都在同样条件下清理后再预热）。
-3. 至少做多次重复，报告区间/均值，不只报告单次结果。
+1. Explicitly state whether you are comparing “first run” (including compilation) or “steady‑state run” (excluding first compilation).
+2. Keep the same caching strategy in each comparison (e.g., always warm‑up first, or always clear and then warm‑up under the same conditions).
+3. Run at least multiple repetitions and report intervals/means, not just a single result.
 
-一个常见误区是：优化后代码本身更快，但因为前后缓存状态不同，最终观测值反而看起来“没变”甚至“变慢”。
+A common pitfall: after optimising, the code itself is faster, but because the cache state differs, the observed numbers may look “unchanged” or even “slower”.
 
-### 7.2 Spatial kernel 的近期口径示例
+### 7.2 A Recent Example from Spatial Kernels
 
-以 `demos/spatial_hex.py` 场景为例，在统一缓存与预热口径后，`spatial.run(5)` 可稳定落在
-`0.6-0.7s` 量级。这个数值用于说明“稳态端到端耗时”的参考区间，而不是首次编译耗时。
+Taking the `demos/spatial_hex.py` scenario as an example, after unifying the caching and warm‑up protocol, `spatial.run(5)` stably falls in the range of `0.6‑0.7s`. This number is meant as a reference range for “steady‑state end‑to‑end runtime”, not the first‑run compilation time.
 
-## 8. 一份实用检查清单
+## 8. A Practical Checklist
 
-开始大规模实验前，可以快速检查：
+Before starting large‑scale experiments, quickly check:
 
-- 是否已完成小规模正确性验证。
-- 是否在正式跑批前完成预热。
-- `record_every` 是否满足当前分析需求（而不是默认最密集）。
-- 是否保留了必要的运行日志与参数快照。
+- Have you completed small‑scale correctness verification?
+- Have you performed a warm‑up before running the actual batch?
+- Does `record_every` meet your current analysis needs (rather than being the densest default)?
+- Have you kept necessary runtime logs and parameter snapshots?
 
-## 9. 推荐工作模式
+## 9. Recommended Workflow
 
-1. 建模初期：优先可解释性与可调试性。
-2. 参数定稿后：恢复默认 Numba 配置，执行长程模拟。
-3. 产出报告时：同时记录“运行耗时”和“关键生物学指标”，避免只看速度。
+1. Early modelling phase: prioritise interpretability and debuggability.
+2. After parameters are finalised: restore the default Numba configuration and run long‑term simulations.
+3. When reporting results: record both “runtime” and “key biological metrics”, not just speed.
 
-## 10. 本章小结
+## 10. Chapter Summary
 
-Numba 在 NATAL 中是“默认可用的性能加速器”，而不是用户必须手工维护的复杂组件。
+In NATAL, Numba is a “performance accelerator that works by default”, not a complex component that users must manually maintain.
 
-对于大多数建模任务，遵循以下原则即可：
+For most modelling tasks, following these principles is enough:
 
-- 正式运行时保持默认启用。
-- 逻辑排查时短暂关闭。
-- 性能评估时采用可复现流程。
+- Keep it enabled by default during production runs.
+- Temporarily disable it for logic debugging.
+- Use reproducible procedures when evaluating performance.
 
 ---
 
-## 相关章节
+## Related Chapters
 
-- [Simulation Kernels 深度解析](simulation_kernels.md)
-- [PopulationState 与 PopulationConfig](population_state_config.md)
-- [Hook 系统](hooks.md)
-- [快速开始](quickstart.md)
+- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [PopulationState and PopulationConfig](population_state_config.md)
+- [Hook System](hooks.md)
+- [Quick Start](quickstart.md)

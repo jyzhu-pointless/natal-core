@@ -1,129 +1,129 @@
-# 快速开始：15 分钟上手 NATAL
+# Quick Start: 15 Minutes to NATAL
 
-本章将通过一个**离散世代种群**和一个**年龄结构种群**的示例，带你快速熟悉 NATAL 的核心建模流程与可视化分析工具。
-如您还没有安装 `natal-core`，请参考[首页](./index.md)完成安装。
+This chapter will guide you through the core modeling workflow and visualization tools of NATAL using examples of a **discrete‑generation population** and an **age‑structured population**.
+If you haven't installed `natal-core` yet, please refer to the [Home Page](./index.md) for installation instructions.
 
 ---
 
-## 1️⃣ 第一步：定义遗传架构
+## 1️⃣ Step 1: Define the Genetic Architecture
 
-NATAL 采用**声明式**语法定义遗传架构。你可以通过 `Species.from_dict()` 快速描述复杂的位点、染色体以及配子标记：
+NATAL uses a **declarative** syntax to define genetic architecture. You can quickly describe complex loci, chromosomes, and gamete labels using `Species.from_dict()`:
 
 ```python
 import natal as nt
 
-# 定义遗传架构
+# Define genetic architecture
 sp = nt.Species.from_dict(
     name="TestSpecies",
     structure={
-        "chr1": {    # 染色体
-            "A": ["WT", "Drive", "Resistance"]    # 位点: [等位基因列表]
+        "chr1": {    # Chromosome
+            "A": ["WT", "Drive", "Resistance"]    # Locus: [list of alleles]
         }
     },
-    gamete_labels=["default", "Cas9_deposited"]    # 可选：配子标签，用于模拟细胞质沉积效应
+    gamete_labels=["default", "Cas9_deposited"]    # Optional: gamete labels for simulating cytoplasmic deposition effects
 )
 ```
 
-### 理解架构中的关键概念
+### Understanding Key Concepts in the Architecture
 
-以下保留快速入门所需的最小心智模型；完整概念、对象关系与更多示例请参考 [遗传结构与实体](genetic_structures.md)。
+This section retains the minimal mental model needed for the quick start. For complete concepts, object relationships, and more examples, see [Genetic Structures and Entities](genetic_structures.md).
 
-本框架将生物遗传信息分为两个层面：**遗传学结构**（静态模板）和**遗传学实体**（动态实例）。
+This framework separates biological genetic information into two layers: **genetic structures** (static templates) and **genetic entities** (dynamic instances).
 
-#### 遗传学结构（genetic structures） —— 物种的“设计图”
+#### Genetic Structures – The "Blueprint" of a Species
 
-定义“有哪些东西”，只描述可能性，不涉及具体选择：
+Defines “what exists”, describing possibilities without concrete choices:
 
-- **`Species`**：二倍体生物物种，包含多对同源染色体，是基因组信息的顶层容器。
-- **`Chromosome`**：染色体（如 `chr1`），包含多个位点。
-- **`Locus`**：基因位点（如 `A`），定义该位置可能出现的等位基因名称（如 `["WT", "Drive"]`）。
+- **`Species`**: A diploid biological species containing multiple homologous chromosomes; the top‑level container of genomic information.
+- **`Chromosome`**: A chromosome (e.g., `chr1`), containing multiple loci.
+- **`Locus`**: A genetic locus (e.g., `A`), defining the possible allele names at that position (e.g., `["WT", "Drive"]`).
 
-> 结构层相当于 “户型图”——几室几厅、每个房间可以放什么样的家具。
+> The structure layer is like a “floor plan” – how many rooms, what furniture can go where.
 
-#### 遗传学实体（genetic entities） —— 具体的“装修实例”
+#### Genetic Entities – The “Furnished” Instances
 
-基于设计图，在每个位点上实际选取一个等位基因，形成模拟中真实存在的遗传物质：
+Based on the blueprint, actual alleles are chosen at each locus to form the genetic material that really exists in the simulation:
 
-- **`Gene`（或称 `Allele`）**：特定的等位基因（如 `WT`、`Drive`）。它是在位点上被实例化的具体变体。
-- **`Haplotype`（单倍型）**：一条染色体上所有位点选定的等位基因组合。
-- **`HaploidGenotype`（单倍基因型）**：物种每对染色体各贡献一条单倍型，共同构成一组完整的单倍体基因组。
-- **`Genotype`（二倍体基因型）**：母本和父本的两套单倍基因型组合而成，代表个体的全部遗传信息。
-  - **注意：** 基因型严格区分母本来源和父本来源的单倍基因型。在字符串表达中，遵循 `Maternal|Paternal` 的顺序。`A|a` 和 `a|A` 会被认为是不同的基因型。
+- **`Gene` (or `Allele`)**: A specific allele (e.g., `WT`, `Drive`). It is the concrete variant instantiated at a locus.
+- **`Haplotype`**: The combination of chosen alleles on one chromosome.
+- **`HaploidGenotype`**: One haplotype contributed from each homologous chromosome, forming a complete haploid genome.
+- **`Genotype` (diploid genotype)**: The combination of maternal and paternal haploid genotypes, representing the individual’s full genetic information.
+  - **Note:** Genotypes strictly distinguish the maternal and paternal haploid origins. In string representation, the order is `Maternal|Paternal`. `A|a` and `a|A` are considered different genotypes.
 
-> 实体层相当于 “装修好的房子” ——每个房间已经选定了具体的家具款式，窗户也确定了是圆是方。
+> The entity layer is like a “furnished house” – each room has specific furniture, and windows are either round or square.
 
-#### 为什么这样区分？
+#### Why Separate These Layers?
 
-- **结构** 是模型级的、不可变的配置（例如“这个物种有 A、B 两个位点”），可以在模拟开始前一次性定义。
-- **实体** 是种群级的、动态出现的实例（例如“当前种群中有 `WT|WT`、`WT|Drive`、`Drive|WT`、`Drive|Drive` 四种基因型”），通过遗传规则产生和传递。
+- **Structures** are model‑level, immutable configurations (e.g., “this species has loci A and B”), defined once before the simulation starts.
+- **Entities** are population‑level, dynamically appearing instances (e.g., “the current population contains `WT|WT`, `WT|Drive`, `Drive|WT`, and `Drive|Drive` genotypes”), generated and transmitted by genetic rules.
 
-这种分离使得模拟可以灵活定义复杂的遗传架构，同时在运行时保持高效的计算。
+This separation allows the simulation to flexibly define complex genetic architectures while maintaining high runtime performance.
 
-### 验证架构
+### Verifying the Architecture
 
 ```python
-# 查看所有可能的基因型
+# List all possible genotypes
 all_genotypes = sp.get_all_genotypes()
-print(f"总共有 {len(all_genotypes)} 种基因型")
-# 输出: 总共有 9 种基因型
+print(f"Total number of genotypes: {len(all_genotypes)}")
+# Output: Total number of genotypes: 9
 # (WT|WT, WT|Drive, WT|Resistance, Drive|WT, Drive|Drive, Drive|Resistance, Resistance|WT, Resistance|Drive, Resistance|Resistance)
 
-# 获取特定基因型
+# Obtain a specific genotype
 wt_wt = sp.get_genotype_from_str("WT|WT")
 wt_drive = sp.get_genotype_from_str("WT|Drive")
 print(f"WT|WT: {wt_wt}")
 print(f"WT|Drive: {wt_drive}")
 ```
 
-> 更多遗传架构的细节，见 [遗传结构与实体](genetic_structures.md)
+> For more details on genetic architecture, see [Genetic Structures and Entities](genetic_structures.md).
 
 ---
 
-## 2️⃣ 第二步：初始化种群
+## 2️⃣ Step 2: Initialise the Population
 
-初始化是模型构建的关键。在此阶段，NATAL 会执行“编译”过程，将高层对象转换为高效的数值映射矩阵。
+Initialisation is a key step in model construction. At this stage, NATAL performs a “compilation” process that converts high‑level objects into efficient numerical mapping matrices.
 
-### 离散世代种群（DiscreteGenerationPopulation）—— 最简单的起点
+### Discrete‑Generation Population – The Simplest Starting Point
 
-如果你的模型不需要年龄结构（如理论模型、果蝇等实验室生物），可以使用更简单的离散世代模型：
+If your model does not need age structure (e.g., theoretical models, laboratory organisms like fruit flies), you can use the simpler discrete‑generation model:
 
 ```python
-# 离散世代模型（无年龄结构）
+# Discrete‑generation model (no age structure)
 pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
         name="FruitFlyPop",
-        stochastic=True                # True: 随机性模型; False: 确定性模型
+        stochastic=True                # True: stochastic model; False: deterministic model
     )
     .initial_state({
         "female": {"WT|WT": 1000},
         "male":   {"WT|WT": 1000}
     })
     .reproduction(
-        eggs_per_female=50,            # 每只雌性产卵数
-        sex_ratio=0.5                  # 后代性别比例
+        eggs_per_female=50,            # Number of eggs per female
+        sex_ratio=0.5                  # Offspring sex ratio
     )
     .build()
 )
 
-print(f"初始种群: {pop.get_total_count()}")
+print(f"Initial population size: {pop.get_total_count()}")
 ```
 
-### 年龄结构种群（AgeStructuredPopulation）—— 更贴近自然
+### Age‑Structured Population – More Realistic for Natural Settings
 
-对于需要年龄结构的自然种群或混合笼养种群，使用年龄结构模型：
+For natural populations or mixed‑cage populations that require age structure, use the age‑structured model:
 
 ```python
-# 年龄结构模型
+# Age‑structured model
 pop = (nt.AgeStructuredPopulation
     .setup(
         species=sp,
         name="MosquitoPop",
-        stochastic=False               # False: 确定性模型; True: 随机性模型
+        stochastic=False               # False: deterministic model; True: stochastic model
     )
     .age_structure(
-        n_ages=8,                      # 8个年龄类别
-        new_adult_age=2                # 2岁为成年
+        n_ages=8,                      # 8 age classes
+        new_adult_age=2                # Age 2 is considered adult
     )
     .initial_state({
         "female": {
@@ -141,41 +141,41 @@ pop = (nt.AgeStructuredPopulation
     .reproduction(
         eggs_per_female=100,
         sex_ratio=0.5,
-        use_sperm_storage=True,        # 启用精子存储机制
+        use_sperm_storage=True,        # Enable sperm storage mechanism
     )
     .competition(
-        juvenile_growth_mode=1,        # 1: 固定竞争模式
+        juvenile_growth_mode=1,        # 1: fixed competition mode
         old_juvenile_carrying_capacity=1200
     )
     .build()
 )
 
-print(f"初始化完成！")
-print(f"总种群大小: {pop.get_total_count():.0f}")
-print(f"雌性总数: {pop.get_female_count():.0f}")
-print(f"雄性总数: {pop.get_male_count():.0f}")
+print("Initialisation complete!")
+print(f"Total population size: {pop.get_total_count():.0f}")
+print(f"Total females: {pop.get_female_count():.0f}")
+print(f"Total males: {pop.get_male_count():.0f}")
 ```
 
-### 两种种群类型对比
+### Comparison of the Two Population Types
 
-| 特性 | DiscreteGenerationPopulation | AgeStructuredPopulation |
-|------|-----------------------------|------------------------|
-| 年龄结构 | ❌ 不支持 | ✅ 支持 |
-| 生存率 | 固定概率 | 按年龄配置 |
-| 精子存储 | ❌ 不支持 | ✅ 支持 |
-| 适用场景 | 实验室人工传代种群 | 自然种群、混合笼养种群 |
-| 复杂度 | 较低 | 较高 |
+| Feature | DiscreteGenerationPopulation | AgeStructuredPopulation |
+|---------|------------------------------|--------------------------|
+| Age structure | ❌ Not supported | ✅ Supported |
+| Survival | Fixed probability | Age‑specific rates |
+| Sperm storage | ❌ Not supported | ✅ Supported |
+| Use case | Laboratory artificially propagated populations | Natural populations, mixed‑cage populations |
+| Complexity | Lower | Higher |
 
 ---
 
-## 3️⃣ 第三步：使用遗传预设系统
+## 3️⃣ Step 3: Use the Genetic Preset System
 
-针对基因驱动、点突变等常见的遗传现象，NATAL 提供了**遗传预设（Genetic Presets）**系统。相比手动编写底层的映射修饰函数，预设系统更加简洁、可重用且易于维护。
+For common genetic phenomena such as gene drives and point mutations, NATAL provides a **Genetic Presets** system. Compared to manually writing low‑level mapping modifier functions, presets are simpler, reusable, and easier to maintain.
 
-### 使用基因驱动预设
+### Using a Gene Drive Preset
 
 ```python
-# 创建基因驱动预设
+# Create a gene drive preset
 drive = nt.HomingDrive(
     name="MyDrive",
     drive_allele="Drive",
@@ -185,27 +185,27 @@ drive = nt.HomingDrive(
     late_germline_resistance_formation_rate=0.03
 )
 
-# 在离散世代种群中添加预设
+# Add the preset to a discrete‑generation population
 pop = (nt.DiscreteGenerationPopulation
     .setup(species=sp, name="FruitFlyPop", stochastic=True)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50, sex_ratio=0.5)
-    .presets(drive)                 # 应用基因驱动预设
+    .presets(drive)                 # Apply the gene drive preset
     .build()
 )
 ```
 
-### 使用其他预设
+### Other Presets
 
-预设系统支持多种遗传修饰：
+The preset system supports various genetic modifications:
 
-- **HomingDrive**: CRISPR/Cas9基因驱动
-- **PointMutation**: 简单点突变
-- **CustomPresets**: 用户自定义预设
+- **HomingDrive**: CRISPR/Cas9 gene drive
+- **PointMutation**: Simple point mutation
+- **CustomPresets**: User‑defined custom presets
 
-### 适应度设置（可选）
+### Fitness Configuration (Optional)
 
-如果需要设置适应度效应，可以在 `fitness()` 方法中配置：
+If you need to set fitness effects, you can configure them in the `fitness()` method:
 
 ```python
 pop = (nt.AgeStructuredPopulation
@@ -213,77 +213,77 @@ pop = (nt.AgeStructuredPopulation
     .age_structure(n_ages=8)
     .initial_state({...})
     .fitness(viability={
-        "Resistance|Resistance": {"female": 0.7},  # 抗性纯合子生存率降低
-        "Drive|Drive": {"female": 0.0}              # 驱动纯合子不育
+        "Resistance|Resistance": {"female": 0.7},  # Reduced survival for resistance homozygotes
+        "Drive|Drive": {"female": 0.0}              # Drive homozygotes are sterile
     })
     .presets(drive)
     .build()
 )
 ```
 
-> **💡 提示**: 对于需要自定义复杂遗传规则的高级用户，可以参考[Modifier机制](modifiers.md)手动编写modifier函数。但对于大多数常见场景，预设系统更简单可靠。
+> **💡 Tip**: Advanced users who need custom complex genetic rules can refer to the [Modifier mechanism](modifiers.md) to manually write modifier functions. However, for most common scenarios, the preset system is simpler and more reliable.
 
 ---
 
-## 4️⃣ 第四步：定义模拟逻辑 - Hook
+## 4️⃣ Step 4: Define Simulation Logic – Hooks
 
-**Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观：
+The **Hook system** allows you to inject custom interventions or monitoring logic at key points in the simulation loop (e.g., at the beginning of each step, after survival selection, etc.). Using declarative `Op` syntax is the most efficient and intuitive way:
 
 ```python
 from natal.hook_dsl import hook, Op
 
 @hook(event='first')
 def release_drive_males():
-    """在 tick == 10 时释放携带驱动的雄性"""
+    """Release drive‑carrying males when tick == 10"""
     return [
         Op.add(
-            genotypes='WT|Drive',    # 选择 WT|Drive 基因型
-            ages=2,                  # 成年年龄（仅对年龄结构模型有效）
-            sex='male',              # 仅释放雄性
-            delta=500,               # 增加 500 只
-            when='tick == 10'        # 条件
+            genotypes='WT|Drive',    # Select WT|Drive genotype
+            ages=2,                  # Adult age (only effective for age‑structured models)
+            sex='male',              # Release only males
+            delta=500,               # Add 500 individuals
+            when='tick == 10'        # Condition
         )
     ]
 
-# 注册到种群
+# Register the hook with the population
 release_drive_males.register(pop)
 
-# 也可在构建过程中注册
+# You can also register the hook during the building process
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MyPop")
-    # ...（其他初始化方法）
+    # ... (other initialisation methods)
     .hooks(release_drive_males)
     .build()
 )
 ```
 
-> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以使用原生 Numba Hook。详见 [Hook 系统](hooks.md)
+> **💡 Tip**: For high‑performance or complex logic, advanced users can use native Numba hooks. See [Hook System](hooks.md) for details.
 
 ---
 
-## 5️⃣ 第五步：运行模拟与结果分析
+## 5️⃣ Step 5: Run the Simulation and Analyse Results
 
 ```python
-# 运行 100 个时间步，每 10 步记录一次历史
+# Run 100 time steps, record history every 10 steps
 pop.run(n_steps=100, record_every=10)
 
-# 或运行直到特定条件（定义在 Hook 中）
+# Or run until a specific condition (defined in a hook)
 pop.run(n_steps=200, record_every=5, finish=False)
 ```
 
-### 查看结果
+### Viewing Results
 
 ```python
-# 1) 用可读字典查看当前状态（适合日志/调试/接口返回）
+# 1) Get the current state as a readable dictionary (good for logging/debugging/API responses)
 state_view = nt.population_to_readable_dict(pop)
 print(state_view["state_type"], state_view["tick"])
 print(state_view["individual_count"]["female"].keys())
 
-# 2) 如需 JSON，可直接导出
+# 2) If JSON is needed, you can export directly
 state_json = nt.population_to_readable_json(pop, indent=2)
 print(state_json[:240])
 
-# 3) 集成 observation rules，按业务分组查看
+# 3) Integrate observation rules to view grouped results by business logic
 observed = nt.population_to_observation_dict(
     pop,
     groups={
@@ -298,47 +298,47 @@ observed = nt.population_to_observation_dict(
 print(observed["observed"]["adult_drive_female"])
 ```
 
-### 🎛️ 使用内置可视化面板（可选）
+### 🎛️ Use the Built‑in Visualisation Dashboard (Optional)
 
-NATAL 提供了一个基于 NiceGUI 的实时可视化面板，可以在浏览器中观察种群动态：
+NATAL provides a real‑time visualisation dashboard based on NiceGUI, allowing you to observe population dynamics in your browser:
 
 ```python
 import natal as nt
 from natal.ui import launch
 
-# ... 定义遗传架构、构建种群 ...
+# ... define genetic architecture, build the population ...
 
-# 启动面板
+# Launch the dashboard
 launch(pop, port=8080, title="My Simulation")
 ```
 
-启动后，在浏览器中打开 <http://localhost:8080> 即可查看种群数量变化、基因型频率等动态图表。
+Once launched, open <http://localhost:8080> in your browser to view dynamic charts of population size, genotype frequencies, etc.
 
 ---
 
-## 深入理解：初始化时的“编译”过程
+## Deep Dive: The “Compilation” Process During Initialisation
 
-虽然高层代码直观易读，但底层在 `build()` 时完成了一系列复杂操作：
+Although the high‑level code is intuitive, the underlying `build()` call performs a series of complex operations:
 
-1. **索引注册**: 所有基因型被分配整数索引，存储在 `pop.registry` (IndexRegistry)
-2. **映射矩阵生成**: 根据遗传预设和遗传映射的 `modifiers` 生成两个关键矩阵：
-   - `基因型→配子`: 规定每个基因型产生什么配子
-   - `配子→合子`: 规定配子组合产生什么基因型
-3. **配置编译**: 所有参数被编译成 `PopulationConfig` NamedTuple，为 Numba JIT 优化做准备
-4. **Hooks 编译**: 用户自定义的 Hooks 被编译为执行计划，将在对应的时机被调用ß
-5. **状态初始化**: 根据初始分布创建 `PopulationState` NamedTuple（包含 numpy 数组）
+1. **Index registration**: All genotypes are assigned integer indices, stored in `pop.registry` (IndexRegistry).
+2. **Mapping matrix generation**: Based on genetic presets and genetic mapping modifiers, two key matrices are generated:
+   - `genotype → gamete`: specifies which gametes each genotype produces.
+   - `gamete → zygote`: specifies which genotypes result from gamete combinations.
+3. **Configuration compilation**: All parameters are compiled into a `PopulationConfig` NamedTuple, ready for Numba JIT optimisation.
+4. **Hook compilation**: User‑defined hooks are compiled into execution plans that will be invoked at the appropriate times.
+5. **State initialisation**: Creates a `PopulationState` NamedTuple (containing numpy arrays) from the initial distribution.
 
-这个过程对用户透明，但理解它很重要。详见：
+This process is transparent to the user, but understanding it is important. See also:
 - [Index registry](index_registry.md)
 - [PopulationState & PopulationConfig](population_state_config.md)
-- [Modifiers 系统](modifiers.md) 和 [遗传预设系统](genetic_presets.md)
-- [Hooks 系统](hooks.md)
+- [Modifiers system](modifiers.md) and [Genetic Presets system](genetic_presets.md)
+- [Hooks system](hooks.md)
 
 ---
 
-## 📊 完整示例
+## 📊 Complete Examples
 
-### 示例一：离散世代种群 + 基因驱动 + Hook
+### Example 1: Discrete‑Generation Population + Gene Drive + Hook
 
 ```python
 import natal as nt
@@ -368,16 +368,16 @@ pop = (nt.DiscreteGenerationPopulation
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50, sex_ratio=0.5)
     .presets(drive)
-    .hooks(release_drive)              # 注册 Hook
+    .hooks(release_drive)              # Register the hook
     .build()
 )
 
 pop.run(n_steps=100, record_every=10)
-print(f"最终种群: {pop.get_total_count():.0f}")
-print(f"等位基因频率: {pop.compute_allele_frequencies()}")
+print(f"Final population size: {pop.get_total_count():.0f}")
+print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 ```
 
-### 示例二：年龄结构种群 + 基因驱动 + 适应度 + Hook
+### Example 2: Age‑Structured Population + Gene Drive + Fitness + Hook
 
 ```python
 import natal as nt
@@ -426,43 +426,43 @@ pop = (nt.AgeStructuredPopulation
 )
 
 pop.run(n_steps=100, record_every=10)
-print(f"最终种群: {pop.get_total_count():.0f}")
-print(f"等位基因频率: {pop.compute_allele_frequencies()}")
+print(f"Final population size: {pop.get_total_count():.0f}")
+print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 ```
 
 ---
 
-## 🎯 下一步
+## 🎯 Next Steps
 
-现在你已经掌握了基础知识！接下来可以：
+Now that you have mastered the basics, you can:
 
-1. **深入学习遗传预设系统**：[遗传预设系统](genetic_presets.md) - 学习如何创建自定义预设
-2. **理解遗传架构**：[遗传结构与实体](genetic_structures.md) - 深入了解Species、Chromosome等概念
-3. **掌握高级功能**：[Hook 系统](hooks.md) - 学习如何注入自定义模拟逻辑
-4. **需要自定义遗传规则**：[Modifier 机制](modifiers.md) - 手动编写gamete/zygote修饰器
-5. **性能优化**：[Numba 优化指南](numba_optimization.md) - 提升模拟性能
+1. **Dive deeper into the Genetic Preset system**: [Genetic Presets Usage Guide](genetic_presets.md) – learn how to create custom presets
+2. **Understand Genetic Architecture**: [Genetic Structures and Entities](genetic_structures.md) – in‑depth look at Species, Chromosome, and other concepts
+3. **Master advanced features**: [Hook System](hooks.md) – learn to inject custom simulation logic
+4. **Customise genetic rules**: [Modifier Mechanism](modifiers.md) – manually write gamete/zygote modifiers
+5. **Optimise performance**: [Numba Optimization Guide](numba_optimization.md) – improve simulation performance
 
 ---
 
-## ❓ 常见问题
+## ❓ Frequently Asked Questions
 
-### Q: 什么是 "gamete_labels"?
-**A**: 用来标记配子的附加维度。例如 "default" 和 "Cas9_deposited" 可以区分有没有 Cas9 蛋白沉积的配子。在计算合子时，会同时考虑配子的等位基因和标签。
+### Q: What are “gamete_labels”?
+**A**: They are an extra dimension to label gametes. For example, `"default"` and `"Cas9_deposited"` can distinguish whether a gamete carries Cas9 protein deposition. When calculating zygotes, both the alleles and the labels of the gametes are considered.
 
-### Q: 为什么初始化较慢？
-**A**: 初始化时要生成两个映射矩阵，复杂度与基因型数量的 3-4 次方有关，根据 numba 缓存情况可能还需要不同程度的编译。对于相对简单（仅有几十种基因型）的遗传学设定，预计需要数秒至数十秒时间。这只发生一次。之后的每个 tick 速度很快。
+### Q: Why is initialisation relatively slow?
+**A**: Initialisation involves generating two mapping matrices, with complexity roughly O((number of genotypes)^(3‑4)). Depending on Numba’s caching behaviour, some compilation may also be required. For relatively simple genetic architectures (only dozens of genotypes), expect several to tens of seconds. This happens only once; subsequent ticks are very fast.
 
-### Q: 什么时候使用离散世代种群？
-**A**: 当你的模型不需要年龄结构时，使用`DiscreteGenerationPopulationBuilder`更简单，适用于：
-- 果蝇等实验室模型
-- 理论模型研究
-- 不需要年龄相关效应的模拟
+### Q: When should I use the discrete‑generation population?
+**A**: Use the discrete‑generation population when your model does not need age structure. It is suitable for:
+- Laboratory models like fruit flies
+- Theoretical model studies
+- Simulations that do not require age‑dependent effects
 
-### Q: "确定性" vs "随机性" 是什么区别？
+### Q: What is the difference between “deterministic” and “stochastic”?
 **A**:
-- `is_stochastic=False`: 使用多项分布期望，结果完全确定（允许小数）
-- `is_stochastic=True`: 使用随机抽样，结果随机波动（必为整数）
+- `is_stochastic=False`: uses the expectation of a multinomial distribution – results are completely deterministic (may be fractional)
+- `is_stochastic=True`: uses random sampling – results are stochastic (always integers)
 
 ---
 
-**准备好更深入的学习了吗？** [前往下一章：遗传结构与实体 →](genetic_structures.md)
+**Ready to go deeper?** [Proceed to the next chapter: Genetic Structures and Entities →](genetic_structures.md)

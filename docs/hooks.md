@@ -1,31 +1,38 @@
-# Hook 系统
+# Hook System
 
-Hook 用于在模拟流程的固定时间点插入用户逻辑。
+Hooks are used to insert user logic at fixed points in the simulation flow.
 
-如果你希望在每个 tick 的某个阶段执行“额外操作”，例如周期投放、条件干预、阈值终止，Hook 是最直接的方式。
+If you want to perform “additional operations” at a certain stage of each tick, such as periodic releases, conditional interventions, or threshold termination, Hooks are the most direct way.
 
-## 1. Hook 的使用价值
+## 1. Value of Using Hooks
 
-Hook 让你在不改动核心内核代码的前提下扩展模型行为，适合：
+Hooks allow you to extend model behaviour without modifying the core kernel code. They are suitable for:
 
-1. 周期性干预（如每隔若干步释放个体）。
-2. 条件触发控制（如数量低于阈值时补充）。
-3. 研究流程控制（如达到条件后提前结束）。
+1. Periodic interventions (e.g., releasing individuals every few steps).
+2. Conditional control (e.g., supplementing when numbers fall below a threshold).
+3. Study flow control (e.g., early termination when a condition is met).
 
-## 2. 事件时间点
+## 2. Event Time Points
 
-NATAL 提供四个标准事件：
+NATAL provides four standard events:
 
-- `first`：每个 tick 的早期阶段。
-- `early`：繁殖后、生存前。
-- `late`：生存后、衰老前。
-- `finish`：模拟结束阶段。
+- `initialization`: after simulation initialisation, before the first tick.
+- `first`: early stage of each tick.
+- `early`: after reproduction, before survival.
+- `late`: after survival, before aging.
+- `finish`: at the end of the simulation.
 
-选择事件时，建议先明确你的干预发生在“生存前”还是“生存后”，这会显著影响结果解释。
+`initialization` is suitable for one‑time startup logic, for example:
 
-## 3. 推荐写法：声明式 Hook
+1. Setting initial boundary conditions or thresholds.
+2. Pre‑recording experimental metadata.
+3. Performing a state correction or check before the first tick.
 
-对于大多数用户，推荐使用 `@hook` 与 `Op.*`：
+When choosing an event, clarify whether your intervention should happen “before initialisation”, “before survival”, or “after survival” – this significantly affects the interpretation of results.
+
+## 3. Recommended Style: Declarative Hooks
+
+For most users, it is recommended to use `@hook` together with `Op.*`, and then bind the hook to a population using `set_hook(...)`:
 
 ```python
 from natal.hook_dsl import hook, Op
@@ -39,27 +46,27 @@ def periodic_release():
     ]
 
 
-periodic_release.register(pop)
+pop.set_hook("first", periodic_release)
 ```
 
-这种方式可读性高、维护成本低，也更便于团队复核模型规则。
+This style is highly readable, low‑maintenance, and makes it easier for teams to review model rules.
 
-## 4. Op 操作的直观理解
+## 4. Intuitive Understanding of `Op` Operations
 
-常用操作包括：
+Common operations include:
 
-- `Op.add`：增加个体数量。
-- `Op.subtract`：减少个体数量。
-- `Op.scale`：按比例缩放。
-- `Op.set_count`：设置目标数量。
-- `Op.kill`：按死亡概率处理。
-- `Op.stop_if_*`：满足条件时停止运行。
+- `Op.add`: increase individual counts.
+- `Op.subtract`: decrease individual counts.
+- `Op.scale`: scale counts by a factor.
+- `Op.set_count`: set a target count.
+- `Op.kill`: kill individuals with a given probability.
+- `Op.stop_if_*`: stop the simulation when a condition is met.
 
-可以把它们理解为“对状态张量进行声明式变换”。
+Think of them as “declarative transformations” applied to the state tensor.
 
-## 5. 条件表达式（when）
+## 5. Condition Expressions (`when`)
 
-`when` 用于控制操作在何时生效，常见写法：
+`when` controls when an operation takes effect. Common forms:
 
 - `tick == N`
 - `tick % N == 0`
@@ -68,18 +75,18 @@ periodic_release.register(pop)
 - `tick <= N`
 - `tick < N`
 
-并支持 `and`、`or`、`not` 与括号组合。
+And supports `and`, `or`, `not`, and parentheses.
 
-示例：
+Examples:
 
 ```python
 when="tick >= 10 and tick < 50"
 when="tick % 7 == 0 and not (tick == 14)"
 ```
 
-## 6. Selector 写法（按目标选择）
+## 6. Selector Syntax (Selecting Targets)
 
-当你希望先选定某个目标（例如特定基因型）再执行逻辑时，可以使用 selector 模式：
+When you want to first select a target (e.g., a specific genotype) and then apply logic, you can use the selector pattern:
 
 ```python
 from natal.hook_dsl import hook
@@ -92,45 +99,50 @@ def cap_target(pop, target_gt):
         arr[:, :, target_gt] *= 0.95
 ```
 
-这类写法适合需要读取当前状态并做条件判断的场景。
+This style is suitable for scenarios where you need to read the current state and apply conditional logic.
 
-## 7. 注册方式
+## 7. Registration Methods
 
-### 7.1 装饰器对象注册
-
-```python
-my_hook.register(pop)
-```
-
-### 7.2 直接设置
+### 7.1 Recommended: `set_hook`
 
 ```python
 pop.set_hook("first", my_hook)
 ```
 
-如果存在多个 Hook，建议通过 `priority` 明确执行顺序，避免隐式顺序导致结果难以复现。
+### 7.2 `register` Syntax as a Complement
 
-## 8. 与 run / run_tick 的关系
+```python
+my_hook.register(pop)
+```
 
-Hook 会在 `run(...)` 与 `run_tick()` 中按事件顺序自动执行。
+If multiple hooks exist, it is recommended to specify execution order via `priority` to avoid implicit ordering that makes results hard to reproduce. `register` is mainly a convenience method provided by the `@hook` decorator; the core binding method remains `set_hook(...)`.
 
-因此，用户通常不需要手动触发 Hook；只需：
+## 8. Relationship with `run` / `run_tick`
 
-1. 定义 Hook。
-2. 注册 Hook。
-3. 正常运行模拟。
+Hooks are automatically executed in event order when calling `run(...)` or `run_tick()`.
 
-## 9. 实践建议
+Therefore, users generally do not need to trigger hooks manually; you only need to:
 
-1. 保持每个 Hook 职责单一，便于验证。
-2. 先做短程模拟确认行为，再扩展到长程。
-3. 当多个 Hook 共同作用时，记录优先级和预期顺序。
-4. 重要实验建议保存配置和 Hook 定义，以支持复现实验。
+1. Define the hook.
+2. Bind it with `set_hook(...)`.
+3. Run the simulation normally.
 
-## 10. 最小组合示例
+## 9. Practical Advice
+
+1. Keep each hook single‑responsibility for easier verification.
+2. Run short simulations to confirm behaviour before extending to long runs.
+3. When multiple hooks interact, record their priorities and expected order.
+4. For important experiments, save the configuration and hook definitions to support reproducibility.
+
+## 10. Minimal Combined Example
 
 ```python
 from natal.hook_dsl import hook, Op
+
+
+@hook(event="initialization", priority=0)
+def init_population():
+    return [Op.stop_if_above(genotypes="Drive|WT", ages="*", threshold=1_000_000)]
 
 
 @hook(event="first", priority=0)
@@ -140,31 +152,34 @@ def release():
 
 @hook(event="late", priority=5)
 def cap(pop):
-    # 这里可加入更细的状态检查
+    # Additional state checks can be placed here
     return [Op.stop_if_above(genotypes="Drive|WT", ages="*", threshold=10000)]
 
+# Assume a population `pop` has already been built via the builder
 
-release.register(pop)
-cap.register(pop)
+pop.set_hook("initialization", init_population)
+pop.set_hook("first", release)
+pop.set_hook("late", cap)
 
 pop.run(n_steps=200, record_every=10)
 ```
 
-## 11. 本章小结
+## 11. Chapter Summary
 
-Hook 系统为 NATAL 提供了稳定、可扩展的行为注入能力。
+The Hook system provides a stable, extensible way to inject behaviour into NATAL.
 
-在用户层，推荐遵循三步：
+At the user level, follow three steps:
 
-1. 用 `@hook` 定义规则。
-2. 用 `register` 或 `set_hook` 绑定到 population。
-3. 用 `run(...)` 执行并结合 history 验证结果。
+1. Define rules with `@hook`.
+2. Prefer binding to the population using `set_hook(...)`.
+3. If you still want to use the convenient `register` syntax from `@hook`, you can also use `register(...)`.
+4. Execute with `run(...)` and verify results using the history.
 
 ---
 
-## 相关章节
+## Related Chapters
 
-- [Modifier 机制](modifiers.md)
-- [Simulation Kernels 深度解析](simulation_kernels.md)
-- [Numba 优化指南](numba_optimization.md)
-- [快速开始](quickstart.md)
+- [Modifier Mechanism](modifiers.md)
+- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [Numba Optimization Guide](numba_optimization.md)
+- [Quick Start](quickstart.md)

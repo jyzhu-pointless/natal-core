@@ -1,170 +1,222 @@
-# Simulation Kernels 深度解析
+# Simulation Kernels Deep Dive
 
-本章面向使用者说明 NATAL 的模拟执行链路：
+This chapter explains the simulation execution chain of NATAL from a user perspective:
 
-- 你在用户层调用什么；
-- 框架内部如何完成一次 tick；
-- 历史记录、状态导入导出与 Hook 在流程中的位置。
+- What you call at the user level.
+- How the framework completes one tick internally.
+- Where history recording, state export/import, and Hooks fit into the flow.
 
-阅读本章后，你应当能清楚回答两个问题：
+After reading this chapter, you should be able to clearly answer two questions:
 
-1. 一次 `pop.run(...)` 在内部做了哪些阶段计算。
-2. 何时使用 `run(...)`、`run_tick()`、`get_history()`、`export_state()`。
+1. What stage computations happen inside `pop.run(...)`.
+2. When to use `run(...)`, `run_tick()`, `get_history()`, and `export_state()`.
 
-## 1. 用户入口与执行路径
+## 1. User Entry Points and Execution Path
 
-日常使用时，你只需要面向 population 对象编程：
+In daily use, you only need to program against the population object:
 
 ```python
 pop.run(n_steps=100, record_every=10)
 pop.run_tick()
 ```
 
-在框架内部，执行路径可概括为：
+Internally, the execution path can be summarized as:
 
 ```text
 population.run(...) / population.run_tick()
-  → 获取已编译的事件 hooks
-  → 绑定 codegen runner
-  → 依次调用阶段内核（reproduction/survival/aging）
-  → 更新 state 与 history
+  → obtain compiled event hooks
+  → bind codegen runner
+  → call stage kernels in order (reproduction/survival/aging)
+  → update state and history
 ```
 
-这意味着你无需手动组织底层内核调用；专注于参数、Hook 与结果分析即可。
+This means you do not need to manually organise low‑level kernel calls; just focus on parameters, Hooks, and result analysis.
 
-## 2. 两类 population 的一致用法
+## 2. Consistent Usage for Both Population Types
 
-### 2.1 AgeStructuredPopulation
+### 2.1 `AgeStructuredPopulation`
 
 ```python
 pop.run(n_steps=100, record_every=10)
 pop.run_tick()
 ```
 
-### 2.2 DiscreteGenerationPopulation
+### 2.2 `DiscreteGenerationPopulation`
 
 ```python
 pop.run(n_steps=100, record_every=10)
 pop.run_tick()
 ```
 
-两者在调用方式上保持一致，差异主要体现在内部状态结构与阶段内核。
+The calling convention is identical for both; differences lie mainly in the internal state structure and the stage kernels.
 
-## 3. 一次 tick 的阶段顺序
+## 3. Stage Order Within One Tick
 
-以一个标准 tick 为例，执行顺序是：
+Taking a standard tick, the execution order is:
 
-1. `first` 事件阶段（框架事件与用户 Hook）
-2. `reproduction` 阶段
-3. `early` 事件阶段
-4. `survival` 阶段
-5. `late` 事件阶段
-6. `aging` 阶段
-7. `n_tick` 增加
+1. User `first` Hook
+2. `reproduction` stage
+3. User `early` Hook
+4. `survival` stage
+5. User `late` Hook
+6. `aging` stage
+7. `n_tick` incremented
 
-这一顺序对年龄结构模型与离散世代模型都成立；不同模型会调用对应的内核实现。
+This order holds for both the age‑structured model and the discrete‑generation model; different models call the corresponding kernel implementations.
 
-## 4. simulation_kernels 模块的职责
+### 3.1 Detailed Algorithm for `AgeStructuredPopulation` per Tick
 
-`src/natal/kernels/simulation_kernels.py` 主要提供“阶段级内核函数”，包括：
+For an `AgeStructuredPopulation` tick, the three main stages can be expanded further:
 
-- 年龄结构模型：`run_reproduction`、`run_survival`、`run_aging`
-- 离散世代模型：`run_discrete_reproduction`、`run_discrete_survival`、`run_discrete_aging`
+1. reproduction
+  - Compute age‑weighted effective male count: `male_count[age, g] * male_mating_rate[age]`.
+  - Build mating probability matrix `P(g_f -> g_m)` based on sexual selection fitness and effective male counts.
+  - Call `sample_mating(...)` to update `sperm_store` (including sperm displacement logic).
+  - Call fertilisation functions to generate age‑0 new individuals (females/males written to `ind_count[:, 0, :]` respectively).
+2. survival
+  - First apply density regulation to age‑0 (juveniles): `NO_COMPETITION / FIXED / LOGISTIC / BEVERTON_HOLT`.
+  - Then compute the combined survival probability “age‑specific survival × viability”.
+  - Update both `individual_count` and `sperm_store` with the combined survival probability, keeping them consistent.
+3. aging
+  - Shift all age classes forward by one.
+  - Clear the new age‑0 slots, waiting for the next tick’s reproduction to write into them.
 
-此外，该模块还提供状态/配置导入导出的轻量包装函数，便于与上层对象方法配合使用。
+Key point: AgeStructured is the “long‑term sperm storage” path; `sperm_store` is synchronously updated in all three stages (reproduction/survival/aging).
 
-## 5. 与 state/config 的关系
+### 3.2 Detailed Algorithm for `DiscreteGenerationPopulation` per Tick
 
-模拟运行时，内核读写的是两个核心对象：
+`DiscreteGenerationPopulation` fixes `n_ages=2` (age0 = juvenile, age1 = adult). The algorithm per tick is more compact:
 
-- `state`：当前时刻的数量分布与时间步。
-- `config`：生存率、交配率、适应度、映射矩阵等规则参数。
+1. reproduction
+  - Only adults at age1 are used for mating and fertilisation.
+  - A temporary `temp_sperm_store` is used for fertilisation within the step; there is no long‑term sperm storage across ticks.
+  - Offspring are written into age0.
+2. survival
+  - First apply density regulation to age0 (supports the same four growth modes).
+  - Apply combined survival probability (age‑specific survival × viability) only to age0.
+3. aging
+  - Generation turnover: `age0 -> age1`.
+  - The previous age1 is overwritten (i.e., “old adults exit” in discrete generations).
 
-如果你已经阅读上一章，可以将本章理解为“state/config 如何在每个 tick 中被消费与更新”。
+Key point: Discrete emphasises “non‑overlapping generations” and does not have the cross‑age, cross‑tick long‑term sperm storage state of AgeStructured.
 
-## 6. 历史记录机制
+### 3.3 Stochastic vs Deterministic: Two Execution Semantics Under the Same Stage Order
 
-`run(...)` 可以按间隔写入历史数据：
+The stage order is unchanged, but how values are updated depends on the configuration:
+
+1. `is_stochastic=False` (deterministic)
+  - Uses expectations / proportional scaling; results are usually continuous values (float).
+  - No Binomial/Poisson sampling.
+2. `is_stochastic=True` (stochastic)
+  - Uses sampling (e.g., Binomial/Poisson/Multinomial) for updates; trajectories exhibit random fluctuations.
+  - If `use_continuous_sampling=True`, continuous approximations (e.g., Beta/Dirichlet/Gamma approximations) are used to improve differentiability/continuity and numerical stability in certain scenarios.
+
+Additionally, the reproduction stage is influenced by `use_fixed_egg_count`:
+
+- `True`: lays eggs according to a fixed expected number.
+- `False`: lays eggs according to a Poisson mechanism (in stochastic mode this manifests as random egg numbers).
+
+## 4. Responsibilities of the `simulation_kernels` Module
+
+`src/natal/kernels/simulation_kernels.py` mainly provides “stage‑level kernel functions”, including:
+
+- For the age‑structured model: `run_reproduction`, `run_survival`, `run_aging`.
+- For the discrete‑generation model: `run_discrete_reproduction`, `run_discrete_survival`, `run_discrete_aging`.
+
+The module also provides lightweight wrapper functions for importing/exporting state and configuration, making them easy to use together with the higher‑level object methods.
+
+## 5. Relationship with `state` / `config`
+
+When the simulation runs, the kernels read and write two core objects:
+
+- `state`: the current population distribution and time step.
+- `config`: rule parameters such as survival rates, mating rates, fitness values, mapping matrices, etc.
+
+If you have read the previous chapter, you can think of this chapter as explaining “how `state`/`config` are consumed and updated in each tick”.
+
+## 6. History Recording Mechanism
+
+`run(...)` can write history data at intervals:
 
 ```python
 pop.run(n_steps=200, record_every=10)
 history = pop.get_history()
 ```
 
-实践建议：
+Practical advice:
 
-- `record_every` 越小，历史越密集，便于诊断细节。
-- `record_every` 越大，历史越精简，更适合长期模拟。
-- 如不需要中间轨迹，可设为 `0` 以减少内存占用。
+- Smaller `record_every` gives denser history, good for diagnosing details.
+- Larger `record_every` gives a sparser history, better for long‑term simulations.
+- If intermediate trajectories are not needed, set it to `0` to reduce memory usage.
 
-## 7. 状态导出与恢复
+## 7. State Export and Restoration
 
-当你需要保存快照、跨脚本传递状态或做分叉实验时，可以使用：
+When you need to save snapshots, pass state between scripts, or branch experiments, you can use:
 
 ```python
 state_flat, history = pop.export_state()
-# ... 保存或外部处理 ...
+# ... save or process externally ...
 pop.import_state(state_flat, history=history)
 ```
 
-典型场景：
+Typical scenarios:
 
-1. 运行到某个关键时间点后保存快照。
-2. 从同一快照派生多个参数分支。
-3. 比较不同策略下的轨迹差异。
+1. Save a snapshot after reaching a critical time point.
+2. Derive multiple parameter branches from the same snapshot.
+3. Compare trajectory differences under different strategies.
 
-## 8. Hook 如何嵌入执行链路
+## 8. How Hooks Are Embedded in the Execution Chain
 
-用户定义的 Hook（如 `first`/`early`/`late`）会被编译并合并到执行流程中，然后由 runner 在对应阶段触发。
+User‑defined Hooks (e.g., `first`/`early`/`late`) are compiled and merged into the execution flow, then triggered by the runner at the corresponding stage.
 
-这带来两个好处：
+This brings two benefits:
 
-- 使用上保持高层 API 简洁。
-- 执行上仍保持统一阶段顺序，结果更可解释。
+- The high‑level API remains concise.
+- The stage order stays uniform, making results more interpretable.
 
-## 9. 推荐使用模式
+## 9. Recommended Usage Patterns
 
-1. 批量模拟：优先使用 `pop.run(...)`。
-2. 单步观察：使用 `pop.run_tick()`。
-3. 分析轨迹：搭配 `record_every` 与 `get_history()`。
-4. 快照实验：使用 `export_state()` / `import_state()`。
-5. 行为扩展：使用 Hook，而不是自行拼接内核调用。
+1. Batch simulations: prefer `pop.run(...)`.
+2. Single‑step observation: use `pop.run_tick()`.
+3. Analysing trajectories: combine `record_every` and `get_history()`.
+4. Snapshot experiments: use `export_state()` / `import_state()`.
+5. Extending behaviour: use Hooks, rather than manually assembling kernel calls.
 
-## 10. 最小示例
+## 10. Minimal Example
 
 ```python
-# 1) 构建 population
+# 1) Build the population
 pop = ...
 
-# 2) 连续运行
+# 2) Run continuously
 pop.run(n_steps=100, record_every=10)
 
-# 3) 单步推进
+# 3) Advance one step
 pop.run_tick()
 
-# 4) 获取历史
+# 4) Retrieve history
 history = pop.get_history()
 
-# 5) 导出与恢复
+# 5) Export and restore
 state_flat, hist = pop.export_state()
 pop.import_state(state_flat, history=hist)
 ```
 
-## 11. 本章小结
+## 11. Chapter Summary
 
-可以把 NATAL 的执行机制理解为三层分工：
+You can view NATAL’s execution mechanism as a three‑layer division of labour:
 
-- population 层：提供稳定的用户 API 与生命周期管理。
-- runner/hook 层：将阶段流程与事件逻辑组织成统一执行链。
-- kernel 层：完成每个阶段的数值计算。
+- Population layer: provides a stable user API and lifecycle management.
+- Runner / hook layer: organises the stage flow and event logic into a unified execution chain.
+- Kernel layer: performs the numerical calculations for each stage.
 
-在实际建模中，你通常只需稳定使用 population API，并在需要时通过 Hook 与 history 提升可控性与可解释性。
+In practice, you usually only need to use the population API stably, and improve controllability and interpretability through Hooks and history when needed.
 
 ---
 
-## 相关章节
+## Related Chapters
 
-- [PopulationState 与 PopulationConfig](population_state_config.md)
-- [Numba 优化指南](numba_optimization.md)
-- [Modifier 机制](modifiers.md)
-- [Hook 系统](hooks.md)
+- [PopulationState and PopulationConfig](population_state_config.md)
+- [Numba Optimization Guide](numba_optimization.md)
+- [Modifier Mechanism](modifiers.md)
+- [Hook System](hooks.md)

@@ -1,26 +1,26 @@
-# 设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围
+# Designing Your Own Preset (2): Using `genotype_filter` to Control Rule Scope
 
-上一章你完成了转换规则的定义。本章继续主线，解决一个关键问题：
+In the previous chapter you defined conversion rules. This chapter continues the main line and solves a key problem:
 
-**同一条转换规则，通常不该对所有基因型都生效。**
+**A single conversion rule should usually not apply to all genotypes.**
 
-这就是 `genotype_filter` 的作用——把模式匹配的结果应用到规则作用范围中。
+This is the role of `genotype_filter` – applying the results of pattern matching to the rule’s scope.
 
-## 1. genotype_filter 是什么
+## 1. What is `genotype_filter`
 
-`genotype_filter` 是一个函数：
+`genotype_filter` is a function that:
 
-- 输入：`Genotype`
-- 输出：`True` 或 `False`
+- Input: `Genotype`
+- Output: `True` or `False`
 
-当返回 `True` 时，规则对该基因型生效；返回 `False` 时，不生效。
+When it returns `True`, the rule applies to that genotype; when it returns `False`, it does not.
 
 ```python
 def my_filter(genotype):
-    return True  # 或 False
+    return True  # or False
 ```
 
-## 2. 主线示例：只在 W|D 杂合子中发生 W->D
+## 2. Main Line Example: `W->D` Only in `W|D` Heterozygotes
 
 ```python
 from natal.gamete_allele_conversion import GameteConversionRuleSet
@@ -40,25 +40,25 @@ ruleset.add_convert(
 )
 ```
 
-这样就把“机制作用范围”明确出来了。
+This makes the “mechanism scope” explicit.
 
-## 3. 常见过滤模式
+## 3. Common Filtering Patterns
 
-### 3.1 携带某等位基因
+### 3.1 Carries a certain allele
 
-适合“只要携带 drive 就触发”的场景。
+Suitable for scenarios where “any individual carrying the drive triggers the effect”.
 
-### 3.2 指定杂合/纯合
+### 3.2 Specify heterozygote / homozygote
 
-适合“仅在杂合子切割”或“仅在纯合子生效”的场景。
+Suitable for scenarios where “cutting only in heterozygotes” or “effect only in homozygotes”.
 
-### 3.3 组合逻辑
+### 3.3 Combining logic
 
-可把多个过滤器组合成与/或/非逻辑，保持规则可读。
+You can combine multiple filters with AND/OR/NOT logic to keep rules readable.
 
-## 4. 与模式匹配语法联动（第13章）
+## 4. Integrating with Pattern Matching Syntax (Chapter 13)
 
-当规则条件复杂时，建议直接复用第13章的 pattern 语法，而不是手写字符串包含判断。
+When the rule condition is complex, it is recommended to reuse the pattern syntax from Chapter 13 instead of writing hand‑crafted string‑containment checks.
 
 ```python
 def build_filter_from_pattern(species, pattern: str):
@@ -76,61 +76,61 @@ ruleset.add_convert(
 )
 ```
 
-这样做的好处：
+Advantages:
 
-1. 语义统一：和 Observation 章节中的 pattern 展开规则一致。
-2. 可维护：pattern 可直接放进实验配置文件。
-3. 可测试：可以独立验证 pattern 命中集合。
+1. Semantic unification: consistent with the pattern expansion rules from the Observation chapter.
+2. Maintainability: patterns can be placed directly into experiment configuration files.
+3. Testability: the pattern’s matched set can be verified independently.
 
-## 5. 设计过滤器的实践建议
+## 5. Practical Advice for Designing Filters
 
-1. 过滤器应当“单一职责”。
-2. 先写最简单可读版本，再做性能优化。
-3. 对复杂过滤器做单元测试，避免误筛选。
-4. 在实验日志里记录过滤器名称和语义。
+1. Filters should have a single responsibility.
+2. Start with the simplest readable version, then optimise for performance later.
+3. Write unit tests for complex filters to avoid incorrect filtering.
+4. Record the filter name and semantics in experiment logs.
 
-## 6. 与 Observation 保持统计口径一致
+## 6. Keeping Statistical Consistency with Observation
 
-推荐把同一个 pattern 同时用于：
+It is recommended to use the same pattern for both:
 
-1. Preset 的 `genotype_filter`（决定谁会被规则影响）。
-2. Observation 的 `groups["genotype"]`（决定统计谁）。
+1. The Preset’s `genotype_filter` (which determines who is affected by the rule).
+2. The Observation’s `groups["genotype"]` (which determines who is counted).
 
-若两边使用不同定义，常见症状是“规则看起来生效了，但观测指标不动”或“观测变化与机制预期不一致”。
+If different definitions are used on both sides, common symptoms are “the rule seems to work, but the observed metrics do not move” or “observed changes do not match the expected mechanism”.
 
-## 7. 调试方法
+## 7. Debugging Methods
 
-建议在小样本下做“命中率检查”：
+It is recommended to check the “hit rate” on a small sample:
 
-1. 枚举当前关注基因型。
-2. 对每个基因型打印 `genotype_filter` 结果。
-3. 核对是否与生物学预期一致。
+1. Enumerate the genotypes of interest.
+2. For each genotype, print the result of `genotype_filter`.
+3. Verify that it matches the biological expectation.
 
-这一步往往能提前避免大量无效模拟。
+This step often prevents many invalid simulations in advance.
 
-## 8. 让规则更可维护
+## 8. Making Rules More Maintainable
 
-当规则增多时，建议把过滤器按语义拆分：
+When the number of rules grows, split filters by semantics:
 
 - `is_drive_carrier`
 - `is_target_heterozygote`
 - `is_male_specific_target`
 
-再通过组合函数构建最终过滤器，而不是写一个巨型函数。
+Then combine them to build the final filter, rather than writing one huge function.
 
-## 9. 本章小结
+## 9. Chapter Summary
 
-你已经完成 Preset 设计的核心两步：
+You have completed the core two steps of Preset design:
 
-1. 定义规则（第 1 章）。
-2. 精细化规则生效范围（这一章）。
+1. Define the rules (Chapter 1).
+2. Refine the rule scope (this chapter).
 
-下一章将把这些内容工程化，讲如何把规则与过滤封装成可复用的 Preset 类。
+The next chapter will engineer these concepts and explain how to encapsulate rules and filters into reusable Preset classes.
 
 ---
 
-## 下一章
+## Next Chapters
 
-- [设计自己的 Preset（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
-- [模式匹配与可扩展配置](genotype_pattern_matching_design.md)
-- [种群观测规则](observation_rules.md)
+- [Designing Your Own Preset (3): Encapsulation, Validation, and Pre‑release Checks](preset_encapsulation_and_validation.md)
+- [Genotype Pattern Matching](genotype_pattern_matching_design.md)
+- [Population Observation Rules](observation_rules.md)

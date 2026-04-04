@@ -1,34 +1,34 @@
-# 设计自己的 Preset（1）：从等位基因转换规则开始
+# Designing Your Own Preset (1): Starting from Allele Conversion Rules
 
-本章开始一条完整主线：**如何设计一个自己的 Preset**。
+This chapter begins a complete main line: **how to design your own Preset**.
 
-第一步不是马上写 Preset 类，而是先把“遗传机制”表达清楚。对多数驱动系统而言，这一步通常体现在**等位基因转换规则**。
+The first step is not to write the Preset class immediately, but to clearly express the “genetic mechanism”. For most drive systems, this step is usually reflected in **allele conversion rules**.
 
-## 1. 先定义机制目标
+## 1. First Define the Mechanism Goal
 
-在写任何代码前，先回答三件事：
+Before writing any code, answer three questions:
 
-1. 哪个等位基因会转换（`from_allele`）？
-2. 转成什么（`to_allele`）？
-3. 转换概率是多少（`rate`）？
+1. Which allele will be converted (`from_allele`)?
+2. What will it be converted to (`to_allele`)?
+3. What is the conversion probability (`rate`)?
 
-例如，一个最小驱动假设可以写成：
+For example, a minimal drive assumption could be written as:
 
-- 在配子生成阶段，`W -> D`，概率 `0.5`。
+- During gamete production, `W -> D` with probability $0.5$.
 
-## 2. 规则对象与规则集
+## 2. Rule Object and Rule Set
 
-NATAL 提供两层结构：
+NATAL provides two layers:
 
-- `GameteAlleleConversionRule`：单条规则。
-- `GameteConversionRuleSet`：规则集合。
+- `GameteAlleleConversionRule`: a single rule.
+- `GameteConversionRuleSet`: a set of rules.
 
-你可以理解为：
+You can think of it as:
 
-- Rule 是“一个句子”。
-- RuleSet 是“一个段落”。
+- A Rule is a “sentence”.
+- A RuleSet is a “paragraph”.
 
-## 3. 最小可用示例
+## 3. Minimal Working Example
 
 ```python
 from natal.gamete_allele_conversion import GameteConversionRuleSet
@@ -37,35 +37,35 @@ ruleset = GameteConversionRuleSet(name="homing_drive")
 ruleset.add_convert(from_allele="W", to_allele="D", rate=0.5)
 ```
 
-这个示例已经足以描述一个最小的转换机制。
+This example is already sufficient to describe a minimal conversion mechanism.
 
-## 4. Zygote 转换规则（受精卵阶段）
+## 4. Zygote Conversion Rules (Fertilised Egg Stage)
 
-等位基因转换还可以在受精卵（zygote）阶段发生，通常用于模拟以下机制：
+Allele conversion can also happen at the zygote stage, typically used to simulate:
 
-- **基因驱动的修复**：在合子中表达的修复系统（例如 Cas9 切割修复）。
-- **等位基因特异性死亡**：某些基因型受精卵生活力降低。
-- **分生组后期转换**：发育过程中的等位基因转换。
+- **Gene drive repair**: a repair system (e.g., Cas9 cleavage repair) expressed in the zygote.
+- **Allele‑specific death**: reduced viability of certain genotype zygotes.
+- **Post‑zygotic conversion**: allele conversion during development.
 
-### 4.1 从 Gamete 到 Zygote
+### 4.1 From Gamete to Zygote
 
-关键区别：
+Key differences:
 
-| 阶段 | 输入 | 机制 | 何时使用 |
-|------|------|------|---------|
-| **Gamete** | 配子（单倍体）| 配子生成时的转换 | 配子驱动系统 |
-| **Zygote** | 受精卵（二倍体）| 受精后立即的转换 | 合子驱动、合子修复 |
+| Stage | Input | Mechanism | When to use |
+|-------|-------|-----------|-------------|
+| **Gamete** | Gamete (haploid) | Conversion during gamete production | Gamete drive systems |
+| **Zygote** | Zygote (diploid) | Conversion immediately after fertilisation | Zygotic drive, zygotic repair |
 
-### 4.2 使用 ZygoteConversionRuleSet
+### 4.2 Using `ZygoteConversionRuleSet`
 
 ```python
 from natal.gamete_allele_conversion import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
-# 在受精卵中，只要A位点含有D等位基因，就转换W->D
+# In the zygote, if the A locus contains a D allele, convert W -> D
 def has_d_at_a(genotype) -> bool:
-    # 伪代码，实际取决于你的Genotype结构
+    # pseudo‑code; actual depends on your Genotype structure
     return "D" in str(genotype)
 
 ruleset.add_convert(
@@ -79,16 +79,16 @@ zygote_mod = ruleset.to_zygote_modifier(pop)
 pop.add_zygote_modifier(zygote_mod, name="zygote_repair")
 ```
 
-### 4.3 Gamete + Zygote 的组合
+### 4.3 Combining Gamete + Zygote
 
-通常驱动系统会同时使用两类规则：
+Usually a drive system uses both types of rules:
 
 ```python
-# 配子阶段：W -> D（偏向）
+# Gamete stage: W -> D (bias)
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
 gamete_ruleset.add_convert("W", "D", rate=0.99)
 
-# 受精卵阶段：实现复制（确保纯和）
+# Zygote stage: copy to ensure homozygosity
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
 zygote_ruleset.add_convert(
     "W", "D",
@@ -100,35 +100,35 @@ pop.add_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
 pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 ```
 
-这样可以在模拟中实现更复杂的遗传驱动机制。
+This allows more complex genetic drive mechanisms to be simulated.
 
-## 5. 与 population 的连接
+## 5. Connecting to a Population
 
-规则集本身只是定义；要生效，需要转换为 modifier 并绑定到 population。无论 Gamete 还是 Zygote，流程都是：
+The rule set itself is just a definition; to take effect, it must be converted into a modifier and bound to a population. The workflow is the same for both Gamete and Zygote:
 
 ```python
-# 配子转换
+# Gamete conversion
 gamete_mod = gamete_ruleset.to_gamete_modifier(pop)
 pop.add_gamete_modifier(gamete_mod, name="homing")
 
-# 受精卵转换
+# Zygote conversion
 zygote_mod = zygote_ruleset.to_zygote_modifier(pop)
 pop.add_zygote_modifier(zygote_mod, name="repair")
 ```
 
-实践上，建议你先在短程模拟里验证频率变化方向，再增加复杂规则。
+In practice, it is recommended to first verify the direction of frequency changes in a short simulation before adding more complex rules.
 
-## 6. 常用控制参数
+## 6. Common Control Parameters
 
 ### 6.1 `sex_filter`
 
-用于指定规则作用于哪个性别：
+Used to specify which sex the rule applies to:
 
-- `"both"`：两性都应用（默认）。
-- `"male"`：仅雄性。
-- `"female"`：仅雌性。
+- `"both"`: applies to both sexes (default).
+- `"male"`: males only.
+- `"female"`: females only.
 
-示例：
+Example:
 
 ```python
 ruleset.add_convert("W", "D", rate=0.8, sex_filter="male")
@@ -136,25 +136,25 @@ ruleset.add_convert("W", "D", rate=0.8, sex_filter="male")
 
 ### 6.2 `name`
 
-建议每条规则和规则集都给出可读名称，方便复现实验。
+It is recommended to give each rule and rule set a human‑readable name to facilitate experiment reproducibility.
 
-## 7. 规则设计建议
+## 7. Rule Design Advice
 
-1. 从一条规则开始，不要一上来写十几条。
-2. 每增加一条规则，先跑 20-50 步检查方向是否符合预期。
-3. 记录“生物学假设 -> 参数值”映射，避免后续难以解释。
+1. Start with a single rule; do not write a dozen at once.
+2. After adding each rule, run 20‑50 steps to check whether the direction matches expectations.
+3. Keep a record of the “biological hypothesis → parameter value” mapping to avoid later interpretability issues.
 
-## 8. 本章小结
+## 8. Chapter Summary
 
-你已经完成 Preset 设计的第一步：
+You have completed the first step of Preset design:
 
-- 把机制写成可执行规则。
-- 把规则绑定到 population。
+- Express the mechanism as executable rules.
+- Bind the rules to a population.
 
-下一章会继续主线：**如何用 `genotype_filter` 把规则限制在你希望的范围上**。
+The next chapter continues the main line: **how to use `genotype_filter` to restrict the rules to your desired scope**.
 
 ---
 
-## 下一章
+## Next Chapter
 
-- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter.md)
+- [Designing Your Own Preset (2): Using `genotype_filter` to Control Rule Scope](genotype_filter.md)

@@ -1,68 +1,70 @@
-# 遗传预设使用指南 (Genetic Presets Guide)
+# Genetic Presets Guide
 
-本文档介绍如何使用和创建遗传预设（Genetic Presets），包括基因驱动、突变系统和其他遗传修饰。
+This document describes how to use and create genetic presets, including gene drives, mutation systems, and other genetic modifications.
 
-## 概述
+## Overview
 
-**遗传预设**（Genetic Presets）是NATAL框架中用于定义可重用遗传修饰的机制。预设可以：
+**Genetic Presets** are a mechanism in the NATAL framework for defining reusable genetic modifications. Presets can:
 
-- 修改配子生成规则（如基因驱动的过度分离）
-- 改变合子发育过程（如胚胎抗性形成）
-- 调整适应度参数（如驱动等位基因的成本）
+- Modify gamete production rules (e.g., meiotic drive)
+- Alter zygote development processes (e.g., embryonic resistance formation)
+- Adjust fitness parameters (e.g., cost of a drive allele)
 
-## 在构建器中应用预设
+## Applying Presets in the Builder
+
 ```python
 pop = (DiscreteGenerationPopulationBuilder(species)
        .setup(name="TestPop")
-       .presets(preset1, preset2)  # 可以应用多个预设
+       .presets(preset1, preset2)  # multiple presets can be applied
        .build())
 ```
 
-## 内置预设
+## Built‑in Presets
 
-### HomingDrive - 同源重组基因驱动
+### HomingDrive – Homing‑Based Gene Drive
 
-实现CRISPR/Cas9类型的同源重组基因驱动：
+Implements a CRISPR/Cas9‑type homing gene drive:
 
 ```python
 from natal.genetic_presets import HomingDrive
 
-# 创建基本的基因驱动
+# Create a basic gene drive
 drive = HomingDrive(
     name="MyDrive",
     drive_allele="Drive",
     target_allele="WT",
     resistance_allele="Resistance",
-    drive_conversion_rate=0.95,  # 95%的转换效率
-    late_germline_resistance_formation_rate=0.03  # 3%形成抗性
+    drive_conversion_rate=0.95,   # 95% conversion efficiency
+    late_germline_resistance_formation_rate=0.03   # 3% resistance formation
 )
 
-# 应用到种群
+# Apply to a population
 population.apply_preset(drive)
 ```
 
-#### 高级配置
+#### Advanced Configuration
+
 ```python
-# 性别特异性参数
+# Sex‑specific parameters
 drive = HomingDrive(
     name="SexSpecificDrive",
     drive_allele="Drive",
     target_allele="WT",
-    drive_conversion_rate={"female": 0.98, "male": 0.92},  # 性别差异
-    late_germline_resistance_formation_rate=(0.02, 0.04),  # 元组形式 (female, male)
+    drive_conversion_rate={"female": 0.98, "male": 0.92},  # sex‑specific
+    late_germline_resistance_formation_rate=(0.02, 0.04),  # tuple (female, male)
     embryo_resistance_formation_rate=0.01,
-    functional_resistance_ratio=0.2,  # 20%的抗性等位基因是功能性的
+    functional_resistance_ratio=0.2,   # 20% of resistance alleles are functional
 
-    # 适应度成本
-    viability_scaling=0.9,      # 10%生存力成本
-    fecundity_scaling=0.95,     # 5%繁殖力成本
-    sexual_selection_scaling=0.85  # 15%性选择劣势
+    # Fitness costs
+    viability_scaling=0.9,      # 10% viability cost
+    fecundity_scaling=0.95,     # 5% fecundity cost
+    sexual_selection_scaling=0.85   # 15% mating disadvantage
 )
 ```
 
-### ToxinAntidoteDrive - 毒素-解毒剂驱动（TARE/TADE）
+### ToxinAntidoteDrive – Toxin‑Antidote Drive (TARE/TADE)
 
-`ToxinAntidoteDrive` 用于建模“驱动等位基因触发目标位点破坏，破坏等位基因产生适应度损失，而驱动等位基因提供救援”的系统。
+`ToxinAntidoteDrive` models systems where “the drive allele triggers disruption at the target locus, the disrupted allele causes a fitness loss, and the drive allele provides rescue”.
 
 ```python
 from natal.genetic_presets import ToxinAntidoteDrive
@@ -84,15 +86,16 @@ ta_drive = ToxinAntidoteDrive(
 population.apply_preset(ta_drive)
 ```
 
-常见参数说明：
+Parameter explanations:
 
-1. `conversion_rate`：生殖系中 `target -> disrupted` 的转换概率，支持 `float`、`(female, male)` 或按性别字典。
-2. `embryo_disruption_rate`：胚胎期转换概率，可与 `cas9_deposition_glab` / `use_paternal_deposition` 联合建模母源/父源沉积效应。
-3. `viability_scaling` 与 `viability_mode`：用于定义 `disrupted` 等位基因的毒素效应；TARE 常用 `viability_scaling=0.0` 且 `viability_mode="recessive"`。
-4. `fecundity_scaling` 与 `fecundity_mode`：定义繁殖力成本。
-5. `sexual_selection_scaling`（可选）：定义性选择效应；支持标量或二元组 `(default_male, carrier_male)`，配合 `sexual_selection_mode` 使用。
+1. `conversion_rate`: probability of `target -> disrupted` conversion in the germline. Supports a `float`, a tuple `(female, male)`, or a sex‑specific dictionary.
+2. `embryo_disruption_rate`: conversion probability at the embryonic stage. Can be combined with `cas9_deposition_glab` / `use_paternal_deposition` to model maternal/paternal deposition effects.
+   - If `cas9_deposition_glab` is set, ensure that the species of the population has registered that label via `gamete_labels` when created; otherwise applying the preset will raise a `KeyError`.
+3. `viability_scaling` and `viability_mode`: define the toxin effect of the `disrupted` allele. For TARE, typical values are `viability_scaling=0.0` and `viability_mode="recessive"`.
+4. `fecundity_scaling` and `fecundity_mode`: define fecundity costs.
+5. `sexual_selection_scaling` (optional): define sexual selection effects. Supports a scalar or a tuple `(default_male, carrier_male)`, used together with `sexual_selection_mode`.
 
-示例：加入性选择成本
+Example: adding a mating cost
 
 ```python
 ta_drive_with_mating_cost = ToxinAntidoteDrive(
@@ -105,11 +108,11 @@ ta_drive_with_mating_cost = ToxinAntidoteDrive(
 )
 ```
 
-## 创建自定义预设
+## Creating Custom Presets
 
-### 与模式匹配结合（强烈推荐）
+### Combine with Pattern Matching (strongly recommended)
 
-当规则作用范围复杂时，建议不要用 `lambda gt: "X" in str(gt)` 这类脆弱字符串判断，而是使用物种提供的模式解析能力生成 `genotype_filter`。
+When the rule scope is complex, it is advisable to avoid fragile string checks like `lambda gt: "X" in str(gt)`. Instead, use the pattern parsing capabilities provided by the species to generate a `genotype_filter`.
 
 ```python
 class PatternBasedPreset(GeneticPreset):
@@ -133,15 +136,15 @@ class PatternBasedPreset(GeneticPreset):
         return ruleset.to_gamete_modifier(population)
 ```
 
-实践建议：
+Practical advice:
 
-1. 在配置文件中维护 pattern 字符串。
-2. Preset 内部负责编译 pattern。
-3. Observation 分组也使用同一 pattern 或由同一 pattern 展开，确保统计口径与规则口径一致。
+1. Maintain pattern strings in configuration files.
+2. The preset is responsible for compiling the pattern.
+3. Use the same pattern (or an expansion of it) for observation groups, ensuring that the statistical and rule scopes are consistent.
 
-### 基础模板
+### Basic Template
 
-所有自定义预设都应该继承自`GeneticPreset`：
+All custom presets should inherit from `GeneticPreset`:
 
 ```python
 from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
@@ -149,46 +152,47 @@ from natal.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
 class MyCustomPreset(GeneticPreset):
-    """自定义遗传修饰预设"""
+    """Custom genetic modification preset"""
 
     def __init__(self, name: str = "MyCustom", species=None):
         super().__init__(name=name, species=species)
-        # 自定义参数
+        # Custom parameters
         self.custom_param = 0.5
 
     def gamete_modifier(self, population) -> Optional[GameteModifier]:
-        """定义配子阶段的修饰逻辑"""
-        # 返回GameteModifier或None
+        """Define gamete‑stage modification logic"""
+        # Return a GameteModifier or None
         return None
 
     def zygote_modifier(self, population) -> Optional[ZygoteModifier]:
-        """定义合子阶段的修饰逻辑"""
-        # 返回ZygoteModifier或None
+        """Define zygote‑stage modification logic"""
+        # Return a ZygoteModifier or None
         return None
 
     def fitness_patch(self) -> PresetFitnessPatch:
-        """定义适应度效应"""
-        # 返回适应度配置字典或None
+        """Define fitness effects"""
+        # Return a fitness configuration dictionary or None
         return None
 ```
 
-### 实现要点
+### Implementation Points
 
-1. **所有方法都是可选的** - 可以实现1-3个方法
-2. **至少实现一个方法** - 否则预设不会有任何效果
-3. **可以返回None** - 表示该阶段不需要修饰
-4. **支持延迟物种绑定** - 可以在创建时不指定species
+1. **All methods are optional** – you can implement 1‑3 methods.
+2. **Implement at least one method** – otherwise the preset will have no effect.
+3. **Can return `None`** – indicates that no modification is needed at that stage.
+4. **Supports delayed species binding** – you can create a preset without specifying a `Species`.
 
-## 实用示例
+## Practical Examples
 
-### 示例1：简单点突变
+### Example 1: Simple Point Mutation
+
 ```python
 from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 from natal.population_builder import AgeStructuredPopulationBuilder
 
 class PointMutation(GeneticPreset):
-    """简单点突变：WT以一定频率突变为Mutant"""
+    """Simple point mutation: WT mutates to Mutant at a certain frequency"""
 
     def __init__(self, mutation_rate: float = 1e-5):
         super().__init__(name="PointMutation")
@@ -201,10 +205,10 @@ class PointMutation(GeneticPreset):
 
     def fitness_patch(self):
         return {
-            "viability_allele": {"Mutant": 0.98}  # 轻微有害
+            "viability_allele": {"Mutant": 0.98}   # slightly deleterious
         }
 
-# 使用示例
+# Usage example
 species = Species.from_dict("TestSpecies", {
     "chr1": {"GeneA": ["WT", "Mutant"]}
 })
@@ -219,10 +223,11 @@ pop = (AgeStructuredPopulationBuilder(species)
        .build())
 ```
 
-### 示例2：双向突变平衡
+### Example 2: Bidirectional Mutation Balance
+
 ```python
 class BidirectionalMutation(GeneticPreset):
-    """双向突变平衡"""
+    """Bidirectional mutation balance"""
 
     def __init__(self, forward_rate: float = 1e-5, backward_rate: float = 1e-6):
         super().__init__(name="BidirectionalMutation")
@@ -234,18 +239,19 @@ class BidirectionalMutation(GeneticPreset):
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
-        # A → B (正向突变)
+        # A → B (forward mutation)
         ruleset.add_convert("A", "B", rate=self.forward_rate)
-        # B → A (回复突变)
+        # B → A (reverse mutation)
         ruleset.add_convert("B", "A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(population)
 ```
 
-### 示例3：条件突变（基因型依赖）
+### Example 3: Conditional Mutation (Genotype‑dependent)
+
 ```python
 class ConditionalMutation(GeneticPreset):
-    """条件突变 - 只在特定基因型背景下发生"""
+    """Conditional mutation – only occurs in a specific genetic background"""
 
     def __init__(self, target_allele: str = "B", required_background: str = "A"):
         super().__init__(name="ConditionalMutation")
@@ -257,7 +263,7 @@ class ConditionalMutation(GeneticPreset):
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
 
-        # 只在携带背景等位基因时才发生突变
+        # Mutation only occurs when the background allele is present
         ruleset.add_convert(
             from_allele=self.target_allele,
             to_allele=f"{self.target_allele}_mutant",
@@ -268,7 +274,8 @@ class ConditionalMutation(GeneticPreset):
         return ruleset.to_gamete_modifier(population)
 ```
 
-### 示例4：复杂基因驱动
+### Example 4: Complex Gene Drive
+
 ```python
 from natal.genetic_presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
@@ -276,7 +283,7 @@ from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 from natal.population_builder import AgeStructuredPopulationBuilder
 
 class ComplexDrive(GeneticPreset):
-    """复杂基因驱动，包含多个阶段的转换"""
+    """Complex gene drive with multiple stages of conversion"""
 
     def __init__(self):
         super().__init__(name="ComplexDrive")
@@ -284,11 +291,11 @@ class ComplexDrive(GeneticPreset):
     def gamete_modifier(self, population):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
-        # 阶段1: 驱动转换 (WT → Drive)
+        # Stage 1: drive conversion (WT → Drive)
         ruleset.add_convert("WT", "Drive", rate=0.95,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
-        # 阶段2: 抗性形成 (剩余WT → Resistance)
+        # Stage 2: resistance formation (remaining WT → Resistance)
         ruleset.add_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
@@ -297,12 +304,12 @@ class ComplexDrive(GeneticPreset):
     def zygote_modifier(self, population):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
-        # 胚胎阶段的额外修饰
+        # Additional embryonic‑stage modification
         ruleset.add_convert(
             from_allele="WT",
             to_allele="Resistance",
             rate=0.02,
-            maternal_glab="Cas9_deposited"  # 需要母源Cas9沉积
+            maternal_glab="cas9"   # requires maternal Cas9 deposition
         )
 
         return ruleset.to_zygote_modifier(population)
@@ -310,15 +317,15 @@ class ComplexDrive(GeneticPreset):
     def fitness_patch(self):
         return {
             "viability_allele": {
-                "Drive": 0.9,      # 驱动等位基因成本
-                "Resistance": 1.0   # 抗性等位基因中性
+                "Drive": 0.9,      # cost of the drive allele
+                "Resistance": 1.0   # resistance allele is neutral
             },
             "fecundity_allele": {
                 "Drive": 0.95
             }
         }
 
-# 使用示例
+# Usage example
 species = Species.from_dict("DriveSpecies", {
     "chr1": {"drive_locus": ["WT", "Drive", "Resistance"]}
 })
@@ -336,61 +343,61 @@ pop = (AgeStructuredPopulationBuilder(species)
        .build())
 ```
 
-## 适应度配置详解
+## Detailed Fitness Configuration
 
-### 适应度效应类型
+### Types of Fitness Effects
 
 ```python
 def fitness_patch(self):
     return {
-        # 1. 基因型特异性适应度
+        # 1. Genotype‑specific fitness
         "viability": {
-            "Drive|Drive": 0.8,      # 特定基因型
+            "Drive|Drive": 0.8,      # specific genotype
             "Drive|WT": 0.9,
             "WT|WT": 1.0
         },
 
-        # 2. 等位基因驱动的适应度（推荐）
+        # 2. Allele‑based fitness (recommended)
         "viability_allele": {
-            "Drive": 0.9,            # 按等位基因拷贝数倍增
+            "Drive": 0.9,            # multiplies by copy number
             "Resistance": 1.0
         },
 
-        # 3. 繁殖力效应
+        # 3. Fecundity effects
         "fecundity_allele": {
-            "Drive": 0.95            # 仅影响雌性
+            "Drive": 0.95            # affects females only
         },
 
-        # 4. 性选择效应
+        # 4. Sexual selection effects
         "sexual_selection_allele": {
-            "Drive": (1.0, 0.8)      # (默认雄性, 携带者选择)
+            "Drive": (1.0, 0.8)      # (default male, carrier male)
         }
     }
 ```
 
-### 性别和年龄特异性
+### Sex‑ and Age‑Specificity
 
 ```python
 def fitness_patch(self):
     return {
-        # 性别特异性
+        # Sex‑specific
         "viability_allele": {
             "Drive": {
-                "female": 0.95,      # 雌性中
-                "male": 0.85         # 雄性中更严重
+                "female": 0.95,      # in females
+                "male": 0.85         # more severe in males
             }
         },
 
-        # 年龄特异性
+        # Age‑specific
         "viability_allele": {
             "Drive": {
-                0: 1.0,               # 年龄0（幼体）
-                1: 0.95,              # 年龄1
-                2: 0.90               # 年龄2+
+                0: 1.0,               # age 0 (juvenile)
+                1: 0.95,              # age 1
+                2: 0.90               # age 2+
             }
         },
 
-        # 组合：性别+年龄
+        # Combined: sex + age
         "viability_allele": {
             "Drive": {
                 "female": {0: 0.98, 1: 0.96, 2: 0.94},
@@ -400,95 +407,109 @@ def fitness_patch(self):
     }
 ```
 
-## 高级主题
+## Advanced Topics
 
-### 多个预设的组合
+### Combining Multiple Presets
 
 ```python
-# 创建多个预设
+# Create multiple presets
 mutation = PointMutation(mutation_rate=1e-5)
 drive = HomingDrive(name="GeneDrive", drive_allele="Drive", target_allele="WT")
-selection = FitnessSelection(target_allele="Deleterious", cost=0.1)
 
-# 同时应用多个预设
+class SelectionPreset(GeneticPreset):
+    def __init__(self, target_allele: str = "Deleterious", cost: float = 0.1):
+        super().__init__(name="SelectionPreset")
+        self.target_allele = target_allele
+        self.cost = cost
+
+    def gamete_modifier(self, population):
+        return None
+
+    def zygote_modifier(self, population):
+        return None
+
+    def fitness_patch(self):
+        return {
+            "viability_allele": {
+                self.target_allele: 1.0 - self.cost,
+            }
+        }
+
+selection = SelectionPreset(target_allele="Deleterious", cost=0.1)
+
+# Apply multiple presets at once
 population.apply_preset(mutation, drive, selection)
 
-# 或在构建器中
+# Or in the builder
 pop = (DiscreteGenerationPopulationBuilder(species)
        .setup(name="ComplexModel")
        .presets(mutation, drive, selection)
        .build())
 ```
 
-### 预设的顺序和交互
+### Order and Interaction of Presets
 
-多个预设按应用顺序执行：
-1. 配子修饰器按顺序应用
-2. 合子修饰器按顺序应用
-3. 适应度补丁合并应用（后面的覆盖前面的）
+Multiple presets are applied in the order they are given:
 
-### 性能优化
+1. Gamete modifiers are applied in order.
+2. Zygote modifiers are applied in order.
+3. Fitness patches are merged (later patches override earlier ones).
+
+### Performance Optimisation
 
 ```python
 class OptimizedPreset(GeneticPreset):
-    """性能优化的预设实现"""
+    """Preset implementation with performance optimisation"""
 
     def __init__(self):
         super().__init__(name="OptimizedPreset")
-        # 预计算常用数据
+        # Pre‑compute commonly used data
         self._precomputed_rules = None
 
     def gamete_modifier(self, population):
-        # 缓存规则集避免重复创建
+        # Cache the rule set to avoid recreating it
         if self._precomputed_rules is None:
             from natal.gamete_allele_conversion import GameteConversionRuleSet
             self._precomputed_rules = GameteConversionRuleSet("Optimized")
-            # ... 添加规则
+            # ... add rules
 
         return self._precomputed_rules.to_gamete_modifier(population)
 ```
 
-## 故障排除
+## Troubleshooting
 
-### 常见问题
+### Common Issues
 
-1. **预设没有效果**
-   - 检查是否所有方法都返回None
-   - 确认等位基因名称拼写正确
-   - 验证转换率是否在0-1范围内
+1. **Preset has no effect**
+   - Check that not all methods return `None`.
+   - Verify that allele names are spelled correctly.
+   - Confirm that conversion rates are within [0, 1].
 
-2. **物种绑定错误**
-   - 确保预设和种群使用相同的物种
-   - 使用延迟绑定（创建时不指定species）
+2. **Species binding error**
+   - Ensure that the preset and the population use the same species.
+   - Use delayed binding (do not specify `Species` at creation time).
 
-3. **性能问题**
-   - 避免在修饰器中创建大量临时对象
-   - 使用规则集缓存
-   - 考虑简化复杂的规则链
+3. **Performance issues**
+   - Avoid creating many temporary objects inside modifiers.
+   - Use rule set caching.
+   - Consider simplifying complex rule chains.
 
-### 调试技巧
+### Debugging Tips
 
 ```python
 class DebugPreset(GeneticPreset):
     def gamete_modifier(self, population):
-        print(f"应用预设到物种: {population.species.name}")
-        print(f"可用等位基因: {list(population.species.gene_index.keys())}")
+        print(f"Applying preset to species: {population.species.name}")
+        print(f"Available alleles: {list(population.species.gene_index.keys())}")
 
-        # 创建修饰器并返回
+        # Create and return the modifier
         # ...
 ```
 
-## 相关文档
+## Related Chapters
 
-- [等位基因转换规则](allele_conversion_rules.md) - 详细的转换规则系统
-- [模式匹配与可扩展配置](genotype_pattern_matching_design.md) - 语法规则与 pattern 设计
-- [种群观测规则](observation_rules.md) - pattern 在观察分组中的使用
-- [Modifier机制](modifiers.md) - 底层修饰器原理
-- [快速开始](quickstart.md) - 基础使用教程
-
-## 参考实现
-
-查看测试文件获取完整示例：
-- `tests/test_recipe_species_binding.py` - 物种绑定测试
-- `tests/test_recipe_fitness_patch.py` - 适应度补丁测试
-
+- [Allele Conversion Rules](allele_conversion_rules.md) – detailed conversion rule system
+- [Pattern Matching and Extensible Configuration](genotype_pattern_matching_design.md) – syntax rules and pattern design
+- [Observation Rules for Populations](observation_rules.md) – using patterns in observation groups
+- [Modifier Mechanism](modifiers.md) – low‑level modifier principles
+- [Quick Start](quickstart.md) – basic usage tutorial

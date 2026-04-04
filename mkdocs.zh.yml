@@ -1,0 +1,80 @@
+site_name: NATAL Core 中文文档
+site_description: 用于生命周期建模分析的 Numba 加速工具包
+site_author: Jinyu Zhu
+
+docs_dir: docs/zh
+
+repo_url: https://github.com/jyzhu-pointless/natal-core
+repo_name: jyzhu-pointless/natal-core
+
+watch:
+  - src/
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.annotation
+    - content.code.copy
+
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - admonition
+  - pymdownx.arithmatex:
+      generic: true
+  - footnotes
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.mark
+  - attr_list
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+nav:
+  - 首页: index.md
+  - 使用指南:
+    - 快速开始: quickstart.md
+    - 遗传结构与实体: genetic_structures.md
+    - Builder 系统: builder_system.md
+    - 索引注册表: index_registry.md
+    - PopulationState 与配置: population_state_config.md
+    - Simulation Kernels: simulation_kernels.md
+    - Numba 优化指南: numba_optimization.md
+    - 修饰器: modifiers.md
+    - Hook 系统: hooks.md
+    - 遗传预设: genetic_presets.md
+    - 空间模拟指南: spatial_simulation_guide.md
+    - 观测规则: observation_rules.md
+    - 基因型模式匹配: genotype_pattern_matching_design.md
+    - 等位基因转换规则: allele_conversion_rules.md
+    - 基因型过滤: genotype_filter.md
+    - 预设封装与验证: preset_encapsulation_and_validation.md
+
+extra_css:
