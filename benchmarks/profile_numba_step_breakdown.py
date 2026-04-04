@@ -27,7 +27,7 @@ from natal.spatial_topology import HexGrid
 class ModeConfig:
     name: str
     stochastic: bool
-    use_dirichlet_sampling: bool
+    use_continuous_sampling: bool
 
 
 def build_deme(
@@ -37,7 +37,7 @@ def build_deme(
     wt_adults: float,
     drive_adults: float,
     stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
 ) -> nt.AgeStructuredPopulation:
     return (
         nt.AgeStructuredPopulation
@@ -45,7 +45,7 @@ def build_deme(
             species=species,
             name=name,
             stochastic=stochastic,
-            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_continuous_sampling=use_continuous_sampling,
         )
         .age_structure(n_ages=5, new_adult_age=1)
         .initial_state(
@@ -98,7 +98,7 @@ def build_spatial_population(mode: ModeConfig) -> SpatialPopulation:
             wt_adults=wt,
             drive_adults=dr,
             stochastic=mode.stochastic,
-            use_dirichlet_sampling=mode.use_dirichlet_sampling,
+            use_continuous_sampling=mode.use_continuous_sampling,
         )
         for idx, (wt, dr) in enumerate(initial_pairs)
     ]
@@ -129,7 +129,7 @@ def profile_numba_steps(mode: ModeConfig) -> None:
     print("\n" + "=" * 100)
     print(
         f"MODE={mode.name} | stochastic={mode.stochastic} "
-        f"| dirichlet={mode.use_dirichlet_sampling}"
+        f"| dirichlet={mode.use_continuous_sampling}"
     )
     print("=" * 100)
 
@@ -242,7 +242,7 @@ def profile_numba_steps(mode: ModeConfig) -> None:
         n_ages,
         n_gen,
         is_stochastic=bool(config.is_stochastic),
-        use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
+        use_continuous_sampling=bool(config.use_continuous_sampling),
     )
     alg.fertilize_with_precomputed_offspring_probability(
         female_counts,
@@ -260,7 +260,7 @@ def profile_numba_steps(mode: ModeConfig) -> None:
         config.use_fixed_egg_count,
         config.sex_ratio,
         is_stochastic=bool(config.is_stochastic),
-        use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
+        use_continuous_sampling=bool(config.use_continuous_sampling),
     )
 
     def _sample_mating_once():
@@ -274,7 +274,7 @@ def profile_numba_steps(mode: ModeConfig) -> None:
             n_ages,
             n_gen,
             is_stochastic=bool(config.is_stochastic),
-            use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
+            use_continuous_sampling=bool(config.use_continuous_sampling),
         )
 
     def _fertilize_once():
@@ -294,7 +294,7 @@ def profile_numba_steps(mode: ModeConfig) -> None:
             config.use_fixed_egg_count,
             config.sex_ratio,
             is_stochastic=bool(config.is_stochastic),
-            use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
+            use_continuous_sampling=bool(config.use_continuous_sampling),
         )
 
     mating_mean, mating_std = _time_call(_sample_mating_once, repeats=20)
@@ -308,9 +308,9 @@ def profile_numba_steps(mode: ModeConfig) -> None:
 
 def main() -> None:
     modes = [
-        ModeConfig("deterministic", stochastic=False, use_dirichlet_sampling=False),
-        ModeConfig("discrete_stochastic", stochastic=True, use_dirichlet_sampling=False),
-        ModeConfig("dirichlet_sampling", stochastic=True, use_dirichlet_sampling=True),
+        ModeConfig("deterministic", stochastic=False, use_continuous_sampling=False),
+        ModeConfig("discrete_stochastic", stochastic=True, use_continuous_sampling=False),
+        ModeConfig("continuous_sampling", stochastic=True, use_continuous_sampling=True),
     ]
 
     for mode in modes:

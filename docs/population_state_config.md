@@ -104,7 +104,7 @@ state = DiscretePopulationState.create(
 1. 维度与控制参数
 
 - `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
-- `is_stochastic`, `use_dirichlet_sampling`, `sex_ratio`
+- `is_stochastic`, `use_continuous_sampling`, `sex_ratio`
 
 2. 年龄相关参数
 

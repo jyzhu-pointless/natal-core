@@ -2438,8 +2438,7 @@ class Species(GeneticStructure['HaploidGenome']):
             A list of resolved ``Genotype`` objects.
 
             - For a single selector atom, returns all matches from that atom.
-            - For tuple selectors, returns the de-duplicated union of all atom
-              matches.
+            - For tuple selectors, returns the de-duplicated union of all atom matches.
 
         Raises:
             TypeError: If a selector atom is neither ``Genotype`` nor ``str``.

@@ -144,7 +144,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         species: Species,
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
-        use_dirichlet_sampling: bool = False,
+        use_continuous_sampling: bool = False,
         gamete_labels: Optional[List[str]] = None,
         use_fixed_egg_count: bool = False,
     ) -> 'AgeStructuredPopulationBuilder':
@@ -154,7 +154,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             species: Species definition used to initialize the builder.
             name: Population name.
             stochastic: Whether to use stochastic sampling.
-            use_dirichlet_sampling: Whether to use Dirichlet sampling.
+            use_continuous_sampling: Whether to use Dirichlet sampling.
             gamete_labels: Optional labels for gamete tracking.
             use_fixed_egg_count: Whether egg count is deterministic.
 
@@ -169,7 +169,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         builder.setup(
             name=name,
             stochastic=stochastic,
-            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_continuous_sampling=use_continuous_sampling,
             use_fixed_egg_count=use_fixed_egg_count
         )
         return builder

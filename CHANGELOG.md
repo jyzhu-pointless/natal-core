@@ -1,5 +1,12 @@
 # Changelog
 
+## 🎉 2026.4.4.b - v0.0.0-beta released!
+- Refactor sampling method naming from 'use_dirichlet_sampling' to 'use_continuous_sampling'
+
+## 2026.4.4
+- feat(spatial): Add support for sparse CSR adjacency matrices and extend migration strategy (heterogenic kernels / hybrid)
+- feat(genetic_presets): Add ToxinAntidoteDrive preset and corresponding tests
+
 ## 2026.4.3
 implemented spatial population with stable numba cache & parallel computation
 

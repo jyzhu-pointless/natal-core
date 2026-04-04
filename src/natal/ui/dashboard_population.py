@@ -891,7 +891,7 @@ class Dashboard:
         growth_mode = int(conf.juvenile_growth_mode)
         return {
             "is_stochastic": bool(conf.is_stochastic),
-            "use_dirichlet_sampling": bool(conf.use_dirichlet_sampling),
+            "use_continuous_sampling": bool(conf.use_continuous_sampling),
             "n_sexes": int(conf.n_sexes),
             "n_ages": int(conf.n_ages),
             "n_genotypes": int(conf.n_genotypes),

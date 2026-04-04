@@ -92,7 +92,7 @@ class PopulationConfigBuilder:
         n_ages: int,
         new_adult_age: int,
         is_stochastic: bool,
-        use_dirichlet_sampling: bool,
+        use_continuous_sampling: bool,
         # Survival & Mating
         female_age_based_survival_rates: Optional[Any],
         male_age_based_survival_rates: Optional[Any],
@@ -129,7 +129,7 @@ class PopulationConfigBuilder:
             n_ages (int): Number of age classes.
             new_adult_age (int): Minimum age for adults.
             is_stochastic (bool): Whether to use stochastic sampling.
-            use_dirichlet_sampling (bool): Whether to use Dirichlet sampling.
+            use_continuous_sampling (bool): Whether to use Dirichlet sampling.
             female_age_based_survival_rates (Any): Survival rates for females.
             male_age_based_survival_rates (Any): Survival rates for males.
             female_age_based_mating_rates (NDArray): Mating rates for females.
@@ -272,7 +272,7 @@ class PopulationConfigBuilder:
             n_ages=n_ages,
             n_glabs=n_glabs,
             is_stochastic=is_stochastic,
-            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_continuous_sampling=use_continuous_sampling,
             age_based_survival_rates=age_based_survival_rates,
             age_based_mating_rates=age_based_mating_rates,
             female_age_based_relative_fertility=female_fertility,
@@ -904,7 +904,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         # Store builder parameters directly
         self.name: str = "AgeStructuredPop"
         self.is_stochastic: bool = True
-        self.use_dirichlet_sampling: bool = False
+        self.use_continuous_sampling: bool = False
         self.use_fixed_egg_count: bool = False
 
         # Age structure
@@ -962,7 +962,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self,
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
-        use_dirichlet_sampling: bool = False,
+        use_continuous_sampling: bool = False,
         use_fixed_egg_count: bool = False
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure basic population settings.
@@ -970,7 +970,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         Args:
             name (str): Human-readable population name.
             stochastic (bool): Whether to use stochastic sampling.
-            use_dirichlet_sampling (bool): If True, use Dirichlet; else standard sampling.
+            use_continuous_sampling (bool): If True, use Dirichlet; else standard sampling.
             use_fixed_egg_count (bool): If True, egg count is fixed; if False, Poisson.
 
         Returns:
@@ -978,7 +978,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         """
         self.name = name
         self.is_stochastic = stochastic
-        self.use_dirichlet_sampling = use_dirichlet_sampling
+        self.use_continuous_sampling = use_continuous_sampling
         self.use_fixed_egg_count = use_fixed_egg_count
         return self
 
@@ -1339,7 +1339,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             n_ages=self.n_ages,
             new_adult_age=self.new_adult_age,
             is_stochastic=self.is_stochastic,
-            use_dirichlet_sampling=self.use_dirichlet_sampling,
+            use_continuous_sampling=self.use_continuous_sampling,
             female_age_based_survival_rates=self.female_age_based_survival_rates,
             male_age_based_survival_rates=self.male_age_based_survival_rates,
             female_age_based_mating_rates=self.female_age_based_mating_rates,
@@ -1474,7 +1474,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
         self.name: str = "DiscreteGenerationPop"
         self.is_stochastic: bool = True
-        self.use_dirichlet_sampling: bool = False
+        self.use_continuous_sampling: bool = False
         self.use_fixed_egg_count: bool = False
 
         self.initial_individual_count: Optional[
@@ -1606,7 +1606,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self,
         name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
-        use_dirichlet_sampling: bool = False,
+        use_continuous_sampling: bool = False,
         use_fixed_egg_count: bool = False
     ) -> 'DiscreteGenerationPopulationBuilder':
         """Configure basic population settings.
@@ -1614,7 +1614,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         Args:
             name (str): Human-readable population name.
             stochastic (bool): Whether to use stochastic sampling.
-            use_dirichlet_sampling (bool): If True, use Dirichlet; else standard sampling.
+            use_continuous_sampling (bool): If True, use Dirichlet; else standard sampling.
             use_fixed_egg_count (bool): If True, egg count is fixed; if False, Poisson.
 
         Returns:
@@ -1622,7 +1622,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         """
         self.name = name
         self.is_stochastic = stochastic
-        self.use_dirichlet_sampling = use_dirichlet_sampling
+        self.use_continuous_sampling = use_continuous_sampling
         self.use_fixed_egg_count = use_fixed_egg_count
         return self
 
@@ -1789,7 +1789,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             n_ages=2,
             new_adult_age=1,
             is_stochastic=self.is_stochastic,
-            use_dirichlet_sampling=self.use_dirichlet_sampling,
+            use_continuous_sampling=self.use_continuous_sampling,
             female_age_based_survival_rates=female_survival,
             male_age_based_survival_rates=male_survival,
             female_age_based_mating_rates=female_mating,

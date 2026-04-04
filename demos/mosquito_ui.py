@@ -73,7 +73,7 @@ pop = nt.AgeStructuredPopulation\
         species=sp,
         name="MosquitoPop",
         stochastic=True,
-        use_dirichlet_sampling=False,
+        use_continuous_sampling=False,
     ) \
     .age_structure(
         n_ages=8,

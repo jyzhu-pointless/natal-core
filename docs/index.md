@@ -1,14 +1,23 @@
 # NATAL Core 文档首页
 
+[![NATAL](https://img.shields.io/badge/NATAL-dev-purple.svg)](https://github.com/jyzhu-pointless/natal-core)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
+[![Numba](https://img.shields.io/badge/Numba-0.60.0+-orange.svg)](https://numba.pydata.org/)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://github.com/jyzhu-pointless/natal-core/blob/main/LICENSE)
+
+![logo](./natal-brand.svg)
+
 NATAL Core 是一个用于群体遗传动力学模拟的 Python 工具包，核心计算路径基于 Numba 加速。
 
 ## 核心特性
 
-- 遗传结构建模：支持染色体、位点、等位基因与基因型模式
-- 群体模型：支持年龄结构群体与离散世代群体
-- 高性能内核：Numba JIT 加速的模拟 Kernel
-- 可扩展机制：Modifier 与 Hook 双扩展体系
-- 观测与筛选：Sampler、过滤规则与模式匹配协同
+- **🧬 遗传结构：** 支持定义完整的基因组-染色体-位点-基因层次化体系
+- **🪲 群体模型：** 支持年龄结构群体与离散世代群体，支持各类生态学和遗传学参数
+- **🌐 空间模拟：** 支持空间种群模拟，使用六边形和正方形网格的亚种群
+- **🚀 高性能内核：** Numba JIT 加速的模拟内核，空间种群下内置并行计算
+- **🧩 可扩展机制：** Modifier、Preset 和 Hook 多重扩展体系，内置常用基因驱动
+- **🔍 观测与筛选：** 支持灵活的模式匹配筛选机制，用于定义 Preset 和观测规则
 
 ## 安装
 
@@ -68,7 +77,7 @@ pip install natal-core
 - [Genetic Structures API](api/genetic_structures.md)
 - [Population Builder API](api/population_builder.md)
 - [Simulation Kernels API](api/simulation_kernels.md)
-- [完整 API 目录](api/)
+- [完整 API 目录](api/index.md)
 
 ## 源码仓库
 

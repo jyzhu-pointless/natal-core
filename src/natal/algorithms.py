@@ -16,7 +16,7 @@ from natal import numba_compat as nbc
 from natal.numba_compat import njit_switch
 
 # ============================================================================
-# Continuous distribution helper functions (for use_dirichlet_sampling=True)
+# Continuous distribution helper functions (for use_continuous_sampling=True)
 # ============================================================================
 # Very small threshold to prevent numerical errors when distribution parameters are 0
 EPS = 1e-10
@@ -214,7 +214,7 @@ def sample_mating(
     n_ages: int,
     n_genotypes: int,
     is_stochastic: bool = True,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> Annotated[NDArray[np.float64], "shape=(A,g,g)"]:
     """Vectorized version: batch sampling of mating events (monogamous). (67.0x speedup)
 
@@ -233,7 +233,7 @@ def sample_mating(
         n_ages: Total number of age classes
         n_genotypes: Number of genotypes g
         is_stochastic: If True, use stochastic sampling; if False, use deterministic expectations
-        use_dirichlet_sampling: If True and is_stochastic=True, use Dirichlet distribution
+        use_continuous_sampling: If True and is_stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
 
     Returns:
@@ -280,7 +280,7 @@ def sample_mating(
                 # Age-specific female mating probability at age a.
                 _p1 = _clamp01(float(female_rates[a]))
 
-                if use_dirichlet_sampling:
+                if use_continuous_sampling:
                     # Continuous sampling: use Beta instead of Binomial
                     n_mating = continuous_binomial(_n1, _p1)
                 else:
@@ -291,7 +291,7 @@ def sample_mating(
 
                 # Step 2: Which male genotype do these mating females mate with respectively?
                 if n_mating > EPS:
-                    if use_dirichlet_sampling:
+                    if use_continuous_sampling:
                         # Continuous sampling: use Dirichlet instead of Multinomial
                         continuous_multinomial(n_mating, P[gf, :], temp_mating)
                         S[a, gf, :] = temp_mating
@@ -374,7 +374,7 @@ def _fertilize_with_precomputed_offspring_probability(
     fixed_eggs: bool = False,
     sex_ratio: float = 0.5,
     is_stochastic: bool = True,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Generate offspring counts using precomputed offspring probabilities."""
     S = np.asarray(sperm_storage_by_male_genotype, dtype=np.float64)
@@ -403,13 +403,13 @@ def _fertilize_with_precomputed_offspring_probability(
                 n_total = 0.0
 
                 if is_stochastic:
-                    if use_dirichlet_sampling:
+                    if use_continuous_sampling:
                         n_pairs_for_sampling = float(pair_count)
                     else:
                         n_pairs_for_sampling = float(np.round(pair_count))
 
                     if proportion_of_females_that_reproduce < 1.0:
-                        if use_dirichlet_sampling:
+                        if use_continuous_sampling:
                             n_reproducing = float(continuous_binomial(n_pairs_for_sampling, p_reproduce))
                         else:
                             n_reproducing = float(nbc.binomial(int(n_pairs_for_sampling), p_reproduce))
@@ -419,12 +419,12 @@ def _fertilize_with_precomputed_offspring_probability(
                     total_lambda = float(n_reproducing * lambda_pair)
 
                     if fixed_eggs:
-                        if use_dirichlet_sampling:
+                        if use_continuous_sampling:
                             n_total = float(total_lambda)
                         else:
                             n_total = float(np.round(total_lambda))
                     else:
-                        if use_dirichlet_sampling:
+                        if use_continuous_sampling:
                             n_total = float(continuous_poisson(total_lambda))
                         else:
                             n_total = float(np.random.poisson(float(total_lambda)))
@@ -448,7 +448,7 @@ def _fertilize_with_precomputed_offspring_probability(
                     if p_surv >= 1.0 - EPS:
                         n_viable = float(n_total)
                     else:
-                        if use_dirichlet_sampling:
+                        if use_continuous_sampling:
                             n_viable = float(continuous_binomial(n_total, p_surv))
                         else:
                             n_viable = float(nbc.binomial(int(round(n_total)), p_surv))
@@ -460,7 +460,7 @@ def _fertilize_with_precomputed_offspring_probability(
                     for g_off in range(n_genotypes):
                         p_norm[g_off] = P_offspring[gf, gm, g_off] * inv_surv
 
-                    if use_dirichlet_sampling:
+                    if use_continuous_sampling:
                         continuous_multinomial(n_viable, p_norm, temp_offspring)
                         for g_off in range(n_genotypes):
                             n_offspring_by_geno[g_off] += temp_offspring[g_off]
@@ -479,7 +479,7 @@ def _fertilize_with_precomputed_offspring_probability(
     if total_offspring > EPS:
         if is_stochastic:
             sex_ratio_scalar = _clamp01(float(sex_ratio))
-            if use_dirichlet_sampling:
+            if use_continuous_sampling:
                 n_females_total = continuous_binomial(total_offspring, sex_ratio_scalar)
             else:
                 n_females_total = float(nbc.binomial(int(total_offspring), sex_ratio_scalar))
@@ -520,7 +520,7 @@ def fertilize_with_mating_genotype(
     fixed_eggs: bool = False,
     sex_ratio: float = 0.5,
     is_stochastic: bool = True,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Vectorized version: batch Multinomial sampling, reducing Python loop layers. (60.9x speedup)
 
@@ -550,7 +550,7 @@ def fertilize_with_mating_genotype(
         fixed_eggs: If True, use fixed egg counts; if False, use Poisson sampling (default: False)
         sex_ratio: Sex ratio of offspring (default: 0.5)
         is_stochastic: If True, use stochastic sampling; if False, use deterministic expectations (default: True)
-        use_dirichlet_sampling: If True and is_stochastic=True, use Dirichlet distribution
+        use_continuous_sampling: If True and is_stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
 
     Returns:
@@ -582,7 +582,7 @@ def fertilize_with_mating_genotype(
         fixed_eggs=fixed_eggs,
         sex_ratio=sex_ratio,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
     )
 
 
@@ -603,7 +603,7 @@ def fertilize_with_precomputed_offspring_probability(
     fixed_eggs: bool = False,
     sex_ratio: float = 0.5,
     is_stochastic: bool = True,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Fertilization wrapper using externally precomputed offspring probabilities.
 
@@ -624,7 +624,7 @@ def fertilize_with_precomputed_offspring_probability(
         fixed_eggs: Whether to use fixed egg counts.
         sex_ratio: Offspring female ratio.
         is_stochastic: Whether to sample stochastically.
-        use_dirichlet_sampling: Whether to use continuous sampling.
+        use_continuous_sampling: Whether to use continuous sampling.
 
     Returns:
         Tuple containing female and male offspring counts with shape (g,).
@@ -645,7 +645,7 @@ def fertilize_with_precomputed_offspring_probability(
         fixed_eggs=fixed_eggs,
         sex_ratio=sex_ratio,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
     )
 
 
@@ -836,7 +836,7 @@ def sample_survival_with_sperm_storage(
     male_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
     n_genotypes: int,
     n_ages: int,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
     """Randomly apply survival rates with consistent sampling of sperm storage.
 
@@ -848,7 +848,7 @@ def sample_survival_with_sperm_storage(
         female_survival_rates: Female survival rates (supports 1D or 2D)
         male_survival_rates: Male survival rates (supports 1D or 2D)
         n_genotypes: Number of genotypes
-        use_dirichlet_sampling: If True, use Dirichlet distribution instead of discrete sampling.
+        use_continuous_sampling: If True, use Dirichlet distribution instead of discrete sampling.
             Currently not implemented (will use discrete).
         n_ages: Number of ages
 
@@ -920,19 +920,19 @@ def sample_survival_with_sperm_storage(
                 )
                 raise ValueError("Invalid state: n_virgins < 0 in sample_survival_with_sperm_storage")
             # In discrete mode, number of trials for binomial should be integer; continuous mode maintains floating point mass.
-            n_virgins = n_virgins_raw if use_dirichlet_sampling else float(int(round(n_virgins_raw)))
+            n_virgins = n_virgins_raw if use_continuous_sampling else float(int(round(n_virgins_raw)))
 
             # Sample each sperm storage separately (independently using same survival rate p_f):
             # S_new[gm] ~ Binomial(S_old[gm], p_f)
             new_sperm_sum = 0.0
             for gm in range(n_genotypes):
-                if use_dirichlet_sampling:
+                if use_continuous_sampling:
                     n_sperm = S[age, g, gm]
                 else:
                     n_sperm = float(int(round(S[age, g, gm])))
 
                 if n_sperm > EPS:
-                    if use_dirichlet_sampling:
+                    if use_continuous_sampling:
                         # Continuous sampling: use Beta instead of Binomial
                         S[age, g, gm] = continuous_binomial(n_sperm, p_f)
                     else:
@@ -944,7 +944,7 @@ def sample_survival_with_sperm_storage(
 
             # Sample virgin females (also using same survival rate p_f)
             if n_virgins > EPS:
-                if use_dirichlet_sampling:
+                if use_continuous_sampling:
                     # Continuous sampling: use Beta instead of Binomial
                     survivors_virgins = continuous_binomial(n_virgins, p_f)
                 else:
@@ -958,7 +958,7 @@ def sample_survival_with_sperm_storage(
             F[age, g] = new_sperm_sum + survivors_virgins
 
             # ===== Sample males =====
-            if use_dirichlet_sampling:
+            if use_continuous_sampling:
                 n_m = M[age, g]
             else:
                 n_m = float(int(round(M[age, g])))
@@ -967,7 +967,7 @@ def sample_survival_with_sperm_storage(
             p_m = _clamp01(float(s_m_2d[age, g_idx_m]))
 
             if n_m > EPS:
-                if use_dirichlet_sampling:
+                if use_continuous_sampling:
                     # Continuous sampling: use Beta instead of Binomial
                     M[age, g] = continuous_binomial(n_m, p_m)
                 else:
@@ -988,7 +988,7 @@ def sample_viability_with_sperm_storage(
     n_genotypes: int,
     n_ages: int,
     target_age: int,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
     """Randomly apply viability with consistent sampling of sperm storage (only at target_age).
 
@@ -1002,7 +1002,7 @@ def sample_viability_with_sperm_storage(
         n_genotypes: Number of genotypes
         n_ages: Number of ages
         target_age: Age index where viability is applied
-        use_dirichlet_sampling: If True, use Dirichlet distribution instead of discrete sampling.
+        use_continuous_sampling: If True, use Dirichlet distribution instead of discrete sampling.
 
     Returns:
         Tuple[female_new, male_new, sperm_store_new]
@@ -1027,7 +1027,7 @@ def sample_viability_with_sperm_storage(
     # Sample only at target_age
     for g in range(n_genotypes):
         n_f_raw = float(F[target_age, g])
-        if use_dirichlet_sampling:
+        if use_continuous_sampling:
             n_m_val = M[target_age, g]
         else:
             n_m_val = float(int(round(M[target_age, g])))
@@ -1057,18 +1057,18 @@ def sample_viability_with_sperm_storage(
                 total_sperm_count,
             )
             raise ValueError("Invalid state: n_virgins < 0 in sample_viability_with_sperm_storage")
-        n_virgins = n_virgins_raw if use_dirichlet_sampling else float(int(round(n_virgins_raw)))
+        n_virgins = n_virgins_raw if use_continuous_sampling else float(int(round(n_virgins_raw)))
 
         # Sample each sperm storage separately (independently using survival rate p_f_val)
         new_sperm_sum = 0.0
         for gm in range(n_genotypes):
-            if use_dirichlet_sampling:
+            if use_continuous_sampling:
                 n_sperm = S[target_age, g, gm]
             else:
                 n_sperm = float(int(round(S[target_age, g, gm])))
 
             if n_sperm > EPS:
-                if use_dirichlet_sampling:
+                if use_continuous_sampling:
                     # Continuous sampling: use Beta instead of Binomial
                     S[target_age, g, gm] = continuous_binomial(n_sperm, p_f_val)
                 else:
@@ -1080,7 +1080,7 @@ def sample_viability_with_sperm_storage(
 
         # Sample virgin females
         if n_virgins > EPS:
-            if use_dirichlet_sampling:
+            if use_continuous_sampling:
                 # Continuous sampling: use Beta instead of Binomial
                 survivors_virgins = continuous_binomial(n_virgins, p_f_val)
             else:
@@ -1094,7 +1094,7 @@ def sample_viability_with_sperm_storage(
 
         # ===== Sample males =====
         if n_m_val > EPS:
-            if use_dirichlet_sampling:
+            if use_continuous_sampling:
                 # Continuous sampling: use Beta instead of Binomial
                 M[target_age, g] = continuous_binomial(n_m_val, p_m_val)
             else:
@@ -1111,7 +1111,7 @@ def recruit_juveniles_sampling(
     carrying_capacity: int,
     n_genotypes: int,
     is_stochastic: bool = True,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Cohort-mode recruitment to carrying capacity.
 
@@ -1126,7 +1126,7 @@ def recruit_juveniles_sampling(
         carrying_capacity: Carrying capacity K
         n_genotypes: Number of genotypes
         is_stochastic: If True, use stochastic sampling; if False, use deterministic scaling
-        use_dirichlet_sampling: If True and is_stochastic=True, use Dirichlet distribution
+        use_continuous_sampling: If True and is_stochastic=True, use Dirichlet distribution
             instead of discrete sampling
 
     Returns:
@@ -1134,7 +1134,7 @@ def recruit_juveniles_sampling(
     """
     female_0, male_0 = age_0_juvenile_counts
     # Ensure inputs are treated as flattened counts
-    if use_dirichlet_sampling:
+    if use_continuous_sampling:
         female_arr = np.asarray(female_0)
         male_arr = np.asarray(male_0)
     else:
@@ -1158,7 +1158,7 @@ def recruit_juveniles_sampling(
     probs = counts / total
 
     if is_stochastic:
-        if use_dirichlet_sampling:
+        if use_continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
             out_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
             continuous_multinomial(K, probs, out_counts)
@@ -1183,7 +1183,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
     scaling_factor: float,
     n_genotypes: int,
     is_stochastic: bool = True,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Scale age-0 juveniles by `scaling_factor`.
 
@@ -1195,7 +1195,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
         scaling_factor: Scaling factor to apply to total juvenile count
         n_genotypes: Number of genotypes
         is_stochastic: If True, use stochastic sampling; if False, use deterministic scaling
-        use_dirichlet_sampling: If True and is_stochastic=True, use Dirichlet distribution
+        use_continuous_sampling: If True and is_stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
 
     Returns:
@@ -1203,7 +1203,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
             Returns float64 arrays (containing integral values if stochastic).
     """
     female_0, male_0 = age_0_juvenile_counts
-    if use_dirichlet_sampling:
+    if use_continuous_sampling:
         female_arr = np.asarray(female_0)
         male_arr = np.asarray(male_0)
     else:
@@ -1217,7 +1217,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
     if total <= 0:
         return np.zeros_like(female_arr), np.zeros_like(male_arr)
 
-    if use_dirichlet_sampling:
+    if use_continuous_sampling:
         desired = total * float(scaling_factor)
     else:
         desired = float(int(round(total * float(scaling_factor))))
@@ -1234,7 +1234,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
     if is_stochastic:
         # Use nbc.multinomial instead of np.random.multinomial
         # This avoids Numba nested JIT dynamic probability array type inference bug
-        if use_dirichlet_sampling:
+        if use_continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
             temp_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
             continuous_multinomial(float(desired), probs, temp_counts)

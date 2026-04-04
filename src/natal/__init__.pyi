@@ -27,7 +27,12 @@ from .genetic_entities import (
 
 from .genetic_patterns import GenotypePatternParser, GenotypeSelector
 
-from .genetic_presets import GeneticPreset, HomingDrive, apply_preset_to_population
+from .genetic_presets import (
+    GeneticPreset,
+    HomingDrive,
+    ToxinAntidoteDrive,
+    apply_preset_to_population,
+)
 
 from .genetic_structures import (
     Locus,
@@ -254,6 +259,7 @@ __all__ = [
     "SpatialPopulation",
     "Species",
     "SquareGrid",
+    "ToxinAntidoteDrive",
     "ZygoteAlleleConversionRule",
     "ZygoteConversionRuleSet",
     "ZygoteGenotypeConversionRule",

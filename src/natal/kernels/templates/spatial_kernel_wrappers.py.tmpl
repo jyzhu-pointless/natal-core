@@ -24,24 +24,24 @@ RESULT_STOP = 1
 
 
 @njit_switch(cache=True)
-def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id=0):
-    result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id)
+def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id=0):
+    result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _FIRST_HOOK(ind_count, tick, deme_id)
 
 
 @njit_switch(cache=True)
-def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id=0):
-    result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id)
+def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id=0):
+    result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _EARLY_HOOK(ind_count, tick, deme_id)
 
 
 @njit_switch(cache=True)
-def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id=0):
-    result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling, deme_id)
+def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id=0):
+    result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _LATE_HOOK(ind_count, tick, deme_id)
@@ -76,7 +76,7 @@ def __RUN_SPATIAL_TICK_NAME__(
             tick=tick,
             is_stochastic=config.is_stochastic,
             has_sperm_storage=has_sperm_storage,
-            use_dirichlet_sampling=config.use_dirichlet_sampling,
+            use_continuous_sampling=config.use_continuous_sampling,
             deme_id=deme_id,
         )
         if result != RESULT_CONTINUE:
@@ -96,7 +96,7 @@ def __RUN_SPATIAL_TICK_NAME__(
             tick=tick,
             is_stochastic=config.is_stochastic,
             has_sperm_storage=has_sperm_storage,
-            use_dirichlet_sampling=config.use_dirichlet_sampling,
+            use_continuous_sampling=config.use_continuous_sampling,
             deme_id=deme_id,
         )
         if result != RESULT_CONTINUE:
@@ -116,7 +116,7 @@ def __RUN_SPATIAL_TICK_NAME__(
             tick=tick,
             is_stochastic=config.is_stochastic,
             has_sperm_storage=has_sperm_storage,
-            use_dirichlet_sampling=config.use_dirichlet_sampling,
+            use_continuous_sampling=config.use_continuous_sampling,
             deme_id=deme_id,
         )
         if result != RESULT_CONTINUE:

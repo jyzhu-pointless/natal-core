@@ -8,6 +8,6 @@ The `genetic_structures` module defines the immutable genetic architecture of th
 
 ## Complete Module Reference
 
-::: natal.genetic_patterns
+::: natal.genetic_structures
     options:
       heading_level: 3

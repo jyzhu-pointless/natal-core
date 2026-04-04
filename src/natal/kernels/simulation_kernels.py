@@ -70,7 +70,7 @@ def run_reproduction_with_precomputed_offspring_probability(
     adult_ages = config.adult_ages
     adult_start_age = adult_ages[0] if len(adult_ages) > 0 else 0
     is_stochastic = config.is_stochastic
-    use_dirichlet_sampling = config.use_dirichlet_sampling
+    use_continuous_sampling = config.use_continuous_sampling
 
     # 1. Extract effective adult male counts (weighted by age-specific mating rates).
     # effective_male_counts = Σ (male_counts[age] * male_mating_rate[age])
@@ -105,7 +105,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         n_ages,
         n_gen,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling
+        use_continuous_sampling=use_continuous_sampling
     )
 
     # 4. Generate offspring (fertilization).
@@ -125,7 +125,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.use_fixed_egg_count, # fixed_eggs
         config.sex_ratio,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling
+        use_continuous_sampling=use_continuous_sampling
     )
 
     # Note: Sex.FEMALE = 0, Sex.MALE = 1.
@@ -192,7 +192,7 @@ def run_survival(
     n_ages = config.n_ages
     n_gen = config.n_genotypes
     is_stochastic = config.is_stochastic
-    use_dirichlet_sampling = config.use_dirichlet_sampling
+    use_continuous_sampling = config.use_continuous_sampling
 
     # =========================================================================
     # Firstly, apply density-dependent survival to age 0 individuals (juveniles) based on the configured growth mode.
@@ -249,7 +249,7 @@ def run_survival(
         scaling_factor,
         n_gen,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling
+        use_continuous_sampling=use_continuous_sampling
     )
     ind_count[0, 0, :] = f_rec
     ind_count[1, 0, :] = m_rec
@@ -292,7 +292,7 @@ def run_survival(
             s_combined_m,
             n_gen,
             n_ages,
-            use_dirichlet_sampling=use_dirichlet_sampling
+            use_continuous_sampling=use_continuous_sampling
         )
         ind_count[0], ind_count[1] = f_surv, m_surv
     else:
@@ -353,7 +353,7 @@ def run_discrete_reproduction(
     ind_count = ind_count.copy()
     n_gen = config.n_genotypes
     is_stochastic = config.is_stochastic
-    use_dirichlet_sampling = config.use_dirichlet_sampling
+    use_continuous_sampling = config.use_continuous_sampling
 
     adult_age = 1
     female_adults = ind_count[0, adult_age, :]
@@ -385,7 +385,7 @@ def run_discrete_reproduction(
         2,
         n_gen,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling
+        use_continuous_sampling=use_continuous_sampling
     )
 
     n_0_female, n_0_male = alg.fertilize_with_mating_genotype(
@@ -406,7 +406,7 @@ def run_discrete_reproduction(
         config.use_fixed_egg_count,
         config.sex_ratio,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling
+        use_continuous_sampling=use_continuous_sampling
     )
 
     ind_count[0, 0, :] = n_0_female
@@ -423,7 +423,7 @@ def run_discrete_survival(
     ind_count = ind_count.copy()
     n_gen = config.n_genotypes
     is_stochastic = config.is_stochastic
-    use_dirichlet_sampling = config.use_dirichlet_sampling
+    use_continuous_sampling = config.use_continuous_sampling
 
     juvenile_growth_mode = config.juvenile_growth_mode
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
@@ -459,7 +459,7 @@ def run_discrete_survival(
         scaling_factor,
         n_gen,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling
+        use_continuous_sampling=use_continuous_sampling
     )
 
     s_age_f, s_age_m = alg.compute_age_based_survival_rates(
@@ -479,7 +479,7 @@ def run_discrete_survival(
     s_combined_0_m = s_age_m[0] * s_via_m[0, :]
 
     if is_stochastic:
-        if use_dirichlet_sampling:
+        if use_continuous_sampling:
             # Continuous approximation: use Beta-based binomial emulation.
             f_surv = np.empty(n_gen, dtype=np.float64)
             m_surv = np.empty(n_gen, dtype=np.float64)

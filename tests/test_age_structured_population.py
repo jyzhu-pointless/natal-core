@@ -21,7 +21,7 @@ def _minimal_pop(sp, *, pop_name: str = "AgePop"):
             species=sp,
             name=pop_name,
             stochastic=False,
-            use_dirichlet_sampling=False,
+            use_continuous_sampling=False,
         )
         .age_structure(n_ages=4, new_adult_age=1)
         .initial_state(

@@ -27,7 +27,7 @@ def build_deme(
     wt_adults: float,
     drive_adults: float,
     stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
 ) -> nt.AgeStructuredPopulation:
     """Build one deme with configurable randomness mode."""
     return (
@@ -36,7 +36,7 @@ def build_deme(
             species=species,
             name=name,
             stochastic=stochastic,
-            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_continuous_sampling=use_continuous_sampling,
         )
         .age_structure(n_ages=5, new_adult_age=1)
         .initial_state(
@@ -79,7 +79,7 @@ def share_config(demes: list[nt.AgeStructuredPopulation]) -> None:
 def build_hex_spatial_population(
     *,
     stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
 ) -> SpatialPopulation:
     """Construct hex-grid spatial population for one mode."""
     species = nt.Species.from_dict(
@@ -99,7 +99,7 @@ def build_hex_spatial_population(
             wt_adults=wt_adults,
             drive_adults=drive_adults,
             stochastic=stochastic,
-            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_continuous_sampling=use_continuous_sampling,
         )
         for idx, (wt_adults, drive_adults) in enumerate(initial_pairs)
     ]
@@ -121,18 +121,18 @@ def build_hex_spatial_population(
     )
 
 
-def profile_mode(mode_name: str, stochastic: bool, use_dirichlet_sampling: bool) -> None:
+def profile_mode(mode_name: str, stochastic: bool, use_continuous_sampling: bool) -> None:
     """Profile one randomness mode and print top hotspots."""
     print("\n" + "=" * 90)
     print(
         f"MODE: {mode_name} | stochastic={stochastic}, "
-        f"use_dirichlet_sampling={use_dirichlet_sampling}"
+        f"use_continuous_sampling={use_continuous_sampling}"
     )
     print("=" * 90)
 
     spatial = build_hex_spatial_population(
         stochastic=stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
     )
 
     # Warm up compilation and cache.
@@ -155,9 +155,9 @@ def profile_mode(mode_name: str, stochastic: bool, use_dirichlet_sampling: bool)
 
 def main() -> None:
     """Run profiling for three randomness modes."""
-    profile_mode("deterministic", stochastic=False, use_dirichlet_sampling=False)
-    profile_mode("discrete stochastic", stochastic=True, use_dirichlet_sampling=False)
-    profile_mode("dirichlet sampling", stochastic=True, use_dirichlet_sampling=True)
+    profile_mode("deterministic", stochastic=False, use_continuous_sampling=False)
+    profile_mode("discrete stochastic", stochastic=True, use_continuous_sampling=False)
+    profile_mode("dirichlet sampling", stochastic=True, use_continuous_sampling=True)
 
 
 if __name__ == "__main__":

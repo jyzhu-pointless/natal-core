@@ -129,7 +129,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         species: Species,
         name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
-        use_dirichlet_sampling: bool = False,
+        use_continuous_sampling: bool = False,
         use_fixed_egg_count: bool = False,
     ) -> DiscreteGenerationPopulationBuilder:
         """Create and preconfigure a discrete-generation population builder.
@@ -141,7 +141,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             species: Species definition used to initialize the builder.
             name: Population name passed through to ``builder.setup``.
             stochastic: Whether to use stochastic sampling. Passed through to ``builder.setup``.
-            use_dirichlet_sampling: If True, use Dirichlet; else Binomial/Multinomial sampling.
+            use_continuous_sampling: If True, use Dirichlet; else Binomial/Multinomial sampling.
                 Passed through to ``builder.setup``.
             use_fixed_egg_count: If True, egg count is fixed; if False, Poisson distributed.
                 Passed through to ``builder.setup``.
@@ -158,7 +158,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         builder.setup(
             name=name,
             stochastic=stochastic,
-            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_continuous_sampling=use_continuous_sampling,
             use_fixed_egg_count=use_fixed_egg_count,
         )
         return builder

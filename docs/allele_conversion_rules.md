@@ -151,7 +151,7 @@ ruleset.add_convert("W", "D", rate=0.8, sex_filter="male")
 - 把机制写成可执行规则。
 - 把规则绑定到 population。
 
-下一章会继续主线：**如何用 `genotype_filter` 把规则限制在你希望的人群上**。
+下一章会继续主线：**如何用 `genotype_filter` 把规则限制在你希望的范围上**。
 
 ---
 

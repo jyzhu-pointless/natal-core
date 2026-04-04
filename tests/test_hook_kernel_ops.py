@@ -28,7 +28,7 @@ def run_single_op(
     initial_sperm: float = 0.0,
     initial_sperm_row: list[float] | None = None,
     is_stochastic: bool = False,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
 ) -> tuple[int, np.ndarray, np.ndarray]:
     ind = np.zeros((2, 1, 1), dtype=np.float64)
     if initial_sperm_row is None:
@@ -72,7 +72,7 @@ def run_single_op(
         has_sperm_storage=True,
         tick=10,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
         deme_id=0
     )
     return int(result), ind, sperm
@@ -148,7 +148,7 @@ if __name__ == "__main__":
         initial_female=7.5,
         initial_sperm=2.5,
         is_stochastic=True,
-        use_dirichlet_sampling=True,
+        use_continuous_sampling=True,
     )
     assert result == RESULT_CONTINUE
     assert float(ind[0, 0, 0]) >= 0.0

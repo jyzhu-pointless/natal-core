@@ -12,22 +12,22 @@ RESULT_CONTINUE = 0
 RESULT_STOP = 1
 
 @njit_switch(cache=True)
-def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
-    result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
+def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling):
+    result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _FIRST_HOOK(ind_count, tick)
 
 @njit_switch(cache=True)
-def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
-    result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
+def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling):
+    result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _EARLY_HOOK(ind_count, tick)
 
 @njit_switch(cache=True)
-def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling):
-    result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_dirichlet_sampling)
+def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling):
+    result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return RESULT_STOP
     return _LATE_HOOK(ind_count, tick)
@@ -37,15 +37,15 @@ def __RUN_TICK_NAME__(state, config, registry):
     ind_count = state.individual_count.copy()
     sperm_store = state.sperm_storage.copy()
     tick = state.n_tick
-    result = _first_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_dirichlet_sampling)
+    result = _first_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     ind_count, sperm_store = run_reproduction(ind_count, sperm_store, config)
-    result = _early_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_dirichlet_sampling)
+    result = _early_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     ind_count, sperm_store = run_survival(ind_count, sperm_store, config)
-    result = _late_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_dirichlet_sampling)
+    result = _late_event(registry, ind_count, sperm_store, tick, config.is_stochastic, True, config.use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
     ind_count, sperm_store = run_aging(ind_count, sperm_store, config)
@@ -98,15 +98,15 @@ def __RUN_DISCRETE_TICK_NAME__(state, config, registry):
     ind_count = state.individual_count.copy()
     tick = state.n_tick
     dummy_sperm_store = np.zeros((0, 0, 0), dtype=np.float64)
-    result = _first_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_dirichlet_sampling)
+    result = _first_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
     ind_count = run_discrete_reproduction(ind_count, config)
-    result = _early_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_dirichlet_sampling)
+    result = _early_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
     ind_count = run_discrete_survival(ind_count, config)
-    result = _late_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_dirichlet_sampling)
+    result = _late_event(registry, ind_count, dummy_sperm_store, tick, config.is_stochastic, False, config.use_continuous_sampling)
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
     ind_count = run_discrete_aging(ind_count)

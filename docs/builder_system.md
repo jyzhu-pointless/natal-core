@@ -44,7 +44,7 @@ Builder 链式配置
 |---|---|---|---|---|
 | `name` | `str` | `"AgeStructuredPop"` | 全流程 | 仅用于标识与日志，不改变动力学。建议实验批次显式命名。 |
 | `stochastic` | `bool` | `True` | reproduction/survival 等采样阶段 | `True` 为随机采样，`False` 为确定性。调参期建议先 `False`。 |
-| `use_dirichlet_sampling` | `bool` | `False` | 概率采样细节 | 控制采样策略。大多数场景保持默认即可。 |
+| `use_continuous_sampling` | `bool` | `False` | 概率采样细节 | 控制采样策略。大多数场景保持默认即可。 |
 | `use_fixed_egg_count` | `bool` | `False` | reproduction | `True` 产卵数固定，`False` 更接近随机产卵过程。 |
 
 ### 3.2 `age_structure(...)`
@@ -289,7 +289,7 @@ Builder 链式配置
 
 - `name`
 - `stochastic`
-- `use_dirichlet_sampling`
+- `use_continuous_sampling`
 - `use_fixed_egg_count`
 
 ### 4.2 `initial_state(...)`

@@ -254,7 +254,7 @@ def test_spatial_population_stochastic_discrete_migration_preserves_integer_coun
     species = _make_species("spatial_run_stochastic_discrete")
     shared_config = SimpleNamespace(
         is_stochastic=True,
-        use_dirichlet_sampling=False,
+        use_continuous_sampling=False,
     )
 
     d0 = _RunDiscreteDemePopulation(species, "d0", shared_config)
@@ -333,7 +333,7 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
     species = _make_species("spatial_run_stochastic_age")
     shared_config = SimpleNamespace(
         is_stochastic=True,
-        use_dirichlet_sampling=False,
+        use_continuous_sampling=False,
     )
 
     d0 = _RunDemePopulation(species, "d0", shared_config)

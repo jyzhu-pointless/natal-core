@@ -48,7 +48,7 @@ class PopulationConfig(NamedTuple):
 
     Attributes:
         is_stochastic: Whether demographic events are stochastic.
-        use_dirichlet_sampling: If True, use Dirichlet sampling for gamete
+        use_continuous_sampling: If True, use Dirichlet sampling for gamete
             proportions; otherwise use multinomial sampling.
         n_sexes: Number of sexes (usually 2).
         n_ages: Number of age classes.
@@ -100,7 +100,7 @@ class PopulationConfig(NamedTuple):
 
     # Scalars are immutable; rebuild this NamedTuple for scalar updates.
     is_stochastic: bool
-    use_dirichlet_sampling: bool
+    use_continuous_sampling: bool
     n_sexes: int
     n_ages: int
     n_genotypes: int
@@ -271,7 +271,7 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
     """
     return PopulationConfig(
         is_stochastic=bool(config.is_stochastic),
-        use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
+        use_continuous_sampling=bool(config.use_continuous_sampling),
         n_sexes=int(config.n_sexes),
         n_ages=int(config.n_ages),
         n_genotypes=int(config.n_genotypes),
@@ -326,7 +326,7 @@ def build_population_config(
     n_ages: int = 2,
     n_glabs: int = 1,
     is_stochastic: bool = True,
-    use_dirichlet_sampling: bool = False,
+    use_continuous_sampling: bool = False,
     age_based_mating_rates: Optional[NDArray[np.float64]] = None,
     age_based_survival_rates: Optional[NDArray[np.float64]] = None,
     female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
@@ -367,7 +367,7 @@ def build_population_config(
         n_ages: Number of age classes (default 2).
         n_glabs: Number of gamete‑label variants per haplotype (default 1).
         is_stochastic: Whether to use stochastic demography.
-        use_dirichlet_sampling: Use Dirichlet sampling for gamete proportions.
+        use_continuous_sampling: Use Dirichlet sampling for gamete proportions.
         age_based_mating_rates: Array (n_sexes, n_ages) – mating rates.
         age_based_survival_rates: Array (n_sexes, n_ages) – survival probabilities.
         female_age_based_relative_fertility: Array (n_ages,) – relative female
@@ -534,7 +534,7 @@ def build_population_config(
     if generation_time is None:
         temp_cfg = PopulationConfig(
             is_stochastic=bool(is_stochastic),
-            use_dirichlet_sampling=bool(use_dirichlet_sampling),
+            use_continuous_sampling=bool(use_continuous_sampling),
             n_sexes=n_sexes_i,
             n_ages=n_ages_i,
             n_genotypes=n_genotypes_i,
@@ -574,7 +574,7 @@ def build_population_config(
 
     return PopulationConfig(
         is_stochastic=bool(is_stochastic),
-        use_dirichlet_sampling=bool(use_dirichlet_sampling),
+        use_continuous_sampling=bool(use_continuous_sampling),
         n_sexes=n_sexes_i,
         n_ages=n_ages_i,
         n_genotypes=n_genotypes_i,

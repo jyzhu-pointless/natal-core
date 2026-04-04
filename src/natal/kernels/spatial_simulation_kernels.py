@@ -203,7 +203,7 @@ def _apply_spatial_adjacency_migration_stochastic_parallel(
     row_dst_prob: NDArray[np.float64],
     row_nnz: NDArray[np.int64],
     rate: float,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
     n_threads: int,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Apply one stochastic migration step using sparse routing rows.
@@ -219,7 +219,7 @@ def _apply_spatial_adjacency_migration_stochastic_parallel(
         row_dst_prob: Sparse destination probabilities per source row.
         row_nnz: Number of valid destinations per source row.
         rate: Migration probability.
-        use_dirichlet_sampling: Whether to use continuous sampling.
+        use_continuous_sampling: Whether to use continuous sampling.
         n_threads: Number of thread lanes reserved for thread-local buffers.
 
     Returns:
@@ -278,7 +278,7 @@ def _apply_spatial_adjacency_migration_stochastic_parallel(
                     row_dst_count=src_nnz,
                     rate=rate,
                     is_stochastic=True,
-                    use_dirichlet_sampling=use_dirichlet_sampling,
+                    use_continuous_sampling=use_continuous_sampling,
                     distributed=distributed,
                     out_ind=out_ind,
                     source_idx=src,
@@ -296,7 +296,7 @@ def _apply_spatial_adjacency_migration_stochastic_parallel(
                         row_dst_count=src_nnz,
                         rate=rate,
                         is_stochastic=True,
-                        use_dirichlet_sampling=use_dirichlet_sampling,
+                        use_continuous_sampling=use_continuous_sampling,
                         distributed=distributed,
                         out_ind=out_ind,
                         out_sperm=out_sperm,
@@ -318,7 +318,7 @@ def _apply_spatial_adjacency_migration_stochastic_parallel(
                         row_dst_count=src_nnz,
                         rate=rate,
                         is_stochastic=True,
-                        use_dirichlet_sampling=use_dirichlet_sampling,
+                        use_continuous_sampling=use_continuous_sampling,
                         distributed=distributed,
                         out_ind=out_ind,
                         source_idx=src,
@@ -587,7 +587,7 @@ def _apply_spatial_kernel_migration_deterministic_parallel(
                     row_dst_count=src_nnz,
                     rate=rate,
                     is_stochastic=False,
-                    use_dirichlet_sampling=False,
+                    use_continuous_sampling=False,
                     distributed=distributed,
                     out_ind=out_ind,
                     source_idx=src,
@@ -605,7 +605,7 @@ def _apply_spatial_kernel_migration_deterministic_parallel(
                         row_dst_count=src_nnz,
                         rate=rate,
                         is_stochastic=False,
-                        use_dirichlet_sampling=False,
+                        use_continuous_sampling=False,
                         distributed=distributed,
                         out_ind=out_ind,
                         out_sperm=out_sperm,
@@ -626,7 +626,7 @@ def _apply_spatial_kernel_migration_deterministic_parallel(
                         row_dst_count=src_nnz,
                         rate=rate,
                         is_stochastic=False,
-                        use_dirichlet_sampling=False,
+                        use_continuous_sampling=False,
                         distributed=distributed,
                         out_ind=out_ind,
                         source_idx=src,
@@ -655,7 +655,7 @@ def _apply_spatial_kernel_migration_stochastic_parallel(
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
     rate: float,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
     n_threads: int,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Apply stochastic migration in kernel/topology mode.
@@ -675,7 +675,7 @@ def _apply_spatial_kernel_migration_stochastic_parallel(
             offsets.
         kernel_include_center: Whether center kernel cell contributes.
         rate: Migration probability for each scalar bucket.
-        use_dirichlet_sampling: Whether stochastic routing uses continuous
+        use_continuous_sampling: Whether stochastic routing uses continuous
             approximation samplers.
         n_threads: Number of thread lanes used for thread-local accumulation.
 
@@ -749,7 +749,7 @@ def _apply_spatial_kernel_migration_stochastic_parallel(
                     row_dst_count=src_nnz,
                     rate=rate,
                     is_stochastic=True,
-                    use_dirichlet_sampling=use_dirichlet_sampling,
+                    use_continuous_sampling=use_continuous_sampling,
                     distributed=distributed,
                     out_ind=out_ind,
                     source_idx=src,
@@ -767,7 +767,7 @@ def _apply_spatial_kernel_migration_stochastic_parallel(
                         row_dst_count=src_nnz,
                         rate=rate,
                         is_stochastic=True,
-                        use_dirichlet_sampling=use_dirichlet_sampling,
+                        use_continuous_sampling=use_continuous_sampling,
                         distributed=distributed,
                         out_ind=out_ind,
                         out_sperm=out_sperm,
@@ -788,7 +788,7 @@ def _apply_spatial_kernel_migration_stochastic_parallel(
                         row_dst_count=src_nnz,
                         rate=rate,
                         is_stochastic=True,
-                        use_dirichlet_sampling=use_dirichlet_sampling,
+                        use_continuous_sampling=use_continuous_sampling,
                         distributed=distributed,
                         out_ind=out_ind,
                         source_idx=src,
@@ -820,7 +820,7 @@ def apply_spatial_adjacency_migration(
     kernel_include_center: bool,
     rate: float,
     is_stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Apply one synchronized migration step over the deme axis.
 
@@ -865,7 +865,7 @@ def apply_spatial_adjacency_migration(
             mass to the source deme.
         rate: Fraction of each scalar bucket that attempts to migrate.
         is_stochastic: Whether migration should use stochastic sampling.
-        use_dirichlet_sampling: Whether stochastic mode should use the
+        use_continuous_sampling: Whether stochastic mode should use the
             continuous Dirichlet/Beta approximation instead of discrete
             Binomial/Multinomial draws.
 
@@ -900,7 +900,7 @@ def apply_spatial_adjacency_migration(
             migration_kernel=migration_kernel,
             kernel_include_center=kernel_include_center,
             rate=rate,
-            use_dirichlet_sampling=use_dirichlet_sampling,
+            use_continuous_sampling=use_continuous_sampling,
             n_threads=numba_max_threads,
         )
 
@@ -933,7 +933,7 @@ def apply_spatial_adjacency_migration(
         row_dst_prob=row_dst_prob,
         row_nnz=row_nnz,
         rate=rate,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
         n_threads=numba_max_threads,
     )
 
@@ -1131,7 +1131,7 @@ def _sample_outbound_count(
     value: float,
     rate: float,
     is_stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
 ) -> float:
     """Compute the outbound amount for one scalar bucket.
 
@@ -1139,7 +1139,7 @@ def _sample_outbound_count(
         value: Source bucket mass before migration.
         rate: Migration probability applied to this bucket.
         is_stochastic: Whether to sample rather than use the expectation.
-        use_dirichlet_sampling: Whether stochastic mode should use the
+        use_continuous_sampling: Whether stochastic mode should use the
             continuous Beta approximation.
 
     Returns:
@@ -1152,7 +1152,7 @@ def _sample_outbound_count(
     if not is_stochastic:
         # Deterministic migration moves the expectation directly.
         return float(value) * rate
-    if use_dirichlet_sampling:
+    if use_continuous_sampling:
         # Continuous mode keeps the state real-valued while still injecting
         # stochasticity into the outbound amount.
         return float(alg.continuous_binomial(float(value), float(rate)))
@@ -1167,7 +1167,7 @@ def _distribute_outbound_count(
     row_dst_prob: NDArray[np.float64],
     row_dst_count: int,
     is_stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
     distributed: NDArray[np.float64],
 ) -> None:
     """Distribute one outbound amount across sparse destinations.
@@ -1177,7 +1177,7 @@ def _distribute_outbound_count(
         row_dst_prob: Destination probabilities for one source deme.
         row_dst_count: Number of valid destination entries in ``row_dst_prob``.
         is_stochastic: Whether to sample rather than use expectations.
-        use_dirichlet_sampling: Whether stochastic mode should use the
+        use_continuous_sampling: Whether stochastic mode should use the
             continuous Dirichlet approximation.
         distributed: Preallocated output vector. On return, contains the
             destination-wise migrated mass in the first ``row_dst_count`` slots.
@@ -1218,7 +1218,7 @@ def _distribute_outbound_count(
         probs[idx] = row_dst_prob[idx] / total
 
     # Continuous stochastic split using Dirichlet-like sampler.
-    if use_dirichlet_sampling:
+    if use_continuous_sampling:
         # Continuous multinomial keeps real-valued buckets while conserving
         # the sampled outbound total.
         alg.continuous_multinomial(float(outbound), probs, distributed)
@@ -1240,7 +1240,7 @@ def _migrate_scalar_bucket(
     row_dst_count: int,
     rate: float,
     is_stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
     distributed: NDArray[np.float64],
     out_ind: NDArray[np.float64],
     source_idx: int,
@@ -1257,7 +1257,7 @@ def _migrate_scalar_bucket(
         row_dst_count: Number of valid destination entries.
         rate: Migration probability for this bucket.
         is_stochastic: Whether outbound mass is sampled.
-        use_dirichlet_sampling: Whether stochastic mode uses continuous
+        use_continuous_sampling: Whether stochastic mode uses continuous
             approximations.
         distributed: Scratch buffer reused for destination allocations.
         out_ind: Destination individual-count buffer updated in place.
@@ -1271,7 +1271,7 @@ def _migrate_scalar_bucket(
         value=value,
         rate=rate,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
     )
     # Split outbound mass across sparse destinations.
     _distribute_outbound_count(
@@ -1279,7 +1279,7 @@ def _migrate_scalar_bucket(
         row_dst_prob=row_dst_prob,
         row_dst_count=row_dst_count,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
         distributed=distributed,
     )
 
@@ -1308,7 +1308,7 @@ def _migrate_sperm_bucket(
     row_dst_count: int,
     rate: float,
     is_stochastic: bool,
-    use_dirichlet_sampling: bool,
+    use_continuous_sampling: bool,
     distributed: NDArray[np.float64],
     out_ind: NDArray[np.float64],
     out_sperm: NDArray[np.float64],
@@ -1330,7 +1330,7 @@ def _migrate_sperm_bucket(
         row_dst_count: Number of valid destination entries.
         rate: Migration probability for this bucket.
         is_stochastic: Whether outbound mass is sampled.
-        use_dirichlet_sampling: Whether stochastic mode uses continuous
+        use_continuous_sampling: Whether stochastic mode uses continuous
             approximations.
         distributed: Scratch buffer reused for destination allocations.
         out_ind: Destination individual-count buffer updated in place.
@@ -1345,7 +1345,7 @@ def _migrate_sperm_bucket(
         value=value,
         rate=rate,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
     )
     # Split outbound sperm mass across sparse destinations.
     _distribute_outbound_count(
@@ -1353,7 +1353,7 @@ def _migrate_sperm_bucket(
         row_dst_prob=row_dst_prob,
         row_dst_count=row_dst_count,
         is_stochastic=is_stochastic,
-        use_dirichlet_sampling=use_dirichlet_sampling,
+        use_continuous_sampling=use_continuous_sampling,
         distributed=distributed,
     )
 
@@ -1532,7 +1532,7 @@ def run_spatial_migration(
         kernel_include_center=kernel_include_center,
         rate=migration_rate,
         is_stochastic=bool(config.is_stochastic),
-        use_dirichlet_sampling=bool(config.use_dirichlet_sampling),
+        use_continuous_sampling=bool(config.use_continuous_sampling),
     )
 
 

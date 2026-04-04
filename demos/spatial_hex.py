@@ -25,7 +25,7 @@ def build_deme(
     """Build one deterministic deme for the UI demo."""
     return (
         nt.AgeStructuredPopulation
-        .setup(species=species, name=name, stochastic=True, use_dirichlet_sampling=True)
+        .setup(species=species, name=name, stochastic=True, use_continuous_sampling=True)
         .age_structure(n_ages=5, new_adult_age=1)
         .initial_state(
             individual_count={
