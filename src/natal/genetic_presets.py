@@ -30,6 +30,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Tuple,
     TypeGuard,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 __all__ = [
     "GeneticPreset",      # Abstract base class for custom presets
     "HomingDrive",        # Built-in gene drive preset
+    "ToxinAntidoteDrive", # Toxin-Antidote gene drive preset
     "apply_preset_to_population",  # Core application function
 ]
 
@@ -58,6 +60,7 @@ __all__ = [
 _AlleleSpecifier = Union[Gene, str]
 _SexSpecifier = Union[Sex, int, str]
 _SexSpecificRates = Union[float, Tuple[float, float], Dict[_SexSpecifier, float]]
+_AlleleScalingMode = Literal["multiplicative", "dominant", "recessive", "custom"]
 
 # Defines how a specific allele scales fitness
 # e.g., if "Dr" allele has viability_scaling = 0.8, then:
@@ -259,8 +262,8 @@ def _make_fitness_patch_given_allele_scaling(
     viability_scaling: Optional[_ViabilityScalingConfig] = None,
     fecundity_scaling: Optional[_FecundityScalingConfig] = None,
     sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
-    viability_mode: str = "multiplicative",
-    fecundity_mode: str = "multiplicative",
+    viability_mode: _AlleleScalingMode = "multiplicative",
+    fecundity_mode: _AlleleScalingMode = "multiplicative",
     sexual_selection_mode: str = "multiplicative",
 ) -> PresetFitnessPatch:
     """Helper to create a fitness patch dict for a single allele's scaling effects."""
@@ -878,8 +881,8 @@ class HomingDrive(GeneticPreset):
         fecundity_scaling: _FecundityScalingConfig = 1.0,
         viability_scaling: _ViabilityScalingConfig = 1.0,
         sexual_selection_scaling: _SexualSelectionScalingConfig = 1.0,
-        viability_mode: str = "multiplicative",
-        fecundity_mode: str = "multiplicative",
+        viability_mode: _AlleleScalingMode = "multiplicative",
+        fecundity_mode: _AlleleScalingMode = "multiplicative",
         sexual_selection_mode: str = "multiplicative",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
@@ -957,8 +960,8 @@ class HomingDrive(GeneticPreset):
         self.viability_scaling = viability_scaling
         self.sexual_selection_scaling = sexual_selection_scaling
 
-        self.viability_mode = viability_mode
-        self.fecundity_mode = fecundity_mode
+        self.viability_mode: _AlleleScalingMode = viability_mode
+        self.fecundity_mode: _AlleleScalingMode = fecundity_mode
         self.sexual_selection_mode = sexual_selection_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
@@ -1187,14 +1190,157 @@ class HomingDrive(GeneticPreset):
 
 
 class ToxinAntidoteDrive(GeneticPreset):
-    """Toxin-Antidote gene drive (e.g., TARE, TADE, TADS).
+    """Toxin-Antidote gene drive (e.g., TARE, TADE).
 
-    This preset implements a toxin-antidote gene drive system where a "toxin" allele causes lethality or sterility,
-    and an "antidote" allele rescues carriers from the toxin's effects. The drive spreads by biasing inheritance of the antidote.
+    This preset implements a toxin-antidote gene drive system where a "drive" allele
+    disrupts a "target" allele into a "disrupted" version. The "disrupted" allele
+    typically carries a high fitness cost (the toxin effect), while the "drive"
+    allele itself often provides a functional rescue (the antidote).
 
     Key features:
-    - Toxin allele that disrupts viability or fecundity
-    - Antidote allele that rescues carriers from toxin effects
-    - Drive conversion that biases inheritance of the antidote allele
+    - Germline disruption (Target -> Disrupted) in drive-carrying parents.
+    - Embryo disruption (Target -> Disrupted) via maternal/paternal Cas9 deposition.
+    - Configurable fitness costs for the disrupted allele (toxin effect).
+
+    In a typical TARE (Toxin-Antidote Recessive Embryo lethality) configuration,
+    the disrupted allele is set to be recessive lethal (viability_scaling=0.0,
+    viability_mode="recessive").
     """
-    pass  # Placeholder for future implementation of Toxin-Antidote drive preset
+
+    def __init__(
+        self,
+        name: str,
+        drive_allele: _AlleleSpecifier,
+        target_allele: _AlleleSpecifier,
+        disrupted_allele: _AlleleSpecifier,
+        conversion_rate: _SexSpecificRates = 0.8,
+        embryo_disruption_rate: _SexSpecificRates = 0.0,
+        viability_scaling: _ViabilityScalingConfig = 0.0,
+        fecundity_scaling: _FecundityScalingConfig = 1.0,
+        sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
+        viability_mode: _AlleleScalingMode = "recessive",
+        fecundity_mode: _AlleleScalingMode = "recessive",
+        sexual_selection_mode: str = "recessive",
+        cas9_deposition_glab: Optional[str] = None,
+        species: Optional[Species] = None,
+        use_paternal_deposition: bool = False,
+    ):
+        """Initialize a toxin-antidote gene drive.
+
+        Args:
+            name: Name of the gene drive.
+            drive_allele: The allele carrying the antidote and disruption machinery.
+            target_allele: The wild-type allele targeted for disruption.
+            disrupted_allele: The resulting non-functional/disrupted allele.
+            conversion_rate: Probability of target disruption in the germline.
+            embryo_disruption_rate: Probability of target disruption in embryos.
+            viability_scaling: Fitness cost for the disrupted allele.
+            fecundity_scaling: Fecundity cost for the disrupted allele.
+            sexual_selection_scaling: Optional sexual-selection effect for the disrupted allele.
+                Supports a scalar copy-number effect or a tuple
+                ``(default_male, carrier_male)``.
+            viability_mode: Scaling mode for viability (default "recessive").
+            fecundity_mode: Scaling mode for fecundity (default "recessive").
+            sexual_selection_mode: Scaling mode for scalar sexual-selection values.
+                Ignored when ``sexual_selection_scaling`` is a tuple.
+            cas9_deposition_glab: Gamete label for Cas9 deposition tracking.
+            species: Optional species to bind at construction.
+            use_paternal_deposition: Whether to enable paternal Cas9 deposition.
+        """
+        self._str_drive_allele = self._resolve_allele_name(drive_allele)
+        self._str_target_allele = self._resolve_allele_name(target_allele)
+        self._str_disrupted_allele = self._resolve_allele_name(disrupted_allele)
+
+        self.conversion_rate = self._resolve_rates(conversion_rate)
+        self.embryo_disruption_rate = self._resolve_rates(embryo_disruption_rate)
+
+        self.viability_scaling = viability_scaling
+        self.fecundity_scaling = fecundity_scaling
+        self.sexual_selection_scaling = sexual_selection_scaling
+        self.viability_mode: _AlleleScalingMode = viability_mode
+        self.fecundity_mode: _AlleleScalingMode = fecundity_mode
+        self.sexual_selection_mode = sexual_selection_mode
+
+        self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
+        self.use_paternal_deposition = bool(use_paternal_deposition)
+
+        super().__init__(name=name, species=species)
+
+    def fitness_patch(self) -> PresetFitnessPatch:
+        """Return declarative fitness patch for the disrupted allele."""
+        return _make_fitness_patch_given_allele_scaling(
+            self._str_disrupted_allele,
+            self.viability_scaling,
+            self.fecundity_scaling,
+            self.sexual_selection_scaling,
+            self.viability_mode,
+            self.fecundity_mode,
+            self.sexual_selection_mode,
+        )
+
+    @property
+    def drive_allele(self) -> Gene:
+        return self._resolve_bound_gene(self._str_drive_allele)
+
+    @property
+    def target_allele(self) -> Gene:
+        return self._resolve_bound_gene(self._str_target_allele)
+
+    @property
+    def disrupted_allele(self) -> Gene:
+        return self._resolve_bound_gene(self._str_disrupted_allele)
+
+    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+        """Implement target disruption in the germline of drive carriers."""
+        def drive_carrier_filter(gt: Genotype) -> bool:
+            return _count_allele_copies(gt, self.drive_allele) > 0
+
+        rule_set = GameteConversionRuleSet(f"{self.name}_GermlineDisruption")
+        for sex in (Sex.FEMALE, Sex.MALE):
+            rate = self.conversion_rate[sex]
+            if rate > 0:
+                rule_set.add_allele_convert(
+                    from_allele=self.target_allele,
+                    to_allele=self.disrupted_allele,
+                    rate=rate,
+                    sex_filter=sex,
+                    genotype_filter=drive_carrier_filter,
+                )
+
+            if self.cas9_deposition_glab and (sex == Sex.FEMALE or self.use_paternal_deposition):
+                rule_set.add_hg_convert(
+                    hg_match=lambda hg: True,
+                    to_haploid_genotype=lambda hg: hg,
+                    rate=1.0,
+                    sex_filter=sex,
+                    genotype_filter=drive_carrier_filter,
+                    target_glab=self.cas9_deposition_glab
+                )
+
+        return rule_set.to_gamete_modifier(population) if rule_set.rules else None
+
+    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+        """Implement target disruption in embryos."""
+        rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoDisruption")
+
+        def zygote_has_drive(gt: Genotype) -> bool:
+            return _count_allele_copies(gt, self.drive_allele) > 0
+
+        for sex in (Sex.FEMALE, Sex.MALE):
+            rate = self.embryo_disruption_rate[sex]
+            if rate > 0:
+                m_glab = self.cas9_deposition_glab if sex == Sex.FEMALE else None
+                p_glab = self.cas9_deposition_glab if (sex == Sex.MALE and self.use_paternal_deposition) else None
+                g_filter = None if (m_glab or p_glab) else zygote_has_drive
+
+                if m_glab or p_glab or g_filter:
+                    rule_set.add_allele_convert(
+                        from_allele=self.target_allele,
+                        to_allele=self.disrupted_allele,
+                        rate=rate,
+                        maternal_glab=m_glab,
+                        paternal_glab=p_glab,
+                        genotype_filter=g_filter,
+                    )
+
+        return rule_set.to_zygote_modifier(population) if rule_set.rules else None

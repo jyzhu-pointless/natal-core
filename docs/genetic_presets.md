@@ -60,6 +60,51 @@ drive = HomingDrive(
 )
 ```
 
+### ToxinAntidoteDrive - 毒素-解毒剂驱动（TARE/TADE）
+
+`ToxinAntidoteDrive` 用于建模“驱动等位基因触发目标位点破坏，破坏等位基因产生适应度损失，而驱动等位基因提供救援”的系统。
+
+```python
+from natal.genetic_presets import ToxinAntidoteDrive
+
+ta_drive = ToxinAntidoteDrive(
+    name="TARE_Drive",
+    drive_allele="Drive",
+    target_allele="WT",
+    disrupted_allele="Disrupted",
+    conversion_rate=0.95,
+    embryo_disruption_rate={"female": 0.30, "male": 0.0},
+    viability_scaling=0.0,
+    fecundity_scaling=1.0,
+    viability_mode="recessive",
+    fecundity_mode="recessive",
+    cas9_deposition_glab="cas9",
+)
+
+population.apply_preset(ta_drive)
+```
+
+常见参数说明：
+
+1. `conversion_rate`：生殖系中 `target -> disrupted` 的转换概率，支持 `float`、`(female, male)` 或按性别字典。
+2. `embryo_disruption_rate`：胚胎期转换概率，可与 `cas9_deposition_glab` / `use_paternal_deposition` 联合建模母源/父源沉积效应。
+3. `viability_scaling` 与 `viability_mode`：用于定义 `disrupted` 等位基因的毒素效应；TARE 常用 `viability_scaling=0.0` 且 `viability_mode="recessive"`。
+4. `fecundity_scaling` 与 `fecundity_mode`：定义繁殖力成本。
+5. `sexual_selection_scaling`（可选）：定义性选择效应；支持标量或二元组 `(default_male, carrier_male)`，配合 `sexual_selection_mode` 使用。
+
+示例：加入性选择成本
+
+```python
+ta_drive_with_mating_cost = ToxinAntidoteDrive(
+    name="TA_WithMatingCost",
+    drive_allele="Drive",
+    target_allele="WT",
+    disrupted_allele="Disrupted",
+    sexual_selection_scaling=(1.0, 0.8),
+    sexual_selection_mode="dominant",
+)
+```
+
 ## 创建自定义预设
 
 ### 与模式匹配结合（强烈推荐）
