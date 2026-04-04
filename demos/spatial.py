@@ -84,6 +84,25 @@ def summarize(spatial: SpatialPopulation) -> None:
         print(f"deme {deme_id}: total={total:.2f}; {pieces}")
 
 
+def summarize_readable(spatial: SpatialPopulation) -> None:
+    """Print state translation and observation summaries for spatial populations."""
+    readable = nt.spatial_population_to_readable_dict(spatial)
+    print(f"readable tick={readable['tick']}, demes={readable['n_demes']}")
+
+    observed = nt.spatial_population_to_observation_dict(
+        spatial,
+        groups={
+            "adult_drive": {
+                "genotype": ["WT|Dr", "Dr|WT", "Dr|Dr"],
+                "age": [1, 2, 3],
+            }
+        },
+        collapse_age=True,
+        include_zero_counts=True,
+    )
+    print("aggregate observation:", observed["aggregate"]["observed"]["adult_drive"])
+
+
 def main() -> None:
     nt.disable_numba()
 
@@ -121,11 +140,13 @@ def main() -> None:
 
     print("Initial state")
     summarize(spatial)
+    summarize_readable(spatial)
 
     spatial.run(n_steps=5, record_every=1)
 
     print("\nAfter 5 ticks")
     summarize(spatial)
+    summarize_readable(spatial)
 
 
 if __name__ == "__main__":

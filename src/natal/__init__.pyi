@@ -175,6 +175,21 @@ from .spatial_topology import (
     apply_migration_convolution,
 )
 
+from .state_translation import (
+    population_state_to_dict,
+    population_state_to_json,
+    discrete_population_state_to_dict,
+    discrete_population_state_to_json,
+    population_to_readable_dict,
+    population_to_readable_json,
+    population_to_observation_dict,
+    population_to_observation_json,
+    spatial_population_to_readable_dict,
+    spatial_population_to_readable_json,
+    spatial_population_to_observation_dict,
+    spatial_population_to_observation_json,
+)
+
 from .type_def import Sex, Age, GameteLabel
 
 from .visualization import get_allele_color, render_cell_svg
@@ -278,6 +293,8 @@ __all__ = [
     "disable_numba",
     "disable_numba_log",
     "disable_numba_signature_trace",
+    "discrete_population_state_to_dict",
+    "discrete_population_state_to_json",
     "enable_numba",
     "enable_numba_log",
     "enable_numba_signature_trace",
@@ -309,6 +326,12 @@ __all__ = [
     "numba_enabled",
     "parse_flattened_discrete_state",
     "parse_flattened_state",
+    "population_state_to_dict",
+    "population_state_to_json",
+    "population_to_observation_dict",
+    "population_to_observation_json",
+    "population_to_readable_dict",
+    "population_to_readable_json",
     "render_cell_svg",
     "run_aging",
     "run_discrete_aging",
@@ -324,6 +347,10 @@ __all__ = [
     "run_spatial_tick_with_migration",
     "run_survival",
     "set_numba_seed",
+    "spatial_population_to_observation_dict",
+    "spatial_population_to_observation_json",
+    "spatial_population_to_readable_dict",
+    "spatial_population_to_readable_json",
     "to_plain_discrete_population_state",
     "to_plain_population_config",
     "to_plain_population_state",

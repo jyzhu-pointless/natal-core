@@ -274,21 +274,28 @@ pop.run(n_steps=200, record_every=5, finish=False)
 ### 查看结果
 
 ```python
-# 获取最终状态
-print(f"最终种群大小: {pop.get_total_count():.0f}")
-print(f"最终雌性数: {pop.get_female_count():.0f}")
-print(f"最终雄性数: {pop.get_male_count():.0f}")
+# 1) 用可读字典查看当前状态（适合日志/调试/接口返回）
+state_view = nt.population_to_readable_dict(pop)
+print(state_view["state_type"], state_view["tick"])
+print(state_view["individual_count"]["female"].keys())
 
-# 查看历史记录
-print(f"记录点数: {len(pop.history)}")
+# 2) 如需 JSON，可直接导出
+state_json = nt.population_to_readable_json(pop, indent=2)
+print(state_json[:240])
 
-# 获取特定基因型的历史（需要转为对象形式）
-history_objects = pop.get_history_as_objects()
-for tick, state in history_objects:
-    # state 是 PopulationState 对象
-    # state.individual_count shape: (n_sexes, n_ages, n_genotypes)
-    total = state.individual_count.sum()
-    print(f"Tick {tick}: {total:.0f} individuals")
+# 3) 集成 observation rules，按业务分组查看
+observed = nt.population_to_observation_dict(
+    pop,
+    groups={
+        "adult_drive_female": {
+            "genotype": ["WT|Drive", "Drive|Drive"],
+            "sex": "female",
+            "age": [2, 3, 4, 5, 6, 7],
+        }
+    },
+    collapse_age=False,
+)
+print(observed["observed"]["adult_drive_female"])
 ```
 
 ### 🎛️ 使用内置可视化面板（可选）
@@ -453,8 +460,8 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 
 ### Q: "确定性" vs "随机性" 是什么区别？
 **A**:
-- `is_stochastic=False`: 使用多项分布期望，结果完全确定
-- `is_stochastic=True`: 使用随机抽样，结果随机波动
+- `is_stochastic=False`: 使用多项分布期望，结果完全确定（允许小数）
+- `is_stochastic=True`: 使用随机抽样，结果随机波动（必为整数）
 
 ---
 

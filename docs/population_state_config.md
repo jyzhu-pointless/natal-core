@@ -211,6 +211,65 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 2. 修改配置数组前，先核对维度，再核对生物学含义。
 3. 在离散世代模型中，建议始终按 age 0/1 的语义组织输入与分析。
 
+## 9. 状态翻译为可读字典/JSON
+
+为了便于日志记录、前后端通信与调试，NATAL 提供了将状态对象翻译为人类可读结构的能力。
+
+相关 API 位于 `natal.state_translation`：
+
+- `population_state_to_dict` / `population_state_to_json`
+- `discrete_population_state_to_dict` / `discrete_population_state_to_json`
+- `population_to_readable_dict` / `population_to_readable_json`
+- `population_to_observation_dict` / `population_to_observation_json`
+
+其中：
+
+- `PopulationState` 翻译结果包含 `individual_count` 与 `sperm_storage`。
+- `DiscretePopulationState` 翻译结果包含 `individual_count`（无 `sperm_storage`）。
+
+示例：
+
+```python
+import natal as nt
+
+# 假设 pop 是任意已构建 population（年龄结构或离散世代）
+readable = nt.population_to_readable_dict(pop)
+print(readable["state_type"], readable["tick"])
+
+# JSON 输出（便于持久化或传输）
+payload = nt.population_to_readable_json(pop, indent=2)
+print(payload[:200])
+```
+
+如果需要在翻译时直接应用 observation rules，可使用观测集成接口：
+
+```python
+observed = nt.population_to_observation_dict(
+    pop,
+    groups={
+        "adult_wt_female": {
+            "genotype": ["WT|WT"],
+            "sex": "female",
+            "age": [1],
+        }
+    },
+    collapse_age=False,
+)
+print(observed["observed"]["adult_wt_female"])
+```
+
+如果你直接操作 `PopulationState` / `DiscretePopulationState`，也可以调用对应的函数，并显式传入标签：
+
+```python
+from natal.state_translation import population_state_to_dict
+
+data = population_state_to_dict(
+    state,
+    genotype_labels=["WT|WT", "WT|Drive", "Drive|Drive"],
+    sex_labels=["female", "male"],
+)
+```
+
 ---
 
 ## 相关章节

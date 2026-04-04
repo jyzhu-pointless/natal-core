@@ -9,6 +9,7 @@ This section provides module-level API references.
 - [discrete_generation_population](discrete_generation_population.md)
 - [population_builder](population_builder.md)
 - [population_state](population_state.md)
+- [state_translation](state_translation.md)
 - [population_config](population_config.md)
 - [simulation_kernels](simulation_kernels.md)
 - [algorithms](algorithms.md)

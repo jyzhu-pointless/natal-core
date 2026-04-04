@@ -100,6 +100,7 @@ nav:
     - genetic_structures: api/genetic_structures.md
     - genetic_entities: api/genetic_entities.md
     - population_state: api/population_state.md
+    - state_translation: api/state_translation.md
     - population_config: api/population_config.md
     - base_population: api/base_population.md
     - age_structured_population: api/age_structured_population.md
