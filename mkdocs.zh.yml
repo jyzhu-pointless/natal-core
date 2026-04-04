@@ -55,7 +55,31 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 plugins:
+  - autorefs:
+      resolve_closest: true
   - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            docstring_section_style: table
+            show_root_heading: true
+            show_source: true
+            show_signature_annotations: true
+            separate_signature: true
+            heading_level: 2
+            merge_init_into_class: true
+            show_if_no_docstring: false
+            show_submodules: false
+            show_object_full_path: false
+            group_by_category: true
+            members_order: source
+            inherited_members: false
+            filters:
+              - "!^_"
+            warn_no_docstring: true
 
 nav:
   - 首页: index.md
