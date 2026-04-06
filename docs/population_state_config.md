@@ -102,33 +102,24 @@ state = DiscretePopulationState.create(
 ### 4.1 Groups of Configuration Data
 
 1. Dimensions and control parameters
-
-- `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
-- `is_stochastic`, `use_continuous_sampling`, `sex_ratio`
-
+  - `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
+  - `is_stochastic`, `use_continuous_sampling`, `sex_ratio`
 2. Age‑related parameters
-
-- `age_based_survival_rates`
-- `age_based_mating_rates`
-- `female_age_based_relative_fertility`
-- `age_based_relative_competition_strength`
-
+  - `age_based_survival_rates`
+  - `age_based_mating_rates`
+  - `female_age_based_relative_fertility`
+  - `age_based_relative_competition_strength`
 3. Fitness parameters
-
-- `viability_fitness` (shape: `(n_sexes, n_ages, n_genotypes)`)
-- `fecundity_fitness` (shape: `(n_sexes, n_genotypes)`)
-- `sexual_selection_fitness` (shape: `(n_genotypes, n_genotypes)`)
-
+  - `viability_fitness` (shape: `(n_sexes, n_ages, n_genotypes)`)
+  - `fecundity_fitness` (shape: `(n_sexes, n_genotypes)`)
+  - `sexual_selection_fitness` (shape: `(n_genotypes, n_genotypes)`)
 4. Genetic mapping matrices
-
-- `genotype_to_gametes_map` (shape: `(n_sexes, n_genotypes, n_haploid_genotypes * n_glabs)`)
-- `gametes_to_zygote_map` (shape: `(n_hg*n_glabs, n_hg*n_glabs, n_genotypes)`)
-
+  - `genotype_to_gametes_map` (shape: `(n_sexes, n_genotypes, n_haploid_genotypes * n_glabs)`)
+  - `gametes_to_zygote_map` (shape: `(n_hg*n_glabs, n_hg*n_glabs, n_genotypes)`)
 5. Initial distributions and scaling parameters
-
-- `initial_individual_count`
-- `initial_sperm_storage`
-- `population_scale`, `base_carrying_capacity`, etc.
+  - `initial_individual_count`
+  - `initial_sperm_storage`
+  - `population_scale`, `base_carrying_capacity`, etc.
 
 ### 4.2 What to Pay Attention to When Using
 

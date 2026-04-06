@@ -43,7 +43,7 @@ NATAL 将遗传学对象分为两层：
 | 类 | 说明 | 绑定到 | 示例 |
 |---|---|---|---|
 | `Gene` | 等位基因 | Locus | "w+"、"w"、"Drive" |
-| `Haplotype` | 单倍型（单条染色体的等位基因组合） | Chromosome | 可能有数百种 |
+| `Haplotype` | 单倍型（单条染色体的等位基因组合） | Chromosome | 可能有数十至数百种 |
 | `HaploidGenotype` | 单倍体基因组（所有染色体的单倍型） | Species | $\sim 2^\text{位点数}$ 种 |
 | `Genotype` | 二倍体基因型 | Species | $\sim \text{HaploidGenotype数}^2$ 种 |
 
@@ -66,7 +66,8 @@ sp = Species.from_dict(
         "chr2": {
             "C": ["C1", "C2"],
         },
-    }
+    },
+    gamete_labels=["default", "Cas9_deposited"]  # 可选：配子标签
 )
 ```
 
@@ -143,6 +144,8 @@ for allele in locus.alleles:
 
 等位基因是"结构"与"实体"的交界点。
 
+**重要提醒：`Gene` 的标识名称 `name` 需要在 `Species` 中唯一。**
+
 ```python
 # 获取等位基因（通过 Species）
 sp = Species.from_dict(
@@ -160,7 +163,7 @@ print(f"Allele index: {a1.allele_index}")  # 0 或 1
 
 ### Haplotype：单倍型
 
-单条染色体上的等位基因组合。对于 N 个位点，有 ∏(每个位点的等位基因数) 种可能。
+单条染色体上的等位基因组合。对于 $N$ 个位点，有 $\prod_{i=1}^N \text{每个位点的等位基因数}$ 种可能。
 
 ```python
 # 获取所有可能的单倍型
@@ -280,20 +283,14 @@ print(f"Heterozygous at locus A: {gt.is_heterozygous(sp['chr1']['A'])}")
 
 ## 全局缓存机制
 
-### 为什么需要全局缓存？
-
-1. **内存效率**：避免创建重复的 Genotype 对象
-2. **哈希一致性**：字符串规范化确保 `"WT|Drive"` 和 `"Drive|WT"` 映射到同一对象
-3. **索引稳定性**：与 IndexRegistry 配合，每个 Genotype 对应唯一的整数索引
+为避免基因型字符串解析的重复计算，NATAL 在 Species 层面实现了对 `Genotype` 对象字符串表示的全局缓存。
 
 ### 缓存的工作原理
 
 ```
 字符串 "WT|Drive"
-    ↓ [规范化] → 按字母序排序
-"Drive|WT"
     ↓ [查缓存]
-Species.genotype_cache["Drive|WT"]
+Species.genotype_cache["WT|Drive"]
     ↓ [命中或创建]
 Genotype 对象（全局唯一）
     ↓ [注册到 IndexRegistry]

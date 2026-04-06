@@ -40,28 +40,28 @@ Builder 链式配置
 
 ### 3.1 `setup(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `name` | `str` | `"AgeStructuredPop"` | 全流程 | 仅用于标识与日志，不改变动力学。建议实验批次显式命名。 |
-| `stochastic` | `bool` | `True` | reproduction/survival 等采样阶段 | `True` 为随机采样，`False` 为确定性。调参期建议先 `False`。 |
-| `use_continuous_sampling` | `bool` | `False` | 概率采样细节 | 控制采样策略。大多数场景保持默认即可。 |
-| `use_fixed_egg_count` | `bool` | `False` | reproduction | `True` 产卵数固定，`False` 更接近随机产卵过程。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `name` | `str` | 种群的标识名称。 | `"AgeStructuredPop"` | 全流程 | 用于日志和标识，不影响动力学；建议实验批次显式命名。 |
+| `stochastic` | `bool` | 采用随机或确定性采样。 | `True` | reproduction/survival 等采样阶段 | `True`=随机，`False`=确定性；调参期建议先用 `False`。 |
+| `use_continuous_sampling` | `bool` | 采样策略的选择。 | `False` | 概率采样细节 | 控制采样方式；大多数场景保持默认即可。 |
+| `use_fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 固定产卵数，`False` 更接近随机产卵过程。 |
 
 ### 3.2 `age_structure(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `n_ages` | `int` | `8` | 全流程（数组维度） | 年龄层数量。会约束初始状态、存活率向量等长度。 |
-| `new_adult_age` | `int` | `2` | reproduction/survival | 成虫起始年龄索引。建议与物种生命史一致。 |
-| `generation_time` | `Optional[int]` | `None` | 编译参数 | 代时标记，可用于建模解释；不建议与年龄定义冲突。 |
-| `equilibrium_distribution` | `Optional[list/ndarray]` | `None` | competition/初始化标度 | 平衡分布辅助参数。仅在你明确要做稳态标定时使用。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `n_ages` | `int` | 分年龄阶段的总数。 | `8` | 全流程（数组维度） | 约束初始状态、存活率向量等数组长度；必须与所有年龄相关参数长度一致。 |
+| `new_adult_age` | `int` | 个体进入成虫阶段的年龄索引。 | `2` | reproduction/survival | 建议与目标物种的生命史阶段一致；低于此年龄为幼体。 |
+| `generation_time` | `Optional[int]` | 代时标记。 | `None` | 编译参数 | 用于建模解释；与 `age_structure` 重名参数，后设值覆盖先设值。 |
+| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 平衡分布辅助参数。 | `None` | competition/初始化标度 | 与 `age_structure` 重名参数，后设值覆盖先设值；仅明确做稳态标定时使用。 |
 
 ### 3.3 `initial_state(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `individual_count` | `dict` | 必填 | 初始状态 | 格式 `{sex: {genotype: age_data}}`。不设置会在 `build()` 报错。 |
-| `sperm_storage` | `Optional[dict]` | `None` | reproduction（若启用储精） | 初始精子库存。仅在 `use_sperm_storage=True` 场景必要。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `individual_count` | `Mapping[str, Mapping[Union[Genotype, str], Union[int, float, List, Tuple, NDArray, Dict[int, float]]]]` | 初始个体数量分布，格式 `{sex: {genotype: age_data}}`。 | 必填 | 初始状态 | 不设置会在 `build()` 报错；支持标量、序列、映射等多种格式。 |
+| `sperm_storage` | `Optional[Mapping[Union[Genotype, str], Mapping[Union[Genotype, str], Union[int, float, List, Tuple, NDArray, Dict[int, float]]]]]` | 初始精子库存（若启用储精）。 | `None` | reproduction | 仅在 `use_sperm_storage=True` 场景必要；格式为三层映射。 |
 
 `age_data` 支持：标量、列表/元组/数组、`{age: value}` 映射。必须非负。
 
@@ -96,12 +96,12 @@ Builder 链式配置
 
 ### 3.4 `survival(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `female_age_based_survival_rates` | `Optional[Any]` | `None` | survival | 支持标量/序列/映射/函数。`None` 使用默认曲线。 |
-| `male_age_based_survival_rates` | `Optional[Any]` | `None` | survival | 同上。 |
-| `generation_time` | `Optional[int]` | `None` | 编译参数 | 与 `age_structure` 同名参数，后设会覆盖先设值。 |
-| `equilibrium_distribution` | `Optional[list/ndarray]` | `None` | 标度辅助 | 与 `age_structure` 同名参数，后设覆盖先设值。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `female_age_based_survival_rates` | `Optional[Union[int, float, List[float], NDArray[np.float64], Dict[int, float], Callable]]` | 雌性按年龄的生存率。 | `None` | survival | 支持标量/序列/映射/函数等多种格式；`None` 使用默认曲线；建议限定在 `[0, 1]`。 |
+| `male_age_based_survival_rates` | `Optional[Union[int, float, List[float], NDArray[np.float64], Dict[int, float], Callable]]` | 雄性按年龄的生存率。 | `None` | survival | 同 `female_age_based_survival_rates`。 |
+| `generation_time` | `Optional[int]` | 代时标记。 | `None` | 编译参数 | 与 `age_structure` 同名参数；后设值覆盖先设值。 |
+| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 平衡分布辅助参数。 | `None` | 标度辅助 | 与 `age_structure` 同名参数；后设值覆盖先设值。 |
 
 实用建议：
 
@@ -138,16 +138,16 @@ Builder 链式配置
 
 ### 3.5 `reproduction(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `female_age_based_mating_rates` | `Optional[list/ndarray]` | `None` | reproduction | 雌性按年龄交配率。 |
-| `male_age_based_mating_rates` | `Optional[list/ndarray]` | `None` | reproduction | 雄性按年龄交配率。 |
-| `female_age_based_relative_fertility` | `Optional[list/ndarray]` | `None` | reproduction | 雌性按年龄相对生育力权重。 |
-| `eggs_per_female` | `float` | `50.0` | reproduction | 每雌基础产卵规模。先从中性值开始。 |
-| `use_fixed_egg_count` | `bool` | `False` | reproduction | 固定/随机产卵开关。 |
-| `sex_ratio` | `float` | `0.5` | reproduction | 后代雌性比例，通常设为 0.5。 |
-| `use_sperm_storage` | `bool` | `True` | reproduction | 是否启用储精机制。 |
-| `sperm_displacement_rate` | `float` | `0.05` | reproduction | 新精子替换旧精子的强度。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `female_age_based_mating_rates` | `Optional[Union[List[float], NDArray[np.float64]]]` | 雌性按年龄的交配率。 | `None` | reproduction | 长度需等于 `n_ages`；未设定时使用默认值。 |
+| `male_age_based_mating_rates` | `Optional[Union[List[float], NDArray[np.float64]]]` | 雄性按年龄的交配率。 | `None` | reproduction | 长度需等于 `n_ages`；未设定时使用默认值。 |
+| `female_age_based_relative_fertility` | `Optional[Union[List[float], NDArray[np.float64]]]` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度需等于 `n_ages`；用于调节不同年龄雌性的产卵財献。 |
+| `eggs_per_female` | `float` | 每雌个体的基础产卵数。 | `50.0` | reproduction | 用作种群产卵数的基准；先从中性值开始调参。 |
+| `use_fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 固定产卵数，`False` 随机产卵。 |
+| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 范围应在 `[0, 1]`；0.5 表示男女等比。 |
+| `use_sperm_storage` | `bool` | 是否启用储精机制。 | `True` | reproduction | `True` 启用储精，`False` 禁用；仅当代交配。 |
+| `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 范围通常在 `(0, 1]`；较高值表示新精子替换速度快。 |
 
 格式与长度要求（源码行为）：
 
@@ -157,29 +157,29 @@ Builder 链式配置
 
 ### 3.6 `competition(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `competition_strength` | `float` | `5.0` | 幼体密度调节 | 竞争强度因子。 |
-| `juvenile_growth_mode` | `int\|str` | `"logistic"` | 幼体密度调节 | 支持字符串或常量。常用 `logistic`。 |
-| `low_density_growth_rate` | `float` | `6.0` | 幼体密度调节 | 低密度增长速率，过大易振荡。 |
-| `old_juvenile_carrying_capacity` | `Optional[int]` | `None` | 幼体密度调节 | 优先于 `expected_num_adult_females` 推导。 |
-| `expected_num_adult_females` | `Optional[int]` | `None` | 容量推导 | 若未给 carrying capacity，可与产卵数一起推导容量。 |
-| `equilibrium_distribution` | `Optional[list/ndarray]` | `None` | 标度辅助 | 与前述同名参数一致，后设覆盖先设。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `competition_strength` | `float` | 幼体竞争的强度因子。 | `5.0` | 幼体密度调节 | 影响密度制约效应的强弱；越大则调控效应越强。 |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`, `"beverton_holt"` 等模式；通常用 `logistic`。 |
+| `low_density_growth_rate` | `float` | 低密度下的内秱增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；过大易导致種群振荡。 |
+| `old_juvenile_carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 幼体密度调节 | 若指定则优先使用；否则从 `expected_num_adult_females` 推导。 |
+| `expected_num_adult_females` | `Optional[int]` | 期望的成体雌性数量。 | `None` | 容量推导 | 用于推导承载容量；若已指定 `old_juvenile_carrying_capacity` 则无须提供。 |
+| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 平衡分布辅助参数。 | `None` | 标度辅助 | 与 `age_structure` 同名参数；后设值覆盖先设值。 |
 
 ### 3.7 `presets(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `*preset_list` | `Any` 变长参数 | 空 | build 后处理 | 预设会先应用，随后 `fitness/modifiers/hooks` 可继续覆盖。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `*preset_list` | `Any` 变长参数 | 预设配置对象列表。 | 空 | build 后处理 | 预设会先应用，建立基线配置；其后 `fitness`/`modifiers`/`hooks` 可覆盖预设值。 |
 
 ### 3.8 `fitness(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `viability` | `Optional[dict]` | `None` | survival | 生存适应度映射。支持按基因型、按性别、按年龄、按性别+年龄。 |
-| `fecundity` | `Optional[dict]` | `None` | reproduction | 生殖力适应度映射。 |
-| `sexual_selection` | `Optional[dict]` | `None` | reproduction（配对偏好） | 支持平铺或嵌套映射。 |
-| `mode` | `str` | `"replace"` | fitness 写入策略 | `replace` 覆盖，`multiply` 乘法缩放。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `viability` | `Optional[Dict[GenotypeSelector, Union[float, Dict[Union[str, Sex, int], Union[float, Dict[int, float]]]]]]` | 生存适应度系数。 | `None` | survival | 支持多层级：按基因型、按性别、按年龄、按性别+年龄；默认 `None` 不改动。 |
+| `fecundity` | `Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]]` | 生殖力适应度系数。 | `None` | reproduction | 按基因型和/或性别指定；默认 `None` 不改动。 |
+| `sexual_selection` | `Optional[Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]]` | 配对偏好权重。 | `None` | reproduction | 支持平铺映射 `{male: value}` 或嵌套映射 `{female: {male: value}}`。 |
+| `mode` | `str` | 適应度值的写入模式。 | `"replace"` | fitness 写入策略 | `"replace"` 覆盖原值，`"multiply"` 按倍数缩放。 |
 
 代码对齐格式（来自 `fitness()` 注释与 `_iter_sexual_selection_entries`）：
 
@@ -220,10 +220,10 @@ Builder 链式配置
 
 ### 3.9 `modifiers(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `gamete_modifiers` | `Optional[list[(hook_id,name,fn)]]` | `None` | gamete->zygote 映射编译 | 通常用于配子阶段修饰。 |
-| `zygote_modifiers` | `Optional[list[(hook_id,name,fn)]]` | `None` | zygote 映射编译 | 通常用于合子阶段修饰。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `gamete_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | 配子阶段的转换函数列表。 | `None` | gamete->zygote 映射编译 | 格式为 `(优先级, 名称, 函数)` 元组；按优先级排序后应用。 |
+| `zygote_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | 合子阶段的转换函数列表。 | `None` | zygote 映射编译 | 格式为 `(优先级, 名称, 函数)` 元组；按优先级排序后应用。 |
 
 代码对齐格式：
 
@@ -241,9 +241,9 @@ Builder 链式配置
 
 ### 3.10 `hooks(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明与建议 |
-|---|---|---|---|---|
-| `*hook_items` | `Callable` 或 `HookMap` | 空 | 事件点（first/early/late/finish 等） | 可混用函数与字典注册形式。未声明事件会报错。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `*hook_items` | `Callable` 或 `HookMap` | 钩子函数或钩子注册映射。 | 空 | 事件点（first/early/late/finish 等） | 支持两种形式：直接传函数（需 @hook 元数据）或传事件映射字典；未声明事件会报错。 |
 
 两种合法输入：
 
@@ -294,9 +294,9 @@ Builder 链式配置
 
 ### 4.2 `initial_state(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明 |
-|---|---|---|---|---|
-| `individual_count` | `dict` | 必填 | 初始状态 | 仍是 `{sex: {genotype: age_data}}`，但仅支持 age 0/1。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `individual_count` | `dict` | 初始个体数量分布，格式 `{sex: {genotype: age_data}}`。 | 必填 | 初始状态 | 离散世代模型仅支持 age 0 和 age 1；各输入格式同年龄模型。 |
 
 离散模型 `age_data` 代码对齐格式（来自 `_resolve_discrete_age_distribution`）：
 
@@ -322,20 +322,20 @@ Builder 链式配置
 
 ### 4.3 `reproduction(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明 |
-|---|---|---|---|---|
-| `eggs_per_female` | `float` | `50.0` | reproduction | 每雌产卵规模。 |
-| `sex_ratio` | `float` | `0.5` | reproduction | 后代雌性比例。 |
-| `female_adult_mating_rate` | `float` | `1.0` | reproduction | 成体雌性交配率。 |
-| `male_adult_mating_rate` | `float` | `1.0` | reproduction | 成体雄性交配率。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `eggs_per_female` | `float` | 每雌个体每代产卵数。 | `50.0` | reproduction | 用作产卵的基准值；调参时从中性值开始。 |
+| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 范围应在 `[0, 1]`；0.5 表示男女等比。 |
+| `female_adult_mating_rate` | `float` | 成体雌性的交配率。 | `1.0` | reproduction | 表示雌性参与交配的比例；范围 `[0, 1]`。 |
+| `male_adult_mating_rate` | `float` | 成体雄性的交配率。 | `1.0` | reproduction | 表示雄性参与交配的比例；范围 `[0, 1]`。 |
 
 ### 4.4 `survival(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明 |
-|---|---|---|---|---|
-| `female_age0_survival` | `float` | `1.0` | survival | 雌性幼体阶段存活率。 |
-| `male_age0_survival` | `float` | `1.0` | survival | 雄性幼体阶段存活率。 |
-| `adult_survival` | `float` | `0.0` | survival/aging 边界 | 成体跨步存活率。设 0 可近似非重叠世代。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `female_age0_survival` | `float` | 雌性幼体（age 0）的存活率。 | `1.0` | survival | 范围 `[0, 1]`；1.0 表示完全存活。 |
+| `male_age0_survival` | `float` | 雄性幼体（age 0）的存活率。 | `1.0` | survival | 范围 `[0, 1]`；1.0 表示完全存活。 |
+| `adult_survival` | `float` | 成体代际间存活率。 | `0.0` | survival/aging 边界 | 范围 `[0, 1]`；设 0 可近似严格非重叠世代；较高值允许成体跨代存活。 |
 
 建模约束建议：
 
@@ -344,11 +344,11 @@ Builder 链式配置
 
 ### 4.5 `competition(...)`
 
-| 参数 | 类型 | 默认值 | 影响阶段 | 说明 |
-|---|---|---|---|---|
-| `juvenile_growth_mode` | `int\|str` | `"logistic"` | 幼体密度调节 | 增长模式。 |
-| `low_density_growth_rate` | `float` | `1.0` | 幼体密度调节 | 低密度增长速率。 |
-| `carrying_capacity` | `Optional[int]` | `None` | 密度上限 | 承载上限。 |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 常用 `"logistic"`；也可用 `"beverton_holt"` 等其他模式。 |
+| `low_density_growth_rate` | `float` | 低密度下的内秱增长倍数。 | `1.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；过大易导致振荡。 |
+| `carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 密度上限 | 未设定时自动推导；优先使用显式指定的值。 |
 
 ### 4.6 `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`
 
@@ -399,16 +399,13 @@ Builder 链式配置
 ## 7. 常见错误与排查
 
 1. 忘记 `initial_state(...)`
-- 现象：`build()` 直接报错。
-
+  - 现象：`build()` 直接报错。
 2. 年龄向量长度与 `n_ages` 不一致
-- 现象：初始化或编译阶段报错。
-
+  - 现象：初始化或编译阶段报错。
 3. `sex_ratio` 或概率参数越界
-- 现象：结果异常或运行时错误。
-
+  - 现象：结果异常或运行时错误。
 4. 同名参数多次设置导致覆盖
-- 现象：行为与预期不一致。比如 `generation_time`、`equilibrium_distribution` 在多个方法都可设置，后调用覆盖先调用。
+  - 现象：行为与预期不一致。比如 `generation_time`、`equilibrium_distribution` 在多个方法都可设置，后调用覆盖先调用。
 
 ## 8. 本章小结
 

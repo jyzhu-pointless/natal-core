@@ -1,12 +1,16 @@
 # NATAL Core Documentation
 
-[![NATAL](https://img.shields.io/badge/NATAL-dev-purple.svg)](https://github.com/jyzhu-pointless/natal-core)
+**N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles.
+
+[![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
 [![Numba](https://img.shields.io/badge/Numba-0.60.0+-orange.svg)](https://numba.pydata.org/)
+[![Docs](https://img.shields.io/readthedocs/natal-core?label=docs)](https://natal-core.readthedocs.io/en/latest/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://github.com/jyzhu-pointless/natal-core/blob/main/LICENSE)
 
-![logo](./natal-brand.svg)
+![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
 NATAL Core is a Python toolkit for simulating population genetic dynamics, with core computational paths accelerated by Numba.
 

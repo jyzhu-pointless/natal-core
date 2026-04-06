@@ -102,33 +102,24 @@ state = DiscretePopulationState.create(
 ### 4.1 配置内容分组
 
 1. 维度与控制参数
-
-- `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
-- `is_stochastic`, `use_continuous_sampling`, `sex_ratio`
-
+  - `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
+  - `is_stochastic`, `use_continuous_sampling`, `sex_ratio`
 2. 年龄相关参数
-
-- `age_based_survival_rates`
-- `age_based_mating_rates`
-- `female_age_based_relative_fertility`
-- `age_based_relative_competition_strength`
-
+  - `age_based_survival_rates`
+  - `age_based_mating_rates`
+  - `female_age_based_relative_fertility`
+  - `age_based_relative_competition_strength`
 3. 适应度参数
-
-- `viability_fitness`（形状：`(n_sexes, n_ages, n_genotypes)`）
-- `fecundity_fitness`（形状：`(n_sexes, n_genotypes)`）
-- `sexual_selection_fitness`（形状：`(n_genotypes, n_genotypes)`）
-
+  - `viability_fitness`（形状：`(n_sexes, n_ages, n_genotypes)`）
+  - `fecundity_fitness`（形状：`(n_sexes, n_genotypes)`）
+  - `sexual_selection_fitness`（形状：`(n_genotypes, n_genotypes)`）
 4. 遗传映射矩阵
-
-- `genotype_to_gametes_map`（形状：`(n_sexes, n_genotypes, n_haploid_genotypes * n_glabs)`）
-- `gametes_to_zygote_map`（形状：`(n_hg*n_glabs, n_hg*n_glabs, n_genotypes)`）
-
+  - `genotype_to_gametes_map`（形状：`(n_sexes, n_genotypes, n_haploid_genotypes * n_glabs)`）
+  - `gametes_to_zygote_map`（形状：`(n_hg*n_glabs, n_hg*n_glabs, n_genotypes)`）
 5. 初始分布与缩放参数
-
-- `initial_individual_count`
-- `initial_sperm_storage`
-- `population_scale`, `base_carrying_capacity` 等
+  - `initial_individual_count`
+  - `initial_sperm_storage`
+  - `population_scale`, `base_carrying_capacity` 等
 
 ### 4.2 使用时应关注什么
 

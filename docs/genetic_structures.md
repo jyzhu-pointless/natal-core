@@ -43,7 +43,7 @@ NATAL divides genetic objects into two layers:
 | Class | Description | Bound to | Example |
 |-------|-------------|----------|---------|
 | `Gene` | An allele | Locus | "w+", "w", "Drive" |
-| `Haplotype` | A haplotype (allele combination on one chromosome) | Chromosome | Possibly hundreds |
+| `Haplotype` | A haplotype (allele combination on one chromosome) | Chromosome | Possibly tens to hundreds |
 | `HaploidGenotype` | A haploid genome (haplotypes of all chromosomes) | Species | $\sim 2^\text{number of loci}$ possibilities |
 | `Genotype` | A diploid genotype | Species | $\sim \text{(number of haploid genotypes)}^2$ possibilities |
 
@@ -66,7 +66,8 @@ sp = Species.from_dict(
         "chr2": {
             "C": ["C1", "C2"],
         },
-    }
+    },
+    gamete_labels=["default", "Cas9_deposited"]  # optional: gamete labels
 )
 ```
 
@@ -143,6 +144,8 @@ for allele in locus.alleles:
 
 An allele is the boundary between “structure” and “entity”.
 
+**Important Note: `Gene` names must be unique within a `Species`.**
+
 ```python
 # Obtain an allele (via Species)
 sp = Species.from_dict(
@@ -160,7 +163,7 @@ print(f"Allele index: {a1.allele_index}")  # 0 or 1
 
 ### Haplotype
 
-The combination of alleles on a single chromosome. For N loci, there are ∏(number of alleles per locus) possibilities.
+The combination of alleles on a single chromosome. For $N$ loci, there are $\prod_{i=1}^N \text{number of alleles per locus}$ possibilities.
 
 ```python
 # Obtain all possible haplotypes for a chromosome
@@ -280,20 +283,14 @@ print(f"Heterozygous at locus A: {gt.is_heterozygous(sp['chr1']['A'])}")
 
 ## Global Caching Mechanism
 
-### Why is global caching needed?
-
-1. **Memory efficiency**: avoid creating duplicate Genotype objects.
-2. **Hashing consistency**: string normalisation ensures `"WT|Drive"` and `"Drive|WT"` map to the same object.
-3. **Index stability**: together with IndexRegistry, each Genotype gets a unique integer index.
+To avoid redundant calculations, NATAL implements a global cache for string representations of `Genotype` objects.
 
 ### How the cache works
 
 ```
 String "WT|Drive"
-    ↓ [normalisation] → sort alphabetically
-"Drive|WT"
     ↓ [check cache]
-Species.genotype_cache["Drive|WT"]
+Species.genotype_cache["WT|Drive"]
     ↓ [hit or create]
 Genotype object (globally unique)
     ↓ [register with IndexRegistry]
