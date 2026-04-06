@@ -70,17 +70,5 @@ end = time.perf_counter()
 print(f"Execution time: {end - start:.3f} seconds\n")
 
 # === Demo outputs ===
-genotypes = [str(gt) for gt in pop._registry.index_to_genotype]
-count_female = [int(gt) for gt in pop._state.individual_count[0][1]]
-count_male = [int(gt) for gt in pop._state.individual_count[1][1]]
-
-# readable output
-for i, sex in enumerate(["female", "male"]):
-    print(f"{sex}:")
-    row = []
-    for j, gt in enumerate(genotypes):
-        count = count_female[j] if i == 0 else count_male[j]
-        row.append(f"{gt:>8}: {count:>6},")
-        if (j + 1) % 4 == 0 or j == len(genotypes) - 1:
-            print("  ", "  ".join(row))
-            row = []
+state_view = nt.population_to_readable_dict(pop)
+print(state_view["individual_count"])

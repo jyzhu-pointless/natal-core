@@ -1,9 +1,19 @@
 from collections.abc import Mapping
-from typing import cast
 
 import natal as nt
 from natal.genetic_entities import Genotype
 from natal.ui import launch
+
+# for type annotations only
+IndividualDistribution = Mapping[
+    str,
+    Mapping[Genotype | str, list[float] | tuple[float, ...] | dict[int, float] | int | float],
+]
+
+SpermStorage = Mapping[
+    Genotype | str,
+    Mapping[Genotype | str, dict[int, float] | list[float] | tuple[float, ...] | int | float],
+]
 
 sp = nt.Species.from_dict(
     name="TestSpecies",
@@ -38,7 +48,7 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-initial_distribution = {
+initial_distribution: IndividualDistribution = {
     "female": {
         "WT|WT":    [0.0, 60.0, 60.0, 50.0, 40.0, 30.0, 20.0, 10.0],
     },
@@ -49,7 +59,7 @@ initial_distribution = {
 }
 
 # 初始精子存储：测试多种格式
-initial_sperm = {
+initial_sperm: SpermStorage = {
     # 格式1: Dict - 稀疏映射 {age: count}
     "WT|WT": {
         "WT|WT": {2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0},
@@ -57,16 +67,6 @@ initial_sperm = {
         "WT|Dr": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     },
 }
-
-IndividualDistribution = Mapping[
-    str,
-    Mapping[Genotype | str, list[float] | tuple[float, ...] | dict[int, float] | int | float],
-]
-
-SpermStorage = Mapping[
-    Genotype | str,
-    Mapping[Genotype | str, dict[int, float] | list[float] | tuple[float, ...] | int | float],
-]
 
 pop = nt.AgeStructuredPopulation\
     .setup(
@@ -80,8 +80,8 @@ pop = nt.AgeStructuredPopulation\
         new_adult_age=2,
     ) \
     .initial_state(
-        individual_count=cast(IndividualDistribution, initial_distribution),
-        sperm_storage=cast(SpermStorage, initial_sperm),
+        individual_count=initial_distribution,
+        sperm_storage=initial_sperm,
     ) \
     .reproduction(
         female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],

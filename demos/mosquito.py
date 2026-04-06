@@ -1,8 +1,19 @@
 import time
+from collections.abc import Mapping
 
 import natal as nt
+from natal.genetic_entities import Genotype
 
-nt.enable_numba()
+# for type annotations only
+IndividualDistribution = Mapping[
+    str,
+    Mapping[Genotype | str, list[float] | tuple[float, ...] | dict[int, float] | int | float],
+]
+
+SpermStorage = Mapping[
+    Genotype | str,
+    Mapping[Genotype | str, dict[int, float] | list[float] | tuple[float, ...] | int | float],
+]
 
 sp = nt.Species.from_dict(
     name="TestSpecies",
@@ -29,7 +40,7 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-initial_distribution = {
+initial_distribution: IndividualDistribution = {
     "female": {
         "WT|WT":    [0, 600, 600, 500, 400, 300, 200, 100],
     },
@@ -39,12 +50,11 @@ initial_distribution = {
     },
 }
 
-# 初始精子存储：测试多种格式
-initial_sperm = {
-    # 格式1: Dict - 稀疏映射 {age: count}
+initial_sperm: SpermStorage = {
     "WT|WT": {
+        # Supported format 1: Dict - sparse mapping {age: count}
         "WT|WT": {2: 500.0, 3: 400.0, 4: 300.0, 5: 200.0, 6: 100.0},
-        # 格式2: List - 密集列表
+        # Supported format 2: List - dense list
         "WT|Dr": [0, 0, 3.0, 2.0, 1.0, 0, 0, 0],
     },
 }
@@ -89,23 +99,5 @@ end_time = time.perf_counter()
 print(f"\nSimulation completed in {end_time - start_time:.8f} seconds.")
 
 # === Demo outputs ===
-genotypes = [str(gt) for gt in pop._registry.index_to_genotype]
-count = pop._state.individual_count
-
-# readable output
-for i, sex in enumerate(["female", "male"]):
-    print(f"{sex}:")
-    subarr = count[i]  # shape: (n_ages, n_genotypes)
-    # sum by 0-1, 2-7 age groups
-    age_groups = {"juveniles": (0, 2), "adults": (2, 8)}
-    for age_group, (age_start, age_end) in age_groups.items():
-        print(f" - {sex} {age_group}:")
-        group_counts = subarr[age_start:age_end].sum(axis=0)
-        row = []
-        for j, gt in enumerate(genotypes):
-            row.append(f"{gt:>8}: {group_counts[j]:>8.2f},")
-            if (j + 1) % 4 == 0 or j == len(genotypes) - 1:
-                print("  ", "  ".join(row))
-                row = []
-
-
+state_view = nt.population_to_readable_dict(pop)
+print(state_view["individual_count"])

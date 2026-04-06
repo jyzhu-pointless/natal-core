@@ -77,7 +77,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
 
     initial_pairs = [
         (0.0, 255.0),
-    ]*10000
+    ]*25
     demes = [
         build_deme(
             species,
@@ -92,7 +92,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
     # Hex kernels still use a 3x3 matrix; valid offsets are interpreted by HexGrid.
     return SpatialPopulation(
         demes=demes,
-        topology=HexGrid(rows=100, cols=100, wrap=False),
+        topology=HexGrid(rows=5, cols=5, wrap=False),
         migration_kernel=np.array(
             [
                 [0.00, 0.10, 0.05],
