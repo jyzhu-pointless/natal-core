@@ -8,12 +8,6 @@ It also offers helper functions to compress/decompress combined
 The registry is used throughout the simulation to translate domain objects
 (e.g., ``Genotype`` instances, strings) into compact integer indices that
 are suitable for NumPy arrays and Numba‑accelerated kernels.
-
-Todo:
-    * Support for sex‑chromosome‑specific indexing: genotypes may map to
-      different indices depending on sex. This could be implemented by
-      maintaining separate mappings for each sex or by allowing a
-      ``sex`` argument in index resolution methods.
 """
 
 from __future__ import annotations

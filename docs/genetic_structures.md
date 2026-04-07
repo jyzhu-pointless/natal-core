@@ -73,6 +73,34 @@ sp = Species.from_dict(
 
 Advantage: concise syntax, easy to load from configuration files.
 
+`from_dict` also supports an extended chromosome config format when you need
+to set sex-chromosome metadata inline:
+
+```python
+sp = Species.from_dict(
+    name="MosquitoSexAware",
+    structure={
+        "chrA": {
+            "loci": {
+                "A": ["A1", "A2"],
+            },
+        },
+        "chrX": {
+            "sex_type": "X",
+            "loci": {
+                "sx": ["X1"],
+            },
+        },
+        "chrY": {
+            "sex_type": "Y",
+            "loci": {
+                "sy": ["Y1"],
+            },
+        },
+    },
+)
+```
+
 #### Creation method 2: chained API (more flexible)
 
 ```python
@@ -206,7 +234,7 @@ wt_wt = sp.get_genotype_from_str("WT|WT")
 wt_drive = sp.get_genotype_from_str("WT|Drive")
 drive_drive = sp.get_genotype_from_str("Drive|Drive")
 
-print(f"Genotype: {wt_drive}")  # prints: WT|Drive or Drive|WT (depending on ordering)
+print(f"Genotype: {wt_drive}")  # prints: WT|Drive (maternal|paternal order is preserved)
 ```
 
 **Method 2: From haploid genomes**
@@ -229,16 +257,17 @@ for gt in all_genotypes:
 
 #### Stringifying Genotype (global cache)
 
-**This is a key feature of NATAL**: Genotype uses a global cache with strings as normalised keys.
+**This is a key feature of NATAL**: Genotype uses a global cache with species-parsable,
+ordered strings as keys.
 
 ```python
-# Key point 1: string normalisation
+# Key point 1: maternal/paternal order is strict
 wt_drive = sp.get_genotype_from_str("WT|Drive")
 drive_wt = sp.get_genotype_from_str("Drive|WT")
 
-# At the Species level, they are normalised to the same object
-print(wt_drive == drive_wt)  # True
-print(str(wt_drive) == str(drive_wt))  # True
+# At the Species level, they are different ordered genotypes
+print(wt_drive == drive_wt)  # False
+print(str(wt_drive) == str(drive_wt))  # False
 
 # Key point 2: caching means string consistency
 gt1 = sp.get_genotype_from_str("WT|Drive")
@@ -251,6 +280,11 @@ genotype_map = {
     drive_drive: 50,
 }
 ```
+
+`GenotypePattern` follows the same ordering semantics by default:
+
+- Use `|` for strict maternal|paternal order.
+- Use `::` only when you explicitly want unordered matching.
 
 #### Accessing the internal structure of a Genotype
 

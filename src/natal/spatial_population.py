@@ -583,7 +583,7 @@ class SpatialPopulation:
             if getattr(deme, "_finished", False):
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial tick")
 
-        hooks = self._demes[0].get_compiled_event_hooks()
+        hooks = self._demes[0].get_compiled_event_hooks() # TODO: Check if hooks are shared across demes
         assert hooks.run_spatial_tick_fn is not None, "hooks.run_spatial_tick_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
 

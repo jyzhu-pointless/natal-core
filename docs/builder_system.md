@@ -145,7 +145,7 @@ Validation rules (source behaviour):
 | `female_age_based_relative_fertility` | `Optional[list/ndarray]` | Female relative fertility weight by age. | `None` | reproduction | Length must equal `n_ages`; tunes contribution to egg production by female age. |
 | `eggs_per_female` | `float` | Base egg count per female individual. | `50.0` | reproduction | Used as baseline for population egg production; start from neutral value. |
 | `use_fixed_egg_count` | `bool` | Whether egg count is fixed. | `False` | reproduction | `True` fixes egg count, `False` uses random oviposition. |
-| `sex_ratio` | `float` | Proportion of females in offspring. | `0.5` | reproduction | Range should be in `[0, 1]`; 0.5 represents 1:1 sex ratio. |
+| `sex_ratio` | `float` | Proportion of females in offspring. | `0.5` | reproduction | Range should be in `[0, 1]`; 0.5 represents 1:1 sex ratio. Ignored when sex chromosome constraints deterministically assign offspring sex (e.g., XX/ZW female, XY/ZZ male). |
 | `use_sperm_storage` | `bool` | Enable sperm storage mechanism. | `True` | reproduction | `True` enables storage, `False` disables; mating only in current generation. |
 | `sperm_displacement_rate` | `float` | Rate of new sperm replacing old sperm. | `0.05` | reproduction | Range typically in `(0, 1]`; higher value = faster replacement. |
 
@@ -325,7 +325,7 @@ Validation rules:
 | Parameter | Type | Explanation | Default | Affected stage | Remarks |
 |---|---|---|---|---|---|
 | `eggs_per_female` | `float` | Egg count per female individual per generation. | `50.0` | reproduction | Baseline value for population egg production; start from neutral value. |
-| `sex_ratio` | `float` | Proportion of females in offspring. | `0.5` | reproduction | Range should be in `[0, 1]`; 0.5 represents 1:1 sex ratio. |
+| `sex_ratio` | `float` | Proportion of females in offspring. | `0.5` | reproduction | Range should be in `[0, 1]`; 0.5 represents 1:1 sex ratio. Ignored when sex chromosome constraints deterministically assign offspring sex (e.g., XX/ZW female, XY/ZZ male). |
 | `female_adult_mating_rate` | `float` | Adult female mating rate. | `1.0` | reproduction | Proportion of females participating in mating; range `[0, 1]`. |
 | `male_adult_mating_rate` | `float` | Adult male mating rate. | `1.0` | reproduction | Proportion of males participating in mating; range `[0, 1]`. |
 

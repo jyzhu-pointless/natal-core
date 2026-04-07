@@ -109,6 +109,12 @@ def run_reproduction_with_precomputed_offspring_probability(
     )
 
     # 4. Generate offspring (fertilization).
+    female_genotype_compatibility = config.female_genotype_compatibility
+    male_genotype_compatibility = config.male_genotype_compatibility
+    female_only_by_sex_chrom = config.female_only_by_sex_chrom
+    male_only_by_sex_chrom = config.male_only_by_sex_chrom
+    has_sex_chromosomes = config.has_sex_chromosomes
+
     n_0_female, n_0_male = alg.fertilize_with_precomputed_offspring_probability(
         female_counts,
         sperm_store,
@@ -120,10 +126,15 @@ def run_reproduction_with_precomputed_offspring_probability(
         n_ages,
         n_gen,
         config.n_haploid_genotypes,
+        female_genotype_compatibility,
+        male_genotype_compatibility,
+        female_only_by_sex_chrom,
+        male_only_by_sex_chrom,
         config.n_glabs,
         1.0, # proportion_of_females_that_reproduce (default)
         config.use_fixed_egg_count, # fixed_eggs
         config.sex_ratio,
+        has_sex_chromosomes=has_sex_chromosomes,
         is_stochastic=is_stochastic,
         use_continuous_sampling=use_continuous_sampling
     )
@@ -388,6 +399,11 @@ def run_discrete_reproduction(
         use_continuous_sampling=use_continuous_sampling
     )
 
+    female_genotype_compatibility = config.female_genotype_compatibility
+    male_genotype_compatibility = config.male_genotype_compatibility
+    female_only_by_sex_chrom = config.female_only_by_sex_chrom
+    male_only_by_sex_chrom = config.male_only_by_sex_chrom
+
     n_0_female, n_0_male = alg.fertilize_with_mating_genotype(
         temp_female_counts,
         temp_sperm_store,
@@ -401,10 +417,15 @@ def run_discrete_reproduction(
         2,
         n_gen,
         config.n_haploid_genotypes,
+        female_genotype_compatibility,
+        male_genotype_compatibility,
+        female_only_by_sex_chrom,
+        male_only_by_sex_chrom,
         config.n_glabs,
         1.0,
         config.use_fixed_egg_count,
         config.sex_ratio,
+        has_sex_chromosomes=config.has_sex_chromosomes,
         is_stochastic=is_stochastic,
         use_continuous_sampling=use_continuous_sampling
     )
@@ -422,8 +443,10 @@ def run_discrete_survival(
     """Run survival stage (discrete generation): juvenile competition and survival filtering."""
     ind_count = ind_count.copy()
     n_gen = config.n_genotypes
-    is_stochastic = config.is_stochastic
-    use_continuous_sampling = config.use_continuous_sampling
+    # Read booleans through explicit casts to avoid ambiguous truthy handling
+    # and to force recompilation after PopulationConfig schema updates.
+    is_stochastic = bool(config.is_stochastic)
+    use_continuous_sampling = bool(config.use_continuous_sampling)
 
     juvenile_growth_mode = config.juvenile_growth_mode
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())

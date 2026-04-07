@@ -73,6 +73,33 @@ sp = Species.from_dict(
 
 优点：语法简洁，易于从配置文件加载。
 
+当你需要在 `from_dict` 中直接声明性染色体信息时，也可以使用扩展格式：
+
+```python
+sp = Species.from_dict(
+    name="MosquitoSexAware",
+    structure={
+        "chrA": {
+            "loci": {
+                "A": ["A1", "A2"],
+            },
+        },
+        "chrX": {
+            "sex_type": "X",
+            "loci": {
+                "sx": ["X1"],
+            },
+        },
+        "chrY": {
+            "sex_type": "Y",
+            "loci": {
+                "sy": ["Y1"],
+            },
+        },
+    },
+)
+```
+
 #### 创建方式 2：链式 API（更灵活）
 
 ```python
@@ -206,7 +233,7 @@ wt_wt = sp.get_genotype_from_str("WT|WT")
 wt_drive = sp.get_genotype_from_str("WT|Drive")
 drive_drive = sp.get_genotype_from_str("Drive|Drive")
 
-print(f"Genotype: {wt_drive}")  # 输出: WT|Drive 或 Drive|WT（取决于排序）
+print(f"Genotype: {wt_drive}")  # 输出: WT|Drive（严格保留 maternal|paternal 顺序）
 ```
 
 **方式2：从单倍体基因组**
@@ -229,16 +256,17 @@ for gt in all_genotypes:
 
 #### 字符串化 Genotype（全局缓存）
 
-**这是 NATAL 的一个关键特性**：Genotype 使用全局缓存，通过字符串作为标准化键。
+**这是 NATAL 的一个关键特性**：Genotype 使用全局缓存，通过可回解析且
+有序的字符串作为键。
 
 ```python
-# 关键点1：字符串规范化
+# 关键点1：母本/父本顺序是严格有序的
 wt_drive = sp.get_genotype_from_str("WT|Drive")
 drive_wt = sp.get_genotype_from_str("Drive|WT")
 
-# 在 Species 层面，它们被规范化为同一个对象
-print(wt_drive == drive_wt)  # True
-print(str(wt_drive) == str(drive_wt))  # True
+# 在 Species 层面，它们是两个不同的有序基因型
+print(wt_drive == drive_wt)  # False
+print(str(wt_drive) == str(drive_wt))  # False
 
 # 关键点2：缓存意味着字符串一致性
 gt1 = sp.get_genotype_from_str("WT|Drive")
@@ -251,6 +279,11 @@ genotype_map = {
     drive_drive: 50,
 }
 ```
+
+`GenotypePattern`（见 [Genotype Pattern 语法与匹配](genotype_patterns.md)）默认遵循相同的有序语义：
+
+- 使用 `|` 表示严格的 maternal|paternal 顺序匹配。
+- 仅在明确需要无序匹配时使用 `::`。
 
 #### 访问基因型内部结构
 
@@ -493,6 +526,7 @@ alleles_at_locus = gt.get_alleles_at_locus(locus)  # (mat_gene, pat_gene)
 - [快速开始：15 分钟上手 NATAL](quickstart.md) - 基本使用示例
 - [Builder 系统详解](builder_system.md) - 从 Species 到可运行种群的链式构建
 - [IndexRegistry 索引机制](index_registry.md) - 对象索引的详细机制
+- [Genotype Pattern 语法与匹配](genotype_patterns.md) - 基因型模式表达、`|`/`::` 顺序规则与匹配示例
 - [Modifier 机制](modifiers.md) - 如何基于 Genotype 定义遗传规则
 
 ---

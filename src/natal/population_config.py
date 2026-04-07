@@ -82,6 +82,18 @@ class PopulationConfig(NamedTuple):
         generation_time: Pre‑computed mean generation time.
         new_adult_age: Age at which individuals become adults.
         hook_slot: Slot index for hook functions (reserved).
+        has_sex_chromosomes: Whether the species has sex-chromosome constraints
+            (e.g., XY or ZW systems). Used to determine if offspring sex is
+            genotype-determined (True) or ratio-determined (False). This flag
+            is independent of gamete modifier effects or temporary lethality.
+        female_genotype_compatibility: Shape (n_genotypes,) – female-side
+            compatibility weight per genotype.
+        male_genotype_compatibility: Shape (n_genotypes,) – male-side
+            compatibility weight per genotype.
+        female_only_by_sex_chrom: Shape (n_genotypes,) – True where genotype
+            is female-only under sex-chromosome constraints.
+        male_only_by_sex_chrom: Shape (n_genotypes,) – True where genotype is
+            male-only under sex-chromosome constraints.
         adult_ages: 1D array of age indices that are considered adult.
         genotype_to_gametes_map: Shape (n_sexes, n_genotypes, n_hg*n_glabs) –
             probability of producing each (haplotype, glab) combination.
@@ -125,6 +137,11 @@ class PopulationConfig(NamedTuple):
     generation_time: float
     new_adult_age: int
     hook_slot: int
+    has_sex_chromosomes: bool
+    female_genotype_compatibility: NDArray[np.float64]
+    male_genotype_compatibility: NDArray[np.float64]
+    female_only_by_sex_chrom: NDArray[np.bool_]
+    male_only_by_sex_chrom: NDArray[np.bool_]
     # NumPy arrays are still mutable in-place.
     adult_ages: NDArray[np.int64]
     genotype_to_gametes_map: NDArray[np.float64]
@@ -251,7 +268,7 @@ class PopulationConfig(NamedTuple):
 PlainPopulationConfig = PopulationConfig
 
 
-def _maybe_copy_array(arr: NDArray[np.float64], copy: bool) -> NDArray[np.float64]:
+def _maybe_copy_array(arr: NDArray[Any], copy: bool) -> NDArray[Any]:
     """Helper to conditionally copy a NumPy array."""
     return arr.copy() if copy else arr
 
@@ -296,6 +313,11 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         generation_time=float(config.generation_time),
         new_adult_age=int(config.new_adult_age),
         hook_slot=int(config.hook_slot),
+        has_sex_chromosomes=bool(config.has_sex_chromosomes),
+        female_genotype_compatibility=_maybe_copy_array(config.female_genotype_compatibility, copy),
+        male_genotype_compatibility=_maybe_copy_array(config.male_genotype_compatibility, copy),
+        female_only_by_sex_chrom=_maybe_copy_array(config.female_only_by_sex_chrom, copy),
+        male_only_by_sex_chrom=_maybe_copy_array(config.male_only_by_sex_chrom, copy),
         adult_ages=config.adult_ages.copy() if copy else config.adult_ages,
         genotype_to_gametes_map=_maybe_copy_array(config.genotype_to_gametes_map, copy),
         gametes_to_zygote_map=_maybe_copy_array(config.gametes_to_zygote_map, copy),
@@ -344,6 +366,7 @@ def build_population_config(
     juvenile_growth_mode: int = LOGISTIC,
     generation_time: Optional[float] = None,
     hook_slot: int = 0,
+    has_sex_chromosomes: bool = False,
     genotype_to_gametes_map: Optional[NDArray[np.float64]] = None,
     gametes_to_zygote_map: Optional[NDArray[np.float64]] = None,
     initial_individual_count: Optional[NDArray[np.float64]] = None,
@@ -388,6 +411,9 @@ def build_population_config(
         juvenile_growth_mode: Growth mode (see constants).
         generation_time: Optional pre‑computed generation time; if None, computed.
         hook_slot: Slot index for hooks (default 0).
+        has_sex_chromosomes: Whether the species has sex‑chromosome constraints.
+            If True, offspring sex is determined by genotype compatibility;
+            if False, only sex_ratio is used (default False).
         genotype_to_gametes_map: Pre‑built mapping from genotype to gametes.
         gametes_to_zygote_map: Pre‑built mapping from gamete pair to zygote.
         initial_individual_count: Initial population counts (n_sexes, n_ages,
@@ -517,6 +543,16 @@ def build_population_config(
         "gametes_to_zygote_map",
         default_value=np.zeros,
     )
+    female_genotype_compatibility = g2g[0].sum(axis=1)
+    male_genotype_compatibility = g2g[1].sum(axis=1)
+    female_only_by_sex_chrom = np.zeros(n_genotypes_i, dtype=np.bool_)
+    male_only_by_sex_chrom = np.zeros(n_genotypes_i, dtype=np.bool_)
+    if has_sex_chromosomes:
+        for g_off in range(n_genotypes_i):
+            f_ok = female_genotype_compatibility[g_off] > alg.EPS
+            m_ok = male_genotype_compatibility[g_off] > alg.EPS
+            female_only_by_sex_chrom[g_off] = f_ok and not m_ok
+            male_only_by_sex_chrom[g_off] = m_ok and not f_ok
 
     expected_competition_strength, expected_survival_rate = alg.compute_equilibrium_metrics(
         carrying_capacity=carrying_capacity_f,
@@ -559,6 +595,11 @@ def build_population_config(
             generation_time=0.0,
             new_adult_age=new_adult_age_i,
             hook_slot=int(hook_slot),
+            has_sex_chromosomes=bool(has_sex_chromosomes),
+            female_genotype_compatibility=female_genotype_compatibility,
+            male_genotype_compatibility=male_genotype_compatibility,
+            female_only_by_sex_chrom=female_only_by_sex_chrom,
+            male_only_by_sex_chrom=male_only_by_sex_chrom,
             adult_ages=adult_ages,
             genotype_to_gametes_map=g2g,
             gametes_to_zygote_map=g2z,
@@ -599,6 +640,11 @@ def build_population_config(
         generation_time=generation_time_f,
         new_adult_age=new_adult_age_i,
         hook_slot=int(hook_slot),
+        has_sex_chromosomes=bool(has_sex_chromosomes),
+        female_genotype_compatibility=female_genotype_compatibility,
+        male_genotype_compatibility=male_genotype_compatibility,
+        female_only_by_sex_chrom=female_only_by_sex_chrom,
+        male_only_by_sex_chrom=male_only_by_sex_chrom,
         adult_ages=adult_ages,
         genotype_to_gametes_map=g2g,
         gametes_to_zygote_map=g2z,
@@ -715,17 +761,50 @@ def initialize_gamete_map(
     n_hg_glabs = n_hg * n_glabs
 
     genotype_to_gametes_map: NDArray[np.float64] = np.zeros((n_sexes, n_genotypes, n_hg_glabs), dtype=np.float64)
+    haplo_to_idx = {hg: idx for idx, hg in enumerate(haploid_genotypes)}
+
+    # Build optional sex-specific haploid availability constraints from species.
+    # This keeps backward compatibility for autosome-only species (no filtering),
+    # while making XY/ZW systems sex-aware by default.
+    allowed_haplotypes_by_sex: dict[int, set[HaploidGenotype]] = {}
+    if haploid_genotypes:
+        species = haploid_genotypes[0].species
+        try:
+            female_allowed = set(species.get_maternal_haploid_genotypes())
+            male_allowed = set(species.get_paternal_haploid_genotypes())
+            if female_allowed:
+                allowed_haplotypes_by_sex[int(Sex.FEMALE)] = female_allowed
+            if male_allowed:
+                allowed_haplotypes_by_sex[int(Sex.MALE)] = male_allowed
+        except Exception:
+            # If species does not provide parent-role iterators, fall back to
+            # legacy behavior (same gamete distribution for all sexes).
+            allowed_haplotypes_by_sex = {}
 
     # Populate baseline mapping using genotype.produce_gametes()
     for idx_genotype, genotype in enumerate(diploid_genotypes):
+        base_gametes = genotype.produce_gametes()
         for sex_idx in range(n_sexes):
-            gametes = genotype.produce_gametes()
-            for gamete, freq in gametes.items():
-                if gamete in haploid_genotypes:
-                    idx_hg = haploid_genotypes.index(gamete)
-                    # By default, only map frequency for the default glab (0)
-                    compressed_idx = compress_hg_glab(idx_hg, 0, n_glabs)
-                    genotype_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = freq
+            allowed = allowed_haplotypes_by_sex.get(sex_idx)
+            if allowed is None:
+                filtered_gametes = base_gametes
+            else:
+                filtered_gametes = {
+                    gamete: freq for gamete, freq in base_gametes.items() if gamete in allowed
+                }
+
+            total_freq = float(sum(filtered_gametes.values()))
+            if total_freq <= 0.0:
+                continue
+
+            inv_total = 1.0 / total_freq
+            for gamete, freq in filtered_gametes.items():
+                idx_hg = haplo_to_idx.get(gamete)
+                if idx_hg is None:
+                    continue
+                # By default, only map frequency for the default glab (0)
+                compressed_idx = compress_hg_glab(idx_hg, 0, n_glabs)
+                genotype_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = float(freq) * inv_total
 
     # Apply optional modifier callables
     if gamete_modifiers:

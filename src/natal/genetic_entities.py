@@ -722,11 +722,43 @@ class Genotype:
             return self._gamete_cache
 
         # Dictionary to accumulate gamete frequencies
-        # Key: chromosome_idx → Dict[haplotype, frequency]
+        # Key: chromosome/group index -> Dict[haplotype, frequency]
         chromosome_gamete_frequencies: List[Dict[Haplotype, float]] = []
 
-        # For each chromosome, compute possible haplotypes and their frequencies
+        def _find_haplotype_in_group(
+            haploid: HaploidGenotype,
+            group_chromosomes: List[Chromosome],
+        ) -> Optional[Haplotype]:
+            """Return the unique haplotype from a sex-chromosome group, if present."""
+            found: Optional[Haplotype] = None
+            for group_chromosome in group_chromosomes:
+                try:
+                    current = haploid.get_haplotype_for_chromosome(group_chromosome)
+                except ValueError:
+                    continue
+
+                if found is not None and found is not current:
+                    raise ValueError(
+                        "Haploid genotype contains multiple chromosomes from the same sex group."
+                    )
+                found = current
+            return found
+
+        sex_groups: Optional[Dict[str, List[Chromosome]]] = None
+        get_groups = getattr(self.species, "get_sex_chromosome_groups", None)
+        if callable(get_groups):
+            sex_groups = cast(Optional[Dict[str, List[Chromosome]]], get_groups())
+
+        sex_chromosomes: set[Chromosome] = set()
+        if sex_groups:
+            for group in sex_groups.values():
+                sex_chromosomes.update(group)
+
+        # For each autosome, compute possible haplotypes and frequencies.
         for chromosome in self.species.chromosomes:
+            if chromosome in sex_chromosomes:
+                continue
+
             mat_haplotype = self.maternal.get_haplotype_for_chromosome(chromosome)
             pat_haplotype = self.paternal.get_haplotype_for_chromosome(chromosome)
 
@@ -734,20 +766,53 @@ class Genotype:
                 # Homozygous chromosome - only one gamete type (frequency 1.0)
                 chromosome_gamete_frequencies.append({mat_haplotype: 1.0})
             else:
-                # Heterozygous chromosome
-                # Check if recombination should be considered
+                # Heterozygous autosome
                 if self._should_use_recombination(chromosome):
-                    # Compute frequencies based on recombination rates
                     frequencies = self._compute_recombinant_haplotypes_for_chromosome(
                         mat_haplotype, pat_haplotype, chromosome
                     )
                     chromosome_gamete_frequencies.append(frequencies)
                 else:
-                    # No recombination: simple Mendelian segregation (faster)
                     chromosome_gamete_frequencies.append({
                         mat_haplotype: 0.5,
-                        pat_haplotype: 0.5
+                        pat_haplotype: 0.5,
                     })
+
+        # For each sex-chromosome group, choose one maternal and one paternal
+        # haplotype from that group (e.g., X/Y in XY systems).
+        if sex_groups:
+            for group_name, group_chromosomes in sex_groups.items():
+                mat_haplotype = _find_haplotype_in_group(self.maternal, group_chromosomes)
+                pat_haplotype = _find_haplotype_in_group(self.paternal, group_chromosomes)
+
+                if mat_haplotype is None and pat_haplotype is None:
+                    continue
+                if mat_haplotype is None or pat_haplotype is None:
+                    raise ValueError(
+                        f"Incomplete sex chromosome pair in group '{group_name}' for genotype '{self}'."
+                    )
+
+                if mat_haplotype is pat_haplotype:
+                    chromosome_gamete_frequencies.append({mat_haplotype: 1.0})
+                    continue
+
+                # Recombination only applies when both haplotypes are from the same
+                # chromosome. For X/Y or Z/W pairs, use simple Mendelian segregation.
+                if mat_haplotype.chromosome is pat_haplotype.chromosome and self._should_use_recombination(mat_haplotype.chromosome):
+                    frequencies = self._compute_recombinant_haplotypes_for_chromosome(
+                        mat_haplotype,
+                        pat_haplotype,
+                        mat_haplotype.chromosome,
+                    )
+                    chromosome_gamete_frequencies.append(frequencies)
+                else:
+                    chromosome_gamete_frequencies.append({
+                        mat_haplotype: 0.5,
+                        pat_haplotype: 0.5,
+                    })
+
+        if not chromosome_gamete_frequencies:
+            raise ValueError("Cannot produce gametes: no chromosome haplotypes available in genotype.")
 
         # Combine chromosome gametes using the multiplication rule
         # Each gamete is a combination of one haplotype per chromosome

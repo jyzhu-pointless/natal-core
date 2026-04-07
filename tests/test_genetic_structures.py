@@ -4,6 +4,8 @@ import pytest  # type: ignore
 
 import natal as nt
 from natal.genetic_structures import SexChromosomeType
+from natal.population_config import extract_gamete_frequencies, initialize_gamete_map
+from natal.type_def import Sex
 
 
 class TestSexChromosomeType:
@@ -151,6 +153,158 @@ class TestSpeciesFromDict:
             structure={"chr1": ["locA"]},
         )
         assert len(sp.chromosomes) == 1
+
+    def test_extended_format_supports_sex_type(self):
+        sp = nt.Species.from_dict(
+            name="S_with_sex_type",
+            structure={
+                "chrX": {
+                    "sex_type": "X",
+                    "loci": {"sx": ["X1"]},
+                },
+                "chrY": {
+                    "sex_type": "Y",
+                    "loci": {"sy": ["Y1"]},
+                },
+                "chrA": {
+                    "loci": {"a": ["A"]},
+                },
+            },
+        )
+
+        assert sp.get_chromosome("chrX").sex_type == SexChromosomeType.X
+        assert sp.get_chromosome("chrY").sex_type == SexChromosomeType.Y
+        assert sp.sex_system == "XY"
+
+    def test_extended_format_invalid_sex_type_raises(self):
+        with pytest.raises(AssertionError):  # type: ignore
+            nt.Species.from_dict(
+                name="S_bad_sex_type",
+                structure={
+                    "chrX": {
+                        "sex_type": 123,  # type: ignore[arg-type]
+                        "loci": {"sx": ["X1"]},
+                    }
+                },
+            )
+
+
+class TestSexAwareGameteMap:
+    def test_initialize_gamete_map_is_sex_aware_for_xy(self):
+        species = nt.Species.from_dict(
+            name="S_xy_gamete_map",
+            structure={
+                "chrA": {"loci": {"a": ["A"]}},
+                "chrX": {"sex_type": "X", "loci": {"sx": ["X1"]}},
+                "chrY": {"sex_type": "Y", "loci": {"sy": ["Y1"]}},
+            },
+        )
+
+        haploid_genotypes = species.get_all_haploid_genotypes()
+        diploid_genotypes = species.get_all_genotypes()
+        gamete_map = initialize_gamete_map(
+            haploid_genotypes=haploid_genotypes,
+            diploid_genotypes=diploid_genotypes,
+            n_glabs=1,
+        )
+
+        chrom_x = species.get_chromosome("chrX")
+        chrom_y = species.get_chromosome("chrY")
+        assert chrom_x is not None
+        assert chrom_y is not None
+
+        idx_xy = None
+        for idx, gt in enumerate(diploid_genotypes):
+            try:
+                mat_x = gt.maternal.get_haplotype_for_chromosome(chrom_x)
+                pat_y = gt.paternal.get_haplotype_for_chromosome(chrom_y)
+            except ValueError:
+                continue
+            if mat_x is not None and pat_y is not None:
+                idx_xy = idx
+                break
+        assert idx_xy is not None
+
+        female_freqs = extract_gamete_frequencies(
+            genotype_to_gametes_map=gamete_map,
+            sex_idx=int(Sex.FEMALE),
+            genotype_idx=idx_xy,
+            haploid_genotypes=haploid_genotypes,
+            n_glabs=1,
+        )
+        male_freqs = extract_gamete_frequencies(
+            genotype_to_gametes_map=gamete_map,
+            sex_idx=int(Sex.MALE),
+            genotype_idx=idx_xy,
+            haploid_genotypes=haploid_genotypes,
+            n_glabs=1,
+        )
+
+        female_y_freq = 0.0
+        male_y_freq = 0.0
+        for hg, freq in female_freqs.items():
+            try:
+                hg.get_haplotype_for_chromosome(chrom_y)
+            except ValueError:
+                continue
+            female_y_freq += freq
+        for hg, freq in male_freqs.items():
+            try:
+                hg.get_haplotype_for_chromosome(chrom_y)
+            except ValueError:
+                continue
+            male_y_freq += freq
+
+        assert female_y_freq == pytest.approx(0.0)
+        assert male_y_freq > 0.0
+        assert sum(female_freqs.values()) == pytest.approx(1.0)
+        assert sum(male_freqs.values()) == pytest.approx(1.0)
+
+    def test_species_haploid_getters_support_parent_role(self):
+        species = nt.Species.from_dict(
+            name="S_xy_haploid_getters",
+            structure={
+                "chrA": {"loci": {"a": ["A"]}},
+                "chrX": {"sex_type": "X", "loci": {"sx": ["X1"]}},
+                "chrY": {"sex_type": "Y", "loci": {"sy": ["Y1"]}},
+            },
+        )
+
+        all_hap = species.get_haploid_genotypes()
+        mat_hap = species.get_haploid_genotypes("maternal")
+        pat_hap = species.get_haploid_genotypes("paternal")
+
+        assert all_hap == species.get_all_haploid_genotypes()
+        assert mat_hap == species.get_maternal_haploid_genotypes()
+        assert pat_hap == species.get_paternal_haploid_genotypes()
+
+        chrom_y = species.get_chromosome("chrY")
+        assert chrom_y is not None
+        mat_has_y = any(
+            hap.get_haplotype_for_chromosome(chrom_y) is not None
+            for hap in mat_hap
+            if any(h.chromosome is chrom_y for h in hap.haplotypes)
+        )
+        pat_has_y = any(
+            hap.get_haplotype_for_chromosome(chrom_y) is not None
+            for hap in pat_hap
+            if any(h.chromosome is chrom_y for h in hap.haplotypes)
+        )
+        assert mat_has_y is False
+        assert pat_has_y is True
+
+    def test_species_haploid_getters_invalid_parent_role_raises(self):
+        species = nt.Species.from_dict(
+            name="S_xy_invalid_parent_role",
+            structure={
+                "chrA": {"loci": {"a": ["A"]}},
+                "chrX": {"sex_type": "X", "loci": {"sx": ["X1"]}},
+                "chrY": {"sex_type": "Y", "loci": {"sy": ["Y1"]}},
+            },
+        )
+
+        with pytest.raises(ValueError):
+            species.get_haploid_genotypes("unknown")  # type: ignore[arg-type]
 
 class TestSpeciesQueries:
     def test_get_locus_found(self, simple_species):

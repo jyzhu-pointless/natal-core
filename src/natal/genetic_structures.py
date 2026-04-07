@@ -29,6 +29,7 @@ from typing import (
     Dict,
     Generic,
     List,
+    Literal,
     Optional,
     Protocol,
     Set,
@@ -2029,7 +2030,7 @@ class Species(GeneticStructure['HaploidGenome']):
     def from_dict(
         cls,
         name: str,
-        structure: Dict[str, Union[List[str], Dict[str, List[str]]]],
+        structure: Dict[str, Union[List[str], Dict[str, List[str]], Dict[str, Any]]],
         gamete_labels: Optional[List[str]] = None
     ) -> Species:
         """Create a Species with complete hierarchy from a dictionary specification.
@@ -2043,6 +2044,13 @@ class Species(GeneticStructure['HaploidGenome']):
                     'ChromName': {
                         'Locus1': ['allele1', 'allele2'],  # With alleles
                         'Locus2': ['allele1', 'allele2'],
+                    }
+                    # OR
+                    'ChromName': {
+                        'sex_type': 'X',
+                        'loci': {
+                            'Locus1': ['allele1', 'allele2'],
+                        },
                     }
                 }
 
@@ -2072,18 +2080,43 @@ class Species(GeneticStructure['HaploidGenome']):
         species = cls(name, gamete_labels=gamete_labels)
 
         for chrom_name, loci_spec in structure.items():
-            chrom = species.add_chromosome(chrom_name)
+            sex_type: Optional[Union[SexChromosomeType, str]] = None
+            normalized_loci_spec: Union[List[str], Dict[str, List[str]]]
 
-            assert isinstance(loci_spec, (list, dict)), \
-                f"Invalid loci specification for chromosome '{chrom_name}'. " \
-                f"Expected list or dict, got {type(loci_spec).__name__}"
+            # Extended chromosome config format:
+            # {
+            #   "sex_type": "X" | "Y" | "Z" | "W" | "autosome",
+            #   "loci": [...]/{...}
+            # }
+            if isinstance(loci_spec, dict) and ("loci" in loci_spec or "sex_type" in loci_spec):
+                raw_loci = loci_spec.get("loci")
+                if raw_loci is None:
+                    raw_loci = []
+                assert isinstance(raw_loci, (list, dict)), \
+                    f"Invalid loci specification for chromosome '{chrom_name}'. " \
+                    f"Expected list or dict, got {type(raw_loci).__name__}"
+                normalized_loci_spec = cast(Union[List[str], Dict[str, List[str]]], raw_loci)
 
-            if isinstance(loci_spec, list):
+                raw_sex_type = loci_spec.get("sex_type")
+                if raw_sex_type is not None:
+                    assert isinstance(raw_sex_type, (SexChromosomeType, str)), \
+                        f"Invalid sex_type for chromosome '{chrom_name}'. " \
+                        f"Expected SexChromosomeType or str, got {type(raw_sex_type).__name__}"
+                    sex_type = raw_sex_type
+            else:
+                assert isinstance(loci_spec, (list, dict)), \
+                    f"Invalid loci specification for chromosome '{chrom_name}'. " \
+                    f"Expected list or dict, got {type(loci_spec).__name__}"
+                normalized_loci_spec = cast(Union[List[str], Dict[str, List[str]]], loci_spec)
+
+            chrom = species.add_chromosome(chrom_name, sex_type=sex_type)
+
+            if isinstance(normalized_loci_spec, list):
                 # Simple format: list of locus names
-                for locus_name in loci_spec:
+                for locus_name in normalized_loci_spec:
                     chrom.add_locus(locus_name)
             else: # Detailed format: {locus_name: [allele_names]}
-                for locus_name, allele_names in loci_spec.items():
+                for locus_name, allele_names in normalized_loci_spec.items():
                     locus = chrom.add_locus(locus_name)
                     # Create alleles (genes)
                     for allele_name in allele_names:
@@ -3325,6 +3358,50 @@ class Species(GeneticStructure['HaploidGenome']):
             List of all HaploidGenome instances.
         """
         return list(self.iter_haploid_genotypes())
+
+    def get_maternal_haploid_genotypes(self) -> List[HaploidGenome]:
+        """Get all maternal-transmissible haploid genomes.
+
+        Returns:
+            List of maternal haploid genomes.
+        """
+        return list(self.iter_maternal_haploid_genotypes())
+
+    def get_paternal_haploid_genotypes(self) -> List[HaploidGenome]:
+        """Get all paternal-transmissible haploid genomes.
+
+        Returns:
+            List of paternal haploid genomes.
+        """
+        return list(self.iter_paternal_haploid_genotypes())
+
+    def get_haploid_genotypes(
+        self,
+        parent: Optional[Literal["maternal", "paternal"]] = None,
+    ) -> List[HaploidGenome]:
+        """Get haploid genomes, optionally constrained by parent role.
+
+        Args:
+            parent: Parent role constraint. Accepted values are ``"maternal"``
+                and ``"paternal"``. If omitted/None, return all haploid genomes.
+
+        Returns:
+            List of haploid genomes for the requested scope.
+
+        Raises:
+            ValueError: If ``parent`` is not one of supported values.
+        """
+        if parent is None:
+            return self.get_all_haploid_genotypes()
+
+        normalized = parent.strip().lower()
+        if normalized == "maternal":
+            return self.get_maternal_haploid_genotypes()
+        if normalized == "paternal":
+            return self.get_paternal_haploid_genotypes()
+        raise ValueError(
+            f"Unknown parent role: {parent!r}. Expected 'maternal', 'paternal', or None."
+        )
 
     def get_all_genotypes(self) -> List[Genotype]:
         """

@@ -145,7 +145,7 @@ Builder 链式配置
 | `female_age_based_relative_fertility` | `Optional[Union[List[float], NDArray[np.float64]]]` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度需等于 `n_ages`；用于调节不同年龄雌性的产卵財献。 |
 | `eggs_per_female` | `float` | 每雌个体的基础产卵数。 | `50.0` | reproduction | 用作种群产卵数的基准；先从中性值开始调参。 |
 | `use_fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 固定产卵数，`False` 随机产卵。 |
-| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 范围应在 `[0, 1]`；0.5 表示男女等比。 |
+| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 范围应在 `[0, 1]`；0.5 表示男女等比。当性染色体约束可确定后代性别时（如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
 | `use_sperm_storage` | `bool` | 是否启用储精机制。 | `True` | reproduction | `True` 启用储精，`False` 禁用；仅当代交配。 |
 | `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 范围通常在 `(0, 1]`；较高值表示新精子替换速度快。 |
 
@@ -325,7 +325,7 @@ Builder 链式配置
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `eggs_per_female` | `float` | 每雌个体每代产卵数。 | `50.0` | reproduction | 用作产卵的基准值；调参时从中性值开始。 |
-| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 范围应在 `[0, 1]`；0.5 表示男女等比。 |
+| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 范围应在 `[0, 1]`；0.5 表示男女等比。当性染色体约束可确定后代性别时（如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
 | `female_adult_mating_rate` | `float` | 成体雌性的交配率。 | `1.0` | reproduction | 表示雌性参与交配的比例；范围 `[0, 1]`。 |
 | `male_adult_mating_rate` | `float` | 成体雄性的交配率。 | `1.0` | reproduction | 表示雄性参与交配的比例；范围 `[0, 1]`。 |
 
