@@ -196,3 +196,43 @@ def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
     assert np.isclose(totals[3], 200.0 / 3.0)
     assert np.isclose(totals[4], 200.0 / 3.0)
     assert np.isclose(sum(totals), 200.0)
+
+
+def test_spatial_population_heterogeneous_kernel_bank_routes_per_source(
+    simple_species: nt.Species,
+) -> None:
+    demes = [
+        _make_deme(simple_species, "deme_0", adult_count=100.0),
+        _make_deme(simple_species, "deme_1", adult_count=100.0),
+        _make_deme(simple_species, "deme_2", adult_count=0.0),
+    ]
+
+    shared_config = demes[0].export_config()
+    for deme in demes[1:]:
+        deme.import_config(shared_config)
+
+    right_only = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+    left_only = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+
+    spatial = SpatialPopulation(
+        demes=demes,
+        topology=SquareGrid(rows=1, cols=3, neighborhood="von_neumann", wrap=False),
+        migration_strategy="kernel",
+        kernel_bank=(right_only, left_only),
+        deme_kernel_ids=np.array([0, 1, 0], dtype=np.int64),
+        migration_rate=1.0,
+    )
+
+    row0 = spatial.migration_row(0)
+    row1 = spatial.migration_row(1)
+    assert np.allclose(row0, np.array([0.0, 1.0, 0.0], dtype=np.float64))
+    assert np.allclose(row1, np.array([1.0, 0.0, 0.0], dtype=np.float64))
+
+    spatial.run_tick()
+
+    totals = [float(deme.state.individual_count.sum()) for deme in spatial.demes]
+    # source 0 migrates to 1; source 1 migrates to 0
+    assert np.isclose(totals[0], 200.0)
+    assert np.isclose(totals[1], 200.0)
+    assert np.isclose(totals[2], 0.0)
+    assert np.isclose(sum(totals), 400.0)

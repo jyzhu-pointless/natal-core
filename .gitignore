@@ -26,3 +26,5 @@ site/*
 !.vscode/extensions.json
 
 .trae/*
+
+*beamer*

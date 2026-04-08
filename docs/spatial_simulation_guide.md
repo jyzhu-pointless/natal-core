@@ -38,6 +38,8 @@ The constructor of `SpatialPopulation` supports these most common parameters:
 - `topology`: optional grid topology, typically `SquareGrid` or `HexGrid`.
 - `adjacency`: explicit adjacency matrix; if not provided, it is usually derived from `topology`.
 - `migration_kernel`: a migration kernel used when following the kernel path.
+- `kernel_bank`: optional kernel bank for heterogeneous per-deme kernel routing.
+- `deme_kernel_ids`: optional per-deme kernel id mapping into `kernel_bank`.
 - `migration_rate`: the proportion of individuals that participate in migration each step.
 - `migration_strategy`: `auto`, `adjacency`, `kernel`, or `hybrid`; default is `auto`.
 - `kernel_include_center`: under the kernel path, whether to include the centre cell as a migration target.
@@ -46,6 +48,8 @@ If you only want to remember the most important rules, keep these two in mind:
 
 1. If you provide `adjacency`, the adjacency path is used.
 2. If you provide `migration_kernel`, the kernel path is used, and `topology` must also exist.
+3. If you provide `kernel_bank` + `deme_kernel_ids`, the kernel path is also used (heterogeneous kernels).
+4. `hybrid` is reserved for adjacency+kernel mixed dispatch policy. It is not required for heterogeneous kernels.
 
 ## 3. Minimal Working Flow
 
@@ -67,6 +71,10 @@ You have two common paths:
 
 1. **adjacency path** – suitable for scenarios where you first define the topology and then generate the adjacency matrix.
 2. **kernel path** – suitable for scenarios where you want to describe local migration weights using a 3×3 or 5×5 kernel.
+
+Also note:
+
+- Heterogeneous kernels (different kernels on different source demes) are part of the **kernel path**, not a separate `hybrid` mode.
 
 ### 3.4 Assemble the Spatial Container
 
@@ -118,6 +126,28 @@ spatial = SpatialPopulation(
 )
 ```
 
+### 3.6 Heterogeneous Kernel Example (Kernel Bank)
+
+```python
+import numpy as np
+from natal.spatial_population import SpatialPopulation
+from natal.spatial_topology import SquareGrid
+
+right_only = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+left_only = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+
+spatial = SpatialPopulation(
+  demes=demes,
+  topology=SquareGrid(rows=1, cols=3, neighborhood="von_neumann", wrap=False),
+  migration_strategy="kernel",
+  kernel_bank=(right_only, left_only),
+  deme_kernel_ids=np.array([0, 1, 0], dtype=np.int64),
+  migration_rate=1.0,
+)
+```
+
+In this setup, each source deme chooses its own kernel by `deme_kernel_ids[src]`.
+
 ## 4. What Happens at Runtime
 
 The semantics of `run_tick()` and `run(...)` are the same as for ordinary populations, but they advance all demes together:
@@ -147,8 +177,8 @@ You can think of it simply as:
 In the implementation, the kernel path requires:
 
 - `topology` to exist.
-- `migration_kernel` to be a 2D array.
-- Both dimensions of `migration_kernel` must be odd.
+- either `migration_kernel` or (`kernel_bank` + `deme_kernel_ids`).
+- all kernels must be 2D arrays with odd dimensions.
 
 This is why demos often use a `3×3` or `5×5` kernel.
 

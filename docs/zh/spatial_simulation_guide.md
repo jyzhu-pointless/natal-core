@@ -38,6 +38,8 @@ for deme in demes[1:]:
 - `topology`：可选的网格拓扑，常见是 `SquareGrid` 或 `HexGrid`。
 - `adjacency`：显式邻接矩阵；如果不传，通常会从 `topology` 推导。
 - `migration_kernel`：迁移核，走 kernel 路径时使用。
+- `kernel_bank`：可选的 kernel 集合，用于不同 source deme 使用不同 kernel。
+- `deme_kernel_ids`：可选的 per-deme kernel id，索引到 `kernel_bank`。
 - `migration_rate`：每步参与迁移的比例。
 - `migration_strategy`：`auto`、`adjacency`、`kernel`、`hybrid`，默认 `auto`。
 - `kernel_include_center`：kernel 路径下是否把中心格也算进迁移目标。
@@ -46,6 +48,8 @@ for deme in demes[1:]:
 
 1. 传 `adjacency` 就走邻接矩阵路径。
 2. 传 `migration_kernel` 就走 kernel 路径，而且 topology 必须同时存在。
+3. 传 `kernel_bank` + `deme_kernel_ids` 也走 kernel 路径（异构 kernel）。
+4. `hybrid` 预留给 adjacency+kernel 混合分流策略，不是异构 kernel 的必选项。
 
 ## 3. 最小可用流程
 
@@ -67,6 +71,10 @@ for deme in demes[1:]:
 
 1. adjacency 路径：适合“先定义拓扑，再生成邻接矩阵”的场景。
 2. kernel 路径：适合“用一个 3x3 或 5x5 核描述局部迁移权重”的场景。
+
+补充：
+
+- 异构 kernel（不同 source deme 用不同 kernel）仍属于 **kernel 路径**，不是单独的 `hybrid` 路径。
 
 ### 3.4 组装空间容器
 
@@ -118,6 +126,28 @@ spatial = SpatialPopulation(
 )
 ```
 
+### 3.6 异构 Kernel 示例（Kernel Bank）
+
+```python
+import numpy as np
+from natal.spatial_population import SpatialPopulation
+from natal.spatial_topology import SquareGrid
+
+right_only = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+left_only = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+
+spatial = SpatialPopulation(
+  demes=demes,
+  topology=SquareGrid(rows=1, cols=3, neighborhood="von_neumann", wrap=False),
+  migration_strategy="kernel",
+  kernel_bank=(right_only, left_only),
+  deme_kernel_ids=np.array([0, 1, 0], dtype=np.int64),
+  migration_rate=1.0,
+)
+```
+
+这个配置下，每个 source deme 会通过 `deme_kernel_ids[src]` 选择自己的 kernel。
+
 ## 4. 运行时到底做了什么
 
 `run_tick()` 和 `run(...)` 的语义和普通 population 一样，但它们会把所有 deme 一起推进：
@@ -147,8 +177,8 @@ spatial = SpatialPopulation(
 在实现里，kernel 路径会要求：
 
 - `topology` 存在。
-- `migration_kernel` 是二维数组。
-- `migration_kernel` 的行和列都必须是奇数。
+- 需要提供 `migration_kernel`，或同时提供 (`kernel_bank` + `deme_kernel_ids`)。
+- 所有 kernel 都必须是奇数维二维数组。
 
 这就是为什么 demo 里常见 `3x3` 或 `5x5` 的 kernel。
 
