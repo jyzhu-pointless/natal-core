@@ -679,6 +679,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 "Cannot run() again after finish=True."
             )
 
+        if self.should_use_python_dispatch():
+            return self._run_python_dispatch(
+                n_steps=n_steps,
+                record_every=record_every,
+                finish=finish,
+                clear_history_on_start=clear_history_on_start,
+            )
+
         config = sk.export_config(self)
 
         hooks = self.get_compiled_event_hooks()
@@ -716,6 +724,80 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self.trigger_event("finish")
         elif finish:
             # Otherwise, if finish parameter is True, actively trigger finish
+            self.finish_simulation()
+
+        return self
+
+    def _run_python_dispatch(
+        self,
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> "AgeStructuredPopulation":
+        """Run using Python event dispatch so py_wrapper hooks are honored."""
+        from natal.hook_dsl import RESULT_CONTINUE
+
+        self.ensure_hook_executor()
+
+        if clear_history_on_start:
+            self.clear_history()
+
+        if record_every > 0 and (self._tick % record_every == 0):
+            self.create_history_snapshot()
+
+        was_stopped = False
+        for _ in range(n_steps):
+            if self.trigger_event("first", deme_id=0) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            ind_next, sperm_next = sk.run_reproduction(
+                self._state_nn.individual_count,
+                self._state_nn.sperm_storage,
+                self._config_nn,
+            )
+            self._state_nn.individual_count[:] = ind_next
+            self._state_nn.sperm_storage[:] = sperm_next
+
+            if self.trigger_event("early", deme_id=0) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            ind_next, sperm_next = sk.run_survival(
+                self._state_nn.individual_count,
+                self._state_nn.sperm_storage,
+                self._config_nn,
+            )
+            self._state_nn.individual_count[:] = ind_next
+            self._state_nn.sperm_storage[:] = sperm_next
+
+            if self.trigger_event("late", deme_id=0) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            ind_next, sperm_next = sk.run_aging(
+                self._state_nn.individual_count,
+                self._state_nn.sperm_storage,
+                self._config_nn,
+            )
+            self._state_nn.individual_count[:] = ind_next
+            self._state_nn.sperm_storage[:] = sperm_next
+
+            self._tick += 1
+            self._state = PopulationState(
+                n_tick=int(self._tick),
+                individual_count=self._state_nn.individual_count,
+                sperm_storage=self._state_nn.sperm_storage,
+            )
+
+            if record_every > 0 and (self._tick % record_every == 0):
+                self.create_history_snapshot()
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
             self.finish_simulation()
 
         return self

@@ -14,6 +14,7 @@ from natal.hooks.compiler import CompiledEventHooks, hook, noop_hook  # noqa: E4
 from natal.hooks.selector import compile_selector_hook  # noqa: E402
 from natal.hooks.types import CompiledHookDescriptor  # noqa: E402
 from natal.numba_utils import numba_enabled  # noqa: E402
+import natal as nt  # noqa: E402
 
 
 class _FakeIndexCore:
@@ -129,3 +130,40 @@ def test_compiled_event_hooks_produces_event_chains():
     assert hooks.early is not None
     assert hooks.late is not None
     assert hooks.finish is not None
+
+
+def _build_population_for_numba_set_hook_test() -> nt.DiscreteGenerationPopulation:
+    species = nt.Species.from_dict(
+        name="NumbaSetHookStrictSpecies",
+        structure={"chr1": {"loc": ["WT", "Dr"]}},
+    )
+    return (
+        nt.DiscreteGenerationPopulation.setup(species=species, name="NumbaSetHookStrictPop", stochastic=False)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0.0, 5.0]},
+                "male": {"WT|WT": [0.0, 5.0]},
+            }
+        )
+        .build()
+    )
+
+
+def test_population_api_rejects_plain_python_hook_when_numba_enabled():
+    pop = _build_population_for_numba_set_hook_test()
+
+    with numba_enabled():
+        with pytest.raises(TypeError, match="Python-layer hooks are not allowed"):
+            pop.set_hook("first", lambda population: None)
+
+
+def test_population_api_rejects_hook_python_wrapper_when_numba_enabled():
+    pop = _build_population_for_numba_set_hook_test()
+
+    @hook(event="first")
+    def py_wrapper_hook(population):  # pragma: no cover - should never run
+        _ = population
+
+    with numba_enabled():
+        with pytest.raises(TypeError, match="Python hook"):
+            pop.set_hook("first", py_wrapper_hook)

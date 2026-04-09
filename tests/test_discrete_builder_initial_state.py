@@ -51,7 +51,7 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
                 pop = builder.build()
 
         self.assertIsNotNone(pop)
-        self.assertIs(build_mock.call_args.kwargs["carrying_capacity"], None)
+        self.assertIs(build_mock.call_args.kwargs["age_1_carrying_capacity"], None)
         self.assertIs(build_mock.call_args.kwargs["expected_num_adult_females"], None)
 
     def _make_population_shell(self) -> DiscreteGenerationPopulation:

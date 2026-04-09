@@ -14,7 +14,14 @@ from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
 from natal.hook_dsl import DemeSelector
+from natal.numba_utils import is_numba_enabled
 from natal.population_state import PopulationState
+from natal.spatial_simulation_kernels import (
+    run_spatial_aging,
+    run_spatial_migration,
+    run_spatial_reproduction,
+    run_spatial_survival,
+)
 from natal.spatial_topology import (
     GridTopology,
     build_adjacency_matrix,
@@ -1128,6 +1135,87 @@ class SpatialPopulation:
             return self._migration_kernel
         return np.zeros((1, 1), dtype=np.float64)
 
+    def _has_python_hooks(self) -> bool:
+        """Return whether any managed deme has Python-layer hooks."""
+        return any(deme.has_python_hooks() for deme in self._demes)
+
+    def _has_mixed_hook_types(self) -> bool:
+        """Return whether any managed deme mixes hook types in one event."""
+        return any(deme.has_mixed_hook_types() for deme in self._demes)
+
+    def _should_use_python_dispatch(self) -> bool:
+        """Return whether spatial run should use Python event dispatch."""
+        return self._has_mixed_hook_types() or (not is_numba_enabled() and self._has_python_hooks())
+
+    def _run_tick_with_python_dispatch(self) -> bool:
+        """Run one spatial tick with Python event dispatch enabled.
+
+        Returns:
+            bool: True if execution was stopped by hooks, otherwise False.
+        """
+        from natal.hook_dsl import RESULT_CONTINUE
+
+        for deme in self._demes:
+            deme.ensure_hook_executor()
+
+        for deme_id, deme in enumerate(self._demes):
+            if deme.trigger_event("first", deme_id=deme_id) != RESULT_CONTINUE:
+                return True
+
+        config = self._shared_config()
+        ind_all, sperm_all = self._stack_deme_state_arrays()
+
+        ind_all, sperm_all = run_spatial_reproduction(
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            config=config,
+        )
+        self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
+
+        for deme_id, deme in enumerate(self._demes):
+            if deme.trigger_event("early", deme_id=deme_id) != RESULT_CONTINUE:
+                return True
+
+        ind_all, sperm_all = run_spatial_survival(
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            config=config,
+        )
+        self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
+
+        for deme_id, deme in enumerate(self._demes):
+            if deme.trigger_event("late", deme_id=deme_id) != RESULT_CONTINUE:
+                return True
+
+        ind_all, sperm_all = run_spatial_aging(
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            config=config,
+        )
+
+        effective_adjacency = self._adjacency
+        effective_migration_mode_code = self._migration_mode_code
+        if self._heterogeneous_kernel_adjacency is not None:
+            effective_adjacency = self._heterogeneous_kernel_adjacency
+            effective_migration_mode_code = 0
+
+        ind_all, sperm_all = run_spatial_migration(
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            adjacency=effective_adjacency,
+            migration_mode=effective_migration_mode_code,
+            topology_rows=0 if self._topology is None else int(self._topology.rows),
+            topology_cols=0 if self._topology is None else int(self._topology.cols),
+            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
+            migration_kernel=self._migration_kernel_array(),
+            kernel_include_center=bool(self._kernel_include_center),
+            config=config,
+            migration_rate=float(self._migration_rate),
+        )
+
+        self._apply_stacked_state(ind_all, sperm_all, int(self._tick) + 1)
+        return False
+
     def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick via the generated spatial wrapper.
 
@@ -1140,6 +1228,14 @@ class SpatialPopulation:
         for idx, deme in enumerate(self._demes):
             if getattr(deme, "_finished", False):
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial tick")
+
+        if self._should_use_python_dispatch():
+            was_stopped = self._run_tick_with_python_dispatch()
+            if was_stopped:
+                for deme in self._demes:
+                    deme._finished = True  # type: ignore[attr-defined]
+                    deme.trigger_event("finish")
+            return self
 
         assert self._hooks.run_spatial_tick_fn is not None, "hooks.run_spatial_tick_fn should always be initialized"
         assert self._hooks.registry is not None, "hooks.registry should always be initialized"
@@ -1211,6 +1307,21 @@ class SpatialPopulation:
         for idx, deme in enumerate(self._demes):
             if getattr(deme, "_finished", False):
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial simulation")
+
+        if self._should_use_python_dispatch():
+            was_stopped = False
+            for _ in range(n_steps):
+                if self._run_tick_with_python_dispatch():
+                    was_stopped = True
+                    break
+            if was_stopped:
+                for deme in self._demes:
+                    deme._finished = True  # type: ignore[attr-defined]
+                    deme.trigger_event("finish")
+            elif finish:
+                for deme in self._demes:
+                    deme.finish_simulation()
+            return self
 
         assert self._hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"
         assert self._hooks.registry is not None, "hooks.registry should always be initialized"

@@ -59,38 +59,38 @@ initial_sperm: SpermStorage = {
     },
 }
 
-pop = nt.AgeStructuredPopulation\
+pop = (nt.AgeStructuredPopulation
     .setup(
         species=sp,
         name="MosquitoPop",
         stochastic=False,
         use_continuous_sampling=False,
-    ) \
+    )
     .age_structure(
         n_ages=8,
         new_adult_age=2,
-    ) \
+    )
     .initial_state(
         individual_count=initial_distribution
-    ) \
+    )
     .reproduction(
         female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
         male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
         eggs_per_female=50,
         sperm_displacement_rate=0.05,
-    ) \
+    )
     .survival(
         female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2],
         male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2],
-    ) \
+    )
     .competition(
         juvenile_growth_mode="concave",
         old_juvenile_carrying_capacity=1200,
         expected_num_adult_females=2100,
-    ) \
+    )
     .presets(
         drive
-    ).build()
+    ).build())
 
 pop.run(0)
 start_time = time.perf_counter()

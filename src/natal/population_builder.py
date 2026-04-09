@@ -109,7 +109,7 @@ class PopulationConfigBuilder:
         relative_competition_factor: float,
         juvenile_growth_mode: Union[int, str],
         low_density_growth_rate: float,
-        carrying_capacity: Optional[float],
+        age_1_carrying_capacity: Optional[float],
         old_juvenile_carrying_capacity: Optional[float],
         expected_num_adult_females: Optional[float],
         equilibrium_individual_distribution: Optional[ArrayF64],
@@ -143,8 +143,8 @@ class PopulationConfigBuilder:
             relative_competition_factor (float): Competition intensity.
             juvenile_growth_mode (Union[int, str]): Growth model type.
             low_density_growth_rate (float): Intrinsic growth rate.
-            carrying_capacity (Optional[float]): Total capacity.
-            old_juvenile_carrying_capacity (Optional[float]): Capacity for older juveniles.
+            age_1_carrying_capacity (Optional[float]): Population carrying capacity at age=1.
+            old_juvenile_carrying_capacity (Optional[float]): Alias for age_1_carrying_capacity (deprecated).
             expected_num_adult_females (Optional[float]): Target adult female count.
             equilibrium_individual_distribution (Optional[NDArray]): Expected distribution.
             gamete_modifiers (List[Tuple]): Custom gamete modifiers.
@@ -259,7 +259,19 @@ class PopulationConfigBuilder:
 
         # ===== Compute carrying capacity =====
         resolved_carrying_capacity = PopulationConfigBuilder._resolve_carrying_capacity(
-            carrying_capacity, old_juvenile_carrying_capacity, expected_num_adult_females, expected_eggs_per_female
+            carrying_capacity=None,  # Not used in _resolve_carrying_capacity
+            age_1_carrying_capacity=age_1_carrying_capacity,
+            old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
+            expected_num_adult_females=expected_num_adult_females,
+            expected_eggs_per_female=expected_eggs_per_female,
+            age_based_survival_rates=age_based_survival_rates,
+            age_based_mating_rates=age_based_mating_rates,
+            female_age_based_relative_fertility=female_fertility,
+            sex_ratio=sex_ratio,
+            new_adult_age=new_adult_age,
+            n_ages=n_ages,
+            age_based_relative_competition_strength=age_based_relative_competition_strength,
+            initial_individual_count=initial_individual_count,
         )
 
         # print("🔧 Initializing population configuration...")
@@ -288,7 +300,8 @@ class PopulationConfigBuilder:
             sex_ratio=sex_ratio,
             low_density_growth_rate=low_density_growth_rate,
             juvenile_growth_mode=juvenile_growth_mode_int,
-            old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
+            age_1_carrying_capacity=age_1_carrying_capacity or old_juvenile_carrying_capacity,
+            old_juvenile_carrying_capacity=None,  # Not used, use age_1_carrying_capacity
             expected_num_adult_females=expected_num_adult_females,
             equilibrium_individual_distribution=equilibrium_individual_distribution,
             genotype_to_gametes_map=gamete_map,
@@ -340,18 +353,218 @@ class PopulationConfigBuilder:
     @staticmethod
     def _resolve_carrying_capacity(
         carrying_capacity: Optional[float],
+        age_1_carrying_capacity: Optional[float],
         old_juvenile_carrying_capacity: Optional[float],
         expected_num_adult_females: Optional[float],
-        expected_eggs_per_female: float
+        expected_eggs_per_female: float,
+        age_based_survival_rates: Optional[NDArray[np.float64]] = None,
+        age_based_mating_rates: Optional[NDArray[np.float64]] = None,
+        female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
+        sex_ratio: float = 0.5,
+        new_adult_age: int = 1,
+        n_ages: Optional[int] = None,
+        age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
+        initial_individual_count: Optional[NDArray[np.float64]] = None,
     ) -> float:
-        """Logic to resolve carrying capacity from multiple possible sources."""
+        """Logic to resolve carrying capacity from multiple possible sources.
+
+        Args:
+            carrying_capacity: Unused (kept for compatibility).
+            age_1_carrying_capacity: Population carrying capacity at age=1.
+            old_juvenile_carrying_capacity: Alias for age_1_carrying_capacity (deprecated).
+            expected_num_adult_females: Target adult female count (can infer K from this).
+            expected_eggs_per_female: Base egg production per female.
+            age_based_survival_rates: Survival rates array with shape (2, n_ages).
+            age_based_mating_rates: Mating rates array with shape (2, n_ages).
+            female_age_based_relative_fertility: Female fertility by age (n_ages,).
+            sex_ratio: Offspring sex ratio.
+            new_adult_age: Minimum age for adults.
+            n_ages: Total number of age classes.
+            age_based_relative_competition_strength: Competition weights by age.
+            initial_individual_count: Initial population distribution (2, n_ages).
+
+        Returns:
+            float: Resolved carrying capacity.
+
+        Raises:
+            ValueError: If no valid carrying capacity source found.
+
+        Note:
+            Priority order:
+            1. age_1_carrying_capacity (preferred name)
+            2. old_juvenile_carrying_capacity (alias, for backward compatibility)
+            3. expected_num_adult_females (compute via equilibrium if rates available)
+            4. initial_individual_count (fallback, use for inference)
+        """
+        # Priority 1: age_1_carrying_capacity (new preferred name)
+        if age_1_carrying_capacity is not None:
+            return float(age_1_carrying_capacity)
+
+        # Priority 2: old_juvenile_carrying_capacity (legacy alias)
         if old_juvenile_carrying_capacity is not None:
             return float(old_juvenile_carrying_capacity)
-        if carrying_capacity is not None:
-            return float(carrying_capacity)
+
+        # Priority 3: expected_num_adult_females with equilibrium inference
         if expected_num_adult_females is not None:
+            # Try equilibrium-based approach if all necessary parameters available
+            if (age_based_survival_rates is not None and
+                age_based_mating_rates is not None and
+                female_age_based_relative_fertility is not None and
+                n_ages is not None):
+                # Build equilibrium distribution from expected_num_adult_females
+                k_val = PopulationConfigBuilder._compute_equilibrium_carrying_capacity_from_female_count(
+                    expected_num_adult_females=expected_num_adult_females,
+                    expected_eggs_per_female=expected_eggs_per_female,
+                    age_based_survival_rates=age_based_survival_rates,
+                    age_based_mating_rates=age_based_mating_rates,
+                    female_age_based_relative_fertility=female_age_based_relative_fertility,
+                    sex_ratio=sex_ratio,
+                    new_adult_age=new_adult_age,
+                    n_ages=n_ages,
+                )
+                return k_val
+
+            # Fallback without rates: just scale by egg production
             return float(expected_num_adult_females) * expected_eggs_per_female
-        return 1000.0
+
+        # Priority 4: initial_individual_count (fallback for no explicit sources)
+        if initial_individual_count is not None:
+            total_females = initial_individual_count[0].sum()
+            if total_females > 0.1:
+                total_males = initial_individual_count[1].sum()
+                # Use initial population as proxy for carrying capacity
+                # Calculate sex ratio from initial state
+                total_both = total_females + total_males
+                if total_both > 0:
+                    observed_sex_ratio = total_females / total_both
+                else:
+                    observed_sex_ratio = sex_ratio
+
+                # If rates are available, try equilibrium inference
+                if (age_based_survival_rates is not None and
+                    age_based_mating_rates is not None and
+                    female_age_based_relative_fertility is not None and
+                    n_ages is not None):
+                    try:
+                        k_val = PopulationConfigBuilder._compute_equilibrium_carrying_capacity_from_female_count(
+                            expected_num_adult_females=float(total_females),
+                            expected_eggs_per_female=expected_eggs_per_female,
+                            age_based_survival_rates=age_based_survival_rates,
+                            age_based_mating_rates=age_based_mating_rates,
+                            female_age_based_relative_fertility=female_age_based_relative_fertility,
+                            sex_ratio=observed_sex_ratio,
+                            new_adult_age=new_adult_age,
+                            n_ages=n_ages,
+                        )
+                        return k_val
+                    except Exception:
+                        # If equilibrium inference fails, fall through to simple estimate
+                        pass
+
+                # Simple estimate: use total population or scale from females
+                if total_both > 0:
+                    return total_both
+                else:
+                    return total_females * expected_eggs_per_female
+
+        raise ValueError("No valid carrying capacity source found.")
+
+
+    @staticmethod
+    def _compute_equilibrium_carrying_capacity_from_female_count(
+        expected_num_adult_females: float,
+        expected_eggs_per_female: float,
+        age_based_survival_rates: NDArray[np.float64],
+        age_based_mating_rates: NDArray[np.float64],
+        female_age_based_relative_fertility: NDArray[np.float64],
+        sex_ratio: float,
+        new_adult_age: int,
+        n_ages: int,
+    ) -> float:
+        """Compute carrying capacity (K at age=1) from expected adult female count.
+
+        Uses equilibrium distribution inference similar to compute_equilibrium_metrics:
+        1. Distribute expected_num_adult_females across ages using survival rates
+        2. Calculate expected age-0 egg production from adult females
+        3. Infer K as the age-1 total at equilibrium
+
+        Args:
+            expected_num_adult_females: Target count of adult females.
+            expected_eggs_per_female: Base egg production per female.
+            age_based_survival_rates: Survival rates (2, n_ages).
+            age_based_mating_rates: Mating rates (2, n_ages).
+            female_age_based_relative_fertility: Female fertility by age (n_ages,).
+            sex_ratio: Offspring sex ratio.
+            new_adult_age: Minimum adult age.
+            n_ages: Total number of age classes.
+
+        Returns:
+            float: Inferred carrying capacity at age=1.
+
+        Note:
+            This method mirrors the logic in compute_equilibrium_metrics but
+            works in reverse: given adult female count, infer the age-1 total.
+        """
+        # Build equilibrium distribution centered at age=new_adult_age
+        expected_distribution = np.zeros((2, n_ages), dtype=np.float64)
+
+        # Distribute expected_num_adult_females across adult ages.
+        # Assume proportional distribution based on relative survival to each age.
+        # Age progression backward from a reference age (new_adult_age).
+        # Forward: N(age) = N(age-1) * survival(age-1)
+        # Backward: If total adults should be expected_num_adult_females,
+        # allocate at new_adult_age as the reference point.
+        expected_distribution[0, new_adult_age] = expected_num_adult_females
+
+        # Backward propagation: age < new_adult_age (juveniles)
+        for age in range(new_adult_age - 1, -1, -1):
+            if age > 0:
+                expected_distribution[0, age] = expected_distribution[0, age + 1] / (age_based_survival_rates[0, age] + 1e-10)
+            else:
+                # Age 0: from age 0 to age 1 via survival_rate[0]
+                expected_distribution[0, age] = expected_distribution[0, 1] / (age_based_survival_rates[0, 0] + 1e-10)
+
+        # Forward propagation: age > new_adult_age (older adults)
+        for age in range(new_adult_age + 1, n_ages):
+            expected_distribution[0, age] = expected_distribution[0, age - 1] * age_based_survival_rates[0, age - 1]
+
+        # For males, assume proportional distribution
+        for age in range(n_ages):
+            if age >= new_adult_age:
+                if age == new_adult_age:
+                    # At reference age, allocate males proportionally
+                    male_count = expected_num_adult_females * (1.0 - sex_ratio) / sex_ratio
+                    expected_distribution[1, age] = male_count
+                else:
+                    # Older males: forward propagation
+                    expected_distribution[1, age] = expected_distribution[1, age - 1] * age_based_survival_rates[1, age - 1]
+
+        # Calculate cumulative mating rates for females (holding sperm)
+        p_mated = np.zeros(n_ages, dtype=np.float64)
+        p_unmated = 1.0
+        for age in range(new_adult_age, n_ages):
+            m_rate = age_based_mating_rates[0, age]
+            p_unmated *= (1.0 - m_rate)
+            p_mated[age] = 1.0 - p_unmated
+
+        # Calculate produced age-0 eggs
+        produced_age_0 = 0.0
+        for age in range(new_adult_age, n_ages):
+            n_f = expected_distribution[0, age]
+            produced_age_0 += n_f * p_mated[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
+
+        # Calculate sex-weighted age-0 survival rate
+        s_0_avg = sex_ratio * age_based_survival_rates[0, 0] + (1.0 - sex_ratio) * age_based_survival_rates[1, 0]
+
+        # Infer carrying capacity: at equilibrium, age-1 total = produced_age_0 * s_0_avg * expected_survival_rate
+        # For simplicity, assume expected_survival_rate ≈ 1.0 at equilibrium
+        # => K ≈ produced_age_0 * s_0_avg
+        if produced_age_0 > 1e-10:
+            carrying_capacity = produced_age_0 * s_0_avg
+        else:
+            carrying_capacity = expected_eggs_per_female * expected_num_adult_females
+
+        return max(1.0, carrying_capacity)
 
     @staticmethod
     def _get_all_haploid_genotypes(species: Species) -> List[HaploidGenome]:
@@ -586,10 +799,6 @@ class PopulationConfigBuilder:
         if fcount <= 0:
             return {}
         return dict.fromkeys(range(new_adult_age, n_ages), fcount)
-
-        raise TypeError(
-            f"Age data must be List/Tuple/NDArray, Dict, or numeric scalar, got {type(age_data)}"
-        )
 
     @staticmethod
     def resolve_age_structured_initial_individual_count(
@@ -947,6 +1156,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.relative_competition_factor: float = 1.0
         self.juvenile_growth_mode: Union[int, str] = LOGISTIC
         self.low_density_growth_rate: float = 1.0
+        self.age_1_carrying_capacity: Optional[int] = None
         self.old_juvenile_carrying_capacity: Optional[int] = None
         self.expected_num_adult_females: Optional[int] = None
 
@@ -1111,6 +1321,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         competition_strength: float = 5.0,
         juvenile_growth_mode: Union[int, str] = "logistic",
         low_density_growth_rate: float = 6.0,
+        age_1_carrying_capacity: Optional[int] = None,
         old_juvenile_carrying_capacity: Optional[int] = None,
         expected_num_adult_females: Optional[int] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
@@ -1121,7 +1332,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             competition_strength (float): Intensity of competition factor.
             juvenile_growth_mode (Union[int, str]): Growth model ("logistic", etc.).
             low_density_growth_rate (float): Growth rate at low density.
-            old_juvenile_carrying_capacity (Optional[int]): Capacity for older juveniles.
+            age_1_carrying_capacity (Optional[int]): Population capacity at age=1.
+            old_juvenile_carrying_capacity (Optional[int]): Alias for age_1_carrying_capacity (deprecated).
             expected_num_adult_females (Optional[int]): Equilibrium number of adult females.
             equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
 
@@ -1131,8 +1343,10 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.relative_competition_factor = competition_strength
         self.juvenile_growth_mode = juvenile_growth_mode
         self.low_density_growth_rate = low_density_growth_rate
-        if old_juvenile_carrying_capacity is not None:
-            self.old_juvenile_carrying_capacity = old_juvenile_carrying_capacity
+        if age_1_carrying_capacity is not None:
+            self.age_1_carrying_capacity = age_1_carrying_capacity
+        elif old_juvenile_carrying_capacity is not None:
+            self.age_1_carrying_capacity = old_juvenile_carrying_capacity
         if expected_num_adult_females is not None:
             self.expected_num_adult_females = expected_num_adult_females
         if equilibrium_distribution is not None:
@@ -1353,8 +1567,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             relative_competition_factor=self.relative_competition_factor,
             juvenile_growth_mode=self.juvenile_growth_mode,
             low_density_growth_rate=self.low_density_growth_rate,
-            carrying_capacity=None,
-            old_juvenile_carrying_capacity=self.old_juvenile_carrying_capacity,
+            age_1_carrying_capacity=self.age_1_carrying_capacity,
+            old_juvenile_carrying_capacity=None,
             expected_num_adult_females=self.expected_num_adult_females,
             equilibrium_individual_distribution=self.equilibrium_individual_distribution,
             gamete_modifiers=self.gamete_modifiers,
@@ -1803,7 +2017,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             relative_competition_factor=1.0,
             juvenile_growth_mode=self.juvenile_growth_mode,
             low_density_growth_rate=self.low_density_growth_rate,
-            carrying_capacity=self.carrying_capacity,
+            age_1_carrying_capacity=self.carrying_capacity,
             old_juvenile_carrying_capacity=None,
             expected_num_adult_females=(
                 self.carrying_capacity * self.sex_ratio

@@ -145,7 +145,7 @@ pop = (nt.AgeStructuredPopulation
     )
     .competition(
         juvenile_growth_mode=1,        # 1: fixed competition mode
-        old_juvenile_carrying_capacity=1200
+        age_1_carrying_capacity=1200
     )
     .build()
 )
@@ -418,7 +418,7 @@ pop = (nt.AgeStructuredPopulation
         male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
     .reproduction(eggs_per_female=100, sex_ratio=0.5, use_sperm_storage=True)
-    .competition(juvenile_growth_mode=1, old_juvenile_carrying_capacity=1200)
+    .competition(juvenile_growth_mode=1, age_1_carrying_capacity=1200)
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)
     .hooks(release_drive)

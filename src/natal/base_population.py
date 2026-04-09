@@ -39,6 +39,7 @@ from natal.helpers import resolve_sex_label
 from natal.hook_dsl import CompiledEventHooks
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.numba_utils import is_numba_enabled
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
 
@@ -184,6 +185,7 @@ class BasePopulation(ABC, Generic[T_State]):
         for event_name, func, hook_name, hook_id in self._pending_hooks:
             self.set_hook(event_name, func, hook_id=hook_id, hook_name=hook_name, compile=True)
         self._pending_hooks.clear()
+        self._hook_executor = None
 
     # ========================================================================
     # Registry and Genotype Initialization
@@ -978,6 +980,11 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # Check if function has @hook metadata and should be compiled
         hook_meta = getattr(func, '_hook_meta', None)
+        if is_numba_enabled() and hook_meta is None:
+            raise TypeError(
+                "Python-layer hooks are not allowed when Numba is enabled. "
+                "Use @hook(...) with a compilable body or disable Numba."
+            )
 
         if compile and hook_meta is not None:
             # Use the hook's register method with event override
@@ -990,6 +997,7 @@ class BasePopulation(ABC, Generic[T_State]):
                     register_fn(self, event_override=event_name, deme_selector_override=deme_selector)
                 # Compiled hooks are stored in _compiled_hooks.
                 # Only selector-mode hooks with py_wrapper are mirrored to _hooks.
+                self._hook_executor = None
                 return
 
         # Traditional registration (no compilation)
@@ -1006,6 +1014,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self._hooks[event_name].append((hook_id, actual_name, func))
         # Sort by hook ID to preserve execution order.
         self._hooks[event_name].sort(key=lambda x: x[0])
+        self._hook_executor = None
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """
@@ -1082,6 +1091,7 @@ class BasePopulation(ABC, Generic[T_State]):
         original_len = len(self._hooks[event_name])
         self._hooks[event_name] = [(hid, name, func) for hid, name, func in self._hooks[event_name]
                                     if hid != hook_id]
+        self._hook_executor = None
         return len(self._hooks[event_name]) < original_len
 
     # ========================================================================
@@ -1102,6 +1112,7 @@ class BasePopulation(ABC, Generic[T_State]):
             (or by HookExecutor when trigger_event is used).
         """
         self._compiled_hooks.append(desc)
+        self._hook_executor = None
 
         from natal.numba_utils import NUMBA_ENABLED
         if NUMBA_ENABLED and desc.py_wrapper is not None and desc.njit_fn is None:
@@ -1127,6 +1138,35 @@ class BasePopulation(ABC, Generic[T_State]):
             self._hooks[event_name].append((hook_id, desc.name, hook_func))
             self._hooks[event_name].sort(key=lambda x: x[0])
 
+    def has_python_hooks(self) -> bool:
+        """Return whether any Python-layer hooks are currently registered."""
+        hooks_map = cast(Dict[str, List[HookEntry]], getattr(self, "_hooks", {}))
+        return any(len(entries) > 0 for entries in hooks_map.values())
+
+    def has_mixed_hook_types(self) -> bool:
+        """Return whether any event mixes declarative/njit/python hook types."""
+        for event_name in self.ALLOWED_EVENTS:
+            kinds: set[str] = set()
+            for desc in self.get_compiled_hooks(event_name):
+                if getattr(desc, "plan", None) is not None:
+                    kinds.add("declarative")
+                if getattr(desc, "njit_fn", None) is not None:
+                    kinds.add("njit")
+                if getattr(desc, "py_wrapper", None) is not None and getattr(desc, "njit_fn", None) is None:
+                    kinds.add("python")
+            if len(kinds) > 1:
+                return True
+        return False
+
+    def should_use_python_dispatch(self) -> bool:
+        """Return whether this population should run with Python event dispatch."""
+        return self.has_mixed_hook_types() or (not is_numba_enabled() and self.has_python_hooks())
+
+    def ensure_hook_executor(self) -> None:
+        """Build HookExecutor lazily for Python event-dispatch paths."""
+        if self._hook_executor is None:
+            self._hook_executor = self._build_hook_executor()
+
     def register_compiled_hook(self, desc: Any) -> None:
         """Public wrapper for registering compiled hooks."""
         self._register_compiled_hook(desc)
@@ -1140,7 +1180,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             List of CompiledHookDescriptor sorted by priority.
         """
-        hooks = self._compiled_hooks
+        hooks = cast(List[Any], getattr(self, "_compiled_hooks", []))
         if event is not None:
             hooks = [h for h in hooks if h.event == event]
         return sorted(hooks, key=lambda h: h.priority)

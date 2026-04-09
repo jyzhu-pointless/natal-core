@@ -161,10 +161,23 @@ Builder 链式配置
 |---|---|---|---|---|---|
 | `competition_strength` | `float` | 幼体竞争的强度因子。 | `5.0` | 幼体密度调节 | 影响密度制约效应的强弱；越大则调控效应越强。 |
 | `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`, `"beverton_holt"` 等模式；通常用 `logistic`。 |
-| `low_density_growth_rate` | `float` | 低密度下的内秱增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；过大易导致種群振荡。 |
-| `old_juvenile_carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 幼体密度调节 | 若指定则优先使用；否则从 `expected_num_adult_females` 推导。 |
-| `expected_num_adult_females` | `Optional[int]` | 期望的成体雌性数量。 | `None` | 容量推导 | 用于推导承载容量；若已指定 `old_juvenile_carrying_capacity` 则无须提供。 |
+| `low_density_growth_rate` | `float` | 低密度增长率（内禀增长率）。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；过大易导致种群振荡。 |
+| `age_1_carrying_capacity` | `Optional[int]` | 年龄=1处的种群承载容量。 | `None` | 幼体密度调节 | 若指定则优先使用（最高优先级）。 |
+| `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 的别名（已弃用）。 | `None` | 幼体密度调节 | 遗留参数名，两个参数都可用，但推荐使用 `age_1_carrying_capacity`。 |
+| `expected_num_adult_females` | `Optional[int]` | 期望的成体雌性数量。 | `None` | 容量推导 | 用于通过平衡分布分析推导承载容量（下见说明）。 |
 | `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 平衡分布辅助参数。 | `None` | 标度辅助 | 与 `age_structure` 同名参数；后设值覆盖先设值。 |
+
+**承载容量解析逻辑：**
+
+当不指定 `age_1_carrying_capacity` 或 `old_juvenile_carrying_capacity` 时，系统通过平衡分布分析使用 `expected_num_adult_females` 推导承载容量：
+
+1. 若提供 `age_1_carrying_capacity` 或 `old_juvenile_carrying_capacity`（遗留别名），使用该值（最高优先级）。
+2. 若提供 `expected_num_adult_females`，系统利用基于年龄的存活率将此数量分配到各年龄阶段。
+3. 基于平衡年龄分布，计算来自成体雌性的期望 age-0 卵子产量（考虑交配率和生育权重）。
+4. 从 age-0 产量和 age-0 到 age-1 的基础存活率推断承载容量（K 在 age=1）。
+5. 若无可用的承载容量源，系统尝试从初始状态（`initial_state()`）推导（如已提供）。
+
+该方法确保承载容量与平衡种群分布一致，而不是采用幼稚的标度因子。
 
 ### 3.7 `presets(...)`
 

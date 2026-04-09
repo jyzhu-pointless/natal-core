@@ -14,49 +14,48 @@ from natal.spatial_topology import HexGrid
 from natal.ui import launch
 
 
+@nt.hook(event="first", priority=0, deme_selector=40)
+def release_drive_carriers():
+    return [
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=100, when="tick == 10")
+    ]
+
 def build_deme(
     species: nt.Species,
     *,
     name: str,
     wt_adults: float,
     drive_adults: float,
-) -> nt.AgeStructuredPopulation:
+) -> nt.DiscreteGenerationPopulation:
     """Build one deterministic deme for the UI demo."""
     return (
-        nt.AgeStructuredPopulation
+        nt.DiscreteGenerationPopulation
         .setup(species=species, name=name, stochastic=False)
-        .age_structure(n_ages=5, new_adult_age=1)
         .initial_state(
             individual_count={
                 "female": {
-                    "WT|WT": [0.0, wt_adults, 0.0, 0.0, 0.0],
-                    "Dr|WT": [0.0, drive_adults, 0.0, 0.0, 0.0],
+                    "WT|WT": wt_adults,
+                    "Dr|WT": drive_adults,
                 },
                 "male": {
-                    "WT|WT": [0.0, wt_adults, 0.0, 0.0, 0.0],
-                    "Dr|WT": [0.0, drive_adults, 0.0, 0.0, 0.0],
+                    "WT|WT": wt_adults,
+                    "Dr|WT": drive_adults,
                 },
             }
         )
-        .survival(
-            female_age_based_survival_rates=[1.0, 0.96, 0.9, 0.75, 0.0],
-            male_age_based_survival_rates=[1.0, 0.96, 0.9, 0.75, 0.0],
-        )
         .reproduction(
-            female_age_based_mating_rates=[0.0, 1.0, 1.0, 0.8, 0.0],
-            male_age_based_mating_rates=[0.0, 1.0, 1.0, 0.8, 0.0],
-            eggs_per_female=10.0,
-            use_sperm_storage=False,
+            eggs_per_female=50.0,
         )
         .competition(
-            juvenile_growth_mode="logistic",
-            expected_num_adult_females=240,
+            juvenile_growth_mode="concave",
+            carrying_capacity=1000,
+            low_density_growth_rate=6.0
         )
         .build()
     )
 
 
-def share_config(demes: list[nt.AgeStructuredPopulation]) -> None:
+def share_config(demes: list[nt.DiscreteGenerationPopulation]) -> None:
     """Share one compiled config object across demes."""
     shared_config = demes[0].export_config()
     for deme in demes[1:]:
@@ -75,8 +74,9 @@ def build_hex_spatial_population() -> SpatialPopulation:
     )
 
     initial_pairs = [
-        (0.0, 255.0),
-    ]*25
+        (500.0, 0.0),
+    ]*81
+
     demes = [
         build_deme(
             species,
@@ -91,7 +91,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
     # Hex kernels still use a 3x3 matrix; valid offsets are interpreted by HexGrid.
     return SpatialPopulation(
         demes=demes,
-        topology=HexGrid(rows=5, cols=5, wrap=False),
+        topology=HexGrid(rows=9, cols=9, wrap=False),
         migration_kernel=np.array(
             [
                 [0.00, 0.10, 0.05],

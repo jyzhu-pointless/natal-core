@@ -7,9 +7,10 @@ from typing import Any, cast
 
 import numpy as np
 
+import natal as nt
 from natal.base_population import BasePopulation
 from natal.genetic_structures import Species
-from natal.hook_dsl import CompiledEventHooks
+from natal.hook_dsl import CompiledEventHooks, Op, hook
 from natal import numba_compat as nbc
 from natal.population_state import DiscretePopulationState, PopulationState
 from natal.spatial_population import SpatialPopulation
@@ -417,3 +418,70 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         assert female_total >= sperm_total
         assert np.allclose(deme.state.individual_count, np.round(deme.state.individual_count))
         assert np.allclose(deme.state.sperm_storage, np.round(deme.state.sperm_storage))
+
+
+def test_spatial_mixed_hook_priority_ordering_runs_in_run_tick_and_run():
+    species = _make_species("spatial_mixed_priority")
+    calls: list[str] = []
+    observed: dict[str, list[float]] = {
+        "first_py": [],
+        "first_njit": [],
+        "early_probe": [],
+    }
+
+    def _build_deme(name: str) -> nt.DiscreteGenerationPopulation:
+        return (
+            nt.DiscreteGenerationPopulation.setup(species=species, name=name, stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 10.0]},
+                    "male": {"WT|WT": [0.0, 10.0]},
+                }
+            )
+            .reproduction(eggs_per_female=0.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .build()
+        )
+
+    d0 = _build_deme("mixed_d0")
+    d1 = _build_deme("mixed_d1")
+
+    # Spatial kernels require one shared config object.
+    d1._config = d0.export_config()  # type: ignore[attr-defined]
+
+    @hook(event="first", priority=0)
+    def first_python(population):  # type: ignore[no-untyped-def]
+        calls.append("py")
+        observed["first_py"].append(float(population.state.individual_count[1, 1, 0]))
+
+    @hook(event="first", priority=1, numba=True)
+    def first_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
+        _ = (tick, deme_id)
+        calls.append("njit")
+        observed["first_njit"].append(float(ind_count[1, 1, 0]))
+        ind_count[1, 1, 0] += 2.0
+        return 0
+
+    @hook(event="first", priority=2)
+    def first_csr():
+        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
+
+    @hook(event="early", priority=0)
+    def early_probe(population):  # type: ignore[no-untyped-def]
+        observed["early_probe"].append(float(population.state.individual_count[1, 1, 0]))
+
+    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    spatial.set_hook("first", first_csr)
+    spatial.set_hook("first", first_njit)
+    spatial.set_hook("first", first_python)
+    spatial.set_hook("early", early_probe)
+
+    spatial.run_tick()
+    spatial.run(n_steps=1)
+
+    # 2 demes * 2 ticks: py/njit each called 4 times, per-deme order fixed.
+    assert calls == ["py", "njit", "py", "njit", "py", "njit", "py", "njit"]
+    assert observed["first_py"] == [10.0, 10.0, 0.0, 0.0]
+    assert observed["first_njit"] == [10.0, 10.0, 0.0, 0.0]
+    # early probes confirm csr (+3) is applied after njit (+2) each tick.
+    assert observed["early_probe"] == [15.0, 15.0, 5.0, 5.0]

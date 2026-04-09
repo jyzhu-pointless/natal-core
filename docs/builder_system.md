@@ -162,9 +162,22 @@ Format and length requirements (source behaviour):
 | `competition_strength` | `float` | Intensity factor of juvenile competition. | `5.0` | juvenile density regulation | Affects strength of density regulation effect; larger value = stronger control. |
 | `juvenile_growth_mode` | `int\|str` | Juvenile growth density regulation mode. | `"logistic"` | juvenile density regulation | Supports `"logistic"`, `"beverton_holt"` etc.; commonly use `logistic`. |
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density. | `6.0` | juvenile density regulation | Represents multiplication factor without competition; too high may cause oscillations. |
-| `old_juvenile_carrying_capacity` | `Optional[int]` | Carrying capacity for juveniles. | `None` | juvenile density regulation | If specified, takes precedence; otherwise derived from `expected_num_adult_females`. |
-| `expected_num_adult_females` | `Optional[int]` | Expected count of adult females. | `None` | capacity derivation | Used to derive carrying capacity; unnecessary if `old_juvenile_carrying_capacity` specified. |
+| `age_1_carrying_capacity` | `Optional[int]` | Population carrying capacity at age=1. | `None` | juvenile density regulation | If specified, takes precedence over other sources (highest priority). |
+| `old_juvenile_carrying_capacity` | `Optional[int]` | Alias for `age_1_carrying_capacity` (deprecated). | `None` | juvenile density regulation | Legacy parameter name; both parameters work but `age_1_carrying_capacity` is preferred. |
+| `expected_num_adult_females` | `Optional[int]` | Expected count of adult females. | `None` | capacity derivation | Used to infer carrying capacity via equilibrium analysis (see note below). |
 | `equilibrium_distribution` | `Optional[list/ndarray]` | Auxiliary equilibrium distribution. | `None` | scaling helper | Same name parameter as `age_structure`; later value overrides earlier. |
+
+**Carrying capacity resolution logic:**
+
+When neither `age_1_carrying_capacity` nor `old_juvenile_carrying_capacity` are specified, `expected_num_adult_females` is used to infer the carrying capacity through equilibrium distribution analysis:
+
+1. If `age_1_carrying_capacity` or `old_juvenile_carrying_capacity` (legacy alias) is provided, that value is used (highest priority).
+2. If `expected_num_adult_females` is provided, the system distributes this count across age classes using age-based survival rates.
+3. Based on the equilibrium age distribution, it computes the expected age-0 egg production from adult females using mating rates and fertility weights.
+4. The inferred carrying capacity (K at age=1) is computed from the age-0 production and base survival rate from age-0 to age-1.
+5. If no carrying capacity source is available, the system attempts to infer from initial state (`initial_state()`) if provided.
+
+This approach ensures that the carrying capacity is consistent with the equilibrium population distribution, rather than using a naive scaling factor.
 
 ### 3.7 `presets(...)`
 

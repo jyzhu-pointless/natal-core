@@ -117,6 +117,12 @@ my_hook.register(pop)
 
 If multiple hooks exist, it is recommended to specify execution order via `priority` to avoid implicit ordering that makes results hard to reproduce. `register` is mainly a convenience method provided by the `@hook` decorator; the core binding method remains `set_hook(...)`.
 
+### 7.3 Numba Mode and Mixed Hook Types
+
+- When global `NUMBA_ENABLED=True`, Python-layer hooks are rejected at registration time.
+- When global `NUMBA_ENABLED=False`, Python hooks are automatically executed in `run(...)` / `run_tick()`.
+- If one event mixes different hook types (declarative CSR, njit, Python), execution falls back to unified Python event dispatch so that cross-type ordering follows `priority`.
+
 ## 8. Relationship with `run` / `run_tick`
 
 Hooks are automatically executed in event order when calling `run(...)` or `run_tick()`.

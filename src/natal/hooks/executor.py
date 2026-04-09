@@ -542,44 +542,62 @@ class HookExecutor:
         tick: int,
         deme_id: int = 0,
     ) -> int:
-        """Run one event with phase ordering: CSR -> njit -> Python.
-
-        ``deme_id`` is only used for hook descriptor filtering (``deme_selector``).
-        CSR declarative plans remain event-scoped and run first as before.
-        """
+        """Run one event with priority ordering across hook types."""
         if event_id < 0 or event_id >= NUM_EVENTS:
             return RESULT_CONTINUE
 
         ind_count = population.state.individual_count
 
         # Prepare optional sperm-storage arrays for kernels that require them.
-        sperm_store = population.state.sperm_storage
+        sperm_store = getattr(population.state, "sperm_storage", None)
         has_sperm_storage = sperm_store is not None and sperm_store.size > 0
         if not has_sperm_storage:
             sperm_store = np.zeros((0, 0, 0), dtype=np.float64)
+        assert sperm_store is not None
         is_stochastic = bool(getattr(getattr(population, "_config", None), "is_stochastic", False))
         use_continuous_sampling = bool(
             getattr(getattr(population, "_config", None), "use_continuous_sampling", False)
         )
 
-        result = execute_csr_event_program_with_state(
-            self.registry,
-            event_id,
-            ind_count,
-            sperm_store,
-            tick,
-            is_stochastic,
-            has_sperm_storage,
-            use_continuous_sampling,
-            deme_id,
-        )
-        if result == RESULT_STOP:
-            return RESULT_STOP
+        from ..numba_utils import NUMBA_ENABLED
 
-        # Phase 2: user-provided njit hooks (filtered by deme_selector).
+        # Unified timeline: descriptors are pre-sorted by priority (stable).
         for desc in self.hooks_by_event.get(event_id, []):
             if not deme_selector_matches(desc.deme_selector, deme_id):
                 continue
+
+            if desc.plan is not None:
+                result = execute_csr_event_arrays(
+                    np.int32(1),
+                    np.int32(1),
+                    np.array([0, 1], dtype=np.int32),
+                    np.array([desc.plan.n_ops], dtype=np.int32),
+                    np.array([0, desc.plan.n_ops], dtype=np.int32),
+                    desc.plan.op_types,
+                    desc.plan.gidx_offsets,
+                    desc.plan.gidx_data,
+                    desc.plan.age_offsets,
+                    desc.plan.age_data,
+                    desc.plan.sex_masks.flatten(),
+                    desc.plan.params,
+                    desc.plan.condition_offsets,
+                    desc.plan.condition_types,
+                    desc.plan.condition_params,
+                    np.array([0], dtype=np.int32),   # selector ANY
+                    np.array([0, 0], dtype=np.int32),
+                    np.array([], dtype=np.int32),
+                    0,
+                    ind_count,
+                    sperm_store,
+                    has_sperm_storage,
+                    tick,
+                    is_stochastic,
+                    use_continuous_sampling,
+                    deme_id,
+                )
+                if result == RESULT_STOP:
+                    return RESULT_STOP
+
             if desc.njit_fn is not None:
                 try:
                     result = desc.njit_fn(ind_count, tick, deme_id)
@@ -588,12 +606,6 @@ class HookExecutor:
                 except Exception as e:
                     raise RuntimeError(f"Error in njit hook '{desc.name}': {e}") from e
 
-        from ..numba_utils import NUMBA_ENABLED
-
-        # Phase 3: python wrappers (filtered by deme_selector; disallowed when NUMBA_ENABLED is True).
-        for desc in self.hooks_by_event.get(event_id, []):
-            if not deme_selector_matches(desc.deme_selector, deme_id):
-                continue
             if desc.py_wrapper is not None and desc.njit_fn is None:
                 if NUMBA_ENABLED:
                     raise RuntimeError(

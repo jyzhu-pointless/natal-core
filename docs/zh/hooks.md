@@ -117,6 +117,12 @@ my_hook.register(pop)
 
 如果存在多个 Hook，建议通过 `priority` 明确执行顺序，避免隐式顺序导致结果难以复现。`register` 主要是 `@hook` 装饰器返回对象的便捷语法，核心绑定方式仍然是 `set_hook(...)`。
 
+### 7.3 Numba 模式与混合类型 Hook
+
+- 当全局 `NUMBA_ENABLED=True` 时，Python 层 Hook 会在注册阶段被拒绝。
+- 当全局 `NUMBA_ENABLED=False` 时，Python Hook 会在 `run(...)` / `run_tick()` 中自动执行。
+- 如果同一事件混用了 declarative CSR、njit、Python 三类 Hook，运行时会自动切到统一 Python 事件调度，确保跨类型按 `priority` 排序执行。
+
 ## 8. 与 run / run_tick 的关系
 
 Hook 会在 `run(...)` 与 `run_tick()` 中按事件顺序自动执行。

@@ -237,6 +237,61 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     def _step_aging(self) -> None:
         self._state_nn.individual_count[:] = sk.run_discrete_aging(self._state_nn.individual_count)
 
+    def _run_python_dispatch(
+        self,
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> DiscreteGenerationPopulation:
+        """Run using Python event dispatch so py_wrapper hooks are honored."""
+        from natal.hook_dsl import RESULT_CONTINUE
+
+        self.ensure_hook_executor()
+
+        if clear_history_on_start:
+            self.clear_history()
+
+        if record_every > 0 and (self._tick % record_every == 0):
+            self.create_history_snapshot()
+
+        was_stopped = False
+        for _ in range(n_steps):
+            if self.trigger_event("first", deme_id=0) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            self._step_reproduction()
+
+            if self.trigger_event("early", deme_id=0) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            self._step_survival()
+
+            if self.trigger_event("late", deme_id=0) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            self._step_aging()
+
+            self._tick += 1
+            self._state = DiscretePopulationState(
+                n_tick=int(self._tick),
+                individual_count=self._state_nn.individual_count,
+            )
+
+            if record_every > 0 and (self._tick % record_every == 0):
+                self.create_history_snapshot()
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
+
     def run(
         self,
         n_steps: int = 1,
@@ -248,6 +303,14 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             raise RuntimeError(
                 f"Population '{self.name}' has finished. "
                 "Cannot run() again after finish=True."
+            )
+
+        if self.should_use_python_dispatch():
+            return self._run_python_dispatch(
+                n_steps=n_steps,
+                record_every=record_every,
+                finish=finish,
+                clear_history_on_start=clear_history_on_start,
             )
 
         hooks = self.get_compiled_event_hooks()

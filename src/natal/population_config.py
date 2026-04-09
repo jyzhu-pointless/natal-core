@@ -372,6 +372,7 @@ def build_population_config(
     initial_individual_count: Optional[NDArray[np.float64]] = None,
     initial_sperm_storage: Optional[NDArray[np.float64]] = None,
     population_scale: float = 1.0,
+    age_1_carrying_capacity: Optional[float] = None,
     old_juvenile_carrying_capacity: Optional[float] = None,
     expected_num_adult_females: Optional[float] = None,
     infer_capacity_from_initial_state: bool = True,
@@ -422,7 +423,8 @@ def build_population_config(
             n_genotypes). If None, filled with zeros.
         population_scale: Scaling factor for carrying capacity and expected
             adult females.
-        old_juvenile_carrying_capacity: Legacy name for base carrying capacity.
+        age_1_carrying_capacity: Population carrying capacity at age=1.
+        old_juvenile_carrying_capacity: Alias for age_1_carrying_capacity (deprecated, use age_1_carrying_capacity).
         expected_num_adult_females: Expected number of adult females (unscaled).
         infer_capacity_from_initial_state: If True and carrying_capacity is None,
             compute base capacity from initial_individual_count.
@@ -460,8 +462,10 @@ def build_population_config(
     else:
         init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_hg_glabs), dtype=np.float64)
 
-    if old_juvenile_carrying_capacity is not None:
-        base_carrying_capacity = float(old_juvenile_carrying_capacity)
+    # Support both age_1_carrying_capacity and old_juvenile_carrying_capacity (alias)
+    resolved_age_1_carrying_capacity = age_1_carrying_capacity or old_juvenile_carrying_capacity
+    if resolved_age_1_carrying_capacity is not None:
+        base_carrying_capacity = float(resolved_age_1_carrying_capacity)
     elif carrying_capacity is not None:
         base_carrying_capacity = float(carrying_capacity)
     elif infer_capacity_from_initial_state and initial_individual_count is not None:
