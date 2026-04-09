@@ -151,9 +151,6 @@ def _apply_numba_cache_dir() -> None:
         pass
 
 
-_apply_numba_cache_dir()
-
-
 def _start_compile_feedback(fn_name: str) -> Optional[CompileFeedback]:
     """Emit immediate compile start feedback and animate a TTY spinner on one line."""
     if not NUMBA_LOG_ENABLED:

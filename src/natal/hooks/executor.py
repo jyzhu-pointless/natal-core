@@ -620,3 +620,184 @@ class HookExecutor:
 
     def get_hooks_for_event(self, event_id: int) -> List[CompiledHookDescriptor]:
         return self.hooks_by_event.get(event_id, [])
+
+
+def run_discrete_with_hooks(
+    population: Any,
+    *,
+    n_steps: int,
+    record_every: int,
+    finish: bool,
+    clear_history_on_start: bool,
+) -> Any:
+    """Run one discrete population through HookExecutor-coordinated timeline."""
+    from natal.kernels import simulation_kernels as sk
+    from natal.population_state import DiscretePopulationState
+
+    population.ensure_hook_executor()
+
+    if clear_history_on_start:
+        population.clear_history()
+
+    if record_every > 0 and (population._tick % record_every == 0):
+        population.create_history_snapshot()
+
+    was_stopped = False
+    for _ in range(n_steps):
+        if population.trigger_event("first", deme_id=0) != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+        population._state_nn.individual_count[:] = sk.run_discrete_reproduction(
+            population._state_nn.individual_count,
+            population._config_nn,
+        )
+
+        if population.trigger_event("early", deme_id=0) != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+        population._state_nn.individual_count[:] = sk.run_discrete_survival(
+            population._state_nn.individual_count,
+            population._config_nn,
+        )
+
+        if population.trigger_event("late", deme_id=0) != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+        population._state_nn.individual_count[:] = sk.run_discrete_aging(
+            population._state_nn.individual_count,
+        )
+
+        population._tick += 1
+        population._state = DiscretePopulationState(
+            n_tick=int(population._tick),
+            individual_count=population._state_nn.individual_count,
+        )
+
+        if record_every > 0 and (population._tick % record_every == 0):
+            population.create_history_snapshot()
+
+    if was_stopped:
+        population._finished = True
+        population.trigger_event("finish")
+    elif finish:
+        population.finish_simulation()
+
+    return population
+
+
+def run_age_structured_with_hooks(
+    population: Any,
+    *,
+    n_steps: int,
+    record_every: int,
+    finish: bool,
+    clear_history_on_start: bool,
+) -> Any:
+    """Run one age-structured population through HookExecutor timeline."""
+    from natal.kernels import simulation_kernels as sk
+    from natal.population_state import PopulationState
+
+    population.ensure_hook_executor()
+
+    if clear_history_on_start:
+        population.clear_history()
+
+    if record_every > 0 and (population._tick % record_every == 0):
+        population.create_history_snapshot()
+
+    was_stopped = False
+    for _ in range(n_steps):
+        if population.trigger_event("first", deme_id=0) != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+        ind_next, sperm_next = sk.run_reproduction(
+            population._state_nn.individual_count,
+            population._state_nn.sperm_storage,
+            population._config_nn,
+        )
+        population._state_nn.individual_count[:] = ind_next
+        population._state_nn.sperm_storage[:] = sperm_next
+
+        if population.trigger_event("early", deme_id=0) != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+        ind_next, sperm_next = sk.run_survival(
+            population._state_nn.individual_count,
+            population._state_nn.sperm_storage,
+            population._config_nn,
+        )
+        population._state_nn.individual_count[:] = ind_next
+        population._state_nn.sperm_storage[:] = sperm_next
+
+        if population.trigger_event("late", deme_id=0) != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+        ind_next, sperm_next = sk.run_aging(
+            population._state_nn.individual_count,
+            population._state_nn.sperm_storage,
+            population._config_nn,
+        )
+        population._state_nn.individual_count[:] = ind_next
+        population._state_nn.sperm_storage[:] = sperm_next
+
+        population._tick += 1
+        population._state = PopulationState(
+            n_tick=int(population._tick),
+            individual_count=population._state_nn.individual_count,
+            sperm_storage=population._state_nn.sperm_storage,
+        )
+
+        if record_every > 0 and (population._tick % record_every == 0):
+            population.create_history_snapshot()
+
+    if was_stopped:
+        population._finished = True
+        population.trigger_event("finish")
+    elif finish:
+        population.finish_simulation()
+
+    return population
+
+
+def run_spatial_tick_with_hooks(spatial_population: Any) -> bool:
+    """Run one spatial tick via deme-local run_tick plus shared migration."""
+    from natal.spatial_simulation_kernels import run_spatial_migration
+
+    for deme in spatial_population._demes:
+        deme.run_tick()
+        if bool(getattr(deme, "_finished", False)):
+            return True
+
+    spatial_population._tick = int(spatial_population._demes[0].tick)
+
+    config = spatial_population._shared_config()
+    ind_all, sperm_all = spatial_population._stack_deme_state_arrays()
+
+    effective_adjacency = spatial_population._adjacency
+    effective_migration_mode_code = spatial_population._migration_mode_code
+    if spatial_population._heterogeneous_kernel_adjacency is not None:
+        effective_adjacency = spatial_population._heterogeneous_kernel_adjacency
+        effective_migration_mode_code = 0
+
+    ind_all, sperm_all = run_spatial_migration(
+        ind_count_all=ind_all,
+        sperm_store_all=sperm_all,
+        adjacency=effective_adjacency,
+        migration_mode=effective_migration_mode_code,
+        topology_rows=0 if spatial_population._topology is None else int(spatial_population._topology.rows),
+        topology_cols=0 if spatial_population._topology is None else int(spatial_population._topology.cols),
+        topology_wrap=False if spatial_population._topology is None else bool(spatial_population._topology.wrap),
+        migration_kernel=spatial_population._migration_kernel_array(),
+        kernel_include_center=bool(spatial_population._kernel_include_center),
+        config=config,
+        migration_rate=float(spatial_population._migration_rate),
+    )
+
+    spatial_population._apply_stacked_state(ind_all, sperm_all, int(spatial_population._tick))
+    return False

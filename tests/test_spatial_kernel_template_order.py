@@ -10,12 +10,8 @@ def test_spatial_template_stage_order_is_strict():
     tick_def = source.index("def __RUN_SPATIAL_TICK_NAME__")
     tick_body = source[tick_def:]
 
-    idx_first = tick_body.index("_first_event")
-    idx_repro = tick_body.index("run_spatial_reproduction")
-    idx_early = tick_body.index("_early_event")
-    idx_surv = tick_body.index("run_spatial_survival")
-    idx_late = tick_body.index("_late_event")
-    idx_aging = tick_body.index("run_spatial_aging")
-    idx_mig = tick_body.index("run_spatial_migration")
+    idx_tick_with_migration = tick_body.index("run_spatial_tick_with_migration")
+    idx_adjacency = tick_body.index("adjacency=adjacency")
+    idx_migration_rate = tick_body.index("migration_rate=migration_rate")
 
-    assert idx_first < idx_repro < idx_early < idx_surv < idx_late < idx_aging < idx_mig
+    assert idx_tick_with_migration < idx_adjacency < idx_migration_rate

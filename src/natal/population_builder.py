@@ -84,7 +84,6 @@ class PopulationConfigBuilder:
     encapsulating the complexity of converting builder parameters.
     """
 
-    # TODO: where should the initial state be configured?
     @staticmethod
     def build(
         species: Species,

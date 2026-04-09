@@ -9,4 +9,5 @@ def test_hatch_build_configuration_does_not_filter_out_source_tree():
 
     assert "[tool.hatch.build]\ninclude = [" not in pyproject_text
     assert 'packages = ["src/natal"]' in pyproject_text
-    assert 'artifacts = [\n    "src/natal/kernels/templates/*.tmpl",\n]' in pyproject_text
+    assert 'artifacts = [' in pyproject_text
+    assert '"src/natal/kernels/templates/*.tmpl"' in pyproject_text

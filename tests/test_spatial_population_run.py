@@ -485,3 +485,169 @@ def test_spatial_mixed_hook_priority_ordering_runs_in_run_tick_and_run():
     assert observed["first_njit"] == [10.0, 10.0, 0.0, 0.0]
     # early probes confirm csr (+3) is applied after njit (+2) each tick.
     assert observed["early_probe"] == [15.0, 15.0, 5.0, 5.0]
+
+
+def test_spatial_compiled_hooks_are_pinned_to_owning_deme() -> None:
+    species = _make_species("spatial_pinned_hooks")
+
+    def _build_deme(name: str) -> nt.DiscreteGenerationPopulation:
+        return (
+            nt.DiscreteGenerationPopulation.setup(species=species, name=name, stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 2.0]},
+                    "male": {"WT|WT": [0.0, 2.0]},
+                }
+            )
+            .reproduction(eggs_per_female=0.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .build()
+        )
+
+    d0 = _build_deme("pin_d0")
+    d1 = _build_deme("pin_d1")
+
+    @hook(event="first", priority=1)
+    def first_d0():
+        return [Op.add(genotypes="WT|WT", ages=1, sex="female", delta=1.0)]
+
+    @hook(event="first", priority=0)
+    def first_d1():
+        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=1.0)]
+
+    d0.set_hook("first", first_d0)
+    d1.set_hook("first", first_d1)
+
+    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    registry = spatial.hooks.registry
+    assert registry is not None
+
+    start = int(registry.hook_offsets[0])
+    end = int(registry.hook_offsets[1])
+    assert end - start == 2
+    assert registry.deme_selector_types[start:end].tolist() == [1, 1]
+
+    sel0_start = int(registry.deme_selector_offsets[start])
+    sel0_end = int(registry.deme_selector_offsets[start + 1])
+    sel1_start = int(registry.deme_selector_offsets[start + 1])
+    sel1_end = int(registry.deme_selector_offsets[start + 2])
+    assert registry.deme_selector_data[sel0_start:sel0_end].tolist() == [0]
+    assert registry.deme_selector_data[sel1_start:sel1_end].tolist() == [1]
+
+
+def test_spatial_mixed_priority_is_local_per_deme() -> None:
+    species = _make_species("spatial_local_priority_per_deme")
+    calls: list[str] = []
+    observed: dict[str, list[float]] = {"d0_py": [], "d0_early": [], "d1_py": [], "d1_early": []}
+
+    def _build_deme(name: str) -> nt.DiscreteGenerationPopulation:
+        return (
+            nt.DiscreteGenerationPopulation.setup(species=species, name=name, stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 10.0]},
+                    "male": {"WT|WT": [0.0, 10.0]},
+                }
+            )
+            .reproduction(eggs_per_female=0.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .build()
+        )
+
+    d0 = _build_deme("local_d0")
+    d1 = _build_deme("local_d1")
+    d1._config = d0.export_config()  # type: ignore[attr-defined]
+
+    @hook(event="first", priority=0)
+    def d0_py(population):  # type: ignore[no-untyped-def]
+        calls.append("d0_py")
+        observed["d0_py"].append(float(population.state.individual_count[1, 1, 0]))
+
+    @hook(event="first", priority=1, numba=True)
+    def d0_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
+        _ = (tick, deme_id)
+        calls.append("d0_njit")
+        ind_count[1, 1, 0] += 2.0
+        return 0
+
+    @hook(event="first", priority=2)
+    def d0_csr():
+        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
+
+    @hook(event="early", priority=0)
+    def d0_early(population):  # type: ignore[no-untyped-def]
+        observed["d0_early"].append(float(population.state.individual_count[1, 1, 0]))
+
+    @hook(event="first", priority=2)
+    def d1_py(population):  # type: ignore[no-untyped-def]
+        calls.append("d1_py")
+        observed["d1_py"].append(float(population.state.individual_count[1, 1, 0]))
+
+    @hook(event="first", priority=0, numba=True)
+    def d1_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
+        _ = (tick, deme_id)
+        calls.append("d1_njit")
+        ind_count[1, 1, 0] += 4.0
+        return 0
+
+    @hook(event="first", priority=1)
+    def d1_csr():
+        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=5.0)]
+
+    @hook(event="early", priority=0)
+    def d1_early(population):  # type: ignore[no-untyped-def]
+        observed["d1_early"].append(float(population.state.individual_count[1, 1, 0]))
+
+    d0.set_hook("first", d0_csr)
+    d0.set_hook("first", d0_njit)
+    d0.set_hook("first", d0_py)
+    d0.set_hook("early", d0_early)
+
+    d1.set_hook("first", d1_csr)
+    d1.set_hook("first", d1_njit)
+    d1.set_hook("first", d1_py)
+    d1.set_hook("early", d1_early)
+
+    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    spatial.run_tick()
+
+    assert calls == ["d0_py", "d0_njit", "d1_njit", "d1_py"]
+    assert observed["d0_py"] == [10.0]
+    assert observed["d0_early"] == [15.0]
+    assert observed["d1_py"] == [19.0]
+    assert observed["d1_early"] == [19.0]
+
+
+def test_spatial_compiled_local_hooks_still_take_effect() -> None:
+    species = _make_species("spatial_compiled_local_hook_effect")
+
+    def _build_deme(name: str) -> nt.DiscreteGenerationPopulation:
+        return (
+            nt.DiscreteGenerationPopulation.setup(species=species, name=name, stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 10.0]},
+                    "male": {"WT|WT": [0.0, 10.0]},
+                }
+            )
+            .reproduction(eggs_per_female=0.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .build()
+        )
+
+    d0 = _build_deme("csr_d0")
+    d1 = _build_deme("csr_d1")
+    d1._config = d0.export_config()  # type: ignore[attr-defined]
+
+    @hook(event="first", priority=0)
+    def stop_immediately():
+        return [Op.stop_if_above(genotypes="WT|WT", ages=1, sex="male", threshold=1.0)]
+
+    d0.set_hook("first", stop_immediately)
+
+    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    spatial.run_tick()
+
+    assert d0._finished and d1._finished  # type: ignore[attr-defined]
+    with np.testing.assert_raises(RuntimeError):
+        spatial.run_tick()

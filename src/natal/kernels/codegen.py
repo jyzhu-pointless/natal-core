@@ -139,9 +139,22 @@ def compile_spatial_kernel_bound_wrappers(
 ) -> Tuple[Callable[..., Any], Callable[..., Any]]:
     """Compile spatial wrappers bound to one event-hook set.
 
+    Args:
+        first_fn: Bound callable for ``first`` event chain. Kept as part of the
+            cache key for ABI compatibility with existing hook compilation
+            inputs.
+        early_fn: Bound callable for ``early`` event chain.
+        late_fn: Bound callable for ``late`` event chain.
+
+    Returns:
+        Tuple[Callable[..., Any], Callable[..., Any]]:
+            ``(run_spatial_tick_fn, run_spatial_fn)`` callables loaded from the
+            generated module.
+
     The returned callables are ``(run_spatial_tick_fn, run_spatial_fn)``.
-    Spatial phase order inside wrappers is:
-    first -> reproduction -> early -> survival -> late -> aging -> migration.
+    Spatial wrappers execute one full local lifecycle plus migration and do
+    not inject event hooks directly. Spatial hook dispatch is handled by the
+    Python fallback path in ``SpatialPopulation`` when hooks are present.
     """
     key = _hash_key(
         [
@@ -161,6 +174,9 @@ def compile_spatial_kernel_bound_wrappers(
     )
     module_path = _write_codegen_module(module_stem, source)
     module = _load_codegen_module(module_stem, module_path)
+    # Keep symbol binding stable with previous template generations. Current
+    # spatial template does not consume these symbols directly, but preserving
+    # assignment avoids subtle compatibility surprises for cached modules.
     setattr(module, "_FIRST_HOOK", first_fn)   # noqa: B010
     setattr(module, "_EARLY_HOOK", early_fn)   # noqa: B010
     setattr(module, "_LATE_HOOK", late_fn)     # noqa: B010

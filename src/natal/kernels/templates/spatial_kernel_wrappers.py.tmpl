@@ -1,50 +1,13 @@
 # type: ignore
 import numpy as np
 
-from natal.hook_dsl import (
-    EVENT_EARLY,
-    EVENT_FIRST,
-    EVENT_LATE,
-    execute_csr_event_program_with_state,
-    njit_switch,
-)
+from natal.hook_dsl import njit_switch
 from natal.kernels.spatial_simulation_kernels import (
-    run_spatial_aging,
-    run_spatial_migration,
-    run_spatial_reproduction,
-    run_spatial_survival,
+    run_spatial_tick_with_migration,
 )
-
-_FIRST_HOOK = None
-_EARLY_HOOK = None
-_LATE_HOOK = None
 
 RESULT_CONTINUE = 0
 RESULT_STOP = 1
-
-
-@njit_switch(cache=True)
-def _first_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id=0):
-    result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id)
-    if result != RESULT_CONTINUE:
-        return RESULT_STOP
-    return _FIRST_HOOK(ind_count, tick, deme_id)
-
-
-@njit_switch(cache=True)
-def _early_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id=0):
-    result = execute_csr_event_program_with_state(registry, EVENT_EARLY, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id)
-    if result != RESULT_CONTINUE:
-        return RESULT_STOP
-    return _EARLY_HOOK(ind_count, tick, deme_id)
-
-
-@njit_switch(cache=True)
-def _late_event(registry, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id=0):
-    result = execute_csr_event_program_with_state(registry, EVENT_LATE, ind_count, sperm_store, tick, is_stochastic, has_sperm_storage, use_continuous_sampling, deme_id)
-    if result != RESULT_CONTINUE:
-        return RESULT_STOP
-    return _LATE_HOOK(ind_count, tick, deme_id)
 
 
 @njit_switch(cache=True)
@@ -63,76 +26,12 @@ def __RUN_SPATIAL_TICK_NAME__(
     kernel_include_center,
     migration_rate,
 ):
-    ind = ind_count_all.copy()
-    sperm = sperm_store_all.copy()
-    n_demes = ind.shape[0]
-    has_sperm_storage = True
-
-    for deme_id in range(n_demes):
-        result = _first_event(
-            registry=registry,
-            ind_count=ind[deme_id],
-            sperm_store=sperm[deme_id],
-            tick=tick,
-            is_stochastic=config.is_stochastic,
-            has_sperm_storage=has_sperm_storage,
-            use_continuous_sampling=config.use_continuous_sampling,
-            deme_id=deme_id,
-        )
-        if result != RESULT_CONTINUE:
-            return (ind, sperm, tick), RESULT_STOP
-
-    ind, sperm = run_spatial_reproduction(
-        ind_count_all=ind,
-        sperm_store_all=sperm,
+    _ = registry
+    ind, sperm, tick_next = run_spatial_tick_with_migration(
+        ind_count_all=ind_count_all.copy(),
+        sperm_store_all=sperm_store_all.copy(),
         config=config,
-    )
-
-    for deme_id in range(n_demes):
-        result = _early_event(
-            registry=registry,
-            ind_count=ind[deme_id],
-            sperm_store=sperm[deme_id],
-            tick=tick,
-            is_stochastic=config.is_stochastic,
-            has_sperm_storage=has_sperm_storage,
-            use_continuous_sampling=config.use_continuous_sampling,
-            deme_id=deme_id,
-        )
-        if result != RESULT_CONTINUE:
-            return (ind, sperm, tick), RESULT_STOP
-
-    ind, sperm = run_spatial_survival(
-        ind_count_all=ind,
-        sperm_store_all=sperm,
-        config=config,
-    )
-
-    for deme_id in range(n_demes):
-        result = _late_event(
-            registry=registry,
-            ind_count=ind[deme_id],
-            sperm_store=sperm[deme_id],
-            tick=tick,
-            is_stochastic=config.is_stochastic,
-            has_sperm_storage=has_sperm_storage,
-            use_continuous_sampling=config.use_continuous_sampling,
-            deme_id=deme_id,
-        )
-        if result != RESULT_CONTINUE:
-            return (ind, sperm, tick), RESULT_STOP
-
-    # Migration runs after aging and still reads from the pre-migration state
-    # for every source deme, because the kernel implementation writes into
-    # fresh output buffers.
-    ind, sperm = run_spatial_aging(
-        ind_count_all=ind,
-        sperm_store_all=sperm,
-        config=config,
-    )
-    ind, sperm = run_spatial_migration(
-        ind_count_all=ind,
-        sperm_store_all=sperm,
+        tick=tick,
         adjacency=adjacency,
         migration_mode=migration_mode,
         topology_rows=topology_rows,
@@ -140,10 +39,9 @@ def __RUN_SPATIAL_TICK_NAME__(
         topology_wrap=topology_wrap,
         migration_kernel=migration_kernel,
         kernel_include_center=kernel_include_center,
-        config=config,
         migration_rate=migration_rate,
     )
-    return (ind, sperm, np.int32(tick + 1)), RESULT_CONTINUE
+    return (ind, sperm, np.int32(tick_next)), RESULT_CONTINUE
 
 
 @njit_switch(cache=True)

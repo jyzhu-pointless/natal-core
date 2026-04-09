@@ -88,4 +88,6 @@ typeCheckingMode = "strict"
 packages = ["src/natal"]
 artifacts = [
     "src/natal/kernels/templates/*.tmpl",
+    "natal.svg",
+    "natal-brand.svg",
 ]

@@ -7,6 +7,7 @@ Each deme is represented by one concrete ``BasePopulation`` subclass instance.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any, Callable, List, Literal, Optional, Tuple, cast
 
 import numpy as np
@@ -14,14 +15,7 @@ from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
 from natal.hook_dsl import DemeSelector
-from natal.numba_utils import is_numba_enabled
 from natal.population_state import PopulationState
-from natal.spatial_simulation_kernels import (
-    run_spatial_aging,
-    run_spatial_migration,
-    run_spatial_reproduction,
-    run_spatial_survival,
-)
 from natal.spatial_topology import (
     GridTopology,
     build_adjacency_matrix,
@@ -53,11 +47,18 @@ def _coerce_adjacency_dense(
         TypeError: If input type is unsupported.
         ValueError: If shapes or sparse indices are invalid.
     """
+    # Normalize user input early so downstream code can assume one concrete
+    # ndarray representation regardless of original input form.
     adjacency_obj = cast(object, adjacency)
 
     if isinstance(adjacency_obj, np.ndarray):
-        dense = np.asarray(adjacency_obj, dtype=np.float64)
+        # Dense mode is interpreted as a square matrix.
+        dense_arr = cast(np.ndarray, adjacency_obj)
+        if dense_arr.shape != (n_demes, n_demes):
+            raise ValueError(f"adjacency array must be {n_demes}x{n_demes}")
+        dense = np.asarray(dense_arr, dtype=np.float64)
     elif isinstance(adjacency_obj, tuple):
+        # Tuple mode is interpreted as CSR triplet: (indptr, indices, data).
         csr_items = cast(tuple[object, ...], adjacency_obj)
         if len(csr_items) != 3:
             raise TypeError(
@@ -84,11 +85,16 @@ def _coerce_adjacency_dense(
             if int(indptr[pos + 1]) < int(indptr[pos]):
                 raise ValueError("CSR indptr must be non-decreasing")
 
+        # Here, we rebuild the dense matrix from CSR.
+        # This should be efficient enough for small matrices, but may be a bottleneck
+        # for very large grids with complex migration patterns.
+        # TODO(spatial-migration/sparse): Add a direct sparse path.
         dense = np.zeros((n_demes, n_demes), dtype=np.float64)
         for src in range(n_demes):
             start = int(indptr[src])
             end = int(indptr[src + 1])
             for item_idx in range(start, end):
+                # CSR rows may contain repeated destinations; accumulate.
                 dst = int(indices[item_idx])
                 if dst < 0 or dst >= n_demes:
                     raise ValueError(
@@ -96,6 +102,8 @@ def _coerce_adjacency_dense(
                     )
                 dense[src, dst] += data[item_idx]
     else:
+        # Sparse-matrix compatibility path (e.g. scipy.sparse).
+        # TODO(spatial-migration/sparse): Add a direct sparse path.
         toarray_fn = getattr(adjacency_obj, "toarray", None)
         if not callable(toarray_fn):
             raise TypeError(
@@ -136,6 +144,7 @@ def _build_heterogeneous_kernel_adjacency(
     n_demes = topology.n_demes
     adjacency = np.zeros((n_demes, n_demes), dtype=np.float64)
 
+    # Build one outbound row per source deme, then row-normalize.
     for src in range(n_demes):
         kernel_id = int(deme_kernel_ids[src])
         kernel = kernel_bank[kernel_id]
@@ -162,6 +171,8 @@ def _build_heterogeneous_kernel_adjacency(
                 adjacency[src, dst] += weight
                 row_total += weight
 
+        # Normalize each source row so migration code can treat it as
+        # probability weights directly.
         if row_total > 0.0:
             adjacency[src, :] /= row_total
 
@@ -248,8 +259,12 @@ class SpatialPopulation:
         if not demes:
             raise ValueError("demes must contain at least one BasePopulation instance")
 
+        # Keep a stable list internally; public accessor returns an immutable
+        # tuple view to prevent accidental external mutation.
         self._demes: List[BasePopulation[Any]] = list(demes)
 
+        # Spatial container expects all demes to share one Species object so
+        # genotype indexing and config semantics are globally consistent.
         first_species = self._demes[0].species
         for idx, deme in enumerate(self._demes[1:], start=1):
             if deme.species is not first_species:
@@ -268,6 +283,7 @@ class SpatialPopulation:
                 "migration_strategy must be one of: auto, adjacency, kernel, hybrid"
             )
 
+        # Resolve strategy-level policy into one concrete backend mode.
         if migration_strategy == "adjacency":
             migration_mode: Literal["adjacency", "kernel"] = "adjacency"
         elif migration_strategy == "kernel":
@@ -294,6 +310,8 @@ class SpatialPopulation:
                     "deme_kernel_ids are both provided"
                 )
             if migration_kernel is not None:
+                # Kernels are centered on one source cell; odd dimensions are
+                # required so a unique center index exists.
                 migration_kernel = np.asarray(migration_kernel, dtype=np.float64)
                 if (
                     migration_kernel.ndim != 2
@@ -303,6 +321,9 @@ class SpatialPopulation:
                     raise ValueError("migration_kernel must be a 2D array with odd dimensions")
 
         if adjacency is None:
+            # Default adjacency:
+            # - no topology: identity matrix (no migration unless diagonal used)
+            # - with topology: topology-derived neighborhood matrix
             if topology is None:
                 adjacency = np.eye(n_demes, dtype=np.float64)
             else:
@@ -348,157 +369,16 @@ class SpatialPopulation:
                     )
 
         # Initialize hooks system
-        from natal.hook_dsl import CompiledEventHooks
-
-        # Check if all demes have _hooks_obj (used in tests)
         if all(hasattr(deme, "_hooks_obj") for deme in self._demes):
-            # Use the first deme's hooks_obj for compatibility with tests
+            # Use the first deme's hooks_obj for compatibility with tests.
             self._hooks: Any = self._demes[0]._hooks_obj  # type: ignore[attr-defined]
         else:
-            # Normal case: collect and compile hooks from all demes
-            from natal.hook_dsl import (
-                EVENT_NAMES,
-                CompiledHookDescriptor,
-                HookProgram,
-            )
-
-            # Collect compiled hooks from all demes
-            compiled_hooks: list[CompiledHookDescriptor] = []
-            for deme in self._demes:
-                try:
-                    compiled_hooks.extend(deme.get_compiled_hooks())
-                except AttributeError:
-                    # Handle test mock objects that don't have _compiled_hooks
-                    pass
-
-            # Build hook program from collected hooks
-            def _build_hook_program() -> HookProgram:
-                """Build HookProgram from compiled hooks of all demes."""
-                events = EVENT_NAMES
-                n_events = len(events)
-
-                # 1. Collect all hooks per event
-                hook_offsets: list[int] = [0]
-                hook_list_by_event: list[list[CompiledHookDescriptor]] = []
-
-                for event_name in events:
-                    hooks = [h for h in compiled_hooks if h.event == event_name]
-                    hook_list_by_event.append(hooks)
-                    hook_offsets.append(hook_offsets[-1] + len(hooks))
-
-                n_hooks = hook_offsets[-1]
-
-                # 2. Pack all operation data
-                all_op_types: list[int] = []
-                all_gidx_offsets: list[int] = [0]
-                all_gidx_data: list[int] = []
-                all_age_offsets: list[int] = [0]
-                all_age_data: list[int] = []
-                all_sex_masks: list[bool] = []
-                all_params: list[float] = []
-                all_cond_offsets: list[int] = [0]
-                all_cond_types: list[int] = []
-                all_cond_params: list[int] = []
-
-                all_deme_sel_types: list[int] = []
-                all_deme_sel_offsets: list[int] = [0]
-                all_deme_sel_data: list[int] = []
-
-                n_ops_list: list[int] = []
-                op_offsets: list[int] = [0]
-
-                for hooks in hook_list_by_event:
-                    for hook in hooks:
-                        plan = hook.plan
-                        if plan is None or plan.n_ops == 0:
-                            n_ops_list.append(0)
-                            op_offsets.append(op_offsets[-1])
-                            continue
-
-                        n_ops_list.append(plan.n_ops)
-
-                        # Pack operation data
-                        all_op_types.extend(plan.op_types.tolist())
-
-                        # Handle gidx (adjust offsets for concatenation)
-                        gidx_offset_base = len(all_gidx_data)
-                        for i in range(plan.n_ops):
-                            all_gidx_offsets.append(
-                                gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0]
-                            )
-                        all_gidx_data.extend(plan.gidx_data.tolist())
-
-                        # Handle age
-                        age_offset_base = len(all_age_data)
-                        for i in range(plan.n_ops):
-                            all_age_offsets.append(
-                                age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0]
-                            )
-                        all_age_data.extend(plan.age_data.tolist())
-
-                        # Handle sex masks (flatten 2D -> 1D)
-                        all_sex_masks.extend(plan.sex_masks.flatten().tolist())
-
-                        # Handle params, conditions
-                        all_params.extend(plan.params.tolist())
-                        cond_offset_base = len(all_cond_types)
-                        for i in range(plan.n_ops):
-                            all_cond_offsets.append(
-                                cond_offset_base + plan.condition_offsets[i + 1] - plan.condition_offsets[0]
-                            )
-                        all_cond_types.extend(plan.condition_types.tolist())
-                        all_cond_params.extend(plan.condition_params.tolist())
-
-                        op_offsets.append(len(all_op_types))
-
-                        # Pack deme selector from CompiledHookDescriptor
-                        sel = hook.deme_selector
-                        if sel == "*":
-                            all_deme_sel_types.append(0)
-                        elif isinstance(sel, int):
-                            all_deme_sel_types.append(1)
-                            all_deme_sel_data.append(int(sel))
-                        elif isinstance(sel, range):
-                            all_deme_sel_types.append(2)
-                            all_deme_sel_data.append(int(sel.start))
-                            all_deme_sel_data.append(int(sel.stop))
-                        else:
-                            all_deme_sel_types.append(3)
-                            all_deme_sel_data.extend([int(x) for x in sel])
-                        all_deme_sel_offsets.append(len(all_deme_sel_data))
-
-                # 3. Create HookProgram
-                return HookProgram(
-                    n_events=np.int32(n_events),
-                    n_hooks=np.int32(n_hooks),
-                    hook_offsets=np.array(hook_offsets, dtype=np.int32),
-                    n_ops_list=np.array(n_ops_list, dtype=np.int32),
-                    op_offsets=np.array(op_offsets, dtype=np.int32),
-                    op_types_data=np.array(all_op_types, dtype=np.int32),
-                    gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
-                    gidx_data=np.array(all_gidx_data, dtype=np.int32),
-                    age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
-                    age_data=np.array(all_age_data, dtype=np.int32),
-                    sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
-                    params_data=np.array(all_params, dtype=np.float64),
-                    condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
-                    condition_types_data=np.array(all_cond_types, dtype=np.int32),
-                    condition_params_data=np.array(all_cond_params, dtype=np.int32),
-                    deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
-                    deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
-                    deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
-                )
-
-            registry = _build_hook_program()
-
-            # Create CompiledEventHooks from collected hooks
-            self._hooks = CompiledEventHooks.from_compiled_hooks(
-                compiled_hooks,
-                registry=registry
-            )
+            self._hooks = self._compile_spatial_hooks_from_demes()
 
         heterogeneous_kernel_adjacency: NDArray[np.float64] | None = None
         if topology is not None and normalized_kernel_bank is not None and normalized_deme_kernel_ids is not None:
+            # Pre-build dense effective routing matrix once so runtime kernels
+            # can stay simple even under per-deme heterogeneous kernels.
             heterogeneous_kernel_adjacency = _build_heterogeneous_kernel_adjacency(
                 topology=topology,
                 kernel_bank=normalized_kernel_bank,
@@ -524,6 +404,7 @@ class SpatialPopulation:
         self._kernel_include_center = bool(kernel_include_center)
         self._migration_mode_code = 0 if migration_mode == "adjacency" else 1
         self._migration_rate = float(migration_rate)
+        # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
 
         for idx, deme in enumerate(self._demes[1:], start=1):
@@ -635,146 +516,18 @@ class SpatialPopulation:
             hook_name: Optional human-readable name for debugging.
             compile: Whether to try compiling @hook-decorated functions.
             deme_selector: Optional deme selector.
+
+        Note:
+            This API is a spatial convenience entrypoint: it forwards the same
+            hook registration call to every deme, then rebuilds one aggregate
+            compiled hook bundle.
         """
         # Register hook in all demes
         for deme in self._demes:
             deme.set_hook(event_name, func, hook_id, hook_name, compile, deme_selector)
 
-        # Recompile hooks
-        from natal.hook_dsl import (
-            EVENT_NAMES,
-            CompiledEventHooks,
-            CompiledHookDescriptor,
-            HookProgram,
-        )
-        compiled_hooks: list[CompiledHookDescriptor] = []
-        for deme in self._demes:
-            try:
-                compiled_hooks.extend(deme.get_compiled_hooks())
-            except AttributeError:
-                # Handle test mock objects that don't have _compiled_hooks
-                pass
-
-        # Rebuild hook program
-        def _build_hook_program() -> HookProgram:
-            """Build HookProgram from compiled hooks of all demes."""
-            events = EVENT_NAMES
-            n_events = len(events)
-
-            # 1. Collect all hooks per event
-            hook_offsets: list[int] = [0]
-            hook_list_by_event: list[list[CompiledHookDescriptor]] = []
-
-            for event_name in events:
-                hooks = [h for h in compiled_hooks if h.event == event_name]
-                hook_list_by_event.append(hooks)
-                hook_offsets.append(hook_offsets[-1] + len(hooks))
-
-            n_hooks = hook_offsets[-1]
-
-            # 2. Pack all operation data
-            all_op_types: list[int] = []
-            all_gidx_offsets: list[int] = [0]
-            all_gidx_data: list[int] = []
-            all_age_offsets: list[int] = [0]
-            all_age_data: list[int] = []
-            all_sex_masks: list[bool] = []
-            all_params: list[float] = []
-            all_cond_offsets: list[int] = [0]
-            all_cond_types: list[int] = []
-            all_cond_params: list[int] = []
-
-            all_deme_sel_types: list[int] = []
-            all_deme_sel_offsets: list[int] = [0]
-            all_deme_sel_data: list[int] = []
-
-            n_ops_list: list[int] = []
-            op_offsets: list[int] = [0]
-
-            for hooks in hook_list_by_event:
-                for hook in hooks:
-                    plan = hook.plan
-                    if plan is None or plan.n_ops == 0:
-                        n_ops_list.append(0)
-                        op_offsets.append(op_offsets[-1])
-                        continue
-
-                    n_ops_list.append(plan.n_ops)
-
-                    # Pack operation data
-                    all_op_types.extend(plan.op_types.tolist())
-
-                    # Handle gidx (adjust offsets for concatenation)
-                    gidx_offset_base = len(all_gidx_data)
-                    for i in range(plan.n_ops):
-                        all_gidx_offsets.append(
-                            gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0]
-                        )
-                    all_gidx_data.extend(plan.gidx_data.tolist())
-
-                    # Handle age
-                    age_offset_base = len(all_age_data)
-                    for i in range(plan.n_ops):
-                        all_age_offsets.append(
-                            age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0]
-                        )
-                    all_age_data.extend(plan.age_data.tolist())
-
-                    # Handle sex masks (flatten 2D -> 1D)
-                    all_sex_masks.extend(plan.sex_masks.flatten().tolist())
-
-                    # Handle params, conditions
-                    all_params.extend(plan.params.tolist())
-                    cond_offset_base = len(all_cond_types)
-                    for i in range(plan.n_ops):
-                        all_cond_offsets.append(
-                            cond_offset_base + plan.condition_offsets[i + 1] - plan.condition_offsets[0]
-                        )
-                    all_cond_types.extend(plan.condition_types.tolist())
-                    all_cond_params.extend(plan.condition_params.tolist())
-
-                    op_offsets.append(len(all_op_types))
-
-                    # Pack deme selector from CompiledHookDescriptor
-                    sel = hook.deme_selector
-                    if sel == "*":
-                        all_deme_sel_types.append(0)
-                    elif isinstance(sel, int):
-                        all_deme_sel_types.append(1)
-                        all_deme_sel_data.append(int(sel))
-                    elif isinstance(sel, range):
-                        all_deme_sel_types.append(2)
-                        all_deme_sel_data.append(int(sel.start))
-                        all_deme_sel_data.append(int(sel.stop))
-                    else:
-                        all_deme_sel_types.append(3)
-                        all_deme_sel_data.extend([int(x) for x in sel])
-                    all_deme_sel_offsets.append(len(all_deme_sel_data))
-
-            # 3. Create HookProgram
-            return HookProgram(
-                n_events=np.int32(n_events),
-                n_hooks=np.int32(n_hooks),
-                hook_offsets=np.array(hook_offsets, dtype=np.int32),
-                n_ops_list=np.array(n_ops_list, dtype=np.int32),
-                op_offsets=np.array(op_offsets, dtype=np.int32),
-                op_types_data=np.array(all_op_types, dtype=np.int32),
-                gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
-                gidx_data=np.array(all_gidx_data, dtype=np.int32),
-                age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
-                age_data=np.array(all_age_data, dtype=np.int32),
-                sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
-                params_data=np.array(all_params, dtype=np.float64),
-                condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
-                condition_types_data=np.array(all_cond_types, dtype=np.int32),
-                condition_params_data=np.array(all_cond_params, dtype=np.int32),
-                deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
-                deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
-                deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
-            )
-
-        registry = _build_hook_program()
-        self._hooks = CompiledEventHooks.from_compiled_hooks(compiled_hooks, registry=registry)
+        # Rebuild aggregate hooks once after all per-deme mutations.
+        self._hooks = self._compile_spatial_hooks_from_demes()
 
     def remove_hook(self, event_name: str, hook_id: int) -> bool:
         """Remove a specific hook from all demes.
@@ -785,149 +538,214 @@ class SpatialPopulation:
 
         Returns:
             True if removed successfully from all demes, otherwise False.
+
+        Note:
+            Hook removal follows the same consistency rule as registration:
+            mutate each deme first, then rebuild the aggregate compiled hooks.
         """
         success = True
         for deme in self._demes:
             if not deme.remove_hook(event_name, hook_id):
                 success = False
 
-        # Recompile hooks
-        from natal.hook_dsl import (
-            EVENT_NAMES,
-            CompiledEventHooks,
-            CompiledHookDescriptor,
-            HookProgram,
-        )
-        compiled_hooks: list[CompiledHookDescriptor] = []
-        for deme in self._demes:
-            try:
-                compiled_hooks.extend(deme.get_compiled_hooks())
-            except AttributeError:
-                # Handle test mock objects that don't have _compiled_hooks
-                pass
-
-        # Rebuild hook program
-        def _build_hook_program() -> HookProgram:
-            """Build HookProgram from compiled hooks of all demes."""
-            events = EVENT_NAMES
-            n_events = len(events)
-
-            # 1. Collect all hooks per event
-            hook_offsets: list[int] = [0]
-            hook_list_by_event: list[list[CompiledHookDescriptor]] = []
-
-            for event_name in events:
-                hooks = [h for h in compiled_hooks if h.event == event_name]
-                hook_list_by_event.append(hooks)
-                hook_offsets.append(hook_offsets[-1] + len(hooks))
-
-            n_hooks = hook_offsets[-1]
-
-            # 2. Pack all operation data
-            all_op_types: list[int] = []
-            all_gidx_offsets: list[int] = [0]
-            all_gidx_data: list[int] = []
-            all_age_offsets: list[int] = [0]
-            all_age_data: list[int] = []
-            all_sex_masks: list[bool] = []
-            all_params: list[float] = []
-            all_cond_offsets: list[int] = [0]
-            all_cond_types: list[int] = []
-            all_cond_params: list[int] = []
-
-            all_deme_sel_types: list[int] = []
-            all_deme_sel_offsets: list[int] = [0]
-            all_deme_sel_data: list[int] = []
-
-            n_ops_list: list[int] = []
-            op_offsets: list[int] = [0]
-
-            for hooks in hook_list_by_event:
-                for hook in hooks:
-                    plan = hook.plan
-                    if plan is None or plan.n_ops == 0:
-                        n_ops_list.append(0)
-                        op_offsets.append(op_offsets[-1])
-                        continue
-
-                    n_ops_list.append(plan.n_ops)
-
-                    # Pack operation data
-                    all_op_types.extend(plan.op_types.tolist())
-
-                    # Handle gidx (adjust offsets for concatenation)
-                    gidx_offset_base = len(all_gidx_data)
-                    for i in range(plan.n_ops):
-                        all_gidx_offsets.append(
-                            gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0]
-                        )
-                    all_gidx_data.extend(plan.gidx_data.tolist())
-
-                    # Handle age
-                    age_offset_base = len(all_age_data)
-                    for i in range(plan.n_ops):
-                        all_age_offsets.append(
-                            age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0]
-                        )
-                    all_age_data.extend(plan.age_data.tolist())
-
-                    # Handle sex masks (flatten 2D -> 1D)
-                    all_sex_masks.extend(plan.sex_masks.flatten().tolist())
-
-                    # Handle params, conditions
-                    all_params.extend(plan.params.tolist())
-                    cond_offset_base = len(all_cond_types)
-                    for i in range(plan.n_ops):
-                        all_cond_offsets.append(
-                            cond_offset_base + plan.condition_offsets[i + 1] - plan.condition_offsets[0]
-                        )
-                    all_cond_types.extend(plan.condition_types.tolist())
-                    all_cond_params.extend(plan.condition_params.tolist())
-
-                    op_offsets.append(len(all_op_types))
-
-                    # Pack deme selector from CompiledHookDescriptor
-                    sel = hook.deme_selector
-                    if sel == "*":
-                        all_deme_sel_types.append(0)
-                    elif isinstance(sel, int):
-                        all_deme_sel_types.append(1)
-                        all_deme_sel_data.append(int(sel))
-                    elif isinstance(sel, range):
-                        all_deme_sel_types.append(2)
-                        all_deme_sel_data.append(int(sel.start))
-                        all_deme_sel_data.append(int(sel.stop))
-                    else:
-                        all_deme_sel_types.append(3)
-                        all_deme_sel_data.extend([int(x) for x in sel])
-                    all_deme_sel_offsets.append(len(all_deme_sel_data))
-
-            # 3. Create HookProgram
-            return HookProgram(
-                n_events=np.int32(n_events),
-                n_hooks=np.int32(n_hooks),
-                hook_offsets=np.array(hook_offsets, dtype=np.int32),
-                n_ops_list=np.array(n_ops_list, dtype=np.int32),
-                op_offsets=np.array(op_offsets, dtype=np.int32),
-                op_types_data=np.array(all_op_types, dtype=np.int32),
-                gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
-                gidx_data=np.array(all_gidx_data, dtype=np.int32),
-                age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
-                age_data=np.array(all_age_data, dtype=np.int32),
-                sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
-                params_data=np.array(all_params, dtype=np.float64),
-                condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
-                condition_types_data=np.array(all_cond_types, dtype=np.int32),
-                condition_params_data=np.array(all_cond_params, dtype=np.int32),
-                deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
-                deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
-                deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
-            )
-
-        registry = _build_hook_program()
-        self._hooks = CompiledEventHooks.from_compiled_hooks(compiled_hooks, registry=registry)
+        # Keep aggregate compiled hooks synchronized with deme-local state.
+        self._hooks = self._compile_spatial_hooks_from_demes()
 
         return success
+
+    @staticmethod
+    def _selector_matches_deme(selector: DemeSelector, deme_id: int) -> bool:
+        """Return whether one deme selector targets a concrete deme id.
+
+        Args:
+            selector: Deme selector in any supported hook form:
+                ``"*"``, integer id, ``range``, or explicit id collection.
+            deme_id: Concrete deme index to test.
+
+        Returns:
+            ``True`` when ``deme_id`` is selected by ``selector``; otherwise
+            ``False``.
+        """
+        if selector == "*":
+            return True
+        if isinstance(selector, int):
+            return selector == deme_id
+        if isinstance(selector, range):
+            return deme_id in selector
+        return deme_id in selector
+
+    def _collect_effective_compiled_hooks(self) -> list[Any]:
+        """Collect hooks from each deme and pin each one to its owner deme.
+
+        Local spatial hook semantics are per-deme: ordering and execution scope
+        are only defined inside each deme. This method lifts per-deme hook
+        descriptors into one aggregate list while forcing ``deme_selector`` to
+        the owning deme id.
+
+        Returns:
+            A flat list of hook descriptors safe for aggregate spatial
+            execution. Every descriptor in the returned list has
+            ``deme_selector`` rewritten to one concrete integer deme id.
+
+        Note:
+            Rewriting selectors here avoids accidental cross-deme execution
+            after flattening all demes into a single compiled registry.
+        """
+        compiled_hooks: list[Any] = []
+        for deme_id, deme in enumerate(self._demes):
+            try:
+                hooks = deme.get_compiled_hooks()
+            except AttributeError:
+                # Lightweight test doubles may not implement compiled-hook APIs.
+                continue
+
+            for desc in hooks:
+                # Keep only descriptors that actually apply to this owning deme.
+                if not self._selector_matches_deme(desc.deme_selector, deme_id):
+                    continue
+                # Pin selector to concrete owner deme so aggregate execution
+                # preserves local-only hook semantics.
+                compiled_hooks.append(replace(desc, deme_selector=int(deme_id)))
+        return compiled_hooks
+
+    @staticmethod
+    def _build_hook_program(compiled_hooks: list[Any]) -> Any:
+        """Build one CSR ``HookProgram`` from aggregate compiled descriptors.
+
+        Args:
+            compiled_hooks: Flattened descriptor list that already encodes final
+                per-hook ``deme_selector`` routing.
+
+        Returns:
+            HookProgram: Plain-data CSR payload consumed by hook execution
+            kernels and the Python ``HookExecutor`` path.
+
+        Note:
+            This function packs all declarative operation arrays into contiguous
+            buffers to keep downstream execution loops vectorizable and
+            allocation-free during runtime dispatch.
+        """
+        from natal.hook_dsl import EVENT_NAMES, HookProgram
+
+        events = EVENT_NAMES
+        n_events = len(events)
+
+        hook_offsets: list[int] = [0]
+        hook_list_by_event: list[list[Any]] = []
+        for event_name in events:
+            hooks = [h for h in compiled_hooks if h.event == event_name]
+            hook_list_by_event.append(hooks)
+            hook_offsets.append(hook_offsets[-1] + len(hooks))
+
+        n_hooks = hook_offsets[-1]
+        all_op_types: list[int] = []
+        all_gidx_offsets: list[int] = [0]
+        all_gidx_data: list[int] = []
+        all_age_offsets: list[int] = [0]
+        all_age_data: list[int] = []
+        all_sex_masks: list[bool] = []
+        all_params: list[float] = []
+        all_cond_offsets: list[int] = [0]
+        all_cond_types: list[int] = []
+        all_cond_params: list[int] = []
+        all_deme_sel_types: list[int] = []
+        all_deme_sel_offsets: list[int] = [0]
+        all_deme_sel_data: list[int] = []
+        n_ops_list: list[int] = []
+        op_offsets: list[int] = [0]
+
+        for hooks in hook_list_by_event:
+            for hook in hooks:
+                plan = hook.plan
+                if plan is None or plan.n_ops == 0:
+                    # Keep offset arrays aligned even for hooks without
+                    # declarative operations (e.g. pure njit/python descriptors).
+                    n_ops_list.append(0)
+                    op_offsets.append(op_offsets[-1])
+                    continue
+
+                n_ops_list.append(plan.n_ops)
+                all_op_types.extend(plan.op_types.tolist())
+
+                # Offsets are rebased to flattened buffers as each hook's plan
+                # payload is appended.
+                gidx_offset_base = len(all_gidx_data)
+                for i in range(plan.n_ops):
+                    all_gidx_offsets.append(gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0])
+                all_gidx_data.extend(plan.gidx_data.tolist())
+
+                age_offset_base = len(all_age_data)
+                for i in range(plan.n_ops):
+                    all_age_offsets.append(age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0])
+                all_age_data.extend(plan.age_data.tolist())
+
+                all_sex_masks.extend(plan.sex_masks.flatten().tolist())
+                all_params.extend(plan.params.tolist())
+
+                cond_offset_base = len(all_cond_types)
+                for i in range(plan.n_ops):
+                    all_cond_offsets.append(
+                        cond_offset_base + plan.condition_offsets[i + 1] - plan.condition_offsets[0]
+                    )
+                all_cond_types.extend(plan.condition_types.tolist())
+                all_cond_params.extend(plan.condition_params.tolist())
+                op_offsets.append(len(all_op_types))
+
+                # Persist compiled selector in compact integer encoding expected
+                # by njit-side selector matching helpers.
+                sel = hook.deme_selector
+                if sel == "*":
+                    all_deme_sel_types.append(0)
+                elif isinstance(sel, int):
+                    all_deme_sel_types.append(1)
+                    all_deme_sel_data.append(int(sel))
+                elif isinstance(sel, range):
+                    all_deme_sel_types.append(2)
+                    all_deme_sel_data.append(int(sel.start))
+                    all_deme_sel_data.append(int(sel.stop))
+                else:
+                    all_deme_sel_types.append(3)
+                    all_deme_sel_data.extend([int(x) for x in sel])
+                all_deme_sel_offsets.append(len(all_deme_sel_data))
+
+        return HookProgram(
+            n_events=np.int32(n_events),
+            n_hooks=np.int32(n_hooks),
+            hook_offsets=np.array(hook_offsets, dtype=np.int32),
+            n_ops_list=np.array(n_ops_list, dtype=np.int32),
+            op_offsets=np.array(op_offsets, dtype=np.int32),
+            op_types_data=np.array(all_op_types, dtype=np.int32),
+            gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
+            gidx_data=np.array(all_gidx_data, dtype=np.int32),
+            age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
+            age_data=np.array(all_age_data, dtype=np.int32),
+            sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
+            params_data=np.array(all_params, dtype=np.float64),
+            condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
+            condition_types_data=np.array(all_cond_types, dtype=np.int32),
+            condition_params_data=np.array(all_cond_params, dtype=np.int32),
+            deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
+            deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
+            deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
+        )
+
+    def _compile_spatial_hooks_from_demes(self) -> Any:
+        """Compile one aggregate hook bundle from current per-deme hooks.
+
+        Returns:
+            CompiledEventHooks: Event call chains plus CSR registry used by
+            both generated wrappers and Python dispatch fallback.
+
+        Implementation detail:
+            This function is the single rebuild entrypoint used by
+            initialization, ``set_hook(...)``, and ``remove_hook(...)`` so all
+            hook mutation paths stay behaviorally consistent.
+        """
+        from natal.hook_dsl import CompiledEventHooks
+
+        compiled_hooks = self._collect_effective_compiled_hooks()
+        registry = self._build_hook_program(compiled_hooks)
+        return CompiledEventHooks.from_compiled_hooks(compiled_hooks, registry=registry)
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """Trigger an event and execute all registered hooks for a specific deme.
@@ -940,7 +758,7 @@ class SpatialPopulation:
             int: RESULT_CONTINUE (0) to continue, RESULT_STOP (1) to stop.
         """
         if 0 <= deme_id < self.n_demes:
-            return self._demes[ deme_id].trigger_event(event_name, deme_id)
+            return self._demes[deme_id].trigger_event(event_name, deme_id)
         return 0  # RESULT_CONTINUE
 
     def get_total_count(self) -> int:
@@ -1017,8 +835,17 @@ class SpatialPopulation:
         return frequencies
 
     def migration_row(self, source_idx: int) -> NDArray[np.float64]:
-        """Return normalized outbound migration weights for one source deme."""
+        """Return normalized outbound migration weights for one source deme.
+
+        Args:
+            source_idx: Source deme index.
+
+        Returns:
+            A dense float64 vector of length ``n_demes`` with outbound weights
+            from ``source_idx``.
+        """
         if self._heterogeneous_kernel_adjacency is not None:
+            # Fast path: precomputed dense matrix for heterogeneous kernels.
             return self._heterogeneous_kernel_adjacency[source_idx].astype(np.float64, copy=True)
 
         if self._migration_mode == "adjacency":
@@ -1063,6 +890,11 @@ class SpatialPopulation:
         Returns:
             A tuple ``(ind_all, sperm_all)`` where each array has deme as its
             leading axis.
+
+        Note:
+            Discrete-generation demes may not expose sperm storage. In that
+            case this method synthesizes zero-valued storage arrays with a
+            shape compatible with the deme's age/genotype dimensions.
         """
         ind_all = np.stack([deme.state.individual_count for deme in self._demes], axis=0)
 
@@ -1076,6 +908,7 @@ class SpatialPopulation:
                 if cfg is not None and hasattr(cfg, "n_ages") and hasattr(cfg, "n_genotypes"):
                     s = np.zeros((cfg.n_ages, cfg.n_genotypes, cfg.n_genotypes), dtype=np.float64)
                 else:
+                    # Conservative fallback derived from state tensor shape.
                     ind_shape = deme.state.individual_count.shape
                     s = np.zeros((ind_shape[1], ind_shape[2], ind_shape[2]), dtype=np.float64)
             sperm_list.append(s)
@@ -1090,6 +923,11 @@ class SpatialPopulation:
             ind_all: Stacked individual-count array with deme as the first axis.
             sperm_all: Stacked sperm-storage array with deme as the first axis.
             tick: Tick value to assign to each deme and this container.
+
+        Note:
+            This method is the only write-back point from stacked kernel state
+            into per-deme objects. Keeping it centralized helps preserve tick
+            synchronization invariants.
         """
         for deme_id, deme in enumerate(self._demes):
             new_fields = {
@@ -1099,6 +937,7 @@ class SpatialPopulation:
             if hasattr(deme.state, "sperm_storage"):
                 new_fields["sperm_storage"] = sperm_all[deme_id]
 
+            # Replace immutable state tuple and keep mirror tick fields aligned.
             deme._state = deme.state._replace(**new_fields)  # type: ignore[attr-defined]
             deme.tick = int(tick)
         self._tick = int(tick)
@@ -1115,6 +954,8 @@ class SpatialPopulation:
             TypeError: If a deme does not implement ``export_config``.
             ValueError: If demes export different config objects.
         """
+        # Spatial kernels assume one shared config object to avoid per-deme
+        # config branching inside njit paths.
         export_fn = getattr(self._demes[0], "export_config", None)
         if not callable(export_fn):
             raise TypeError("deme[0] does not implement export_config()")
@@ -1123,6 +964,8 @@ class SpatialPopulation:
             deme_export = getattr(deme, "export_config", None)
             if not callable(deme_export):
                 raise TypeError(f"deme[{idx}] does not implement export_config()")
+            # Identity check is intentional: semantic equality is not enough
+            # for kernels that capture config fields through one object.
             if deme_export() is not cfg:
                 raise ValueError(
                     f"deme[{idx}] uses a different config object; current spatial runner requires a shared config"
@@ -1133,88 +976,58 @@ class SpatialPopulation:
         """Return the migration kernel array expected by compiled kernels."""
         if self._migration_kernel is not None:
             return self._migration_kernel
+        # Adjacency mode ignores this argument, but wrapper signatures require
+        # one ndarray for all call sites.
         return np.zeros((1, 1), dtype=np.float64)
 
     def _has_python_hooks(self) -> bool:
-        """Return whether any managed deme has Python-layer hooks."""
+        """Return whether any managed deme currently owns Python-layer hooks.
+
+        Returns:
+            ``True`` if at least one deme has hooks registered through the
+            legacy Python callback map; otherwise ``False``.
+        """
         return any(deme.has_python_hooks() for deme in self._demes)
 
     def _has_mixed_hook_types(self) -> bool:
-        """Return whether any managed deme mixes hook types in one event."""
-        return any(deme.has_mixed_hook_types() for deme in self._demes)
-
-    def _should_use_python_dispatch(self) -> bool:
-        """Return whether spatial run should use Python event dispatch."""
-        return self._has_mixed_hook_types() or (not is_numba_enabled() and self._has_python_hooks())
-
-    def _run_tick_with_python_dispatch(self) -> bool:
-        """Run one spatial tick with Python event dispatch enabled.
+        """Return whether any managed deme mixes hook types in one event.
 
         Returns:
-            bool: True if execution was stopped by hooks, otherwise False.
+            ``True`` if any deme has an event containing multiple hook payload
+            categories (declarative/njit/python); otherwise ``False``.
         """
-        from natal.hook_dsl import RESULT_CONTINUE
+        return any(deme.has_mixed_hook_types() for deme in self._demes)
 
+    def _has_compiled_hooks(self) -> bool:
+        """Return whether any managed deme has compiled (CSR/njit) hooks.
+
+        Returns:
+            ``True`` if at least one deme reports a non-empty compiled hook
+            list; otherwise ``False``.
+        """
         for deme in self._demes:
-            deme.ensure_hook_executor()
-
-        for deme_id, deme in enumerate(self._demes):
-            if deme.trigger_event("first", deme_id=deme_id) != RESULT_CONTINUE:
-                return True
-
-        config = self._shared_config()
-        ind_all, sperm_all = self._stack_deme_state_arrays()
-
-        ind_all, sperm_all = run_spatial_reproduction(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            config=config,
-        )
-        self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
-
-        for deme_id, deme in enumerate(self._demes):
-            if deme.trigger_event("early", deme_id=deme_id) != RESULT_CONTINUE:
-                return True
-
-        ind_all, sperm_all = run_spatial_survival(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            config=config,
-        )
-        self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
-
-        for deme_id, deme in enumerate(self._demes):
-            if deme.trigger_event("late", deme_id=deme_id) != RESULT_CONTINUE:
-                return True
-
-        ind_all, sperm_all = run_spatial_aging(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            config=config,
-        )
-
-        effective_adjacency = self._adjacency
-        effective_migration_mode_code = self._migration_mode_code
-        if self._heterogeneous_kernel_adjacency is not None:
-            effective_adjacency = self._heterogeneous_kernel_adjacency
-            effective_migration_mode_code = 0
-
-        ind_all, sperm_all = run_spatial_migration(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            adjacency=effective_adjacency,
-            migration_mode=effective_migration_mode_code,
-            topology_rows=0 if self._topology is None else int(self._topology.rows),
-            topology_cols=0 if self._topology is None else int(self._topology.cols),
-            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
-            migration_kernel=self._migration_kernel_array(),
-            kernel_include_center=bool(self._kernel_include_center),
-            config=config,
-            migration_rate=float(self._migration_rate),
-        )
-
-        self._apply_stacked_state(ind_all, sperm_all, int(self._tick) + 1)
+            try:
+                if len(deme.get_compiled_hooks()) > 0:
+                    return True
+            except AttributeError:
+                # Some test doubles do not implement compiled-hook APIs.
+                continue
         return False
+
+    def _should_use_python_dispatch(self) -> bool:
+        """Return whether spatial runtime must use Python event dispatch.
+
+        Returns:
+            ``True`` if local hook execution is required for this spatial run.
+            ``False`` when the simulation can use the hook-free compiled fast
+            path end-to-end.
+
+        Note:
+            Current compiled spatial wrappers intentionally skip local hook
+            insertion. Therefore, presence of either Python or compiled hooks
+            forces execution through the per-deme Python dispatch timeline.
+        """
+        return self._has_python_hooks() or self._has_compiled_hooks()
 
     def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick via the generated spatial wrapper.
@@ -1230,13 +1043,17 @@ class SpatialPopulation:
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial tick")
 
         if self._should_use_python_dispatch():
-            was_stopped = self._run_tick_with_python_dispatch()
+            from natal.hooks.executor import run_spatial_tick_with_hooks
+
+            # Hook-aware path: preserve per-deme local hook semantics.
+            was_stopped = bool(run_spatial_tick_with_hooks(self))
             if was_stopped:
                 for deme in self._demes:
                     deme._finished = True  # type: ignore[attr-defined]
                     deme.trigger_event("finish")
             return self
 
+        # Hook-free fast path: one compiled spatial wrapper call.
         assert self._hooks.run_spatial_tick_fn is not None, "hooks.run_spatial_tick_fn should always be initialized"
         assert self._hooks.registry is not None, "hooks.registry should always be initialized"
 
@@ -1309,9 +1126,13 @@ class SpatialPopulation:
                 raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial simulation")
 
         if self._should_use_python_dispatch():
+            from natal.hooks.executor import run_spatial_tick_with_hooks
+
+            # Hook-aware execution iterates tick-by-tick so stop signals can
+            # short-circuit immediately after each local event timeline.
             was_stopped = False
             for _ in range(n_steps):
-                if self._run_tick_with_python_dispatch():
+                if bool(run_spatial_tick_with_hooks(self)):
                     was_stopped = True
                     break
             if was_stopped:
@@ -1323,6 +1144,8 @@ class SpatialPopulation:
                     deme.finish_simulation()
             return self
 
+        # Hook-free fast path delegates the whole batch to one compiled wrapper
+        # call, which may still early-stop if runtime result requests it.
         assert self._hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"
         assert self._hooks.registry is not None, "hooks.registry should always be initialized"
 

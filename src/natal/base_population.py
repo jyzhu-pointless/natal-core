@@ -1159,8 +1159,18 @@ class BasePopulation(ABC, Generic[T_State]):
         return False
 
     def should_use_python_dispatch(self) -> bool:
-        """Return whether this population should run with Python event dispatch."""
-        return self.has_mixed_hook_types() or (not is_numba_enabled() and self.has_python_hooks())
+                """Return whether this population should run with Python event dispatch.
+
+                Policy:
+                        - When Numba is disabled, any registered hook type uses Python
+                            dispatch so py/declarative/njit hooks share one sequential path.
+                        - When Numba is enabled, only mixed hook-type timelines fall back
+                            to Python dispatch; homogeneous compiled timelines stay on kernel
+                            wrappers.
+                """
+                if not is_numba_enabled():
+                        return self.has_python_hooks() or len(self.get_compiled_hooks()) > 0
+                return self.has_mixed_hook_types()
 
     def ensure_hook_executor(self) -> None:
         """Build HookExecutor lazily for Python event-dispatch paths."""

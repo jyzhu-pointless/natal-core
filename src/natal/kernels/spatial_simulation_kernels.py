@@ -1556,25 +1556,51 @@ def run_spatial_tick(
 
     Returns:
         A tuple ``(ind_next, sperm_next, tick_next)``.
+
+    Design:
+        This kernel executes one full lifecycle per deme inside a single
+        ``prange`` region. Compared with stage-by-stage spatial passes, it
+        reduces synchronization points between parallel sections while
+        preserving per-deme lifecycle ordering.
     """
     # Spatial ticks intentionally reuse the single-deme lifecycle ordering.
-    # The only spatial coupling is injected later by migration.
-    ind, sperm = run_spatial_reproduction(
-        ind_count_all=ind_count_all,
-        sperm_store_all=sperm_store_all,
-        config=config,
+    # To avoid stage-by-stage global synchronization, run a full local tick
+    # for each deme inside one prange pass, then apply migration separately.
+    # The offspring tensor depends only on static config, so compute once and
+    # reuse for every deme in this tick.
+    offspring_probability = alg.compute_offspring_probability_tensor(
+        meiosis_f=config.genotype_to_gametes_map[0],
+        meiosis_m=config.genotype_to_gametes_map[1],
+        haplo_to_genotype_map=config.gametes_to_zygote_map,
+        n_genotypes=config.n_genotypes,
+        n_haplogenotypes=config.n_haploid_genotypes,
+        n_glabs=config.n_glabs,
     )
-    ind, sperm = run_spatial_survival(
-        ind_count_all=ind,
-        sperm_store_all=sperm,
-        config=config,
-    )
-    ind, sperm = run_spatial_aging(
-        ind_count_all=ind,
-        sperm_store_all=sperm,
-        config=config,
-    )
-    return ind, sperm, int(tick) + 1
+
+    for deme_id in prange(ind_count_all.shape[0]):
+        # Work on one deme-local pair of arrays; there are no cross-deme reads
+        # until the migration stage, so this section is parallel-safe.
+        ind_d, sperm_d = run_reproduction_with_precomputed_offspring_probability(
+            ind_count=ind_count_all[deme_id],
+            sperm_store=sperm_store_all[deme_id],
+            config=config,
+            offspring_probability=offspring_probability,
+        )
+        # Keep lifecycle order identical to non-spatial single-population kernels.
+        ind_d, sperm_d = run_survival(
+            ind_count=ind_d,
+            sperm_store=sperm_d,
+            config=config,
+        )
+        ind_d, sperm_d = run_aging(
+            ind_count=ind_d,
+            sperm_store=sperm_d,
+            config=config,
+        )
+        ind_count_all[deme_id] = ind_d
+        sperm_store_all[deme_id] = sperm_d
+
+    return ind_count_all, sperm_store_all, int(tick) + 1
 
 
 @njit_switch(cache=True)
@@ -1613,6 +1639,11 @@ def run_spatial_tick_with_migration(
 
     Returns:
         A tuple ``(ind_next, sperm_next, tick_next)``.
+
+    Note:
+        Local lifecycle and migration are intentionally separated into two
+        kernels: the first phase is embarrassingly parallel per deme, while
+        migration introduces cross-deme coupling and is handled afterwards.
     """
     # First finish the within-deme lifecycle for every deme, then apply one
     # synchronized migration step on the post-aging state.
