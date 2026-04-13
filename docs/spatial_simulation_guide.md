@@ -238,9 +238,15 @@ This dashboard is suitable for three tasks:
 
 If the demes do not share the same `Species`, `SpatialPopulation` will directly raise an error.
 
-### Error 2: Configuration not shared
+### Error 2: Inconsistent migration sampling mode across demes
 
-If each deme does not use the same `config` object, the shared configuration check will fail during `run_tick()` / `run(...)`.
+Heterogeneous deme configs are supported. However, when migration is enabled,
+all demes must use the same values for `is_stochastic` and
+`use_continuous_sampling`; otherwise `run_tick()` / `run(...)` raises an
+error.
+
+When deme configs are heterogeneous, spatial execution uses the per-deme
+hook-aware timeline to keep local hook semantics consistent.
 
 ### Error 3: Kernel dimensions are incorrect
 
@@ -262,7 +268,8 @@ If you provide `migration_kernel` but it is not an odd‑dimension 2D array, con
 The practical usage of `SpatialPopulation` can be remembered as four steps:
 
 1. Build a set of demes that share the same species.
-2. Make those demes share the same configuration.
+2. You may use heterogeneous deme configs, but keep migration sampling mode
+  consistent across demes.
 3. Choose either the adjacency path or the migration kernel path.
 4. Debug with `run_tick()` and run batch experiments with `run(...)`.
 

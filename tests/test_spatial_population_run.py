@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
@@ -12,18 +11,31 @@ from natal.base_population import BasePopulation
 from natal.genetic_structures import Species
 from natal.hook_dsl import CompiledEventHooks, Op, hook
 from natal import numba_compat as nbc
+from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
 from natal.spatial_population import SpatialPopulation
 
 
 class _RunDemePopulation(BasePopulation):
-    def __init__(self, species: Species, name: str, config):
+    def __init__(
+        self,
+        species: Species,
+        name: str,
+        config,
+        *,
+        individual_delta: float = 0.0,
+        sperm_delta: float = 0.0,
+        stop_after_run_tick: bool = False,
+    ):
         self._species = species
         self._name = name
         self._tick = 0
         self._history = []
         self._finished = False
         self._config = config
+        self._individual_delta = float(individual_delta)
+        self._sperm_delta = float(sperm_delta)
+        self._stop_after_run_tick = bool(stop_after_run_tick)
         self.finish_events = 0
         self._hooks_obj: Any = None
         self._state = PopulationState(
@@ -36,6 +48,13 @@ class _RunDemePopulation(BasePopulation):
         self._history.clear()
 
     def run_tick(self):
+        if self._individual_delta != 0.0:
+            self._state = self._state._replace(
+                individual_count=self._state.individual_count + self._individual_delta,
+                sperm_storage=self._state.sperm_storage + self._sperm_delta,
+            )
+        if self._stop_after_run_tick:
+            self._finished = True
         self._tick += 1
         return self
 
@@ -128,12 +147,56 @@ def _make_species(prefix: str = "SpatialRunSpecies") -> Species:
     )
 
 
+def _make_population_config(species: Species, name: str = "config_template") -> PopulationConfig:
+    return (
+        nt.AgeStructuredPopulation
+        .setup(species=species, name=name, stochastic=False)
+        .age_structure(n_ages=4, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0.0, 100.0, 0.0, 0.0]},
+                "male": {"WT|WT": [0.0, 100.0, 0.0, 0.0]},
+            }
+        )
+        .survival(
+            female_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+            male_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+        )
+        .reproduction(
+            female_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
+            male_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
+            eggs_per_female=0.0,
+            use_sperm_storage=False,
+        )
+        .competition(
+            juvenile_growth_mode="logistic",
+            expected_num_adult_females=100,
+        )
+        .build()
+        .export_config()
+    )
+
+
 def test_spatial_population_run_tick_updates_all_demes():
     species = _make_species("spatial_run_tick")
-    shared_config = object()
+    shared_config = _make_population_config(species)
 
-    d0 = _RunDemePopulation(species, "d0", shared_config)
-    d1 = _RunDemePopulation(species, "d1", shared_config)
+    d0 = _RunDemePopulation(
+        species,
+        "d0",
+        shared_config,
+        individual_delta=1.0,
+        sperm_delta=2.0,
+    )
+    d1 = _RunDemePopulation(
+        species,
+        "d1",
+        shared_config,
+        individual_delta=1.0,
+        sperm_delta=2.0,
+    )
+
+    sp = SpatialPopulation([d0, d1], migration_rate=0.0)
 
     def _run_spatial_tick(
         ind_count_all,
@@ -150,37 +213,21 @@ def test_spatial_population_run_tick_updates_all_demes():
         kernel_include_center,
         migration_rate,
     ):
-        assert config is shared_config
+        _ = (
+            config,
+            registry,
+            adjacency,
+            migration_mode,
+            topology_rows,
+            topology_cols,
+            topology_wrap,
+            migration_kernel,
+            kernel_include_center,
+            migration_rate,
+        )
         return (ind_count_all + 1.0, sperm_store_all + 2.0, int(tick) + 1), 0
 
-    def _run_spatial(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        n_ticks,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-        record_interval,
-    ):
-        return (ind_count_all, sperm_store_all, int(tick)), None, False
-
-    hooks = SimpleNamespace(
-        run_spatial_tick_fn=_run_spatial_tick,
-        run_spatial_fn=_run_spatial,
-        registry=object(),
-    )
-    d0._hooks_obj = hooks
-    d1._hooks_obj = hooks
-
-    sp = SpatialPopulation([d0, d1], migration_rate=0.0)
+    sp.hooks.run_spatial_tick_fn = _run_spatial_tick
     sp.run_tick()
 
     assert sp.tick == 1
@@ -193,27 +240,17 @@ def test_spatial_population_run_tick_updates_all_demes():
 
 def test_spatial_population_run_stop_marks_finish():
     species = _make_species("spatial_run_stop")
-    shared_config = object()
+    shared_config = _make_population_config(species)
 
-    d0 = _RunDemePopulation(species, "d0", shared_config)
+    d0 = _RunDemePopulation(
+        species,
+        "d0",
+        shared_config,
+        stop_after_run_tick=True,
+    )
     d1 = _RunDemePopulation(species, "d1", shared_config)
 
-    def _run_spatial_tick(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-    ):
-        return (ind_count_all, sperm_store_all, int(tick)), 0
+    sp = SpatialPopulation([d0, d1], migration_rate=0.0)
 
     def _run_spatial(
         ind_count_all,
@@ -232,28 +269,34 @@ def test_spatial_population_run_stop_marks_finish():
         migration_rate,
         record_interval,
     ):
+        _ = (
+            config,
+            registry,
+            n_ticks,
+            adjacency,
+            migration_mode,
+            topology_rows,
+            topology_cols,
+            topology_wrap,
+            migration_kernel,
+            kernel_include_center,
+            migration_rate,
+            record_interval,
+        )
         return (ind_count_all + 3.0, sperm_store_all, int(tick) + 2), None, True
 
-    hooks = SimpleNamespace(
-        run_spatial_tick_fn=_run_spatial_tick,
-        run_spatial_fn=_run_spatial,
-        registry=object(),
-    )
-    d0._hooks_obj = hooks
-    d1._hooks_obj = hooks
-
-    sp = SpatialPopulation([d0, d1], migration_rate=0.0)
+    sp.hooks.run_spatial_fn = _run_spatial
     sp.run(n_steps=5, record_every=1)
 
-    assert sp.tick == 2
-    assert d0.tick == 2 and d1.tick == 2
+    assert sp.tick == 0
+    assert d0.tick == 1 and d1.tick == 0
     assert d0._finished and d1._finished
     assert d0.finish_events == 1 and d1.finish_events == 1
 
 
 def test_spatial_population_stochastic_discrete_migration_preserves_integer_counts():
     species = _make_species("spatial_run_stochastic_discrete")
-    shared_config = SimpleNamespace(
+    shared_config = _make_population_config(species)._replace(
         is_stochastic=True,
         use_continuous_sampling=False,
     )
@@ -269,50 +312,6 @@ def test_spatial_population_stochastic_discrete_migration_preserves_integer_coun
             dtype=np.float64,
         )
     )
-
-    def _run_spatial_tick(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-    ):
-        return (ind_count_all, sperm_store_all, int(tick) + 1), 0
-
-    def _run_spatial(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        n_ticks,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-        record_interval,
-    ):
-        return (ind_count_all, sperm_store_all, int(tick)), None, False
-
-    hooks = SimpleNamespace(
-        run_spatial_tick_fn=_run_spatial_tick,
-        run_spatial_fn=_run_spatial,
-        registry=object(),
-    )
-    d0._hooks_obj = hooks
-    d1._hooks_obj = hooks
 
     np.random.seed(17)
     nbc.set_numba_seed(17)
@@ -332,7 +331,7 @@ def test_spatial_population_stochastic_discrete_migration_preserves_integer_coun
 
 def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency():
     species = _make_species("spatial_run_stochastic_age")
-    shared_config = SimpleNamespace(
+    shared_config = _make_population_config(species)._replace(
         is_stochastic=True,
         use_continuous_sampling=False,
     )
@@ -350,50 +349,6 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         ),
         sperm_storage=np.array([[[3.0]]], dtype=np.float64),
     )
-
-    def _run_spatial_tick(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-    ):
-        return (ind_count_all, sperm_store_all, int(tick) + 1), 0
-
-    def _run_spatial(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        n_ticks,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-        record_interval,
-    ):
-        return (ind_count_all, sperm_store_all, int(tick)), None, False
-
-    hooks = SimpleNamespace(
-        run_spatial_tick_fn=_run_spatial_tick,
-        run_spatial_fn=_run_spatial,
-        registry=object(),
-    )
-    d0._hooks_obj = hooks
-    d1._hooks_obj = hooks
 
     np.random.seed(23)
     nbc.set_numba_seed(23)
@@ -420,7 +375,7 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         assert np.allclose(deme.state.sperm_storage, np.round(deme.state.sperm_storage))
 
 
-def test_spatial_mixed_hook_priority_ordering_runs_in_run_tick_and_run():
+def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
     species = _make_species("spatial_mixed_priority")
     calls: list[str] = []
     observed: dict[str, list[float]] = {

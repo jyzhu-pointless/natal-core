@@ -238,9 +238,14 @@ launch(spatial, port=8080, title="Spatial Debug Dashboard")
 
 如果 demes 不是同一个 Species，`SpatialPopulation` 会直接报错。
 
-### 错误 2：config 没有共享
+### 错误 2：deme 间迁移采样模式不一致
 
-如果每个 deme 的 config 不是同一个对象，`run_tick()` / `run(...)` 会在共享配置检查时失败。
+支持异构 deme config。但当迁移开启时，所有 deme 的
+`is_stochastic` 与 `use_continuous_sampling` 必须保持一致；
+否则 `run_tick()` / `run(...)` 会报错。
+
+当 deme 配置为异构时，空间执行会走按 deme 的 hook-aware 时间线，
+以保证 local hook 语义一致。
 
 ### 错误 3：kernel 维度不对
 
@@ -262,7 +267,7 @@ launch(spatial, port=8080, title="Spatial Debug Dashboard")
 SpatialPopulation 的实际使用顺序可以记成四步：
 
 1. 构建一组共享 species 的 deme。
-2. 让这些 deme 共享同一个 config。
+2. 可以使用异构 deme config，但迁移采样模式要在各 deme 之间保持一致。
 3. 选择 adjacency 或 migration_kernel。
 4. 用 `run_tick()` 调试，用 `run(...)` 跑批量实验。
 

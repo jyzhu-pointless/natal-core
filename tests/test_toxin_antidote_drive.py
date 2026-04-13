@@ -21,14 +21,14 @@ class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):
         patch = preset.fitness_patch()
 
         self.assertEqual(
-            patch["viability_allele"],
+            patch["viability_per_allele"],
             {"Disrupted": (0.0, "recessive")},
         )
         self.assertEqual(
-            patch["fecundity_allele"],
+            patch["fecundity_per_allele"],
             {"Disrupted": (1.0, "recessive")},
         )
-        self.assertNotIn("sexual_selection_allele", patch)
+        self.assertNotIn("sexual_selection_per_allele", patch)
 
     def test_tuple_sexual_selection_is_exported_in_patch(self) -> None:
         preset = ToxinAntidoteDrive(
@@ -43,7 +43,7 @@ class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):
         patch = preset.fitness_patch()
 
         self.assertEqual(
-            patch["sexual_selection_allele"],
+            patch["sexual_selection_per_allele"],
             {"Disrupted": ((1.0, 0.7), "dominant")},
         )
 
@@ -60,7 +60,7 @@ class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):
         patch = preset.fitness_patch()
 
         self.assertEqual(
-            patch["sexual_selection_allele"],
+            patch["sexual_selection_per_allele"],
             {"Disrupted": (0.85, "dominant")},
         )
 

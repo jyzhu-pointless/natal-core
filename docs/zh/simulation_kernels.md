@@ -73,6 +73,7 @@ pop.run_tick()
   - 基于性选择适应度与有效雄性数量，构建交配概率矩阵 `P(g_f -> g_m)`。
   - 调用 `sample_mating(...)` 更新 `sperm_store`（包含精子置换逻辑）。
   - 调用受精函数生成 age-0 新个体（雌/雄分别写入 `ind_count[:, 0, :]`）。
+  - 对新生成的 age-0 个体应用合子适应度（zygote fitness）
 2. survival
   - 先对 age-0（幼体）做密度调节：`NO_COMPETITION / FIXED / LOGISTIC / BEVERTON_HOLT`。
   - 再计算“年龄生存率 × 生存力（viability）”的联合生存率。
@@ -124,6 +125,24 @@ pop.run_tick()
 - 离散世代模型：`run_discrete_reproduction`、`run_discrete_survival`、`run_discrete_aging`
 
 此外，该模块还提供状态/配置导入导出的轻量包装函数，便于与上层对象方法配合使用。
+
+### 4.1 Spatial migration 后端模块布局
+
+Spatial migration 相关内核现已按后端拆分到目录模块
+`src/natal/kernels/migration/` 下：
+
+- `adjacency.py`：邻接行后端（dense/sparse row 路由）。
+- `kernel.py`：拓扑 + migration-kernel 后端。
+- `__init__.py`：包级后端入口重导出。
+
+兼容入口 `src/natal/kernels/spatial_migration_kernels.py`
+保持旧 API 不变，并按后端模式分发：
+
+- `migration_mode == 0` -> adjacency 后端（`adjacency.py`）
+- `migration_mode == 1` -> kernel-topology 后端（`kernel.py`）
+
+这样可以在不改变用户侧入口（如 `run_spatial_migration(...)`）的前提下，
+把 migration 内部实现做成可维护的模块化结构。
 
 ## 5. 与 `state`/`config` 的关系
 

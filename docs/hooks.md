@@ -120,8 +120,8 @@ If multiple hooks exist, it is recommended to specify execution order via `prior
 ### 7.3 Numba Mode and Mixed Hook Types
 
 - When global `NUMBA_ENABLED=True`, Python-layer hooks are rejected at registration time.
-- When global `NUMBA_ENABLED=False`, Python hooks are automatically executed in `run(...)` / `run_tick()`.
-- If one event mixes different hook types (declarative CSR, njit, Python), execution falls back to unified Python event dispatch so that cross-type ordering follows `priority`.
+- When global `NUMBA_ENABLED=False`, any registered hook type (declarative CSR, njit, Python) is executed through one unified Python event-dispatch path in `run(...)` / `run_tick()`.
+- When global `NUMBA_ENABLED=True`, mixed-type timelines fall back to unified Python event dispatch so that cross-type ordering follows `priority`.
 - In `SpatialPopulation`, local hook priority is evaluated per deme. Ordering is guaranteed within one deme, not across different demes.
 
 ## 8. Relationship with `run` / `run_tick`

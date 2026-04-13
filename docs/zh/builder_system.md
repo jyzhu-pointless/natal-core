@@ -192,7 +192,8 @@ Builder 链式配置
 | `viability` | `Optional[Dict[GenotypeSelector, Union[float, Dict[Union[str, Sex, int], Union[float, Dict[int, float]]]]]]` | 生存适应度系数。 | `None` | survival | 支持多层级：按基因型、按性别、按年龄、按性别+年龄；默认 `None` 不改动。 |
 | `fecundity` | `Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]]` | 生殖力适应度系数。 | `None` | reproduction | 按基因型和/或性别指定；默认 `None` 不改动。 |
 | `sexual_selection` | `Optional[Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]]` | 配对偏好权重。 | `None` | reproduction | 支持平铺映射 `{male: value}` 或嵌套映射 `{female: {male: value}}`。 |
-| `mode` | `str` | 適应度值的写入模式。 | `"replace"` | fitness 写入策略 | `"replace"` 覆盖原值，`"multiply"` 按倍数缩放。 |
+| `zygote` | `Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]]` | 合子适应度系数。 | `None` | reproduction | 在 survival 阶段之前应用；表示合子存活成为个体的概率. ｜
+| `mode` | `str` | 适应度值的写入模式。 | `"replace"` | fitness 写入策略 | `"replace"` 覆盖原值，`"multiply"` 按倍数缩放。 |
 
 代码对齐格式（来自 `fitness()` 注释与 `_iter_sexual_selection_entries`）：
 
@@ -217,6 +218,12 @@ Builder 链式配置
 
 # sexual_selection 嵌套格式: {female_selector: {male_selector: value}}
 .fitness(sexual_selection={"WT|WT": {"Drive|WT": 0.8, "WT|WT": 1.0}})
+
+# zygote fitness: 基因型 -> 浮点数（应用于两性）
+.fitness(zygote={"A|A": 0.5, "a|a": 0.8})
+
+# zygote fitness: 基因型 -> {性别: 浮点数}（性别特定）
+.fitness(zygote={"a|a": {"female": 0.3, "male": 0.4}})
 ```
 
 `GenotypeSelector` 支持：

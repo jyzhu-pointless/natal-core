@@ -192,6 +192,7 @@ This approach ensures that the carrying capacity is consistent with the equilibr
 | `viability` | `Optional[Dict[GenotypeSelector, Union[float, Dict[Union[str, Sex, int], Union[float, Dict[int, float]]]]]]` | Survival fitness coefficient. | `None` | survival | Supports multi-level: by genotype, by sex, by age, by sex+age; default `None` does not modify. |
 | `fecundity` | `Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]]` | Reproductive fitness coefficient. | `None` | reproduction | Specified by genotype and/or sex; default `None` does not modify. |
 | `sexual_selection` | `Optional[Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]]` | Pair preference weight. | `None` | reproduction | Supports flat mapping `{male: value}` or nested mapping `{female: {male: value}}`. |
+| `zygote` | `Optional[Dict[GenotypeSelector, Union[float, Dict[str, float]]]]` | Zygote fitness coefficient. | `None` | reproduction | Applied during reproduction stage before survival; represents probability that a zygote survives to become an individual. |
 | `mode` | `str` | Fitness value writing mode. | `"replace"` | fitness writing strategy | `"replace"` overwrites original, `"multiply"` scales by factor. |
 
 Code‑aligned format (from `fitness()` docstring and `_iter_sexual_selection_entries`):
@@ -217,6 +218,12 @@ Code‑aligned format (from `fitness()` docstring and `_iter_sexual_selection_en
 
 # sexual_selection nested format: {female_selector: {male_selector: value}}
 .fitness(sexual_selection={"WT|WT": {"Drive|WT": 0.8, "WT|WT": 1.0}})
+
+# zygote fitness: genotype -> float (applies to both sexes)
+.fitness(zygote={"A|A": 0.5, "a|a": 0.8})
+
+# zygote fitness: genotype -> {sex: float} (sex-specific)
+.fitness(zygote={"a|a": {"female": 0.3, "male": 0.4}})
 ```
 
 `GenotypeSelector` supports:

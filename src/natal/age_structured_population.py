@@ -3,12 +3,6 @@
 This module implements age-structured (overlapping generation) population
 models and utilities for survival, reproduction, juvenile recruitment, and
 fitness management.
-
-Attributes:
-    __all__ (list[str]): List of public symbols exported by this module.
-
-.. _Google Python Style Guide:
-   http://google.github.io/styleguide/pyguide.html
 """
 
 from collections.abc import Mapping

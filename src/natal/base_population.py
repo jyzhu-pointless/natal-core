@@ -13,6 +13,7 @@ keeping internal state representations compatible with NumPy/Numba kernels.
 from __future__ import annotations
 
 import hashlib
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import (
@@ -167,7 +168,7 @@ class BasePopulation(ABC, Generic[T_State]):
                     func, hook_name, hook_id = hook_info
 
                     # Check if function has @hook metadata
-                    hook_meta = getattr(func, '_hook_meta', None)
+                    hook_meta = getattr(func, 'meta', None)
                     if hook_meta is not None:
                         # Defer compilation until _finalize_hooks() is called
                         self._pending_hooks.append((event_name, func, hook_name, hook_id))
@@ -978,8 +979,20 @@ class BasePopulation(ABC, Generic[T_State]):
         if event_name not in self.ALLOWED_EVENTS:
             raise ValueError(f"Event '{event_name}' not in {self.ALLOWED_EVENTS}")
 
+        # BasePopulation itself is panmictic. Non-wildcard deme selectors are
+        # interpreted by SpatialPopulation orchestration and should not be
+        # consumed here.
+        if deme_selector is not None and deme_selector != "*":
+            warnings.warn(
+                "BasePopulation ignores non-'*' deme_selector. "
+                "Apply deme selection through SpatialPopulation-level logic instead.",
+                UserWarning,
+                stacklevel=2,
+            )
+            deme_selector = None
+
         # Check if function has @hook metadata and should be compiled
-        hook_meta = getattr(func, '_hook_meta', None)
+        hook_meta = getattr(func, 'meta', None)
         if is_numba_enabled() and hook_meta is None:
             raise TypeError(
                 "Python-layer hooks are not allowed when Numba is enabled. "

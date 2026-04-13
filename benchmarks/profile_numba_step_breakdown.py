@@ -14,10 +14,8 @@ import numpy as np
 import natal as nt
 import natal.algorithms as alg
 from natal.kernels.spatial_simulation_kernels import (
-    run_spatial_aging,
     run_spatial_migration,
-    run_spatial_reproduction,
-    run_spatial_survival,
+    run_spatial_tick,
 )
 from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
@@ -140,9 +138,7 @@ def profile_numba_steps(mode: ModeConfig) -> None:
     ind_all, sperm_all = spatial._stack_deme_state_arrays()
 
     # Warm-up direct kernel calls once each.
-    run_spatial_reproduction(ind_all.copy(), sperm_all.copy(), config)
-    run_spatial_survival(ind_all.copy(), sperm_all.copy(), config)
-    run_spatial_aging(ind_all.copy(), sperm_all.copy(), config)
+    run_spatial_tick(ind_all.copy(), sperm_all.copy(), config, int(spatial.tick))
     run_spatial_migration(
         ind_all.copy(),
         sperm_all.copy(),
@@ -157,25 +153,12 @@ def profile_numba_steps(mode: ModeConfig) -> None:
         float(spatial._migration_rate),
     )
 
-    repro_mean, repro_std = _time_call(
-        run_spatial_reproduction,
+    tick_mean, tick_std = _time_call(
+        run_spatial_tick,
         ind_all.copy(),
         sperm_all.copy(),
         config,
-        repeats=5,
-    )
-    surv_mean, surv_std = _time_call(
-        run_spatial_survival,
-        ind_all.copy(),
-        sperm_all.copy(),
-        config,
-        repeats=5,
-    )
-    aging_mean, aging_std = _time_call(
-        run_spatial_aging,
-        ind_all.copy(),
-        sperm_all.copy(),
-        config,
+        int(spatial.tick),
         repeats=5,
     )
     mig_mean, mig_std = _time_call(
@@ -194,11 +177,9 @@ def profile_numba_steps(mode: ModeConfig) -> None:
         repeats=5,
     )
 
-    stage_total = repro_mean + surv_mean + aging_mean + mig_mean
+    stage_total = tick_mean + mig_mean
     print("\n[Spatial Numba Stages]")
-    print(f"reproduction: {repro_mean:.4f}s ± {repro_std:.4f}s ({repro_mean/stage_total*100:.1f}%)")
-    print(f"survival    : {surv_mean:.4f}s ± {surv_std:.4f}s ({surv_mean/stage_total*100:.1f}%)")
-    print(f"aging       : {aging_mean:.4f}s ± {aging_std:.4f}s ({aging_mean/stage_total*100:.1f}%)")
+    print(f"local_tick  : {tick_mean:.4f}s ± {tick_std:.4f}s ({tick_mean/stage_total*100:.1f}%)")
     print(f"migration   : {mig_mean:.4f}s ± {mig_std:.4f}s ({mig_mean/stage_total*100:.1f}%)")
 
     # Reproduction inner breakdown on one representative deme.

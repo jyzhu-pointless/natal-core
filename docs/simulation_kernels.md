@@ -73,6 +73,7 @@ For an `AgeStructuredPopulation` tick, the three main stages can be expanded fur
   - Build mating probability matrix `P(g_f -> g_m)` based on sexual selection fitness and effective male counts.
   - Call `sample_mating(...)` to update `sperm_store` (including sperm displacement logic).
   - Call fertilisation functions to generate age‑0 new individuals (females/males written to `ind_count[:, 0, :]` respectively).
+  - Apply zygote fitness to newly formed offspring (age‑0 individuals) before survival stage.
 2. survival
   - First apply density regulation to age‑0 (juveniles): `NO_COMPETITION / FIXED / LOGISTIC / BEVERTON_HOLT`.
   - Then compute the combined survival probability “age‑specific survival × viability”.
@@ -124,6 +125,24 @@ Additionally, the reproduction stage is influenced by `use_fixed_egg_count`:
 - For the discrete‑generation model: `run_discrete_reproduction`, `run_discrete_survival`, `run_discrete_aging`.
 
 The module also provides lightweight wrapper functions for importing/exporting state and configuration, making them easy to use together with the higher‑level object methods.
+
+### 4.1 Spatial Migration Backend Layout
+
+Spatial migration kernels are now organized as a package under
+`src/natal/kernels/migration/`:
+
+- `adjacency.py`: adjacency-row backend (dense/sparse row routing).
+- `kernel.py`: topology + migration-kernel backend.
+- `__init__.py`: package-level re-exports for backend entry points.
+
+The compatibility facade `src/natal/kernels/spatial_migration_kernels.py`
+keeps the legacy public API stable while dispatching by backend mode:
+
+- `migration_mode == 0` -> adjacency backend (`adjacency.py`)
+- `migration_mode == 1` -> kernel-topology backend (`kernel.py`)
+
+This split keeps migration internals modular without changing user-facing
+entry points such as `run_spatial_migration(...)`.
 
 ## 5. Relationship with `state` / `config`
 

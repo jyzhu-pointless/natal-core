@@ -69,9 +69,9 @@ class TestPresetFitnessPatch(unittest.TestCase):
         self.gt_drive_wt = self.species.get_genotype_from_str("Drive|WT")
         self.gt_drive_drive = self.species.get_genotype_from_str("Drive|Drive")
 
-    def test_viability_allele_scaling_is_multiplicative_by_copy_number(self) -> None:
+    def test_viability_per_allele_scaling_is_multiplicative_by_copy_number(self) -> None:
         patch = {
-            "viability_allele": {
+            "viability_per_allele": {
                 "Drive": 0.8,
             }
         }
@@ -85,9 +85,9 @@ class TestPresetFitnessPatch(unittest.TestCase):
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_wt], 0.8)
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_drive], 0.64)
 
-    def test_fecundity_allele_scaling_is_multiplicative_by_copy_number(self) -> None:
+    def test_fecundity_per_allele_scaling_is_multiplicative_by_copy_number(self) -> None:
         patch = {
-            "fecundity_allele": {
+            "fecundity_per_allele": {
                 "Drive": 0.5,
             }
         }

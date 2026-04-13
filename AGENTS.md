@@ -16,9 +16,11 @@ If rules conflict, prefer the English specification files.
 ## 2) Mandatory quality gates before proposing completion
 
 For code changes, run and pass all of the following:
-- pytest
-- pyright
-- ruff check src demos
+```bash
+pytest
+pyright
+ruff check src demos
+```
 
 Activate the repository virtual environment before running `pyright` so it uses
 the project-installed dependencies and configuration.

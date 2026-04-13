@@ -460,7 +460,7 @@ class Dashboard:
                     # Name
                     ui.label(str(gt)).classes('text-base font-bold mt-1 text-center leading-tight text-gray-800')
 
-                    # Fitness (NEW)
+                    # Fitness
                     fit_info = self._get_genotype_fitness(i, target_age_fit)
                     if fit_info:
                         with ui.column().classes('w-full items-center gap-0 my-1 bg-gray-50 rounded p-1'):
@@ -470,9 +470,12 @@ class Dashboard:
                                 ui.label(fit_info['fec']).classes('text-sm text-gray-600')
 
                     # Counts
-                    with ui.row().classes('w-full justify-between px-1 mt-1'):
-                        ui.label(f"F: {total_f}").classes('text-base font-bold text-pink-600')
-                        ui.label(f"M: {total_m}").classes('text-base font-bold text-blue-600')
+                    with ui.row().classes('w-full justify-between px-1 -mb-1'):
+                        ui.label("Female").classes('text-sm font-bold text-pink-600 leading-none')
+                        ui.label("Male").classes('text-sm font-bold text-blue-600 leading-none')
+                    with ui.row().classes('w-full justify-between px-1'):
+                        ui.label(f"{total_f}").classes('text-base font-bold text-pink-600 leading-none')
+                        ui.label(f"{total_m}").classes('text-base font-bold text-blue-600 leading-none')
 
                     # Detailed age breakdown (skipping Age 0)
                     if self._is_age_structured_population:
@@ -484,7 +487,7 @@ class Dashboard:
                                 if af > 0 or am > 0:
                                     with ui.row().classes('w-full justify-between text-sm text-gray-500 leading-tight'):
                                         ui.label(f"A{age}")
-                                        ui.label(f"{af}/{am}")
+                                        ui.label(f"F {af} / M {am}")
 
     def _get_viability_data(self):
         config = self.pop.export_config()
@@ -995,9 +998,9 @@ class Dashboard:
 
         res = {}
         if v_f != 1.0 or v_m != 1.0:
-            res['via'] = f"V: {v_f:.2g}(F)/{v_m:.2g}(M)"
+            res['via'] = f"Via: {v_f:.2g}(F)/{v_m:.2g}(M)"
         if f_f != 1.0 or f_m != 1.0:
-            res['fec'] = f"F: {f_f:.2g}(F)/{f_m:.2g}(M)"
+            res['fec'] = f"Fec: {f_f:.2g}(F)/{f_m:.2g}(M)"
         return res
 
     def handle_chart_zoom(self, e):

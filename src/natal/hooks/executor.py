@@ -765,39 +765,3 @@ def run_age_structured_with_hooks(
     return population
 
 
-def run_spatial_tick_with_hooks(spatial_population: Any) -> bool:
-    """Run one spatial tick via deme-local run_tick plus shared migration."""
-    from natal.spatial_simulation_kernels import run_spatial_migration
-
-    for deme in spatial_population._demes:
-        deme.run_tick()
-        if bool(getattr(deme, "_finished", False)):
-            return True
-
-    spatial_population._tick = int(spatial_population._demes[0].tick)
-
-    config = spatial_population._shared_config()
-    ind_all, sperm_all = spatial_population._stack_deme_state_arrays()
-
-    effective_adjacency = spatial_population._adjacency
-    effective_migration_mode_code = spatial_population._migration_mode_code
-    if spatial_population._heterogeneous_kernel_adjacency is not None:
-        effective_adjacency = spatial_population._heterogeneous_kernel_adjacency
-        effective_migration_mode_code = 0
-
-    ind_all, sperm_all = run_spatial_migration(
-        ind_count_all=ind_all,
-        sperm_store_all=sperm_all,
-        adjacency=effective_adjacency,
-        migration_mode=effective_migration_mode_code,
-        topology_rows=0 if spatial_population._topology is None else int(spatial_population._topology.rows),
-        topology_cols=0 if spatial_population._topology is None else int(spatial_population._topology.cols),
-        topology_wrap=False if spatial_population._topology is None else bool(spatial_population._topology.wrap),
-        migration_kernel=spatial_population._migration_kernel_array(),
-        kernel_include_center=bool(spatial_population._kernel_include_center),
-        config=config,
-        migration_rate=float(spatial_population._migration_rate),
-    )
-
-    spatial_population._apply_stacked_state(ind_all, sperm_all, int(spatial_population._tick))
-    return False

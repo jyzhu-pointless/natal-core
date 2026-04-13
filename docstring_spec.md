@@ -1,8 +1,8 @@
 # Google Style Docstring Specification
 
-This specification is based on the [Google Python Style Guide](http://google.github.io/styleguide/pyguide.html). It defines the required format for docstrings with two additional mandatory rules:  
-1. **Fixed section names** – only the standard section headers may be used.  
-2. **All variables must be typed** – either via PEP 484 annotations or explicitly in the docstring.  
+This specification is based on the [Google Python Style Guide](http://google.github.io/styleguide/pyguide.html). It defines the required format for docstrings with two additional mandatory rules:
+1. **Fixed section names** – only the standard section headers may be used.
+2. **All variables must be typed** – either via PEP 484 annotations or explicitly in the docstring.
 3. **Docstring content must be written in English** – including summaries, descriptions, and examples.
 
 ---
@@ -40,7 +40,7 @@ Only the following standard section headers are allowed. If extra information is
 
 ## 3. Type Annotations Requirement
 
-**Every variable (parameters, return values, attributes) must have an explicit type.**  
+**Every variable (parameters, return values, attributes) must have an explicit type.**
 Two acceptable methods:
 
 ### Method 1: Use PEP 484 Type Annotations (Recommended)
@@ -92,7 +92,7 @@ class MyClass:
 
 ## 4. Docstring Content Must Be in English
 
-All text inside docstrings – including the summary, parameter descriptions, return value descriptions, and example comments – **must be written in English**.  
+All text inside docstrings – including the summary, parameter descriptions, return value descriptions, and example comments – **must be written in English**.
 This ensures consistency and makes the documentation accessible to a wider audience.
 
 ```python

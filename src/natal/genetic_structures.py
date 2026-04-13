@@ -31,7 +31,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Protocol,
     Set,
     Tuple,
     TypeGuard,
@@ -46,7 +45,6 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from natal.genetic_entities import Gene, Genotype, HaploidGenome, Haplotype
-    from natal.genetic_patterns import GenotypePattern, GenotypePatternParser
 
 __all__ = [
     "Locus",
@@ -64,36 +62,6 @@ GenotypeChromosomeCombo = Tuple[AlleleTuple, AlleleTuple]
 GenotypeComboMap = Dict[int, GenotypeChromosomeCombo]
 HaploidComboMap = Dict[int, AlleleTuple]
 
-
-class _LocusPatternLike(Protocol):
-    """Protocol for locus-level pattern containers."""
-
-    locus_patterns: Iterable[object]
-
-
-class _ChromosomePairPatternLike(Protocol):
-    """Protocol for maternal/paternal chromosome-pair patterns."""
-
-    maternal_pattern: _LocusPatternLike
-    paternal_pattern: _LocusPatternLike
-
-
-class _GenotypePatternLike(Protocol):
-    """Protocol for genotype patterns composed of chromosome pairs."""
-
-    chromosome_patterns: Iterable[Optional[_ChromosomePairPatternLike]]
-
-
-class _HaploidGenomePatternLike(Protocol):
-    """Protocol for haploid genome patterns composed of haplotype patterns."""
-
-    haplotype_patterns: Iterable[Optional[_LocusPatternLike]]
-
-
-class _PatternParserLike(Protocol):
-    """Protocol for parser objects that resolve allowed alleles per locus pattern."""
-
-    def get_allowed_alleles(self, locus_pattern: object) -> List[str]: ...
 
 logger = logging.getLogger(__name__)  # temp logger
 
@@ -2613,9 +2581,9 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         Enumerate all genotypes matching a pattern.
 
-        Generates all possible genotype combinations that satisfy the pattern.
-        If a pattern element is a wildcard (*) or set ({}), all possible
-        alleles are explored. For single alleles, only that allele is used.
+        Yields all possible genotype combinations that satisfy the pattern.
+        Uses the pattern's built-in matching logic to filter candidates,
+        avoiding complex combination generation.
 
         Args:
             pattern: Pattern string (see parse_genotype_pattern for syntax).
@@ -2637,107 +2605,13 @@ class Species(GeneticStructure['HaploidGenome']):
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse(pattern)
 
-        # For each chromosome pattern, extract allowed alleles
         count = 0
-
-        try:
-            for genotype_combo in self._generate_genotype_combinations(
-                pattern_obj, parser
-            ):
+        for genotype in self.iter_genotypes():
+            if pattern_obj.matches(genotype):
                 if max_count is not None and count >= max_count:
                     return
-
-                try:
-                    # Convert combination back to genotype
-                    genotype_str = self._convert_combo_to_genotype_str(genotype_combo)
-                    genotype = self.get_genotype_from_str(genotype_str)
-                    yield genotype
-                    count += 1
-                except Exception:
-                    # Skip invalid combinations
-                    continue
-        except Exception:
-            # Handle parsing or other errors gracefully
-            return
-
-    def _generate_genotype_combinations(
-        self,
-        pattern_obj: GenotypePattern,
-        parser: GenotypePatternParser
-    ) -> Iterable[GenotypeComboMap]:
-        """Generate all chromosome combinations from pattern.
-
-        Each chromosome pattern is a ChromosomePairPattern with maternal
-        and paternal HaplotypePath objects.
-        """
-        from itertools import product as iterproduct
-
-        pattern_like = cast(_GenotypePatternLike, pattern_obj)
-        parser_like = cast(_PatternParserLike, parser)
-
-        chromosome_combos: List[Tuple[int, List[GenotypeChromosomeCombo]]] = []
-
-        for chr_idx, chr_pattern in enumerate(pattern_like.chromosome_patterns):
-            if chr_pattern is None:
-                # Omitted chromosome - skip it
-                continue
-
-            # Generate maternal haplotype combinations (for all loci on this chromosome)
-            mat_locus_combos: List[List[str]] = []
-            for locus_pattern in chr_pattern.maternal_pattern.locus_patterns:
-                mat_alleles = parser_like.get_allowed_alleles(locus_pattern)
-                mat_locus_combos.append(mat_alleles)
-            mat_hap_combos: List[AlleleTuple] = list(iterproduct(*mat_locus_combos))
-
-            # Generate paternal haplotype combinations (for all loci on this chromosome)
-            pat_locus_combos: List[List[str]] = []
-            for locus_pattern in chr_pattern.paternal_pattern.locus_patterns:
-                pat_alleles = parser_like.get_allowed_alleles(locus_pattern)
-                pat_locus_combos.append(pat_alleles)
-            pat_hap_combos: List[AlleleTuple] = list(iterproduct(*pat_locus_combos))
-
-            # All combinations for this chromosome (maternal x paternal)
-            chr_combos: List[GenotypeChromosomeCombo] = [
-                (mat_hap_combo, pat_hap_combo)
-                for mat_hap_combo in mat_hap_combos
-                for pat_hap_combo in pat_hap_combos
-            ]
-            chromosome_combos.append((chr_idx, chr_combos))
-
-        # Generate all combinations across chromosomes
-        if chromosome_combos:
-            chr_indices, chr_combo_lists = zip(*chromosome_combos)
-            for combo in iterproduct(*chr_combo_lists):
-                combo_map: GenotypeComboMap = dict(zip(chr_indices, combo))
-                yield combo_map
-        else:
-            # No specified chromosomes - yield empty
-            yield cast(GenotypeComboMap, {})
-
-    def _convert_combo_to_genotype_str(self, combo: GenotypeComboMap) -> str:
-        """Convert a chromosome combination back to genotype string format.
-
-        combo format: {chr_idx: (mat_alleles_tuple, pat_alleles_tuple), ...}
-        Output format: "A1/B1|A2/B2; C1/C1|..."
-        """
-        genotype_parts: List[str] = []
-
-        for chr_idx in range(len(self.chromosomes)):
-            if chr_idx not in combo:
-                # Omitted chromosome - use wildcards
-                chromosome = self.chromosomes[chr_idx]
-                locus_strs = ["*" for _ in chromosome.loci]
-                genotype_parts.append("/".join(locus_strs) + "|" + "/".join(locus_strs))
-            else:
-                # Specified chromosome: combo[chr_idx] = (mat_alleles_tuple, pat_alleles_tuple)
-                mat_alleles_tuple, pat_alleles_tuple = combo[chr_idx]
-
-                # Convert tuples to lists of strings
-                mat_str = "/".join(str(allele) for allele in mat_alleles_tuple)
-                pat_str = "/".join(str(allele) for allele in pat_alleles_tuple)
-                genotype_parts.append(f"{mat_str}|{pat_str}")
-
-        return ";".join(genotype_parts)
+                yield genotype
+                count += 1
 
     # ========================================================================
     # HAPLOIDGENOME PATTERN MATCHING
@@ -2805,9 +2679,9 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         Enumerate all haploid genomes matching a pattern.
 
-        Generates all possible haploid genome combinations that satisfy the pattern.
-        If a pattern element is a wildcard (*) or set ({}), all possible
-        alleles are explored. For single alleles, only that allele is used.
+        Yields all possible haploid genome combinations that satisfy the pattern.
+        Uses the pattern's built-in matching logic to filter candidates,
+        avoiding complex combination generation.
 
         Args:
             pattern: Pattern string (see parse_haploid_genome_pattern for syntax).
@@ -2829,94 +2703,13 @@ class Species(GeneticStructure['HaploidGenome']):
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse_haploid_genome_pattern(pattern)
 
-        # For each haplotype pattern, extract allowed alleles
         count = 0
-
-        try:
-            for haploid_combo in self._generate_haploid_genome_combinations(
-                pattern_obj, parser
-            ):
+        for haploid_genome in self.iter_haploid_genotypes():
+            if pattern_obj.matches(haploid_genome):
                 if max_count is not None and count >= max_count:
                     return
-
-                try:
-                    # Convert combination back to haploid genome
-                    haploid_str = self._convert_haploid_combo_to_haploid_genome_str(haploid_combo)
-                    haploid_genome = self.get_haploid_genome_from_str(haploid_str)
-                    yield haploid_genome
-                    count += 1
-                except Exception:
-                    # Skip invalid combinations
-                    continue
-        except Exception:
-            # Handle parsing or other errors gracefully
-            return
-
-    def _generate_haploid_genome_combinations(
-        self,
-        pattern_obj: object,
-        parser: object,
-    ) -> Iterable[HaploidComboMap]:
-        """Generate all haplotype combinations from a HaploidGenomePattern.
-
-        Each haplotype pattern is a HaplotypePath with a list of locus
-        patterns for one DNA strand.
-        """
-        from itertools import product as iterproduct
-
-        pattern_like = cast(_HaploidGenomePatternLike, pattern_obj)
-        parser_like = cast(_PatternParserLike, parser)
-
-        chromosome_combos: List[Tuple[int, List[AlleleTuple]]] = []
-
-        for chr_idx, haplotype_pattern in enumerate(pattern_like.haplotype_patterns):
-            if haplotype_pattern is None:
-                # Omitted chromosome - skip it
-                continue
-
-            # Generate locus combinations for this haplotype
-            locus_combos: List[List[str]] = []
-            for locus_pattern in haplotype_pattern.locus_patterns:
-                alleles = parser_like.get_allowed_alleles(locus_pattern)
-                locus_combos.append(alleles)
-
-            # Cartesian product of all loci for this chromosome
-            hap_combos: List[AlleleTuple] = list(iterproduct(*locus_combos))
-            chromosome_combos.append((chr_idx, hap_combos))
-
-        # Generate all combinations across chromosomes
-        if chromosome_combos:
-            chr_indices, chr_combo_lists = zip(*chromosome_combos)
-            for combo in iterproduct(*chr_combo_lists):
-                combo_map: HaploidComboMap = dict(zip(chr_indices, combo))
-                yield combo_map
-        else:
-            # No specified chromosomes - yield empty
-            yield cast(HaploidComboMap, {})
-
-    def _convert_haploid_combo_to_haploid_genome_str(self, combo: HaploidComboMap) -> str:
-        """Convert a haplotype combination back to haploid genome string format.
-
-        combo format: {chr_idx: alleles_tuple, ...}
-        Output format: "A1/B1; C1"
-        """
-        haploid_parts: List[str] = []
-
-        for chr_idx in range(len(self.chromosomes)):
-            if chr_idx not in combo:
-                # Omitted chromosome - use wildcards
-                chromosome = self.chromosomes[chr_idx]
-                locus_strs = ["*" for _ in chromosome.loci]
-                haploid_parts.append("/".join(locus_strs))
-            else:
-                # Specified chromosome: combo[chr_idx] = alleles_tuple
-                alleles_tuple = combo[chr_idx]
-
-                # Convert tuple to string
-                allele_str = "/".join(str(allele) for allele in alleles_tuple)
-                haploid_parts.append(allele_str)
-
-        return ";".join(haploid_parts)
+                yield haploid_genome
+                count += 1
 
     def __repr__(self):
         chrom_strs: List[str] = []

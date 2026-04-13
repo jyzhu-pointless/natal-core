@@ -65,6 +65,10 @@ class PopulationConfig(NamedTuple):
             coefficients.
         sexual_selection_fitness: Shape (n_genotypes, n_genotypes) – sexual
             selection coefficients (female genotype × male genotype).
+        zygote_fitness: Shape (n_sexes, n_genotypes) – zygote fitness
+            coefficients applied during reproduction stage before survival.
+            Represents the probability that a zygote survives to become an
+            individual, applied before competition and viability selection.
         age_based_relative_competition_strength: Shape (n_ages,) – relative
             contribution to competition for each age.
         sperm_displacement_rate: Probability that a new mating displaces stored
@@ -124,6 +128,7 @@ class PopulationConfig(NamedTuple):
     viability_fitness: NDArray[np.float64]
     fecundity_fitness: NDArray[np.float64]
     sexual_selection_fitness: NDArray[np.float64]
+    zygote_fitness: NDArray[np.float64]
     age_based_relative_competition_strength: NDArray[np.float64]
     sperm_displacement_rate: float
     expected_eggs_per_female: float
@@ -184,6 +189,20 @@ class PopulationConfig(NamedTuple):
             value: Fitness value.
         """
         self.sexual_selection_fitness[female_geno_idx, male_geno_idx] = value
+
+    def set_zygote_fitness(self, sex: int, genotype_idx: int, value: float) -> None:
+        """Set zygote fitness for a specific (sex, genotype) combination.
+
+        Zygote fitness represents the probability that a zygote survives to become
+        an individual, applied during reproduction stage before survival and
+        competition.
+
+        Args:
+            sex: Sex index.
+            genotype_idx: Diploid genotype index.
+            value: Fitness value (0.0 to 1.0).
+        """
+        self.zygote_fitness[sex, genotype_idx] = value
 
     def set_population_scale(self, scale: float) -> PopulationConfig:
         """Return a new config with the population scale factor updated.
@@ -300,6 +319,7 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         viability_fitness=_maybe_copy_array(config.viability_fitness, copy),
         fecundity_fitness=_maybe_copy_array(config.fecundity_fitness, copy),
         sexual_selection_fitness=_maybe_copy_array(config.sexual_selection_fitness, copy),
+        zygote_fitness=_maybe_copy_array(config.zygote_fitness, copy),
         age_based_relative_competition_strength=_maybe_copy_array(config.age_based_relative_competition_strength, copy),
         sperm_displacement_rate=float(config.sperm_displacement_rate),
         expected_eggs_per_female=float(config.expected_eggs_per_female),
@@ -355,6 +375,7 @@ def build_population_config(
     viability_fitness: Optional[NDArray[np.float64]] = None,
     fecundity_fitness: Optional[NDArray[np.float64]] = None,
     sexual_selection_fitness: Optional[NDArray[np.float64]] = None,
+    zygote_fitness: Optional[NDArray[np.float64]] = None,
     age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
     new_adult_age: int = 2,
     sperm_displacement_rate: float = 0.05,
@@ -530,6 +551,7 @@ def build_population_config(
     viability = _validate_or_default_array(viability_fitness, (n_sexes_i, n_ages_i, n_genotypes_i), "viability_fitness")
     fecundity = _validate_or_default_array(fecundity_fitness, (n_sexes_i, n_genotypes_i), "fecundity_fitness")
     sexual = _validate_or_default_array(sexual_selection_fitness, (n_genotypes_i, n_genotypes_i), "sexual_selection_fitness")
+    zygote = _validate_or_default_array(zygote_fitness, (n_sexes_i, n_genotypes_i), "zygote_fitness")
     competition = _validate_or_default_array(
         age_based_relative_competition_strength,
         (n_ages_i,),
@@ -586,6 +608,7 @@ def build_population_config(
             viability_fitness=viability,
             fecundity_fitness=fecundity,
             sexual_selection_fitness=sexual,
+            zygote_fitness=zygote,
             age_based_relative_competition_strength=competition,
             sperm_displacement_rate=float(sperm_displacement_rate),
             expected_eggs_per_female=float(expected_eggs_per_female),
@@ -631,6 +654,7 @@ def build_population_config(
         viability_fitness=viability,
         fecundity_fitness=fecundity,
         sexual_selection_fitness=sexual,
+        zygote_fitness=zygote,
         age_based_relative_competition_strength=competition,
         sperm_displacement_rate=float(sperm_displacement_rate),
         expected_eggs_per_female=float(expected_eggs_per_female),

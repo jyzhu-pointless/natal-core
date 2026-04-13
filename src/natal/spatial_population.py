@@ -8,14 +8,36 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any, Callable, List, Literal, Optional, Tuple, cast
+from typing import (
+    Callable,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Tuple,
+    TypeAlias,
+    cast,
+)
 
 import numpy as np
 from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
-from natal.hook_dsl import DemeSelector
-from natal.population_state import PopulationState
+from natal.genetic_structures import Species
+from natal.hook_dsl import (
+    CompiledEventHooks,
+    CompiledHookDescriptor,
+    DemeSelector,
+    HookProgram,
+)
+from natal.kernels.spatial_simulation_kernels import (
+    run_spatial_migration,
+    run_spatial_steps_codegen_wrapper,
+    run_spatial_tick_codegen_wrapper,
+)
+from natal.numba_utils import is_numba_enabled
+from natal.population_config import PopulationConfig
+from natal.population_state import DiscretePopulationState, PopulationState
 from natal.spatial_topology import (
     GridTopology,
     build_adjacency_matrix,
@@ -23,9 +45,20 @@ from natal.spatial_topology import (
 
 __all__ = ["SpatialPopulation"]
 
+ConfigObject: TypeAlias = object
+SpatialStateTuple: TypeAlias = tuple[NDArray[np.float64], NDArray[np.float64], int]
+DemePopulation: TypeAlias = BasePopulation[PopulationState] | BasePopulation[DiscretePopulationState]
+
+
+class _ConfigBankProtocol(Protocol):
+    """Minimal mutable config bank interface for heterogeneous dispatch."""
+
+    def append(self, value: ConfigObject) -> None:
+        """Append one config object."""
+
 
 def _coerce_adjacency_dense(
-    adjacency: Any,
+    adjacency: object,
     n_demes: int,
 ) -> NDArray[np.float64]:
     """Coerce dense or sparse-like adjacency input to a dense float64 matrix.
@@ -34,7 +67,7 @@ def _coerce_adjacency_dense(
 
     - Dense ``np.ndarray`` with shape ``(n_demes, n_demes)``.
     - CSR tuple ``(indptr, indices, data)``.
-    - Any object exposing ``toarray()`` (for example scipy sparse matrices).
+    - Objects exposing ``toarray()`` (for example scipy sparse matrices).
 
     Args:
         adjacency: User-provided adjacency input.
@@ -49,7 +82,7 @@ def _coerce_adjacency_dense(
     """
     # Normalize user input early so downstream code can assume one concrete
     # ndarray representation regardless of original input form.
-    adjacency_obj = cast(object, adjacency)
+    adjacency_obj = adjacency
 
     if isinstance(adjacency_obj, np.ndarray):
         # Dense mode is interpreted as a square matrix.
@@ -187,9 +220,9 @@ class SpatialPopulation:
 
     Attributes:
         name (str): Human-readable name for the spatial container.
-        demes (Sequence[BasePopulation[Any]]): Immutable view of managed demes.
+        demes (Sequence[DemePopulation]): Immutable view of managed demes.
         n_demes (int): Number of demes in the spatial system.
-        species (Any): Shared species object used by all demes.
+        species (object): Shared species object used by all demes.
         topology (GridTopology | None): Spatial topology used by the landscape.
         adjacency (NDArray[np.float64]): Outbound migration matrix between demes
             when migration mode is ``"adjacency"``.
@@ -211,7 +244,7 @@ class SpatialPopulation:
 
     def __init__(
         self,
-        demes: Sequence[BasePopulation[Any]],
+        demes: Sequence[DemePopulation],
         *,
         topology: Optional[GridTopology] = None,
         adjacency: Optional[object] = None,
@@ -261,7 +294,7 @@ class SpatialPopulation:
 
         # Keep a stable list internally; public accessor returns an immutable
         # tuple view to prevent accidental external mutation.
-        self._demes: List[BasePopulation[Any]] = list(demes)
+        self._demes: List[DemePopulation] = list(demes)
 
         # Spatial container expects all demes to share one Species object so
         # genotype indexing and config semantics are globally consistent.
@@ -368,12 +401,9 @@ class SpatialPopulation:
                         f"{len(normalized_kernel_bank)}"
                     )
 
-        # Initialize hooks system
-        if all(hasattr(deme, "_hooks_obj") for deme in self._demes):
-            # Use the first deme's hooks_obj for compatibility with tests.
-            self._hooks: Any = self._demes[0]._hooks_obj  # type: ignore[attr-defined]
-        else:
-            self._hooks = self._compile_spatial_hooks_from_demes()
+        # Spatial hooks are local-to-deme by design, so container-level hooks
+        # must always be rebuilt from all demes.
+        self._hooks = self._compile_spatial_hooks_from_demes()
 
         heterogeneous_kernel_adjacency: NDArray[np.float64] | None = None
         if topology is not None and normalized_kernel_bank is not None and normalized_deme_kernel_ids is not None:
@@ -419,8 +449,8 @@ class SpatialPopulation:
         return self._name
 
     @property
-    def demes(self) -> Sequence[BasePopulation[Any]]:
-        """Sequence[BasePopulation[Any]]: Immutable view of all managed demes."""
+    def demes(self) -> Sequence[DemePopulation]:
+        """Sequence[DemePopulation]: Immutable view of all managed demes."""
         return tuple(self._demes)
 
     @property
@@ -429,8 +459,8 @@ class SpatialPopulation:
         return len(self._demes)
 
     @property
-    def species(self) -> Any:
-        """Any: Shared species object used by all demes."""
+    def species(self) -> Species:
+        """Species: Shared species object used by all demes."""
         return self._demes[0].species
 
     @property
@@ -477,7 +507,7 @@ class SpatialPopulation:
     def migration_rate(self, value: float) -> None:
         self._migration_rate = float(value)
 
-    def deme(self, idx: int) -> BasePopulation[Any]:
+    def deme(self, idx: int) -> DemePopulation:
         """Return one deme by positional index.
 
         Args:
@@ -494,8 +524,8 @@ class SpatialPopulation:
         return self._tick
 
     @property
-    def hooks(self) -> Any:
-        """Any: Global event hooks shared across all demes."""
+    def hooks(self) -> CompiledEventHooks:
+        """CompiledEventHooks: Global event hooks shared across all demes."""
         return self._hooks
 
     def set_hook(
@@ -518,13 +548,17 @@ class SpatialPopulation:
             deme_selector: Optional deme selector.
 
         Note:
-            This API is a spatial convenience entrypoint: it forwards the same
-            hook registration call to every deme, then rebuilds one aggregate
-            compiled hook bundle.
+            This API is a spatial convenience entrypoint. ``deme_selector`` is
+            interpreted here to choose target demes, then forwarded hooks are
+            registered on selected demes with panmictic selector semantics.
+            Compiler-level selector fields are transport-only metadata.
         """
-        # Register hook in all demes
-        for deme in self._demes:
-            deme.set_hook(event_name, func, hook_id, hook_name, compile, deme_selector)
+        # Spatial-level selector handling: select target demes here and avoid
+        # passing non-wildcard selectors into BasePopulation.
+        for deme_id, deme in enumerate(self._demes):
+            if deme_selector is not None and not self._selector_matches_deme(deme_selector, deme_id):
+                continue
+            deme.set_hook(event_name, func, hook_id, hook_name, compile, None)
 
         # Rebuild aggregate hooks once after all per-deme mutations.
         self._hooks = self._compile_spatial_hooks_from_demes()
@@ -574,7 +608,7 @@ class SpatialPopulation:
             return deme_id in selector
         return deme_id in selector
 
-    def _collect_effective_compiled_hooks(self) -> list[Any]:
+    def _collect_effective_compiled_hooks(self) -> list[CompiledHookDescriptor]:
         """Collect hooks from each deme and pin each one to its owner deme.
 
         Local spatial hook semantics are per-deme: ordering and execution scope
@@ -591,7 +625,7 @@ class SpatialPopulation:
             Rewriting selectors here avoids accidental cross-deme execution
             after flattening all demes into a single compiled registry.
         """
-        compiled_hooks: list[Any] = []
+        compiled_hooks: list[CompiledHookDescriptor] = []
         for deme_id, deme in enumerate(self._demes):
             try:
                 hooks = deme.get_compiled_hooks()
@@ -609,7 +643,7 @@ class SpatialPopulation:
         return compiled_hooks
 
     @staticmethod
-    def _build_hook_program(compiled_hooks: list[Any]) -> Any:
+    def _build_hook_program(compiled_hooks: list[CompiledHookDescriptor]) -> HookProgram:
         """Build one CSR ``HookProgram`` from aggregate compiled descriptors.
 
         Args:
@@ -625,13 +659,13 @@ class SpatialPopulation:
             buffers to keep downstream execution loops vectorizable and
             allocation-free during runtime dispatch.
         """
-        from natal.hook_dsl import EVENT_NAMES, HookProgram
+        from natal.hook_dsl import EVENT_NAMES
 
         events = EVENT_NAMES
         n_events = len(events)
 
         hook_offsets: list[int] = [0]
-        hook_list_by_event: list[list[Any]] = []
+        hook_list_by_event: list[list[CompiledHookDescriptor]] = []
         for event_name in events:
             hooks = [h for h in compiled_hooks if h.event == event_name]
             hook_list_by_event.append(hooks)
@@ -729,7 +763,7 @@ class SpatialPopulation:
             deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
         )
 
-    def _compile_spatial_hooks_from_demes(self) -> Any:
+    def _compile_spatial_hooks_from_demes(self) -> CompiledEventHooks:
         """Compile one aggregate hook bundle from current per-deme hooks.
 
         Returns:
@@ -741,8 +775,6 @@ class SpatialPopulation:
             initialization, ``set_hook(...)``, and ``remove_hook(...)`` so all
             hook mutation paths stay behaviorally consistent.
         """
-        from natal.hook_dsl import CompiledEventHooks
-
         compiled_hooks = self._collect_effective_compiled_hooks()
         registry = self._build_hook_program(compiled_hooks)
         return CompiledEventHooks.from_compiled_hooks(compiled_hooks, registry=registry)
@@ -942,20 +974,21 @@ class SpatialPopulation:
             deme.tick = int(tick)
         self._tick = int(tick)
 
-    def _shared_config(self) -> Any:
+    def _shared_config(self) -> ConfigObject:
         """Return one shared config for spatial kernels.
 
-        Current spatial kernel wrappers expect one config object for all demes.
+        Current spatial kernel wrappers expect equivalent config values for
+        all demes.
 
         Returns:
             The shared exported config object used by every deme.
 
         Raises:
             TypeError: If a deme does not implement ``export_config``.
-            ValueError: If demes export different config objects.
+            ValueError: If demes export different config values.
         """
-        # Spatial kernels assume one shared config object to avoid per-deme
-        # config branching inside njit paths.
+        # Spatial kernels assume equivalent config values across demes to avoid
+        # per-deme config branching inside njit paths.
         export_fn = getattr(self._demes[0], "export_config", None)
         if not callable(export_fn):
             raise TypeError("deme[0] does not implement export_config()")
@@ -964,13 +997,115 @@ class SpatialPopulation:
             deme_export = getattr(deme, "export_config", None)
             if not callable(deme_export):
                 raise TypeError(f"deme[{idx}] does not implement export_config()")
-            # Identity check is intentional: semantic equality is not enough
-            # for kernels that capture config fields through one object.
-            if deme_export() is not cfg:
+            if not self._configs_match(cfg, deme_export()):
                 raise ValueError(
-                    f"deme[{idx}] uses a different config object; current spatial runner requires a shared config"
+                    f"deme[{idx}] exports different config values; current spatial runner requires equivalent configs"
                 )
         return cfg
+
+    def _migration_config(self) -> ConfigObject:
+        """Return one config object that carries migration runtime flags.
+
+        Migration kernels only use ``is_stochastic`` and
+        ``use_continuous_sampling``. Heterogeneous deme configs are supported
+        as long as these migration-relevant flags are consistent when
+        migration is enabled.
+
+        Returns:
+            One exported config object to feed migration kernels.
+
+        Raises:
+            TypeError: If a deme does not implement ``export_config``.
+            ValueError: If migration is enabled and migration flags differ
+                across demes.
+        """
+        export_fn = getattr(self._demes[0], "export_config", None)
+        if not callable(export_fn):
+            raise TypeError("deme[0] does not implement export_config()")
+        cfg = export_fn()
+
+        if float(self._migration_rate) <= 0.0:
+            return cfg
+
+        cfg_is_stochastic = bool(getattr(cfg, "is_stochastic", False))
+        cfg_use_continuous_sampling = bool(getattr(cfg, "use_continuous_sampling", False))
+
+        for idx, deme in enumerate(self._demes[1:], start=1):
+            deme_export = getattr(deme, "export_config", None)
+            if not callable(deme_export):
+                raise TypeError(f"deme[{idx}] does not implement export_config()")
+            other_cfg = deme_export()
+            if bool(getattr(other_cfg, "is_stochastic", False)) != cfg_is_stochastic:
+                raise ValueError(
+                    f"deme[{idx}] has different is_stochastic; migration requires consistent stochastic mode across demes"
+                )
+            if bool(getattr(other_cfg, "use_continuous_sampling", False)) != cfg_use_continuous_sampling:
+                raise ValueError(
+                    f"deme[{idx}] has different use_continuous_sampling; migration requires consistent sampling mode "
+                    "across demes"
+                )
+        return cfg
+
+    def _has_heterogeneous_configs(self) -> bool:
+        """Return whether demes export non-equivalent config values."""
+        export_fn = getattr(self._demes[0], "export_config", None)
+        if not callable(export_fn):
+            raise TypeError("deme[0] does not implement export_config()")
+        reference_cfg = export_fn()
+
+        for idx, deme in enumerate(self._demes[1:], start=1):
+            deme_export = getattr(deme, "export_config", None)
+            if not callable(deme_export):
+                raise TypeError(f"deme[{idx}] does not implement export_config()")
+            if not self._configs_match(reference_cfg, deme_export()):
+                return True
+        return False
+
+    @staticmethod
+    def _configs_match(reference_cfg: ConfigObject, candidate_cfg: ConfigObject) -> bool:
+        """Return whether two exported configs are equivalent by value.
+
+        Args:
+            reference_cfg: Reference config object.
+            candidate_cfg: Candidate config object.
+
+        Returns:
+            ``True`` when both configs expose the same field layout and equal
+            values; otherwise ``False``.
+        """
+        if reference_cfg is candidate_cfg:
+            return True
+
+        field_names = getattr(reference_cfg, "_fields", None)
+        candidate_fields = getattr(candidate_cfg, "_fields", None)
+        if field_names is not None and candidate_fields is not None:
+            if field_names != candidate_fields:
+                return False
+
+            for field_name in field_names:
+                reference_value = getattr(reference_cfg, field_name)
+                candidate_value = getattr(candidate_cfg, field_name)
+
+                if isinstance(reference_value, np.ndarray) or isinstance(candidate_value, np.ndarray):
+                    if not isinstance(reference_value, np.ndarray) or not isinstance(candidate_value, np.ndarray):
+                        return False
+                    reference_array = cast(NDArray[np.generic], reference_value)
+                    candidate_array = cast(NDArray[np.generic], candidate_value)
+                    if reference_array.shape != candidate_array.shape:
+                        return False
+                    if not np.array_equal(reference_array, candidate_array):
+                        return False
+                    continue
+
+                if reference_value != candidate_value:
+                    return False
+
+            return True
+
+        try:
+            return bool(reference_cfg == candidate_cfg)
+        except Exception:
+            return False
 
     def _migration_kernel_array(self) -> NDArray[np.float64]:
         """Return the migration kernel array expected by compiled kernels."""
@@ -1023,11 +1158,177 @@ class SpatialPopulation:
             path end-to-end.
 
         Note:
-            Current compiled spatial wrappers intentionally skip local hook
-            insertion. Therefore, presence of either Python or compiled hooks
-            forces execution through the per-deme Python dispatch timeline.
+            Spatial codegen wrappers currently do not execute local per-deme
+            hook timelines. We therefore keep Python dispatch whenever hooks
+            are present, when global Numba is disabled, or when deme configs
+            are heterogeneous by value.
         """
-        return self._has_python_hooks() or self._has_compiled_hooks()
+        if not is_numba_enabled():
+            return True
+        if self._has_python_hooks() or self._has_compiled_hooks():
+            return True
+        return self._has_heterogeneous_configs()
+
+    def _config_equivalence_groups(self) -> list[tuple[ConfigObject, list[int]]]:
+        """Group deme indices by value-equivalent exported configs.
+
+        Returns:
+            A list of ``(config, deme_indices)`` groups where each group shares
+            one value-equivalent config.
+
+        Raises:
+            TypeError: If any deme does not implement ``export_config``.
+        """
+        groups: list[tuple[ConfigObject, list[int]]] = []
+
+        for deme_idx, deme in enumerate(self._demes):
+            deme_export = getattr(deme, "export_config", None)
+            if not callable(deme_export):
+                raise TypeError(f"deme[{deme_idx}] does not implement export_config()")
+            cfg = deme_export()
+
+            assigned = False
+            for group_idx, (group_cfg, group_deme_indices) in enumerate(groups):
+                if self._configs_match(group_cfg, cfg):
+                    group_deme_indices.append(deme_idx)
+                    groups[group_idx] = (group_cfg, group_deme_indices)
+                    assigned = True
+                    break
+            if not assigned:
+                groups.append((cfg, [deme_idx]))
+
+        return groups
+
+    def _heterogeneous_config_bank_and_ids(self) -> tuple[object, NDArray[np.int64]]:
+        """Build a Numba-typed config bank and per-deme config ids.
+
+        Returns:
+            A tuple ``(config_bank, deme_config_ids)`` where ``config_bank`` is
+            a numba.typed.List of unique configs and ``deme_config_ids`` maps
+            each deme to one config index.
+
+        TODO(spatial-config/flattened-config-bank): Consider replacing the
+            typed-list config bank with flattened config matrices plus index
+            vectors to stabilize kernel signatures and simplify heterogeneous
+            dispatch ABI.
+        """
+        import importlib
+
+        groups = self._config_equivalence_groups()
+        deme_config_ids = np.empty(self.n_demes, dtype=np.int64)
+
+        numba_typed = importlib.import_module("numba.typed")
+        config_bank_factory = cast(Callable[[], _ConfigBankProtocol], numba_typed.List)
+        config_bank = config_bank_factory()
+        for group_id, (group_cfg, group_deme_indices) in enumerate(groups):
+            config_bank.append(group_cfg)
+            for deme_idx in group_deme_indices:
+                deme_config_ids[deme_idx] = np.int64(group_id)
+
+        return cast(object, config_bank), deme_config_ids
+
+    def _effective_migration_route(self) -> tuple[NDArray[np.float64], int]:
+        """Return effective migration adjacency and mode code."""
+        if self._heterogeneous_kernel_adjacency is not None:
+            return self._heterogeneous_kernel_adjacency, 0
+        return self._adjacency, self._migration_mode_code
+
+    def _ensure_demes_runnable(self, *, context: str) -> None:
+        """Raise if any deme is already finished before execution."""
+        for idx, deme in enumerate(self._demes):
+            if getattr(deme, "_finished", False):
+                raise RuntimeError(f"deme[{idx}] has finished; cannot {context}")
+
+    def _mark_all_demes_stopped(self) -> None:
+        """Mark all demes finished and emit the finish event."""
+        for deme in self._demes:
+            deme._finished = True  # type: ignore[attr-defined]
+            deme.trigger_event("finish")
+
+    def _run_python_dispatch_tick(self) -> bool:
+        """Run one tick via per-deme ``run_tick`` and shared migration."""
+        for deme in self._demes:
+            deme.run_tick()
+            if bool(getattr(deme, "_finished", False)):
+                return True
+
+        self._tick = int(self._demes[0].tick)
+
+        config = self._migration_config()
+        ind_all, sperm_all = self._stack_deme_state_arrays()
+        effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
+
+        ind_all, sperm_all = run_spatial_migration(
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            adjacency=effective_adjacency,
+            migration_mode=effective_migration_mode_code,
+            topology_rows=0 if self._topology is None else int(self._topology.rows),
+            topology_cols=0 if self._topology is None else int(self._topology.cols),
+            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
+            migration_kernel=self._migration_kernel_array(),
+            kernel_include_center=bool(self._kernel_include_center),
+            config=cast(PopulationConfig, config),
+            migration_rate=float(self._migration_rate),
+        )
+        self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
+        return False
+
+    def _run_codegen_wrapper_tick(self) -> bool:
+        """Run one tick through the compiled spatial wrapper path."""
+        assert self._hooks.run_spatial_tick_fn is not None, "hooks.run_spatial_tick_fn should always be initialized"
+        assert self._hooks.registry is not None, "hooks.registry should always be initialized"
+
+        config = cast(PopulationConfig, self._shared_config())
+        ind_all, sperm_all = self._stack_deme_state_arrays()
+        effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
+        final_state_tuple, was_stopped = run_spatial_tick_codegen_wrapper(
+            run_tick_fn=self._hooks.run_spatial_tick_fn,
+            registry=self._hooks.registry,
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            config=config,
+            tick=int(self._tick),
+            adjacency=effective_adjacency,
+            migration_mode=effective_migration_mode_code,
+            topology_rows=0 if self._topology is None else int(self._topology.rows),
+            topology_cols=0 if self._topology is None else int(self._topology.cols),
+            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
+            migration_kernel=self._migration_kernel_array(),
+            kernel_include_center=bool(self._kernel_include_center),
+            migration_rate=float(self._migration_rate),
+        )
+        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
+        return was_stopped
+
+    def _run_codegen_wrapper_steps(self, n_steps: int, *, record_every: int) -> bool:
+        """Run multiple ticks through the compiled spatial wrapper path."""
+        assert self._hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"
+        assert self._hooks.registry is not None, "hooks.registry should always be initialized"
+
+        config = cast(PopulationConfig, self._shared_config())
+        ind_all, sperm_all = self._stack_deme_state_arrays()
+        effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
+        final_state_tuple, was_stopped = run_spatial_steps_codegen_wrapper(
+            run_fn=self._hooks.run_spatial_fn,
+            registry=self._hooks.registry,
+            ind_count_all=ind_all,
+            sperm_store_all=sperm_all,
+            config=config,
+            tick=int(self._tick),
+            n_steps=int(n_steps),
+            adjacency=effective_adjacency,
+            migration_mode=effective_migration_mode_code,
+            topology_rows=0 if self._topology is None else int(self._topology.rows),
+            topology_cols=0 if self._topology is None else int(self._topology.cols),
+            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
+            migration_kernel=self._migration_kernel_array(),
+            kernel_include_center=bool(self._kernel_include_center),
+            migration_rate=float(self._migration_rate),
+            record_every=int(record_every),
+        )
+        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
+        return was_stopped
 
     def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick via the generated spatial wrapper.
@@ -1038,62 +1339,16 @@ class SpatialPopulation:
         Raises:
             RuntimeError: If any deme has already finished.
         """
-        for idx, deme in enumerate(self._demes):
-            if getattr(deme, "_finished", False):
-                raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial tick")
+        self._ensure_demes_runnable(context="run spatial tick")
 
         if self._should_use_python_dispatch():
-            from natal.hooks.executor import run_spatial_tick_with_hooks
-
-            # Hook-aware path: preserve per-deme local hook semantics.
-            was_stopped = bool(run_spatial_tick_with_hooks(self))
-            if was_stopped:
-                for deme in self._demes:
-                    deme._finished = True  # type: ignore[attr-defined]
-                    deme.trigger_event("finish")
-            return self
-
-        # Hook-free fast path: one compiled spatial wrapper call.
-        assert self._hooks.run_spatial_tick_fn is not None, "hooks.run_spatial_tick_fn should always be initialized"
-        assert self._hooks.registry is not None, "hooks.registry should always be initialized"
-
-        run_tick_fn = cast(Callable[..., Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], int]], self._hooks.run_spatial_tick_fn)
-        registry = self._hooks.registry
-        config = self._shared_config()
-        ind_all, sperm_all = self._stack_deme_state_arrays()
-        effective_adjacency = self._adjacency
-        effective_migration_mode_code = self._migration_mode_code
-        if self._heterogeneous_kernel_adjacency is not None:
-            effective_adjacency = self._heterogeneous_kernel_adjacency
-            effective_migration_mode_code = 0
-
-        final_state_tuple, result = run_tick_fn(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            config=config,
-            registry=registry,
-            tick=int(self._tick),
-            adjacency=effective_adjacency,
-            # TODO(spatial-migration/wrapper-signature-run-tick): Extend
-            # wrapper signature to pass heterogeneous routing payloads.
-            # Scope:
-            # - Add explicit args for sparse cache and per-deme kernel routing.
-            # - Keep backward compatibility for existing generated wrappers.
-            migration_mode=effective_migration_mode_code,
-            topology_rows=0 if self._topology is None else int(self._topology.rows),
-            topology_cols=0 if self._topology is None else int(self._topology.cols),
-            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
-            migration_kernel=self._migration_kernel_array(),
-            kernel_include_center=bool(self._kernel_include_center),
-            migration_rate=float(self._migration_rate),
-        )
-
-        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
-
-        if int(result) != 0:
-            for deme in self._demes:
-                deme._finished = True  # type: ignore[attr-defined]
-                deme.trigger_event("finish")
+            # Hook-aware fallback: preserve per-deme local hook semantics.
+            was_stopped = self._run_python_dispatch_tick()
+        else:
+            # Global Numba path: run codegen wrapper for one full spatial tick.
+            was_stopped = self._run_codegen_wrapper_tick()
+        if was_stopped:
+            self._mark_all_demes_stopped()
         return self
 
     def run(
@@ -1121,73 +1376,20 @@ class SpatialPopulation:
         if n_steps < 0:
             raise ValueError("n_steps must be >= 0")
 
-        for idx, deme in enumerate(self._demes):
-            if getattr(deme, "_finished", False):
-                raise RuntimeError(f"deme[{idx}] has finished; cannot run spatial simulation")
+        self._ensure_demes_runnable(context="run spatial simulation")
 
         if self._should_use_python_dispatch():
-            from natal.hooks.executor import run_spatial_tick_with_hooks
-
-            # Hook-aware execution iterates tick-by-tick so stop signals can
-            # short-circuit immediately after each local event timeline.
+            # Hook-aware fallback: keep local hook timeline semantics.
             was_stopped = False
             for _ in range(n_steps):
-                if bool(run_spatial_tick_with_hooks(self)):
+                if self._run_python_dispatch_tick():
                     was_stopped = True
                     break
-            if was_stopped:
-                for deme in self._demes:
-                    deme._finished = True  # type: ignore[attr-defined]
-                    deme.trigger_event("finish")
-            elif finish:
-                for deme in self._demes:
-                    deme.finish_simulation()
-            return self
-
-        # Hook-free fast path delegates the whole batch to one compiled wrapper
-        # call, which may still early-stop if runtime result requests it.
-        assert self._hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"
-        assert self._hooks.registry is not None, "hooks.registry should always be initialized"
-
-        run_fn = cast(Callable[..., Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], NDArray[np.float64], bool]], self._hooks.run_spatial_fn)
-        registry = self._hooks.registry
-        config = self._shared_config()
-        ind_all, sperm_all = self._stack_deme_state_arrays()
-        effective_adjacency = self._adjacency
-        effective_migration_mode_code = self._migration_mode_code
-        if self._heterogeneous_kernel_adjacency is not None:
-            effective_adjacency = self._heterogeneous_kernel_adjacency
-            effective_migration_mode_code = 0
-
-        final_state_tuple, _history, was_stopped = run_fn(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            config=config,
-            registry=registry,
-            tick=int(self._tick),
-            n_ticks=int(n_steps),
-            adjacency=effective_adjacency,
-            # TODO(spatial-migration/wrapper-signature-run): Extend wrapper
-            # signature to pass heterogeneous routing payloads.
-            # Scope:
-            # - Mirror run_tick signature additions for batch run wrapper.
-            # - Ensure generated template and runtime call sites stay aligned.
-            migration_mode=effective_migration_mode_code,
-            topology_rows=0 if self._topology is None else int(self._topology.rows),
-            topology_cols=0 if self._topology is None else int(self._topology.cols),
-            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
-            migration_kernel=self._migration_kernel_array(),
-            kernel_include_center=bool(self._kernel_include_center),
-            migration_rate=float(self._migration_rate),
-            record_interval=int(record_every),
-        )
-
-        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
-
+        else:
+            # Global Numba path: run batched spatial wrapper.
+            was_stopped = self._run_codegen_wrapper_steps(n_steps, record_every=int(record_every))
         if bool(was_stopped):
-            for deme in self._demes:
-                deme._finished = True  # type: ignore[attr-defined]
-                deme.trigger_event("finish")
+            self._mark_all_demes_stopped()
         elif finish:
             for deme in self._demes:
                 deme.finish_simulation()

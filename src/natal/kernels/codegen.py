@@ -152,13 +152,13 @@ def compile_spatial_kernel_bound_wrappers(
             generated module.
 
     The returned callables are ``(run_spatial_tick_fn, run_spatial_fn)``.
-    Spatial wrappers execute one full local lifecycle plus migration and do
-    not inject event hooks directly. Spatial hook dispatch is handled by the
-    Python fallback path in ``SpatialPopulation`` when hooks are present.
+    ``SpatialPopulation`` uses these wrappers as its global-Numba fast path
+    when the run can stay on one shared-equivalent config ABI and does not
+    require per-deme Python hook dispatch.
     """
     key = _hash_key(
         [
-            "spatial_kernel_wrappers_v6",
+            "spatial_kernel_wrappers_v7",
             _stable_callable_identity(first_fn),
             _stable_callable_identity(early_fn),
             _stable_callable_identity(late_fn),

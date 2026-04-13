@@ -143,6 +143,44 @@ def run_reproduction_with_precomputed_offspring_probability(
     ind_count[0, 0, :] = n_0_female  # sex=0 is FEMALE
     ind_count[1, 0, :] = n_0_male    # sex=1 is MALE
 
+    # 5. Apply zygote fitness to newly formed offspring (age-0 individuals)
+    if hasattr(config, 'zygote_fitness'):
+        # Apply zygote fitness to age-0 individuals with proper stochastic sampling
+        if is_stochastic:
+            # Use stochastic sampling for zygote survival
+            female_offspring = ind_count[0, 0, :].copy()
+            male_offspring = ind_count[1, 0, :].copy()
+
+            # Apply zygote fitness using binomial sampling
+            for g in range(n_gen):
+                if use_continuous_sampling:
+                    # Continuous sampling: use continuous_binomial function
+                    if female_offspring[g] > 0:
+                        female_offspring[g] = alg.continuous_binomial(
+                            female_offspring[g], config.zygote_fitness[0, g]
+                        )
+                    if male_offspring[g] > 0:
+                        male_offspring[g] = alg.continuous_binomial(
+                            male_offspring[g], config.zygote_fitness[1, g]
+                        )
+                else:
+                    # Discrete sampling: use standard binomial distribution
+                    if female_offspring[g] > 0:
+                        n_female = int(round(female_offspring[g]))
+                        if n_female > 0:
+                            female_offspring[g] = binomial(n_female, config.zygote_fitness[0, g])
+                    if male_offspring[g] > 0:
+                        n_male = int(round(male_offspring[g]))
+                        if n_male > 0:
+                            male_offspring[g] = binomial(n_male, config.zygote_fitness[1, g])
+
+            ind_count[0, 0, :] = female_offspring
+            ind_count[1, 0, :] = male_offspring
+        else:
+            # Deterministic mode: simple multiplication
+            ind_count[0, 0, :] *= config.zygote_fitness[0, :]  # Female offspring
+            ind_count[1, 0, :] *= config.zygote_fitness[1, :]  # Male offspring
+
     return ind_count, sperm_store
 
 

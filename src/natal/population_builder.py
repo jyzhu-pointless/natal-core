@@ -3,18 +3,6 @@
 This module provides PopulationBuilder classes for streamlined, chainable
 population construction. It separates configuration management from object
 instantiation, preventing parameter bloat and enabling clear, readable code.
-
-Examples:
-    Examples can be given using the ``AgeStructuredPopulation.builder`` entry point::
-
-        pop = (AgeStructuredPopulation.builder(species)
-            .setup(name="Pop1", stochastic=True)
-            .age_structure(n_ages=10, new_adult_age=2)
-            .survival(female_rates=[...], male_rates=[...])
-            .build())
-
-.. _Google Python Style Guide:
-   http://google.github.io/styleguide/pyguide.html
 """
 
 import inspect
@@ -70,7 +58,8 @@ ViabilityNestedMap = Dict[Union[str, Sex, int], Union[float, AgeScalarMap]]
 ViabilityMap = Dict[GenotypeSelector, Union[float, ViabilityNestedMap]]
 FecundityMap = Dict[GenotypeSelector, Union[float, SexScalarMap]]
 SexualSelectionMap = Dict[GenotypeSelector, Union[float, Dict[GenotypeSelector, float]]]
-FitnessOperationName = Literal["viability", "fecundity", "sexual_selection"]
+ZygoteFitnessMap = Dict[GenotypeSelector, Union[float, SexScalarMap]]
+FitnessOperationName = Literal["viability", "fecundity", "sexual_selection", "zygote"]
 FitnessOperation = Tuple[FitnessOperationName, Tuple[object], Dict[str, str]]
 
 InitializeMapFn = Callable[..., NDArray[np.float64]]
@@ -1375,13 +1364,14 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         viability: Optional[ViabilityMap] = None,
         fecundity: Optional[FecundityMap] = None,
         sexual_selection: Optional[SexualSelectionMap] = None,
+        zygote: Optional[ViabilityMap] = None,
         mode: str = "replace",
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure fitness via population methods (applied after presets).
 
         Fitness is set using the population's set_viability(), set_fecundity(),
-        and set_sexual_selection() methods AFTER presets are applied. This allows
-        presets to set base fitness values which can then be overridden.
+        set_sexual_selection(), and set_zygote() methods AFTER presets are applied.
+        This allows presets to set base fitness values which can then be overridden.
 
         Args:
             viability (Optional[Dict]): Mapping genotype -> {sex: value} or genotype -> value.
@@ -1390,8 +1380,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                 - Float: Applies to both sexes.
                 - Dict: {sex: value} applies per-sex.
             sexual_selection (Optional[Dict]): Nested mapping of female_selector -> {male_selector: value}.
+            zygote (Optional[Dict]): Mapping genotype -> zygote fitness value (float or dict).
+                Zygote fitness represents the probability that a zygote survives to become
+                an individual, applied during reproduction stage before survival and competition.
                 - female_selector can be omitted by passing flat form {male_selector: value},
                     which applies to all female genotypes.
+            zygote (Optional[Dict]): Mapping genotype -> fitness value (float or dict).
+                Applied during reproduction stage to newly formed offspring.
             mode (str): Scaling mode. 'replace' (default) overwrites existing values.
                 'multiply' scales existing values by the provided factor.
 
@@ -1406,6 +1401,9 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
         if sexual_selection is not None:
             self._fitness_operations.append(('sexual_selection', (sexual_selection,), {'mode': mode}))
+
+        if zygote is not None:
+            self._fitness_operations.append(('zygote', (zygote,), {'mode': mode}))
 
         return self
 
@@ -1487,15 +1485,15 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                         self._hooks[event] = []
                     self._hooks[event].extend(registrations)
             elif callable(item):
-                meta = getattr(item, '_hook_meta', {})
-                event = meta.get('event') or getattr(item, '_hook_event', None)
+                meta = getattr(item, 'meta', {})
+                event = meta.get('event') or getattr(item, 'event', None)
                 if not event:
                     raise ValueError(
                         f"Hook '{getattr(item, '__name__', str(item))}' missing event. "
                         "Please specify with @hook(event='...')"
                     )
 
-                priority = meta.get('priority', getattr(item, '_hook_priority', 0))
+                priority = meta.get('priority', getattr(item, 'priority', 0))
                 name = getattr(item, '__name__', None)
 
                 if event not in self._hooks:
@@ -1668,6 +1666,38 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                                 val *= current
                             pop.config.set_sexual_selection_fitness(f_idx, m_idx, val)
 
+            elif method_name == 'zygote':
+                zygote_map = cast(ZygoteFitnessMap, args[0])
+                for genotype_selector, values in zygote_map.items():
+                    matched_genotypes = pop.species.resolve_genotype_selectors(
+                        selector=genotype_selector,
+                        context='zygote',
+                    )
+
+                    for genotype in matched_genotypes:
+                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
+
+                        if isinstance(values, dict):
+                            for sex_label, value in values.items():
+                                sex_idx = resolve_sex_label(sex_label)
+                                # For zygote fitness, we don't support age-specific values
+                                # value should be a float, not AgeScalarMap
+                                if isinstance(value, dict):
+                                    raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
+                                val = float(value)
+                                if is_multiply:
+                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
+                        else:
+                            # values is a float, not AgeScalarMap for zygote fitness
+                            for sex_idx in (0, 1):
+                                val = float(values)
+                                if is_multiply:
+                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
+
         return pop
 
 
@@ -1738,6 +1768,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         viability: Optional[ViabilityMap] = None,
         fecundity: Optional[FecundityMap] = None,
         sexual_selection: Optional[SexualSelectionMap] = None,
+        zygote: Optional[ViabilityMap] = None,
         mode: str = "replace",
     ) -> "DiscreteGenerationPopulationBuilder":
         """Configure fitness via population methods (applied after presets).
@@ -1746,6 +1777,9 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             viability (Optional[Dict]): Genotype selectors to scalar or per-sex values.
             fecundity (Optional[Dict]): Genotype selectors to fecundity values.
             sexual_selection (Optional[Dict]): Flat or nested mating preference mapping.
+            zygote (Optional[Dict]): Genotype selectors to zygote fitness values.
+                Zygote fitness represents the probability that a zygote survives to become
+                an individual, applied during reproduction stage before survival and competition.
             mode (str): 'replace' or 'multiply'.
 
         Returns:
@@ -1759,6 +1793,9 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
         if sexual_selection is not None:
             self._fitness_operations.append(("sexual_selection", (sexual_selection,), {'mode': mode}))
+
+        if zygote is not None:
+            self._fitness_operations.append(("zygote", (zygote,), {'mode': mode}))
 
         return self
 
@@ -1948,15 +1985,15 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                         self._hooks[event] = []
                     self._hooks[event].extend(registrations)
             elif callable(item):
-                meta = getattr(item, '_hook_meta', {})
-                event = meta.get('event') or getattr(item, '_hook_event', None)
+                meta = getattr(item, 'meta', {})
+                event = meta.get('event') or getattr(item, 'event', None)
                 if not event:
                     raise ValueError(
                         f"Hook '{getattr(item, '__name__', str(item))}' missing event. "
                         "Please specify with @hook(event='...')"
                     )
 
-                priority = meta.get('priority', getattr(item, '_hook_priority', 0))
+                priority = meta.get('priority', getattr(item, 'priority', 0))
                 name = getattr(item, '__name__', None)
 
                 if event not in self._hooks:
@@ -2117,5 +2154,37 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                                 current = pop.config.sexual_selection_fitness[f_idx, m_idx]
                                 val *= current
                             pop.config.set_sexual_selection_fitness(f_idx, m_idx, val)
+
+            elif method_name == 'zygote':
+                zygote_map = cast(ZygoteFitnessMap, args[0])
+                for genotype_selector, values in zygote_map.items():
+                    matched_genotypes = pop.species.resolve_genotype_selectors(
+                        selector=genotype_selector,
+                        context='zygote',
+                    )
+
+                    for genotype in matched_genotypes:
+                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
+
+                        if isinstance(values, dict):
+                            for sex_label, value in values.items():
+                                sex_idx = resolve_sex_label(sex_label)
+                                # For zygote fitness, we don't support age-specific values
+                                # value should be a float, not AgeScalarMap
+                                if isinstance(value, dict):
+                                    raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
+                                val = float(value)
+                                if is_multiply:
+                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
+                        else:
+                            # values is a float, not AgeScalarMap for zygote fitness
+                            for sex_idx in (0, 1):
+                                val = float(values)
+                                if is_multiply:
+                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    val *= current
+                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
 
         return pop

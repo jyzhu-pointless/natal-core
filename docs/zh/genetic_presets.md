@@ -310,12 +310,16 @@ class ComplexDrive(GeneticPreset):
 
     def fitness_patch(self):
         return {
-            "viability_allele": {
+            "viability_per_allele": {
                 "Drive": 0.9,      # 驱动等位基因成本
                 "Resistance": 1.0   # 抗性等位基因中性
             },
-            "fecundity_allele": {
+            "fecundity_per_allele": {
                 "Drive": 0.95
+            },
+            "zygote_per_allele": {
+                "Drive": 0.8,     # 合子阶段生存率降低
+                "Resistance": 1.0   # 抗性等位基因中性
             }
         }
 

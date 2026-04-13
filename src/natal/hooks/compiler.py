@@ -1,7 +1,5 @@
 """Unified hook entrypoints and event-wise compiler.
-
 This module connects three authoring styles into one runtime contract:
-
 1) declarative hooks (Op list -> CompiledHookPlan)
 2) selector hooks (symbolic selectors -> wrapper/compiled callable)
 3) custom hooks (user-provided njit or Python callback)
@@ -10,15 +8,28 @@ This module connects three authoring styles into one runtime contract:
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    cast,
+)
 
 import numpy as np
 
-import natal.kernels.codegen as _kernel_codegen
+from natal.hooks.declarative import compile_declarative_hook
+from natal.hooks.selector import compile_selector_hook
+from natal.kernels.codegen import (
+    compile_kernel_bound_wrappers,
+    compile_spatial_kernel_bound_wrappers,
+)
 from natal.numba_utils import njit_switch
 
-from . import declarative as _declarative
-from . import selector as _selector
 from .declarative import HookOp
 from .types import (
     EVENT_NAMES,
@@ -36,37 +47,39 @@ if TYPE_CHECKING:
 
     from .types import CompiledHookDescriptor
 
-
-HookFn = Callable[..., object]
-
-KernelWrapperCompiler = Callable[[HookFn, HookFn, HookFn], Tuple[HookFn, HookFn, HookFn, HookFn]]
-SpatialKernelWrapperCompiler = Callable[[HookFn, HookFn, HookFn], Tuple[HookFn, HookFn]]
+# Plain callable type — used everywhere that only needs "something you can call".
+# noop hooks, njit functions, combined hooks, kernel wrappers all satisfy this.
+HookCallable = Callable[..., Any]
+KernelWrapperCompiler = Callable[[HookCallable, HookCallable, HookCallable], Tuple[HookCallable, HookCallable, HookCallable, HookCallable]]
+SpatialKernelWrapperCompiler = Callable[[HookCallable, HookCallable, HookCallable], Tuple[HookCallable, HookCallable]]
 DeclarativeCompiler = Callable[..., "CompiledHookDescriptor"]
 SelectorCompiler = Callable[..., "CompiledHookDescriptor"]
 
-_compile_kernel_bound_wrappers: Any = _kernel_codegen.compile_kernel_bound_wrappers
-_compile_spatial_kernel_bound_wrappers: Any = _kernel_codegen.compile_spatial_kernel_bound_wrappers
-_compile_declarative_hook: Any = _declarative.compile_declarative_hook
-_compile_selector_hook: Any = _selector.compile_selector_hook
-
-compile_kernel_bound_wrappers: KernelWrapperCompiler = cast(KernelWrapperCompiler, _compile_kernel_bound_wrappers)
-compile_spatial_kernel_bound_wrappers: SpatialKernelWrapperCompiler = cast(
-    SpatialKernelWrapperCompiler,
-    _compile_spatial_kernel_bound_wrappers,
-)
-compile_declarative_hook: DeclarativeCompiler = cast(DeclarativeCompiler, _compile_declarative_hook)
-compile_selector_hook: SelectorCompiler = cast(SelectorCompiler, _compile_selector_hook)
+class DecoratedHookFn(Protocol):
+    """Protocol for functions that have been decorated with @hook().
+    Only the @hook() decorator produces objects satisfying this protocol.
+    All other hook callables (noop, njit, combined, kernel wrappers) are
+    plain ``HookCallable``.
+    """
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    __name__: str
+    meta: Dict[str, Any]
+    compiled: Optional[Any]
+    event: Any
+    selectors: Dict[str, Any]
+    priority: int
+    numba_mode: Any
+    deme_selector: Any
+    register: Callable[..., Any]
 
 @njit_switch(cache=True)
 def _noop_hook(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> int:
     """Default hook implementation used for missing event handlers."""
     return 0
 
-
 noop_hook = _noop_hook
 
-
-def _normalize_njit_fn(fn: HookFn) -> HookFn:
+def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
     """Ensure an njit hook matches the internal (ind_count, tick, deme_id) signature.
 
     If the user provided a 2-arg function, wrap it.
@@ -74,19 +87,16 @@ def _normalize_njit_fn(fn: HookFn) -> HookFn:
     py_fn = getattr(fn, "py_func", fn)
     sig = inspect.signature(py_fn)
     params = list(sig.parameters.values())
-
     # If it already matches or has varargs, assume it handles 3 args.
     if len(params) >= 3:
         return fn
-
     # Wrap 2-arg function: (ind_count, tick) -> (ind_count, tick, deme_id)
     @njit_switch(cache=True)
     def wrapped(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> object:
         return fn(ind_count, tick)
     return wrapped
 
-
-def compile_combined_hook(njit_fns: List[HookFn], name: str = "combined_hook") -> HookFn:
+def compile_combined_hook(njit_fns: List[HookCallable], name: str = "combined_hook") -> HookCallable:
     """Combine multiple njit hooks into one generated njit function.
 
     We generate source code instead of composing Python closures so the result
@@ -94,6 +104,7 @@ def compile_combined_hook(njit_fns: List[HookFn], name: str = "combined_hook") -
     """
     if len(njit_fns) == 0:
         return _noop_hook
+
     if len(njit_fns) == 1:
         return njit_fns[0]
 
@@ -102,8 +113,8 @@ def compile_combined_hook(njit_fns: List[HookFn], name: str = "combined_hook") -
     key = hash_key(combined_parts)
     fn_name = f"_combined_hook_{key}"
     module_stem = f"combined_hook_{key}"
-
     placeholder_names = [f"_FN_{i}" for i in range(len(njit_fns))]
+
     # Generated module imports the same switch helper as the rest of hook DSL.
     lines = ["from natal.hook_dsl import njit_switch"]
     lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
@@ -114,6 +125,7 @@ def compile_combined_hook(njit_fns: List[HookFn], name: str = "combined_hook") -
             f"def {fn_name}(ind_count, tick, deme_id=0):",
         ]
     )
+
     for placeholder in placeholder_names:
         lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
         lines.append("    if _result != 0:")
@@ -123,10 +135,11 @@ def compile_combined_hook(njit_fns: List[HookFn], name: str = "combined_hook") -
 
     module_path = write_codegen_module(module_stem, "\n".join(lines))
     module = load_codegen_module(module_stem, module_path)
+
     for placeholder, fn in zip(placeholder_names, njit_fns):
         setattr(module, placeholder, fn)
-    return getattr(module, fn_name)
 
+    return getattr(module, fn_name)
 
 class CompiledEventHooks:
     """Container for event-wise combined hook callables.
@@ -134,7 +147,6 @@ class CompiledEventHooks:
     Kernel code expects one callable per event name. This class stores those
     callables and optionally the declarative ``HookProgram`` registry.
     """
-
     __slots__ = (
         "first",
         "early",
@@ -149,20 +161,19 @@ class CompiledEventHooks:
         "run_spatial_tick_fn",
         "run_spatial_fn",
     )
-
     # Type annotations for attributes
-    first: HookFn
-    early: HookFn
-    late: HookFn
-    finish: HookFn
+    first: HookCallable
+    early: HookCallable
+    late: HookCallable
+    finish: HookCallable
     registry: Optional[Any]
-    _event_hooks: Dict[str, HookFn]
-    run_tick_fn: Optional[HookFn]
-    run_fn: Optional[HookFn]
-    run_discrete_tick_fn: Optional[HookFn]
-    run_discrete_fn: Optional[HookFn]
-    run_spatial_tick_fn: Optional[HookFn]
-    run_spatial_fn: Optional[HookFn]
+    _event_hooks: Dict[str, HookCallable]
+    run_tick_fn: Optional[HookCallable]
+    run_fn: Optional[HookCallable]
+    run_discrete_tick_fn: Optional[HookCallable]
+    run_discrete_fn: Optional[HookCallable]
+    run_spatial_tick_fn: Optional[HookCallable]
+    run_spatial_fn: Optional[HookCallable]
 
     def __init__(self) -> None:
         self.first = _noop_hook
@@ -178,15 +189,15 @@ class CompiledEventHooks:
         self.run_spatial_tick_fn = None
         self.run_spatial_fn = None
 
-    def get_hook(self, event_name: str) -> HookFn:
+    def get_hook(self, event_name: str) -> HookCallable:
         return self._event_hooks.get(event_name, _noop_hook)
 
-    def set_hook(self, event_name: str, hook_fn: HookFn) -> None:
+    def set_hook(self, event_name: str, hook_fn: HookCallable) -> None:
         self._event_hooks[event_name] = hook_fn
         setattr(self, event_name, hook_fn)
 
     @staticmethod
-    def from_compiled_hooks(compiled_hooks: List[CompiledHookDescriptor], registry: Optional[HookProgram] = None):
+    def from_compiled_hooks(compiled_hooks: List[CompiledHookDescriptor], registry: Optional[HookProgram] = None) -> CompiledEventHooks:
         """Build event-wise combined callables from descriptors."""
         from ..numba_utils import NUMBA_ENABLED
 
@@ -199,8 +210,8 @@ class CompiledEventHooks:
 
         result = CompiledEventHooks()
         result.registry = registry
+        hooks_by_event: Dict[str, List[Tuple[int, HookCallable]]] = {name: [] for name in EVENT_NAMES}
 
-        hooks_by_event: Dict[str, List[Tuple[int, HookFn]]] = {name: [] for name in EVENT_NAMES}
         for desc in compiled_hooks:
             if desc.njit_fn is not None and desc.event in hooks_by_event:
                 hooks_by_event[desc.event].append((desc.priority, desc.njit_fn))
@@ -211,18 +222,20 @@ class CompiledEventHooks:
                 njit_fns = [fn for _, fn in hook_list]
                 combined = compile_combined_hook(njit_fns, f"combined_{event_name}_hooks")
                 result.set_hook(event_name, combined)
+
         (
             result.run_tick_fn,
             result.run_fn,
             result.run_discrete_tick_fn,
             result.run_discrete_fn,
         ) = compile_kernel_bound_wrappers(result.first, result.early, result.late)
+
         (
             result.run_spatial_tick_fn,
             result.run_spatial_fn,
         ) = compile_spatial_kernel_bound_wrappers(result.first, result.early, result.late)
-        return result
 
+        return result
 
 def hook(
     event: Optional[str] = None,
@@ -230,35 +243,43 @@ def hook(
     priority: int = 0,
     numba: bool = False,
     deme_selector: DemeSelector = "*",
-):
+) -> Callable[[Callable[..., Any]], DecoratedHookFn]:
     """Decorator entrypoint for all supported hook authoring styles.
 
     The decorated function gets a ``register(pop, event_override=None)``
     helper that compiles and registers a ``CompiledHookDescriptor``.
-    """
 
-    def decorator(func: HookFn) -> HookFn:
+    Args:
+        event: Hook event name.
+        selectors: Optional symbolic selectors for selector-mode hooks.
+        priority: Execution priority (lower values run earlier).
+        numba: Whether this hook is an explicit custom njit hook.
+        deme_selector: Transport-only selector metadata. The compiler stores
+            and forwards this value into ``CompiledHookDescriptor`` but does
+            not interpret spatial routing semantics itself.
+    """
+    def decorator(func: Callable[..., Any]) -> DecoratedHookFn:
+        hook_func = cast(DecoratedHookFn, func)
         # Store metadata for debugging / introspection / future recompilation.
-        func._hook_meta = {  # type: ignore
+        hook_func.meta = {
             "event": event,
             "selectors": selectors or {},
             "priority": priority,
             "numba_mode": numba,
             "deme_selector": deme_selector,
         }
-        func._hook_compiled = None  # type: ignore
-
-        func._hook_event = event  # type: ignore
-        func._hook_selectors_spec = selectors or {}  # type: ignore
-        func._hook_priority = priority  # type: ignore
-        func._hook_numba_mode = numba  # type: ignore
-        func._hook_deme_selector = deme_selector  # type: ignore
+        hook_func.compiled = None
+        hook_func.event = event
+        hook_func.selectors = selectors or {}
+        hook_func.priority = priority
+        hook_func.numba_mode = numba
+        hook_func.deme_selector = deme_selector
 
         def register(
             pop: BasePopulation[Any],
             event_override: Optional[str] = None,
             deme_selector_override: Optional[DemeSelector] = None,
-        ):
+        ) -> CompiledHookDescriptor:
             """Compile this hook against one population instance."""
             from ..numba_utils import NUMBA_ENABLED
             from .types import CompiledHookDescriptor
@@ -274,7 +295,7 @@ def hook(
             if numba:
                 # Mode 1: explicit custom njit hook.
                 validate_numba_hook_required(func, func.__name__, "@hook(numba=True)")
-                norm_fn = _normalize_njit_fn(func)
+                norm_fn = _normalize_njit_fn(hook_func)
                 desc = CompiledHookDescriptor(
                     name=func.__name__,
                     event=actual_event,
@@ -283,6 +304,7 @@ def hook(
                     njit_fn=norm_fn,
                     meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
                 )
+
             elif selectors:
                 # Mode 2: selector-based hook (python or njit wrapper path).
                 desc = compile_selector_hook(
@@ -294,6 +316,7 @@ def hook(
                     numba_mode=numba,
                     deme_selector=actual_deme_selector,
                 )
+
             else:
                 # Mode 3: declarative hook if function returns HookOp list,
                 # otherwise plain Python callback fallback.
@@ -335,7 +358,7 @@ def hook(
                                 f"Python hook '{func.__name__}' is not allowed when Numba is enabled. "
                                 "Please convert it to @njit or use declarative Op hooks."
                             )
-                        def _py_wrapper(p: object, f: HookFn = func) -> object:
+                        def _py_wrapper(p: object, f: HookCallable = func) -> object:
                             return f(p)
 
                         desc = CompiledHookDescriptor(
@@ -347,17 +370,16 @@ def hook(
                             meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
                         )
 
-            func._hook_compiled = desc  # type: ignore
+            hook_func.compiled = desc  # type: ignore
             pop.register_compiled_hook(desc)
             return desc
 
-        func.register = register  # type: ignore
-        return func
+        hook_func.register = register  # type: ignore
+        return hook_func
 
     return decorator
 
-
-def _has_required_parameters(func: HookFn) -> bool:
+def _has_required_parameters(func: HookCallable) -> bool:
     """Return whether calling ``func()`` would require positional/keyword args."""
     sig = inspect.signature(func)
     for param in sig.parameters.values():

@@ -20,7 +20,6 @@ import numpy as np
 
 # Direct kernel imports
 from natal.kernels.simulation_kernels import run_reproduction, run_reproduction_with_precomputed_offspring_probability
-from natal.kernels.spatial_simulation_kernels import run_spatial_reproduction
 from natal.algorithms import sample_mating, fertilize_with_mating_genotype, compute_offspring_probability_tensor
 from natal.population_state import PopulationState
 from natal.population_config import PopulationConfig
