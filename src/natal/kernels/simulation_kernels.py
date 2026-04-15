@@ -115,6 +115,20 @@ def run_reproduction_with_precomputed_offspring_probability(
     male_only_by_sex_chrom = config.male_only_by_sex_chrom
     has_sex_chromosomes = config.has_sex_chromosomes
 
+    total_adult_females = 0.0
+    weighted_reproducing_females = 0.0
+    for age in adult_ages:
+        if age < n_ages:
+            n_f_age = float(female_counts[age, :].sum())
+            total_adult_females += n_f_age
+            weighted_reproducing_females += n_f_age * float(config.age_based_reproduction_rates[age])
+
+    if total_adult_females > 0.0:
+        proportion_of_females_that_reproduce = weighted_reproducing_females / total_adult_females
+    else:
+        proportion_of_females_that_reproduce = 0.0
+    proportion_of_females_that_reproduce = min(1.0, max(0.0, proportion_of_females_that_reproduce))
+
     n_0_female, n_0_male = alg.fertilize_with_precomputed_offspring_probability(
         female_counts,
         sperm_store,
@@ -131,7 +145,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         female_only_by_sex_chrom,
         male_only_by_sex_chrom,
         config.n_glabs,
-        1.0, # proportion_of_females_that_reproduce (default)
+        proportion_of_females_that_reproduce,
         config.use_fixed_egg_count, # fixed_eggs
         config.sex_ratio,
         has_sex_chromosomes=has_sex_chromosomes,
@@ -460,7 +474,7 @@ def run_discrete_reproduction(
         female_only_by_sex_chrom,
         male_only_by_sex_chrom,
         config.n_glabs,
-        1.0,
+        float(config.age_based_reproduction_rates[adult_age]),
         config.use_fixed_egg_count,
         config.sex_ratio,
         has_sex_chromosomes=config.has_sex_chromosomes,

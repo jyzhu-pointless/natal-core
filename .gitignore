@@ -28,3 +28,13 @@ site/*
 .trae/*
 
 *beamer*
+
+*.csv
+csv*
+
+debug*
+diagnose*
+
+demos/test*
+
+*.png

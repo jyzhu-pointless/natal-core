@@ -86,6 +86,7 @@ class PopulationConfigBuilder:
         male_age_based_survival_rates: Optional[Any],
         female_age_based_mating_rates: Optional[ArrayF64],
         male_age_based_mating_rates: Optional[ArrayF64],
+        female_age_based_reproduction_rates: Optional[ArrayF64],
         female_age_based_relative_fertility: Optional[ArrayF64],
         # Reproduction
         expected_eggs_per_female: float,
@@ -122,6 +123,8 @@ class PopulationConfigBuilder:
             male_age_based_survival_rates (Any): Survival rates for males.
             female_age_based_mating_rates (NDArray): Mating rates for females.
             male_age_based_mating_rates (NDArray): Mating rates for males.
+            female_age_based_reproduction_rates (NDArray): Reproduction participation
+                rates for females.
             female_age_based_relative_fertility (NDArray): Fertility weights for females.
             expected_eggs_per_female (float): Average egg production.
             use_fixed_egg_count (bool): Whether egg count is deterministic.
@@ -220,6 +223,17 @@ class PopulationConfigBuilder:
 
         age_based_mating_rates = np.array([female_mating, male_mating], dtype=np.float64)
 
+        # ===== Female reproduction participation rates =====
+        if female_age_based_reproduction_rates is not None:
+            if len(female_age_based_reproduction_rates) != n_ages:
+                raise ValueError(
+                    f"female_age_based_reproduction_rates length {len(female_age_based_reproduction_rates)} != n_ages {n_ages}"
+                )
+            female_reproduction = np.array(female_age_based_reproduction_rates, dtype=np.float64)
+        else:
+            # Backward compatible default: reuse female mating rates.
+            female_reproduction = female_mating.copy()
+
         # ===== Female fertility =====
         if female_age_based_relative_fertility is not None:
             if len(female_age_based_relative_fertility) != n_ages:
@@ -237,10 +251,11 @@ class PopulationConfigBuilder:
 
         # ===== Competition strength =====
         age_based_relative_competition_strength = np.ones(n_ages, dtype=np.float64)
-        if relative_competition_factor > 0:
-            age_based_relative_competition_strength[0] = relative_competition_factor
-            if n_ages > 1:
-                age_based_relative_competition_strength[1] = relative_competition_factor
+        if relative_competition_factor > 0 and n_ages > 1:
+            # Keep new larvae (age 0) at baseline competition strength 1.0,
+            # and scale only old larvae (age 1), matching the SLiM formula:
+            # new_larvae + old_larvae * OLD_LARVA_COMPETITION_FACTOR.
+            age_based_relative_competition_strength[1] = relative_competition_factor
 
         # ===== Parse juvenile growth mode =====
         juvenile_growth_mode_int = PopulationConfigBuilder._resolve_growth_mode(juvenile_growth_mode)
@@ -254,6 +269,7 @@ class PopulationConfigBuilder:
             expected_eggs_per_female=expected_eggs_per_female,
             age_based_survival_rates=age_based_survival_rates,
             age_based_mating_rates=age_based_mating_rates,
+            age_based_reproduction_rates=female_reproduction,
             female_age_based_relative_fertility=female_fertility,
             sex_ratio=sex_ratio,
             new_adult_age=new_adult_age,
@@ -275,6 +291,7 @@ class PopulationConfigBuilder:
             use_continuous_sampling=use_continuous_sampling,
             age_based_survival_rates=age_based_survival_rates,
             age_based_mating_rates=age_based_mating_rates,
+            age_based_reproduction_rates=female_reproduction,
             female_age_based_relative_fertility=female_fertility,
             viability_fitness=viability_fitness,
             fecundity_fitness=fecundity_fitness,
@@ -347,6 +364,7 @@ class PopulationConfigBuilder:
         expected_eggs_per_female: float,
         age_based_survival_rates: Optional[NDArray[np.float64]] = None,
         age_based_mating_rates: Optional[NDArray[np.float64]] = None,
+        age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,
         female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
         sex_ratio: float = 0.5,
         new_adult_age: int = 1,
@@ -364,6 +382,8 @@ class PopulationConfigBuilder:
             expected_eggs_per_female: Base egg production per female.
             age_based_survival_rates: Survival rates array with shape (2, n_ages).
             age_based_mating_rates: Mating rates array with shape (2, n_ages).
+            age_based_reproduction_rates: Female reproduction participation rates
+                with shape (n_ages,).
             female_age_based_relative_fertility: Female fertility by age (n_ages,).
             sex_ratio: Offspring sex ratio.
             new_adult_age: Minimum age for adults.
@@ -405,6 +425,7 @@ class PopulationConfigBuilder:
                     expected_eggs_per_female=expected_eggs_per_female,
                     age_based_survival_rates=age_based_survival_rates,
                     age_based_mating_rates=age_based_mating_rates,
+                    age_based_reproduction_rates=age_based_reproduction_rates,
                     female_age_based_relative_fertility=female_age_based_relative_fertility,
                     sex_ratio=sex_ratio,
                     new_adult_age=new_adult_age,
@@ -439,6 +460,7 @@ class PopulationConfigBuilder:
                             expected_eggs_per_female=expected_eggs_per_female,
                             age_based_survival_rates=age_based_survival_rates,
                             age_based_mating_rates=age_based_mating_rates,
+                            age_based_reproduction_rates=age_based_reproduction_rates,
                             female_age_based_relative_fertility=female_age_based_relative_fertility,
                             sex_ratio=observed_sex_ratio,
                             new_adult_age=new_adult_age,
@@ -464,6 +486,7 @@ class PopulationConfigBuilder:
         expected_eggs_per_female: float,
         age_based_survival_rates: NDArray[np.float64],
         age_based_mating_rates: NDArray[np.float64],
+        age_based_reproduction_rates: Optional[NDArray[np.float64]],
         female_age_based_relative_fertility: NDArray[np.float64],
         sex_ratio: float,
         new_adult_age: int,
@@ -481,6 +504,8 @@ class PopulationConfigBuilder:
             expected_eggs_per_female: Base egg production per female.
             age_based_survival_rates: Survival rates (2, n_ages).
             age_based_mating_rates: Mating rates (2, n_ages).
+            age_based_reproduction_rates: Female reproduction participation rates (n_ages).
+                If None, falls back to female mating rates.
             female_age_based_relative_fertility: Female fertility by age (n_ages,).
             sex_ratio: Offspring sex ratio.
             new_adult_age: Minimum adult age.
@@ -527,19 +552,21 @@ class PopulationConfigBuilder:
                     # Older males: forward propagation
                     expected_distribution[1, age] = expected_distribution[1, age - 1] * age_based_survival_rates[1, age - 1]
 
-        # Calculate cumulative mating rates for females (holding sperm)
-        p_mated = np.zeros(n_ages, dtype=np.float64)
-        p_unmated = 1.0
+        # Equilibrium calibration uses explicit reproduction participation
+        # rates for each female age.
+        p_reproducing = np.zeros(n_ages, dtype=np.float64)
+        if age_based_reproduction_rates is None:
+            reproduction_rates = age_based_mating_rates[0, :]
+        else:
+            reproduction_rates = age_based_reproduction_rates
         for age in range(new_adult_age, n_ages):
-            m_rate = age_based_mating_rates[0, age]
-            p_unmated *= (1.0 - m_rate)
-            p_mated[age] = 1.0 - p_unmated
+            p_reproducing[age] = min(1.0, max(0.0, float(reproduction_rates[age])))
 
         # Calculate produced age-0 eggs
         produced_age_0 = 0.0
         for age in range(new_adult_age, n_ages):
             n_f = expected_distribution[0, age]
-            produced_age_0 += n_f * p_mated[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
+            produced_age_0 += n_f * p_reproducing[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
 
         # Calculate sex-weighted age-0 survival rate
         s_0_avg = sex_ratio * age_based_survival_rates[0, 0] + (1.0 - sex_ratio) * age_based_survival_rates[1, 0]
@@ -1132,6 +1159,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.male_age_based_survival_rates: Optional[Any] = None
         self.female_age_based_mating_rates: Optional[ArrayF64] = None
         self.male_age_based_mating_rates: Optional[ArrayF64] = None
+        self.female_age_based_reproduction_rates: Optional[ArrayF64] = None
         self.female_age_based_relative_fertility: Optional[ArrayF64] = None
 
         # Reproduction
@@ -1269,6 +1297,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self,
         female_age_based_mating_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
         male_age_based_mating_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        female_age_based_reproduction_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
         female_age_based_relative_fertility: Optional[Union[List[float], NDArray[np.float64]]] = None,
         eggs_per_female: float = 50.0,
         use_fixed_egg_count: bool = False,
@@ -1281,6 +1310,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         Args:
             female_age_based_mating_rates (Optional[Union[List, NDArray]]): Female mating rates.
             male_age_based_mating_rates (Optional[Union[List, NDArray]]): Male mating rates.
+            female_age_based_reproduction_rates (Optional[Union[List, NDArray]]): Female
+                reproduction participation rates by age.
             female_age_based_relative_fertility (Optional[Union[List, NDArray]]): Fertility weights.
             eggs_per_female (float): Baseline eggs per adult female.
             use_fixed_egg_count (bool): If True, egg count is fixed; else Poisson.
@@ -1295,6 +1326,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             self.female_age_based_mating_rates = np.array(female_age_based_mating_rates)
         if male_age_based_mating_rates is not None:
             self.male_age_based_mating_rates = np.array(male_age_based_mating_rates)
+        if female_age_based_reproduction_rates is not None:
+            self.female_age_based_reproduction_rates = np.array(female_age_based_reproduction_rates)
         if female_age_based_relative_fertility is not None:
             self.female_age_based_relative_fertility = np.array(female_age_based_relative_fertility)
         self.expected_eggs_per_female = eggs_per_female
@@ -1317,7 +1350,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         """Configure competition, carrying capacity, and density-dependent parameters.
 
         Args:
-            competition_strength (float): Intensity of competition factor.
+            competition_strength (float): Relative competition factor for age-1
+                juveniles (age-0 remains baseline competition weight 1.0).
             juvenile_growth_mode (Union[int, str]): Growth model ("logistic", etc.).
             low_density_growth_rate (float): Growth rate at low density.
             age_1_carrying_capacity (Optional[int]): Population capacity at age=1.
@@ -1555,6 +1589,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             male_age_based_survival_rates=self.male_age_based_survival_rates,
             female_age_based_mating_rates=self.female_age_based_mating_rates,
             male_age_based_mating_rates=self.male_age_based_mating_rates,
+            female_age_based_reproduction_rates=self.female_age_based_reproduction_rates,
             female_age_based_relative_fertility=self.female_age_based_relative_fertility,
             expected_eggs_per_female=self.expected_eggs_per_female,
             use_fixed_egg_count=self.use_fixed_egg_count,
@@ -2044,6 +2079,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             male_age_based_survival_rates=male_survival,
             female_age_based_mating_rates=female_mating,
             male_age_based_mating_rates=male_mating,
+            female_age_based_reproduction_rates=female_mating,
             female_age_based_relative_fertility=female_relative_fertility,
             expected_eggs_per_female=self.expected_eggs_per_female,
             use_fixed_egg_count=self.use_fixed_egg_count,

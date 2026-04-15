@@ -211,6 +211,7 @@ The relevant APIs are located in `natal.state_translation`:
 - `population_state_to_dict` / `population_state_to_json`
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
 - `population_to_readable_dict` / `population_to_readable_json`
+- `population_history_to_readable_dict` / `population_history_to_readable_json`
 - `population_to_observation_dict` / `population_to_observation_json`
 
 Among them:
@@ -230,6 +231,10 @@ print(readable["state_type"], readable["tick"])
 # JSON output (useful for persistence or transmission)
 payload = nt.population_to_readable_json(pop, indent=2)
 print(payload[:200])
+
+# History output (converted from flattened snapshots)
+hist_view = nt.population_history_to_readable_dict(pop)
+print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 ```
 
 If you want to directly apply observation rules during translation (see [Population Observation Rules](observation_rules.md)), you can use the observation integration interface:

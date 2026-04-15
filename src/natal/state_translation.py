@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 import numpy as np
 
-from natal.population_state import DiscretePopulationState, PopulationState
+from natal.population_state import (
+    DiscretePopulationState,
+    PopulationState,
+    parse_flattened_discrete_state,
+    parse_flattened_state,
+)
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -28,6 +33,8 @@ __all__ = [
     "discrete_population_state_to_json",
     "population_to_readable_dict",
     "population_to_readable_json",
+    "population_history_to_readable_dict",
+    "population_history_to_readable_json",
     "population_to_observation_dict",
     "population_to_observation_json",
     "spatial_population_to_readable_dict",
@@ -295,6 +302,121 @@ def population_to_readable_json(
     """Translate a population's current state to a readable JSON string."""
     payload = population_to_readable_dict(
         population=population,
+        include_zero_counts=include_zero_counts,
+    )
+    return json.dumps(payload, ensure_ascii=False, indent=indent)
+
+
+def population_history_to_readable_dict(
+    population: BasePopulation[Any],
+    history: Optional[np.ndarray] = None,
+    include_zero_counts: bool = False,
+) -> Dict[str, Any]:
+    """Translate flattened history records into readable snapshot dictionaries.
+
+    Args:
+        population: Population instance that defines history shape and labels.
+        history: Optional flattened history array. When ``None``, uses
+            ``population.get_history()``.
+        include_zero_counts: Whether to keep zero-valued entries in each
+            snapshot payload.
+
+    Returns:
+        A dictionary containing metadata and translated snapshot entries.
+
+    Raises:
+        TypeError: If the population state type is unsupported.
+        ValueError: If ``history`` is not a 2D array.
+    """
+    state = population.state
+    n_sexes, n_ages, n_genotypes = state.individual_count.shape
+    genotype_labels = _genotype_labels_from_registry(population.index_registry, int(n_genotypes))
+
+    history_array: np.ndarray
+    if history is None:
+        get_history = getattr(population, "get_history", None)
+        if callable(get_history):
+            try:
+                history_array = cast(np.ndarray, get_history())
+            except ValueError:
+                history_array = np.zeros((0, 0), dtype=np.float64)
+        else:
+            history_array = np.zeros((0, 0), dtype=np.float64)
+    else:
+        history_array = cast(np.ndarray, np.asarray(history, dtype=np.float64))
+
+    if history_array.ndim != 2:
+        raise ValueError(
+            f"history must be a 2D array, got shape {history_array.shape}"
+        )
+
+    snapshots: List[Dict[str, Any]] = []
+    if isinstance(state, PopulationState):
+        for idx in range(int(history_array.shape[0])):
+            row = history_array[idx, :]
+            parsed_state = parse_flattened_state(
+                row,
+                n_sexes=n_sexes,
+                n_ages=n_ages,
+                n_genotypes=n_genotypes,
+                copy=True,
+            )
+            snapshots.append(
+                population_state_to_dict(
+                    state=parsed_state,
+                    genotype_labels=genotype_labels,
+                    include_zero_counts=include_zero_counts,
+                )
+            )
+    elif isinstance(state, DiscretePopulationState):
+        for idx in range(int(history_array.shape[0])):
+            row = history_array[idx, :]
+            parsed_state = parse_flattened_discrete_state(
+                row,
+                n_sexes=n_sexes,
+                n_ages=n_ages,
+                n_genotypes=n_genotypes,
+                copy=True,
+            )
+            snapshots.append(
+                discrete_population_state_to_dict(
+                    state=parsed_state,
+                    genotype_labels=genotype_labels,
+                    include_zero_counts=include_zero_counts,
+                )
+            )
+    else:
+        raise TypeError(f"Unsupported state type: {type(state).__name__}")
+
+    return {
+        "state_type": type(state).__name__,
+        "name": str(population.name),
+        "n_snapshots": int(history_array.shape[0]),
+        "snapshots": snapshots,
+    }
+
+
+def population_history_to_readable_json(
+    population: BasePopulation[Any],
+    history: Optional[np.ndarray] = None,
+    include_zero_counts: bool = False,
+    indent: int = 2,
+) -> str:
+    """Translate flattened history records to a readable JSON string.
+
+    Args:
+        population: Population instance that defines history shape and labels.
+        history: Optional flattened history array. When ``None``, uses
+            ``population.get_history()``.
+        include_zero_counts: Whether to keep zero-valued entries.
+        indent: Indentation level used by ``json.dumps``.
+
+    Returns:
+        JSON string containing history metadata and translated snapshots.
+    """
+    payload = population_history_to_readable_dict(
+        population=population,
+        history=history,
         include_zero_counts=include_zero_counts,
     )
     return json.dumps(payload, ensure_ascii=False, indent=indent)

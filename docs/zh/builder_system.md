@@ -159,7 +159,7 @@ Builder 链式配置
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | 幼体竞争的强度因子。 | `5.0` | 幼体密度调节 | 影响密度制约效应的强弱；越大则调控效应越强。 |
+| `competition_strength` | `float` | 老幼体（age-1）的相对竞争因子。 | `5.0` | 幼体密度调节 | 竞争权重按年龄区分：age-0 固定为 `1.0`，age-1 使用 `competition_strength`。 |
 | `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`, `"beverton_holt"` 等模式；通常用 `logistic`。 |
 | `low_density_growth_rate` | `float` | 低密度增长率（内禀增长率）。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；过大易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | 年龄=1处的种群承载容量。 | `None` | 幼体密度调节 | 若指定则优先使用（最高优先级）。 |

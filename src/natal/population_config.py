@@ -56,6 +56,8 @@ class PopulationConfig(NamedTuple):
         n_haploid_genotypes: Number of haploid genotype types.
         n_glabs: Number of gamete‑label variants per haplotype.
         age_based_mating_rates: Shape (n_sexes, n_ages) – mating rates per sex/age.
+        age_based_reproduction_rates: Shape (n_ages,) – female reproduction
+            participation rates per age.
         age_based_survival_rates: Shape (n_sexes, n_ages) – survival probabilities.
         female_age_based_relative_fertility: Shape (n_ages,) – relative fertility
             of females at each age.
@@ -123,6 +125,7 @@ class PopulationConfig(NamedTuple):
     n_haploid_genotypes: int
     n_glabs: int
     age_based_mating_rates: NDArray[np.float64]
+    age_based_reproduction_rates: NDArray[np.float64]
     age_based_survival_rates: NDArray[np.float64]
     female_age_based_relative_fertility: NDArray[np.float64]
     viability_fitness: NDArray[np.float64]
@@ -314,6 +317,7 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         n_haploid_genotypes=int(config.n_haploid_genotypes),
         n_glabs=int(config.n_glabs),
         age_based_mating_rates=_maybe_copy_array(config.age_based_mating_rates, copy),
+        age_based_reproduction_rates=_maybe_copy_array(config.age_based_reproduction_rates, copy),
         age_based_survival_rates=_maybe_copy_array(config.age_based_survival_rates, copy),
         female_age_based_relative_fertility=_maybe_copy_array(config.female_age_based_relative_fertility, copy),
         viability_fitness=_maybe_copy_array(config.viability_fitness, copy),
@@ -370,6 +374,7 @@ def build_population_config(
     is_stochastic: bool = True,
     use_continuous_sampling: bool = False,
     age_based_mating_rates: Optional[NDArray[np.float64]] = None,
+    age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,
     age_based_survival_rates: Optional[NDArray[np.float64]] = None,
     female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
     viability_fitness: Optional[NDArray[np.float64]] = None,
@@ -414,6 +419,8 @@ def build_population_config(
         is_stochastic: Whether to use stochastic demography.
         use_continuous_sampling: Use Dirichlet sampling for gamete proportions.
         age_based_mating_rates: Array (n_sexes, n_ages) – mating rates.
+        age_based_reproduction_rates: Array (n_ages,) – female reproduction
+            participation rates.
         age_based_survival_rates: Array (n_sexes, n_ages) – survival probabilities.
         female_age_based_relative_fertility: Array (n_ages,) – relative female
             fertility per age.
@@ -534,6 +541,13 @@ def build_population_config(
         has_sex_dim=True,
         set_juvenile_values_to_zero=True,
     )
+    reproduction = _validate_or_default_array(
+        age_based_reproduction_rates,
+        (n_ages_i,),
+        "age_based_reproduction_rates",
+        has_sex_dim=False,
+        set_juvenile_values_to_zero=True,
+    )
     survival = _validate_or_default_array(
         age_based_survival_rates,
         (n_sexes_i, n_ages_i),
@@ -585,6 +599,7 @@ def build_population_config(
         expected_eggs_per_female=float(expected_eggs_per_female),
         age_based_survival_rates=survival,
         age_based_mating_rates=mating,
+        age_based_reproduction_rates=reproduction,
         female_age_based_relative_fertility=female_fertility,
         relative_competition_strength=competition,
         sex_ratio=float(sex_ratio),
@@ -603,6 +618,7 @@ def build_population_config(
             n_haploid_genotypes=n_haploid_genotypes_i,
             n_glabs=n_glabs_i,
             age_based_mating_rates=mating,
+            age_based_reproduction_rates=reproduction,
             age_based_survival_rates=survival,
             female_age_based_relative_fertility=female_fertility,
             viability_fitness=viability,
@@ -649,6 +665,7 @@ def build_population_config(
         n_haploid_genotypes=n_haploid_genotypes_i,
         n_glabs=n_glabs_i,
         age_based_mating_rates=mating,
+        age_based_reproduction_rates=reproduction,
         age_based_survival_rates=survival,
         female_age_based_relative_fertility=female_fertility,
         viability_fitness=viability,

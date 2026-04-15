@@ -236,7 +236,9 @@ def sample_mating(
         sperm_store: Sperm storage array with shape (A, g, g) tracking mated females by male genotype
         mating_prob: Mating probability matrix with shape (g, g)
         female_mating_rates_by_age: Age-specific female mating rates with shape (A,)
-        sperm_displacement_rate: Rate of sperm displacement (unused in current implementation)
+        sperm_displacement_rate: Rate controlling remating displacement.
+            The effective remating probability is
+            ``p_remating = p_mating(age) * sperm_displacement_rate``.
         adult_start_idx: Starting age index for adults
         n_ages: Total number of age classes
         n_genotypes: Number of genotypes g
@@ -250,10 +252,11 @@ def sample_mating(
     Note:
         - `S[a, gf, :]` is interpreted as a partition of *mated* females of
           (age=a, female_genotype=gf) by male genotype.
-        - Virgins are represented implicitly as:
-          `virgins = female_count[a, gf] - sum_gm(S[a, gf, gm])`
-        - To preserve this meaning, this function rebuilds adult rows each tick
-          from current mating outcomes, rather than blending with previous rows.
+                - Virgins are represented implicitly as:
+                    `virgins = female_count[a, gf] - sum_gm(S[a, gf, gm])`
+                - Historical sperm storage is preserved across ticks.
+                    Remating displaces an expected fraction of existing sperm allocation,
+                    then adds newly formed matings.
         - Previous implementation used a single scalar mating rate for all
           adult ages. Now we use age-specific female mating rates:
           `p_mating(age) = female_mating_rates_by_age[age]`.
@@ -267,63 +270,146 @@ def sample_mating(
     assert female_rates.shape[0] == n_ages
 
     # NOTE:
-    # sperm_store stores only mated-female allocations by male genotype.
-    # Therefore each tick we rebuild adult rows from current mating outcomes,
-    # instead of mixing with previous rows. Keep sperm_displacement_rate for
-    # API compatibility, but it is intentionally unused here.
+    # sperm_store stores mated-female allocations by male genotype.
+    # We preserve historical mated state across ticks and model remating as
+    # sperm replacement controlled by sperm_displacement_rate.
 
     if is_stochastic:
         # ===== Monogamous random mode =====
         # Steps: (1) Determine mating count (2) Choose mating partner genotype
-        temp_mating = np.zeros(n_genotypes, dtype=np.float64)
-        draws_int = np.zeros(n_genotypes, dtype=np.int64)
+        temp_mating = np.zeros(n_genotypes, dtype=np.float64)  # Temporary array for continuous sampling
+
+        # Iterate over all adult age classes
         for a in range(adult_start_idx, n_ages):
-            # Rebuild this age-slice from current outcomes.
-            S[a, :, :] = 0.0
+            # Get age-specific mating probabilities
+            p_mating = _clamp01(float(female_rates[a]))        # Female mating probability at this age
+            p_displace = _clamp01(float(sperm_displacement_rate))  # Sperm displacement rate
 
+            # Iterate over all female genotypes
             for gf in range(n_genotypes):
-                # Step 1: How many females of this genotype participate in mating?
-                # _n1: Current (age, gf) female count
-                _n1 = float(F[a, gf])
-                # Age-specific female mating probability at age a.
-                _p1 = _clamp01(float(female_rates[a]))
+                n_female = float(F[a, gf])  # Number of females of this genotype at this age
 
+                # Calculate current mated count by summing sperm storage for this female genotype
+                mated_count = 0.0
+                for gm in range(n_genotypes):
+                    mated_count += S[a, gf, gm]  # Sum sperm storage across all male genotypes
+
+                # Calculate number of virgin females (not yet mated)
+                virgins = max(0.0, n_female - mated_count)  # Ensure non-negative
+
+                # ===== Virgin Female Mating =====
+                # Calculate how many virgin females will mate in this tick
+                n_mating_virgins = 0.0
                 if use_continuous_sampling:
-                    # Continuous sampling: use Beta instead of Binomial
-                    n_mating = continuous_binomial(_n1, _p1)
+                    # Continuous sampling: use Beta-binomial approximation
+                    n_mating_virgins = continuous_binomial(virgins, p_mating)
                 else:
-                    # Discrete sampling: standard Binomial
-                    # n_mating ~ Binomial(_n1, _p1)
-                    # Semantics: number of females that mate in this tick for this age/female genotype.
-                    n_mating = float(nbc.binomial(int(round(_n1)), _p1))
+                    # Discrete sampling: standard binomial distribution
+                    n_mating_virgins = float(nbc.binomial(int(round(virgins)), p_mating))
+
+                # ===== Sperm Displacement (Remating) =====
+                # This section handles the removal of existing sperm when females remate.
+                # CORRECTED APPROACH: Sample each sperm storage entry independently using binomial distribution
+                # instead of sampling total count first then distributing with multinomial.
+
+                p_remating = p_displace * p_mating  # Combined probability of displacement and mating
+
+                n_remating = 0.0
+
+                # Only proceed if there are mated females and remating probability > 0
+                if mated_count > EPS and p_remating > EPS:
+                    if use_continuous_sampling:
+                        # Continuous sampling: use proportional removal for all genotypes
+                        removed_fraction = min(1.0, p_remating)  # Use probability directly as fraction
+                        for gm in range(n_genotypes):
+                            # Remove the same fraction from each genotype
+                            S[a, gf, gm] -= S[a, gf, gm] * removed_fraction
+                    else:
+                        # Discrete sampling: sample each sperm storage entry independently
+                        # This is the correct approach: each mated female's decision to remate is independent
+
+                        total_removed = 0.0  # Track total removed for consistency with new mating
+
+                        # Iterate over each male genotype in sperm storage
+                        for gm in range(n_genotypes):
+                            current_sperm_count = S[a, gf, gm]
+
+                            # Only process if there are sperm to potentially remove
+                            if current_sperm_count > EPS:
+                                # Sample removal count for this specific male genotype
+                                # Each sperm entry represents mated females, so we sample independently
+                                n_remove_gm = float(nbc.binomial(int(round(current_sperm_count)), p_remating))
+
+                                # Remove the sampled count
+                                S[a, gf, gm] -= n_remove_gm
+                                total_removed += n_remove_gm
+
+                                # Clamp to avoid negative values
+                                if S[a, gf, gm] < 0.0 and S[a, gf, gm] > -EPS:
+                                    S[a, gf, gm] = 0.0
+
+                        # Use total removed count for consistency with new mating allocation
+                        n_remating = total_removed
+
+                # ===== New Mating Allocation =====
+                # This section handles the allocation of new mating events to sperm storage.
+                # Total new mating = virgin females mating + remating females
+
+                n_new_mating = n_mating_virgins + n_remating
 
                 # Step 2: Which male genotype do these mating females mate with respectively?
-                if n_mating > EPS:
+                if n_new_mating > EPS:
                     if use_continuous_sampling:
                         # Continuous sampling: use Dirichlet instead of Multinomial
-                        continuous_multinomial(n_mating, P[gf, :], temp_mating)
-                        S[a, gf, :] = temp_mating
+                        continuous_multinomial(n_new_mating, P[gf, :], temp_mating)
+                        for gm in range(n_genotypes):
+                            S[a, gf, gm] += temp_mating[gm]
                     else:
                         # Discrete sampling: standard Multinomial
                         # actual_matings[gf,gm]:
                         # Allocation of mated females gf paired with males gm.
-                        draws_int = nbc.multinomial(int(round(n_mating)), P[gf, :])
+
+                        # CRITICAL POINT: New mating allocation
+                        # We use the mating probability matrix P[gf, :] to determine which male genotype
+                        # each mating female pairs with. This should be consistent with the removal probability
+                        # used in the sperm displacement section.
+
+                        # Convert to integer for multinomial sampling
+                        n_new_int = int(round(n_new_mating))
+                        mating_draws = nbc.multinomial(n_new_int, P[gf, :])
+
+                        # Add the new mating allocations to sperm storage
                         for gm in range(n_genotypes):
-                            S[a, gf, gm] = float(draws_int[gm])
+                            S[a, gf, gm] += float(mating_draws[gm])
 
         return S
 
     else:
         # ===== Monogamous deterministic mode =====
-        # Mating count = female count * mating rate * P[gf, gm]
         for a in range(adult_start_idx, n_ages):
+            p_mating = _clamp01(float(female_rates[a]))
+            p_displace = _clamp01(float(sperm_displacement_rate))
+
             for gf in range(n_genotypes):
-                # Deterministic version:
-                # E[n_mating(age)] = female_count(age) * mating_rate(age)
-                n_mating = F[a, gf] * _clamp01(float(female_rates[a]))
-                # E[matings(gf,gm)] = E[n_mating] * P(gm|gf)
+                n_female = float(F[a, gf])
+                mated_count = 0.0
                 for gm in range(n_genotypes):
-                    S[a, gf, gm] = n_mating * P[gf, gm]
+                    mated_count += S[a, gf, gm]
+
+                virgins = max(0.0, n_female - mated_count)
+                n_mating_virgins = virgins * p_mating
+                p_remating = p_displace * p_mating
+                n_remating = mated_count * p_remating
+
+                if n_remating > EPS and mated_count > EPS:
+                    removed_fraction = min(1.0, n_remating / mated_count)
+                    for gm in range(n_genotypes):
+                        S[a, gf, gm] -= S[a, gf, gm] * removed_fraction
+
+                n_new_mating = n_mating_virgins + n_remating
+                if n_new_mating > EPS:
+                    for gm in range(n_genotypes):
+                        S[a, gf, gm] += n_new_mating * P[gf, gm]
 
         return S
 
@@ -1424,6 +1510,7 @@ def compute_equilibrium_metrics(
     sex_ratio: float,
     new_adult_age: int,
     n_ages: int,
+    age_based_reproduction_rates: Optional[NDArray[np.float64]] = None, # (age,)
     equilibrium_individual_count: Optional[NDArray[np.float64]] = None, # (sex, age, genotype_sum)
 ) -> Tuple[float, float]:
     """Calculate competition strength and survival rate metrics under equilibrium.
@@ -1435,6 +1522,9 @@ def compute_equilibrium_metrics(
         expected_eggs_per_female: Basic offspring count
         age_based_survival_rates: Survival rate matrix (2, n_ages)
         age_based_mating_rates: Mating rate matrix (2, n_ages)
+        age_based_reproduction_rates: Female age-specific reproduction participation
+            rates with shape (n_ages,). If None, falls back to
+            ``age_based_mating_rates[0]``.
         female_age_based_relative_fertility: Female age-dependent relative fertility (n_ages,)
         relative_competition_strength: Competition weights for each age (n_ages,)
         sex_ratio: Sex ratio (female proportion)
@@ -1445,16 +1535,15 @@ def compute_equilibrium_metrics(
     Returns:
         Tuple[expected_competition_strength, expected_survival_rate]
     """
-    # Pre-calculate cumulative mating rates for females of each age (i.e., proportion holding sperm, assuming no sperm depletion)
-    # Individuals hold sperm if they have mated before
-    p_mated = np.zeros(n_ages, dtype=np.float64)
-    p_unmated = 1.0
+    # Use age-specific reproduction participation rates for equilibrium
+    # calibration. If not provided, fall back to female mating rates.
+    p_reproducing = np.zeros(n_ages, dtype=np.float64)
+    if age_based_reproduction_rates is not None:
+        reproduce_rates = np.asarray(age_based_reproduction_rates)
+    else:
+        reproduce_rates = age_based_mating_rates[0]
     for age in range(new_adult_age, n_ages):
-        m_rate = age_based_mating_rates[0, age]
-        # Recursion: P(unmated until age a) = Π_{k<=a}(1 - m_rate[k])
-        p_unmated *= (1.0 - m_rate)
-        # P(mated by age a) = 1 - P(unmated by age a)
-        p_mated[age] = 1.0 - p_unmated
+        p_reproducing[age] = _clamp01(float(reproduce_rates[age]))
 
     if equilibrium_individual_count is not None:
         # 1. Use user-provided equilibrium distribution
@@ -1463,10 +1552,10 @@ def compute_equilibrium_metrics(
         produced_age_0 = 0.0
         for age in range(new_adult_age, n_ages):
             n_f = expected_distribution[0, age]
-            # Here consider cumulative mating rate (proportion holding sperm) and relative fertility
+            # Use per-tick reproducing fraction and relative fertility
             # Contribution of this age to age0 production:
-            # n_f * P(mated) * relative_fertility * eggs_per_female
-            produced_age_0 += n_f * p_mated[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
+            # n_f * P(reproducing_this_tick) * relative_fertility * eggs_per_female
+            produced_age_0 += n_f * p_reproducing[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
 
         total_age_1 = expected_distribution[0, 1] + expected_distribution[1, 1]
     else:
@@ -1493,7 +1582,7 @@ def compute_equilibrium_metrics(
         produced_age_0 = 0.0
         for age in range(new_adult_age, n_ages):
             n_f = expected_distribution[0, age]
-            produced_age_0 += n_f * p_mated[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
+            produced_age_0 += n_f * p_reproducing[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
 
     # Calculate total expected competition strength (limited to larvae participating in competition, i.e., age < new_adult_age)
     # Age 0 is produced Egg count; Age 1+ are survivors in distribution

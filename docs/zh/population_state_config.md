@@ -211,6 +211,7 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 - `population_state_to_dict` / `population_state_to_json`
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
 - `population_to_readable_dict` / `population_to_readable_json`
+- `population_history_to_readable_dict` / `population_history_to_readable_json`
 - `population_to_observation_dict` / `population_to_observation_json`
 
 其中：
@@ -230,6 +231,10 @@ print(readable["state_type"], readable["tick"])
 # JSON 输出（便于持久化或传输）
 payload = nt.population_to_readable_json(pop, indent=2)
 print(payload[:200])
+
+# 历史记录输出（由扁平快照转换）
+hist_view = nt.population_history_to_readable_dict(pop)
+print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 ```
 
 如果需要在翻译时直接应用 observation rules（详见 [种群观测规则](observation_rules.md)），可使用观测集成接口：

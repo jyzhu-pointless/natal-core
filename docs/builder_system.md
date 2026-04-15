@@ -159,7 +159,7 @@ Format and length requirements (source behaviour):
 
 | Parameter | Type | Explanation | Default | Affected stage | Remarks |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | Intensity factor of juvenile competition. | `5.0` | juvenile density regulation | Affects strength of density regulation effect; larger value = stronger control. |
+| `competition_strength` | `float` | Relative competition factor for old larvae. | `5.0` | juvenile density regulation | Competition weights are age-specific: age-0 uses baseline `1.0`, age-1 uses `competition_strength`. |
 | `juvenile_growth_mode` | `int\|str` | Juvenile growth density regulation mode. | `"logistic"` | juvenile density regulation | Supports `"logistic"`, `"beverton_holt"` etc.; commonly use `logistic`. |
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density. | `6.0` | juvenile density regulation | Represents multiplication factor without competition; too high may cause oscillations. |
 | `age_1_carrying_capacity` | `Optional[int]` | Population carrying capacity at age=1. | `None` | juvenile density regulation | If specified, takes precedence over other sources (highest priority). |

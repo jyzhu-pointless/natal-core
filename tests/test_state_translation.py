@@ -11,6 +11,8 @@ from natal.population_state import DiscretePopulationState, PopulationState
 from natal.state_translation import (
     discrete_population_state_to_dict,
     discrete_population_state_to_json,
+    population_history_to_readable_dict,
+    population_history_to_readable_json,
     population_to_observation_dict,
     population_to_observation_json,
     population_state_to_dict,
@@ -146,6 +148,77 @@ def test_discrete_population_state_to_dict_include_zero_counts() -> None:
         include_zero_counts=True,
     )
     assert result["individual_count"]["female"]["age_0"]["WT|WT"] == 0.0
+
+
+def test_population_history_to_readable_dict_for_age_structured() -> None:
+    species = nt.Species.from_dict(
+        name="HistReadableAge",
+        structure={"chr1": {"A": ["WT", "Dr"]}},
+        gamete_labels=["default"],
+    )
+
+    pop = (
+        nt.AgeStructuredPopulation
+        .setup(species=species, name="HistAge", stochastic=False)
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0, 6, 4]},
+                "male": {"WT|WT": [0, 6, 4]},
+            }
+        )
+        .survival(
+            female_age_based_survival_rates=[1.0, 1.0, 0.9],
+            male_age_based_survival_rates=[1.0, 1.0, 0.9],
+        )
+        .reproduction(eggs_per_female=2, use_sperm_storage=True)
+        .competition(old_juvenile_carrying_capacity=100)
+        .build()
+    )
+
+    pop.run(n_steps=2, record_every=1, clear_history_on_start=True)
+    payload = population_history_to_readable_dict(pop, include_zero_counts=True)
+
+    assert payload["state_type"] == "PopulationState"
+    assert payload["n_snapshots"] == 3
+    assert payload["snapshots"][0]["tick"] == 0
+    assert payload["snapshots"][-1]["tick"] == 2
+    assert "sperm_storage" in payload["snapshots"][-1]
+
+
+def test_population_history_to_readable_json_for_discrete() -> None:
+    species = nt.Species.from_dict(
+        name="HistReadableDisc",
+        structure={"chr1": {"A": ["WT", "Dr"]}},
+        gamete_labels=["default"],
+    )
+
+    pop = (
+        nt.DiscreteGenerationPopulation
+        .setup(species=species, name="HistDisc", stochastic=False)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0, 8]},
+                "male": {"WT|WT": [0, 8]},
+            }
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2)
+        .competition(low_density_growth_rate=1.2, carrying_capacity=100)
+        .build()
+    )
+
+    pop.run(n_steps=2, record_every=1, clear_history_on_start=True)
+    _, history = pop.export_state()
+    assert history is not None
+
+    payload = population_history_to_readable_json(pop, history=history, include_zero_counts=True)
+    parsed = json.loads(payload)
+
+    assert parsed["state_type"] == "DiscretePopulationState"
+    assert parsed["n_snapshots"] == 3
+    assert parsed["snapshots"][0]["tick"] == 0
+    assert parsed["snapshots"][-1]["tick"] == 2
 
 
 def test_population_to_observation_dict_with_groups_for_discrete() -> None:

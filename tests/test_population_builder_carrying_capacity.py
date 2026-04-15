@@ -235,3 +235,126 @@ class TestCarryingCapacityResolution:
         # Expected survival rate should be non-negative and reasonable
         assert exp_survival_rate >= 0.0
         assert exp_survival_rate < 10.0  # Should not be unreasonably large
+
+    def test_reproduction_rate_separates_from_mating_rate_for_capacity_inference(self) -> None:
+        """Inferred carrying capacity should respond to reproduction rates, not only mating rates."""
+        n_ages = 6
+        age_based_survival_rates = np.array([
+            [1.0, 1.0, 0.9, 0.8, 0.6, 0.0],
+            [1.0, 1.0, 0.85, 0.75, 0.5, 0.0],
+        ], dtype=np.float64)
+
+        age_based_mating_rates = np.array([
+            [0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+        ], dtype=np.float64)
+
+        female_age_based_relative_fertility = np.array(
+            [0.0, 0.0, 1.0, 1.0, 0.8, 0.0],
+            dtype=np.float64,
+        )
+
+        full_reproduction = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 0.0], dtype=np.float64)
+        half_reproduction = np.array([0.0, 0.0, 0.5, 0.5, 0.5, 0.0], dtype=np.float64)
+
+        inferred_k_full = PopulationConfigBuilder._resolve_carrying_capacity(
+            carrying_capacity=None,
+            age_1_carrying_capacity=None,
+            old_juvenile_carrying_capacity=None,
+            expected_num_adult_females=300.0,
+            expected_eggs_per_female=40.0,
+            age_based_survival_rates=age_based_survival_rates,
+            age_based_mating_rates=age_based_mating_rates,
+            age_based_reproduction_rates=full_reproduction,
+            female_age_based_relative_fertility=female_age_based_relative_fertility,
+            sex_ratio=0.5,
+            new_adult_age=2,
+            n_ages=n_ages,
+        )
+
+        inferred_k_half = PopulationConfigBuilder._resolve_carrying_capacity(
+            carrying_capacity=None,
+            age_1_carrying_capacity=None,
+            old_juvenile_carrying_capacity=None,
+            expected_num_adult_females=300.0,
+            expected_eggs_per_female=40.0,
+            age_based_survival_rates=age_based_survival_rates,
+            age_based_mating_rates=age_based_mating_rates,
+            age_based_reproduction_rates=half_reproduction,
+            female_age_based_relative_fertility=female_age_based_relative_fertility,
+            sex_ratio=0.5,
+            new_adult_age=2,
+            n_ages=n_ages,
+        )
+
+        assert inferred_k_full > 0.0
+        assert inferred_k_half > 0.0
+        assert inferred_k_half < inferred_k_full
+
+    def test_competition_strength_applies_to_old_larvae_only(self) -> None:
+        """Competition strength scales age-1 larvae while age-0 remains baseline 1.0."""
+        sp = _make_species("TestCompetitionStrengthProfile")
+        pop = (
+            nt.AgeStructuredPopulation
+            .setup(species=sp, name="CompetitionProfile", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=2)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 10.0, 10.0, 10.0]},
+                    "male": {"WT|WT": [0.0, 10.0, 10.0, 10.0]},
+                }
+            )
+            .reproduction(
+                female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0],
+                male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0],
+                eggs_per_female=10.0,
+            )
+            .competition(
+                competition_strength=5.0,
+                juvenile_growth_mode="linear",
+                old_juvenile_carrying_capacity=100.0,
+                expected_num_adult_females=20.0,
+            )
+            .build()
+        )
+
+        cfg = pop.export_config()
+        np.testing.assert_array_equal(
+            cfg.age_based_relative_competition_strength,
+            np.array([1.0, 5.0, 1.0, 1.0], dtype=np.float64),
+        )
+
+    def test_expected_competition_strength_matches_age0_age1_weighting(self) -> None:
+        """Equilibrium competition metric should use age0*1 + age1*competition_strength."""
+        sp = _make_species("TestExpectedCompetitionMetric")
+        pop = (
+            nt.AgeStructuredPopulation
+            .setup(species=sp, name="ExpectedCompetitionMetric", stochastic=False)
+            .age_structure(n_ages=8, new_adult_age=2)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 150.0, 150.0, 125.0, 100.0, 75.0, 50.0, 25.0]},
+                    "male": {"WT|WT": [0.0, 150.0, 150.0, 100.0, 50.0]},
+                }
+            )
+            .reproduction(
+                female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                female_age_based_reproduction_rates=[0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+                eggs_per_female=50.0,
+            )
+            .survival(
+                female_age_based_survival_rates=[1.0, 1.0, 5 / 6, 4 / 5, 3 / 4, 2 / 3, 1 / 2],
+                male_age_based_survival_rates=[1.0, 1.0, 2 / 3, 1 / 2],
+            )
+            .competition(
+                competition_strength=5.0,
+                juvenile_growth_mode="linear",
+                old_juvenile_carrying_capacity=600.0,
+                expected_num_adult_females=1050.0,
+            )
+            .build()
+        )
+
+        cfg = pop.export_config()
+        assert cfg.expected_competition_strength == pytest.approx(29250.0, rel=1e-12, abs=1e-12)
