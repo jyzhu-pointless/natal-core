@@ -11,6 +11,8 @@ from natal.population_state import DiscretePopulationState, PopulationState
 from natal.state_translation import (
     discrete_population_state_to_dict,
     discrete_population_state_to_json,
+    output_current_state,
+    output_history,
     population_history_to_readable_dict,
     population_history_to_readable_json,
     population_to_observation_dict,
@@ -257,6 +259,81 @@ def test_population_to_observation_dict_with_groups_for_discrete() -> None:
 
     assert result["labels"] == ["adult_wt_female"]
     assert result["observed"]["adult_wt_female"]["female"]["age_1"] == 9.0
+
+
+def test_output_current_state_can_write_json_file(tmp_path) -> None:
+    species = nt.Species.from_dict(
+        name="ObsOutputCurrent",
+        structure={"chr1": {"A": ["WT", "Dr"]}},
+        gamete_labels=["default"],
+    )
+
+    pop = (
+        nt.DiscreteGenerationPopulation
+        .setup(species=species, name="ObsCurrent", stochastic=False)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0, 9]},
+                "male": {"WT|WT": [0, 7]},
+            }
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2)
+        .competition(low_density_growth_rate=1.2, carrying_capacity=100)
+        .build()
+    )
+
+    output_file = tmp_path / "current_state.json"
+    payload = output_current_state(
+        pop,
+        groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
+        collapse_age=False,
+        include_zero_counts=True,
+        output_path=output_file,
+    )
+
+    parsed = json.loads(output_file.read_text(encoding="utf-8"))
+    assert parsed == payload
+    assert parsed["labels"] == ["adult_wt"]
+
+
+def test_output_history_can_write_json_file(tmp_path) -> None:
+    species = nt.Species.from_dict(
+        name="ObsOutputHistory",
+        structure={"chr1": {"A": ["WT", "Dr"]}},
+        gamete_labels=["default"],
+    )
+
+    pop = (
+        nt.DiscreteGenerationPopulation
+        .setup(species=species, name="ObsHistory", stochastic=False)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0, 8]},
+                "male": {"WT|WT": [0, 8]},
+            }
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2)
+        .competition(low_density_growth_rate=1.2, carrying_capacity=100)
+        .build()
+    )
+
+    pop.run(n_steps=2, record_every=1, clear_history_on_start=True)
+
+    output_file = tmp_path / "history.json"
+    payload = output_history(
+        pop,
+        groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
+        collapse_age=False,
+        include_zero_counts=True,
+        output_path=output_file,
+    )
+
+    parsed = json.loads(output_file.read_text(encoding="utf-8"))
+    assert parsed == payload
+    assert parsed["n_snapshots"] == 3
+    assert parsed["snapshots"][0]["labels"] == ["adult_wt"]
 
 
 def test_population_to_observation_json_is_valid_and_collapsed() -> None:

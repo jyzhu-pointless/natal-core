@@ -6,7 +6,7 @@ instantiation, preventing parameter bloat and enabling clear, readable code.
 """
 
 import inspect
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,8 +16,10 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    TypeAlias,
     Union,
     cast,
+    overload,
 )
 
 import numpy as np
@@ -48,6 +50,11 @@ __all__ = ["AgeStructuredPopulationBuilder", "DiscreteGenerationPopulationBuilde
 GenotypeSelectorAtom = Union[Genotype, str]
 GenotypeSelector = Union[GenotypeSelectorAtom, Tuple[GenotypeSelectorAtom, ...]]
 ArrayF64 = NDArray[np.float64]
+InitialAgeCountValue: TypeAlias = (
+    Sequence[float | int] | Mapping[int, float | int] | ArrayF64 | int | float
+)
+InitialIndividualCountInput: TypeAlias = Mapping[str, Mapping[Any, InitialAgeCountValue]]
+InitialSpermStorageInput: TypeAlias = Mapping[Any, Mapping[Any, InitialAgeCountValue]]
 HookFn = Callable[..., object]
 ModifierSpec = Tuple[int, Optional[str], HookFn]
 HookRegistration = Tuple[HookFn, Optional[str], Optional[int]]
@@ -738,7 +745,7 @@ class PopulationConfigBuilder:
     @staticmethod
     def _resolve_genotype_index(
         species: Species,
-        genotype_key: Union[Genotype, str],
+        genotype_key: object,
         genotype_to_index: Dict[Genotype, int],
     ) -> int:
         """Resolve a genotype key into its registered integer index.
@@ -757,15 +764,17 @@ class PopulationConfigBuilder:
         """
         if isinstance(genotype_key, str):
             genotype = species.get_genotype_from_str(genotype_key)
-        else:
+        elif isinstance(genotype_key, Genotype):
             genotype = genotype_key
+        else:
+            raise TypeError(f"genotype_key must be a genotype or str, got {type(genotype_key)}")
         if genotype.species is not species:
             raise ValueError("Genotype must belong to this species")
         return int(genotype_to_index[genotype])
 
     @staticmethod
     def _resolve_age_counts_age_structured(
-        age_data: Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
+        age_data: InitialAgeCountValue,
         n_ages: int,
         new_adult_age: int,
     ) -> Dict[int, float]:
@@ -783,7 +792,7 @@ class PopulationConfigBuilder:
             ValueError: If counts are negative or ages are out of range.
             TypeError: If data type is unsupported.
         """
-        if isinstance(age_data, dict):
+        if isinstance(age_data, Mapping):
             age_map = age_data
             out: Dict[int, float] = {}
             for age, count in age_map.items():
@@ -796,7 +805,9 @@ class PopulationConfigBuilder:
                     out[age] = fcount
             return out
 
-        if isinstance(age_data, (list, tuple, np.ndarray)):
+        if isinstance(age_data, (Sequence, np.ndarray)) and not isinstance(
+            age_data, (str, bytes, bytearray)
+        ):
             arr = np.asarray(age_data, dtype=np.float64)
             out = {}
             for age, count in enumerate(arr):
@@ -818,7 +829,7 @@ class PopulationConfigBuilder:
     @staticmethod
     def resolve_age_structured_initial_individual_count(
         species: Species,
-        distribution: Mapping[str, Mapping[Union[Genotype, str], Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float]]],
+        distribution: InitialIndividualCountInput,
         n_ages: int,
         new_adult_age: int,
     ) -> NDArray[np.float64]:
@@ -853,10 +864,7 @@ class PopulationConfigBuilder:
     @staticmethod
     def resolve_age_structured_initial_sperm_storage(
         species: Species,
-        sperm_storage: Mapping[
-            Union[Genotype, str],
-            Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
-        ],
+        sperm_storage: InitialSpermStorageInput,
         n_ages: int,
         new_adult_age: int,
     ) -> NDArray[np.float64]:
@@ -895,7 +903,7 @@ class PopulationConfigBuilder:
 
     @staticmethod
     def _resolve_discrete_age_distribution(
-        age_data: Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
+        age_data: InitialAgeCountValue,
     ) -> Tuple[float, float]:
         """Normalize discrete distribution data into (age0, age1) counts.
 
@@ -914,7 +922,9 @@ class PopulationConfigBuilder:
                 raise ValueError(f"Count must be non-negative, got {value}")
             return 0.0, value
 
-        if isinstance(age_data, (list, tuple, np.ndarray)):
+        if isinstance(age_data, (Sequence, np.ndarray)) and not isinstance(
+            age_data, (str, bytes, bytearray)
+        ):
             arr = np.asarray(age_data, dtype=np.float64)
             if arr.size == 0:
                 return 0.0, 0.0
@@ -928,7 +938,7 @@ class PopulationConfigBuilder:
                 return float(arr[0]), float(arr[1])
             raise ValueError(f"Discrete initial list/array must have length <= 2, got {arr.size}")
 
-        if isinstance(age_data, dict):
+        if isinstance(age_data, Mapping):
             age_map = age_data
             unsupported_keys = [k for k in age_map.keys() if k not in (0, 1)]
             if unsupported_keys:
@@ -946,7 +956,7 @@ class PopulationConfigBuilder:
     @staticmethod
     def resolve_discrete_initial_individual_count(
         species: Species,
-        distribution: Dict[str, Dict[Union[Genotype, str], Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float]]],
+        distribution: InitialIndividualCountInput,
     ) -> NDArray[np.float64]:
         """Resolve initial individual counts for discrete generation models.
 
@@ -1138,21 +1148,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.equilibrium_individual_distribution: Optional[ArrayF64] = None
 
         # Initial state (required)
-        self.initial_individual_count: Optional[
-            Mapping[
-                str,
-                Mapping[
-                    Union[Genotype, str],
-                    Union[List[float], Tuple[float, ...], ArrayF64, Dict[int, float], int, float],
-                ],
-            ]
-        ] = None
-        self.initial_sperm_storage: Optional[
-            Mapping[
-                Union[Genotype, str],
-                Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], ArrayF64, int, float]],
-            ]
-        ] = None
+        self.initial_individual_count: Optional[InitialIndividualCountInput] = None
+        self.initial_sperm_storage: Optional[InitialSpermStorageInput] = None
 
         # Survival and mating
         self.female_age_based_survival_rates: Optional[Any] = None
@@ -1172,9 +1169,9 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.relative_competition_factor: float = 1.0
         self.juvenile_growth_mode: Union[int, str] = LOGISTIC
         self.low_density_growth_rate: float = 1.0
-        self.age_1_carrying_capacity: Optional[int] = None
-        self.old_juvenile_carrying_capacity: Optional[int] = None
-        self.expected_num_adult_females: Optional[int] = None
+        self.age_1_carrying_capacity: Optional[float] = None
+        self.old_juvenile_carrying_capacity: Optional[float] = None
+        self.expected_num_adult_females: Optional[float] = None
 
         # Fitness and modifiers (delayed until build)
         self._fitness_operations: List[FitnessOperation] = []
@@ -1234,21 +1231,34 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
         return self
 
+    @overload
     def initial_state(
         self,
-        individual_count: Mapping[
-            str,
-            Mapping[
-                Union[Genotype, str],
-                Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
-            ],
-        ],
-        sperm_storage: Optional[
-            Mapping[
-                Union[Genotype, str],
-                Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], NDArray[np.float64], int, float]],
-            ]
-        ] = None
+        individual_count: Mapping[str, Mapping[str, InitialAgeCountValue]],
+        sperm_storage: Optional[Mapping[str, Mapping[str, InitialAgeCountValue]]] = None,
+    ) -> 'AgeStructuredPopulationBuilder':
+        ...
+
+    @overload
+    def initial_state(
+        self,
+        individual_count: Mapping[str, Mapping[Genotype, InitialAgeCountValue]],
+        sperm_storage: Optional[Mapping[Genotype, Mapping[Genotype, InitialAgeCountValue]]] = None,
+    ) -> 'AgeStructuredPopulationBuilder':
+        ...
+
+    @overload
+    def initial_state(
+        self,
+        individual_count: Mapping[str, Mapping[Genotype | str, InitialAgeCountValue]],
+        sperm_storage: Optional[Mapping[Genotype | str, Mapping[Genotype | str, InitialAgeCountValue]]] = None,
+    ) -> 'AgeStructuredPopulationBuilder':
+        ...
+
+    def initial_state(
+        self,
+        individual_count: InitialIndividualCountInput,
+        sperm_storage: Optional[InitialSpermStorageInput] = None,
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure initial population state and sperm storage.
 
@@ -1342,9 +1352,9 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         competition_strength: float = 5.0,
         juvenile_growth_mode: Union[int, str] = "logistic",
         low_density_growth_rate: float = 6.0,
-        age_1_carrying_capacity: Optional[int] = None,
-        old_juvenile_carrying_capacity: Optional[int] = None,
-        expected_num_adult_females: Optional[int] = None,
+        age_1_carrying_capacity: Optional[float] = None,
+        old_juvenile_carrying_capacity: Optional[float] = None,
+        expected_num_adult_females: Optional[float] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure competition, carrying capacity, and density-dependent parameters.
@@ -1354,9 +1364,9 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                 juveniles (age-0 remains baseline competition weight 1.0).
             juvenile_growth_mode (Union[int, str]): Growth model ("logistic", etc.).
             low_density_growth_rate (float): Growth rate at low density.
-            age_1_carrying_capacity (Optional[int]): Population capacity at age=1.
-            old_juvenile_carrying_capacity (Optional[int]): Alias for age_1_carrying_capacity (deprecated).
-            expected_num_adult_females (Optional[int]): Equilibrium number of adult females.
+            age_1_carrying_capacity (Optional[float]): Population capacity at age=1.
+            old_juvenile_carrying_capacity (Optional[float]): Alias for age_1_carrying_capacity (deprecated).
+            expected_num_adult_females (Optional[float]): Equilibrium number of adult females.
             equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
 
         Returns:
@@ -1755,15 +1765,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self.use_continuous_sampling: bool = False
         self.use_fixed_egg_count: bool = False
 
-        self.initial_individual_count: Optional[
-            Dict[
-                str,
-                Dict[
-                    Union[Genotype, str],
-                    Union[List[float], Tuple[float, ...], ArrayF64, Dict[int, float], int, float],
-                ],
-            ]
-        ] = None
+        self.initial_individual_count: Optional[InitialIndividualCountInput] = None
 
         self.expected_eggs_per_female: float = 50.0
         self.sex_ratio: float = 0.5
@@ -1911,15 +1913,30 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self.use_fixed_egg_count = use_fixed_egg_count
         return self
 
+    @overload
     def initial_state(
         self,
-        individual_count: Dict[
-            str,
-            Dict[
-                Union[Genotype, str],
-                Union[List[float], Tuple[float, ...], NDArray[np.float64], Dict[int, float], int, float],
-            ],
-        ],
+        individual_count: Mapping[str, Mapping[str, InitialAgeCountValue]],
+    ) -> "DiscreteGenerationPopulationBuilder":
+        ...
+
+    @overload
+    def initial_state(
+        self,
+        individual_count: Mapping[str, Mapping[Genotype, InitialAgeCountValue]],
+    ) -> "DiscreteGenerationPopulationBuilder":
+        ...
+
+    @overload
+    def initial_state(
+        self,
+        individual_count: Mapping[str, Mapping[Genotype | str, InitialAgeCountValue]],
+    ) -> "DiscreteGenerationPopulationBuilder":
+        ...
+
+    def initial_state(
+        self,
+        individual_count: InitialIndividualCountInput,
     ) -> "DiscreteGenerationPopulationBuilder":
         """Configure the initial population state.
 
@@ -1982,14 +1999,14 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self,
         juvenile_growth_mode: Union[int, str] = "logistic",
         low_density_growth_rate: float = 1.0,
-        carrying_capacity: Optional[int] = None,
+        carrying_capacity: Optional[float] = None,
     ) -> "DiscreteGenerationPopulationBuilder":
         """Configure juvenile growth mode and density-dependence parameters.
 
         Args:
             juvenile_growth_mode (Union[int, str]): Growth model identifier.
             low_density_growth_rate (float): Per-step growth factor at low density.
-            carrying_capacity (Optional[int]): Optional carrying capacity.
+            carrying_capacity (Optional[float]): Optional carrying capacity.
 
         Returns:
             DiscreteGenerationPopulationBuilder: Self for chaining.

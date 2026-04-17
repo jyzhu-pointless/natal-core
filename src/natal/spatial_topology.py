@@ -226,13 +226,11 @@ class SquareGrid(GridTopology):
 
 @dataclass(frozen=True)
 class HexGrid(GridTopology):
-    """Hex grid using odd-r offset indices with pointy-top geometric embedding.
+    """Hex grid using parallelogram coordinates with pointy-top geometric embedding.
 
-    Index-space neighbor offsets depend on row parity (odd-r), but geometric
-    neighbor vectors are parity-invariant and all have unit length. If
-    ``wrap=True``, candidate neighbor coordinates produced by the odd-r to
-    axial conversion path are wrapped back into the rectangular index domain,
-    so boundary demes still keep six neighbors under periodic boundaries.
+    This implementation uses a parallelogram grid where each cell has six
+    neighbors in a hexagonal pattern. The grid is defined using two basis
+    vectors that form a 60-degree angle, creating a natural hexagonal topology.
 
     Examples:
         On a non-wrapping grid, a corner cell loses out-of-bounds neighbors::
@@ -249,66 +247,19 @@ class HexGrid(GridTopology):
 
     _SQRT3_OVER_2 = math.sqrt(3.0) / 2.0
 
-    @staticmethod
-    def _offset_to_axial(coord: Coord) -> Tuple[int, int]:
-        """Convert one odd-r offset coordinate to axial coordinates.
 
-        Args:
-            coord: Offset coordinate as ``(row, col)``.
-
-        Returns:
-            Axial coordinate as ``(q, r)``.
-
-        Examples:
-            In odd-r layout, odd rows are shifted half a cell to the right in
-            geometric space, so the axial q coordinate depends on row parity::
-
-                HexGrid._offset_to_axial((0, 2)) == (2, 0)
-                HexGrid._offset_to_axial((1, 2)) == (2, 1)
-        """
-        row, col = coord
-        # odd-r offset -> axial:
-        # remove the half-column shift carried by odd rows so neighbor logic can
-        # use one parity-independent set of six axial direction vectors.
-        q = col - ((row - (row & 1)) // 2)
-        r = row
-        return (q, r)
-
-    @staticmethod
-    def _axial_to_offset(q: int, r: int) -> Coord:
-        """Convert one axial coordinate to odd-r offset coordinates.
-
-        Args:
-            q: Axial q coordinate.
-            r: Axial r coordinate.
-
-        Returns:
-            Offset coordinate as ``(row, col)``.
-
-        Examples:
-            This is the inverse of ``_offset_to_axial``::
-
-                HexGrid._axial_to_offset(2, 0) == (0, 2)
-                HexGrid._axial_to_offset(2, 1) == (1, 2)
-        """
-        # axial -> odd-r offset:
-        # re-apply the half-column shift implied by the destination row parity
-        # so the result lands back in the rectangular row/col index domain.
-        row = r
-        col = q + ((r - (r & 1)) // 2)
-        return (row, col)
 
     def to_xy(self, coord: Coord) -> Tuple[float, float]:
-        """Map odd-r offset coord to pointy-top Cartesian coordinates.
+        """Map parallelogram coordinate to pointy-top Cartesian coordinates.
 
         Positive x points right, positive y points downward.
         With side length = 1, adjacent hex centers are distance 1 apart.
         """
-        q, r = self._offset_to_axial(coord)
-        # Axial basis vectors for pointy-top hexes:
-        # moving +q shifts x by 1; moving +r shifts x by 1/2 and y by sqrt(3)/2.
-        x = q + 0.5 * r
-        y = self._SQRT3_OVER_2 * r
+        i, j = coord
+        # Parallelogram basis vectors for pointy-top hexes:
+        # moving +i shifts x by 1; moving +j shifts x by 1/2 and y by sqrt(3)/2.
+        x = i + 0.5 * j
+        y = self._SQRT3_OVER_2 * j
         return (float(x), float(y))
 
     def neighbor_direction_vectors(self) -> Tuple[Tuple[float, float], ...]:
@@ -330,11 +281,10 @@ class HexGrid(GridTopology):
         """Return neighboring coordinates for one hex-grid location.
 
         Args:
-            coord: Source grid coordinate in odd-r offset form.
+            coord: Source grid coordinate in parallelogram form.
 
         Returns:
-            Neighbor coordinates after parity-aware offset conversion and
-            boundary normalization.
+            Neighbor coordinates after boundary normalization.
 
         Examples:
             A center cell has six neighbors. Under periodic boundaries, edge
@@ -344,21 +294,20 @@ class HexGrid(GridTopology):
                 HexGrid(rows=4, cols=4, wrap=False).neighbor_coords((1, 1))
                 HexGrid(rows=4, cols=4, wrap=True).neighbor_coords((0, 0))
         """
-        q, r = self._offset_to_axial(coord)
-        axial_offsets: Sequence[Tuple[int, int]] = (
-            (1, 0),
-            (1, -1),
-            (0, -1),
-            (-1, 0),
-            (-1, 1),
-            (0, 1),
+        i, j = coord
+        # Direct neighbor offsets in parallelogram coordinates
+        parallelogram_offsets: Sequence[Tuple[int, int]] = (
+            (1, 0),   # right
+            (0, 1),   # down-right
+            (-1, 1),  # down-left
+            (-1, 0),  # left
+            (0, -1),  # up-left
+            (1, -1),  # up-right
         )
         result: List[Coord] = []
-        for dq, dr in axial_offsets:
-            # Compute the six hex neighbors in axial space first. This avoids
-            # having separate neighbor tables for even and odd rows.
-            cand_row, cand_col = self._axial_to_offset(q + dq, r + dr)
-            normalized = self.normalize_coord(cand_row, cand_col)
+        for di, dj in parallelogram_offsets:
+            # Compute neighbors directly in parallelogram space
+            normalized = self.normalize_coord(i + di, j + dj)
             if normalized is not None:
                 result.append(normalized)
         return result

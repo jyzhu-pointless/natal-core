@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.4.17
+- Refactor HexGrid to use parallelogram coordinates instead of odd-r offset coordinates for simpler neighbor calculation
+- Update spatial visualization to support parallelogram grid layout with continuous diagonal offset
+- Improve colorbar layout: change to horizontal orientation at bottom to avoid overlap with landscape
+- Implement dynamic colorbar range adjustment: only update when current max exceeds 110% of historical max
+- Enhance user experience: clicking deme no longer automatically switches to selected deme page
+- Update spatial dashboard with improved layout and stable visualization ranges
+
 ## 2026.4.13
 - Add Zygote Fitness support: new fitness type applied during reproduction stage before survival and competition
 - Extend PopulationConfig with zygote_fitness field and set_zygote_fitness method

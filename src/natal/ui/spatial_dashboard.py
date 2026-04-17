@@ -53,6 +53,7 @@ class SpatialDashboard:
         self._chart_history: list[list[float]] = []
         self._allele_freq_history: dict[str, list[list[float]]] = {}
         self.show_numbers = False  # Toggle for displaying population counts as numbers
+        self._max_count_history = 0.0  # Track historical maximum for colorbar range
         self._record_snapshot()
 
     async def _run_step(self) -> None:
@@ -209,12 +210,13 @@ class SpatialDashboard:
                     showscale=True,
                     colorbar={
                         "title": "Population Count",
-                        "thickness": 20,
-                        "len": 0.5,
-                        "x": 1.0,
-                        "xanchor": "right",
-                        "y": 0.5,
-                        "yanchor": "middle",
+                        "thickness": 15,
+                        "len": 0.8,
+                        "orientation": "h",  # Horizontal orientation
+                        "x": 0.5,
+                        "xanchor": "center",
+                        "y": -0.15,
+                        "yanchor": "top",
                     },
                 )
             ]
@@ -236,7 +238,7 @@ class SpatialDashboard:
             yaxis={"title": "Row", "autorange": "reversed", "dtick": max(1, topology.rows // 10)},
             height=500,
             transition={"duration": 0},
-            margin={"l": 10, "r": 56, "t": 40, "b": 10},
+            margin={"l": 10, "r": 10, "t": 40, "b": 60},  # Increased bottom margin for horizontal colorbar
         )
         return fig
 
@@ -245,7 +247,12 @@ class SpatialDashboard:
         self.landscape_container.clear()
         topology = self.pop.topology
         counts = [float(deme.state.individual_count.sum()) for deme in self.pop.demes]
-        max_count = max(counts) if counts else 1.0
+        current_max = max(counts) if counts else 1.0
+        # Only update historical max if current max exceeds 110% of historical max
+        if current_max > 1.1 * self._max_count_history:
+            self._max_count_history = current_max
+        # Colorbar range is always 110% of historical max for stability
+        max_count = 1.1 * self._max_count_history
 
         if not HAS_PLOTLY:
             ui.label("Plotly is required for landscape visualization. Install with: pip install plotly").classes(
@@ -334,12 +341,10 @@ class SpatialDashboard:
             # Calculate positions for each hex/square
             hex_size = 1.0
             if is_hex:
-                # Pointy-top regular hexagons (gapless row-offset layout):
-                # width = sqrt(3) * size, height = 2 * size
-                # horizontal center spacing = sqrt(3) * size
-                # vertical center spacing = 1.5 * size
-                x_spacing = float(np.sqrt(3) * hex_size)
-                y_spacing = 1.5 * hex_size
+                # Parallelogram grid: regular hexagonal arrangement
+                # Spacing remains the same as in odd-r layout for consistent geometry
+                x_spacing = float(np.sqrt(3) * hex_size)  # 1.732
+                y_spacing = 1.5 * hex_size                # 1.5
             else:
                 # For squares: spacing is 2*size
                 x_spacing = 2.0
@@ -351,8 +356,9 @@ class SpatialDashboard:
                     count = counts[idx]
 
                     if is_hex:
-                        # Offset alternating rows
-                        x = col * x_spacing + (x_spacing / 2.0 if row % 2 == 1 else 0.0)
+                        # Parallelogram grid: continuous diagonal offset
+                        # Each row shifts by half a hexagon width relative to previous row
+                        x = col * x_spacing + row * (x_spacing / 2.0)
                         y = row * y_spacing
                     else:
                         x = col * x_spacing
@@ -433,7 +439,7 @@ class SpatialDashboard:
                             )
                         )
 
-            # Add colorbar
+            # Add horizontal colorbar at the bottom
             cbar_trace = go.Scatter(
                 x=[None],
                 y=[None],
@@ -443,12 +449,13 @@ class SpatialDashboard:
                     "cmid": max_count / 2,
                     "colorbar": {
                         "title": "Population Count",
-                        "thickness": 20,
-                        "len": 0.5,
-                        "x": 1.0,
-                        "xanchor": "right",
-                        "y": 0.5,
-                        "yanchor": "middle",
+                        "thickness": 15,
+                        "len": 0.8,
+                        "orientation": "h",  # Horizontal orientation
+                        "x": 0.5,
+                        "xanchor": "center",
+                        "y": -0.15,
+                        "yanchor": "top",
                     },
                     "cmin": 0,
                     "cmax": max_count,
@@ -471,7 +478,7 @@ class SpatialDashboard:
                 hovermode="closest",
                 height=500,
                 transition={"duration": 0},
-                margin={"l": 10, "r": 56, "t": 40, "b": 10},
+                margin={"l": 10, "r": 10, "t": 40, "b": 60},  # Increased bottom margin for horizontal colorbar
             )
 
             # Use NiceGUI plotly widget to keep landscape inside the panel with built-in zoom.
@@ -716,7 +723,7 @@ class SpatialDashboard:
     def _select_deme(self, idx: int) -> None:
         """Select one deme and refresh the detail view."""
         self.selected_deme_idx = idx
-        self.tabs_main.set_value("deme")
+        # Don't automatically switch to deme tab - keep user on current view
         self._render_landscape()
         self._render_migration_panel()
         self._update_selected_deme()

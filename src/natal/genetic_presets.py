@@ -100,7 +100,7 @@ _SexualSelectionScalingConfig = Union[
 # 1) float
 # 2) (het, hom) tuple for mode="custom"
 # 3) {sex: scale}
-_ZygoteScalingConfig = Union[
+_ZygoteViabilityScalingConfig = Union[
     float,  # both sex
     Tuple[float, float],
     Dict[_SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
@@ -259,8 +259,8 @@ def _is_sexual_selection_scaling_config(value: object) -> TypeGuard[_SexualSelec
     pair = _as_pair(value)
     return pair is not None and isinstance(pair[0], (int, float)) and isinstance(pair[1], (int, float))
 
-def _is_zygote_scaling_config(value: object) -> TypeGuard[_ZygoteScalingConfig]:
-    """Type guard for zygote scaling configuration."""
+def _is_zygote_viability_scaling_config(value: object) -> TypeGuard[_ZygoteViabilityScalingConfig]:
+    """Type guard for zygote viability scaling configuration."""
     if isinstance(value, (int, float)):
         return True
     pair = _as_pair(value)
@@ -276,7 +276,7 @@ def _make_fitness_patch_given_allele_scaling(
     viability_scaling: Optional[_ViabilityScalingConfig] = None,
     fecundity_scaling: Optional[_FecundityScalingConfig] = None,
     sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
-    zygote_scaling: Optional[_ZygoteScalingConfig] = None,
+    zygote_scaling: Optional[_ZygoteViabilityScalingConfig] = None,
     viability_mode: _AlleleScalingMode = "multiplicative",
     fecundity_mode: _AlleleScalingMode = "multiplicative",
     sexual_selection_mode: str = "multiplicative",
@@ -690,18 +690,18 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
     zygote_per_allele_patch = patch.get('zygote_per_allele', {})
     for allele_name, val in zygote_per_allele_patch.items():
         config, mode = _split_config_mode(val)
-        if not _is_zygote_scaling_config(config):
+        if not _is_zygote_viability_scaling_config(config):
             raise TypeError(f"Invalid zygote_per_allele config for '{allele_name}'")
-        _apply_zygote_allele_scaling(population, all_genotypes, allele_name, config, mode)
+        _apply_zygote_viability_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
-def _apply_zygote_allele_scaling(
+def _apply_zygote_viability_allele_scaling(
     population: 'BasePopulation[Any]',
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
-    config: _ZygoteScalingConfig,
+    config: _ZygoteViabilityScalingConfig,
     mode: str = "multiplicative",
 ) -> None:
-    """Apply allele-driven zygote scaling using multiplicative copy-number effect."""
+    """Apply allele-driven zygote viability scaling using multiplicative copy-number effect."""
     # zygote tensor layout:
     #   zygote_fitness[sex_idx, genotype_idx]
     # This function multiplies existing values in-place via setter calls,
@@ -1066,7 +1066,7 @@ class HomingDrive(GeneticPreset):
         fecundity_scaling: _FecundityScalingConfig = 1.0,
         viability_scaling: _ViabilityScalingConfig = 1.0,
         sexual_selection_scaling: _SexualSelectionScalingConfig = 1.0,
-        zygote_scaling: _ZygoteScalingConfig = 1.0,
+        zygote_scaling: _ZygoteViabilityScalingConfig = 1.0,
         viability_mode: _AlleleScalingMode = "multiplicative",
         fecundity_mode: _AlleleScalingMode = "multiplicative",
         sexual_selection_mode: _AlleleScalingMode = "multiplicative",
@@ -1414,12 +1414,14 @@ class ToxinAntidoteDrive(GeneticPreset):
         disrupted_allele: _AlleleSpecifier,
         conversion_rate: _SexSpecificRates = 0.8,
         embryo_disruption_rate: _SexSpecificRates = 0.0,
-        viability_scaling: _ViabilityScalingConfig = 0.0,
+        viability_scaling: _ViabilityScalingConfig = 1.0,
         fecundity_scaling: _FecundityScalingConfig = 1.0,
         sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
+        zygote_viability_scaling: _ZygoteViabilityScalingConfig = 0.0,
         viability_mode: _AlleleScalingMode = "recessive",
         fecundity_mode: _AlleleScalingMode = "recessive",
-        sexual_selection_mode: str = "recessive",
+        sexual_selection_mode: _AlleleScalingMode = "recessive",
+        zygote_viability_mode: _AlleleScalingMode = "recessive",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
         use_paternal_deposition: bool = False,
@@ -1438,10 +1440,14 @@ class ToxinAntidoteDrive(GeneticPreset):
             sexual_selection_scaling: Optional sexual-selection multiplier for the disrupted allele.
                 Supports a scalar copy-number effect or a tuple
                 ``(default_male, carrier_male)``.
+            zygote_viability_scaling: Zygote viability scaling configuration for the disrupted allele.
+                Applied during reproduction stage before survival; represents probability that a zygote
+                survives to become an individual.
             viability_mode: Scaling mode for viability (default "recessive").
             fecundity_mode: Scaling mode for fecundity (default "recessive").
             sexual_selection_mode: Scaling mode for scalar sexual-selection values.
                 Ignored when ``sexual_selection_scaling`` is a tuple.
+            zygote_viability_mode: Scaling mode for zygote viability (default "multiplicative").
             cas9_deposition_glab: Gamete label for Cas9 deposition tracking.
             species: Optional species to bind at construction.
             use_paternal_deposition: Whether to enable paternal Cas9 deposition.
@@ -1456,9 +1462,11 @@ class ToxinAntidoteDrive(GeneticPreset):
         self.viability_scaling = viability_scaling
         self.fecundity_scaling = fecundity_scaling
         self.sexual_selection_scaling = sexual_selection_scaling
+        self.zygote_viability_scaling = zygote_viability_scaling
         self.viability_mode: _AlleleScalingMode = viability_mode
         self.fecundity_mode: _AlleleScalingMode = fecundity_mode
         self.sexual_selection_mode = sexual_selection_mode
+        self.zygote_viability_mode: _AlleleScalingMode = zygote_viability_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
@@ -1472,11 +1480,11 @@ class ToxinAntidoteDrive(GeneticPreset):
             self.viability_scaling,
             self.fecundity_scaling,
             self.sexual_selection_scaling,
-            None,  # zygote_scaling
+            self.zygote_viability_scaling,  # zygote_viability_scaling
             self.viability_mode,
             self.fecundity_mode,
             self.sexual_selection_mode,
-            "multiplicative",  # zygote_mode
+            self.zygote_viability_mode,  # zygote_viability_mode
         )
 
     @property

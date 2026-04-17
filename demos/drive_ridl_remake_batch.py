@@ -1,3 +1,4 @@
+# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false
 """
 Remake Drive-RIDL (Zhu J, et al. *BMC Biol* (2024)) using NATAL.
 
@@ -14,12 +15,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from time import perf_counter
+from typing import TypeAlias
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
 
 import natal as nt
+from natal.genetic_entities import Genotype
 
 # Core constants
 NUM_ADULT_FEMALES = 50000
@@ -43,6 +46,11 @@ HEATMAP_VMAX = 300.0
 FEMALE_BALANCE_WEIGHTS = np.array([0, 6, 6, 5, 4, 3, 2, 1], dtype=np.float64)
 MALE_BALANCE_WEIGHTS = np.array([0, 6, 6, 4, 2], dtype=np.float64)
 BALANCE_SCALE = NUM_ADULT_FEMALES / 21.0
+
+InitialDistribution: TypeAlias = dict[
+    str,
+    dict[Genotype | str, list[float | int] | tuple[float | int, ...] | dict[int, float | int] | int | float],
+]
 
 
 # 1. Define the mosquito species
@@ -107,7 +115,7 @@ def make_release_hook(release_size: int):
     return release_male_homozygotes
 
 
-def sample_initial_state(rng: np.random.Generator) -> dict[str, dict[str, list[int]]]:
+def sample_initial_state(rng: np.random.Generator) -> InitialDistribution:
     """Sample age distributions from balanced-shape probabilities with fixed totals."""
     female_total = int(round(FEMALE_BALANCE_WEIGHTS.sum() * BALANCE_SCALE))
     male_total = int(round(MALE_BALANCE_WEIGHTS.sum() * BALANCE_SCALE))
@@ -115,8 +123,8 @@ def sample_initial_state(rng: np.random.Generator) -> dict[str, dict[str, list[i
     female_probs = FEMALE_BALANCE_WEIGHTS / FEMALE_BALANCE_WEIGHTS.sum()
     male_probs = MALE_BALANCE_WEIGHTS / MALE_BALANCE_WEIGHTS.sum()
 
-    female_counts = rng.multinomial(female_total, female_probs).tolist()
-    male_counts = rng.multinomial(male_total, male_probs).tolist()
+    female_counts: list[float | int] = [int(x) for x in rng.multinomial(female_total, female_probs).tolist()]
+    male_counts: list[float | int] = [int(x) for x in rng.multinomial(male_total, male_probs).tolist()]
 
     return {
         "female": {"WT|WT": female_counts},
@@ -156,9 +164,10 @@ def build_population(
         competition_strength=5,
         juvenile_growth_mode="linear",
         low_density_growth_rate=6.0,
-        age_1_carrying_capacity=24000,
-        expected_num_adult_females=54000,
+        age_1_carrying_capacity=NUM_ADULT_FEMALES * 12/21,
+        expected_num_adult_females=NUM_ADULT_FEMALES,
     ).reproduction(
+        female_age_based_reproduction_rates=[0, 0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
         eggs_per_female=50,
         sperm_displacement_rate=0.05,
     ).presets(
@@ -284,7 +293,7 @@ def plot_heatmap(
 ) -> None:
     """Plot a square heatmap image with a shared normalization range."""
     masked = np.ma.masked_invalid(mean_suppression_weeks)
-    cmap = plt.cm.magma.reversed().copy()
+    cmap = plt.cm.get_cmap("magma_r").copy()
     cmap.set_bad(color="#9c9c9c")
 
     fig, ax = plt.subplots(figsize=(3.2, 3.2), dpi=150)
@@ -322,7 +331,7 @@ def plot_heatmap(
 
 def save_shared_colorbar(norm: Normalize) -> None:
     """Save a single horizontal colorbar shared by all heatmaps."""
-    cmap = plt.cm.magma.reversed().copy()
+    cmap = plt.cm.get_cmap("magma_r").copy()
     cmap.set_bad(color="#9c9c9c")
 
     cbar_fig, cbar_ax = plt.subplots(figsize=(3.2, 0.7), dpi=150)

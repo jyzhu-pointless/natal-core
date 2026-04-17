@@ -615,7 +615,7 @@ def _convert_haploid_genotype(
         haploid_genome: The haploid genome to potentially convert.
         from_allele: Name of the source allele to look for.
         to_allele: Name of the target allele to substitute.
-        conversion_rate: Probability of successful conversion (0â€“1).
+        conversion_rate: Probability of successful conversion (0-1).
 
     Returns:
         ``None`` if *from_allele* is not present in the genome, otherwise
@@ -630,7 +630,7 @@ def _convert_haploid_genotype(
             if gene.name != from_allele:
                 continue
 
-            # Found the source allele â€” look up target Gene at the same Locus
+            # Found the source allele: look up target Gene at the same Locus
             locus = gene.locus
             target_gene = None
             for registered_gene in locus.all_entities:

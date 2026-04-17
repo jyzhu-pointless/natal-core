@@ -22,7 +22,7 @@ class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):
 
         self.assertEqual(
             patch["viability_per_allele"],
-            {"Disrupted": (0.0, "recessive")},
+            {"Disrupted": (1.0, "recessive")},
         )
         self.assertEqual(
             patch["fecundity_per_allele"],

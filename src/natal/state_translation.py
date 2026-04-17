@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import numpy as np
 
@@ -31,12 +32,12 @@ __all__ = [
     "population_state_to_json",
     "discrete_population_state_to_dict",
     "discrete_population_state_to_json",
+    "output_current_state",
+    "output_history",
     "population_to_readable_dict",
     "population_to_readable_json",
     "population_history_to_readable_dict",
     "population_history_to_readable_json",
-    "population_to_observation_dict",
-    "population_to_observation_json",
     "spatial_population_to_readable_dict",
     "spatial_population_to_readable_json",
     "spatial_population_to_observation_dict",
@@ -458,27 +459,26 @@ def _build_observation_payload(
     raise ValueError(f"Unsupported observed array ndim: {observed.ndim}")
 
 
-def population_to_observation_dict(
+def _write_json_payload(
+    payload: Dict[str, Any],
+    output_path: Optional[Union[str, Path]],
+    indent: int,
+) -> None:
+    if output_path is None:
+        return
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=indent), encoding="utf-8")
+
+
+def _get_population_observation_payload(
     population: BasePopulation[Any],
     *,
-    groups: Optional[GroupsInput] = None,
-    collapse_age: bool = False,
-    include_zero_counts: bool = False,
+    groups: Optional[GroupsInput],
+    collapse_age: bool,
+    include_zero_counts: bool,
 ) -> Dict[str, Any]:
-    """Apply observation rules and export observed counts in readable form.
-
-    This function integrates ``natal.observation`` with state translation.
-
-    Args:
-        population: Population instance to observe.
-        groups: Observation groups passed to ``ObservationFilter.build_filter``.
-            When ``None``, one group per genotype index is used.
-        collapse_age: Whether observation rule generation collapses age axis.
-        include_zero_counts: Whether to keep zero-valued entries.
-
-    Returns:
-        A dictionary with observation metadata and observed counts.
-    """
     from natal.observation import ObservationFilter, apply_rule
 
     state = population.state
@@ -508,6 +508,186 @@ def population_to_observation_dict(
     }
 
 
+def _get_history_array(
+    population: BasePopulation[Any],
+    history: Optional[np.ndarray],
+) -> np.ndarray:
+    if history is None:
+        get_history = getattr(population, "get_history", None)
+        if callable(get_history):
+            try:
+                return cast(np.ndarray, get_history())
+            except ValueError:
+                return np.zeros((0, 0), dtype=np.float64)
+        return np.zeros((0, 0), dtype=np.float64)
+
+    return cast(np.ndarray, np.asarray(history, dtype=np.float64))
+
+
+def _build_history_observation_payload(
+    population: BasePopulation[Any],
+    *,
+    history: Optional[np.ndarray],
+    groups: Optional[GroupsInput],
+    collapse_age: bool,
+    include_zero_counts: bool,
+) -> Dict[str, Any]:
+    from natal.observation import ObservationFilter, apply_rule
+
+    state = population.state
+    n_sexes, n_ages, n_genotypes = state.individual_count.shape
+    sex_labels = _default_sex_labels(n_sexes)
+
+    history_array = _get_history_array(population, history)
+    if history_array.ndim != 2:
+        raise ValueError(f"history must be a 2D array, got shape {history_array.shape}")
+
+    obs_filter = ObservationFilter(population.index_registry)
+    mask, labels = obs_filter.build_filter(
+        pop_or_state=population,
+        diploid_genotypes=population.species,
+        groups=groups,
+        collapse_age=collapse_age,
+    )
+
+    snapshots: List[Dict[str, Any]] = []
+    for idx in range(int(history_array.shape[0])):
+        row = history_array[idx, :]
+        if isinstance(state, PopulationState):
+            parsed_state = parse_flattened_state(
+                row,
+                n_sexes=n_sexes,
+                n_ages=n_ages,
+                n_genotypes=n_genotypes,
+                copy=True,
+            )
+        elif isinstance(state, DiscretePopulationState):
+            parsed_state = parse_flattened_discrete_state(
+                row,
+                n_sexes=n_sexes,
+                n_ages=n_ages,
+                n_genotypes=n_genotypes,
+                copy=True,
+            )
+        else:
+            raise TypeError(f"Unsupported state type: {type(state).__name__}")
+
+        observed = apply_rule(parsed_state.individual_count, mask)
+        snapshots.append(
+            {
+                "tick": int(parsed_state.n_tick),
+                "state_type": type(parsed_state).__name__,
+                "labels": list(labels),
+                "observed": _build_observation_payload(
+                    observed=observed,
+                    labels=labels,
+                    sex_labels=sex_labels,
+                    include_zero_counts=include_zero_counts,
+                ),
+            }
+        )
+
+    return {
+        "state_type": type(state).__name__,
+        "name": str(population.name),
+        "n_snapshots": int(history_array.shape[0]),
+        "collapse_age": bool(collapse_age),
+        "labels": list(labels),
+        "snapshots": snapshots,
+    }
+
+
+def output_current_state(
+    population: BasePopulation[Any],
+    *,
+    groups: Optional[GroupsInput] = None,
+    collapse_age: bool = False,
+    include_zero_counts: bool = False,
+    output_path: Optional[Union[str, Path]] = None,
+    indent: int = 2,
+) -> Dict[str, Any]:
+    """Export the current population state with observation rules applied.
+
+    This function integrates ``natal.observation`` with state translation and
+    can optionally write the JSON payload to ``output_path``.
+
+    Args:
+        population: Population instance to observe.
+        groups: Observation groups passed to ``ObservationFilter.build_filter``.
+            When ``None``, one group per genotype index is used.
+        collapse_age: Whether observation rule generation collapses age axis.
+        include_zero_counts: Whether to keep zero-valued entries.
+        output_path: Optional JSON file path. When provided, the payload is
+            written to this file as UTF-8 JSON.
+        indent: Indentation used when writing JSON.
+
+    Returns:
+        A dictionary with observation metadata and observed counts.
+    """
+    payload = _get_population_observation_payload(
+        population,
+        groups=groups,
+        collapse_age=collapse_age,
+        include_zero_counts=include_zero_counts,
+    )
+    _write_json_payload(payload, output_path, indent)
+    return payload
+
+
+def output_history(
+    population: BasePopulation[Any],
+    *,
+    groups: Optional[GroupsInput] = None,
+    collapse_age: bool = False,
+    include_zero_counts: bool = False,
+    history: Optional[np.ndarray] = None,
+    output_path: Optional[Union[str, Path]] = None,
+    indent: int = 2,
+) -> Dict[str, Any]:
+    """Export the observation history for a population.
+
+    Args:
+        population: Population instance to observe.
+        groups: Observation groups passed to ``ObservationFilter.build_filter``.
+            When ``None``, one group per genotype index is used.
+        collapse_age: Whether observation rule generation collapses age axis.
+        include_zero_counts: Whether to keep zero-valued entries.
+        history: Optional flattened history array. When omitted, the population
+            history is fetched from ``population.get_history()``.
+        output_path: Optional JSON file path. When provided, the payload is
+            written to this file as UTF-8 JSON.
+        indent: Indentation used when writing JSON.
+
+    Returns:
+        A dictionary containing observation metadata and per-snapshot outputs.
+    """
+    payload = _build_history_observation_payload(
+        population,
+        history=history,
+        groups=groups,
+        collapse_age=collapse_age,
+        include_zero_counts=include_zero_counts,
+    )
+    _write_json_payload(payload, output_path, indent)
+    return payload
+
+
+def population_to_observation_dict(
+    population: BasePopulation[Any],
+    *,
+    groups: Optional[GroupsInput] = None,
+    collapse_age: bool = False,
+    include_zero_counts: bool = False,
+) -> Dict[str, Any]:
+    """Legacy wrapper for :func:`output_current_state`."""
+    return output_current_state(
+        population,
+        groups=groups,
+        collapse_age=collapse_age,
+        include_zero_counts=include_zero_counts,
+    )
+
+
 def population_to_observation_json(
     population: BasePopulation[Any],
     *,
@@ -516,9 +696,9 @@ def population_to_observation_json(
     include_zero_counts: bool = False,
     indent: int = 2,
 ) -> str:
-    """Apply observation rules and export observed counts as JSON string."""
-    payload = population_to_observation_dict(
-        population=population,
+    """Legacy wrapper that serializes :func:`output_current_state` to JSON."""
+    payload = output_current_state(
+        population,
         groups=groups,
         collapse_age=collapse_age,
         include_zero_counts=include_zero_counts,

@@ -13,12 +13,26 @@ from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 from natal.ui import launch
 
+SIZE = 51  # Change to small values (odd) if needed. Recommended: 9
 
-@nt.hook(event="first", priority=0, deme_selector=40)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=100, when="tick == 10")
-    ]
+# @nt.hook(event="first", priority=0, deme_selector=40)
+# def release_drive_carriers():
+#     return [
+#         nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=100, when="tick == 10")
+#     ]
+
+drive = nt.HomingDrive(
+    name="TestHoming",
+    drive_allele="Dr",
+    target_allele="WT",
+    resistance_allele="R2",
+    functional_resistance_allele="R1",
+    drive_conversion_rate=0.8,
+    late_germline_resistance_formation_rate=0.99,
+    functional_resistance_ratio=1e-8,
+    fecundity_scaling={"female": (0.7, 0.0)},
+    fecundity_mode="custom"
+)
 
 def build_deme(
     species: nt.Species,
@@ -30,7 +44,7 @@ def build_deme(
     """Build one deterministic deme for the UI demo."""
     return (
         nt.DiscreteGenerationPopulation
-        .setup(species=species, name=name, stochastic=False)
+        .setup(species=species, name=name, stochastic=True)
         .initial_state(
             individual_count={
                 "female": {
@@ -50,7 +64,7 @@ def build_deme(
             juvenile_growth_mode="concave",
             carrying_capacity=1000,
             low_density_growth_rate=6.0
-        )
+        ).presets(drive)
         .build()
     )
 
@@ -68,14 +82,16 @@ def build_hex_spatial_population() -> SpatialPopulation:
         name="SpatialHexUiDemoSpecies",
         structure={
             "chr1": {
-                "loc": ["WT", "Dr"],
+                "loc": ["WT", "Dr", "R2", "R1"],
             }
         },
     )
 
     initial_pairs = [
         (500.0, 0.0),
-    ]*81
+    ] * (SIZE * SIZE)
+
+    initial_pairs[SIZE * SIZE // 2] = (490.0, 10.0)
 
     demes = [
         build_deme(
@@ -91,16 +107,17 @@ def build_hex_spatial_population() -> SpatialPopulation:
     # Hex kernels still use a 3x3 matrix; valid offsets are interpreted by HexGrid.
     return SpatialPopulation(
         demes=demes,
-        topology=HexGrid(rows=9, cols=9, wrap=False),
+        topology=HexGrid(rows=SIZE, cols=SIZE, wrap=False),
         migration_kernel=np.array(
             [
-                [0.00, 0.10, 0.05],
-                [0.10, 0.00, 0.10],
-                [0.05, 0.10, 0.00],
+                [0.00, 0.10, 0.10],
+                [0.10, 0.40, 0.10],
+                [0.10, 0.10, 0.00],
             ],
             dtype=np.float64,
         ),
-        migration_rate=0.2,
+        kernel_include_center=True,
+        migration_rate=1.0,
         name="SpatialHexUiDemo",
     )
 
