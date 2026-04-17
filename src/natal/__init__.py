@@ -18,6 +18,7 @@ from typing import Any, Dict, List, cast
 # {"Sex": "type_def", "AgeStructuredPopulation": "age_structured_population"}
 # When code first accesses natal.Sex, the matching module is imported on demand.
 _lazy_map: Dict[str, str] = {}
+_lazy_packages: set[str] = set()
 
 
 def _extract_module_exports(module_file: Path) -> list[str]:
@@ -90,9 +91,10 @@ for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lam
         continue
 
     if is_package:
-        if module_name != "hooks":
+        if module_name not in {"hooks", "ui"}:
             continue
         module_file = package_dir / module_name / "__init__.py"
+        _lazy_packages.add(module_name)
     else:
         module_file = package_dir / f"{module_name}.py"
 
@@ -104,6 +106,9 @@ for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lam
     # result stable and predictable.
     for name in _extract_module_exports(module_file):
         _lazy_map.setdefault(name, module_name)
+
+    if is_package:
+        _lazy_map.setdefault(module_name, module_name)
 
 # Public export list.
 #
@@ -118,6 +123,9 @@ def __getattr__(name: str) -> Any:
     # here so the symbol is loaded only on first access.
     if name in _lazy_map:
         module = importlib.import_module(f".{_lazy_map[name]}", __name__)
+        if name in _lazy_packages:
+            globals()[name] = module
+            return module
         value = getattr(module, name)
         # Cache the resolved object in this module's globals so future accesses do
         # not have to go through __getattr__ again.

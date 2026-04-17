@@ -1,4 +1,4 @@
-"""Simple discrete demo for readable observation output.
+"""Simple discrete demo for observation output and history tracking.
 
 Linear script version for slides: build -> run -> export a compact report.
 """
@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 
 import natal as nt
-from natal.state_translation import output_current_state, output_history
 
 nt.disable_numba()
 
@@ -61,17 +60,20 @@ groups: dict[str, dict[str, object]] = {
     },
 }
 
-current_state = output_current_state(
-    population=population,
+# Create a reusable observation object
+observation = population.create_observation(
     groups=groups,
     collapse_age=True,
+)
+
+# Use the population's built-in output methods with the reusable observation
+current_state = population.output_current_state(
+    observation=observation,
     include_zero_counts=False,
 )
 
-history_report = output_history(
-    population=population,
-    groups=groups,
-    collapse_age=True,
+history_report = population.output_history(
+    observation=observation,
     include_zero_counts=False,
 )
 

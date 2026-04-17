@@ -1,6 +1,13 @@
 # Changelog
 
-## 2026.4.17
+## 2026.4.17 (v0.1.0-rc.1)
+- Refactor Observation system: make Observation reusable and state-independent by removing dimension coupling from state validation
+- Decouple `ObservationFilter` from state-specific logic; dimension validation now occurs at apply-time via `Observation.apply()`
+- Refocus API documentation: position `Observation` and state translation output functions as primary user entry points
+- Discourage direct user instantiation of `Observation`; recommend population-level convenience methods instead
+- Add `output_current_state()` and `output_history()` convenience methods to `BasePopulation` as primary interfaces
+- Enhance demo files with observation and translator usage examples: `observation_history_demo.py`, `mosquito.py`, `discrete.py`
+- Demonstrate pattern string filtering in demos: use `"Dr::*"` and `"R2|*"` patterns to show flexible genotype matching
 - Refactor HexGrid to use parallelogram coordinates instead of odd-r offset coordinates for simpler neighbor calculation
 - Update spatial visualization to support parallelogram grid layout with continuous diagonal offset
 - Improve colorbar layout: change to horizontal orientation at bottom to avoid overlap with landscape

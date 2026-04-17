@@ -1,5 +1,3 @@
-import time
-
 import natal as nt
 
 sp = nt.Species.from_dict(
@@ -61,14 +59,25 @@ pop = nt.DiscreteGenerationPopulation \
     .hooks(release_drive_carriers) \
     .build()
 
-pop.run(5)
-
-start = time.perf_counter()
 pop.run(10000)
-end = time.perf_counter()
 
-print(f"Execution time: {end - start:.3f} seconds\n")
+# === Observation demo ===
+observation = pop.create_observation(
+    groups={
+        "wildtype": {"genotype": ["WT|WT"]},
+        "drive_het": {"genotype": ["WT::Dr"]},
+        "drive_hom": {"genotype": ["Dr|Dr"]},
+    },
+    collapse_age=True,
+)
 
-# === Demo outputs ===
-state_view = nt.population_to_readable_dict(pop)
-print(state_view["individual_count"])
+current_observation = pop.output_current_state(
+    observation=observation,
+    include_zero_counts=False,
+)
+
+print("\n--- Observation Output ---")
+print("Labels:", current_observation["labels"])
+print("Observed counts by genotype group:")
+for group_name, counts in current_observation["observed"].items():
+    print(f"  {group_name}: {counts}")

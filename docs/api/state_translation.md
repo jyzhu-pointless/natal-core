@@ -9,6 +9,36 @@ The `state_translation` module converts `PopulationState` and
 readable labels and optional zero-value filtering. For age-structured states,
 translation includes sperm-storage tensors as well.
 
+## Observation Output Helpers
+
+Use `output_current_state` and `output_history` for observation-centric output.
+Both helpers support:
+
+- Building observation rules from `groups` directly.
+- Reusing a prebuilt observation object via `observation=...`.
+- Optional JSON file output through `output_path`.
+
+You can build reusable observations from the population API:
+
+```python
+observation = pop.create_observation(
+  groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
+  collapse_age=False,
+)
+
+current_payload = nt.output_current_state(
+  population=pop,
+  observation=observation,
+  output_path="outputs/current.json",
+)
+
+history_payload = nt.output_history(
+  population=pop,
+  observation=observation,
+  output_path="outputs/history.json",
+)
+```
+
 ## History Translation Helpers
 
 Use `population_history_to_readable_dict` and

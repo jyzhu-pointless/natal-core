@@ -1,16 +1,16 @@
 import natal as nt
 from natal.ui import launch
 
+# 1. Define the genetics architecture of a species
 sp = nt.Species.from_dict(
     name="TestSpecies",
     structure={
-        "chr1": {
-            "loc1": ["WT", "Dr", "R2", "R1"]
-        }
+        "chr1": {"loc1": ["WT", "Dr", "R2", "R1"]}
     },
     gamete_labels=["default", "cas9_deposited"]
 )
 
+# 2. Define a drive using built-in presets
 drive = nt.HomingDrive(
     name="TestHoming",
     drive_allele="Dr",
@@ -28,38 +28,34 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
+# 3. Define a release event using hooks
 @nt.hook(event="first", priority=0)
 def release_drive_carriers():
     return [
         nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
     ]
 
-pop = nt.DiscreteGenerationPopulation \
+# 4. Build a panmictic population
+pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
         name="TestPop",
-        stochastic=True,
-    ) \
+        stochastic=True
+    )
     .initial_state(
         individual_count={
-            "male": { "WT|WT": 25000 },
-            "female": { "WT|WT": 25000 }
+        "male": {"WT|WT": 50000}, "female": {"WT|WT": 50000}
         }
-    ) \
-    .survival(
-        female_age0_survival=1.0,
-        male_age0_survival=1.0
-    ) \
+    )
     .reproduction(
         eggs_per_female=100
-    ) \
+    )
     .competition(
-        low_density_growth_rate=8.0,
-        carrying_capacity=50000,
+        low_density_growth_rate=6.0,
+        carrying_capacity=100000,
         juvenile_growth_mode="concave"
-    ) \
-    .presets(drive) \
-    .hooks(release_drive_carriers) \
-    .build()
+    )
+    .presets(drive).hooks(release_drive_carriers).build())
 
+# 5. Launch interactive WebUI and run simulation
 launch(pop)

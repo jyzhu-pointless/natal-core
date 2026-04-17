@@ -336,6 +336,82 @@ def test_output_history_can_write_json_file(tmp_path) -> None:
     assert parsed["snapshots"][0]["labels"] == ["adult_wt"]
 
 
+def test_population_create_observation_is_reusable_for_current_state() -> None:
+    species = nt.Species.from_dict(
+        name="ObsCreateFromPopulation",
+        structure={"chr1": {"A": ["WT", "Dr"]}},
+        gamete_labels=["default"],
+    )
+
+    pop = (
+        nt.DiscreteGenerationPopulation
+        .setup(species=species, name="ObsReusable", stochastic=False)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0, 9]},
+                "male": {"WT|WT": [0, 7]},
+            }
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2)
+        .competition(low_density_growth_rate=1.2, carrying_capacity=100)
+        .build()
+    )
+
+    observation = pop.create_observation(
+        groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
+        collapse_age=False,
+    )
+    payload = output_current_state(
+        pop,
+        observation=observation,
+        include_zero_counts=True,
+    )
+
+    assert payload["collapse_age"] is False
+    assert payload["labels"] == ["adult_wt"]
+    assert payload["observed"]["adult_wt"]["female"]["age_1"] == 9.0
+
+
+def test_output_history_accepts_prebuilt_observation() -> None:
+    species = nt.Species.from_dict(
+        name="ObsHistoryWithObject",
+        structure={"chr1": {"A": ["WT", "Dr"]}},
+        gamete_labels=["default"],
+    )
+
+    pop = (
+        nt.DiscreteGenerationPopulation
+        .setup(species=species, name="ObsHistoryObj", stochastic=False)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0, 8]},
+                "male": {"WT|WT": [0, 8]},
+            }
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2)
+        .competition(low_density_growth_rate=1.2, carrying_capacity=100)
+        .build()
+    )
+
+    pop.run(n_steps=2, record_every=1, clear_history_on_start=True)
+
+    observation = pop.create_observation(
+        groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
+        collapse_age=False,
+    )
+    payload = output_history(
+        pop,
+        observation=observation,
+        include_zero_counts=True,
+    )
+
+    assert payload["labels"] == ["adult_wt"]
+    assert payload["n_snapshots"] == 3
+    assert payload["snapshots"][0]["labels"] == ["adult_wt"]
+
+
 def test_population_to_observation_json_is_valid_and_collapsed() -> None:
     species = nt.Species.from_dict(
         name="ObsReadableAge",

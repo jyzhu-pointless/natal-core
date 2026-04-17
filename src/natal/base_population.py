@@ -16,6 +16,7 @@ import hashlib
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -43,12 +44,19 @@ from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.numba_utils import is_numba_enabled
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
+from natal.state_translation import (
+    output_current_state as _output_current_state,
+)
+from natal.state_translation import (
+    output_history as _output_history,
+)
 
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
 if TYPE_CHECKING:
     from natal.genetic_presets import GeneticPreset
     from natal.hook_dsl import CompiledHookDescriptor, DemeSelector, HookProgram
+    from natal.observation import GroupsInput, Observation
 
 HookCallback = Callable[..., object]
 HookEntry = Tuple[int, Optional[str], HookCallback]
@@ -816,6 +824,110 @@ class BasePopulation(ABC, Generic[T_State]):
         """Return the female-to-male ratio, or ``np.inf`` when male count is zero."""
         males = self.get_male_count()
         return self.get_female_count() / males if males > 0 else np.inf
+
+    def create_observation(
+        self,
+        *,
+        groups: Optional[GroupsInput] = None,
+        collapse_age: bool = False,
+    ) -> Observation:
+        """Create a compiled observation from the current population schema.
+
+        Args:
+            groups: Observation groups passed to ``ObservationFilter``.
+                When ``None``, one group per genotype index is used.
+            collapse_age: Whether observation collapses the age axis.
+
+        Returns:
+            Compiled ``Observation`` object that can be reused across states.
+        """
+        from natal.observation import ObservationFilter
+
+        obs_filter = ObservationFilter(self.index_registry)
+        return obs_filter.build_filter(
+            diploid_genotypes=self.species,
+            groups=groups,
+            collapse_age=collapse_age,
+        )
+
+    def output_current_state(
+        self,
+        *,
+        observation: Optional[Observation] = None,
+        groups: Optional[GroupsInput] = None,
+        collapse_age: bool = False,
+        include_zero_counts: bool = False,
+        output_path: Optional[Union[str, Path]] = None,
+        indent: int = 2,
+    ) -> Dict[str, Any]:
+        """Export the current population state with observation rules applied.
+
+        This method integrates observation with state translation and can
+        optionally write the JSON payload to a file.
+
+        Args:
+            observation: Optional prebuilt observation object. When provided,
+                ``groups`` and ``collapse_age`` are ignored.
+            groups: Observation groups passed to ``ObservationFilter``.
+                When ``None``, one group per genotype index is used.
+            collapse_age: Whether observation rule generation collapses age axis.
+            include_zero_counts: Whether to keep zero-valued entries.
+            output_path: Optional JSON file path. When provided, the payload is
+                written to this file as UTF-8 JSON.
+            indent: Indentation used when writing JSON.
+
+        Returns:
+            A dictionary with observation metadata and observed counts.
+        """
+        return _output_current_state(
+            self,
+            observation=observation,
+            groups=groups,
+            collapse_age=collapse_age,
+            include_zero_counts=include_zero_counts,
+            output_path=output_path,
+            indent=indent,
+        )
+
+    def output_history(
+        self,
+        *,
+        observation: Optional[Observation] = None,
+        groups: Optional[GroupsInput] = None,
+        collapse_age: bool = False,
+        include_zero_counts: bool = False,
+        history: Optional[np.ndarray] = None,
+        output_path: Optional[Union[str, Path]] = None,
+        indent: int = 2,
+    ) -> Dict[str, Any]:
+        """Export the observation history for this population.
+
+        Args:
+            observation: Optional prebuilt observation object. When provided,
+                ``groups`` and ``collapse_age`` are ignored.
+            groups: Observation groups passed to ``ObservationFilter``.
+                When ``None``, one group per genotype index is used.
+            collapse_age: Whether observation rule generation collapses age axis.
+            include_zero_counts: Whether to keep zero-valued entries.
+            history: Optional flattened history array. When omitted, the
+                population history is fetched from ``get_history()``.
+            output_path: Optional JSON file path. When provided, the payload is
+                written to this file as UTF-8 JSON.
+            indent: Indentation used when writing JSON.
+
+        Returns:
+            A dictionary containing observation metadata and per-snapshot outputs.
+        """
+        return _output_history(
+            self,
+            observation=observation,
+            groups=groups,
+            collapse_age=collapse_age,
+            include_zero_counts=include_zero_counts,
+            history=history,
+            output_path=output_path,
+            indent=indent,
+        )
 
     @property
     def is_finished(self) -> bool:

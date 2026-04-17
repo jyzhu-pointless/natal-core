@@ -6,7 +6,7 @@
 
 ## 核心概念
 
-### 为什么需要 ObservationFilter？
+### 为什么使用 Observation？
 
 在模拟过程中，我们通常需要：
 1. 从完整的 `individual_count` 数组（全基因型、全性别、全年龄）中提取特定的子群体
@@ -17,9 +17,9 @@
 
 | 对象 | 作用 |
 |------|------|
-| **ObservationFilter** | 创建过滤规则和应用规则的主类 |
-| **规则 (rule)** | NumPy 掩码数组，shape: `(n_groups, n_sexes, [n_ages], n_genotypes)` |
-| **观察结果 (observed)** | 应用规则后的聚合数据，shape: `(n_groups, n_sexes, [n_ages])` |
+| **Population.create_observation(...)** | 推荐的公开入口，用于构建可复用观测对象 |
+| **output_current_state / output_history** | 推荐的公开输出 API，内置 observation 集成 |
+| **ObservationFilter** | 高级编译辅助类（仅低层定制流程需要） |
 
 ### 设计特点
 
@@ -30,7 +30,28 @@
 
 ---
 
-## ObservationFilter API
+## 推荐的公开工作流
+
+不建议在业务代码里直接实例化 `Observation`。优先使用 population 层公开方法。
+
+```python
+from natal.state_translation import output_current_state, output_history
+
+observation = pop.create_observation(
+    groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
+    collapse_age=False,
+)
+
+current = output_current_state(population=pop, observation=observation)
+history = output_history(population=pop, observation=observation)
+
+print(observation.labels)
+print(current["observed"])
+```
+
+这种写法可以复用观测定义，并把维度有效性校验延迟到应用/输出阶段。
+
+## ObservationFilter API（高级）
 
 ### 构造函数
 
@@ -48,42 +69,36 @@ filter = ObservationFilter(registry)
 
 ### build_filter 方法
 
-主方法，构建过滤规则。
+构建并返回可复用 `Observation` 对象。
 
 ```python
 def build_filter(
     self,
-    pop_or_state: Union[PopulationState, BasePopulation],
     *,
     diploid_genotypes: Optional[Union[Sequence, Species, BasePopulation]] = None,
     groups: Optional[Union[List, Tuple, Dict]] = None,
     collapse_age: bool = False,
-) -> Tuple[np.ndarray, List[str]]
+) -> Observation
 ```
 
 **参数**：
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `pop_or_state` | PopulationState \| BasePopulation | 种群对象或状态 |
 | `diploid_genotypes` | Sequence \| Species \| BasePopulation | 基因型列表（支持多种格式）|
 | `groups` | None \| List \| Dict | 分组规范 |
 | `collapse_age` | bool | 是否将所有年龄合并为一维 |
 
 **返回**：
-```python
-(rule, labels)
-# rule: np.ndarray, shape (n_groups, n_sexes, [n_ages], n_genotypes)
-# labels: List[str], 每个分组的名称
-```
+可复用 `Observation` 对象（包含 `labels`，并可在后续状态上反复应用）。
 
 #### groups 格式
 
 ##### 1. groups=None（默认，每个基因型一组）
 
 ```python
-rule, labels = filter.build_filter(pop, diploid_genotypes=pop.species)
-# labels = ['g0', 'g1', 'g2', ...]，一个标签对应一个基因型
+observation = pop.create_observation(groups=None)
+# observation.labels = ('g0', 'g1', 'g2', ...)，一个标签对应一个基因型
 ```
 
 ##### 2. groups 是列表（无名分组）
@@ -93,8 +108,8 @@ groups = [
     {"genotype": ["WT|WT"], "sex": "female"},
     {"genotype": ["WT|Drive"], "age": [2, 3, 4]},
 ]
-rule, labels = filter.build_filter(pop, groups=groups)
-# labels = ['group_0', 'group_1']
+observation = pop.create_observation(groups=groups)
+# observation.labels = ('group_0', 'group_1')
 ```
 
 ##### 3. groups 是字典（有名分组）
@@ -110,8 +125,8 @@ groups = {
         "sex": "female"
     },
 }
-rule, labels = filter.build_filter(pop, groups=groups)
-# labels = ['all_females', 'adults', 'drive_carriers', 'juvenile_drive']
+observation = pop.create_observation(groups=groups)
+# observation.labels = ('all_females', 'adults', 'drive_carriers', 'juvenile_drive')
 ```
 
 #### 选择器格式 (Selector Specs)

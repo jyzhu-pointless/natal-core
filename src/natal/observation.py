@@ -24,8 +24,18 @@ from numpy.typing import NDArray
 from natal.base_population import BasePopulation
 from natal.genetic_structures import Species
 from natal.index_registry import IndexRegistry
-from natal.population_state import DiscretePopulationState, PopulationState
 from natal.type_def import Sex
+
+__all__ = [
+    "AgeSpec",
+    "SexSpec",
+    "GroupSpec",
+    "GroupSpecDict",
+    "GroupsInput",
+    "Observation",
+    "ObservationFilter",
+    "apply_rule",
+]
 
 AgeSpec = Optional[
     Union[
@@ -55,6 +65,53 @@ class GroupSpec:
     unordered: bool = False
 
 
+@dataclass(frozen=True)
+class Observation:
+    """Compiled observation rule with stable labels.
+
+    Attributes:
+        filter: ObservationFilter used to resolve selectors and build masks.
+        diploid_genotypes: Genotype source used for selector resolution.
+        specs: Normalized group specifications.
+        labels: Group labels aligned with the first axis of the generated mask.
+        collapse_age: Whether the rule collapses age during projection.
+    """
+
+    filter: ObservationFilter
+    diploid_genotypes: Optional[Union[Sequence[Any], Species, BasePopulation[Any]]]
+    specs: Tuple[Tuple[str, Dict[str, Any]], ...]
+    labels: Tuple[str, ...]
+    collapse_age: bool
+
+    def apply(self, individual_count: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Project population counts using this observation rule.
+
+        Args:
+            individual_count: Population count array.
+
+        Returns:
+            Aggregated observation output produced by ``apply_rule``.
+        """
+        if individual_count.ndim not in (2, 3):
+            raise ValueError(f"Unsupported individual_count ndim: {individual_count.ndim}")
+
+        n_sexes = int(individual_count.shape[0])
+        n_ages = int(individual_count.shape[1]) if individual_count.ndim == 3 else 1
+        n_genotypes = int(individual_count.shape[-1])
+        collapse_age = self.collapse_age or individual_count.ndim == 2
+        resolved_diploid = self.filter.resolve_diploid_genotypes(self.diploid_genotypes)
+
+        rule = self.filter.build_mask_from_specs(
+            n_sexes=n_sexes,
+            n_ages=n_ages,
+            n_genotypes=n_genotypes,
+            diploid_genotypes=resolved_diploid,
+            specs=self.specs,
+            collapse_age=collapse_age,
+        )
+        return apply_rule(individual_count, rule)
+
+
 # Type aliases for backward compatibility and flexibility
 GroupSpecDict = Dict[str, Any]  # Legacy dict format for group specification
 GroupsInput = Optional[Union[List[GroupSpecDict], Tuple[GroupSpecDict, ...], Dict[str, GroupSpecDict]]]
@@ -82,6 +139,129 @@ class ObservationFilter:
             registry: IndexRegistry for genotype index resolution.
         """
         self.registry = registry
+
+    @staticmethod
+    def resolve_diploid_genotypes(
+        diploid_genotypes: Optional[Union[Sequence[Any], Species, BasePopulation[Any]]]
+    ) -> Optional[Sequence[Any]]:
+        if diploid_genotypes is None:
+            return None
+        if isinstance(diploid_genotypes, BasePopulation):
+            try:
+                return list(diploid_genotypes.species.iter_genotypes())
+            except Exception:
+                return None
+        if isinstance(diploid_genotypes, Species):
+            try:
+                return list(diploid_genotypes.iter_genotypes())
+            except Exception:
+                return None
+        return diploid_genotypes
+
+    @staticmethod
+    def _normalize_group_specs(
+        groups: GroupsInput,
+        diploid_genotypes: Optional[Sequence[Any]],
+    ) -> Tuple[List[Tuple[str, Dict[str, Any]]], Tuple[str, ...]]:
+        specs: List[Tuple[str, Dict[str, Any]]] = []
+
+        if groups is None:
+            if diploid_genotypes is None:
+                raise ValueError("diploid_genotypes required when groups is None")
+            labels = tuple(f"g{g}" for g in range(len(diploid_genotypes)))
+            return [(label, {"genotype": [index]}) for index, label in enumerate(labels)], labels
+
+        if isinstance(groups, (list, tuple)):
+            for i, item in enumerate(groups):
+                name = f"group_{i}"
+                if isinstance(item, GroupSpec):
+                    spec_dict: Dict[str, Any] = {}
+                    if item.genotype is not None:
+                        spec_dict["genotype"] = item.genotype
+                    if item.age is not None:
+                        spec_dict["age"] = item.age
+                    if item.sex is not None:
+                        spec_dict["sex"] = item.sex
+                    if item.unordered:
+                        spec_dict["unordered"] = item.unordered
+                    specs.append((name, spec_dict))
+                else:
+                    specs.append((name, item))
+            return specs, tuple(name for name, _ in specs)
+
+        else:
+            for name, item in groups.items():
+                if isinstance(item, GroupSpec):
+                    spec_dict = {}
+                    if item.genotype is not None:
+                        spec_dict["genotype"] = item.genotype
+                    if item.age is not None:
+                        spec_dict["age"] = item.age
+                    if item.sex is not None:
+                        spec_dict["sex"] = item.sex
+                    if item.unordered:
+                        spec_dict["unordered"] = item.unordered
+                    specs.append((str(name), spec_dict))
+                else:
+                    specs.append((str(name), item))
+            return specs, tuple(name for name, _ in specs)
+
+    def build_mask_from_specs(
+        self,
+        *,
+        n_sexes: int,
+        n_ages: int,
+        n_genotypes: int,
+        diploid_genotypes: Optional[Sequence[Any]],
+        specs: Tuple[Tuple[str, Dict[str, Any]], ...],
+        collapse_age: bool,
+    ) -> NDArray[np.float64]:
+        resolved_diploid = diploid_genotypes
+
+        if resolved_diploid is not None and len(resolved_diploid) != n_genotypes:
+            raise ValueError(
+                "diploid_genotypes count does not match individual_count shape: "
+                f"{len(resolved_diploid)} != {n_genotypes}"
+            )
+
+        per_genotypes: List[List[int]] = []
+        per_sexes: List[List[int]] = []
+        per_age_preds: List[Callable[[int], bool]] = []
+
+        for _, spec in specs:
+            gen_spec = self._get_gen_spec(spec)
+            unordered = bool(spec.get("unordered", False))
+            gen_list = self._resolve_genotype_list(gen_spec, resolved_diploid, unordered)  # type: ignore[arg-type]
+            per_genotypes.append(gen_list)
+
+            sex_spec = self._get_sex_spec(spec)
+            per_sexes.append(self._resolve_sexes(sex_spec, n_sexes))
+
+            age_spec = self._get_age_spec(spec)
+            per_age_preds.append(self._make_age_predicate(age_spec))
+
+        n_groups = len(specs)
+        if not collapse_age:
+            mask = np.zeros((n_groups, n_sexes, n_ages, n_genotypes), dtype=np.float64)
+            for gi in range(n_groups):
+                for gidx in per_genotypes[gi]:
+                    for s in per_sexes[gi]:
+                        for a in range(n_ages):
+                            if per_age_preds[gi](a):
+                                mask[gi, s, a, gidx] = 1.0
+            return mask
+
+        mask = np.zeros((n_groups, n_sexes, n_genotypes), dtype=np.float64)
+        for gi in range(n_groups):
+            for gidx in per_genotypes[gi]:
+                for s in per_sexes[gi]:
+                    any_selected = False
+                    for a in range(n_ages):
+                        if per_age_preds[gi](a):
+                            any_selected = True
+                            break
+                    mask[gi, s, gidx] = 1.0 if any_selected else 0.0
+        return mask
 
     def _resolve_genotype_index(
         self, diploid_genotypes: Sequence[Any], sel: Any
@@ -254,16 +434,17 @@ class ObservationFilter:
                     raise ValueError("diploid_genotypes required to enumerate genotypes")
                 return list(range(len(diploid_genotypes)))
 
+            if diploid_genotypes is None:
+                raise ValueError("diploid_genotypes required to resolve genotype selectors")
+
             unordered_map: Optional[Dict[str, List[int]]] = None
-            if unordered and diploid_genotypes is not None:
+            if unordered:
                 unordered_map = self._build_unordered_map(diploid_genotypes)
 
             out: List[int] = []
             for sel in gen_spec:
                 if isinstance(sel, int):
                     out.append(sel)
-                    continue
-                if diploid_genotypes is None:
                     continue
                 idx = self._resolve_genotype_index(diploid_genotypes, sel)
                 if idx is not None:
@@ -332,159 +513,59 @@ class ObservationFilter:
 
     def build_filter(
         self,
-        pop_or_state: Union[PopulationState, DiscretePopulationState, BasePopulation[Any]],
         *,
         diploid_genotypes: Optional[Union[Sequence[Any], Species, BasePopulation[Any]]] = None,
         groups: GroupsInput = None,
         collapse_age: bool = False,
-    ) -> Tuple[NDArray[np.float64], List[str]]:
-        """Build a rule (NumPy mask) and labels from `groups`.
+    ) -> Observation:
+        """Build a reusable ``Observation`` from `groups`.
 
-        `groups` may be:
-          - None: one group per genotype (requires `diploid_genotypes`).
-          - list/tuple: sequence of spec-items (each spec-item is a dict or
-            iterable of genotype selectors).
-          - dict: mapping name->spec-item.
-
-        Spec-item keys supported: `genotype`, `age`, `sex`, `unordered`.
+        Dimension validation is deferred until ``Observation.apply()``.
 
         Args:
-            pop_or_state: PopulationState or BasePopulation instance.
             diploid_genotypes: Optional sequence of genotypes, Species, or
-                BasePopulation to resolve genotype selectors.
+                BasePopulation used to resolve genotype selectors.
             groups: Group specification (None, list/tuple, or dict).
-            collapse_age: Whether to collapse the age dimension in the mask.
+            collapse_age: Whether the observation collapses age during projection.
 
         Returns:
-            Tuple of (mask, labels) where mask is a NumPy array and labels
-            is a list of group names.
+            Reusable ``Observation`` instance.
 
         Raises:
-            TypeError: If pop_or_state is not a PopulationState or BasePopulation.
             ValueError: If groups is invalid or diploid_genotypes is required but missing.
         """
-        assert isinstance(pop_or_state, (PopulationState, DiscretePopulationState, BasePopulation)), \
-                "`pop_or_state` must be a population or a population state instance"
+        resolved_diploid = self.resolve_diploid_genotypes(diploid_genotypes)
+        specs, labels = self._normalize_group_specs(groups, resolved_diploid)
+        return Observation(
+            filter=self,
+            diploid_genotypes=resolved_diploid,
+            specs=tuple(specs),
+            labels=tuple(labels),
+            collapse_age=bool(collapse_age),
+        )
 
-        if isinstance(pop_or_state, BasePopulation):
-            pop = pop_or_state
-            state = pop.state
-        else:
-            state = pop_or_state
+    def create_observation(
+        self,
+        *,
+        diploid_genotypes: Optional[Union[Sequence[Any], Species, BasePopulation[Any]]] = None,
+        groups: GroupsInput = None,
+        collapse_age: bool = False,
+    ) -> Observation:
+        """Create a compiled ``Observation`` object.
 
-        arr = state.individual_count
-        n_sexes = arr.shape[0]
-        n_ages = arr.shape[1]
-        n_genotypes = arr.shape[-1]
+        Args:
+            diploid_genotypes: Optional genotype source for selector resolution.
+            groups: Group specification (None, list/tuple, or dict).
+            collapse_age: Whether the rule collapses age during projection.
 
-        # Validate input types early with assert
-        assert groups is None or isinstance(groups, (list, tuple, dict)), \
-            "groups must be None, list/tuple, or dict"
-
-        specs: List[Tuple[str, Dict[str, Any]]] = []
-        if groups is None:
-            if diploid_genotypes is None:
-                raise ValueError("diploid_genotypes required when groups is None")
-            specs = [(f"g{g}", {"genotype": [g]}) for g in range(n_genotypes)]
-        elif isinstance(groups, (list, tuple)):
-            for i, item in enumerate(groups):
-                name = f"group_{i}"
-
-                # Handle different input types with explicit type checking
-                # Use isinstance for GroupSpec and dict separately
-                if isinstance(item, GroupSpec):
-                    # Convert GroupSpec to dict format
-                    spec_dict: Dict[str, Any] = {}
-                    if item.genotype is not None:
-                        spec_dict["genotype"] = item.genotype
-                    if item.age is not None:
-                        spec_dict["age"] = item.age
-                    if item.sex is not None:
-                        spec_dict["sex"] = item.sex
-                    if item.unordered:
-                        spec_dict["unordered"] = item.unordered
-                    specs.append((name, spec_dict))
-                else:
-                    # Assume it's a dict or genotype selector
-                    specs.append((name, item))
-        else:  # groups is dict
-            for name, item in groups.items():
-                # Handle different input types with explicit type checking
-                # Use isinstance for GroupSpec and dict separately
-                if isinstance(item, GroupSpec):
-                    # Convert GroupSpec to dict format
-                    spec_dict: Dict[str, Any] = {}
-                    if item.genotype is not None:
-                        spec_dict["genotype"] = item.genotype
-                    if item.age is not None:
-                        spec_dict["age"] = item.age
-                    if item.sex is not None:
-                        spec_dict["sex"] = item.sex
-                    if item.unordered:
-                        spec_dict["unordered"] = item.unordered
-                    specs.append((str(name), spec_dict))
-                else:
-                    # Assume it's a dict or genotype selector
-                    specs.append((str(name), item))
-
-        labels = [s[0] for s in specs]
-        n_groups = len(labels)
-
-        resolved_diploid: Optional[Sequence[Any]] = None
-        if diploid_genotypes is not None:
-            if isinstance(diploid_genotypes, BasePopulation):
-                try:
-                    resolved_diploid = diploid_genotypes._get_all_possible_diploid_genotypes()  # type: ignore[attr-defined]
-                except Exception:
-                    try:
-                        resolved_diploid = list(diploid_genotypes.species.iter_genotypes())  # type: ignore[attr-defined]
-                    except Exception:
-                        resolved_diploid = None
-            elif isinstance(diploid_genotypes, Species):
-                try:
-                    resolved_diploid = list(diploid_genotypes.iter_genotypes())
-                except Exception:
-                    resolved_diploid = None
-            else:
-                resolved_diploid = diploid_genotypes
-
-        per_genotypes: List[List[int]] = []
-        per_sexes: List[List[int]] = []
-        per_age_preds: List[Callable[[int], bool]] = []
-
-        for _, spec in specs:
-            gen_spec = self._get_gen_spec(spec)
-            unordered = bool(spec.get("unordered", False))
-            gen_list = self._resolve_genotype_list(gen_spec, resolved_diploid, unordered)  # type: ignore[arg-type]
-            per_genotypes.append(gen_list)
-
-            sex_spec = self._get_sex_spec(spec)
-            per_sexes.append(self._resolve_sexes(sex_spec, n_sexes))
-
-            age_spec = self._get_age_spec(spec)
-            per_age_preds.append(self._make_age_predicate(age_spec))
-
-        if not collapse_age:
-            mask = np.zeros((n_groups, n_sexes, n_ages, n_genotypes), dtype=np.float64)
-            for gi in range(n_groups):
-                for gidx in per_genotypes[gi]:
-                    for s in per_sexes[gi]:
-                        for a in range(n_ages):
-                            if per_age_preds[gi](a):
-                                mask[gi, s, a, gidx] = 1.0
-        else:
-            mask = np.zeros((n_groups, n_sexes, n_genotypes), dtype=np.float64)
-            for gi in range(n_groups):
-                for gidx in per_genotypes[gi]:
-                    for s in per_sexes[gi]:
-                        any_selected = False
-                        for a in range(n_ages):
-                            if per_age_preds[gi](a):
-                                any_selected = True
-                                break
-                        mask[gi, s, gidx] = 1.0 if any_selected else 0.0
-
-        return mask, labels
+        Returns:
+            Compiled ``Observation`` instance.
+        """
+        return self.build_filter(
+            diploid_genotypes=diploid_genotypes,
+            groups=groups,
+            collapse_age=collapse_age,
+        )
 
 
 def apply_rule(

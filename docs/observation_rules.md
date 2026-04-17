@@ -6,7 +6,7 @@ This chapter introduces the `observation` module, which is used to extract and a
 
 ## Core Concepts
 
-### Why is `ObservationFilter` needed?
+### Why use `Observation`?
 
 During a simulation, we often need to:
 
@@ -17,10 +17,9 @@ During a simulation, we often need to:
 ### Three Key Objects
 
 | Object | Purpose |
-|--------|---------|
-| **ObservationFilter** | The main class for creating filtering rules and applying them |
-| **Rule** | A NumPy mask array with shape `(n_groups, n_sexes, [n_ages], n_genotypes)` |
-| **Observed** | Aggregated data after applying the rule, shape `(n_groups, n_sexes, [n_ages])` |
+| **Population.create_observation(...)** | Recommended public entrypoint for building reusable observations |
+| **output_current_state / output_history** | Recommended public output APIs with built-in observation integration |
+| **ObservationFilter** | Advanced compiler helper (only needed for low-level custom workflows) |
 
 ### Design Features
 
@@ -31,7 +30,30 @@ During a simulation, we often need to:
 
 ---
 
-## ObservationFilter API
+## Recommended Public Workflow
+
+Do not instantiate `Observation` directly in user code. Use population-level public APIs.
+
+```python
+from natal.state_translation import output_current_state, output_history
+
+observation = pop.create_observation(
+    groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
+    collapse_age=False,
+)
+
+current = output_current_state(population=pop, observation=observation)
+history = output_history(population=pop, observation=observation)
+
+print(observation.labels)
+print(current["observed"])
+```
+
+This pattern keeps observation definition reusable, while validating dimensions at apply/output time.
+
+## ObservationFilter API (Advanced)
+
+Use `ObservationFilter` only when you need low-level control outside the standard population workflow.
 
 ### Constructor
 
@@ -49,42 +71,36 @@ filter = ObservationFilter(registry)
 
 ### `build_filter` Method
 
-The main method for constructing filtering rules.
+Builds and returns a reusable `Observation` object.
 
 ```python
 def build_filter(
     self,
-    pop_or_state: Union[PopulationState, BasePopulation],
     *,
     diploid_genotypes: Optional[Union[Sequence, Species, BasePopulation]] = None,
     groups: Optional[Union[List, Tuple, Dict]] = None,
     collapse_age: bool = False,
-) -> Tuple[np.ndarray, List[str]]
+) -> Observation
 ```
 
 **Parameters**:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `pop_or_state` | `PopulationState` \| `BasePopulation` | Population object or state |
 | `diploid_genotypes` | `Sequence` \| `Species` \| `BasePopulation` | List of genotypes (supports multiple formats) |
 | `groups` | `None` \| `List` \| `Dict` | Group specifications |
 | `collapse_age` | `bool` | Whether to collapse all ages into one dimension |
 
 **Returns**:
-```python
-(rule, labels)
-# rule: np.ndarray, shape (n_groups, n_sexes, [n_ages], n_genotypes)
-# labels: List[str], name of each group
-```
+Reusable `Observation` object.
 
 #### `groups` Format
 
 ##### 1. `groups=None` (default, one group per genotype)
 
 ```python
-rule, labels = filter.build_filter(pop, diploid_genotypes=pop.species)
-# labels = ['g0', 'g1', 'g2', ...], one label per genotype
+observation = pop.create_observation(groups=None)
+# observation.labels = ('g0', 'g1', 'g2', ...), one label per genotype
 ```
 
 ##### 2. `groups` as a list (unnamed groups)
@@ -94,8 +110,8 @@ groups = [
     {"genotype": ["WT|WT"], "sex": "female"},
     {"genotype": ["WT|Drive"], "age": [2, 3, 4]},
 ]
-rule, labels = filter.build_filter(pop, groups=groups)
-# labels = ['group_0', 'group_1']
+observation = pop.create_observation(groups=groups)
+# observation.labels = ('group_0', 'group_1')
 ```
 
 ##### 3. `groups` as a dict (named groups)
@@ -111,8 +127,8 @@ groups = {
         "sex": "female"
     },
 }
-rule, labels = filter.build_filter(pop, groups=groups)
-# labels = ['all_females', 'adults', 'drive_carriers', 'juvenile_drive']
+observation = pop.create_observation(groups=groups)
+# observation.labels = ('all_females', 'adults', 'drive_carriers', 'juvenile_drive')
 ```
 
 #### Selector Specifications
@@ -163,7 +179,7 @@ groups = {
     }
 }
 
-rule, labels = filter.build_filter(pop, groups=groups)
+observation = pop.create_observation(groups=groups)
 ```
 
 This approach lets Observation and Preset share the same pattern semantics, reducing inconsistencies between “rule target” and “observation target”.
@@ -239,21 +255,20 @@ If you are using a non‑pattern selector object, `unordered=True` can still be 
 ```python
 from natal.observation import ObservationFilter
 
-filter = ObservationFilter(pop.registry)
-
 groups = {
     "females": {"sex": "female"},
     "males": {"sex": "male"},
 }
 
-rule, labels = filter.build_filter(
-    pop,
+filter = ObservationFilter(pop.registry)
+observation = filter.create_observation(
     diploid_genotypes=pop.species,
-    groups=groups
+    groups=groups,
 )
+observed = observation.apply(pop.state.individual_count)
 
-print(labels)  # ['females', 'males']
-print(rule.shape)  # (2, 2, 8, n_genotypes) if there are 8 ages
+print(observation.labels)  # ('females', 'males')
+print(observed.shape)  # (2, 2, 8) if there are 8 ages
 ```
 
 ### Example 2: Age Stratification

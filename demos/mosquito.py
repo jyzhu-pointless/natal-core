@@ -1,4 +1,3 @@
-import time
 from collections.abc import Mapping
 
 import natal as nt
@@ -19,7 +18,7 @@ sp = nt.Species.from_dict(
     name="TestSpecies",
     structure={
         "chr1": {
-            "loc": ["WT", "Dr", "R2"]
+            "loc": ["WT", "Dr", "R2", "R1"]
         }
     },
     gamete_labels=["default", "cas9_deposited"]
@@ -31,12 +30,12 @@ drive = nt.HomingDrive(
     cas9_allele="Dr",
     target_allele="WT",
     resistance_allele="R2",
-    # functional_resistance_allele="R1",
-    drive_conversion_rate=0.0,
-    late_germline_resistance_formation_rate=0.0,
-    # functional_resistance_ratio=0.1,
-    embryo_resistance_formation_rate=0.0,
-    fecundity_scaling=1.0,
+    functional_resistance_allele="R1",
+    drive_conversion_rate=0.8,
+    late_germline_resistance_formation_rate=0.5,
+    functional_resistance_ratio=0.00001,
+    embryo_resistance_formation_rate=0.1,
+    fecundity_scaling={"female": 0.0},
     cas9_deposition_glab="cas9_deposited"
 )
 
@@ -92,12 +91,27 @@ pop = (nt.AgeStructuredPopulation
         drive
     ).build())
 
-pop.run(0)
-start_time = time.perf_counter()
-pop.run(1, finish=True)  # 添加 finish=True 来触发 finish hook
-end_time = time.perf_counter()
-print(f"\nSimulation completed in {end_time - start_time:.8f} seconds.")
+pop.run(10, finish=True)
 
-# === Demo outputs ===
-state_view = nt.population_to_readable_dict(pop)
-print(state_view["individual_count"])
+# === Observation demo with pattern strings ===
+# Demonstrate pattern string functionality for flexible genotype filtering
+observation = pop.create_observation(
+    groups={
+        "all_adults": {"age": [2, 3, 4, 5, 6, 7]},
+        "dr_carriers": {"genotype": "Dr::*", "age": [2, 3, 4, 5]},  # Pattern: any with Dr
+        "wild_type": {"genotype": "WT|WT"},  # Exact genotype
+        "any_resistance": {"genotype": "R2::*"},  # Pattern: any with R2
+        "resistant_adults": {"genotype": "R2::*", "age": [2, 3, 4, 5]},  # R2 with adult age
+    },
+    collapse_age=False,
+)
+
+current_observation = pop.output_current_state(
+    observation=observation,
+    include_zero_counts=False,
+)
+
+print("\n--- Observation Output with Pattern Strings ---")
+print("Labels:", current_observation["labels"])
+print("Collapse Age:", current_observation["collapse_age"])
+print("Observed counts:", current_observation["observed"])

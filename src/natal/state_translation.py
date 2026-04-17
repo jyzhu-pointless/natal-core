@@ -24,7 +24,7 @@ from natal.population_state import (
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
     from natal.index_registry import IndexRegistry
-    from natal.observation import GroupsInput
+    from natal.observation import GroupsInput, Observation
     from natal.spatial_population import SpatialPopulation
 
 __all__ = [
@@ -475,33 +475,29 @@ def _write_json_payload(
 def _get_population_observation_payload(
     population: BasePopulation[Any],
     *,
+    observation: Optional[Observation],
     groups: Optional[GroupsInput],
     collapse_age: bool,
     include_zero_counts: bool,
 ) -> Dict[str, Any]:
-    from natal.observation import ObservationFilter, apply_rule
-
     state = population.state
     n_sexes = int(state.individual_count.shape[0])
     sex_labels = _default_sex_labels(n_sexes)
 
-    obs_filter = ObservationFilter(population.index_registry)
-    mask, labels = obs_filter.build_filter(
-        pop_or_state=population,
-        diploid_genotypes=population.species,
+    resolved_observation = observation or population.create_observation(
         groups=groups,
         collapse_age=collapse_age,
     )
-    observed = apply_rule(state.individual_count, mask)
+    observed = resolved_observation.apply(state.individual_count)
 
     return {
         "state_type": type(state).__name__,
         "tick": int(state.n_tick),
-        "collapse_age": bool(collapse_age),
-        "labels": list(labels),
+        "collapse_age": bool(resolved_observation.collapse_age),
+        "labels": list(resolved_observation.labels),
         "observed": _build_observation_payload(
             observed=observed,
-            labels=labels,
+            labels=resolved_observation.labels,
             sex_labels=sex_labels,
             include_zero_counts=include_zero_counts,
         ),
@@ -528,12 +524,11 @@ def _build_history_observation_payload(
     population: BasePopulation[Any],
     *,
     history: Optional[np.ndarray],
+    observation: Optional[Observation],
     groups: Optional[GroupsInput],
     collapse_age: bool,
     include_zero_counts: bool,
 ) -> Dict[str, Any]:
-    from natal.observation import ObservationFilter, apply_rule
-
     state = population.state
     n_sexes, n_ages, n_genotypes = state.individual_count.shape
     sex_labels = _default_sex_labels(n_sexes)
@@ -542,10 +537,7 @@ def _build_history_observation_payload(
     if history_array.ndim != 2:
         raise ValueError(f"history must be a 2D array, got shape {history_array.shape}")
 
-    obs_filter = ObservationFilter(population.index_registry)
-    mask, labels = obs_filter.build_filter(
-        pop_or_state=population,
-        diploid_genotypes=population.species,
+    resolved_observation = observation or population.create_observation(
         groups=groups,
         collapse_age=collapse_age,
     )
@@ -572,15 +564,15 @@ def _build_history_observation_payload(
         else:
             raise TypeError(f"Unsupported state type: {type(state).__name__}")
 
-        observed = apply_rule(parsed_state.individual_count, mask)
+        observed = resolved_observation.apply(parsed_state.individual_count)
         snapshots.append(
             {
                 "tick": int(parsed_state.n_tick),
                 "state_type": type(parsed_state).__name__,
-                "labels": list(labels),
+                "labels": list(resolved_observation.labels),
                 "observed": _build_observation_payload(
                     observed=observed,
-                    labels=labels,
+                    labels=resolved_observation.labels,
                     sex_labels=sex_labels,
                     include_zero_counts=include_zero_counts,
                 ),
@@ -591,8 +583,8 @@ def _build_history_observation_payload(
         "state_type": type(state).__name__,
         "name": str(population.name),
         "n_snapshots": int(history_array.shape[0]),
-        "collapse_age": bool(collapse_age),
-        "labels": list(labels),
+        "collapse_age": bool(resolved_observation.collapse_age),
+        "labels": list(resolved_observation.labels),
         "snapshots": snapshots,
     }
 
@@ -600,6 +592,7 @@ def _build_history_observation_payload(
 def output_current_state(
     population: BasePopulation[Any],
     *,
+    observation: Optional[Observation] = None,
     groups: Optional[GroupsInput] = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
@@ -613,6 +606,8 @@ def output_current_state(
 
     Args:
         population: Population instance to observe.
+        observation: Optional prebuilt observation object. When provided,
+            ``groups`` and ``collapse_age`` are ignored.
         groups: Observation groups passed to ``ObservationFilter.build_filter``.
             When ``None``, one group per genotype index is used.
         collapse_age: Whether observation rule generation collapses age axis.
@@ -626,6 +621,7 @@ def output_current_state(
     """
     payload = _get_population_observation_payload(
         population,
+        observation=observation,
         groups=groups,
         collapse_age=collapse_age,
         include_zero_counts=include_zero_counts,
@@ -637,6 +633,7 @@ def output_current_state(
 def output_history(
     population: BasePopulation[Any],
     *,
+    observation: Optional[Observation] = None,
     groups: Optional[GroupsInput] = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
@@ -648,6 +645,8 @@ def output_history(
 
     Args:
         population: Population instance to observe.
+        observation: Optional prebuilt observation object. When provided,
+            ``groups`` and ``collapse_age`` are ignored.
         groups: Observation groups passed to ``ObservationFilter.build_filter``.
             When ``None``, one group per genotype index is used.
         collapse_age: Whether observation rule generation collapses age axis.
@@ -664,6 +663,7 @@ def output_history(
     payload = _build_history_observation_payload(
         population,
         history=history,
+        observation=observation,
         groups=groups,
         collapse_age=collapse_age,
         include_zero_counts=include_zero_counts,
@@ -675,6 +675,7 @@ def output_history(
 def population_to_observation_dict(
     population: BasePopulation[Any],
     *,
+    observation: Optional[Observation] = None,
     groups: Optional[GroupsInput] = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
@@ -682,6 +683,7 @@ def population_to_observation_dict(
     """Legacy wrapper for :func:`output_current_state`."""
     return output_current_state(
         population,
+        observation=observation,
         groups=groups,
         collapse_age=collapse_age,
         include_zero_counts=include_zero_counts,
@@ -691,6 +693,7 @@ def population_to_observation_dict(
 def population_to_observation_json(
     population: BasePopulation[Any],
     *,
+    observation: Optional[Observation] = None,
     groups: Optional[GroupsInput] = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
@@ -699,6 +702,7 @@ def population_to_observation_json(
     """Legacy wrapper that serializes :func:`output_current_state` to JSON."""
     payload = output_current_state(
         population,
+        observation=observation,
         groups=groups,
         collapse_age=collapse_age,
         include_zero_counts=include_zero_counts,
@@ -780,7 +784,7 @@ def spatial_population_to_observation_dict(
     Returns:
         Dictionary with per-deme and aggregate observation payloads.
     """
-    from natal.observation import ObservationFilter, apply_rule
+    from natal.observation import ObservationFilter
 
     per_deme_payload: Dict[str, Any] = {}
     for deme_idx, deme in enumerate(spatial_population.demes):
@@ -796,22 +800,21 @@ def spatial_population_to_observation_dict(
     sex_labels = _default_sex_labels(n_sexes)
 
     obs_filter = ObservationFilter(spatial_population.deme(0).index_registry)
-    mask, labels = obs_filter.build_filter(
-        pop_or_state=aggregate_state,
+    observation = obs_filter.create_observation(
         diploid_genotypes=spatial_population.species,
         groups=groups,
         collapse_age=collapse_age,
     )
-    observed = apply_rule(aggregate_state.individual_count, mask)
+    observed = observation.apply(aggregate_state.individual_count)
 
     aggregate_payload: Dict[str, Any] = {
         "state_type": "PopulationState",
         "tick": int(aggregate_state.n_tick),
-        "collapse_age": bool(collapse_age),
-        "labels": list(labels),
+        "collapse_age": bool(observation.collapse_age),
+        "labels": list(observation.labels),
         "observed": _build_observation_payload(
             observed=observed,
-            labels=labels,
+            labels=observation.labels,
             sex_labels=sex_labels,
             include_zero_counts=include_zero_counts,
         ),

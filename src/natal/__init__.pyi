@@ -105,6 +105,17 @@ from .numba_utils import (
     with_numba_enabled,
 )
 
+from .observation import (
+    AgeSpec,
+    SexSpec,
+    GroupSpec,
+    GroupSpecDict,
+    GroupsInput,
+    Observation,
+    ObservationFilter,
+    apply_rule,
+)
+
 from .population_builder import (
     AgeStructuredPopulationBuilder,
     DiscreteGenerationPopulationBuilder,
@@ -202,6 +213,7 @@ from .zygote_allele_conversion import (
 
 __all__ = [
     "Age",
+    "AgeSpec",
     "AgeStructuredPopulation",
     "AgeStructuredPopulationBuilder",
     "Allele",
@@ -243,6 +255,9 @@ __all__ = [
     "GenotypePatternParser",
     "GenotypeSelector",
     "GridTopology",
+    "GroupSpec",
+    "GroupSpecDict",
+    "GroupsInput",
     "HaploidGenome",
     "HaploidGenotype",
     "Haplotype",
@@ -261,6 +276,8 @@ __all__ = [
     "NUMBA_ENABLED",
     "NUMBA_LOG_ENABLED",
     "NUMBA_SIGNATURE_TRACE_ENABLED",
+    "Observation",
+    "ObservationFilter",
     "Op",
     "OpType",
     "PlainDiscretePopulationState",
@@ -271,6 +288,7 @@ __all__ = [
     "RESULT_CONTINUE",
     "RESULT_STOP",
     "Sex",
+    "SexSpec",
     "SpatialPopulation",
     "Species",
     "SquareGrid",
@@ -281,6 +299,7 @@ __all__ = [
     "apply_migration_adjacency",
     "apply_migration_convolution",
     "apply_preset_to_population",
+    "apply_rule",
     "apply_spatial_adjacency_migration",
     "binomial_2d",
     "build_adjacency_matrix",
