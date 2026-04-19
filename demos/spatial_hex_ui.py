@@ -15,12 +15,6 @@ from natal.ui import launch
 
 SIZE = 51  # Change to small values (odd) if needed. Recommended: 9
 
-# @nt.hook(event="first", priority=0, deme_selector=40)
-# def release_drive_carriers():
-#     return [
-#         nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=100, when="tick == 10")
-#     ]
-
 drive = nt.HomingDrive(
     name="TestHoming",
     drive_allele="Dr",
@@ -109,10 +103,24 @@ def build_hex_spatial_population() -> SpatialPopulation:
         demes=demes,
         topology=HexGrid(rows=SIZE, cols=SIZE, wrap=False),
         migration_kernel=np.array(
+            # In hex grid, the 6 neighbors of a source cell are at offsets
+            # (0,1), (1,0), (1,-1), (0,-1), (-1,0), (-1,1).
+            # ===========================
+            # |--> x
+            # v    [   ] [ a ] [ b ]
+            # y    [ c ] [src] [ d ]
+            #      [ e ] [ f ] [   ]
+            # ===========================
+            # EQUIVALENT TO:
+            # ===========================
+            #       [ a ] / \ [ b ]
+            #      [ c ] |src| [ d ]
+            #       [ e ] \ / [ f ]
+            # ===========================
             [
-                [0.00, 0.10, 0.10],
+                [0.  , 0.10, 0.10],
                 [0.10, 0.40, 0.10],
-                [0.10, 0.10, 0.00],
+                [0.10, 0.10, 0.  ],
             ],
             dtype=np.float64,
         ),

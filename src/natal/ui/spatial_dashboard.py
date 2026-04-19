@@ -972,6 +972,10 @@ def launch_spatial(
     title: str = "NATAL Spatial Dashboard",
 ) -> None:
     """Launch the embedded spatial dashboard."""
+    from importlib.resources import files
+
+    # Get favicon path from package resources
+    favicon_path = str(files('natal').joinpath('natal.svg'))
 
     @ui.page("/")
     def main_page() -> None:
@@ -979,4 +983,4 @@ def launch_spatial(
         dashboard.build_layout()
 
     print(f"Starting Spatial Dashboard at http://localhost:{port}")
-    ui.run(title=title, port=port, show=False, reload=False, favicon="natal.svg")
+    ui.run(title=title, port=port, show=False, reload=False, favicon=favicon_path)

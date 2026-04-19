@@ -1351,12 +1351,17 @@ def launch(population: 'BasePopulation[Any]', port: int = 8080, title: str = "NA
         port: Web server port.
         title: The title of the dashboard.
     """
+    from importlib.resources import files
+
+    # Get favicon path from package resources
+    favicon_path = str(files('natal').joinpath('natal.svg'))
+
     # Reset NiceGUI state to avoid conflicts if re-run in same process
     # Note: NiceGUI is singleton-based, so multiple launches might need care.
 
     @ui.page('/')
     def main_page():
-        ui.add_head_html('<link rel="icon" href="natal.svg" type="image/svg+xml">')
+        ui.add_head_html('<link rel="icon" href="/favicon.svg" type="image/svg+xml">')
         dashboard = Dashboard(population)
         dashboard.build_layout()
 
@@ -1366,4 +1371,4 @@ def launch(population: 'BasePopulation[Any]', port: int = 8080, title: str = "NA
     print(f"🚀 Starting Dashboard at http://localhost:{port}")
     print("📖 Click Ctrl+C to stop the dashboard")
     title = f"{population.name} - NATAL Dashboard" if population.name else "NATAL Dashboard"
-    ui.run(title=title, port=port, show=False, reload=False, favicon='natal.svg')
+    ui.run(title=title, port=port, show=False, reload=False, favicon=favicon_path)
