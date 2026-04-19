@@ -19,7 +19,6 @@ except ImportError:
 
     numba_max_threads = 1
 
-import natal.algorithms as alg
 from natal import numba_compat as nbc
 from natal.numba_utils import njit_switch
 
@@ -206,7 +205,7 @@ def _apply_spatial_adjacency_migration_internal(
     return out_ind, out_sperm
 
 
-@njit_switch(cache=True, parallel=True)
+@njit_switch(cache=True)
 def _apply_spatial_adjacency_migration_deterministic_parallel(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
@@ -231,7 +230,7 @@ def _apply_spatial_adjacency_migration_deterministic_parallel(
     )
 
 
-@njit_switch(cache=True, parallel=True)
+@njit_switch(cache=True)
 def _apply_spatial_adjacency_migration_stochastic_parallel(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
@@ -519,7 +518,7 @@ def _sample_outbound_count(
     if use_continuous_sampling:
         # Continuous mode keeps the state real-valued while still injecting
         # stochasticity into the outbound amount.
-        return float(alg.continuous_binomial(float(value), float(rate)))
+        return float(nbc.continuous_binomial(float(value), float(rate)))
     # Discrete mode treats each scalar bucket as a Bernoulli family and keeps
     # the migrated amount integer-valued.
     return float(nbc.binomial(int(round(float(value))), float(rate)))
@@ -586,7 +585,7 @@ def _distribute_outbound_count(
     if use_continuous_sampling:
         # Continuous multinomial keeps real-valued buckets while conserving
         # the sampled outbound total.
-        alg.continuous_multinomial(float(outbound), probs, distributed)
+        nbc.continuous_multinomial(float(outbound), probs, distributed)
         return
 
     # Discrete multinomial allocates an integer outbound count to
