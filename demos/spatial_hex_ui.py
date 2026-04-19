@@ -13,7 +13,7 @@ from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 from natal.ui import launch
 
-SIZE = 51  # Change to small values (odd) if needed. Recommended: 9
+SIZE = 9  # Change to larger values (odd) if needed. Example: 51
 
 drive = nt.HomingDrive(
     name="TestHoming",

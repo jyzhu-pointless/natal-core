@@ -44,7 +44,7 @@ pop = (nt.DiscreteGenerationPopulation
     )
     .initial_state(
         individual_count={
-        "male": {"WT|WT": 50000}, "female": {"WT|WT": 50000}
+            "male": {"WT|WT": 50000}, "female": {"WT|WT": 50000}
         }
     )
     .reproduction(
