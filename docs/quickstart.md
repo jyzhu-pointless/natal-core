@@ -273,6 +273,9 @@ pop.run(n_steps=200, record_every=5, finish=False)
 
 ### Viewing Results
 
+The snippet below demonstrates the recommended observation/state-translation
+workflow used across the runnable demos.
+
 ```python
 # 1) Get the current state as a readable dictionary (good for logging/debugging/API responses)
 state_view = nt.population_to_readable_dict(pop)
@@ -283,20 +286,61 @@ print(state_view["individual_count"]["female"].keys())
 state_json = nt.population_to_readable_json(pop, indent=2)
 print(state_json[:240])
 
-# 3) Integrate observation rules to view grouped results by business logic
-observed = nt.population_to_observation_dict(
-    pop,
+# 3) Define reusable observation rules (recommended via population API)
+observation = pop.create_observation(
     groups={
         "adult_drive_female": {
-            "genotype": ["WT|Drive", "Drive|Drive"],
+            "genotype": "Drive::*",
             "sex": "female",
             "age": [2, 3, 4, 5, 6, 7],
-        }
+        },
+        "all_adults": {
+            "age": [2, 3, 4, 5, 6, 7],
+        },
     },
     collapse_age=False,
 )
-print(observed["observed"]["adult_drive_female"])
+
+# 4) Export current snapshot (state translation + observation)
+current_obs = pop.output_current_state(
+    observation=observation,
+    include_zero_counts=False,
+)
+print(current_obs["labels"])
+print(current_obs["observed"]["adult_drive_female"])
+
+# 5) Export observation history (directly usable for plotting/export)
+history_obs = pop.output_history(
+    observation=observation,
+    include_zero_counts=False,
+)
+print(history_obs["n_snapshots"])
+print(history_obs["snapshots"][0]["observed"]["all_adults"])
 ```
+
+The pair `output_current_state()` and `output_history()` is the recommended
+public state translation workflow:
+
+- `observation` defines what to observe (grouping/filter rules)
+- state translation defines how to export (readable dict/JSON payloads)
+
+If you prefer module-level functions, you can also call
+`nt.output_current_state(...)` and `nt.output_history(...)`; semantics are
+equivalent to the population methods.
+
+### Matching Runnable Demos
+
+These scripts map directly to the workflow above (run from repository root):
+
+```bash
+python demos/observation_history_demo.py
+python demos/discrete.py
+python demos/mosquito.py
+```
+
+For additional scenarios, see the `demos/` directory.
+
+Note: the demos above are executable repository scripts that are verified by running them; the doc snippet is primarily explanatory.
 
 ### 🎛️ Use the Built‑in Visualisation Dashboard (Optional)
 
@@ -338,7 +382,7 @@ This process is transparent to the user, but understanding it is important. See 
 
 ## 📊 Complete Examples
 
-### Example 1: Discrete‑Generation Population + Gene Drive + Hook
+### Example 1: Discrete-Generation Population + Gene Drive + Hook
 
 ```python
 import natal as nt
@@ -368,16 +412,16 @@ pop = (nt.DiscreteGenerationPopulation
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50, sex_ratio=0.5)
     .presets(drive)
-    .hooks(release_drive)              # Register the hook
+    .hooks(release_drive)
     .build()
 )
 
 pop.run(n_steps=100, record_every=10)
-print(f"Final population size: {pop.get_total_count():.0f}")
+print(f"Final population: {pop.get_total_count():.0f}")
 print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 ```
 
-### Example 2: Age‑Structured Population + Gene Drive + Fitness + Hook
+### Example 2: Age-Structured Population + Gene Drive + Fitness + Hook
 
 ```python
 import natal as nt
@@ -401,7 +445,7 @@ drive = HomingDrive(
 
 @hook(event='first')
 def release_drive():
-    return [Op.add(genotypes='Drive|*', ages=[2,3,4,5,6,7], delta=100, when='tick == 10')]
+    return [Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10')]
 
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MosquitoPop", stochastic=False)
@@ -426,7 +470,7 @@ pop = (nt.AgeStructuredPopulation
 )
 
 pop.run(n_steps=100, record_every=10)
-print(f"Final population size: {pop.get_total_count():.0f}")
+print(f"Final population: {pop.get_total_count():.0f}")
 print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 ```
 

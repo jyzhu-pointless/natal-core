@@ -1,6 +1,6 @@
-# NATAL Core 中文文档
+# NATAL Core 文档
 
-**N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles.
+**N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles
 
 [![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
@@ -12,44 +12,53 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-NATAL Core 是一个用于群体遗传动力学模拟的 Python 工具包，核心计算路径基于 Numba 加速。
+**NATAL Core** 是一个前向时间的群体遗传学模拟引擎，支持物种的可配置生命周期。它支持年龄结构化和离散世代种群、精子储存、遗传预设、基于 hook 的干预措施以及高性能的 Numba 内核。NATAL Core 尤其适用于**对昆虫种群中的基因驱动（gene drive）系统进行建模**，但其灵活的架构也使其能够应用于广泛的群体遗传学场景。
 
-## 核心特性
+NATAL Core 是 NATAL 项目的一部分。完整项目还包括 **NATAL Inferencer**，这是一个基于 NATAL Core 的群体遗传学模型参数推断工具包。
 
-- **🧬 遗传结构：** 支持定义完整的基因组-染色体-位点-基因层次化体系
-- **🪲 群体模型：** 支持年龄结构群体与离散世代群体，支持各类生态学和遗传学参数
-- **🌐 空间模拟：** 支持空间种群模拟，使用六边形和正方形网格的亚种群
-- **🚀 高性能内核：** Numba JIT 加速的模拟内核，空间种群下内置并行计算
-- **🧩 可扩展机制：** Modifier、Preset 和 Hook 多重扩展体系，内置常用基因驱动
-- **🔍 观测与筛选：** 支持灵活的模式匹配筛选机制，用于定义 Preset 和观测规则
+## 主要特性
+
+- 🪲 支持前向时间模拟，可灵活配置种群的生命周期（年龄结构化种群与离散世代种群）
+- 🧬 可定义遗传结构，包括染色体、基因座和等位基因
+- 🚀 基于 Numba 加速的计算核心，性能优秀
+- 🧩 内置多种基因驱动预设，特别是 homing drive 和 toxin-antidote drive
+- 🪝 提供 Hook 系统，可在模拟过程中插入自定义干预逻辑
+- 🔍 配备观察与过滤工具，便于后续分析
+- 🗺️ 支持多 deme（亚种群）空间模拟
 
 ## 安装
 
-### 1. 创建并激活虚拟环境
+### 1. 创建虚拟环境
 
-推荐使用虚拟环境管理依赖，以下命令可任选其一。
+强烈建议使用虚拟环境来管理依赖项。
 
-```bash
-# uv（推荐）
-uv venv --python 3.12 .venv
-source .venv/bin/activate      # Linux / macOS
-.venv\Scripts\activate         # Windows
-```
+请选择以下命令之一。**推荐使用 Python 3.12**，但任何 Python 版本 >= 3.9 应该都可以工作。
 
 ```bash
-# venv
-python -m venv .venv
-source .venv/bin/activate      # Linux / macOS
-.venv\Scripts\activate         # Windows
+uv venv --python 3.12 .venv            # uv（推荐）
+python -m venv .venv                   # venv（请确保使用 Python >= 3.9）
+conda create -n natal-env python=3.12  # conda
 ```
+
+在 Windows 上，你可以运行 `py -3.12 -m venv .venv` 来指定 Python 3.12 作为虚拟环境的解释器。
+
+### 2. 激活虚拟环境
+
+Linux / macOS：
 
 ```bash
-# conda
-conda create -n natal-env python=3.12
-conda activate natal-env
+source .venv/bin/activate    # uv / venv
+conda activate natal-env     # conda
 ```
 
-### 2. 安装 NATAL Core
+Windows：
+
+```powershell
+.venv\Scripts\activate       # uv / venv
+conda activate natal-env     # conda
+```
+
+### 3. 安装 NATAL Core
 
 ```bash
 uv pip install natal-core
@@ -57,9 +66,77 @@ uv pip install natal-core
 pip install natal-core
 ```
 
+## 一个最小示例
+
+```python
+import natal as nt
+from natal.ui import launch
+
+# 1. 定义物种的遗传架构
+sp = nt.Species.from_dict(
+    name="TestSpecies",
+    structure={
+        "chr1": {"loc1": ["WT", "Dr", "R2", "R1"]}
+    },
+    gamete_labels=["default", "cas9_deposited"]
+)
+
+# 2. 使用内置预设定义驱动
+drive = nt.HomingDrive(
+    name="TestHoming",
+    drive_allele="Dr",
+    cas9_allele="Dr",
+    target_allele="WT",
+    resistance_allele="R2",
+    functional_resistance_allele="R1",
+    drive_conversion_rate=0.95,
+    late_germline_resistance_formation_rate=0.9,
+    functional_resistance_ratio=0.001,
+    embryo_resistance_formation_rate=0.0,
+    viability_scaling=1.0,
+    fecundity_scaling={"female": 0.0},
+    fecundity_mode="recessive",
+    cas9_deposition_glab="cas9_deposited"
+)
+
+# 3. 使用 hook 定义释放事件
+@nt.hook(event="first", priority=0)
+def release_drive_carriers():
+    return [
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
+    ]
+
+# 4. 构建一个随机交配种群
+pop = (nt.DiscreteGenerationPopulation
+    .setup(
+        species=sp,
+        name="TestPop",
+        stochastic=True
+    )
+    .initial_state(
+        individual_count={
+        "male": {"WT|WT": 50000}, "female": {"WT|WT": 50000}
+        }
+    )
+    .reproduction(
+        eggs_per_female=100
+    )
+    .competition(
+        low_density_growth_rate=6.0,
+        carrying_capacity=100000,
+        juvenile_growth_mode="concave"
+    )
+    .presets(drive).hooks(release_drive_carriers).build())
+
+# 5. 启动交互式 WebUI 并运行模拟
+launch(pop)
+```
+
+更多可即时使用的示例，请参阅 GitHub 仓库中的 [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) 目录。
+
 ## 学习路径（按推荐顺序）
 
-1. [快速开始：15 分钟上手 NATAL](quickstart.md)
+1. [快速入门：15 分钟上手 NATAL](quickstart.md)
 2. [遗传结构与实体](genetic_structures.md)
 3. [Builder 系统详解](builder_system.md)
 4. [IndexRegistry 索引机制](index_registry.md)
@@ -69,20 +146,22 @@ pip install natal-core
 8. [Modifier 机制](modifiers.md)
 9. [Hook 系统](hooks.md)
 10. [遗传预设使用指南](genetic_presets.md)
-11. [Spatial 模拟指南](spatial_simulation_guide.md)
-12. [种群观测规则](observation_rules.md)
-13. [基因型模式匹配](genotype_patterns.md)
-14. [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
-15. [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter.md)
-16. [设计自己的 Preset（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
+11. [空间模拟指南](spatial_simulation_guide.md)
+12. [种群观察规则](observation_rules.md)
+13. [模式匹配与可扩展配置](genotype_patterns.md)
+14. [设计你自己的预设（1）：从等位基因转换规则开始](allele_conversion_rules.md)
+15. [设计你自己的预设（2）：使用 genotype_filter 控制规则范围](genotype_filter.md)
+16. [设计你自己的预设（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
 
 ## API 文档
 
-- [Genetic Structures API](api/genetic_structures.md)
-- [Population Builder API](api/population_builder.md)
-- [Simulation Kernels API](api/simulation_kernels.md)
-- [完整 API 目录](api/index.md)
+- [完整 API 索引](api/index.md)
 
-## 源码仓库
+## 链接
 
-- [GitHub: jyzhu-pointless/natal-core](https://github.com/jyzhu-pointless/natal-core)
+- GitHub 仓库：https://github.com/jyzhu-pointless/natal-core
+- PyPI 包：https://pypi.org/project/natal-core/
+
+## 许可证
+
+本项目采用 MIT 许可证。

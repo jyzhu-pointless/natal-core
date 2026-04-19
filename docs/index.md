@@ -1,6 +1,6 @@
 # NATAL Core Documentation
 
-**N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles.
+**N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles
 
 [![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
@@ -12,50 +12,128 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-NATAL Core is a Python toolkit for simulating population genetic dynamics, with core computational paths accelerated by Numba.
+**NATAL Core** is a forward-time population genetics simulation engine that supports configurable lifecycles of species. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and high-performance Numba kernels. NATAL Core is especially useful for **modeling gene drive systems** in insect populations, but its flexible architecture allows it to be applied to a wide range of population genetics scenarios.
+
+NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for parameter inference in population genetics models based on NATAL Core.
 
 ## Key Features
 
-- **🧬 Genetic Architecture:** Support for defining a complete genome–chromosome–locus–gene hierarchical system.
-- **🪲 Population Models:** Age‑structured and discrete‑generation populations, supporting various ecological and genetic parameters.
-- **🌐 Spatial Simulation:** Spatially‑explicit population simulation using hexagonal and square grids for subpopulations.
-- **🚀 High‑Performance Kernels:** Numba JIT‑accelerated simulation kernels, with built‑in parallelism for spatial models.
-- **🧩 Extensibility:** Modifier, Preset, and Hook systems for flexible extension; built‑in common gene drives.
-- **🔍 Observation & Filtering:** Flexible pattern‑matching filters for defining Presets and observation rules.
+- 🪲 Forward-time configurable population modeling (age-structured and discrete-generation).
+- 🧬 Genetic architecture definition with chromosomes, loci, and alleles.
+- 🚀 Numba-accelerated kernels for high performance.
+- 🧩 Built-in genetic presets, especially for homing drives and toxin-antidote drives.
+- 🪝 Hook system for custom interventions during simulation.
+- 🔍 Observation and filtering utilities for downstream analysis.
+- 🗺️ Spatial simulation support across multiple demes.
 
 ## Installation
 
-### 1. Create and activate a virtual environment
+### 1. Create a virtual environment
 
-It is recommended to use a virtual environment to manage dependencies. Choose one of the following commands.
+It is strongly recommended to use a virtual environment to manage dependencies.
 
-```bash
-# uv (recommended)
-uv venv --python 3.12 .venv
-source .venv/bin/activate      # Linux / macOS
-.venv\Scripts\activate         # Windows
-```
+Choose one of the following commands. **Python 3.12** is recommended, but any Python version >= 3.9 should work.
 
 ```bash
-# venv
-python -m venv .venv
-source .venv/bin/activate      # Linux / macOS
-.venv\Scripts\activate         # Windows
+uv venv --python 3.12 .venv            # uv (recommended)
+python -m venv .venv                   # venv (please ensure Python >= 3.9 is used)
+conda create -n natal-env python=3.12  # conda
 ```
+
+On Windows, you can run `py -3.12 -m venv .venv` to specify Python 3.12 as the interpreter for the virtual environment.
+
+### 2. Activate the virtual environment
+
+Linux / macOS:
 
 ```bash
-# conda
-conda create -n natal-env python=3.12
-conda activate natal-env
+source .venv/bin/activate    # uv / venv
+conda activate natal-env     # conda
 ```
 
-### 2. Install NATAL Core
+Windows:
+
+```powershell
+
+.venv\Scripts\activate       # uv / venv
+conda activate natal-env     # conda
+```
+
+### 3. Install NATAL Core
 
 ```bash
 uv pip install natal-core
 # or
 pip install natal-core
 ```
+
+## A Minimal Example
+
+```python
+import natal as nt
+from natal.ui import launch
+
+# 1. Define the genetics architecture of a species
+sp = nt.Species.from_dict(
+    name="TestSpecies",
+    structure={
+        "chr1": {"loc1": ["WT", "Dr", "R2", "R1"]}
+    },
+    gamete_labels=["default", "cas9_deposited"]
+)
+
+# 2. Define a drive using built-in presets
+drive = nt.HomingDrive(
+    name="TestHoming",
+    drive_allele="Dr",
+    cas9_allele="Dr",
+    target_allele="WT",
+    resistance_allele="R2",
+    functional_resistance_allele="R1",
+    drive_conversion_rate=0.95,
+    late_germline_resistance_formation_rate=0.9,
+    functional_resistance_ratio=0.001,
+    embryo_resistance_formation_rate=0.0,
+    viability_scaling=1.0,
+    fecundity_scaling={"female": 0.0},
+    fecundity_mode="recessive",
+    cas9_deposition_glab="cas9_deposited"
+)
+
+# 3. Define a release event using hooks
+@nt.hook(event="first", priority=0)
+def release_drive_carriers():
+    return [
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
+    ]
+
+# 4. Build a panmictic population
+pop = (nt.DiscreteGenerationPopulation
+    .setup(
+        species=sp,
+        name="TestPop",
+        stochastic=True
+    )
+    .initial_state(
+        individual_count={
+        "male": {"WT|WT": 50000}, "female": {"WT|WT": 50000}
+        }
+    )
+    .reproduction(
+        eggs_per_female=100
+    )
+    .competition(
+        low_density_growth_rate=6.0,
+        carrying_capacity=100000,
+        juvenile_growth_mode="concave"
+    )
+    .presets(drive).hooks(release_drive_carriers).build())
+
+# 5. Launch interactive WebUI and run simulation
+launch(pop)
+```
+
+For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) directory in the GitHub repository.
 
 ## Learning Path (in recommended order)
 
@@ -78,11 +156,13 @@ pip install natal-core
 
 ## API Documentation
 
-- [Genetic Structures API](api/genetic_structures.md)
-- [Population Builder API](api/population_builder.md)
-- [Simulation Kernels API](api/simulation_kernels.md)
 - [Full API Index](api/index.md)
 
-## Source Repository
+## Links
 
-- [GitHub: jyzhu-pointless/natal-core](https://github.com/jyzhu-pointless/natal-core)
+- GitHub repository: https://github.com/jyzhu-pointless/natal-core
+- PyPI package: https://pypi.org/project/natal-core/
+
+## License
+
+This project is licensed under the MIT License.

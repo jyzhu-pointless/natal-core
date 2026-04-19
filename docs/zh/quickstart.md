@@ -24,9 +24,7 @@ sp = nt.Species.from_dict(
 )
 ```
 
-### 理解架构中的关键概念
-
-以下保留快速入门所需的最小心智模型；完整概念、对象关系与更多示例请参考 [遗传结构与实体](genetic_structures.md)。
+### 理解遗传架构中的关键概念
 
 本框架将生物遗传信息分为两个层面：**遗传学结构**（静态模板）和**遗传学实体**（动态实例）。
 
@@ -58,6 +56,8 @@ sp = nt.Species.from_dict(
 - **实体** 是种群级的、动态出现的实例（例如“当前种群中有 `WT|WT`、`WT|Drive`、`Drive|WT`、`Drive|Drive` 四种基因型”），通过遗传规则产生和传递。
 
 这种分离使得模拟可以灵活定义复杂的遗传架构，同时在运行时保持高效的计算。
+
+> 完整概念、对象关系与更多示例请参考 [遗传结构与实体](genetic_structures.md)。
 
 ### 验证架构
 
@@ -197,11 +197,9 @@ pop = (nt.DiscreteGenerationPopulation
 
 ### 使用其他预设
 
-预设系统支持多种遗传修饰：
+目前预设系统包括 [HomingDrive](api/genetic_presets#HomingDrive) 和 [ToxinAntidoteDrive](api/genetic_presets#ToxinAntidoteDrive) 两类，未来会持续扩展更多预设类型。
 
-- **HomingDrive**: CRISPR/Cas9基因驱动
-- **PointMutation**: 简单点突变
-- **CustomPresets**: 用户自定义预设
+你也可以自定义预设，详见 [设计自己的 Preset](allele_conversion_rules.md)。
 
 ### 适应度设置（可选）
 
@@ -213,7 +211,7 @@ pop = (nt.AgeStructuredPopulation
     .age_structure(n_ages=8)
     .initial_state({...})
     .fitness(viability={
-        "Resistance|Resistance": {"female": 0.7},  # 抗性纯合子生存率降低
+        "Resistance|Resistance": {"female": 0.7},   # 抗性纯合子生存率降低
         "Drive|Drive": {"female": 0.0}              # 驱动纯合子不育
     })
     .presets(drive)
@@ -283,20 +281,58 @@ print(state_view["individual_count"]["female"].keys())
 state_json = nt.population_to_readable_json(pop, indent=2)
 print(state_json[:240])
 
-# 3) 集成 observation rules，按业务分组查看
-observed = nt.population_to_observation_dict(
-    pop,
+# 3) 定义可复用 observation 规则（推荐通过 population API）
+observation = pop.create_observation(
     groups={
         "adult_drive_female": {
-            "genotype": ["WT|Drive", "Drive|Drive"],
+            "genotype": "Drive::*",
             "sex": "female",
             "age": [2, 3, 4, 5, 6, 7],
-        }
+        },
+        "all_adults": {
+            "age": [2, 3, 4, 5, 6, 7],
+        },
     },
     collapse_age=False,
 )
-print(observed["observed"]["adult_drive_female"])
+
+# 4) 导出当前快照（状态翻译 + observation）
+current_obs = pop.output_current_state(
+    observation=observation,
+    include_zero_counts=False,
+)
+print(current_obs["labels"])
+print(current_obs["observed"]["adult_drive_female"])
+
+# 5) 导出历史 observation（可直接用于绘图/导出）
+history_obs = pop.output_history(
+    observation=observation,
+    include_zero_counts=False,
+)
+print(history_obs["n_snapshots"])
+print(history_obs["snapshots"][0]["observed"]["all_adults"])
 ```
+
+推荐将 `output_current_state()` 与 `output_history()` 搭配使用：
+
+- `observation` 定义观测对象（分组与筛选规则）
+- 状态翻译 API 定义导出形式（可读 dict/JSON）
+
+如果你更偏好模块级函数，也可以使用
+`nt.output_current_state(...)` 和 `nt.output_history(...)`；语义与
+population 方法等价。
+
+### 对应可运行示例
+
+下面脚本与上述流程直接对应（在仓库根目录运行）：
+
+```bash
+python demos/observation_history_demo.py
+python demos/discrete.py
+python demos/mosquito.py
+```
+
+更多场景可参考 `demos/` 目录。
 
 ### 🎛️ 使用内置可视化面板（可选）
 
@@ -325,7 +361,7 @@ launch(pop, port=8080, title="My Simulation")
    - `基因型→配子`: 规定每个基因型产生什么配子
    - `配子→合子`: 规定配子组合产生什么基因型
 3. **配置编译**: 所有参数被编译成 `PopulationConfig` NamedTuple，为 Numba JIT 优化做准备
-4. **Hooks 编译**: 用户自定义的 Hooks 被编译为执行计划，将在对应的时机被调用ß
+4. **Hooks 编译**: 用户自定义的 Hooks 被编译为执行计划，将在对应的时机被调用
 5. **状态初始化**: 根据初始分布创建 `PopulationState` NamedTuple（包含 numpy 数组）
 
 这个过程对用户透明，但理解它很重要。详见：
@@ -401,7 +437,7 @@ drive = HomingDrive(
 
 @hook(event='first')
 def release_drive():
-    return [Op.add(genotypes='Drive|*', ages=[2,3,4,5,6,7], delta=100, when='tick == 10')]
+    return [Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10')]
 
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MosquitoPop", stochastic=False)
