@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.4.19 (v0.1.0-rc.2)
+- Remove redundant `parallel=True` decorators from adjacency migration wrapper functions that do not contain `prange`
+- Move probability related logic from `algorithms.py` to `numba_compat.py`
+- Change the DNA pattern of the logo from left-handed to right-handed helix
+- Fix dashboard favicon loading after wheel installation by resolving `natal.svg` from package resources at runtime
+- Update the `index` and `quickstart` parts of documentation
+
 ## 2026.4.17 (v0.1.0-rc.1)
 - Refactor Observation system: make Observation reusable and state-independent by removing dimension coupling from state validation
 - Decouple `ObservationFilter` from state-specific logic; dimension validation now occurs at apply-time via `Observation.apply()`
