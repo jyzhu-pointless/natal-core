@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 
-from natal import algorithms as alg
+from natal import numba_compat as nbc
 from natal.numba_utils import njit_switch
 
 from .types import (
@@ -51,7 +51,6 @@ def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
     if isinstance(selector, range):
         return deme_id in selector
     return deme_id in selector
-    raise TypeError(f"Unsupported deme selector type: {type(selector).__name__}")
 
 
 @njit_switch(cache=True)
@@ -186,7 +185,7 @@ def _sample_survivors(
         return 0.0
     if stochastic_flag:
         if dirichlet_flag:
-            return alg.continuous_binomial(n_base, survival_prob)
+            return nbc.continuous_binomial(n_base, survival_prob)
         return float(np.random.binomial(int(round(n_base)), survival_prob))
     return n_base * survival_prob
 
@@ -244,6 +243,9 @@ def _apply_target_with_sperm(
 
     # Validate on raw mass first, then convert to sampling counts.
     n_virgins_raw = n_f_raw - total_sperm_count
+    if n_virgins_raw >= -nbc.EPS:
+        # Prevent negative virgins.
+        n_virgins_raw = max(0.0, n_virgins_raw)
     if n_virgins_raw < 0.0:
         print(
             "n_virgins<0 in _apply_target_with_sperm:",

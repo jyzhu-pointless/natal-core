@@ -6,6 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal.algorithms as alg
+import natal.numba_compat as nbc
 from natal.numba_compat import binomial
 from natal.numba_utils import njit_switch
 from natal.population_config import FIXED, LOGISTIC, NO_COMPETITION, PopulationConfig
@@ -157,11 +158,11 @@ def run_reproduction_with_precomputed_offspring_probability(
                 if use_continuous_sampling:
                     # Continuous sampling: use continuous_binomial function
                     if female_offspring[g] > 0:
-                        female_offspring[g] = alg.continuous_binomial(
+                        female_offspring[g] = nbc.continuous_binomial(
                             female_offspring[g], config.zygote_fitness[0, g]
                         )
                     if male_offspring[g] > 0:
-                        male_offspring[g] = alg.continuous_binomial(
+                        male_offspring[g] = nbc.continuous_binomial(
                             male_offspring[g], config.zygote_fitness[1, g]
                         )
                 else:
@@ -169,7 +170,7 @@ def run_reproduction_with_precomputed_offspring_probability(
                     if female_offspring[g] > 0:
                         n_female = int(round(female_offspring[g]))
                         if n_female > 0:
-                            female_offspring[g] = binomial(n_female, config.zygote_fitness[0, g])
+                            female_offspring[g] = nbc.binomial(n_female, config.zygote_fitness[0, g])
                     if male_offspring[g] > 0:
                         n_male = int(round(male_offspring[g]))
                         if n_male > 0:
@@ -547,8 +548,8 @@ def run_discrete_survival(
             f_surv = np.empty(n_gen, dtype=np.float64)
             m_surv = np.empty(n_gen, dtype=np.float64)
             for g in range(n_gen):
-                f_surv[g] = alg.continuous_binomial(f_rec[g], s_combined_0_f[g])
-                m_surv[g] = alg.continuous_binomial(m_rec[g], s_combined_0_m[g])
+                f_surv[g] = nbc.continuous_binomial(f_rec[g], s_combined_0_f[g])
+                m_surv[g] = nbc.continuous_binomial(m_rec[g], s_combined_0_m[g])
         else:
             f_surv = np.zeros(n_gen, dtype=np.float64)
             m_surv = np.zeros(n_gen, dtype=np.float64)

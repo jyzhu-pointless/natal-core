@@ -16,13 +16,17 @@ Examples:
 """
 
 import numpy as np
+from numpy.typing import NDArray
 
 from .numba_utils import is_numba_enabled, njit_switch
 
 __all__ = [
-    "binomial_2d", "multinomial_rows", "multinomial", "set_numba_seed"
+    "EPS", "binomial", "binomial_2d", "multinomial_rows", "multinomial",
+    "continuous_poisson", "continuous_binomial", "continuous_multinomial",
+    "set_numba_seed", "clamp01"
 ]
 
+EPS = 1e-10
 
 # The original binomial implementation in Numba (numba.cpython.randomimpl) has a performance issue
 # for large n*p due to a fallback to a slower algorithm (BTPE not implemented).
@@ -424,6 +428,153 @@ def _multinomial_numpy(
     return np.random.multinomial(n, pvals)
 
 
+# ============================================================================
+# Continuous sampling utilities
+# ============================================================================
+
+@njit_switch(cache=True)
+def _continuous_poisson(lam: float) -> float:
+    """Use Gamma distribution to continuousize Poisson distribution.
+
+    Moments matching: Poisson(λ) -> Gamma(λ, 1)
+    Mean and variance are both λ.
+
+    Args:
+        lam: Poisson parameter λ
+
+    Returns:
+        Value sampled from Gamma(λ, 1)
+    """
+    if lam <= EPS:
+        return 0.0
+    return np.random.gamma(lam, 1.0)
+
+
+@njit_switch(cache=True)
+def _continuous_binomial(n: float, p: float) -> float:
+    """Use Beta distribution to continuousize Binomial distribution.
+
+    Moments matching: Binomial(n, p) -> Beta((n-1)*p, (n-1)*(1-p))
+    Multiply the sampled proportion by n to get "continuous count".
+
+    Args:
+        n: Binomial sample size
+        p: Binomial success probability (0 < p < 1)
+
+    Returns:
+        Continuous count value (float between 0 and n)
+    """
+    if p <= EPS:
+        return 0.0
+    if p >= 1.0 - EPS:
+        return float(n)
+
+    # When n <= 1, the concentration (n-1) is non-positive, making it impossible to perform effective moment matching via Beta distribution.
+    # In this case, forced sampling would cause severe numerical bias (tending towards 0.5*n), so we fall back to deterministic expected value.
+    if n <= 1.0 + EPS:
+        return n * p
+
+
+    # Moment matching: map Binomial(n, p) to proportion variable r~Beta(alpha,beta), then return n*r.
+    # The larger the concentration, the smaller the fluctuation in r (closer to deterministic p).
+    concentration = n - 1.0
+    # alpha / (alpha + beta) = p, ensuring the proportion mean is p
+    alpha = p * concentration
+    beta_val = (1.0 - p) * concentration
+
+    # Numerical protection
+    alpha = max(alpha, EPS)
+    beta_val = max(beta_val, EPS)
+
+    proportion = np.random.beta(alpha, beta_val)
+    # Return "continuous count" rather than proportion: count = n * proportion
+    return proportion * n
+
+
+@njit_switch(cache=True)
+def _continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: NDArray[np.float64]) -> None:
+    """Use Dirichlet distribution to continuousize Multinomial distribution.
+
+    Moments matching: Multinomial(n, p) → Dirichlet((n-1) × p).
+    Generates continuous samples by scaling independent Gamma variates.
+    Results are stored in out_counts in-place (no return value).
+
+    This function avoids memory allocation issues by using component-wise Gamma
+    sampling and normalizing, rather than calling a high-level Dirichlet routine.
+    For very small total counts (n ≤ 1), falls back to deterministic expected values.
+
+    Args:
+        n: Total count (continuous multinomial sample size).
+        p_array: Probability vector with shape (k,), must sum to 1.
+        out_counts: Pre-allocated output array with shape (k,). Will be filled with
+            continuous category counts that sum to approximately n (modified in-place).
+
+    Returns:
+        None (results written directly to out_counts).
+    """
+    k = len(p_array)
+
+    # Performance optimization and numerical protection: for extremely small sample sizes, use deterministic allocation directly.
+    if n <= 1.0 + EPS:
+        for i in range(k):
+            out_counts[i] = n * p_array[i]
+        return
+
+    # Similar to continuous_binomial, Dirichlet total concentration is set to (n-1).
+    # Each category concentration alpha_i = p_i * (n-1), so the mean is p_i.
+    concentration = n - 1.0
+    sum_gamma = 0.0
+
+    # Generate k Gamma(α_i, 1) variables
+    for i in range(k):
+        alpha = p_array[i] * concentration
+
+        if alpha <= EPS:
+            # If probability is extremely low, set to 0 directly
+            val = 0.0
+        else:
+            val = float(np.random.gamma(alpha, 1.0))  # pyright: ignore
+
+        out_counts[i] = val
+        sum_gamma += val
+
+    # Normalize and multiply by total n:
+    # If g_i ~ Gamma(alpha_i,1), then g_i/sum(g) ~ Dirichlet(alpha)
+    # Finally out_i = n * g_i/sum(g) is the continuous "category count".
+    if sum_gamma > EPS:
+        factor = n / sum_gamma
+        for i in range(k):
+            out_counts[i] *= factor
+    else:
+        # Extreme case (all alpha close to 0）
+        # Use original probability vector for fallback to maintain total approximately n
+        for i in range(k):
+            out_counts[i] = n * p_array[i]
+
+    # Final numerical validation: ensure output sum is approximately equal to n, avoiding cumulative numerical errors
+    total = 0.0
+    for i in range(k):
+        total += out_counts[i]
+
+    # If total is very small or already within reasonable error range, no additional processing needed
+    tol = 1e-6 * max(1.0, n)
+    if total > EPS and abs(total - n) > tol:
+        # Lightweight rescaling to correct deviations caused by floating point errors
+        correction = n / total
+        for i in range(k):
+            out_counts[i] *= correction
+
+
+@njit_switch(cache=True)
+def _clamp01(x: float) -> float:
+    """Clamp a probability-like value into [0, 1]."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    return x
+
+
 @njit_switch(cache=True)
 def _set_numba_seed_numba(seed: int) -> None:
     """Set RNG seed inside Numba/JIT random state."""
@@ -433,7 +584,6 @@ def _set_numba_seed_numba(seed: int) -> None:
 def _set_numba_seed_numpy(seed: int) -> None:
     """Set RNG seed for NumPy random state in non-Numba mode."""
     np.random.seed(seed)
-
 
 # ============================================================================
 # Export the correct implementation based on Numba configuration
@@ -447,6 +597,10 @@ if is_numba_enabled():
     multinomial_rows = _multinomial_rows_numba
     multinomial = _multinomial_numba
     binomial = fast_binomial
+    clamp01 = _clamp01
+    continuous_poisson = _continuous_poisson
+    continuous_binomial = _continuous_binomial
+    continuous_multinomial = _continuous_multinomial
     set_numba_seed = _set_numba_seed_numba
 else:
     # Use NumPy vectorized implementations
@@ -456,5 +610,9 @@ else:
     multinomial_rows = _multinomial_rows_numpy
     multinomial = _multinomial_numpy
     binomial = np.random.binomial
+    clamp01 = _clamp01
+    continuous_poisson = _continuous_poisson
+    continuous_binomial = _continuous_binomial
+    continuous_multinomial = _continuous_multinomial
     set_numba_seed = _set_numba_seed_numpy
 

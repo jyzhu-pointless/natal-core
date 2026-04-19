@@ -21,147 +21,6 @@ from natal.numba_compat import njit_switch
 # Very small threshold to prevent numerical errors when distribution parameters are 0
 EPS = 1e-10
 
-@njit_switch(cache=True)
-def _clamp01(x: float) -> float:
-    """Clamp a probability-like value into [0, 1]."""
-    if x <= 0.0:
-        return 0.0
-    if x >= 1.0:
-        return 1.0
-    return x
-
-@njit_switch(cache=True)
-def continuous_poisson(lam: float) -> float:
-    """Use Gamma distribution to continuousize Poisson distribution.
-
-    Moments matching: Poisson(λ) -> Gamma(λ, 1)
-    Mean and variance are both λ.
-
-    Args:
-        lam: Poisson parameter λ
-
-    Returns:
-        Value sampled from Gamma(λ, 1)
-    """
-    if lam <= EPS:
-        return 0.0
-    return np.random.gamma(lam, 1.0)
-
-
-@njit_switch(cache=True)
-def continuous_binomial(n: float, p: float) -> float:
-    """Use Beta distribution to continuousize Binomial distribution.
-
-    Moments matching: Binomial(n, p) -> Beta((n-1)*p, (n-1)*(1-p))
-    Multiply the sampled proportion by n to get "continuous count".
-
-    Args:
-        n: Binomial sample size
-        p: Binomial success probability (0 < p < 1)
-
-    Returns:
-        Continuous count value (float between 0 and n)
-    """
-    if p <= EPS:
-        return 0.0
-    if p >= 1.0 - EPS:
-        return float(n)
-
-    # When n <= 1, the concentration (n-1) is non-positive, making it impossible to perform effective moment matching via Beta distribution.
-    # In this case, forced sampling would cause severe numerical bias (tending towards 0.5*n), so we fall back to deterministic expected value.
-    if n <= 1.0 + EPS:
-        return n * p
-
-
-    # Moment matching: map Binomial(n, p) to proportion variable r~Beta(alpha,beta), then return n*r.
-    # The larger the concentration, the smaller the fluctuation in r (closer to deterministic p).
-    concentration = n - 1.0
-    # alpha / (alpha + beta) = p, ensuring the proportion mean is p
-    alpha = p * concentration
-    beta_val = (1.0 - p) * concentration
-
-    # Numerical protection
-    alpha = max(alpha, EPS)
-    beta_val = max(beta_val, EPS)
-
-    proportion = np.random.beta(alpha, beta_val)
-    # Return "continuous count" rather than proportion: count = n * proportion
-    return proportion * n
-
-
-@njit_switch(cache=True)
-def continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: NDArray[np.float64]) -> None:
-    """Use Dirichlet distribution to continuousize Multinomial distribution.
-
-    Moments matching: Multinomial(n, p) → Dirichlet((n-1) × p).
-    Generates continuous samples by scaling independent Gamma variates.
-    Results are stored in out_counts in-place (no return value).
-
-    This function avoids memory allocation issues by using component-wise Gamma
-    sampling and normalizing, rather than calling a high-level Dirichlet routine.
-    For very small total counts (n ≤ 1), falls back to deterministic expected values.
-
-    Args:
-        n: Total count (continuous multinomial sample size).
-        p_array: Probability vector with shape (k,), must sum to 1.
-        out_counts: Pre-allocated output array with shape (k,). Will be filled with
-            continuous category counts that sum to approximately n (modified in-place).
-
-    Returns:
-        None (results written directly to out_counts).
-    """
-    k = len(p_array)
-
-    # Performance optimization and numerical protection: for extremely small sample sizes, use deterministic allocation directly.
-    if n <= 1.0 + EPS:
-        for i in range(k):
-            out_counts[i] = n * p_array[i]
-        return
-
-    # Similar to continuous_binomial, Dirichlet total concentration is set to (n-1).
-    # Each category concentration alpha_i = p_i * (n-1), so the mean is p_i.
-    concentration = n - 1.0
-    sum_gamma = 0.0
-
-    # Generate k Gamma(α_i, 1) variables
-    for i in range(k):
-        alpha = p_array[i] * concentration
-
-        if alpha <= EPS:
-            # If probability is extremely low, set to 0 directly
-            val = 0.0
-        else:
-            val = float(np.random.gamma(alpha, 1.0))  # pyright: ignore
-
-        out_counts[i] = val
-        sum_gamma += val
-
-    # Normalize and multiply by total n:
-    # If g_i ~ Gamma(alpha_i,1), then g_i/sum(g) ~ Dirichlet(alpha)
-    # Finally out_i = n * g_i/sum(g) is the continuous "category count".
-    if sum_gamma > EPS:
-        factor = n / sum_gamma
-        for i in range(k):
-            out_counts[i] *= factor
-    else:
-        # Extreme case (all alpha close to 0）
-        # Use original probability vector for fallback to maintain total approximately n
-        for i in range(k):
-            out_counts[i] = n * p_array[i]
-
-    # Final numerical validation: ensure output sum is approximately equal to n, avoiding cumulative numerical errors
-    total = 0.0
-    for i in range(k):
-        total += out_counts[i]
-
-    # If total is very small or already within reasonable error range, no additional processing needed
-    tol = 1e-6 * max(1.0, n)
-    if total > EPS and abs(total - n) > tol:
-        # Lightweight rescaling to correct deviations caused by floating point errors
-        correction = n / total
-        for i in range(k):
-            out_counts[i] *= correction
-
 # 1. Prepare male gamete pool
 @njit_switch(cache=True)
 def compute_mating_probability_matrix(
@@ -282,8 +141,8 @@ def sample_mating(
         # Iterate over all adult age classes
         for a in range(adult_start_idx, n_ages):
             # Get age-specific mating probabilities
-            p_mating = _clamp01(float(female_rates[a]))        # Female mating probability at this age
-            p_displace = _clamp01(float(sperm_displacement_rate))  # Sperm displacement rate
+            p_mating = nbc.clamp01(float(female_rates[a]))        # Female mating probability at this age
+            p_displace = nbc.clamp01(float(sperm_displacement_rate))  # Sperm displacement rate
 
             # Iterate over all female genotypes
             for gf in range(n_genotypes):
@@ -302,7 +161,7 @@ def sample_mating(
                 n_mating_virgins = 0.0
                 if use_continuous_sampling:
                     # Continuous sampling: use Beta-binomial approximation
-                    n_mating_virgins = continuous_binomial(virgins, p_mating)
+                    n_mating_virgins = nbc.continuous_binomial(virgins, p_mating)
                 else:
                     # Discrete sampling: standard binomial distribution
                     n_mating_virgins = float(nbc.binomial(int(round(virgins)), p_mating))
@@ -361,7 +220,7 @@ def sample_mating(
                 if n_new_mating > EPS:
                     if use_continuous_sampling:
                         # Continuous sampling: use Dirichlet instead of Multinomial
-                        continuous_multinomial(n_new_mating, P[gf, :], temp_mating)
+                        nbc.continuous_multinomial(n_new_mating, P[gf, :], temp_mating)
                         for gm in range(n_genotypes):
                             S[a, gf, gm] += temp_mating[gm]
                     else:
@@ -387,8 +246,8 @@ def sample_mating(
     else:
         # ===== Monogamous deterministic mode =====
         for a in range(adult_start_idx, n_ages):
-            p_mating = _clamp01(float(female_rates[a]))
-            p_displace = _clamp01(float(sperm_displacement_rate))
+            p_mating = nbc.clamp01(float(female_rates[a]))
+            p_displace = nbc.clamp01(float(sperm_displacement_rate))
 
             for gf in range(n_genotypes):
                 n_female = float(F[a, gf])
@@ -581,7 +440,7 @@ def _fertilize_with_precomputed_offspring_probability(
                             n_total = float(np.round(total_lambda))
                     else:
                         if use_continuous_sampling:
-                            n_total = float(continuous_poisson(total_lambda))
+                            n_total = float(nbc.continuous_poisson(total_lambda))
                         else:
                             n_total = float(np.random.poisson(float(total_lambda)))
                 else:
@@ -605,7 +464,7 @@ def _fertilize_with_precomputed_offspring_probability(
                         n_viable = float(n_total)
                     else:
                         if use_continuous_sampling:
-                            n_viable = float(continuous_binomial(n_total, p_surv))
+                            n_viable = float(nbc.continuous_binomial(n_total, p_surv))
                         else:
                             n_viable = float(nbc.binomial(int(round(n_total)), p_surv))
 
@@ -617,7 +476,7 @@ def _fertilize_with_precomputed_offspring_probability(
                         p_norm[g_off] = P_offspring[gf, gm, g_off] * inv_surv
 
                     if use_continuous_sampling:
-                        continuous_multinomial(n_viable, p_norm, temp_offspring)
+                        nbc.continuous_multinomial(n_viable, p_norm, temp_offspring)
                         for g_off in range(n_genotypes):
                             n_offspring_by_geno[g_off] += temp_offspring[g_off]
                     else:
@@ -643,7 +502,7 @@ def _fertilize_with_precomputed_offspring_probability(
         #
         # If True: use genotype-specific compatibility weights (f_w, m_w) to assign sex.
         # If False: use only the global sex_ratio parameter.
-        sex_ratio_scalar = _clamp01(float(sex_ratio))
+        sex_ratio_scalar = nbc.clamp01(float(sex_ratio))
 
         # ===== Phase 2: Allocate offspring sex per genotype =====
         for g_off in range(n_genotypes):
@@ -671,7 +530,7 @@ def _fertilize_with_precomputed_offspring_probability(
                     # as if the weights represent viable gamete production per sex.
                     denom = f_w + m_w
                     if denom > EPS:
-                        p_f = _clamp01(f_w / denom)
+                        p_f = nbc.clamp01(f_w / denom)
                     else:
                         p_f = 0.5
                 else:
@@ -682,7 +541,7 @@ def _fertilize_with_precomputed_offspring_probability(
                 # ===== Subphase 2c: Stochastic sex assignment =====
                 if is_stochastic:
                     if use_continuous_sampling:
-                        n_f = continuous_binomial(n_g, p_f)
+                        n_f = nbc.continuous_binomial(n_g, p_f)
                     else:
                         n_f = float(nbc.binomial(int(round(n_g)), p_f))
                 else:
@@ -779,9 +638,9 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
     has_combo = False
     for a in range(adult_start_idx, n_ages):
         # Get age-specific reproduction rate
-        p_reproduce_age = _clamp01(float(reproduction_rates[a]))
+        p_reproduce_age = nbc.clamp01(float(reproduction_rates[a]))
         # Get age-specific relative fertility rate
-        fertility_factor_age = _clamp01(float(fertility_rates[a]))
+        fertility_factor_age = nbc.clamp01(float(fertility_rates[a]))
 
         for gf in range(n_genotypes):
             fertility_factor_f = phi_f[gf]
@@ -805,7 +664,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                     # Apply age-specific reproduction rate
                     if p_reproduce_age < 1.0:
                         if use_continuous_sampling:
-                            n_reproducing = float(continuous_binomial(n_pairs_for_sampling, p_reproduce_age))
+                            n_reproducing = float(nbc.continuous_binomial(n_pairs_for_sampling, p_reproduce_age))
                         else:
                             n_reproducing = float(nbc.binomial(int(n_pairs_for_sampling), p_reproduce_age))
                     else:
@@ -820,7 +679,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                             n_total = float(np.round(total_lambda))
                     else:
                         if use_continuous_sampling:
-                            n_total = float(continuous_poisson(total_lambda))
+                            n_total = float(nbc.continuous_poisson(total_lambda))
                         else:
                             n_total = float(np.random.poisson(float(total_lambda)))
                 else:
@@ -844,7 +703,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                         n_viable = float(n_total)
                     else:
                         if use_continuous_sampling:
-                            n_viable = float(continuous_binomial(n_total, p_surv))
+                            n_viable = float(nbc.continuous_binomial(n_total, p_surv))
                         else:
                             n_viable = float(nbc.binomial(int(round(n_total)), p_surv))
 
@@ -856,7 +715,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                         p_norm[g_off] = P_offspring[gf, gm, g_off] * inv_surv
 
                     if use_continuous_sampling:
-                        continuous_multinomial(n_viable, p_norm, temp_offspring)
+                        nbc.continuous_multinomial(n_viable, p_norm, temp_offspring)
                         for g_off in range(n_genotypes):
                             n_offspring_by_geno[g_off] += temp_offspring[g_off]
                     else:
@@ -876,7 +735,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
         n_offspring_male = np.zeros(n_genotypes, dtype=np.float64)
 
         # Sex assignment strategy (same as original function)
-        sex_ratio_scalar = _clamp01(float(sex_ratio))
+        sex_ratio_scalar = nbc.clamp01(float(sex_ratio))
 
         for g_off in range(n_genotypes):
             n_g = n_offspring_by_geno[g_off]
@@ -894,7 +753,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                 if has_sex_chromosomes:
                     denom = f_w + m_w
                     if denom > EPS:
-                        p_f = _clamp01(f_w / denom)
+                        p_f = nbc.clamp01(f_w / denom)
                     else:
                         p_f = 0.5
                 else:
@@ -902,7 +761,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
 
                 if is_stochastic:
                     if use_continuous_sampling:
-                        n_f = continuous_binomial(n_g, p_f)
+                        n_f = nbc.continuous_binomial(n_g, p_f)
                     else:
                         n_f = float(nbc.binomial(int(round(n_g)), p_f))
                 else:
@@ -1436,7 +1295,7 @@ def sample_survival_with_sperm_storage(
             n_f_raw = float(F[age, g])
 
             g_idx_f = g % s_f_2d.shape[1]
-            p_f = _clamp01(float(s_f_2d[age, g_idx_f]))
+            p_f = nbc.clamp01(float(s_f_2d[age, g_idx_f]))
 
             # Calculate number of virgin females (females without stored sperm)
             # total_sperm_count = sum_gm S[age,g,gm]
@@ -1476,7 +1335,7 @@ def sample_survival_with_sperm_storage(
                 if n_sperm > EPS:
                     if use_continuous_sampling:
                         # Continuous sampling: use Beta instead of Binomial
-                        S[age, g, gm] = continuous_binomial(n_sperm, p_f)
+                        S[age, g, gm] = nbc.continuous_binomial(n_sperm, p_f)
                     else:
                         # Discrete sampling: standard Binomial
                         S[age, g, gm] = float(nbc.binomial(int(n_sperm), p_f))
@@ -1488,7 +1347,7 @@ def sample_survival_with_sperm_storage(
             if n_virgins > EPS:
                 if use_continuous_sampling:
                     # Continuous sampling: use Beta instead of Binomial
-                    survivors_virgins = continuous_binomial(n_virgins, p_f)
+                    survivors_virgins = nbc.continuous_binomial(n_virgins, p_f)
                 else:
                     # Discrete sampling: standard Binomial
                     survivors_virgins = float(nbc.binomial(int(n_virgins), p_f))
@@ -1506,12 +1365,12 @@ def sample_survival_with_sperm_storage(
                 n_m = float(int(round(M[age, g])))
 
             g_idx_m = g % s_m_2d.shape[1]
-            p_m = _clamp01(float(s_m_2d[age, g_idx_m]))
+            p_m = nbc.clamp01(float(s_m_2d[age, g_idx_m]))
 
             if n_m > EPS:
                 if use_continuous_sampling:
                     # Continuous sampling: use Beta instead of Binomial
-                    M[age, g] = continuous_binomial(n_m, p_m)
+                    M[age, g] = nbc.continuous_binomial(n_m, p_m)
                 else:
                     # Discrete sampling: standard Binomial
                     M[age, g] = float(nbc.binomial(int(n_m), p_m))
@@ -1574,8 +1433,8 @@ def sample_viability_with_sperm_storage(
         else:
             n_m_val = float(int(round(M[target_age, g])))
 
-        p_f_val = _clamp01(float(v_f[g]))
-        p_m_val = _clamp01(float(v_m[g]))
+        p_f_val = nbc.clamp01(float(v_f[g]))
+        p_m_val = nbc.clamp01(float(v_m[g]))
 
         # ===== Sample females and their sperm storage =====
         # Calculate number of virgin females
@@ -1612,7 +1471,7 @@ def sample_viability_with_sperm_storage(
             if n_sperm > EPS:
                 if use_continuous_sampling:
                     # Continuous sampling: use Beta instead of Binomial
-                    S[target_age, g, gm] = continuous_binomial(n_sperm, p_f_val)
+                    S[target_age, g, gm] = nbc.continuous_binomial(n_sperm, p_f_val)
                 else:
                     # Discrete sampling: standard Binomial
                     S[target_age, g, gm] = float(nbc.binomial(int(n_sperm), p_f_val))
@@ -1624,7 +1483,7 @@ def sample_viability_with_sperm_storage(
         if n_virgins > EPS:
             if use_continuous_sampling:
                 # Continuous sampling: use Beta instead of Binomial
-                survivors_virgins = continuous_binomial(n_virgins, p_f_val)
+                survivors_virgins = nbc.continuous_binomial(n_virgins, p_f_val)
             else:
                 # Discrete sampling: standard Binomial
                 survivors_virgins = float(nbc.binomial(int(n_virgins), p_f_val))
@@ -1638,7 +1497,7 @@ def sample_viability_with_sperm_storage(
         if n_m_val > EPS:
             if use_continuous_sampling:
                 # Continuous sampling: use Beta instead of Binomial
-                M[target_age, g] = continuous_binomial(n_m_val, p_m_val)
+                M[target_age, g] = nbc.continuous_binomial(n_m_val, p_m_val)
             else:
                 # Discrete sampling: standard Binomial
                 M[target_age, g] = float(nbc.binomial(int(n_m_val), p_m_val))
@@ -1704,7 +1563,7 @@ def recruit_juveniles_sampling(
         if use_continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
             out_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
-            continuous_multinomial(K, probs, out_counts)
+            nbc.continuous_multinomial(K, probs, out_counts)
             draws = out_counts
         else:
             # Discrete sampling: standard Multinomial
@@ -1780,7 +1639,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
         if use_continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
             temp_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
-            continuous_multinomial(float(desired), probs, temp_counts)
+            nbc.continuous_multinomial(float(desired), probs, temp_counts)
             f_new = temp_counts[:n_genotypes].astype(np.float64)
             m_new = temp_counts[n_genotypes:].astype(np.float64)
         else:
@@ -1840,7 +1699,7 @@ def compute_equilibrium_metrics(
     else:
         reproduce_rates = age_based_mating_rates[0]
     for age in range(new_adult_age, n_ages):
-        p_reproducing[age] = _clamp01(float(reproduce_rates[age]))
+        p_reproducing[age] = nbc.clamp01(float(reproduce_rates[age]))
 
     if equilibrium_individual_count is not None:
         # 1. Use user-provided equilibrium distribution

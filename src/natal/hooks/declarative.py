@@ -644,7 +644,7 @@ def compile_declarative_hook(
         op_types_list.append(int(op.op_type))
 
         # 2) Genotype span - resolve genotype selectors to actual genotype indices
-        # Examples: "A1/A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
+        # Examples: "A1|A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
         gidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_genotypes)
         gidx_data_list.extend(gidx_array.tolist())
         gidx_offsets.append(len(gidx_data_list))  # Record end offset for this operation

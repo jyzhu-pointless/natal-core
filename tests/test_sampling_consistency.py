@@ -3,7 +3,7 @@
 import numpy as np
 
 from natal import numba_compat as nbc
-from natal.algorithms import continuous_binomial, continuous_multinomial
+from natal.numba_compat import continuous_binomial, continuous_multinomial
 
 
 def test_binomial_consistency():
