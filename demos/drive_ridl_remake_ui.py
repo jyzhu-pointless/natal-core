@@ -105,6 +105,6 @@ pop = (nt.AgeStructuredPopulation.setup(
     ).build()
 )
 
-print(pop.config.zygote_fitness)
+print(pop.config.zygote_viability_fitness)
 
 launch(pop)

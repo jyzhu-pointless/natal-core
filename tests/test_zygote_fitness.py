@@ -32,36 +32,36 @@ class TestZygoteFitness(unittest.TestCase):
         self.simple_species = _make_simple_species()
         self.all_genotypes = self.simple_species.get_all_genotypes()
 
-    def test_population_config_zygote_fitness_field(self) -> None:
-        """Test that PopulationConfig has zygote_fitness field."""
+    def test_population_config_zygote_viability_fitness_field(self) -> None:
+        """Test that PopulationConfig has zygote_viability_fitness field."""
         config = build_population_config(n_genotypes=4, n_haploid_genotypes=2)
 
-        # Check that zygote_fitness field exists
-        self.assertTrue(hasattr(config, 'zygote_fitness'))
+        # Check that zygote_viability_fitness field exists
+        self.assertTrue(hasattr(config, 'zygote_viability_fitness'))
 
         # Check the shape is correct
-        self.assertEqual(config.zygote_fitness.shape, (2, 4))  # (n_sexes, n_genotypes)
+        self.assertEqual(config.zygote_viability_fitness.shape, (2, 4))  # (n_sexes, n_genotypes)
 
         # Check default values are all 1.0
-        np.testing.assert_array_equal(config.zygote_fitness, np.ones((2, 4)))
+        np.testing.assert_array_equal(config.zygote_viability_fitness, np.ones((2, 4)))
 
-    def test_set_zygote_fitness_method(self) -> None:
-        """Test set_zygote_fitness method."""
+    def test_set_zygote_viability_fitness_method(self) -> None:
+        """Test set_zygote_viability_fitness method."""
         config = build_population_config(n_genotypes=4, n_haploid_genotypes=2)
 
         # Set zygote fitness for female genotype 0
-        config.set_zygote_fitness(0, 0, 0.5)
-        self.assertEqual(config.zygote_fitness[0, 0], 0.5)
+        config.set_zygote_viability_fitness(0, 0, 0.5)
+        self.assertEqual(config.zygote_viability_fitness[0, 0], 0.5)
 
         # Set zygote fitness for male genotype 1
-        config.set_zygote_fitness(1, 1, 0.8)
-        self.assertEqual(config.zygote_fitness[1, 1], 0.8)
+        config.set_zygote_viability_fitness(1, 1, 0.8)
+        self.assertEqual(config.zygote_viability_fitness[1, 1], 0.8)
 
         # Verify other values remain unchanged
-        self.assertEqual(config.zygote_fitness[0, 1], 1.0)
-        self.assertEqual(config.zygote_fitness[1, 0], 1.0)
+        self.assertEqual(config.zygote_viability_fitness[0, 1], 1.0)
+        self.assertEqual(config.zygote_viability_fitness[1, 0], 1.0)
 
-    def test_builder_zygote_fitness_parameter(self) -> None:
+    def test_builder_zygote_viability_fitness_parameter(self) -> None:
         """Test zygote parameter in Builder fitness method."""
 
         # Build population with initial state and zygote fitness
@@ -83,7 +83,7 @@ class TestZygoteFitness(unittest.TestCase):
         )
 
         # Verify zygote fitness is configured
-        self.assertTrue(hasattr(population.config, 'zygote_fitness'))
+        self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
 
         # Get genotype indices
         aa_idx = population.index_registry.genotype_to_index[self.simple_species.get_genotype_from_str("A|A")]
@@ -93,7 +93,7 @@ class TestZygoteFitness(unittest.TestCase):
         # Note: Actual values would be set during population build process
         # This test mainly verifies that the API accepts the parameter
 
-    def test_zygote_fitness_preset_configuration(self) -> None:
+    def test_zygote_viability_fitness_preset_configuration(self) -> None:
         """Test zygote fitness configuration through presets."""
 
         # For this test, we'll use the Builder's fitness method directly
@@ -112,9 +112,9 @@ class TestZygoteFitness(unittest.TestCase):
         )
 
         # Verify population has zygote fitness configuration
-        self.assertTrue(hasattr(population.config, 'zygote_fitness'))
+        self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
 
-    def test_zygote_fitness_combined_with_viability(self) -> None:
+    def test_zygote_viability_fitness_combined_with_viability(self) -> None:
         """Test that zygote and viability fitness can be combined."""
 
         population = (
@@ -132,10 +132,10 @@ class TestZygoteFitness(unittest.TestCase):
         )
 
         # Both fitness types should be configured
-        self.assertTrue(hasattr(population.config, 'zygote_fitness'))
+        self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
         self.assertTrue(hasattr(population.config, 'viability_fitness'))
 
-    def test_zygote_fitness_simulation_integration(self) -> None:
+    def test_zygote_viability_fitness_simulation_integration(self) -> None:
         """Test that zygote fitness is applied during reproduction stage."""
 
         # Create a population with zygote fitness
@@ -154,12 +154,12 @@ class TestZygoteFitness(unittest.TestCase):
         )
 
         # Verify that zygote fitness configuration is present
-        self.assertTrue(hasattr(population.config, 'zygote_fitness'))
+        self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
 
         # Verify the zygote fitness value is set correctly
         genotype_idx = population.index_registry.genotype_to_index[self.simple_species.get_genotype_from_str("A|A")]
-        self.assertEqual(population.config.zygote_fitness[0, genotype_idx], 0.5)  # Female
-        self.assertEqual(population.config.zygote_fitness[1, genotype_idx], 0.5)  # Male
+        self.assertEqual(population.config.zygote_viability_fitness[0, genotype_idx], 0.5)  # Female
+        self.assertEqual(population.config.zygote_viability_fitness[1, genotype_idx], 0.5)  # Male
 
         # Run one tick to test integration
         population.run_tick()

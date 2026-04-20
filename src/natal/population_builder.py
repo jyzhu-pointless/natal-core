@@ -1731,17 +1731,17 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                                     raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
                                 val = float(value)
                                 if is_multiply:
-                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
                                     val *= current
-                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
+                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
                         else:
                             # values is a float, not AgeScalarMap for zygote fitness
                             for sex_idx in (0, 1):
                                 val = float(values)
                                 if is_multiply:
-                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
                                     val *= current
-                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
+                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
 
         return pop
 
@@ -2228,16 +2228,16 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                                     raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
                                 val = float(value)
                                 if is_multiply:
-                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
                                     val *= current
-                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
+                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
                         else:
                             # values is a float, not AgeScalarMap for zygote fitness
                             for sex_idx in (0, 1):
                                 val = float(values)
                                 if is_multiply:
-                                    current = pop.config.zygote_fitness[sex_idx, genotype_idx]
+                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
                                     val *= current
-                                pop.config.set_zygote_fitness(sex_idx, genotype_idx, val)
+                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
 
         return pop

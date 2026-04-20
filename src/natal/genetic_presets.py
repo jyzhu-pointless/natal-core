@@ -276,11 +276,11 @@ def _make_fitness_patch_given_allele_scaling(
     viability_scaling: Optional[_ViabilityScalingConfig] = None,
     fecundity_scaling: Optional[_FecundityScalingConfig] = None,
     sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
-    zygote_scaling: Optional[_ZygoteViabilityScalingConfig] = None,
+    zygote_viability_scaling: Optional[_ZygoteViabilityScalingConfig] = None,
     viability_mode: _AlleleScalingMode = "multiplicative",
     fecundity_mode: _AlleleScalingMode = "multiplicative",
     sexual_selection_mode: str = "multiplicative",
-    zygote_mode: _AlleleScalingMode = "multiplicative",
+    zygote_viability_mode: _AlleleScalingMode = "multiplicative",
 ) -> PresetFitnessPatch:
     """Helper to create a fitness patch dict for a single allele's scaling effects.
 
@@ -293,11 +293,11 @@ def _make_fitness_patch_given_allele_scaling(
         viability_scaling: Viability fitness scaling configuration.
         fecundity_scaling: Fecundity fitness scaling configuration.
         sexual_selection_scaling: Sexual selection scaling configuration.
-        zygote_scaling: Zygote fitness scaling configuration.
+        zygote_viability_scaling: Zygote fitness scaling configuration.
         viability_mode: Scaling mode for viability fitness.
         fecundity_mode: Scaling mode for fecundity fitness.
         sexual_selection_mode: Scaling mode for sexual selection.
-        zygote_mode: Scaling mode for zygote fitness.
+        zygote_viability_mode: Scaling mode for zygote fitness.
 
     Returns:
         PresetFitnessPatch: Dictionary containing fitness patch configurations.
@@ -319,8 +319,8 @@ def _make_fitness_patch_given_allele_scaling(
     if sexual_selection_scaling is not None:
         patch['sexual_selection_per_allele'] = {key: (sexual_selection_scaling, sexual_selection_mode)}
 
-    if zygote_scaling is not None:
-        patch['zygote_per_allele'] = {key: (zygote_scaling, zygote_mode)}
+    if zygote_viability_scaling is not None:
+        patch['zygote_per_allele'] = {key: (zygote_viability_scaling, zygote_viability_mode)}
 
     return patch
 
@@ -504,6 +504,70 @@ def _apply_sexual_selection_allele_scaling(
             current = float(sex_sel_arr[f_idx, m_idx])
             population.config.set_sexual_selection_fitness(f_idx, m_idx, current * factor)
 
+def _apply_zygote_viability_allele_scaling(
+    population: 'BasePopulation[Any]',
+    all_genotypes: List[Genotype],
+    allele_name: Union[str, Tuple[str, ...]],
+    config: _ZygoteViabilityScalingConfig,
+    mode: str = "multiplicative",
+) -> None:
+    """Apply allele-driven zygote viability scaling using copy-number and scaling mode."""
+    # zygote tensor layout:
+    #   zygote_viability_fitness[sex_idx, genotype_idx]
+    # This function multiplies existing values in-place via setter calls,
+    # so multiple presets/patches compose multiplicatively.
+    zygote_arr = population.config.zygote_viability_fitness
+
+    # Resolve one or more alleles
+    target_genes: List[Gene] = []
+    names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
+
+    for name in names:
+        gene = population.species.gene_index.get(name.strip())
+        if gene is None:
+            raise ValueError(f"Unknown allele '{name}' in zygote_per_allele patch.")
+        target_genes.append(gene)
+
+    # Compute scaling factors for each genotype
+    for genotype in all_genotypes:
+        genotype_idx = population.index_registry.genotype_to_index[genotype]
+        copy_count: int = _count_combined_allele_copies(genotype, target_genes)
+
+        # Apply scaling based on copy count
+        if copy_count == 0:
+            continue  # No effect for zero copies
+
+        # Get scaling factor for this copy count
+        if _is_effect_scale(config):
+            # Scalar/custom tuple branch for both sexes.
+            total_scale = _calculate_allele_effect(config, copy_count, mode)
+            for sex_idx in range(2):
+                current = float(zygote_arr[sex_idx, genotype_idx])
+                population.config.set_zygote_viability_fitness(sex_idx, genotype_idx, current * total_scale)
+        elif isinstance(config, Mapping):
+            # Sex-specific config.
+            config_map = cast(Mapping[object, object], config)
+            for sex_key, sex_config in config_map.items():
+                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                if _is_effect_scale(sex_config):
+                    total_scale = _calculate_allele_effect(sex_config, copy_count, mode)
+                    current = float(zygote_arr[sex_idx, genotype_idx])
+                    population.config.set_zygote_viability_fitness(sex_idx, genotype_idx, current * total_scale)
+                elif isinstance(sex_config, Mapping):
+                    # Age-specific config (not applicable to zygote fitness)
+                    raise TypeError(
+                        f"Age-specific config not supported for zygote_allele: {sex_config}"
+                    )
+                else:
+                    raise TypeError(
+                        f"Invalid zygote allele sex config for '{allele_name}', sex '{sex_key}': "
+                        f"{type(sex_config).__name__}"
+                    )
+        else:
+            raise TypeError(
+                f"Invalid zygote allele config for '{allele_name}': {type(config).__name__}"
+            )
+
 def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
@@ -677,14 +741,14 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
         for genotype in matched:
             genotype_idx = population.index_registry.genotype_to_index[genotype]
             if isinstance(config, (int, float)):
-                population.config.set_zygote_fitness(0, genotype_idx, float(config))
-                population.config.set_zygote_fitness(1, genotype_idx, float(config))
+                population.config.set_zygote_viability_fitness(0, genotype_idx, float(config))
+                population.config.set_zygote_viability_fitness(1, genotype_idx, float(config))
             elif isinstance(config, Mapping):
                 config_map = cast(Mapping[object, object], config)
                 for sex_key, sex_config in config_map.items():
                     sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
                     if isinstance(sex_config, (int, float)):
-                        population.config.set_zygote_fitness(sex_idx, genotype_idx, float(sex_config))
+                        population.config.set_zygote_viability_fitness(sex_idx, genotype_idx, float(sex_config))
 
     # 6) Zygote allele-based fitness patch
     zygote_per_allele_patch = patch.get('zygote_per_allele', {})
@@ -693,76 +757,6 @@ def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: Preset
         if not _is_zygote_viability_scaling_config(config):
             raise TypeError(f"Invalid zygote_per_allele config for '{allele_name}'")
         _apply_zygote_viability_allele_scaling(population, all_genotypes, allele_name, config, mode)
-
-def _apply_zygote_viability_allele_scaling(
-    population: 'BasePopulation[Any]',
-    all_genotypes: List[Genotype],
-    allele_name: Union[str, Tuple[str, ...]],
-    config: _ZygoteViabilityScalingConfig,
-    mode: str = "multiplicative",
-) -> None:
-    """Apply allele-driven zygote viability scaling using multiplicative copy-number effect."""
-    # zygote tensor layout:
-    #   zygote_fitness[sex_idx, genotype_idx]
-    # This function multiplies existing values in-place via setter calls,
-    # so multiple presets/patches compose multiplicatively.
-    zygote_arr = population.config.zygote_fitness
-
-    # Resolve one or more alleles
-    target_genes: List[Gene] = []
-    names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
-
-    for name in names:
-        gene = population.species.gene_index.get(name.strip())
-        if gene is None:
-            raise ValueError(f"Unknown allele '{name}' in zygote_per_allele patch.")
-        target_genes.append(gene)
-
-    # Compute scaling factors for each genotype
-    for genotype in all_genotypes:
-        genotype_idx = population.index_registry.genotype_to_index[genotype]
-        copy_count: int = _count_combined_allele_copies(genotype, target_genes)
-
-        # Apply scaling based on copy count
-        if copy_count == 0:
-            continue  # No effect for zero copies
-
-        # Get scaling factor for this copy count
-        if isinstance(config, (int, float)):
-            # Single value: apply to all copies
-            scale_per_copy = float(config)
-            total_scale: float = scale_per_copy ** copy_count
-            for sex_idx in range(2):
-                current = zygote_arr[sex_idx, genotype_idx]
-                new_value: float = current * total_scale
-                population.config.set_zygote_fitness(sex_idx, genotype_idx, new_value)
-        elif isinstance(config, Mapping):
-            # Sex-specific or age-specific config
-            config_map = cast(Mapping[object, object], config)
-            for sex_key, sex_config in config_map.items():
-                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
-                if isinstance(sex_config, (int, float)):
-                    # Single value per sex
-                    scale_per_copy = float(sex_config)
-                    total_scale: float = scale_per_copy ** copy_count
-                    current = zygote_arr[sex_idx, genotype_idx]
-                    new_value: float = current * total_scale
-                    population.config.set_zygote_fitness(sex_idx, genotype_idx, new_value)
-                elif isinstance(sex_config, Mapping):
-                    # Age-specific config (not applicable to zygote fitness)
-                    raise TypeError(
-                        f"Age-specific config not supported for zygote_allele: {sex_config}"
-                    )
-                else:
-                    raise TypeError(
-                        f"Invalid zygote allele sex config for '{allele_name}', sex '{sex_key}': "
-                        f"{type(sex_config).__name__}"
-                    )
-        else:
-            raise TypeError(
-                f"Invalid zygote allele config for '{allele_name}': {type(config).__name__}"
-            )
-
 
 def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'GeneticPreset') -> None:
     """Apply a genetic preset to a population by registering its modifiers and fitness effects.
@@ -1066,11 +1060,11 @@ class HomingDrive(GeneticPreset):
         fecundity_scaling: _FecundityScalingConfig = 1.0,
         viability_scaling: _ViabilityScalingConfig = 1.0,
         sexual_selection_scaling: _SexualSelectionScalingConfig = 1.0,
-        zygote_scaling: _ZygoteViabilityScalingConfig = 1.0,
+        zygote_viability_scaling: _ZygoteViabilityScalingConfig = 1.0,
         viability_mode: _AlleleScalingMode = "multiplicative",
         fecundity_mode: _AlleleScalingMode = "multiplicative",
         sexual_selection_mode: _AlleleScalingMode = "multiplicative",
-        zygote_mode: _AlleleScalingMode = "multiplicative",
+        zygote_viability_mode: _AlleleScalingMode = "multiplicative",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
         use_paternal_deposition: bool = False,
@@ -1105,7 +1099,7 @@ class HomingDrive(GeneticPreset):
                 Applied multiplicatively based on allele copy number.
             sexual_selection_scaling (float or tuple): Fitness multiplier affecting sexual selection.
                 Can be a single float or tuple (default_selection, carrier_selection).
-            zygote_scaling (float or dict): Fitness multiplier affecting survival of zygotes before
+            zygote_viability_scaling (float or dict): Fitness multiplier affecting survival of zygotes before
                 competition takes place. Applied multiplicatively based on allele copy number.
             viability_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
                 If "custom", scaling values must be tuples (het_val, hom_val).
@@ -1113,7 +1107,7 @@ class HomingDrive(GeneticPreset):
                 If "custom", scaling values must be tuples (het_val, hom_val).
             sexual_selection_mode (str): Scaling mode for scalar sexual_selection_scaling.
                 Note: if sexual_selection_scaling is a tuple, mode is ignored.
-            zygote_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
+            zygote_viability_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
                 If "custom", scaling values must be tuples (het_val, hom_val).
             cas9_deposition_glab (str, optional): Gamete label for Cas9 deposition tracking.
                 Used for maternal/paternal effect modeling.
@@ -1150,12 +1144,12 @@ class HomingDrive(GeneticPreset):
         self.fecundity_scaling = fecundity_scaling
         self.viability_scaling = viability_scaling
         self.sexual_selection_scaling = sexual_selection_scaling
-        self.zygote_scaling = zygote_scaling
+        self.zygote_viability_scaling = zygote_viability_scaling
 
         self.viability_mode: _AlleleScalingMode = viability_mode
         self.fecundity_mode: _AlleleScalingMode = fecundity_mode
         self.sexual_selection_mode: _AlleleScalingMode = sexual_selection_mode
-        self.zygote_mode: _AlleleScalingMode = zygote_mode
+        self.zygote_viability_mode: _AlleleScalingMode = zygote_viability_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
@@ -1177,11 +1171,11 @@ class HomingDrive(GeneticPreset):
             self.viability_scaling,
             self.fecundity_scaling,
             self.sexual_selection_scaling,
-            self.zygote_scaling,
+            self.zygote_viability_scaling,
             self.viability_mode,
             self.fecundity_mode,
             self.sexual_selection_mode,
-            self.zygote_mode,
+            self.zygote_viability_mode,
         )
 
         return patch
@@ -1465,7 +1459,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         self.zygote_viability_scaling = zygote_viability_scaling
         self.viability_mode: _AlleleScalingMode = viability_mode
         self.fecundity_mode: _AlleleScalingMode = fecundity_mode
-        self.sexual_selection_mode = sexual_selection_mode
+        self.sexual_selection_mode: _AlleleScalingMode = sexual_selection_mode
         self.zygote_viability_mode: _AlleleScalingMode = zygote_viability_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
