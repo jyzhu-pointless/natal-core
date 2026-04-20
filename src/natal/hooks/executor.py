@@ -198,6 +198,9 @@ def _apply_target_without_sperm(
     dirichlet_flag: bool,
 ) -> float:
     """Apply target count update for male branch or no-sperm populations."""
+    if stochastic_flag and not dirichlet_flag:
+        current_count = float(round(current_count))
+
     if target_count >= current_count:
         return target_count
     if current_count <= 0.0:
@@ -219,6 +222,9 @@ def _apply_target_with_sperm(
     When reducing female count, we scale or sample sperm categories with the
     same survival rate so sperm storage remains coherent with female counts.
     """
+    if stochastic_flag and not dirichlet_flag:
+        current_count = float(round(current_count))
+
     if target_count >= current_count:
         return target_count
 
@@ -371,22 +377,22 @@ def execute_csr_event_arrays(
                         # Convert each operation to a target count first, then
                         # route through one unified update function so survival
                         # semantics are consistent across operators.
-                        if op_type == 0:
+                        if op_type == 0:     # Op.scale
                             target = max(0.0, current * param)
-                        elif op_type == 1:
+                        elif op_type == 1:   # Op.set
                             target = max(0.0, param)
-                        elif op_type == 2:
+                        elif op_type == 2:   # Op.add
                             target = max(0.0, current + param)
-                        elif op_type == 3:
+                        elif op_type == 3:   # Op.subtract
                             target = max(0.0, current - param)
-                        elif op_type == 4:
+                        elif op_type == 4:   # Op.kill
                             target = max(0.0, current * (1.0 - param))
-                        elif op_type == 5:
+                        elif op_type == 5:   # Op.sample
                             target = min(current, max(0.0, param))
                         else:
                             target = current
 
-                        if op_type <= 5:
+                        if op_type <= 5:   # Op.scale, Op.set, Op.add, Op.subtract, Op.kill, Op.sample
                             if sex_idx == 0 and has_sperm_storage:
                                 individual_count[sex_idx, age, gidx] = _apply_target_with_sperm(
                                     current,
@@ -405,7 +411,7 @@ def execute_csr_event_arrays(
 
             # STOP_IF_* operators aggregate selected cells and may short-circuit
             # event execution with RESULT_STOP.
-            if op_type == 6 or op_type == 7 or op_type == 8:
+            if op_type == 6 or op_type == 7 or op_type == 8:   # Op.stop_if_zero, Op.stop_if_below, Op.stop_if_above
                 selected_total = 0.0
                 for sex_idx in range(2):
                     if sex_idx == 0 and not sex_female:
@@ -425,7 +431,7 @@ def execute_csr_event_arrays(
                     return RESULT_STOP
                 if op_type == 8 and selected_total > param:
                     return RESULT_STOP
-            elif op_type == 9:
+            elif op_type == 9:   # Op.stop_if_extinction
                 if individual_count.sum() <= 0.0:
                     return RESULT_STOP
 
