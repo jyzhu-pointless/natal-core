@@ -1306,6 +1306,8 @@ def sample_survival_with_sperm_storage(
 
             # Validate on raw mass (not per-cell rounded mass), then convert for sampling.
             n_virgins_raw = n_f_raw - total_sperm_count
+            if n_virgins_raw >= -EPS:
+                n_virgins_raw = max(0.0, n_virgins_raw)
             if n_virgins_raw < -EPS:
                 print(
                     "n_virgins<0 in sample_survival_with_sperm_storage:",
@@ -1444,6 +1446,8 @@ def sample_viability_with_sperm_storage(
 
         # Validate on raw mass (not per-cell rounded mass), then convert for sampling.
         n_virgins_raw = n_f_raw - total_sperm_count
+        if n_virgins_raw >= -EPS:
+            n_virgins_raw = max(0.0, n_virgins_raw)
         if n_virgins_raw < -EPS:
             print(
                 "n_virgins<0 in sample_viability_with_sperm_storage:",
