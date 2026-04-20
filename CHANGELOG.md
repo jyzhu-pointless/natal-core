@@ -1,6 +1,11 @@
 # Changelog
 
-## 2026.4.19 (v0.1.0-rc.2)
+## 2026.4.20 (v0.1.1)
+- fix(algorithms): ensure `n_virgins_raw` is clamped to 0.0 when in the range `(-EPS, 0)` to prevent intermittent negative virgin count errors due to floating point precision issues
+- fix(hooks.executor): round `current_count` to the nearest integer before comparison to `target_count` in discrete stochastic sampling paths where `current_count` may be stored as a float
+- fix(genetic_presets): support different modes (multiplicative, dominant, recessive, custom) for zygote viability scaling; rename `zygote_fitness` to `zygote_viability_fitness` for clarity
+
+## 2026.4.19 (v0.1.0-rc.2, v0.1.0)
 - Remove redundant `parallel=True` decorators from adjacency migration wrapper functions that do not contain `prange`
 - Move probability related logic from `algorithms.py` to `numba_compat.py`
 - Change the DNA pattern of the logo from left-handed to right-handed helix
@@ -24,7 +29,7 @@
 
 ## 2026.4.13
 - Add Zygote Fitness support: new fitness type applied during reproduction stage before survival and competition
-- Extend PopulationConfig with zygote_fitness field and set_zygote_fitness method
+- Extend PopulationConfig with zygote_viability_fitness field and set_zygote_viability_fitness method
 - Update Builder system to support zygote fitness configuration via fitness() method
 - Extend Genetic Presets system with zygote allele-based fitness scaling support
 - Integrate zygote fitness application in simulation kernels with proper stochastic sampling
