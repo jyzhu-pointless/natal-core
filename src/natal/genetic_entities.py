@@ -246,6 +246,20 @@ class Gene(GeneticEntity[Locus]):
             raise ValueError(f"Invalid gene name format: '{name}'. "
                              f"Gene names must contain only letters, numbers, and underscores.")
 
+        # Check for duplicate gene names in the species
+        species = locus.species
+        if species is not None:
+            # Use the public has_gene method to check for existing gene
+            if hasattr(species, 'has_gene') and species.has_gene(name):
+                # If has_gene returns True, the gene exists
+                existing_gene = species.get_gene(name)
+                if existing_gene:
+                    raise ValueError(
+                        f"Duplicate gene name '{name}' found in species. "
+                        f"Gene names must be unique for string-based lookups. "
+                        f"Found at locus '{existing_gene.locus.name}' and '{locus.name}'."
+                    )
+
         # Call parent constructor which handles registration
         super().__init__(name, structure=locus)
 

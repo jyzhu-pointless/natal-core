@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import importlib
 import itertools
-import logging
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Iterable
 from enum import Enum
@@ -61,9 +61,6 @@ AlleleTuple = Tuple[str, ...]
 GenotypeChromosomeCombo = Tuple[AlleleTuple, AlleleTuple]
 GenotypeComboMap = Dict[int, GenotypeChromosomeCombo]
 HaploidComboMap = Dict[int, AlleleTuple]
-
-
-logger = logging.getLogger(__name__)  # temp logger
 
 # Global fallback cache for structures created without a Species (backward compatibility)
 # Format: {structure_type: {name: instance}}
@@ -557,6 +554,13 @@ class GeneticStructure(Generic[E]):
 
         # Check if instance already exists in cache
         if name in cache:
+            warnings.warn(
+                f"Structure '{name}' of type {cls.__name__} already exists in cache. "
+                f"Returning cached instance. "
+                f"Note: Structure names must be unique within the same type.",
+                UserWarning,
+                stacklevel=2
+            )
             return cache[name]
 
         # Create new instance (do NOT cache here - cache in __init__ after success)
@@ -1225,16 +1229,21 @@ class Chromosome(GeneticStructure['Haplotype']):
         """
         Add a locus to this chromosome.
 
-        When inserting a new locus, it defaults to complete linkage with the previous
-        locus (recombination rate = 0), and inherits the recombination rate with the
-        next locus from the previous locus's rate with that next locus.
+        When inserting a new locus:
+        - If it's the first locus of the chromosome: the recombination rate parameter
+          sets the rate with the next (second) locus.
+        - Otherwise: the recombination rate parameter sets the rate with the previous
+          locus, and the rate with the next locus is inherited from the old rate
+          between the previous and next loci.
 
         Args:
             locus_or_name: Either a Locus instance or a name to create a new Locus.
             position: Optional position (only used when creating new Locus by name).
                 If not specified, defaults to max(position) + 1 among existing loci.
-            recombination_rate_with_previous: Recombination rate with the previous locus.
-                Defaults to 0 (complete linkage).
+            recombination_rate_with_previous: Recombination rate with the adjacent locus.
+                Defaults to 0 (complete linkage). If the first locus of the chromosome,
+                sets the rate with the second locus; otherwise sets the rate with the
+                previous locus.
             **kwargs: Additional custom parameters to pass to the Locus constructor.
 
         Returns:
@@ -1300,12 +1309,62 @@ class Chromosome(GeneticStructure['Haplotype']):
             if self._species is not None:
                 self._species.invalidate_gene_index_cache()
 
-    def _update_recombination_map(self) -> None:
-        """Create a fresh recombination map (all rates = 0)."""
-        if len(self.child_structures) > 1:
-            self._recombination_map = Chromosome.RecombinationMap(loci=self.loci)
-        else:
+    def get_locus(self, name: str) -> Optional[Locus]:
+        """
+        Get a locus by name.
+
+        Args:
+            name: Name of the locus.
+
+        Returns:
+            The Locus instance or None if not found.
+        """
+        if name in self.child_structures:
+            return self.child_structures.get(name)
+        return None
+
+    def _update_recombination_map(self, old_sorted_loci: Optional[List[Locus]] = None,
+                                old_map: Optional[Chromosome.RecombinationMap] = None) -> None:
+        """Create a recombination map.
+
+        If order remains the same, preserve recombination rates.
+        If order changes, simulate removal and reinsertion of moved loci.
+        """
+        if len(self.child_structures) <= 1:
             self._recombination_map = None
+            return
+
+        new_sorted_loci = self.loci
+
+        # If we have old state information and order remains the same, preserve rates
+        if (old_sorted_loci and old_map and len(old_sorted_loci) == len(new_sorted_loci) and
+            all(a == b for a, b in zip(old_sorted_loci, new_sorted_loci))):
+            # Order unchanged, preserve all recombination rates by extracting them from old map
+            old_rates = np.array([old_map[i] for i in range(len(old_sorted_loci) - 1)], dtype=np.float64)
+            self._recombination_map = Chromosome.RecombinationMap(loci=new_sorted_loci, rates=old_rates)
+        elif old_sorted_loci and old_map and len(old_sorted_loci) == len(new_sorted_loci):
+            # Order changed, simulate removal and reinsertion of moved loci
+            # Find which loci have changed position
+            differences = 0
+            moved_locus = None
+            old_idx = -1
+
+            for old_locus, new_locus in zip(old_sorted_loci, new_sorted_loci):
+                if old_locus != new_locus:
+                    differences += 1
+                    moved_locus = new_locus
+                    # Find old index of the moved locus
+                    old_idx = old_sorted_loci.index(moved_locus)
+
+            if differences == 1 and moved_locus is not None:
+                # Single locus moved - use the encapsulated method
+                self._update_recombination_map_on_move(moved_locus, old_sorted_loci, old_map, old_idx)
+            else:
+                # Multiple loci moved, create fresh map
+                self._recombination_map = Chromosome.RecombinationMap(loci=new_sorted_loci)
+        else:
+            # No old state information or different lengths, create fresh map
+            self._recombination_map = Chromosome.RecombinationMap(loci=new_sorted_loci)
 
     def invalidate_recombination_map_cache(self) -> None:
         """Public wrapper for recombination-map cache invalidation."""
@@ -1318,7 +1377,15 @@ class Chromosome(GeneticStructure['Haplotype']):
         old_map: Optional[Chromosome.RecombinationMap],
         recombination_rate_with_previous: float
     ) -> None:
-        """Update recombination map when a new locus is inserted."""
+        """Update recombination map when a new locus is inserted.
+
+        When inserting a new locus:
+        - If it's the first locus of the chromosome: uses recombination_rate_with_previous
+          for the rate with the next (second) locus.
+        - Otherwise: uses recombination_rate_with_previous for the rate with the previous
+          locus, and inherits the rate with the next locus from the old rate between
+          the previous and next loci.
+        """
         new_sorted_loci = self.loci
         n = len(new_sorted_loci)
 
@@ -1338,22 +1405,19 @@ class Chromosome(GeneticStructure['Haplotype']):
                 if new_i == new_idx - 1:
                     # Rate between previous locus and new locus
                     new_rates[new_i] = recombination_rate_with_previous
-                elif new_i == new_idx:
+                elif new_idx == 0 and new_i == 0:
+                    # Rate between new locus (first) and next locus
+                    new_rates[new_i] = recombination_rate_with_previous
+                elif new_i >= new_idx:
                     # Rate between new locus and next locus
                     # Inherit from the old rate between prev and next
-                    if new_idx > 0 and new_idx - 1 < len(old_map):
-                        new_rates[new_i] = old_map[new_idx - 1]
-                    else:
-                        new_rates[new_i] = 0.0
-                else:
+                    old_idx = new_i - 1  # Account for insertion
+                    new_rates[new_i] = old_map[old_idx] if old_idx < len(old_map) else 0.0
+                else: # new_i < new_idx
                     # Copy from old map
-                    if new_i < new_idx:
-                        new_rates[new_i] = old_map[new_i] if new_i < len(old_map) else 0.0
-                    else:  # new_i > new_idx
-                        old_idx = new_i - 1  # Account for insertion
-                        new_rates[new_i] = old_map[old_idx] if old_idx < len(old_map) else 0.0
+                    new_rates[new_i] = old_map[new_i] if new_i < len(old_map) else 0.0
         else:
-            # First pair of loci, set the rate
+            # First locus of the chromosome, set the rate with the next locus (second locus) instead
             new_rates[0] = recombination_rate_with_previous
 
         self._recombination_map = Chromosome.RecombinationMap(
@@ -1400,6 +1464,33 @@ class Chromosome(GeneticStructure['Haplotype']):
             loci=new_sorted_loci,
             rates=new_rates
         )
+
+    def _update_recombination_map_on_move(
+        self,
+        moved_locus: Locus,
+        old_sorted_loci: List[Locus],
+        old_map: Chromosome.RecombinationMap,
+        old_idx: int
+    ) -> None:
+        """Update recombination map when a locus is moved.
+
+        Simulates removal and reinsertion of the moved locus.
+        """
+        # Step 1: Remove the locus from old position
+        temp_loci = [loc for loc in old_sorted_loci if loc != moved_locus]
+
+        # Apply removal logic using existing method
+        if len(temp_loci) > 1:
+            self._update_recombination_map_on_remove(old_idx, old_map)
+            temp_map = self._recombination_map
+
+            # Step 2: Reinsert the locus at new position with rate=0
+            # Temporarily set the recombination map to the post-removal state
+            self._recombination_map = temp_map
+            self._update_recombination_map_on_insert(moved_locus, temp_loci, temp_map, recombination_rate_with_previous=0.0)
+        else:
+            # Only one locus remains after removal, create fresh map
+            self._recombination_map = Chromosome.RecombinationMap(loci=self.loci)
 
     def get_locus_index(self, name: str) -> int:
         """Get the index of a locus by name in the sorted loci list."""
@@ -2121,6 +2212,46 @@ class Species(GeneticStructure['HaploidGenome']):
         if name in self.child_structures:
             return self.child_structures.get(name)
         return None
+
+    def get_gene(self, name: str) -> Optional[Gene]:
+        """
+        Get a gene by name across all loci.
+
+        Args:
+            name: Name of the gene.
+
+        Returns:
+            The Gene instance or None if not found.
+
+        Raises:
+            ValueError: If duplicate gene names exist in the species.
+        """
+        try:
+            gene_index = self._build_gene_index()
+            return gene_index.get(name)
+        except ValueError:
+            # Re-raise the duplicate gene error
+            raise
+
+    def has_gene(self, name: str) -> bool:
+        """
+        Check if a gene with the given name exists in the species.
+
+        Args:
+            name: Name of the gene to check.
+
+        Returns:
+            True if the gene exists, False otherwise.
+
+        Raises:
+            ValueError: If duplicate gene names exist in the species.
+        """
+        try:
+            gene_index = self._build_gene_index()
+            return name in gene_index
+        except ValueError:
+            # Re-raise the duplicate gene error
+            raise
 
     # Alias for backward compatibility
     def get_linkage(self, name: str) -> Optional[Chromosome]:
