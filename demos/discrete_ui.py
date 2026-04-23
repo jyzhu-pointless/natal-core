@@ -18,13 +18,13 @@ drive = nt.HomingDrive(
     target_allele="WT",
     resistance_allele="R2",
     functional_resistance_allele="R1",
-    drive_conversion_rate=0.95,
-    late_germline_resistance_formation_rate=0.9,
-    functional_resistance_ratio=0.001,
+    drive_conversion_rate=0.8,
+    late_germline_resistance_formation_rate=0.5,
+    # functional_resistance_ratio=0.001,
     embryo_resistance_formation_rate=0.0,
     viability_scaling=1.0,
-    fecundity_scaling={"female": 0.0},
-    fecundity_mode="recessive",
+    fecundity_scaling={"female": (0.5, 0.0)},
+    fecundity_mode="custom",
     cas9_deposition_glab="cas9_deposited"
 )
 
@@ -40,11 +40,11 @@ pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
         name="TestPop",
-        stochastic=True
+        stochastic=False
     )
     .initial_state(
         individual_count={
-            "male": {"WT|WT": 50000}, "female": {"WT|WT": 50000}
+            "male": {"WT|WT": 40000, "Dr|WT": 10000}, "female": {"WT|WT": 40000, "Dr|WT": 10000}
         }
     )
     .reproduction(
@@ -55,7 +55,7 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="concave"
     )
-    .presets(drive).hooks(release_drive_carriers).build())
+    .presets(drive).fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}}).build())
 
 # 5. Launch interactive WebUI and run simulation
 launch(pop)

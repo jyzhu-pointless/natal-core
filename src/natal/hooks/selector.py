@@ -24,7 +24,6 @@ from .types import (
     is_numba_dispatcher,
     load_codegen_module,
     stable_callable_identity,
-    validate_numba_hook_required,
     write_codegen_module,
 )
 
@@ -93,18 +92,20 @@ def compile_selector_hook(
     event: str,
     selectors_spec: Dict[str, SelectorSpec],
     priority: int = 0,
-    numba_mode: bool = False,
     deme_selector: DemeSelector = "*",
 ) -> CompiledHookDescriptor:
     """Compile selector hook into njit or python descriptor.
 
     ``resolved`` stores canonical selector arrays and is reused by both
     execution paths.
+
+    For selector hooks, Numba compilation depends on:
+    - If function is @njit decorated, use it directly
+    - Otherwise, use global NUMBA_ENABLED setting (auto-wrap if enabled)
     """
     index_registry = pop.registry
     diploid_genotypes = index_registry.index_to_genotype
 
-    # Resolve selectors exactly once during registration.
     resolved = {
         name: _resolve_selector_to_array(spec, index_registry, diploid_genotypes)
         for name, spec in selectors_spec.items()
@@ -119,16 +120,9 @@ def compile_selector_hook(
 
     is_njit_fn = is_numba_dispatcher(func)
 
-    if NUMBA_ENABLED and not (numba_mode or is_njit_fn):
-        raise TypeError(
-            f"Selector hook '{func.__name__}' must be an @njit function when Numba is enabled. "
-            "Either decorate with @njit or disable Numba explicitly."
-        )
-
-    if numba_mode or is_njit_fn:
+    if is_njit_fn or NUMBA_ENABLED:
         # Numba path: generate a thin wrapper with literal selector args.
-        if numba_mode:
-            validate_numba_hook_required(func, func.__name__, "selector numba_mode=True")
+        # The wrapper will call the user function (whether @njit or not)
 
         # Handle signature normalization for user function (2 or 3 args before selectors)
         py_func = getattr(func, "py_func", func)

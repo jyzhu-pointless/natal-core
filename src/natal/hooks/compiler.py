@@ -36,9 +36,9 @@ from .types import (
     DemeSelector,
     HookProgram,
     hash_key,
+    is_njit_function,
     load_codegen_module,
     stable_callable_identity,
-    validate_numba_hook_required,
     write_codegen_module,
 )
 
@@ -68,7 +68,7 @@ class DecoratedHookFn(Protocol):
     event: Any
     selectors: Dict[str, Any]
     priority: int
-    numba_mode: Any
+    custom: bool
     deme_selector: Any
     register: Callable[..., Any]
 
@@ -92,6 +92,20 @@ def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
         return fn
     # Wrap 2-arg function: (ind_count, tick) -> (ind_count, tick, deme_id)
     @njit_switch(cache=True)
+    def wrapped(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> object:
+        return fn(ind_count, tick)
+    return wrapped
+
+
+def _normalize_py_hook(fn: HookCallable) -> HookCallable:
+    """Ensure a Python custom hook matches the (ind_count, tick, deme_id) signature.
+
+    If user provided a 2-arg function, wrap it.
+    """
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.values())
+    if len(params) >= 3:
+        return fn
     def wrapped(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> object:
         return fn(ind_count, tick)
     return wrapped
@@ -237,11 +251,38 @@ class CompiledEventHooks:
 
         return result
 
+
+def _has_required_parameters(func: HookCallable) -> bool:
+    """Return whether calling ``func()`` would require positional/keyword args."""
+    sig = inspect.signature(func)
+    for param in sig.parameters.values():
+        if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            if param.default is inspect.Signature.empty:
+                return True
+        elif param.kind is inspect.Parameter.KEYWORD_ONLY:
+            if param.default is inspect.Signature.empty:
+                return True
+    return False
+
+
+def _is_declarative_population_hook(func: HookCallable) -> bool:
+    """Return whether func accepts a single population parameter (declarative Python hook)."""
+    sig = inspect.signature(func)
+    params = list(sig.parameters.values())
+    if len(params) == 1:
+        param = params[0]
+        if (param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD) and
+                param.default is inspect.Signature.empty):
+            # Single required parameter - likely a population hook, not a custom ind_count hook
+            return True
+    return False
+
+
 def hook(
     event: Optional[str] = None,
     selectors: Optional[Dict[str, Any]] = None,
     priority: int = 0,
-    numba: bool = False,
+    custom: bool = False,
     deme_selector: DemeSelector = "*",
 ) -> Callable[[Callable[..., Any]], DecoratedHookFn]:
     """Decorator entrypoint for all supported hook authoring styles.
@@ -249,30 +290,38 @@ def hook(
     The decorated function gets a ``register(pop, event_override=None)``
     helper that compiles and registers a ``CompiledHookDescriptor``.
 
+    Hook type is determined by:
+    - selectors specified -> Selector hook
+    - custom=True or has required params -> Custom hook
+    - otherwise -> Declarative hook (function returns List[HookOp])
+
+    For custom/selector hooks, Numba compilation depends on:
+    - If function is @njit decorated, use it directly
+    - Otherwise, use global NUMBA_ENABLED setting (auto-wrap if enabled)
+
     Args:
         event: Hook event name.
         selectors: Optional symbolic selectors for selector-mode hooks.
         priority: Execution priority (lower values run earlier).
-        numba: Whether this hook is an explicit custom njit hook.
+        custom: If True, treat as custom hook (function is called directly).
         deme_selector: Transport-only selector metadata. The compiler stores
             and forwards this value into ``CompiledHookDescriptor`` but does
             not interpret spatial routing semantics itself.
     """
     def decorator(func: Callable[..., Any]) -> DecoratedHookFn:
         hook_func = cast(DecoratedHookFn, func)
-        # Store metadata for debugging / introspection / future recompilation.
         hook_func.meta = {
             "event": event,
             "selectors": selectors or {},
             "priority": priority,
-            "numba_mode": numba,
+            "custom": custom,
             "deme_selector": deme_selector,
         }
         hook_func.compiled = None
         hook_func.event = event
         hook_func.selectors = selectors or {}
         hook_func.priority = priority
-        hook_func.numba_mode = numba
+        hook_func.custom = custom
         hook_func.deme_selector = deme_selector
 
         def register(
@@ -292,83 +341,109 @@ def hook(
                     "Specify in decorator @hook(event='...') or call pop.set_hook('event', hook)"
                 )
 
-            if numba:
-                # Mode 1: explicit custom njit hook.
-                validate_numba_hook_required(func, func.__name__, "@hook(numba=True)")
-                norm_fn = _normalize_njit_fn(hook_func)
-                desc = CompiledHookDescriptor(
-                    name=func.__name__,
-                    event=actual_event,
-                    priority=priority,
-                    deme_selector=actual_deme_selector,
-                    njit_fn=norm_fn,
-                    meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
-                )
+            has_required_params = _has_required_parameters(func)
+            is_declarative_pop_hook = _is_declarative_population_hook(func)
+            is_custom_or_selector = custom or selectors is not None or (has_required_params and not is_declarative_pop_hook)
 
-            elif selectors:
-                # Mode 2: selector-based hook (python or njit wrapper path).
-                desc = compile_selector_hook(
-                    func,
-                    pop,
-                    actual_event,
-                    selectors,
-                    priority,
-                    numba_mode=numba,
-                    deme_selector=actual_deme_selector,
-                )
-
-            else:
-                # Mode 3: declarative hook if function returns HookOp list,
-                # otherwise plain Python callback fallback.
-                if _has_required_parameters(func):
-                    if NUMBA_ENABLED:
-                        raise TypeError(
-                            f"Python hook '{func.__name__}' is not allowed when Numba is enabled. "
-                            "Please convert it to @njit or use declarative Op hooks."
-                        )
-                    desc = CompiledHookDescriptor(
-                        name=func.__name__,
-                        event=actual_event,
-                        priority=priority,
+            if is_custom_or_selector:
+                if selectors is not None:
+                    desc = compile_selector_hook(
+                        func,
+                        pop,
+                        actual_event,
+                        selectors,
+                        priority,
                         deme_selector=actual_deme_selector,
-                        py_wrapper=func,
-                        meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
                     )
                 else:
-                    result = func()
-                    if isinstance(result, list):
-                        result_ops = cast(List[object], result)
-                        if not all(isinstance(op, HookOp) for op in result_ops):
-                            raise TypeError(
-                                f"Declarative hook '{func.__name__}' must return List[HookOp], "
-                                "or use function arguments for python hook mode."
-                            )
-                        ops = cast(List[HookOp], result_ops)
-                        desc = compile_declarative_hook(
-                            ops,
-                            pop,
-                            actual_event,
-                            priority,
-                            deme_selector=actual_deme_selector,
-                            name=func.__name__,
-                        )
-                    else:
-                        if NUMBA_ENABLED:
-                            raise TypeError(
-                                f"Python hook '{func.__name__}' is not allowed when Numba is enabled. "
-                                "Please convert it to @njit or use declarative Op hooks."
-                            )
-                        def _py_wrapper(p: object, f: HookCallable = func) -> object:
-                            return f(p)
-
+                    if is_njit_function(func):
+                        # Already njit-decorated
+                        norm_fn = func
                         desc = CompiledHookDescriptor(
                             name=func.__name__,
                             event=actual_event,
                             priority=priority,
                             deme_selector=actual_deme_selector,
-                            py_wrapper=_py_wrapper,
+                            njit_fn=norm_fn,
                             meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
                         )
+                    else:
+                        # Try to use njit_switch
+                        try:
+                            decorated_func = njit_switch(cache=False)(func)
+                            # Check if it's a valid compiled function
+                            if NUMBA_ENABLED and is_njit_function(decorated_func):
+                                norm_fn = _normalize_njit_fn(decorated_func)
+                                desc = CompiledHookDescriptor(
+                                    name=func.__name__,
+                                    event=actual_event,
+                                    priority=priority,
+                                    deme_selector=actual_deme_selector,
+                                    njit_fn=norm_fn,
+                                    meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                                )
+                            else:
+                                # NUMBA_ENABLED is False, use py wrapper
+                                wrapped_func = _normalize_py_hook(func)
+                                desc = CompiledHookDescriptor(
+                                    name=func.__name__,
+                                    event=actual_event,
+                                    priority=priority,
+                                    deme_selector=actual_deme_selector,
+                                    njit_fn=None,
+                                    py_wrapper=wrapped_func,
+                                    meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                                )
+                        except Exception:
+                            # Fall back to py wrapper
+                            wrapped_func = _normalize_py_hook(func)
+                            desc = CompiledHookDescriptor(
+                                name=func.__name__,
+                                event=actual_event,
+                                priority=priority,
+                                deme_selector=actual_deme_selector,
+                                njit_fn=None,
+                                py_wrapper=wrapped_func,
+                                meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                            )
+            elif is_declarative_pop_hook:
+                # Single population parameter - use as py_wrapper, but check numba enabled
+                if NUMBA_ENABLED:
+                    raise TypeError(
+                        f"Python hook '{func.__name__}' is not allowed when Numba is enabled. "
+                        "Please convert it to @njit or use declarative Op hooks."
+                    )
+                desc = CompiledHookDescriptor(
+                    name=func.__name__,
+                    event=actual_event,
+                    priority=priority,
+                    deme_selector=actual_deme_selector,
+                    py_wrapper=func,
+                    meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                )
+            else:
+                result = func()
+                if isinstance(result, list):
+                    result_ops = cast(List[object], result)
+                    if not all(isinstance(op, HookOp) for op in result_ops):
+                        raise TypeError(
+                            f"Declarative hook '{func.__name__}' must return List[HookOp], "
+                            "or use custom=True for custom mode."
+                        )
+                    ops = cast(List[HookOp], result_ops)
+                    desc = compile_declarative_hook(
+                        ops,
+                        pop,
+                        actual_event,
+                        priority,
+                        deme_selector=actual_deme_selector,
+                        name=func.__name__,
+                    )
+                else:
+                    raise TypeError(
+                        f"Hook '{func.__name__}' must return List[HookOp] for declarative mode, "
+                        "or use custom=True for custom mode."
+                    )
 
             hook_func.compiled = desc  # type: ignore
             pop.register_compiled_hook(desc)
@@ -378,15 +453,3 @@ def hook(
         return hook_func
 
     return decorator
-
-def _has_required_parameters(func: HookCallable) -> bool:
-    """Return whether calling ``func()`` would require positional/keyword args."""
-    sig = inspect.signature(func)
-    for param in sig.parameters.values():
-        if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
-            if param.default is inspect.Signature.empty:
-                return True
-        elif param.kind is inspect.Parameter.KEYWORD_ONLY:
-            if param.default is inspect.Signature.empty:
-                return True
-    return False

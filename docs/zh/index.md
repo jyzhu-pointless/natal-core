@@ -66,7 +66,7 @@ uv pip install natal-core
 pip install natal-core
 ```
 
-## 一个最小示例
+## 一个最简示例
 
 ```python
 import natal as nt
@@ -134,24 +134,48 @@ launch(pop)
 
 更多可即时使用的示例，请参阅 GitHub 仓库中的 [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) 目录。
 
-## 学习路径（按推荐顺序）
+## 文档目录
 
-1. [快速入门：15 分钟上手 NATAL](quickstart.md)
-2. [遗传结构与实体](genetic_structures.md)
-3. [Builder 系统详解](builder_system.md)
-4. [IndexRegistry 索引机制](index_registry.md)
-5. [PopulationState 与 PopulationConfig](population_state_config.md)
-6. [模拟内核深度解析](simulation_kernels.md)
-7. [Numba 优化指南](numba_optimization.md)
-8. [Modifier 机制](modifiers.md)
-9. [Hook 系统](hooks.md)
-10. [遗传预设使用指南](genetic_presets.md)
-11. [空间模拟指南](spatial_simulation_guide.md)
-12. [种群观察规则](observation_rules.md)
-13. [模式匹配与可扩展配置](genotype_patterns.md)
-14. [设计你自己的预设（1）：从等位基因转换规则开始](allele_conversion_rules.md)
-15. [设计你自己的预设（2）：使用 genotype_filter 控制规则范围](genotype_filter.md)
-16. [设计你自己的预设（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
+推荐先阅读第一部分，上手后以实际项目为驱动阅读第二部分，再根据实际需要选择性阅读第三、四部分。
+
+### 第一部分：快速入门
+
+> 本部分介绍 NATAL Core 的基本概念和使用方法，帮助你快速上手。
+
+1. [快速入门：15 分钟上手 NATAL](1_quickstart.md)
+
+### 第二部分：实用组件
+
+> 本部分介绍 NATAL Core 的主要组件，它们是日常使用的主要功能。
+
+2. [遗传结构与实体](2_genetics.md)
+3. [种群初始化](2_population_initialization.md)
+4. [随机交配种群](2_population.md)
+5. [遗传预设使用指南](2_genetic_presets.md)
+6. [Hook 系统](2_hooks.md)
+7. [模式匹配与可扩展配置](2_genotype_patterns.md)
+8. [提取种群模拟数据](2_data_output.md)
+
+### 第三部分：高级功能
+
+> 本部分介绍 NATAL Core 的高级功能，包括空间模拟和更多自定义配置。
+
+9. [空间模拟指南](3_spatial_simulation.md)
+10. [设计你自己的预设](3_custom_presets.md)
+11. [Modifier 机制](3_modifiers.md)
+12. [高级 Hook 教程](3_advanced_hooks.md)
+
+### 第四部分：底层机制
+
+> 本部分介绍 NATAL Core 中不直接面向用户的底层机制，帮助你深入理解 NATAL Core 的工作原理。
+
+<!--TODO: numba 相关内容可适当提前-->
+
+13. [IndexRegistry 索引机制](4_index_registry.md)
+14. [PopulationState 与 PopulationConfig](4_population_state_config.md)
+15. [模拟内核深度解析](4_simulation_kernels.md)
+16. [Numba 优化指南](4_numba_optimization.md)
+
 
 ## API 文档
 

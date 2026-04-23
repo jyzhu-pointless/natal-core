@@ -57,7 +57,7 @@ sp = nt.Species.from_dict(
 
 这种分离使得模拟可以灵活定义复杂的遗传架构，同时在运行时保持高效的计算。
 
-> 完整概念、对象关系与更多示例请参考 [遗传结构与实体](genetic_structures.md)。
+> 完整概念、对象关系与更多示例请参考 [遗传结构与实体](2_genetics.md)。
 
 ### 验证架构
 
@@ -75,7 +75,7 @@ print(f"WT|WT: {wt_wt}")
 print(f"WT|Drive: {wt_drive}")
 ```
 
-> 更多遗传架构的细节，见 [遗传结构与实体](genetic_structures.md)
+> 更多遗传架构的细节，见 [遗传结构与实体](2_genetics.md)
 
 ---
 
@@ -199,7 +199,7 @@ pop = (nt.DiscreteGenerationPopulation
 
 目前预设系统包括 [HomingDrive](api/genetic_presets#HomingDrive) 和 [ToxinAntidoteDrive](api/genetic_presets#ToxinAntidoteDrive) 两类，未来会持续扩展更多预设类型。
 
-你也可以自定义预设，详见 [设计自己的 Preset](allele_conversion_rules.md)。
+你也可以自定义预设，详见 [设计你自己的预设](3_custom_presets.md)。
 
 ### 适应度设置（可选）
 
@@ -219,7 +219,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **💡 提示**: 对于需要自定义复杂遗传规则的高级用户，可以参考[Modifier机制](modifiers.md)手动编写modifier函数。但对于大多数常见场景，预设系统更简单可靠。
+> **💡 提示**: 对于需要自定义复杂遗传规则的高级用户，可以参考[Modifier机制](3_modifiers.md)手动编写modifier函数。但对于大多数常见场景，预设系统更简单可靠。
 
 ---
 
@@ -255,7 +255,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以使用原生 Numba Hook。详见 [Hook 系统](hooks.md)
+> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以使用原生 Numba Hook。详见 [Hook 系统](2_hooks.md)
 
 ---
 
@@ -365,12 +365,11 @@ launch(pop, port=8080, title="My Simulation")
 5. **状态初始化**: 根据初始分布创建 `PopulationState` NamedTuple（包含 numpy 数组）
 
 这个过程对用户透明，但理解它很重要。详见：
-- [Index registry](index_registry.md)
-- [PopulationState & PopulationConfig](population_state_config.md)
-- [Modifiers 系统](modifiers.md) 和 [遗传预设系统](genetic_presets.md)
-- [Hooks 系统](hooks.md)
-
----
+- [Index registry](4_index_registry.md)
+- [PopulationState & PopulationConfig](4_population_state_config.md)
+- [Modifiers 系统](3_modifiers.md) 和 [遗传预设系统](2_genetic_presets.md)
+- [Hooks 系统](2_hooks.md)
+- [Numba 优化指南](4_numba_optimization.md)---
 
 ## 📊 完整示例
 
@@ -472,11 +471,11 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 
 现在你已经掌握了基础知识！接下来可以：
 
-1. **深入学习遗传预设系统**：[遗传预设系统](genetic_presets.md) - 学习如何创建自定义预设
-2. **理解遗传架构**：[遗传结构与实体](genetic_structures.md) - 深入了解Species、Chromosome等概念
-3. **掌握高级功能**：[Hook 系统](hooks.md) - 学习如何注入自定义模拟逻辑
-4. **需要自定义遗传规则**：[Modifier 机制](modifiers.md) - 手动编写gamete/zygote修饰器
-5. **性能优化**：[Numba 优化指南](numba_optimization.md) - 提升模拟性能
+1. **深入学习遗传预设系统**：[遗传预设系统](2_genetic_presets.md) - 学习如何创建自定义预设
+2. **理解遗传架构**：[遗传结构与实体](2_genetics.md) - 深入了解Species、Chromosome等概念
+3. **掌握高级功能**：[Hook 系统](2_hooks.md) - 学习如何注入自定义模拟逻辑
+4. **需要自定义遗传规则**：[Modifier 机制](3_modifiers.md) - 手动编写gamete/zygote修饰器
+5. **性能优化**：[Numba 优化指南](4_numba_optimization.md) - 提升模拟性能
 
 ---
 
@@ -501,4 +500,4 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 
 ---
 
-**准备好更深入的学习了吗？** [前往下一章：遗传结构与实体 →](genetic_structures.md)
+**准备好更深入的学习了吗？** [前往下一章：遗传结构与实体 →](2_genetics.md)

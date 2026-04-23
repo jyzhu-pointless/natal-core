@@ -151,7 +151,7 @@ pattern3 = "(A1/{B1,B2}|A2/{B1,B2});(C1::C2)"
 
 ### 与 Observation 结合
 
-Observation 章节中的 `groups["genotype"]` 已直接支持 GeneticPattern 解析：
+Observation 章节中的 `groups["genotype"]` 支持 `GenotypePattern` 解析：
 
 ```python
 groups = {
@@ -213,8 +213,6 @@ for hg in sp.enumerate_haploid_genomes_matching_pattern("A1/B1; C1", max_count=5
 
 ## 相关章节
 
-- [种群观测规则](observation_rules.md)
-- [设计自己的 Preset（1）：从等位基因转换规则开始](allele_conversion_rules.md)
-- [设计自己的 Preset（2）：用 genotype_filter 控制规则生效范围](genotype_filter.md)
-- [设计自己的 Preset（3）：封装、验证与发布前检查](preset_encapsulation_and_validation.md)
-- [遗传预设使用指南](genetic_presets.md)
+- [种群观测规则](2_data_output.md)
+- [设计你自己的预设](3_custom_presets.md)
+- [遗传预设使用指南](2_genetic_presets.md)

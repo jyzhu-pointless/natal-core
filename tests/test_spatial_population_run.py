@@ -377,12 +377,11 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
 
 def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
     species = _make_species("spatial_mixed_priority")
-    calls: list[str] = []
-    observed: dict[str, list[float]] = {
-        "first_py": [],
-        "first_njit": [],
-        "early_probe": [],
-    }
+    calls_np = np.zeros(8, dtype=np.int32)  # 0: py, 1: njit
+    observed_first_py_np = np.zeros(4, dtype=np.float64)
+    observed_first_njit_np = np.zeros(4, dtype=np.float64)
+    observed_early_probe_np = np.zeros(4, dtype=np.float64)
+    idx_np = np.zeros(1, dtype=np.int32)
 
     def _build_deme(name: str) -> nt.DiscreteGenerationPopulation:
         return (
@@ -404,18 +403,27 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
     # Spatial kernels require one shared config object.
     d1._config = d0.export_config()  # type: ignore[attr-defined]
 
+    from numba import njit
+
     @hook(event="first", priority=0)
     def first_python(population):  # type: ignore[no-untyped-def]
-        calls.append("py")
-        observed["first_py"].append(float(population.state.individual_count[1, 1, 0]))
+        idx = int(idx_np[0])
+        calls_np[idx] = 0
+        observed_first_py_np[idx // 2] = float(population.state.individual_count[1, 1, 0])
+        idx_np[0] += 1
 
-    @hook(event="first", priority=1, numba=True)
+    @njit
+    @hook(event="first", priority=1)
     def first_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
         _ = (tick, deme_id)
-        calls.append("njit")
-        observed["first_njit"].append(float(ind_count[1, 1, 0]))
+        idx = int(idx_np[0])
+        calls_np[idx] = 1
+        observed_first_njit_np[idx // 2] = float(ind_count[1, 1, 0])
         ind_count[1, 1, 0] += 2.0
+        idx_np[0] += 1
         return 0
+
+    early_idx_np = np.zeros(1, dtype=np.int32)
 
     @hook(event="first", priority=2)
     def first_csr():
@@ -423,7 +431,9 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
 
     @hook(event="early", priority=0)
     def early_probe(population):  # type: ignore[no-untyped-def]
-        observed["early_probe"].append(float(population.state.individual_count[1, 1, 0]))
+        idx = int(early_idx_np[0])
+        observed_early_probe_np[idx] = float(population.state.individual_count[1, 1, 0])
+        early_idx_np[0] += 1
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
     spatial.set_hook("first", first_csr)
@@ -435,11 +445,12 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
     spatial.run(n_steps=1)
 
     # 2 demes * 2 ticks: py/njit each called 4 times, per-deme order fixed.
+    calls = ["py" if x == 0 else "njit" for x in calls_np]
     assert calls == ["py", "njit", "py", "njit", "py", "njit", "py", "njit"]
-    assert observed["first_py"] == [10.0, 10.0, 0.0, 0.0]
-    assert observed["first_njit"] == [10.0, 10.0, 0.0, 0.0]
+    assert observed_first_py_np.tolist() == [10.0, 10.0, 0.0, 0.0]
+    assert observed_first_njit_np.tolist() == [10.0, 10.0, 0.0, 0.0]
     # early probes confirm csr (+3) is applied after njit (+2) each tick.
-    assert observed["early_probe"] == [15.0, 15.0, 5.0, 5.0]
+    assert observed_early_probe_np.tolist() == [15.0, 15.0, 5.0, 5.0]
 
 
 def test_spatial_compiled_hooks_are_pinned_to_owning_deme() -> None:
@@ -492,8 +503,12 @@ def test_spatial_compiled_hooks_are_pinned_to_owning_deme() -> None:
 
 def test_spatial_mixed_priority_is_local_per_deme() -> None:
     species = _make_species("spatial_local_priority_per_deme")
-    calls: list[str] = []
-    observed: dict[str, list[float]] = {"d0_py": [], "d0_early": [], "d1_py": [], "d1_early": []}
+    calls_np = np.zeros(4, dtype=np.int32)  # 0: d0_py, 1: d0_njit, 2: d1_py, 3: d1_njit
+    idx_np = np.zeros(1, dtype=np.int32)
+    observed_d0_py_np = np.zeros(1, dtype=np.float64)
+    observed_d0_early_np = np.zeros(1, dtype=np.float64)
+    observed_d1_py_np = np.zeros(1, dtype=np.float64)
+    observed_d1_early_np = np.zeros(1, dtype=np.float64)
 
     def _build_deme(name: str) -> nt.DiscreteGenerationPopulation:
         return (
@@ -513,16 +528,23 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     d1 = _build_deme("local_d1")
     d1._config = d0.export_config()  # type: ignore[attr-defined]
 
+    from numba import njit
+
     @hook(event="first", priority=0)
     def d0_py(population):  # type: ignore[no-untyped-def]
-        calls.append("d0_py")
-        observed["d0_py"].append(float(population.state.individual_count[1, 1, 0]))
+        idx = int(idx_np[0])
+        calls_np[idx] = 0
+        observed_d0_py_np[0] = float(population.state.individual_count[1, 1, 0])
+        idx_np[0] += 1
 
-    @hook(event="first", priority=1, numba=True)
+    @njit
+    @hook(event="first", priority=1)
     def d0_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
         _ = (tick, deme_id)
-        calls.append("d0_njit")
+        idx = int(idx_np[0])
+        calls_np[idx] = 1
         ind_count[1, 1, 0] += 2.0
+        idx_np[0] += 1
         return 0
 
     @hook(event="first", priority=2)
@@ -531,18 +553,23 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
 
     @hook(event="early", priority=0)
     def d0_early(population):  # type: ignore[no-untyped-def]
-        observed["d0_early"].append(float(population.state.individual_count[1, 1, 0]))
+        observed_d0_early_np[0] = float(population.state.individual_count[1, 1, 0])
 
     @hook(event="first", priority=2)
     def d1_py(population):  # type: ignore[no-untyped-def]
-        calls.append("d1_py")
-        observed["d1_py"].append(float(population.state.individual_count[1, 1, 0]))
+        idx = int(idx_np[0])
+        calls_np[idx] = 2
+        observed_d1_py_np[0] = float(population.state.individual_count[1, 1, 0])
+        idx_np[0] += 1
 
-    @hook(event="first", priority=0, numba=True)
+    @njit
+    @hook(event="first", priority=0)
     def d1_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
         _ = (tick, deme_id)
-        calls.append("d1_njit")
+        idx = int(idx_np[0])
+        calls_np[idx] = 3
         ind_count[1, 1, 0] += 4.0
+        idx_np[0] += 1
         return 0
 
     @hook(event="first", priority=1)
@@ -551,8 +578,9 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
 
     @hook(event="early", priority=0)
     def d1_early(population):  # type: ignore[no-untyped-def]
-        observed["d1_early"].append(float(population.state.individual_count[1, 1, 0]))
+        observed_d1_early_np[0] = float(population.state.individual_count[1, 1, 0])
 
+    # Set hooks directly on individual demes
     d0.set_hook("first", d0_csr)
     d0.set_hook("first", d0_njit)
     d0.set_hook("first", d0_py)
@@ -566,11 +594,12 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
     spatial.run_tick()
 
+    calls = ["d0_py" if x == 0 else "d0_njit" if x == 1 else "d1_py" if x == 2 else "d1_njit" for x in calls_np]
     assert calls == ["d0_py", "d0_njit", "d1_njit", "d1_py"]
-    assert observed["d0_py"] == [10.0]
-    assert observed["d0_early"] == [15.0]
-    assert observed["d1_py"] == [19.0]
-    assert observed["d1_early"] == [19.0]
+    assert observed_d0_py_np[0] == 10.0
+    assert observed_d0_early_np[0] == 15.0
+    assert observed_d1_py_np[0] == 19.0
+    assert observed_d1_early_np[0] == 19.0
 
 
 def test_spatial_compiled_local_hooks_still_take_effect() -> None:

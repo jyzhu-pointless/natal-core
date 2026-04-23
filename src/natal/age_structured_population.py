@@ -648,7 +648,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def run(
         self,
         n_steps: int,
-        record_every: int = 1,
+        record_every: Optional[int] = None,
         finish: bool = False,
         clear_history_on_start: bool = False
     ) -> 'AgeStructuredPopulation':
@@ -656,7 +656,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         Args:
             n_steps: Number of steps to evolve.
-            record_every: Interval for recording snapshots (0 to disable).
+            record_every: Interval for recording snapshots.
+                If None, uses self.record_every. If 0, no snapshots are recorded.
             finish: Whether to mark the population as finished after the run.
             clear_history_on_start: Whether to clear existing history before starting.
 
@@ -672,6 +673,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 f"Population '{self.name}' has finished. "
                 "Cannot run() again after finish=True."
             )
+
+        if record_every is None:
+            record_every = self.record_every
 
         if self.should_use_python_dispatch():
             from natal.hooks.executor import run_age_structured_with_hooks

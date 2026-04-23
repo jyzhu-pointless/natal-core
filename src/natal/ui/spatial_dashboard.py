@@ -244,7 +244,7 @@ class SpatialDashboard:
 
     def _render_landscape(self) -> None:
         """Render the clickable landscape geometry using plotly."""
-        self.landscape_container.clear()
+        self.landscape_container.clear()  # TODO: 不要刷新整张landscape，只改颜色
         topology = self.pop.topology
         counts = [float(deme.state.individual_count.sum()) for deme in self.pop.demes]
         current_max = max(counts) if counts else 1.0

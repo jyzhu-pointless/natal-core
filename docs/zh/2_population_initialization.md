@@ -1,34 +1,57 @@
-# Builder 系统详解
+# 种群初始化
 
-Builder 是 NATAL Core 的核心配置系统，用于构建和管理种群模拟的配置参数。它提供链式 API 来分类设置各种模拟参数，并将高层配置编译成底层可执行的数值配置。
+种群初始化是 NATAL Core 模拟的第一步，通过链式 API 配置和构建种群。
 
-## Builder 功能概览
+## 快速开始：链式 API 配置
 
-Builder 本身不直接执行模拟，其主要作用是将高层输入编译成 `PopulationConfig` 和初始的 `PopulationState`（`DiscretePopulationState`），然后交由模拟引擎运行。
+NATAL Core 提供了简洁的链式 API 来配置种群，这是推荐的使用方式：
 
-整个流程可简化为：
+```python
+import natal as nt
 
-```text
-Builder 链式配置
-  -> build()
-  -> PopulationConfig / PopulationState
-  -> run_tick / run
-  -> reproduction -> survival -> aging（以及 hooks）
+# 链式 API 配置（推荐）
+pop = (
+    nt.AgeStructuredPopulation
+    .setup(species=my_species)
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state(individual_count={
+        "female": {"WT|WT": 100},
+        "male": {"WT|WT": 100}
+    })
+    .survival(female_age_based_survival_rates=0.85)
+    .reproduction(eggs_per_female=50.0)
+    .competition(age_1_carrying_capacity=1000)
+    .hooks(my_hook)
+    .build()
+)
 ```
 
-相关章节：
+## 配置流程
 
-- [PopulationState & PopulationConfig：编译与配置](population_state_config.md)
-- [模拟内核深度解析](simulation_kernels.md)
+完整配置流程如下：
 
-## 两类 Builder
+```text
+Population.setup() → 链式配置方法调用
+  → build()
+  → PopulationConfig / PopulationState
+  → run_tick / run
+  → reproduction → survival → aging（以及 hooks）
+```
 
-- **`AgeStructuredPopulationBuilder`**：适用于多年龄层模型。主要特征包括可配置 `n_ages`、支持按年龄向量输入、可选精子存储机制。
-- **`DiscreteGenerationPopulationBuilder`**：适用于离散世代模型。典型特征是默认使用两个年龄阶段（`n_ages=2`，`new_adult_age=1`）。
+配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulation_kernels.md)）。
 
-## AgeStructuredPopulationBuilder 参数类型
+## 两类配置接口
+
+NATAL Core 提供两种主要的种群类型：
+
+- **`AgeStructuredPopulation`**：适用于多年龄层模型，支持可配置的年龄阶段数量、按年龄向量输入参数以及可选的精子存储机制。
+- **`DiscreteGenerationPopulation`**：适用于离散世代模型，默认使用两个年龄阶段（`n_ages=2`，`new_adult_age=1`），简化了世代交替的建模。
+
+## AgeStructuredPopulation 参数类型
 
 ### `setup(...)` – 基本设置
+
+配置种群的基本信息及随机性。
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
@@ -36,17 +59,22 @@ Builder 链式配置
 | `stochastic` | `bool` | 是否采用随机采样 | `True` | reproduction / survival 等采样阶段 | `True` 表示随机，`False` 表示确定性；调参阶段建议先使用 `False` |
 | `use_continuous_sampling` | `bool` | 采样策略选择 | `False` | 概率采样细节 | 控制采样方式，大多数场景保持默认即可 |
 | `use_fixed_egg_count` | `bool` | 产卵数是否固定 | `False` | reproduction | `True` 表示固定产卵数，`False` 更接近随机产卵过程 |
+| `species` | `Species` | 物种对象 | 必填 | 全流程 | 定义种群的遗传结构，是配置的核心参数 |
 
 ### `age_structure(...)` – 年龄结构
+
+配置种群的年龄结构，包括年龄阶段总数和幼年/成年的划分等。
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `n_ages` | `int` | 年龄阶段总数 | `8` | 全流程（数组维度） | 约束初始状态、存活率向量等数组长度；必须与所有年龄相关参数长度一致 |
-| `new_adult_age` | `int` | 个体进入成虫阶段的年龄索引 | `2` | reproduction / survival | 建议与目标物种的生命史阶段对齐；低于此年龄的个体视为幼体 |
+| `new_adult_age` | `int` | 个体进入成年阶段的年龄索引 | `2` | reproduction / survival | 建议与目标物种的生命史阶段对齐；低于此年龄的个体视为幼体 |
 | `generation_time` | `Optional[int]` | 代时标记 | `None` | 编译参数 | 仅用于建模解释；与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的 |
 | `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 平衡分布辅助参数 | `None` | competition / 初始化标度 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的；仅在需要显式稳态标定时使用 |
 
 ### `initial_state(...)` – 初始状态
+
+初始状态参数在模拟开始时生效，为 `algorithms.py` 中的各种采样函数提供基础数据。初始个体数量分布直接影响后续的繁殖和生存计算，精子存储数据在繁殖阶段被 `sample_mating` 函数使用。
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
@@ -88,7 +116,7 @@ Builder 链式配置
 - 所有计数必须 `>= 0`
 - 基因型字符串必须能被当前的 `Species` 正确解析
 
-### `survival(...)` – 存活率
+### `survival(...)` – 存活参数
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
@@ -100,22 +128,22 @@ Builder 链式配置
 **代码示例**（来自 `_resolve_survival_param`）：
 
 ```python
-# A) None -> 使用默认曲线
+# A) None → 使用默认曲线
 .survival(female_age_based_survival_rates=None)
 
-# B) 标量 -> 所有年龄使用相同值
+# B) 标量 → 所有年龄使用相同值
 .survival(female_age_based_survival_rates=0.85)
 
-# C) 序列 -> 按年龄依次写入，不足补 0，超长截断
+# C) 序列 → 按年龄依次写入，不足补 0，超长截断
 .survival(female_age_based_survival_rates=[1.0, 1.0, 0.9, 0.7])
 
-# D) 稀疏映射 -> 未指定的年龄默认为 1.0
+# D) 稀疏映射 → 未指定的年龄默认为 1.0
 .survival(female_age_based_survival_rates={0: 1.0, 1: 0.95, 2: 0.8})
 
-# E) 函数 -> 必须接收一个 age 参数并返回数值
+# E) 函数 → 必须接收一个 age 参数并返回数值
 .survival(female_age_based_survival_rates=lambda age: 1.0 if age < 2 else 0.8)
 
-# F) 序列末尾用 None 哨兵 -> 末尾用最后一个非 None 值填充
+# F) 序列末尾用 None 哨兵 → 末尾用最后一个非 None 值填充
 .survival(female_age_based_survival_rates=[1.0, 0.9, None])
 ```
 
@@ -133,6 +161,8 @@ Builder 链式配置
 | `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 取值范围通常为 `(0, 1]`；值越大表示新精子替换速度越快。 |
 
 ### `competition(...)` – 竞争与密度调节
+
+竞争参数在种群的生存阶段生效。
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
@@ -164,6 +194,17 @@ Builder 链式配置
 
 ### `fitness(...)` – 适应度系数
 
+适应度参数在模拟的不同阶段生效。`sexual_selection` 在繁殖阶段的 `compute_mating_probability_matrix` 中影响交配概率，`fecundity` 在 `fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction` 中影响产卵数量，`viability` 在生存阶段的 `compute_viability_survival_rates` 中与年龄特定存活率结合，`zygote_viability` 在繁殖阶段结束后立即应用于新生个体。
+
+NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类型会在不同阶段生效：
+
+- `viability`：生存适应度系数，影响个体的生存概率。
+- `fecundity`：生育力适应度系数，影响个体的生育能力。
+- `sexual_selection`：配对偏好权重，影响个体的配对选择。
+- `zygote_viability`：合子存活适应度系数，影响合子的存活概率。
+
+> 建议使用 `presets` 来对特定基因型配置适应度系数，而非直接传入 `fitness`。
+
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `viability` | `Optional[Dict]` | 生存适应度系数。 | `None` | survival | 支持多层嵌套：按基因型、按性别、按年龄、按性别+年龄。默认 `None` 表示不做修改。 |
@@ -175,38 +216,38 @@ Builder 链式配置
 **代码示例**：
 
 ```python
-# viability: 基因型 -> 浮点数
+# viability: 基因型 → 浮点数
 .fitness(viability={"WT|WT": 1.0, "Drive|Drive": 0.6})
 
-# viability: 基因型 -> {性别: 浮点数}
-.fitness(viability={"Drive|WT": {"female": 0.9, "male": 0.8}})
+# viability: 基因型 → {性别: 浮点数}
+.fitness(viability={"Drive::WT": {"female": 0.9, "male": 0.8}})
 
-# viability: 基因型 -> {年龄: 浮点数}，雌雄共用
-.fitness(viability={"Drive|WT": {0: 0.95, 1: 0.85}})
+# viability: 基因型 → {年龄: 浮点数}，雌雄共用
+.fitness(viability={"Drive::WT": {0: 0.95, 1: 0.85}})
 
-# viability: 基因型 -> {性别: {年龄: 浮点数}}，可细分到性别+年龄
-.fitness(viability={"Drive|WT": {"female": {1: 0.9}, "male": {2: 0.8}}})
+# viability: 基因型 → {性别: {年龄: 浮点数}}，可细分到性别+年龄
+.fitness(viability={"Drive::WT": {"female": {1: 0.9}, "male": {2: 0.8}}})
 
-# fecundity: 基因型 -> 浮点数 或 {性别: 浮点数}
+# fecundity: 基因型 → 浮点数 或 {性别: 浮点数}
 .fitness(fecundity={"Drive|Drive": 0.7})
 
 # sexual_selection 扁平格式: {雄性选择器: 值}，自动认为雌性为 '*'
-.fitness(sexual_selection={"Drive|WT": 1.2, "WT|WT": 1.0})
+.fitness(sexual_selection={"Drive::WT": 1.2, "WT|WT": 1.0})
 
 # sexual_selection 嵌套格式: {雌性选择器: {雄性选择器: 值}}
-.fitness(sexual_selection={"WT|WT": {"Drive|WT": 0.8, "WT|WT": 1.0}})
+.fitness(sexual_selection={"WT|WT": {"Drive::WT": 0.8, "WT|WT": 1.0}})
 
-# zygote_viability fitness: 基因型 -> 浮点数（两性通用）
+# zygote_viability fitness: 基因型 → 浮点数（两性通用）
 .fitness(zygote_viability={"A|A": 0.5, "a|a": 0.8})
 
-# zygote_viability fitness: 基因型 -> {性别: 浮点数}（性别特异）
+# zygote_viability fitness: 基因型 → {性别: 浮点数}（性别特异）
 .fitness(zygote_viability={"a|a": {"female": 0.3, "male": 0.4}})
 ```
 
-**`GenotypeSelector` 支持**：
-
-- 单个选择器：`"Drive|WT"` 或 `Genotype` 对象
-- 选择器并集：`("Drive|WT", "Drive|Drive")`
+**关于基因型键**：
+- 可以是 `Genotype` 对象
+- 可以是基因型精确字符串或模式匹配字符串（参见[基因型模式匹配](2_genotype_patterns.md)）
+- 可以是一个包含上述类型的元组，例如 `("Drive::WT", "Drive|Drive")`，表示这些基因型的并集
 
 **`viability` 中年龄键的约束**（与代码一致）：
 
@@ -217,9 +258,11 @@ Builder 链式配置
 
 ### `modifiers(...)` – 修饰器（配子/合子转换）
 
+**算法生效时机**：修饰器在配置编译阶段生效，用于构建配子到合子的映射关系。`gamete_modifiers` 在 `compute_offspring_probability_tensor` 之前处理配子转换，`zygote_modifiers` 在合子形成后处理基因型转换。这些转换函数影响后续的繁殖和遗传计算。
+
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `gamete_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | 配子阶段转换函数列表 | `None` | gamete -> zygote 映射编译 | 每个元素为 `(优先级, 名称, 函数)` 的元组；按优先级排序后依次应用 |
+| `gamete_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | 配子阶段转换函数列表 | `None` | gamete → zygote 映射编译 | 每个元素为 `(优先级, 名称, 函数)` 的元组；按优先级排序后依次应用 |
 | `zygote_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | 合子阶段转换函数列表 | `None` | zygote 映射编译 | 每个元素为 `(优先级, 名称, 函数)` 的元组；按优先级排序后依次应用 |
 
 **示例**：
@@ -238,21 +281,25 @@ Builder 链式配置
 
 ### `hooks(...)` – 钩子函数
 
+**算法生效时机**：钩子函数在模拟的特定事件点生效，如 `first`、`early`、`late`、`finish` 等。这些钩子可以在模拟的不同阶段插入自定义逻辑，影响种群状态或模拟行为。钩子执行时机由事件类型和优先级决定。
+
+> 关于 `hooks` 的详细说明，参见 [Hook 系统](2_hooks.md)。
+
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `*hook_items` | `Callable` 或 `HookMap` | 钩子函数或钩子注册映射。 | 空 | 事件点（first / early / late / finish 等） | 支持两种形式：直接传入函数（需要带有 `@hook` 元数据），或者传入事件映射字典。如果函数未声明事件，会报错。 |
+| `*hook_items` | `Callable` 或 `HookMap` | 钩子函数或钩子注册映射。 | 空 | 事件点（first / early / late / finish 等） | 直接传入函数（带有 `@hook` 修饰器）。 |
 
-**两种合法的输入方式**：
+**示例**：
 
 ```python
-# 1) 直接传入函数（函数必须带有 @hook(event='...') 元数据）
-.hooks(my_hook_fn)
+@nt.hook(event="first", priority=0)
+def release_drive_carriers():
+    return [
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
+    ]
 
-# 2) 传入映射字典
-.hooks({
-  "late": [(my_hook_fn, "my_hook", 10)],
-  "finish": [(finish_hook, "finish", 0)],
-})
+# ...
+.hooks(release_drive_carriers)
 ```
 
 常见错误：
@@ -273,16 +320,16 @@ Builder 链式配置
 
 因此，建议把 `build()` 放在链式调用的最后。
 
-## DiscreteGenerationPopulationBuilder 参数手册
+## DiscreteGenerationPopulation 参数手册
 
-离散世代 Builder 与年龄结构模型的关键差异：
+离散世代模型与年龄结构模型的关键差异：
 
 - 默认使用 `n_ages=2` 和 `new_adult_age=1`。
 - 不需要调用 `age_structure(...)`。
 
 ### `setup(...)`
 
-参数与年龄结构模型一致：`name`、`stochastic`、`use_continuous_sampling`、`use_fixed_egg_count`。
+参数与年龄结构模型一致：`name`、`stochastic`、`use_continuous_sampling`、`use_fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
 
 ### `initial_state(...)`
 
@@ -293,16 +340,16 @@ Builder 链式配置
 **离散模型中 `age_data` 的解析规则**（来自 `_resolve_discrete_age_distribution`）：
 
 ```python
-# 标量 -> (age0=0, age1=value)
+# 标量 → (age0=0, age1=value)
 {"female": {"WT|WT": 1000}}
 
-# 长度 1 的序列 -> (0, value)
+# 长度 1 的序列 → (0, value)
 {"female": {"WT|WT": [1000]}}
 
-# 长度 2 的序列 -> (age0, age1)
+# 长度 2 的序列 → (age0, age1)
 {"female": {"WT|WT": [200, 800]}}
 
-# 映射 -> 只允许键为 0 或 1
+# 映射 → 只允许键为 0 或 1
 {"female": {"WT|WT": {0: 200, 1: 800}}}
 ```
 
@@ -346,27 +393,7 @@ Builder 链式配置
 
 这些方法的语义与年龄结构模型完全一致，区别仅在于离散世代的内核使用固定的年龄结构。
 
-## 参数如何影响模拟过程（一个 tick 的视角）
-
-下面以一个 tick 为例，说明各参数在哪个阶段发挥作用：
-
-1. **reproduction（繁殖）**
-   核心参数：交配率、相对生育力、`eggs_per_female`、`sex_ratio`、`fecundity`、`sexual_selection`、精子存储相关参数。
-
-2. **survival（生存）**
-   核心参数：按年龄的存活率向量 / 标量、`viability`。
-
-3. **aging（衰老）**
-   核心参数：年龄结构模型中的 `n_ages` 和 `new_adult_age`，或者离散世代模型中的 `adult_survival`。
-
-4. **密度调节（幼体竞争）**
-   发生在生存阶段的早期。核心参数：`juvenile_growth_mode`、`low_density_growth_rate`、承载容量相关参数。
-
-5. **hook 事件点**
-   通过 `hooks(...)` 注册的逻辑会在固定的阶段事件点触发，用于在各阶段前后进行干预。
-
-## 推荐的配置顺序（可直接照抄）
-
+## 推荐的配置顺序
 ### 年龄结构模型
 
 1. `setup(...)`
@@ -397,10 +424,39 @@ Builder 链式配置
 | 结果异常或运行时错误 | `sex_ratio` 或其他概率参数越界 | 检查参数是否在合法范围内（如 `[0, 1]`） |
 | 行为与预期不符 | 同名参数多次设置导致覆盖 | 注意 `generation_time`、`equilibrium_distribution` 等参数在多个方法中都可设置，后调用会覆盖先调用 |
 
+## 实现原理
+
+链式 API 的底层通过一个 Builder 对象来管理所有配置。配置的生效顺序是：
+
+1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数
+2. **状态配置**：`initial_state()` 设置初始种群状态
+3. **动力学配置**：`survival()`、`reproduction()`、`competition()` 设置种群动力学参数
+4. **高级配置**：`hooks()`、`fitness()`、`modifiers()` 设置高级功能
+5. **最终构建**：`build()` 编译所有配置并创建种群对象
+
+### 工作机制详解
+
+链式 API 的工作机制基于以下设计原则：
+
+1. **类方法启动**：`setup()` 是一个类方法，通过类名直接调用，返回一个配置对象实例
+2. **链式调用**：每个配置方法都返回配置对象本身，支持连续调用
+3. **配置验证**：在 `build()` 时统一验证所有必要参数，确保配置完整性
+4. **配置编译**：将链式配置转换为底层的 `PopulationConfig` 和 `PopulationState` 对象
+
+这种设计使得配置过程既直观又灵活，同时保持了底层的高性能。
+
 ## 本章小结
 
-Builder 将种群的参数组织成可分类、可链式配置的流程，并在构建时注册到底层 `PopulationConfig` 中，以此实现高层易用性和底层高性能的统一。
+种群初始化通过链式 API 提供了一种简洁、直观的配置方式，将种群的参数组织成可分类、可链式配置的流程，并在构建时注册到底层 `PopulationConfig` 中，以此实现高层易用性和底层高性能的统一。
+
+
+## 相关章节
+
+- [Hook 系统](2_hooks.md) - 钩子函数的详细使用方法
+- [基因型模式匹配](2_genotype_patterns.md) - 基因型匹配规则详解
+- [PopulationState & PopulationConfig：编译与配置](4_population_state_config.md) - 底层配置对象详解
+- [模拟内核深度解析](4_simulation_kernels.md) - 模拟执行流程和算法实现
 
 ***
 
-**下一章**：[IndexRegistry 索引机制](index_registry.md)
+**下一章**：[Hook 系统](2_hooks.md)

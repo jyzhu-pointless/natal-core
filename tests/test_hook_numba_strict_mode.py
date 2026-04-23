@@ -48,6 +48,10 @@ class _FakePop:
         return self._index_core
 
     @property
+    def index_registry(self):
+        return self._index_core
+
+    @property
     def n_ages(self):
         return self._n_ages
 
@@ -55,36 +59,6 @@ class _FakePop:
     def config(self):
         return self._config
 
-
-
-def test_selector_python_hook_rejected_when_numba_enabled():
-    pop = _FakePop()
-
-    def py_selector(population, target):  # pragma: no cover - should never run
-        _ = (population, target)
-
-    with numba_enabled():
-        with pytest.raises(TypeError, match="must be an @njit function"):
-            compile_selector_hook(
-                py_selector,
-                pop,
-                event="early",
-                selectors_spec={"target": "AA"},
-                priority=0,
-                numba_mode=False,
-            )
-
-
-def test_custom_python_hook_rejected_when_numba_enabled():
-    pop = _FakePop()
-
-    @hook(event="early")
-    def py_custom(population):  # pragma: no cover - should never run
-        _ = population
-
-    with numba_enabled():
-        with pytest.raises(TypeError, match="Python hook"):
-            py_custom.register(pop)
 
 
 def test_py_wrapper_guard_in_compiled_event_hooks():

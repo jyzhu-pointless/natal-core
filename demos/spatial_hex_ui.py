@@ -13,7 +13,9 @@ from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 from natal.ui import launch
 
-SIZE = 9  # Change to larger values (odd) if needed. Example: 51
+MAP_SIZE = 501  # Change to larger values (odd) if needed. Example: 51
+LOCAL_CAPACITY = 10000
+INITIAL_LOCAL_DRIVE_CARRIER_RATIO = 0.02
 
 drive = nt.HomingDrive(
     name="TestHoming",
@@ -21,24 +23,27 @@ drive = nt.HomingDrive(
     target_allele="WT",
     resistance_allele="R2",
     functional_resistance_allele="R1",
-    drive_conversion_rate=0.8,
+    drive_conversion_rate=0.95,
     late_germline_resistance_formation_rate=0.99,
     functional_resistance_ratio=1e-8,
-    fecundity_scaling={"female": (0.7, 0.0)},
-    fecundity_mode="custom"
+    fecundity_scaling={"female": (0.5, 0.0)},
+    fecundity_mode="custom",
 )
 
 def build_deme(
     species: nt.Species,
+    idx: int,
     *,
     name: str,
     wt_adults: float,
     drive_adults: float,
 ) -> nt.DiscreteGenerationPopulation:
     """Build one deterministic deme for the UI demo."""
+    if idx % 1000 == 0:
+        print(f"building deme {idx} / {MAP_SIZE * MAP_SIZE}")
     return (
         nt.DiscreteGenerationPopulation
-        .setup(species=species, name=name, stochastic=True)
+        .setup(species=species, name=name, stochastic=False)
         .initial_state(
             individual_count={
                 "female": {
@@ -56,9 +61,9 @@ def build_deme(
         )
         .competition(
             juvenile_growth_mode="concave",
-            carrying_capacity=1000,
+            carrying_capacity=LOCAL_CAPACITY,
             low_density_growth_rate=6.0
-        ).presets(drive)
+        ).presets(drive).fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}})
         .build()
     )
 
@@ -82,14 +87,18 @@ def build_hex_spatial_population() -> SpatialPopulation:
     )
 
     initial_pairs = [
-        (500.0, 0.0),
-    ] * (SIZE * SIZE)
+        (int(round(LOCAL_CAPACITY / 2)), 0.0),
+    ] * (MAP_SIZE * MAP_SIZE)
 
-    initial_pairs[SIZE * SIZE // 2] = (490.0, 10.0)
+    initial_pairs[MAP_SIZE * MAP_SIZE // 2] = (
+        int(round(LOCAL_CAPACITY / 2) * (1 - INITIAL_LOCAL_DRIVE_CARRIER_RATIO)),
+        int(round(LOCAL_CAPACITY / 2) * INITIAL_LOCAL_DRIVE_CARRIER_RATIO)
+    )
 
     demes = [
         build_deme(
             species,
+            idx,
             name=f"hex_deme_{idx}",
             wt_adults=wt_adults,
             drive_adults=drive_adults,
@@ -101,7 +110,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
     # Hex kernels still use a 3x3 matrix; valid offsets are interpreted by HexGrid.
     return SpatialPopulation(
         demes=demes,
-        topology=HexGrid(rows=SIZE, cols=SIZE, wrap=False),
+        topology=HexGrid(rows=MAP_SIZE, cols=MAP_SIZE, wrap=False),
         migration_kernel=np.array(
             # In hex grid, the 6 neighbors of a source cell are at offsets
             # (0,1), (1,0), (1,-1), (0,-1), (-1,0), (-1,1).
@@ -130,10 +139,27 @@ def build_hex_spatial_population() -> SpatialPopulation:
     )
 
 
+from typing import Any, Callable  # noqa: E402
+
+
+def time_perf_wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a function to measure its performance."""
+    import time
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        print(f"{func.__name__} time: {end_time - start_time:.2f} seconds")
+        return result
+    return wrapper
+
+
 def main() -> None:
     """Launch the hex-grid spatial UI demo."""
     # nt.disable_numba()
-    spatial = build_hex_spatial_population()
+    spatial = time_perf_wrapper(build_hex_spatial_population)()  # TODO: 创建需要大量时间，需要优化
+    print("spatial population built")
+    time_perf_wrapper(spatial.run)(5)
     launch(spatial, port=8081, title="Spatial Hex UI Demo")
 
 

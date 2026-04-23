@@ -963,7 +963,7 @@ class BasePopulation(ABC, Generic[T_State]):
     def run(
         self,
         n_steps: int,
-        record_every: int = 1,
+        record_every: Optional[int] = None,
         finish: bool = False
     ) -> BasePopulation[Any]:
         """

@@ -73,7 +73,7 @@ class TestZygoteFitness(unittest.TestCase):
                 "male": {"A|A": [1, 0, 0], "A|a": [1, 0, 0], "a|a": [1, 0, 0]},
             })
             .fitness(
-                zygote={
+                zygote_viability={
                     "A|A": 0.5,           # 50% survival for homozygous A
                     "a|a": {"female": 0.3, "male": 0.4},  # Sex-specific
                     "A|a": 0.8,           # 80% survival for heterozygote
@@ -106,7 +106,7 @@ class TestZygoteFitness(unittest.TestCase):
                 "male": {"A|A": [1, 0, 0]},
             })
             .fitness(
-                zygote={"A|A": 0.0},  # Lethal zygote
+                zygote_viability={"A|A": 0.0},  # Lethal zygote
             )
             .build()
         )
@@ -125,7 +125,7 @@ class TestZygoteFitness(unittest.TestCase):
                 "male": {"A|A": [1, 0, 0]},
             })
             .fitness(
-                zygote={"A|A": 0.5},      # 50% zygote survival
+                zygote_viability={"A|A": 0.5},      # 50% zygote survival
                 viability={"A|A": 0.8},   # 80% viability survival
             )
             .build()
@@ -148,7 +148,7 @@ class TestZygoteFitness(unittest.TestCase):
             })
             .reproduction(eggs_per_female=10.0, use_fixed_egg_count=True)  # Use fixed egg count for deterministic test
             .fitness(
-                zygote={"A|A": 0.5},  # 50% zygote survival
+                zygote_viability={"A|A": 0.5},  # 50% zygote survival
             )
             .build()
         )

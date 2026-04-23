@@ -1,5 +1,7 @@
 # 模拟内核深度解析
 
+<!--TODO: 改为数学模型介绍，需要大量公式-->
+
 本章面向使用者说明 NATAL 的模拟执行链路：
 
 - 你在用户层调用什么；
@@ -201,7 +203,7 @@ pop.import_state(state_flat, history=history)
 4. 快照实验：使用 `export_state()` / `import_state()`。
 5. 行为扩展：使用 Hook，而不是自行拼接内核调用。
 
-## 10. 最小示例
+## 10. 最简示例
 
 ```python
 # 1) 构建 population
@@ -235,7 +237,7 @@ pop.import_state(state_flat, history=hist)
 
 ## 相关章节
 
-- [PopulationState 与 PopulationConfig](population_state_config.md)
-- [Numba 优化指南](numba_optimization.md)
-- [Modifier 机制](modifiers.md)
-- [Hook 系统](hooks.md)
+- [PopulationState 与 PopulationConfig](4_population_state_config.md)
+- [Numba 优化指南](4_numba_optimization.md)
+- [Modifier 机制](3_modifiers.md)
+- [Hook 系统](2_hooks.md)

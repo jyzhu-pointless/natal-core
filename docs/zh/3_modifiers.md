@@ -4,7 +4,7 @@ Modifier 用于在遗传流程中注入“规则级改变”。
 
 如果你希望表达基因驱动、胚胎拯救、细胞质不兼容等机制，Modifier 是核心工具之一。
 
-> 对常见情形，优先考虑使用 [遗传预设系统](genetic_presets.md)。
+> 对常见情形，优先考虑使用 [遗传预设系统](2_genetic_presets.md)。
 > 预设更简洁，Modifier 更灵活。
 
 ## 1. Modifier 的作用位置
@@ -206,7 +206,7 @@ Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
 
 ## 相关章节
 
-- [遗传预设系统](genetic_presets.md)
-- [Hook 系统](hooks.md)
-- [模拟内核深度解析](simulation_kernels.md)
-- [PopulationState 与 PopulationConfig](population_state_config.md)
+- [遗传预设系统](2_genetic_presets.md)
+- [Hook 系统](2_hooks.md)
+- [模拟内核深度解析](4_simulation_kernels.md)
+- [PopulationState 与 PopulationConfig](4_population_state_config.md)

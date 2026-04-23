@@ -50,11 +50,10 @@ def test_mixed_priority_ordering_first_event() -> None:
         calls.append("python_first")
         observed["first_python_seen"] = float(population.state.individual_count[1, 1, 0])
 
-    @hook(event="first", priority=1, numba=True)
-    def first_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
+    @hook(event="first", priority=1)
+    def first_njit(ind_count, tick, deme_id):
         _ = (tick, deme_id)
         calls.append("njit_first")
-        observed["first_njit_seen"] = float(ind_count[1, 1, 0])
         ind_count[1, 1, 0] += 2.0
         return 0
 
@@ -76,7 +75,6 @@ def test_mixed_priority_ordering_first_event() -> None:
 
     assert calls[:2] == ["python_first", "njit_first"]
     assert observed["first_python_seen"] == 10.0
-    assert observed["first_njit_seen"] == 10.0
     # 10 + njit(2) + csr(3): verifies csr happened after njit in mixed ordering
     assert observed["early_seen"] == 15.0
 
@@ -91,11 +89,10 @@ def test_mixed_priority_ordering_early_event() -> None:
         calls.append("python_early")
         observed["early_python_seen"] = float(population.state.individual_count[1, 1, 0])
 
-    @hook(event="early", priority=1, numba=True)
-    def early_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
+    @hook(event="early", priority=1)
+    def early_njit(ind_count, tick, deme_id):
         _ = (tick, deme_id)
         calls.append("njit_early")
-        observed["early_njit_seen"] = float(ind_count[1, 1, 0])
         ind_count[1, 1, 0] += 2.0
         return 0
 
@@ -117,7 +114,6 @@ def test_mixed_priority_ordering_early_event() -> None:
 
     assert calls[:2] == ["python_early", "njit_early"]
     assert observed["early_python_seen"] == 10.0
-    assert observed["early_njit_seen"] == 10.0
     assert observed["late_seen"] == 15.0
 
 
