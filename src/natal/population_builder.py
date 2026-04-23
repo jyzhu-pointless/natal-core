@@ -1431,8 +1431,6 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                 an individual, applied during reproduction stage before survival and competition.
                 - female_selector can be omitted by passing flat form {male_selector: value},
                     which applies to all female genotypes.
-            zygote (Optional[Dict]): Mapping genotype -> fitness value (float or dict).
-                Applied during reproduction stage to newly formed offspring.
             mode (str): Scaling mode. 'replace' (default) overwrites existing values.
                 'multiply' scales existing values by the provided factor.
 
