@@ -16,7 +16,7 @@ theme:
   features:
     - navigation.tabs
     - navigation.sections
-    - toc.integrate
+    - navigation.footer
     - search.suggest
     - search.highlight
     - content.tabs.link
@@ -38,6 +38,8 @@ theme:
         name: 切换到浅色模式
 
 markdown_extensions:
+  - toc:
+      toc_depth: 3
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -53,6 +55,10 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 plugins:
   - autorefs:
@@ -83,39 +89,39 @@ plugins:
 
 nav:
   - 首页: index.md
-  - 使用指南:
-    - 快速开始: quickstart.md
-    - 遗传结构与实体: genetic_structures.md
-    - Builder 系统: builder_system.md
-    - 索引注册表: index_registry.md
-    - PopulationState 与配置: population_state_config.md
-    - Simulation Kernels: simulation_kernels.md
-    - Numba 优化指南: numba_optimization.md
-    - 修饰器: modifiers.md
-    - Hook 系统: hooks.md
-    - 遗传预设: genetic_presets.md
-    - 空间模拟指南: spatial_simulation_guide.md
-    - 观测规则: observation_rules.md
-    - 基因型模式匹配: genotype_patterns.md
-    - 等位基因转换规则: allele_conversion_rules.md
-    - 基因型过滤: genotype_filter.md
-    - 预设封装与验证: preset_encapsulation_and_validation.md
+  - 快速开始: 1_quickstart.md
+  - 实用组件:
+    - 2_genetics.md
+    - 2_population.md
+    - 2_population_initialization.md
+    - 2_data_output.md
+    - 2_genetic_presets.md
+    - 2_hooks.md
+    - 2_genotype_patterns.md
+  - 进阶指南:
+    - 3_custom_presets.md
+    - 3_advanced_hooks.md
+    - 3_modifiers.md
+    - 3_spatial_simulation.md
+  - 内部实现:
+    - 4_index_registry.md
+    - 4_simulation_kernels.md
+    - 4_numba_optimization.md
+    - 4_population_state_config.md
   - API 参考:
-    - 总览: api/index.md
-    - genetic_structures: api/genetic_structures.md
-    - genetic_entities: api/genetic_entities.md
-    - population_state: api/population_state.md
-    - state_translation: api/state_translation.md
-    - population_config: api/population_config.md
-    - base_population: api/base_population.md
-    - age_structured_population: api/age_structured_population.md
-    - discrete_generation_population: api/discrete_generation_population.md
-    - algorithms: api/algorithms.md
-    - simulation_kernels: api/simulation_kernels.md
-    - population_builder: api/population_builder.md
-    - genetic_patterns: api/genetic_patterns.md
-    - modifiers: api/modifiers.md
-    - hook_dsl: api/hook_dsl.md
-    - genetic_presets: api/genetic_presets.md
-
-extra_css:
+    - API 概览: api/index.md
+    - 遗传实体: api/genetic_entities.md
+    - 遗传结构: api/genetic_structures.md
+    - 遗传模式: api/genetic_patterns.md
+    - 遗传预设: api/genetic_presets.md
+    - 种群状态: api/population_state.md
+    - 状态转换: api/state_translation.md
+    - 种群配置: api/population_config.md
+    - 基础种群: api/base_population.md
+    - 离散代种群: api/discrete_generation_population.md
+    - 年龄结构种群: api/age_structured_population.md
+    - 种群构建器: api/population_builder.md
+    - 修饰器: api/modifiers.md
+    - Hook DSL: api/hook_dsl.md
+    - 模拟内核: api/simulation_kernels.md
+    - 算法: api/algorithms.md

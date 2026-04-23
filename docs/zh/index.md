@@ -156,7 +156,7 @@ launch(pop)
 7. [模式匹配与可扩展配置](2_genotype_patterns.md)
 8. [提取种群模拟数据](2_data_output.md)
 
-### 第三部分：高级功能
+### 第三部分：进阶指南
 
 > 本部分介绍 NATAL Core 的高级功能，包括空间模拟和更多自定义配置。
 
@@ -165,9 +165,9 @@ launch(pop)
 11. [Modifier 机制](3_modifiers.md)
 12. [高级 Hook 教程](3_advanced_hooks.md)
 
-### 第四部分：底层机制
+### 第四部分：内部实现
 
-> 本部分介绍 NATAL Core 中不直接面向用户的底层机制，帮助你深入理解 NATAL Core 的工作原理。
+> 本部分介绍 NATAL Core 中不直接面向用户的底层实现机制，帮助你深入理解 NATAL Core 的工作原理。
 
 <!--TODO: numba 相关内容可适当提前-->
 
