@@ -1,6 +1,6 @@
 [project]
 name = "natal-core"
-version = "0.1.1"
+version = "0.1.2"
 description = "Numba-Accelerated Toolkit for Analysis of Lifecycle-based population genetic dynamics"
 readme = "README.md"
 authors = [

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.4.24 (v0.1.2)
+- **feat(genetic_entities)**: check for duplicate gene names in species
+- **feat(genetic_structures)**: add `Chromosome.get_locus`, `Species.get_gene/has_gene`; warn on duplicate names; fix recombination rate handling on position reorder/insertion
+- **refactor(population)**: rename `zygote` fitness args to `zygote_viability`; `run()` default `record_every` from `1` to instance attribute
+- **refactor(hooks)**: remove `numba` from `@hook`, auto-detect njit; add `custom` flag to allow custom hooks
+
 ## 2026.4.20 (v0.1.1)
 - fix(algorithms): ensure `n_virgins_raw` is clamped to 0.0 when in the range `(-EPS, 0)` to prevent intermittent negative virgin count errors due to floating point precision issues
 - fix(hooks.executor): round `current_count` to the nearest integer before comparison to `target_count` in discrete stochastic sampling paths where `current_count` may be stored as a float
