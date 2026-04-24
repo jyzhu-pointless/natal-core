@@ -695,21 +695,29 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         hooks = self.get_compiled_event_hooks()
 
-        # run_fn and registry are always initialized by get_compiled_event_hooks()
-        assert hooks.run_fn is not None, "hooks.run_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
 
-        run_fn: Callable[..., Any] = hooks.run_fn
-        registry = hooks.registry
+        if hooks.run_fn is not None:
+            final_state_tuple, history_new, was_stopped = hooks.run_fn(
+                state=self._state_nn,
+                config=config,
+                registry=hooks.registry,
+                n_ticks=n_steps,
+                record_interval=record_every,
+            )
+        else:
+            from natal.kernels.simulation_kernels import run_with_hooks
 
-        # Directly call the fixed-signature runner for multi-step evolution.
-        final_state_tuple, history_new, was_stopped = run_fn(
-            state=self._state_nn,
-            config=config,
-            registry=registry,
-            n_ticks=n_steps,
-            record_interval=record_every,
-        )
+            final_state_tuple, history_new, was_stopped = run_with_hooks(
+                state=self._state_nn,
+                config=config,
+                registry=hooks.registry,
+                first_hook=hooks.first,
+                early_hook=hooks.early,
+                late_hook=hooks.late,
+                n_ticks=n_steps,
+                record_interval=record_every,
+            )
 
         # Process final state (tuple format: ind_count, sperm, tick)
         self._state = PopulationState(

@@ -8,6 +8,7 @@ import numpy as np
 
 import natal as nt
 from natal.base_population import BasePopulation
+from natal.numba_utils import numba_disabled
 from natal.genetic_structures import Species
 from natal.hook_dsl import CompiledEventHooks, Op, hook
 from natal import numba_compat as nbc
@@ -198,37 +199,8 @@ def test_spatial_population_run_tick_updates_all_demes():
 
     sp = SpatialPopulation([d0, d1], migration_rate=0.0)
 
-    def _run_spatial_tick(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-    ):
-        _ = (
-            config,
-            registry,
-            adjacency,
-            migration_mode,
-            topology_rows,
-            topology_cols,
-            topology_wrap,
-            migration_kernel,
-            kernel_include_center,
-            migration_rate,
-        )
-        return (ind_count_all + 1.0, sperm_store_all + 2.0, int(tick) + 1), 0
-
-    sp.hooks.run_spatial_tick_fn = _run_spatial_tick
-    sp.run_tick()
+    with numba_disabled():
+        sp.run_tick()
 
     assert sp.tick == 1
     assert d0.tick == 1 and d1.tick == 1
@@ -252,41 +224,8 @@ def test_spatial_population_run_stop_marks_finish():
 
     sp = SpatialPopulation([d0, d1], migration_rate=0.0)
 
-    def _run_spatial(
-        ind_count_all,
-        sperm_store_all,
-        config,
-        registry,
-        tick,
-        n_ticks,
-        adjacency,
-        migration_mode,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        migration_kernel,
-        kernel_include_center,
-        migration_rate,
-        record_interval,
-    ):
-        _ = (
-            config,
-            registry,
-            n_ticks,
-            adjacency,
-            migration_mode,
-            topology_rows,
-            topology_cols,
-            topology_wrap,
-            migration_kernel,
-            kernel_include_center,
-            migration_rate,
-            record_interval,
-        )
-        return (ind_count_all + 3.0, sperm_store_all, int(tick) + 2), None, True
-
-    sp.hooks.run_spatial_fn = _run_spatial
-    sp.run(n_steps=5, record_every=1)
+    with numba_disabled():
+        sp.run(n_steps=5, record_every=1)
 
     assert sp.tick == 0
     assert d0.tick == 1 and d1.tick == 0

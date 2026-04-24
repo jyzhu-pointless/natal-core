@@ -13,7 +13,7 @@ from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 from natal.ui import launch
 
-MAP_SIZE = 501  # Change to larger values (odd) if needed. Example: 51
+MAP_SIZE = 51  # Change to larger values (odd) if needed. Example: 51
 LOCAL_CAPACITY = 10000
 INITIAL_LOCAL_DRIVE_CARRIER_RATIO = 0.02
 
@@ -43,7 +43,7 @@ def build_deme(
         print(f"building deme {idx} / {MAP_SIZE * MAP_SIZE}")
     return (
         nt.DiscreteGenerationPopulation
-        .setup(species=species, name=name, stochastic=False)
+        .setup(species=species, name=name, stochastic=True)
         .initial_state(
             individual_count={
                 "female": {
@@ -158,8 +158,6 @@ def main() -> None:
     """Launch the hex-grid spatial UI demo."""
     # nt.disable_numba()
     spatial = time_perf_wrapper(build_hex_spatial_population)()  # TODO: 创建需要大量时间，需要优化
-    print("spatial population built")
-    time_perf_wrapper(spatial.run)(5)
     launch(spatial, port=8081, title="Spatial Hex UI Demo")
 
 

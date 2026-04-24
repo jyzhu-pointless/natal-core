@@ -1,16 +1,25 @@
 """Pure-function simulation kernels run outside Population with Numba support."""
 
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 
 import natal.algorithms as alg
 import natal.numba_compat as nbc
+from natal.hooks.executor import execute_csr_event_program_with_state
+from natal.hooks.types import (
+    EVENT_EARLY,
+    EVENT_FIRST,
+    EVENT_LATE,
+    RESULT_CONTINUE,
+    RESULT_STOP,
+    HookProgram,
+)
 from natal.numba_compat import binomial
 from natal.numba_utils import njit_switch
 from natal.population_config import FIXED, LOGISTIC, NO_COMPETITION, PopulationConfig
-from natal.population_state import PopulationState
+from natal.population_state import DiscretePopulationState, PopulationState
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
@@ -389,6 +398,331 @@ def run_aging(
     sperm_store[0, :, :] = 0.0
 
     return ind_count, sperm_store
+
+
+# ============================================================================
+# Hook-enabled Lifecycle Functions (replaces codegen kernel_wrappers)
+# ============================================================================
+
+@njit_switch(cache=True)
+def _event_with_hooks(
+    registry: HookProgram,
+    event_id: int,
+    ind_count: NDArray[np.float64],
+    sperm_store: NDArray[np.float64],
+    tick: int,
+    is_stochastic: bool,
+    has_sperm_storage: bool,
+    use_continuous_sampling: bool,
+    combined_hook: Callable[..., Any],
+) -> int:
+    """Execute one event: CSR declarative operations then combined njit hook.
+
+    Args:
+        registry: HookProgram CSR data.
+        event_id: Numeric event id (EVENT_FIRST, EVENT_EARLY, EVENT_LATE).
+        ind_count: Individual count array (modified in-place by CSR ops).
+        sperm_store: Sperm storage array (modified in-place by CSR ops).
+        tick: Current tick number.
+        is_stochastic: Whether sampling is stochastic.
+        has_sperm_storage: Whether sperm storage is active.
+        use_continuous_sampling: Whether to use continuous sampling.
+        combined_hook: A compiled @njit combined hook function.
+
+    Returns:
+        RESULT_CONTINUE (0) or RESULT_STOP (1).
+    """
+    result = execute_csr_event_program_with_state(
+        registry, event_id, ind_count, sperm_store, tick,
+        is_stochastic, has_sperm_storage, use_continuous_sampling,
+    )
+    if result != RESULT_CONTINUE:
+        return RESULT_STOP
+    return combined_hook(ind_count, tick)
+
+
+@njit_switch(cache=True)
+def run_tick_with_hooks(
+    state: PopulationState,
+    config: PopulationConfig,
+    registry: HookProgram,
+    first_hook: Callable[..., Any],
+    early_hook: Callable[..., Any],
+    late_hook: Callable[..., Any],
+) -> tuple[tuple[NDArray[np.float64], NDArray[np.float64], int], int]:
+    """Execute one age-structured tick with hook execution.
+
+    Replaces the generated ``__RUN_TICK_NAME__`` wrapper from codegen.
+
+    Args:
+        state: Current PopulationState.
+        config: PopulationConfig with simulation parameters.
+        registry: HookProgram CSR data for declarative operations.
+        first_hook: Combined njit function for ``first`` event.
+        early_hook: Combined njit function for ``early`` event.
+        late_hook: Combined njit function for ``late`` event.
+
+    Returns:
+        A tuple ``(state_tuple, result_code)`` where ``state_tuple`` is
+        ``(ind_count, sperm_storage, tick)`` and ``result_code`` is
+        ``RESULT_CONTINUE`` or ``RESULT_STOP``.
+    """
+    ind_count = state.individual_count.copy()
+    sperm_store = state.sperm_storage.copy()
+    tick = state.n_tick
+    is_stochastic = bool(config.is_stochastic)
+    use_continuous = bool(config.use_continuous_sampling)
+
+    # First event
+    result = _event_with_hooks(
+        registry, EVENT_FIRST, ind_count, sperm_store, tick,
+        is_stochastic, True, use_continuous, first_hook,
+    )
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+
+    ind_count, sperm_store = run_reproduction(ind_count, sperm_store, config)
+
+    # Early event
+    result = _event_with_hooks(
+        registry, EVENT_EARLY, ind_count, sperm_store, tick,
+        is_stochastic, True, use_continuous, early_hook,
+    )
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+
+    ind_count, sperm_store = run_survival(ind_count, sperm_store, config)
+
+    # Late event
+    result = _event_with_hooks(
+        registry, EVENT_LATE, ind_count, sperm_store, tick,
+        is_stochastic, True, use_continuous, late_hook,
+    )
+    if result != RESULT_CONTINUE:
+        return (ind_count, sperm_store, tick), RESULT_STOP
+
+    ind_count, sperm_store = run_aging(ind_count, sperm_store, config)
+    return (ind_count, sperm_store, tick + 1), RESULT_CONTINUE
+
+
+@njit_switch(cache=True)
+def run_with_hooks(
+    state: PopulationState,
+    config: PopulationConfig,
+    registry: HookProgram,
+    first_hook: Callable[..., Any],
+    early_hook: Callable[..., Any],
+    late_hook: Callable[..., Any],
+    n_ticks: int,
+    record_interval: int = 0,
+) -> tuple[tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
+    """Execute multiple age-structured ticks with hook execution and history recording.
+
+    Replaces the generated ``__RUN_NAME__`` wrapper from codegen.
+
+    Args:
+        state: Current PopulationState.
+        config: PopulationConfig.
+        registry: HookProgram CSR data.
+        first_hook: Combined njit function for ``first`` event.
+        early_hook: Combined njit function for ``early`` event.
+        late_hook: Combined njit function for ``late`` event.
+        n_ticks: Number of ticks to execute.
+        record_interval: History recording interval (0 = no recording).
+
+    Returns:
+        A tuple ``(state_tuple, history, was_stopped)``.
+    """
+    was_stopped = False
+    ind_count = state.individual_count.copy()
+    sperm_store = state.sperm_storage.copy()
+    tick = state.n_tick
+    ind_size = ind_count.size
+    sperm_size = sperm_store.size
+    flatten_size = 1 + ind_size + sperm_size
+
+    if record_interval > 0:
+        estimated_size = (n_ticks // record_interval) + 2
+        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
+    else:
+        history_array = np.zeros((0, flatten_size), dtype=np.float64)
+    history_count = 0
+
+    if record_interval > 0 and (tick % record_interval == 0):
+        flat_state = np.zeros(flatten_size, dtype=np.float64)
+        flat_state[0] = tick
+        flat_state[1:1 + ind_size] = ind_count.flatten()
+        flat_state[1 + ind_size:] = sperm_store.flatten()
+        history_array[history_count, :] = flat_state
+        history_count += 1
+
+    for _ in range(n_ticks):
+        temp_state = PopulationState(
+            n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store,
+        )
+        current_state, result = run_tick_with_hooks(
+            temp_state, config, registry, first_hook, early_hook, late_hook,
+        )
+        ind_count, sperm_store, tick = current_state
+
+        if record_interval > 0 and (tick % record_interval == 0):
+            flat_state = np.zeros(flatten_size, dtype=np.float64)
+            flat_state[0] = tick
+            flat_state[1:1 + ind_size] = ind_count.flatten()
+            flat_state[1 + ind_size:] = sperm_store.flatten()
+            history_array[history_count, :] = flat_state
+            history_count += 1
+
+        if result != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+    if record_interval > 0:
+        history_result = history_array[:history_count, :]
+    else:
+        history_result = None
+    return (ind_count, sperm_store, tick), history_result, was_stopped
+
+
+@njit_switch(cache=True)
+def run_discrete_tick_with_hooks(
+    state: DiscretePopulationState,
+    config: PopulationConfig,
+    registry: HookProgram,
+    first_hook: Callable[..., Any],
+    early_hook: Callable[..., Any],
+    late_hook: Callable[..., Any],
+) -> tuple[tuple[NDArray[np.float64], int], int]:
+    """Execute one discrete-generation tick with hook execution.
+
+    Replaces the generated ``__RUN_DISCRETE_TICK_NAME__`` wrapper from codegen.
+
+    Discrete generation has no sperm storage; a dummy sperm store is passed to
+    the CSR executor so declarative operations can still target the sperm tensor
+    gracefully (it remains unused).
+
+    Args:
+        state: Current DiscretePopulationState.
+        config: PopulationConfig.
+        registry: HookProgram CSR data.
+        first_hook: Combined njit function for ``first`` event.
+        early_hook: Combined njit function for ``early`` event.
+        late_hook: Combined njit function for ``late`` event.
+
+    Returns:
+        A tuple ``(state_tuple, result_code)``.
+    """
+    ind_count = state.individual_count.copy()
+    tick = state.n_tick
+    dummy_sperm_store = np.zeros((0, 0, 0), dtype=np.float64)
+    is_stochastic = bool(config.is_stochastic)
+    use_continuous = bool(config.use_continuous_sampling)
+
+    # First event
+    result = _event_with_hooks(
+        registry, EVENT_FIRST, ind_count, dummy_sperm_store, tick,
+        is_stochastic, False, use_continuous, first_hook,
+    )
+    if result != RESULT_CONTINUE:
+        return (ind_count, tick), RESULT_STOP
+
+    ind_count = run_discrete_reproduction(ind_count, config)
+
+    # Early event
+    result = _event_with_hooks(
+        registry, EVENT_EARLY, ind_count, dummy_sperm_store, tick,
+        is_stochastic, False, use_continuous, early_hook,
+    )
+    if result != RESULT_CONTINUE:
+        return (ind_count, tick), RESULT_STOP
+
+    ind_count = run_discrete_survival(ind_count, config)
+
+    # Late event
+    result = _event_with_hooks(
+        registry, EVENT_LATE, ind_count, dummy_sperm_store, tick,
+        is_stochastic, False, use_continuous, late_hook,
+    )
+    if result != RESULT_CONTINUE:
+        return (ind_count, tick), RESULT_STOP
+
+    ind_count = run_discrete_aging(ind_count)
+    return (ind_count, tick + 1), RESULT_CONTINUE
+
+
+@njit_switch(cache=True)
+def run_discrete_with_hooks(
+    state: DiscretePopulationState,
+    config: PopulationConfig,
+    registry: HookProgram,
+    first_hook: Callable[..., Any],
+    early_hook: Callable[..., Any],
+    late_hook: Callable[..., Any],
+    n_ticks: int,
+    record_interval: int = 0,
+) -> tuple[tuple[NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
+    """Execute multiple discrete-generation ticks with hook execution and history.
+
+    Replaces the generated ``__RUN_DISCRETE_NAME__`` wrapper from codegen.
+
+    Args:
+        state: Current DiscretePopulationState.
+        config: PopulationConfig.
+        registry: HookProgram CSR data.
+        first_hook: Combined njit function for ``first`` event.
+        early_hook: Combined njit function for ``early`` event.
+        late_hook: Combined njit function for ``late`` event.
+        n_ticks: Number of ticks to execute.
+        record_interval: History recording interval (0 = no recording).
+
+    Returns:
+        A tuple ``(state_tuple, history, was_stopped)``.
+    """
+    was_stopped = False
+    ind_count = state.individual_count.copy()
+    tick = state.n_tick
+    ind_size = ind_count.size
+    flatten_size = 1 + ind_size
+
+    if record_interval > 0:
+        estimated_size = (n_ticks // record_interval) + 2
+        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
+    else:
+        history_array = np.zeros((0, flatten_size), dtype=np.float64)
+    history_count = 0
+
+    if record_interval > 0 and (tick % record_interval == 0):
+        flat_state = np.zeros(flatten_size, dtype=np.float64)
+        flat_state[0] = tick
+        flat_state[1:1 + ind_size] = ind_count.flatten()
+        history_array[history_count, :] = flat_state
+        history_count += 1
+
+    for _ in range(n_ticks):
+        temp_state = DiscretePopulationState(
+            n_tick=tick, individual_count=ind_count,
+        )
+        current_state, result = run_discrete_tick_with_hooks(
+            temp_state, config, registry, first_hook, early_hook, late_hook,
+        )
+        ind_count, tick = current_state
+
+        if record_interval > 0 and (tick % record_interval == 0):
+            flat_state = np.zeros(flatten_size, dtype=np.float64)
+            flat_state[0] = tick
+            flat_state[1:1 + ind_size] = ind_count.flatten()
+            history_array[history_count, :] = flat_state
+            history_count += 1
+
+        if result != RESULT_CONTINUE:
+            was_stopped = True
+            break
+
+    if record_interval > 0:
+        history_result = history_array[:history_count, :]
+    else:
+        history_result = None
+    return (ind_count, tick), history_result, was_stopped
 
 
 # ============================================================================

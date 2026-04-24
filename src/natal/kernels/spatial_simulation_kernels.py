@@ -1,13 +1,12 @@
 """Spatial simulation kernels.
 
-Core multi-deme lifecycle kernels live under ``natal.kernels`` and are
-intended to be called by generated wrappers (see ``natal.kernels.codegen``).
+Core multi-deme lifecycle kernels live under ``natal.kernels``.
 Migration kernels were split into ``natal.kernels.spatial_migration_kernels``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -254,44 +253,8 @@ def run_spatial_tick_with_adjacency_migration(
     )
 
 
-def run_spatial_tick_codegen_wrapper(
-    run_tick_fn: Any,
-    registry: Any,
-    ind_count_all: NDArray[np.float64],
-    sperm_store_all: NDArray[np.float64],
-    config: PopulationConfig,
-    tick: int,
-    adjacency: NDArray[np.float64],
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
-    migration_rate: float,
-) -> Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], bool]:
-    """Execute one spatial tick through one generated codegen wrapper."""
-    final_state_tuple, result = run_tick_fn(
-        ind_count_all=ind_count_all,
-        sperm_store_all=sperm_store_all,
-        config=config,
-        registry=registry,
-        tick=tick,
-        adjacency=adjacency,
-        migration_mode=migration_mode,
-        topology_rows=topology_rows,
-        topology_cols=topology_cols,
-        topology_wrap=topology_wrap,
-        migration_kernel=migration_kernel,
-        kernel_include_center=kernel_include_center,
-        migration_rate=migration_rate,
-    )
-    return final_state_tuple, int(result) != 0
-
-
-def run_spatial_steps_codegen_wrapper(
-    run_fn: Any,
-    registry: Any,
+@njit_switch(cache=True)
+def run_spatial_steps_with_migration(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
     config: PopulationConfig,
@@ -305,24 +268,81 @@ def run_spatial_steps_codegen_wrapper(
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
     migration_rate: float,
-    record_every: int,
-) -> Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], bool]:
-    """Execute multiple spatial ticks through one generated codegen wrapper."""
-    final_state_tuple, _history, was_stopped = run_fn(
-        ind_count_all=ind_count_all,
-        sperm_store_all=sperm_store_all,
-        config=config,
-        registry=registry,
-        tick=tick,
-        n_ticks=n_steps,
-        adjacency=adjacency,
-        migration_mode=migration_mode,
-        topology_rows=topology_rows,
-        topology_cols=topology_cols,
-        topology_wrap=topology_wrap,
-        migration_kernel=migration_kernel,
-        kernel_include_center=kernel_include_center,
-        migration_rate=migration_rate,
-        record_interval=record_every,
-    )
-    return final_state_tuple, bool(was_stopped)
+    record_interval: int = 0,
+) -> Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
+    """Execute multiple spatial ticks with migration and optional history recording.
+
+    Replaces the generated ``__RUN_SPATIAL_NAME__`` codegen wrapper.
+
+    Args:
+        ind_count_all: Stacked individual counts.
+        sperm_store_all: Stacked sperm storage arrays.
+        config: Shared population configuration.
+        tick: Starting simulation tick.
+        n_steps: Number of ticks to execute.
+        adjacency: Dense outbound migration matrix.
+        migration_mode: Backend selector (0=adjacency, 1=kernel).
+        topology_rows: Topology rows for kernel routing.
+        topology_cols: Topology columns for kernel routing.
+        topology_wrap: Whether kernel routing wraps topology borders.
+        migration_kernel: Kernel when migration_mode == 1.
+        kernel_include_center: Whether kernel center is an outbound target.
+        migration_rate: Fraction of each deme that migrates each tick.
+        record_interval: History recording interval (0 = no recording).
+
+    Returns:
+        A tuple ``(state_tuple, history, was_stopped)``.
+    """
+    was_stopped = False
+    ind = ind_count_all.copy()
+    sperm = sperm_store_all.copy()
+    tick_cur = tick
+
+    ind_size = ind.size
+    sperm_size = sperm.size
+    flatten_size = 1 + ind_size + sperm_size
+
+    if record_interval > 0:
+        estimated_size = (n_steps // record_interval) + 2
+        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
+    else:
+        history_array = np.zeros((0, flatten_size), dtype=np.float64)
+    history_count = 0
+
+    if record_interval > 0 and (tick_cur % record_interval == 0):
+        flat_state = np.zeros(flatten_size, dtype=np.float64)
+        flat_state[0] = tick_cur
+        flat_state[1:1 + ind_size] = ind.flatten()
+        flat_state[1 + ind_size:] = sperm.flatten()
+        history_array[history_count, :] = flat_state
+        history_count += 1
+
+    for _ in range(n_steps):
+        ind, sperm, tick_cur = run_spatial_tick_with_migration(
+            ind_count_all=ind,
+            sperm_store_all=sperm,
+            config=config,
+            tick=int(tick_cur),
+            adjacency=adjacency,
+            migration_mode=migration_mode,
+            topology_rows=topology_rows,
+            topology_cols=topology_cols,
+            topology_wrap=topology_wrap,
+            migration_kernel=migration_kernel,
+            kernel_include_center=kernel_include_center,
+            migration_rate=migration_rate,
+        )
+
+        if record_interval > 0 and (tick_cur % record_interval == 0):
+            flat_state = np.zeros(flatten_size, dtype=np.float64)
+            flat_state[0] = tick_cur
+            flat_state[1:1 + ind_size] = ind.flatten()
+            flat_state[1 + ind_size:] = sperm.flatten()
+            history_array[history_count, :] = flat_state
+            history_count += 1
+
+    if record_interval > 0:
+        history_result = history_array[:history_count, :]
+    else:
+        history_result = None
+    return (ind, sperm, tick_cur), history_result, was_stopped

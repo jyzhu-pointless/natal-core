@@ -73,25 +73,6 @@ def test_py_wrapper_guard_in_compiled_event_hooks():
             CompiledEventHooks.from_compiled_hooks([desc], registry=None)
 
 
-def test_kernel_signatures_have_no_callable_hook_params():
-    hooks = CompiledEventHooks.from_compiled_hooks([], registry=None)
-    assert hooks.run_tick_fn is not None
-    assert hooks.run_fn is not None
-    assert hooks.run_discrete_tick_fn is not None
-    assert hooks.run_discrete_fn is not None
-
-    run_tick_params = list(inspect.signature(hooks.run_tick_fn).parameters.keys())
-    run_params = list(inspect.signature(hooks.run_fn).parameters.keys())
-    run_discrete_tick_params = list(inspect.signature(hooks.run_discrete_tick_fn).parameters.keys())
-    run_discrete_params = list(inspect.signature(hooks.run_discrete_fn).parameters.keys())
-
-    forbidden = {"first_hook", "reproduction_hook", "early_hook", "survival_hook", "late_hook"}
-    assert forbidden.isdisjoint(run_tick_params)
-    assert forbidden.isdisjoint(run_params)
-    assert forbidden.isdisjoint(run_discrete_tick_params)
-    assert forbidden.isdisjoint(run_discrete_params)
-
-
 def test_compiled_event_hooks_produces_event_chains():
     desc = CompiledHookDescriptor(
         name="early_noop",

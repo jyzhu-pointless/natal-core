@@ -32,8 +32,8 @@ from natal.hook_dsl import (
 )
 from natal.kernels.spatial_simulation_kernels import (
     run_spatial_migration,
-    run_spatial_steps_codegen_wrapper,
-    run_spatial_tick_codegen_wrapper,
+    run_spatial_steps_with_migration,
+    run_spatial_tick_with_migration,
 )
 from natal.numba_utils import is_numba_enabled
 from natal.population_config import PopulationConfig
@@ -1158,7 +1158,7 @@ class SpatialPopulation:
             path end-to-end.
 
         Note:
-            Spatial codegen wrappers currently do not execute local per-deme
+            Spatial compiled kernels currently do not execute local per-deme
             hook timelines. We therefore keep Python dispatch whenever hooks
             are present, when global Numba is disabled, or when deme configs
             are heterogeneous by value.
@@ -1275,16 +1275,11 @@ class SpatialPopulation:
         return False
 
     def _run_codegen_wrapper_tick(self) -> bool:
-        """Run one tick through the compiled spatial wrapper path."""
-        assert self._hooks.run_spatial_tick_fn is not None, "hooks.run_spatial_tick_fn should always be initialized"
-        assert self._hooks.registry is not None, "hooks.registry should always be initialized"
-
+        """Run one tick through the njit spatial kernel path."""
         config = cast(PopulationConfig, self._shared_config())
         ind_all, sperm_all = self._stack_deme_state_arrays()
         effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
-        final_state_tuple, was_stopped = run_spatial_tick_codegen_wrapper(
-            run_tick_fn=self._hooks.run_spatial_tick_fn,
-            registry=self._hooks.registry,
+        ind, sperm, tick = run_spatial_tick_with_migration(
             ind_count_all=ind_all,
             sperm_store_all=sperm_all,
             config=config,
@@ -1298,20 +1293,15 @@ class SpatialPopulation:
             kernel_include_center=bool(self._kernel_include_center),
             migration_rate=float(self._migration_rate),
         )
-        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
-        return was_stopped
+        self._apply_stacked_state(ind, sperm, int(tick))
+        return False
 
     def _run_codegen_wrapper_steps(self, n_steps: int, *, record_every: int) -> bool:
-        """Run multiple ticks through the compiled spatial wrapper path."""
-        assert self._hooks.run_spatial_fn is not None, "hooks.run_spatial_fn should always be initialized"
-        assert self._hooks.registry is not None, "hooks.registry should always be initialized"
-
+        """Run multiple ticks through the njit spatial kernel path."""
         config = cast(PopulationConfig, self._shared_config())
         ind_all, sperm_all = self._stack_deme_state_arrays()
         effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
-        final_state_tuple, was_stopped = run_spatial_steps_codegen_wrapper(
-            run_fn=self._hooks.run_spatial_fn,
-            registry=self._hooks.registry,
+        final_state_tuple, _history, was_stopped = run_spatial_steps_with_migration(
             ind_count_all=ind_all,
             sperm_store_all=sperm_all,
             config=config,
@@ -1325,13 +1315,13 @@ class SpatialPopulation:
             migration_kernel=self._migration_kernel_array(),
             kernel_include_center=bool(self._kernel_include_center),
             migration_rate=float(self._migration_rate),
-            record_every=int(record_every),
+            record_interval=int(record_every),
         )
         self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
         return was_stopped
 
     def run_tick(self) -> SpatialPopulation:
-        """Run one spatial tick via the generated spatial wrapper.
+        """Run one spatial tick via the spatial kernel.
 
         Returns:
             This spatial population instance after in-place state update.
@@ -1345,7 +1335,7 @@ class SpatialPopulation:
             # Hook-aware fallback: preserve per-deme local hook semantics.
             was_stopped = self._run_python_dispatch_tick()
         else:
-            # Global Numba path: run codegen wrapper for one full spatial tick.
+            # Global Numba path: run spatial kernel for one full spatial tick.
             was_stopped = self._run_codegen_wrapper_tick()
         if was_stopped:
             self._mark_all_demes_stopped()
@@ -1357,7 +1347,7 @@ class SpatialPopulation:
         record_every: int = 1,
         finish: bool = False,
     ) -> SpatialPopulation:
-        """Run multiple spatial ticks via the generated spatial wrapper.
+        """Run multiple spatial ticks via the spatial kernel.
 
         Args:
             n_steps: Number of ticks to execute.
@@ -1386,7 +1376,7 @@ class SpatialPopulation:
                     was_stopped = True
                     break
         else:
-            # Global Numba path: run batched spatial wrapper.
+            # Global Numba path: run batched spatial kernel.
             was_stopped = self._run_codegen_wrapper_steps(n_steps, record_every=int(record_every))
         if bool(was_stopped):
             self._mark_all_demes_stopped()

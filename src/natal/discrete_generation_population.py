@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     List,
     Optional,
@@ -274,23 +273,29 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         hooks = self.get_compiled_event_hooks()
 
-        # run_discrete_fn and registry are always initialized by get_compiled_event_hooks().
-        assert hooks.run_discrete_fn is not None, "hooks.run_discrete_fn should always be initialized"
         assert hooks.registry is not None, "hooks.registry should always be initialized"
 
-        run_fn = cast(
-            Callable[..., Tuple[Tuple[NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]],
-            hooks.run_discrete_fn,
-        )
-        registry = hooks.registry
+        if hooks.run_discrete_fn is not None:
+            final_state_tuple, history_new, was_stopped = hooks.run_discrete_fn(
+                state=self._state_nn,
+                config=self._config_nn,
+                registry=hooks.registry,
+                n_ticks=n_steps,
+                record_interval=record_every,
+            )
+        else:
+            from natal.kernels.simulation_kernels import run_discrete_with_hooks
 
-        final_state_tuple, history_new, was_stopped = run_fn(
-            state=self._state_nn,
-            config=self._config_nn,
-            registry=registry,
-            n_ticks=n_steps,
-            record_interval=record_every,
-        )
+            final_state_tuple, history_new, was_stopped = run_discrete_with_hooks(
+                state=self._state_nn,
+                config=self._config_nn,
+                registry=hooks.registry,
+                first_hook=hooks.first,
+                early_hook=hooks.early,
+                late_hook=hooks.late,
+                n_ticks=n_steps,
+                record_interval=record_every,
+            )
 
         self._state = DiscretePopulationState(
             n_tick=int(final_state_tuple[1]),

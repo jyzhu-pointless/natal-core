@@ -1,2 +1,2 @@
-"""Kernel-specific runtime and codegen helpers."""
+"""Kernel-specific Numba-accelerated simulation helpers."""
 
