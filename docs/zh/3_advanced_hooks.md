@@ -1,10 +1,12 @@
 # 高级 Hook 教程
 
-在掌握了基础的 Hook 系统后，NATAL Core 还提供了更高级的 Hook 类型，以满足不同场景的性能和灵活性需求。
+[基础教程](2_hooks.md) 介绍了声明式 Hook（`Op.add`、`Op.scale` 等），适合大多数常规场景。
+当需要直接操作 NumPy 数组进行更灵活的状态修改时（例如条件分支、循环、自定义计算），
+可以使用自定义 Hook 或 Selector-based Hook。
 
 ## 自定义 Hook
 
-自定义 Hook 提供了更大的灵活性，允许你直接编写代码来操作模拟状态。
+自定义 Hook 允许你直接编写代码操作模拟状态，在 Numba 编译后执行。
 
 ### 基本用法
 
@@ -13,7 +15,7 @@ from natal.hooks import hook
 
 
 @hook(event="late", priority=10)
-def custom_release_hook(ind_count, tick, deme_id=0):
+def custom_release_hook(ind_count, tick, deme_id=-1):
     # ind_count 是个体数量的 NumPy 数组
     # 形状为 (sex, age, genotype)
     # sex=0 对应雌性，sex=1 对应雄性
@@ -30,8 +32,11 @@ def custom_release_hook(ind_count, tick, deme_id=0):
 
 自定义 Hook 支持两种函数签名：
 
-- `(ind_count, tick)`：在单个 deme 中运行
-- `(ind_count, tick, deme_id)`：在空间种群中跨 deme 运行
+- `(ind_count, tick)` — 不接收 deme 信息（简化签名）
+- `(ind_count, tick, deme_id=-1)` — 接收 deme 索引，空间种群中跨 deme 运行时传入实际索引
+
+`deme_id` 的默认值为 `-1`。当在 `SpatialPopulation` 中注册时，系统会自动传入当前 deme 的索引；
+在非空间种群中注册时，可以不传该参数。
 
 ### 数组索引注意事项
 
@@ -56,7 +61,7 @@ from natal.hooks import hook
 
 
 @hook(event="early", priority=5)
-def custom_culling_hook(ind_count, tick, deme_id=0):
+def custom_culling_hook(ind_count, tick, deme_id=-1):
     # 对特定基因型进行选择性剔除
     if tick > 50:
         # WT|WT 的基因型索引是 0
@@ -126,7 +131,7 @@ from natal.hooks import hook
 
 
 @hook(event="late", priority=10)
-def stochastic_culling_hook(ind_count, tick, deme_id=0):
+def stochastic_culling_hook(ind_count, tick, deme_id=-1):
     if tick > 50:
         # 使用二项分布随机剔除
         # 假设对基因型 0 进行 10% 的剔除概率
@@ -159,7 +164,7 @@ def stochastic_culling_hook(ind_count, tick, deme_id=0):
 
 ```python
 @hook(event="late", priority=10)
-def age_specific_mortality(ind_count, tick, deme_id=0):
+def age_specific_mortality(ind_count, tick, deme_id=-1):
     if tick % 10 == 0:
         # 对每个年龄组应用不同的存活概率
         survival_rates = np.array([0.8, 0.9, 0.95, 0.98, 0.99])
@@ -236,9 +241,9 @@ def check_drive_threshold(ind_count, tick, drive_gt):
     return 0
 
 
-# 自定义 Hook：高效计算和修改状态
+# 自定义 Hook：高效计算和修改状态（deme_id=-1 表示 non-spatial 默认值）
 @hook(event="first", priority=5)
-def custom_process_hook(ind_count, tick, deme_id=0):
+def custom_process_hook(ind_count, tick, deme_id=-1):
     # 执行密集计算
     for age in range(ind_count.shape[1]):
         ind_count[:, age, :] *= 0.99  # 轻微死亡率

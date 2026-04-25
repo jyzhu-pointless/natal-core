@@ -8,6 +8,7 @@ This module connects three authoring styles into one runtime contract:
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -37,6 +38,14 @@ from .types import (
     stable_callable_identity,
     write_codegen_module,
 )
+
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "kernels" / "templates"
+
+
+def _read_template(name: str) -> str:
+    """Read a lifecycle codegen template from ``kernels/templates/``."""
+    return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
+
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -205,249 +214,13 @@ def _gen_lifecycle_source(
 ) -> str:
     """Generate the source code for a lifecycle wrapper module.
 
-    The generated module contains a tick function and a multi-step run function
-    with ``_FIRST_HOOK``, ``_EARLY_HOOK``, ``_LATE_HOOK`` as module-level
-    globals set after import.  This ensures each hook combination gets a unique
-    Numba function keyed by source hash, so ``cache=True`` survives process
-    restarts.
+    Reads the template from ``kernels/templates/`` and substitutes
+    ``TICK_FN_NAME`` and ``RUN_FN_NAME`` placeholders.
     """
-    if is_discrete:
-        stage_imports = "run_discrete_reproduction, run_discrete_survival, run_discrete_aging"
-        state_type = "DiscretePopulationState"
-        # discrete has no sperm storage; pass a dummy
-        sperm_setup = "    dummy_sperm_store = np.zeros((0, 0, 0), dtype=np.float64)"
-        tick_sig = f"def {tick_fn_name}(state, config, registry, deme_id=-1):"
-        tick_body = _gen_discrete_tick_body(tick_fn_name)
-        run_sig = f"def {run_fn_name}(state, config, registry, n_ticks, record_interval=0):"
-        run_body = _gen_discrete_run_body(run_fn_name, tick_fn_name)
-    else:
-        stage_imports = "run_reproduction, run_survival, run_aging"
-        state_type = "PopulationState"
-        sperm_setup = "    sperm_store = state.sperm_storage.copy()"
-        tick_sig = f"def {tick_fn_name}(state, config, registry, deme_id=-1):"
-        tick_body = _gen_structured_tick_body(tick_fn_name)
-        run_sig = f"def {run_fn_name}(state, config, registry, n_ticks, record_interval=0):"
-        run_body = _gen_structured_run_body(run_fn_name, tick_fn_name)
-
-    lines = [
-        "import numpy as np",
-        "from natal.kernels.simulation_kernels import (",
-        f"    {stage_imports},",
-        ")",
-        "from natal.hooks.executor import execute_csr_event_program_with_state",
-        "from natal.hooks.types import EVENT_FIRST, EVENT_EARLY, EVENT_LATE, RESULT_CONTINUE, RESULT_STOP",
-        "from natal.numba_utils import njit_switch",
-        "from natal.population_config import PopulationConfig",
-        f"from natal.population_state import {state_type}",
-        "",
-        "_FIRST_HOOK = None",
-        "_EARLY_HOOK = None",
-        "_LATE_HOOK = None",
-        "",
-        "@njit_switch(cache=True)",
-        tick_sig,
-        "    ind_count = state.individual_count.copy()",
-        "    tick = state.n_tick",
-        sperm_setup,
-        "    is_stochastic = bool(config.is_stochastic)",
-        "    use_continuous = bool(config.use_continuous_sampling)",
-        "",
-        tick_body,
-        "",
-        "@njit_switch(cache=True)",
-        run_sig,
-        run_body,
-        "",
-    ]
-    return "\n".join(lines)
-
-
-def _gen_structured_tick_body(fn_name: str) -> str:
-    return """
-    # FIRST event
-    result = execute_csr_event_program_with_state(
-        registry, EVENT_FIRST, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, deme_id,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _FIRST_HOOK(ind_count, tick, deme_id)
-    if result != 0:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-
-    ind_count, sperm_store = run_reproduction(ind_count, sperm_store, config)
-
-    # EARLY event
-    result = execute_csr_event_program_with_state(
-        registry, EVENT_EARLY, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, deme_id,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _EARLY_HOOK(ind_count, tick, deme_id)
-    if result != 0:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-
-    ind_count, sperm_store = run_survival(ind_count, sperm_store, config)
-
-    # LATE event
-    result = execute_csr_event_program_with_state(
-        registry, EVENT_LATE, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, deme_id,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _LATE_HOOK(ind_count, tick, deme_id)
-    if result != 0:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-
-    ind_count, sperm_store = run_aging(ind_count, sperm_store, config)
-    return (ind_count, sperm_store, tick + 1), RESULT_CONTINUE
-"""
-
-
-def _gen_discrete_tick_body(fn_name: str) -> str:
-    return """
-    # FIRST event
-    result = execute_csr_event_program_with_state(
-        registry, EVENT_FIRST, ind_count, dummy_sperm_store, tick,
-        is_stochastic, False, use_continuous, deme_id,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, tick), RESULT_STOP
-    result = _FIRST_HOOK(ind_count, tick, deme_id)
-    if result != 0:
-        return (ind_count, tick), RESULT_STOP
-
-    ind_count = run_discrete_reproduction(ind_count, config)
-
-    # EARLY event
-    result = execute_csr_event_program_with_state(
-        registry, EVENT_EARLY, ind_count, dummy_sperm_store, tick,
-        is_stochastic, False, use_continuous, deme_id,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, tick), RESULT_STOP
-    result = _EARLY_HOOK(ind_count, tick, deme_id)
-    if result != 0:
-        return (ind_count, tick), RESULT_STOP
-
-    ind_count = run_discrete_survival(ind_count, config)
-
-    # LATE event
-    result = execute_csr_event_program_with_state(
-        registry, EVENT_LATE, ind_count, dummy_sperm_store, tick,
-        is_stochastic, False, use_continuous, deme_id,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, tick), RESULT_STOP
-    result = _LATE_HOOK(ind_count, tick, deme_id)
-    if result != 0:
-        return (ind_count, tick), RESULT_STOP
-
-    ind_count = run_discrete_aging(ind_count)
-    return (ind_count, tick + 1), RESULT_CONTINUE
-"""
-
-
-def _gen_structured_run_body(fn_name: str, tick_fn_name: str) -> str:
-    return f"""
-    was_stopped = False
-    ind_count = state.individual_count.copy()
-    sperm_store = state.sperm_storage.copy()
-    tick = state.n_tick
-    ind_size = ind_count.size
-    sperm_size = sperm_store.size
-    flatten_size = 1 + ind_size + sperm_size
-
-    if record_interval > 0:
-        estimated_size = (n_ticks // record_interval) + 2
-        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
-    else:
-        history_array = np.zeros((0, flatten_size), dtype=np.float64)
-    history_count = 0
-
-    if record_interval > 0 and (tick % record_interval == 0):
-        flat_state = np.zeros(flatten_size, dtype=np.float64)
-        flat_state[0] = tick
-        flat_state[1:1 + ind_size] = ind_count.flatten()
-        flat_state[1 + ind_size:] = sperm_store.flatten()
-        history_array[history_count, :] = flat_state
-        history_count += 1
-
-    for _ in range(n_ticks):
-        temp_state = PopulationState(
-            n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store,
-        )
-        current_state, result = {tick_fn_name}(temp_state, config, registry)
-        ind_count, sperm_store, tick = current_state
-
-        if record_interval > 0 and (tick % record_interval == 0):
-            flat_state = np.zeros(flatten_size, dtype=np.float64)
-            flat_state[0] = tick
-            flat_state[1:1 + ind_size] = ind_count.flatten()
-            flat_state[1 + ind_size:] = sperm_store.flatten()
-            history_array[history_count, :] = flat_state
-            history_count += 1
-
-        if result != RESULT_CONTINUE:
-            was_stopped = True
-            break
-
-    if record_interval > 0:
-        history_result = history_array[:history_count, :]
-    else:
-        history_result = None
-    return (ind_count, sperm_store, tick), history_result, was_stopped
-"""
-
-
-def _gen_discrete_run_body(fn_name: str, tick_fn_name: str) -> str:
-    return f"""
-    was_stopped = False
-    ind_count = state.individual_count.copy()
-    tick = state.n_tick
-    ind_size = ind_count.size
-    flatten_size = 1 + ind_size
-
-    if record_interval > 0:
-        estimated_size = (n_ticks // record_interval) + 2
-        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
-    else:
-        history_array = np.zeros((0, flatten_size), dtype=np.float64)
-    history_count = 0
-
-    if record_interval > 0 and (tick % record_interval == 0):
-        flat_state = np.zeros(flatten_size, dtype=np.float64)
-        flat_state[0] = tick
-        flat_state[1:1 + ind_size] = ind_count.flatten()
-        history_array[history_count, :] = flat_state
-        history_count += 1
-
-    for _ in range(n_ticks):
-        temp_state = DiscretePopulationState(
-            n_tick=tick, individual_count=ind_count,
-        )
-        current_state, result = {tick_fn_name}(temp_state, config, registry)
-        ind_count, tick = current_state
-
-        if record_interval > 0 and (tick % record_interval == 0):
-            flat_state = np.zeros(flatten_size, dtype=np.float64)
-            flat_state[0] = tick
-            flat_state[1:1 + ind_size] = ind_count.flatten()
-            history_array[history_count, :] = flat_state
-            history_count += 1
-
-        if result != RESULT_CONTINUE:
-            was_stopped = True
-            break
-
-    if record_interval > 0:
-        history_result = history_array[:history_count, :]
-    else:
-        history_result = None
-    return (ind_count, tick), history_result, was_stopped
-"""
+    name = "lifecycle_discrete.tmpl.py" if is_discrete else "lifecycle_structured.tmpl.py"
+    return (_read_template(name)
+        .replace("TICK_FN_NAME", tick_fn_name)
+        .replace("RUN_FN_NAME", run_fn_name))
 
 
 def compile_lifecycle_wrapper(
@@ -503,171 +276,16 @@ def _gen_spatial_lifecycle_source(
 ) -> str:
     """Generate source for a spatial lifecycle wrapper module.
 
-    The generated module contains:
-    - A ``tick`` function (``parallel=True``) that runs per-deme lifecycle
-      by calling the panmictic lifecycle tick inside ``prange``, then migration.
-    - A ``run`` function that calls ``tick`` in a loop with history recording.
-
-    The panmictic lifecycle tick is imported from ``_hook_codegen_{stem}``,
-    which already has ``_FIRST_HOOK``/``_EARLY_HOOK``/``_LATE_HOOK`` set as
-    module-level globals.  The spatial module does not need its own hook globals.
+    Reads the template from ``kernels/templates/`` and substitutes
+    ``TICK_FN_NAME``, ``RUN_FN_NAME``, ``PANMICTIC_STEM``,
+    ``PANMICTIC_TICK_FN_NAME`` placeholders.
     """
-    if is_discrete:
-        state_type = "DiscretePopulationState"
-        tick_body = _gen_spatial_discrete_tick_body()
-    else:
-        state_type = "PopulationState"
-        tick_body = _gen_spatial_structured_tick_body()
-
-    run_body = _gen_spatial_run_body(tick_fn_name)
-
-    lines = [
-        "import numpy as np",
-        "from natal.kernels.spatial_migration_kernels import run_spatial_migration",
-        "from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP",
-        "from numba import prange",
-        "from natal.numba_utils import njit_switch",
-        f"from natal.population_state import {state_type}",
-        f"from natal._hook_codegen_{panmictic_stem} import {panmictic_tick_fn_name} as _run_deme_tick",
-        "",
-        "@njit_switch(cache=True, parallel=True)",
-        f"def {tick_fn_name}(",
-        "    ind_count_all, sperm_store_all, config_bank, deme_config_ids,",
-        "    registry, tick,",
-        "    adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,",
-        "    migration_kernel, kernel_include_center, migration_rate,",
-        "):",
-        tick_body,
-        "",
-        "@njit_switch(cache=True)",
-        f"def {run_fn_name}(",
-        "    ind_count_all, sperm_store_all, config_bank, deme_config_ids,",
-        "    registry, tick, n_steps,",
-        "    adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,",
-        "    migration_kernel, kernel_include_center, migration_rate,",
-        "    record_interval=0,",
-        "):",
-        run_body,
-        "",
-    ]
-    return "\n".join(lines)
-
-
-def _gen_spatial_structured_tick_body() -> str:
-    return """
-    n_demes = ind_count_all.shape[0]
-    stopped = np.zeros(n_demes, dtype=np.bool_)
-    for d in prange(n_demes):
-        cfg = config_bank[int(deme_config_ids[d])]
-        ind = ind_count_all[d].copy()
-        sperm = sperm_store_all[d].copy()
-
-        state = PopulationState(n_tick=tick, individual_count=ind, sperm_storage=sperm)
-        (ind, sperm, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
-
-        if result != RESULT_CONTINUE:
-            stopped[d] = True
-
-        ind_count_all[d] = ind
-        sperm_store_all[d] = sperm
-
-    ind_count_all, sperm_store_all = run_spatial_migration(
-        ind_count_all, sperm_store_all, adjacency, migration_mode,
-        topology_rows, topology_cols, topology_wrap,
-        migration_kernel, kernel_include_center,
-        config_bank[0], migration_rate,
-    )
-
-    was_stopped = False
-    for i in range(n_demes):
-        if stopped[i]:
-            was_stopped = True
-            break
-    return ind_count_all, sperm_store_all, tick + 1, was_stopped
-"""
-
-
-def _gen_spatial_discrete_tick_body() -> str:
-    return """
-    n_demes = ind_count_all.shape[0]
-    stopped = np.zeros(n_demes, dtype=np.bool_)
-    for d in prange(n_demes):
-        cfg = config_bank[int(deme_config_ids[d])]
-        ind = ind_count_all[d].copy()
-
-        state = DiscretePopulationState(n_tick=tick, individual_count=ind)
-        (ind, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
-
-        if result != RESULT_CONTINUE:
-            stopped[d] = True
-
-        ind_count_all[d] = ind
-
-    ind_count_all, sperm_store_all = run_spatial_migration(
-        ind_count_all, sperm_store_all, adjacency, migration_mode,
-        topology_rows, topology_cols, topology_wrap,
-        migration_kernel, kernel_include_center,
-        config_bank[0], migration_rate,
-    )
-
-    was_stopped = False
-    for i in range(n_demes):
-        if stopped[i]:
-            was_stopped = True
-            break
-    return ind_count_all, sperm_store_all, tick + 1, was_stopped
-"""
-
-
-def _gen_spatial_run_body(tick_fn_name: str) -> str:
-    return f"""
-    was_stopped = False
-    ind = ind_count_all.copy()
-    sperm = sperm_store_all.copy()
-    tick_cur = tick
-    ind_size = ind.size
-    sperm_size = sperm.size
-    flatten_size = 1 + ind_size + sperm_size
-
-    if record_interval > 0:
-        estimated_size = (n_steps // record_interval) + 2
-        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
-    else:
-        history_array = np.zeros((0, flatten_size), dtype=np.float64)
-    history_count = 0
-
-    if record_interval > 0 and (tick_cur % record_interval == 0):
-        flat_state = np.zeros(flatten_size, dtype=np.float64)
-        flat_state[0] = tick_cur
-        flat_state[1:1 + ind_size] = ind.flatten()
-        flat_state[1 + ind_size:] = sperm.flatten()
-        history_array[history_count, :] = flat_state
-        history_count += 1
-
-    for _ in range(n_steps):
-        ind, sperm, tick_cur, step_stopped = {tick_fn_name}(
-            ind, sperm, config_bank, deme_config_ids, registry, tick_cur,
-            adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,
-            migration_kernel, kernel_include_center, migration_rate,
-        )
-        if step_stopped:
-            was_stopped = True
-            break
-
-        if record_interval > 0 and (tick_cur % record_interval == 0):
-            flat_state = np.zeros(flatten_size, dtype=np.float64)
-            flat_state[0] = tick_cur
-            flat_state[1:1 + ind_size] = ind.flatten()
-            flat_state[1 + ind_size:] = sperm.flatten()
-            history_array[history_count, :] = flat_state
-            history_count += 1
-
-    if record_interval > 0:
-        history_result = history_array[:history_count, :]
-    else:
-        history_result = None
-    return (ind, sperm, tick_cur), history_result, was_stopped
-"""
+    name = "spatial_lifecycle_discrete.tmpl.py" if is_discrete else "spatial_lifecycle_structured.tmpl.py"
+    return (_read_template(name)
+        .replace("TICK_FN_NAME", tick_fn_name)
+        .replace("RUN_FN_NAME", run_fn_name)
+        .replace("PANMICTIC_STEM", panmictic_stem)
+        .replace("PANMICTIC_TICK_FN_NAME", panmictic_tick_fn_name))
 
 
 def compile_spatial_lifecycle_wrapper(

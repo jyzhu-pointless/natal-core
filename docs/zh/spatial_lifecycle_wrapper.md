@@ -18,7 +18,7 @@
 
 ### 1. compiler.py — Panmictic tick 增加 `deme_id` 参数
 
-在 `_gen_lifecycle_source` 中，tick 函数签名增加 `deme_id=0`：
+在 `_gen_lifecycle_source` 中，tick 函数签名增加 `deme_id=-1`：
 
 ```python
 # 重构前
@@ -27,14 +27,14 @@ def _lifecycle_tick_<hash>(state, config, registry):
     result = _FIRST_HOOK(ind_count, tick)
 
 # 重构后
-def _lifecycle_tick_<hash>(state, config, registry, deme_id=0):
+def _lifecycle_tick_<hash>(state, config, registry, deme_id=-1):
     ...
     result = _FIRST_HOOK(ind_count, tick, deme_id)
 ```
 
 对应的 tick body 中对 `_FIRST_HOOK`/`_EARLY_HOOK`/`_LATE_HOOK` 的调用和 `execute_csr_event_program_with_state` 的调用都传递了 `deme_id`。
 
-这样 spatial 路径可以传入真实的 deme 索引（`d`），使 hooks 能感知 deme 上下文；而 panmictic 路径不传此参数（默认 `0`），行为不变。
+这样 spatial 路径可以传入真实的 deme 索引（`d`），使 hooks 能感知 deme 上下文；而 panmictic 路径不传此参数（默认 `-1`），行为不变。
 
 ### 2. compiler.py — Spatial lifecycle wrapper 委托给 panmictic tick
 
@@ -236,8 +236,8 @@ _spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry,
 
 1. **Panmictic tick 作为唯一事实源**：spatial 的 prange 体不再重复生命周期阶段序列，而是**委托给 panmictic lifecycle tick**。生命周期顺序（FIRST → reproduction → EARLY → survival → LATE → aging）**只在一个地方定义**，新增/调整阶段不会漏掉 spatial 路径
 
-2. **deme_id 传递**：panmictic tick 的 `deme_id=0` 默认参数让两种调用路径都能正常工作：
-   - Panmictic 调用：不传 deme_id → 默认 0 → 行为不变
+2. **deme_id 传递**：panmictic tick 的 `deme_id=-1` 默认参数让两种调用路径都能正常工作：
+   - Panmictic 调用：不传 deme_id → 默认 -1 → 行为不变
    - Spatial 调用：传 `d`（deme 索引）→ hooks 能感知 deme 上下文
 
 3. **Config bank 始终使用**：即使所有 deme 共用同一个 config，也通过 config bank 传递，保持生成模块的签名统一
@@ -262,7 +262,7 @@ _spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry,
 
 ```python
 @hook(event="early", custom=True)
-def my_hook(ind_count, tick, deme_id=0):
+def my_hook(ind_count, tick, deme_id=-1):
     """Numba 启用时自动 njit 编译，禁用时用 Python 回退。"""
     if deme_id % 2 == 0:
         ind_count[0, 0, 0] *= 0.5

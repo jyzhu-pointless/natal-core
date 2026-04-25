@@ -69,7 +69,7 @@ Numba 编译 `_lifecycle_tick_527c055` 时，`_FIRST_HOOK` 是模块级全局变
 ```python
 lines = ["from natal.hook_dsl import njit_switch"]
 lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
-lines.append(f"def {fn_name}(ind_count, tick, deme_id=0):")
+lines.append(f"def {fn_name}(ind_count, tick, deme_id=-1):")
 for placeholder in placeholder_names:
     lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
     lines.append("    if _result != 0:")

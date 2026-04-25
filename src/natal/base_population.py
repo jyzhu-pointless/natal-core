@@ -1140,7 +1140,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self._hooks[event_name].sort(key=lambda x: x[0])
         self._hook_executor = None
 
-    def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
+    def trigger_event(self, event_name: str, deme_id: int = -1) -> int:
         """
                 Trigger an event and execute all registered hooks.
 
@@ -1151,7 +1151,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         Args:
                         event_name: Event name to trigger.
-                        deme_id: Optional deme ID (default: 0).
+                        deme_id: Deme index. Default -1 for non-spatial populations.
 
         Returns:
                         int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1) to stop.

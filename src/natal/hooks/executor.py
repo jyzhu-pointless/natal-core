@@ -663,7 +663,7 @@ def run_discrete_with_hooks(
 
     was_stopped = False
     for _ in range(n_steps):
-        if population.trigger_event("first", deme_id=0) != RESULT_CONTINUE:
+        if population.trigger_event("first", deme_id=-1) != RESULT_CONTINUE:
             was_stopped = True
             break
 
@@ -672,7 +672,7 @@ def run_discrete_with_hooks(
             population._config_nn,
         )
 
-        if population.trigger_event("early", deme_id=0) != RESULT_CONTINUE:
+        if population.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
             was_stopped = True
             break
 
@@ -681,7 +681,7 @@ def run_discrete_with_hooks(
             population._config_nn,
         )
 
-        if population.trigger_event("late", deme_id=0) != RESULT_CONTINUE:
+        if population.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
             was_stopped = True
             break
 
@@ -729,7 +729,7 @@ def run_age_structured_with_hooks(
 
     was_stopped = False
     for _ in range(n_steps):
-        if population.trigger_event("first", deme_id=0) != RESULT_CONTINUE:
+        if population.trigger_event("first", deme_id=-1) != RESULT_CONTINUE:
             was_stopped = True
             break
 
@@ -741,7 +741,7 @@ def run_age_structured_with_hooks(
         population._state_nn.individual_count[:] = ind_next
         population._state_nn.sperm_storage[:] = sperm_next
 
-        if population.trigger_event("early", deme_id=0) != RESULT_CONTINUE:
+        if population.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
             was_stopped = True
             break
 
@@ -753,7 +753,7 @@ def run_age_structured_with_hooks(
         population._state_nn.individual_count[:] = ind_next
         population._state_nn.sperm_storage[:] = sperm_next
 
-        if population.trigger_event("late", deme_id=0) != RESULT_CONTINUE:
+        if population.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
             was_stopped = True
             break
 

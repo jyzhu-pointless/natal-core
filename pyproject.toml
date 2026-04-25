@@ -45,6 +45,11 @@ build-backend = "hatchling.build"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = ["-v"]
+filterwarnings = [
+    # Tests reuse Species names across modules; the second creation returns the
+    # cached instance and emits a UserWarning.  Suppress it — it's expected.
+    "ignore:Structure '.*' of type .* already exists in cache:UserWarning",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=7.0.0"]
@@ -53,7 +58,14 @@ test = ["pytest>=7.0.0"]
 target-version = "py39"
 line-length = 88
 include = ["src/**/*.py", "demos/**/*.py"]
-exclude = ["tests/**", "**/__pycache__", "**/*.pyc", "visualization.py", "dashboard.py", "src/natal/hook_dsl.py"]
+exclude = [
+    "tests/**",
+    "**/__pycache__",
+    "**/*.pyc",
+    "visualization.py",
+    "dashboard.py",
+    "src/natal/hook_dsl.py",
+]
 
 [tool.ruff.lint]
 select = [
@@ -80,13 +92,18 @@ ignore = [
 
 [tool.pyright]
 include = ["src"]
-ignore = ["tests/**", "**/__pycache__", "**/*.pyc"]
+ignore = [
+    "tests/**",
+    "**/__pycache__",
+    "**/*.pyc",
+]
 
 typeCheckingMode = "strict"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/natal"]
 artifacts = [
+    "src/natal/kernels/templates/*.tmpl.py",
     "natal.svg",
     "natal-brand.svg",
 ]

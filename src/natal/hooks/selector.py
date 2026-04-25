@@ -193,7 +193,7 @@ def _compile_selector_njit_wrapper(
         [
             "",
             "@njit_switch(cache=True)",
-            f"def {fn_name}(ind_count, tick, deme_id=0):",
+            f"def {fn_name}(ind_count, tick, deme_id=-1):",
             f"    return _USER_FN({call_args}, {args_str})",
             "",
         ]
