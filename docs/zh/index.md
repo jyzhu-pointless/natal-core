@@ -12,7 +12,7 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-**NATAL Core** 是一个前向时间的群体遗传学模拟引擎，支持物种的可配置生命周期。它支持年龄结构化和离散世代种群、精子储存、遗传预设、基于 hook 的干预措施以及高性能的 Numba 内核。NATAL Core 尤其适用于**对昆虫种群中的基因驱动（gene drive）系统进行建模**，但其灵活的架构也使其能够应用于广泛的群体遗传学场景。
+**NATAL Core** 是一个高性能的前向时间群体遗传学模拟引擎，支持可配置的物种生命周期。它支持年龄结构化和离散世代种群、精子储存、遗传预设、基于 hook 的干预措施以及 Numba 加速的模拟内核。NATAL Core 尤其适用于**对昆虫种群中的基因驱动（gene drive）系统进行建模**，但其灵活的架构也使其能够应用于广泛的群体遗传学场景。
 
 NATAL Core 是 NATAL 项目的一部分。完整项目还包括 **NATAL Inferencer**，这是一个基于 NATAL Core 的群体遗传学模型参数推断工具包。
 

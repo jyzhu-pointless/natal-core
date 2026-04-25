@@ -1,7 +1,7 @@
 [project]
 name = "natal-core"
 version = "0.1.2"
-description = "Numba-Accelerated Toolkit for Analysis of Lifecycle-based population genetic dynamics"
+description = "Numba-Accelerated Toolkit for Analysis of Lifecycles, a high-performance forward-time population genetics simulation engine especially designed for gene drive modeling."
 readme = "README.md"
 authors = [
     { name = "Jinyu Zhu", email = "jyzhu_2020@stu.pku.edu.cn" }
@@ -87,7 +87,6 @@ typeCheckingMode = "strict"
 [tool.hatch.build.targets.wheel]
 packages = ["src/natal"]
 artifacts = [
-    "src/natal/kernels/templates/*.tmpl",
     "natal.svg",
     "natal-brand.svg",
 ]

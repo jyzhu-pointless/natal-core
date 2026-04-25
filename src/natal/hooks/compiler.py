@@ -104,20 +104,45 @@ def _normalize_py_hook(fn: HookCallable) -> HookCallable:
         return fn(ind_count, tick)
     return wrapped
 
-def compile_combined_hook(njit_fns: List[HookCallable], name: str = "combined_hook") -> HookCallable:
+def compile_combined_hook(
+    njit_fns: List[HookCallable],
+    deme_selectors: Optional[List[DemeSelector]] = None,
+) -> HookCallable:
     """Combine multiple njit hooks into one generated njit function.
 
     We generate source code instead of composing Python closures so the result
     remains callable from njit kernels.
+
+    When ``deme_selectors`` is provided and contains non-wildcard values,
+    each hook call is wrapped with an ``if deme_id == X`` guard so that
+    per-deme hooks only execute for their target deme(s) — critical for
+    spatial simulations where all hooks share one combined function.
+
+    Args:
+        njit_fns: List of njit-compiled hook functions.
+        name: Human-readable name for the generated function.
+        deme_selectors: Optional per-function deme target.  When ``None``
+            or all ``"*"``, no guards are generated (panmictic-safe).
     """
     if len(njit_fns) == 0:
         return _noop_hook
 
-    if len(njit_fns) == 1:
+    # Normalize to list so pyright can track the type (not Optional).
+    ds_list: List[DemeSelector] = deme_selectors if deme_selectors is not None else []
+    needs_guard = any(ds != "*" for ds in ds_list)
+
+    # Without guards, single-hook combos can return the function directly.
+    if not needs_guard and len(njit_fns) == 1:
         return njit_fns[0]
 
     # Stable key ensures deterministic module names and cache reuse.
-    combined_parts = ["combined"] + [stable_callable_identity(fn) for fn in njit_fns]
+    if needs_guard:
+        combined_parts = ["combined_guarded"]
+        for fn, ds in zip(njit_fns, ds_list):
+            combined_parts.append(stable_callable_identity(fn))
+            combined_parts.append(str(ds))
+    else:
+        combined_parts = ["combined"] + [stable_callable_identity(fn) for fn in njit_fns]
     key = hash_key(combined_parts)
     fn_name = f"_combined_hook_{key}"
     module_stem = f"combined_hook_{key}"
@@ -130,14 +155,38 @@ def compile_combined_hook(njit_fns: List[HookCallable], name: str = "combined_ho
         [
             "",
             "@njit_switch(cache=True)",
-            f"def {fn_name}(ind_count, tick, deme_id=0):",
+            f"def {fn_name}(ind_count, tick, deme_id=-1):",
         ]
     )
 
-    for placeholder in placeholder_names:
-        lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
-        lines.append("    if _result != 0:")
-        lines.append("        return _result")
+    if needs_guard:
+        for placeholder, ds in zip(placeholder_names, ds_list):
+            if ds == "*":
+                lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append("    if _result != 0:")
+                lines.append("        return _result")
+            elif isinstance(ds, int):
+                lines.append(f"    if deme_id == {int(ds)}:")
+                lines.append(f"        _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append("        if _result != 0:")
+                lines.append("            return _result")
+            elif isinstance(ds, range):
+                lines.append(f"    if {ds.start} <= deme_id < {ds.stop}:")
+                lines.append(f"        _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append("        if _result != 0:")
+                lines.append("            return _result")
+            else:
+                # List or tuple — generate a tuple literal for Numba's ``in``.
+                items = ", ".join(str(int(x)) for x in ds)
+                lines.append(f"    if deme_id in ({items}):")
+                lines.append(f"        _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append("        if _result != 0:")
+                lines.append("            return _result")
+    else:
+        for placeholder in placeholder_names:
+            lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
+            lines.append("    if _result != 0:")
+            lines.append("        return _result")
     lines.append("    return 0")
     lines.append("")
 
@@ -167,7 +216,7 @@ def _gen_lifecycle_source(
         state_type = "DiscretePopulationState"
         # discrete has no sperm storage; pass a dummy
         sperm_setup = "    dummy_sperm_store = np.zeros((0, 0, 0), dtype=np.float64)"
-        tick_sig = f"def {tick_fn_name}(state, config, registry):"
+        tick_sig = f"def {tick_fn_name}(state, config, registry, deme_id=-1):"
         tick_body = _gen_discrete_tick_body(tick_fn_name)
         run_sig = f"def {run_fn_name}(state, config, registry, n_ticks, record_interval=0):"
         run_body = _gen_discrete_run_body(run_fn_name, tick_fn_name)
@@ -175,7 +224,7 @@ def _gen_lifecycle_source(
         stage_imports = "run_reproduction, run_survival, run_aging"
         state_type = "PopulationState"
         sperm_setup = "    sperm_store = state.sperm_storage.copy()"
-        tick_sig = f"def {tick_fn_name}(state, config, registry):"
+        tick_sig = f"def {tick_fn_name}(state, config, registry, deme_id=-1):"
         tick_body = _gen_structured_tick_body(tick_fn_name)
         run_sig = f"def {run_fn_name}(state, config, registry, n_ticks, record_interval=0):"
         run_body = _gen_structured_run_body(run_fn_name, tick_fn_name)
@@ -218,11 +267,11 @@ def _gen_structured_tick_body(fn_name: str) -> str:
     # FIRST event
     result = execute_csr_event_program_with_state(
         registry, EVENT_FIRST, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous,
+        is_stochastic, True, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _FIRST_HOOK(ind_count, tick)
+    result = _FIRST_HOOK(ind_count, tick, deme_id)
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -231,11 +280,11 @@ def _gen_structured_tick_body(fn_name: str) -> str:
     # EARLY event
     result = execute_csr_event_program_with_state(
         registry, EVENT_EARLY, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous,
+        is_stochastic, True, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _EARLY_HOOK(ind_count, tick)
+    result = _EARLY_HOOK(ind_count, tick, deme_id)
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -244,11 +293,11 @@ def _gen_structured_tick_body(fn_name: str) -> str:
     # LATE event
     result = execute_csr_event_program_with_state(
         registry, EVENT_LATE, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous,
+        is_stochastic, True, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _LATE_HOOK(ind_count, tick)
+    result = _LATE_HOOK(ind_count, tick, deme_id)
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -262,11 +311,11 @@ def _gen_discrete_tick_body(fn_name: str) -> str:
     # FIRST event
     result = execute_csr_event_program_with_state(
         registry, EVENT_FIRST, ind_count, dummy_sperm_store, tick,
-        is_stochastic, False, use_continuous,
+        is_stochastic, False, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
-    result = _FIRST_HOOK(ind_count, tick)
+    result = _FIRST_HOOK(ind_count, tick, deme_id)
     if result != 0:
         return (ind_count, tick), RESULT_STOP
 
@@ -275,11 +324,11 @@ def _gen_discrete_tick_body(fn_name: str) -> str:
     # EARLY event
     result = execute_csr_event_program_with_state(
         registry, EVENT_EARLY, ind_count, dummy_sperm_store, tick,
-        is_stochastic, False, use_continuous,
+        is_stochastic, False, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
-    result = _EARLY_HOOK(ind_count, tick)
+    result = _EARLY_HOOK(ind_count, tick, deme_id)
     if result != 0:
         return (ind_count, tick), RESULT_STOP
 
@@ -288,11 +337,11 @@ def _gen_discrete_tick_body(fn_name: str) -> str:
     # LATE event
     result = execute_csr_event_program_with_state(
         registry, EVENT_LATE, ind_count, dummy_sperm_store, tick,
-        is_stochastic, False, use_continuous,
+        is_stochastic, False, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
-    result = _LATE_HOOK(ind_count, tick)
+    result = _LATE_HOOK(ind_count, tick, deme_id)
     if result != 0:
         return (ind_count, tick), RESULT_STOP
 
@@ -445,6 +494,242 @@ def compile_lifecycle_wrapper(
     return getattr(module, tick_fn_name), getattr(module, run_fn_name)
 
 
+def _gen_spatial_lifecycle_source(
+    is_discrete: bool,
+    tick_fn_name: str,
+    run_fn_name: str,
+    panmictic_stem: str,
+    panmictic_tick_fn_name: str,
+) -> str:
+    """Generate source for a spatial lifecycle wrapper module.
+
+    The generated module contains:
+    - A ``tick`` function (``parallel=True``) that runs per-deme lifecycle
+      by calling the panmictic lifecycle tick inside ``prange``, then migration.
+    - A ``run`` function that calls ``tick`` in a loop with history recording.
+
+    The panmictic lifecycle tick is imported from ``_hook_codegen_{stem}``,
+    which already has ``_FIRST_HOOK``/``_EARLY_HOOK``/``_LATE_HOOK`` set as
+    module-level globals.  The spatial module does not need its own hook globals.
+    """
+    if is_discrete:
+        state_type = "DiscretePopulationState"
+        tick_body = _gen_spatial_discrete_tick_body()
+    else:
+        state_type = "PopulationState"
+        tick_body = _gen_spatial_structured_tick_body()
+
+    run_body = _gen_spatial_run_body(tick_fn_name)
+
+    lines = [
+        "import numpy as np",
+        "from natal.kernels.spatial_migration_kernels import run_spatial_migration",
+        "from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP",
+        "from numba import prange",
+        "from natal.numba_utils import njit_switch",
+        f"from natal.population_state import {state_type}",
+        f"from natal._hook_codegen_{panmictic_stem} import {panmictic_tick_fn_name} as _run_deme_tick",
+        "",
+        "@njit_switch(cache=True, parallel=True)",
+        f"def {tick_fn_name}(",
+        "    ind_count_all, sperm_store_all, config_bank, deme_config_ids,",
+        "    registry, tick,",
+        "    adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,",
+        "    migration_kernel, kernel_include_center, migration_rate,",
+        "):",
+        tick_body,
+        "",
+        "@njit_switch(cache=True)",
+        f"def {run_fn_name}(",
+        "    ind_count_all, sperm_store_all, config_bank, deme_config_ids,",
+        "    registry, tick, n_steps,",
+        "    adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,",
+        "    migration_kernel, kernel_include_center, migration_rate,",
+        "    record_interval=0,",
+        "):",
+        run_body,
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _gen_spatial_structured_tick_body() -> str:
+    return """
+    n_demes = ind_count_all.shape[0]
+    stopped = np.zeros(n_demes, dtype=np.bool_)
+    for d in prange(n_demes):
+        cfg = config_bank[int(deme_config_ids[d])]
+        ind = ind_count_all[d].copy()
+        sperm = sperm_store_all[d].copy()
+
+        state = PopulationState(n_tick=tick, individual_count=ind, sperm_storage=sperm)
+        (ind, sperm, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
+
+        if result != RESULT_CONTINUE:
+            stopped[d] = True
+
+        ind_count_all[d] = ind
+        sperm_store_all[d] = sperm
+
+    ind_count_all, sperm_store_all = run_spatial_migration(
+        ind_count_all, sperm_store_all, adjacency, migration_mode,
+        topology_rows, topology_cols, topology_wrap,
+        migration_kernel, kernel_include_center,
+        config_bank[0], migration_rate,
+    )
+
+    was_stopped = False
+    for i in range(n_demes):
+        if stopped[i]:
+            was_stopped = True
+            break
+    return ind_count_all, sperm_store_all, tick + 1, was_stopped
+"""
+
+
+def _gen_spatial_discrete_tick_body() -> str:
+    return """
+    n_demes = ind_count_all.shape[0]
+    stopped = np.zeros(n_demes, dtype=np.bool_)
+    for d in prange(n_demes):
+        cfg = config_bank[int(deme_config_ids[d])]
+        ind = ind_count_all[d].copy()
+
+        state = DiscretePopulationState(n_tick=tick, individual_count=ind)
+        (ind, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
+
+        if result != RESULT_CONTINUE:
+            stopped[d] = True
+
+        ind_count_all[d] = ind
+
+    ind_count_all, sperm_store_all = run_spatial_migration(
+        ind_count_all, sperm_store_all, adjacency, migration_mode,
+        topology_rows, topology_cols, topology_wrap,
+        migration_kernel, kernel_include_center,
+        config_bank[0], migration_rate,
+    )
+
+    was_stopped = False
+    for i in range(n_demes):
+        if stopped[i]:
+            was_stopped = True
+            break
+    return ind_count_all, sperm_store_all, tick + 1, was_stopped
+"""
+
+
+def _gen_spatial_run_body(tick_fn_name: str) -> str:
+    return f"""
+    was_stopped = False
+    ind = ind_count_all.copy()
+    sperm = sperm_store_all.copy()
+    tick_cur = tick
+    ind_size = ind.size
+    sperm_size = sperm.size
+    flatten_size = 1 + ind_size + sperm_size
+
+    if record_interval > 0:
+        estimated_size = (n_steps // record_interval) + 2
+        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
+    else:
+        history_array = np.zeros((0, flatten_size), dtype=np.float64)
+    history_count = 0
+
+    if record_interval > 0 and (tick_cur % record_interval == 0):
+        flat_state = np.zeros(flatten_size, dtype=np.float64)
+        flat_state[0] = tick_cur
+        flat_state[1:1 + ind_size] = ind.flatten()
+        flat_state[1 + ind_size:] = sperm.flatten()
+        history_array[history_count, :] = flat_state
+        history_count += 1
+
+    for _ in range(n_steps):
+        ind, sperm, tick_cur, step_stopped = {tick_fn_name}(
+            ind, sperm, config_bank, deme_config_ids, registry, tick_cur,
+            adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,
+            migration_kernel, kernel_include_center, migration_rate,
+        )
+        if step_stopped:
+            was_stopped = True
+            break
+
+        if record_interval > 0 and (tick_cur % record_interval == 0):
+            flat_state = np.zeros(flatten_size, dtype=np.float64)
+            flat_state[0] = tick_cur
+            flat_state[1:1 + ind_size] = ind.flatten()
+            flat_state[1 + ind_size:] = sperm.flatten()
+            history_array[history_count, :] = flat_state
+            history_count += 1
+
+    if record_interval > 0:
+        history_result = history_array[:history_count, :]
+    else:
+        history_result = None
+    return (ind, sperm, tick_cur), history_result, was_stopped
+"""
+
+
+def compile_spatial_lifecycle_wrapper(
+    is_discrete: bool,
+    first_hook: HookCallable,
+    early_hook: HookCallable,
+    late_hook: HookCallable,
+) -> tuple[HookCallable, HookCallable]:
+    """Generate a spatial lifecycle wrapper that delegates per-deme work to the
+    panmictic lifecycle tick inside ``prange``.
+
+    The generated module provides two njit-compiled functions:
+    - A ``tick`` function (parallel=True) that runs per-deme lifecycle by
+      calling the panmictic lifecycle tick inside ``prange``, then migration.
+    - A ``run`` function that calls the tick function in a loop with optional
+      history recording.
+
+    Hook globals (``_FIRST_HOOK``/``_EARLY_HOOK``/``_LATE_HOOK``) live on the
+    panmictic module, not the spatial module.  The spatial module imports and
+    calls the panmictic tick, which resolves hooks via its own module globals.
+
+    Args:
+        is_discrete: If True, generate discrete-generation per-deme lifecycle.
+        first_hook: Combined njit function for the ``first`` event.
+        early_hook: Combined njit function for the ``early`` event.
+        late_hook: Combined njit function for the ``late`` event.
+
+    Returns:
+        A tuple ``(tick_fn, run_fn)`` where tick_fn executes one spatial tick
+        and run_fn executes multiple ticks with history recording.
+    """
+    mode = "discrete" if is_discrete else "structured"
+    # Compute the panmictic wrapper identity (same key as compile_lifecycle_wrapper)
+    panmictic_parts = [f"lifecycle_{mode}"] + [
+        stable_callable_identity(fn) for fn in [first_hook, early_hook, late_hook]
+    ]
+    panmictic_key = hash_key(panmictic_parts)
+    panmictic_stem = f"lifecycle_{mode}_{panmictic_key}"
+    panmictic_tick_fn_name = f"_lifecycle_tick_{panmictic_key}"
+
+    # Compute the spatial wrapper identity
+    spatial_parts = [f"spatial_lifecycle_{mode}"] + [
+        stable_callable_identity(fn) for fn in [first_hook, early_hook, late_hook]
+    ]
+    spatial_key = hash_key(spatial_parts)
+    module_stem = f"spatial_lifecycle_{mode}_{spatial_key}"
+    tick_fn_name = f"_spatial_tick_{spatial_key}"
+    run_fn_name = f"_spatial_run_{spatial_key}"
+
+    source = _gen_spatial_lifecycle_source(
+        is_discrete, tick_fn_name, run_fn_name,
+        panmictic_stem, panmictic_tick_fn_name,
+    )
+    module_path = write_codegen_module(module_stem, source)
+    module = load_codegen_module(module_stem, module_path)
+
+    # No need to set _FIRST_HOOK/ _EARLY_HOOK/ _LATE_HOOK — those live on
+    # the panmictic module and are already set by compile_lifecycle_wrapper.
+
+    return getattr(module, tick_fn_name), getattr(module, run_fn_name)
+
+
 class CompiledEventHooks:
     """Container for event-wise combined hook callables.
 
@@ -463,6 +748,10 @@ class CompiledEventHooks:
         "run_fn",
         "run_discrete_tick_fn",
         "run_discrete_fn",
+        "spatial_tick_fn",
+        "spatial_run_fn",
+        "spatial_discrete_tick_fn",
+        "spatial_discrete_run_fn",
         "_event_hooks",
     )
     # Type annotations for attributes
@@ -475,6 +764,10 @@ class CompiledEventHooks:
     run_fn: Optional[HookCallable]
     run_discrete_tick_fn: Optional[HookCallable]
     run_discrete_fn: Optional[HookCallable]
+    spatial_tick_fn: Optional[HookCallable]
+    spatial_run_fn: Optional[HookCallable]
+    spatial_discrete_tick_fn: Optional[HookCallable]
+    spatial_discrete_run_fn: Optional[HookCallable]
     _event_hooks: Dict[str, HookCallable]
 
     def __init__(self) -> None:
@@ -487,6 +780,10 @@ class CompiledEventHooks:
         self.run_fn = None
         self.run_discrete_tick_fn = None
         self.run_discrete_fn = None
+        self.spatial_tick_fn = None
+        self.spatial_run_fn = None
+        self.spatial_discrete_tick_fn = None
+        self.spatial_discrete_run_fn = None
         self._event_hooks = dict.fromkeys(EVENT_NAMES, _noop_hook)
 
     def get_hook(self, event_name: str) -> HookCallable:
@@ -517,17 +814,18 @@ class CompiledEventHooks:
 
         result = CompiledEventHooks()
         result.registry = registry
-        hooks_by_event: Dict[str, List[Tuple[int, HookCallable]]] = {name: [] for name in EVENT_NAMES}
+        hooks_by_event: Dict[str, List[Tuple[int, HookCallable, DemeSelector]]] = {name: [] for name in EVENT_NAMES}
 
         for desc in compiled_hooks:
             if desc.njit_fn is not None and desc.event in hooks_by_event:
-                hooks_by_event[desc.event].append((desc.priority, desc.njit_fn))
+                hooks_by_event[desc.event].append((desc.priority, desc.njit_fn, desc.deme_selector))
 
         for event_name, hook_list in hooks_by_event.items():
             if hook_list:
                 hook_list.sort(key=lambda x: x[0])
-                njit_fns = [fn for _, fn in hook_list]
-                combined = compile_combined_hook(njit_fns, f"combined_{event_name}_hooks")
+                njit_fns = [fn for _, fn, _ in hook_list]
+                deme_selectors = cast("List[DemeSelector]", [ds for _, _, ds in hook_list])
+                combined = compile_combined_hook(njit_fns, deme_selectors)
                 result.set_hook(event_name, combined)
 
         # Pre-compile lifecycle wrappers per hook combination so Numba
@@ -547,6 +845,13 @@ class CompiledEventHooks:
                 False, first_hook, early_hook, late_hook,
             )
             result.run_discrete_tick_fn, result.run_discrete_fn = compile_lifecycle_wrapper(
+                True, first_hook, early_hook, late_hook,
+            )
+
+            result.spatial_tick_fn, result.spatial_run_fn = compile_spatial_lifecycle_wrapper(
+                False, first_hook, early_hook, late_hook,
+            )
+            result.spatial_discrete_tick_fn, result.spatial_discrete_run_fn = compile_spatial_lifecycle_wrapper(
                 True, first_hook, early_hook, late_hook,
             )
 
@@ -584,7 +889,7 @@ def hook(
     selectors: Optional[Dict[str, Any]] = None,
     priority: int = 0,
     custom: bool = False,
-    deme_selector: DemeSelector = "*",
+    deme: DemeSelector = "*",
 ) -> Callable[[Callable[..., Any]], DecoratedHookFn]:
     """Decorator entrypoint for all supported hook authoring styles.
 
@@ -596,18 +901,22 @@ def hook(
     - custom=True or has required params -> Custom hook
     - otherwise -> Declarative hook (function returns List[HookOp])
 
-    For custom/selector hooks, Numba compilation depends on:
-    - If function is @njit decorated, use it directly
-    - Otherwise, use global NUMBA_ENABLED setting (auto-wrap if enabled)
+    For custom/selector hooks, Numba compilation is automatic — you do
+    **not** need to stack ``@njit``.  If Numba is enabled, the function is
+    wrapped with ``njit_switch`` automatically.  If Numba is disabled, a
+    pure-Python wrapper is used.
+
+    When a custom hook is called inside a spatial ``prange`` region, the
+    ``deme_id`` parameter receives the current deme index, enabling one
+    hook function to handle all demes with per-deme branching logic.
 
     Args:
         event: Hook event name.
         selectors: Optional symbolic selectors for selector-mode hooks.
         priority: Execution priority (lower values run earlier).
         custom: If True, treat as custom hook (function is called directly).
-        deme_selector: Transport-only selector metadata. The compiler stores
-            and forwards this value into ``CompiledHookDescriptor`` but does
-            not interpret spatial routing semantics itself.
+        deme: Target deme(s) for spatial populations.  ``"*"`` (default)
+            means all demes.  Accepts a single int, list, tuple, or range.
     """
     def decorator(func: Callable[..., Any]) -> DecoratedHookFn:
         hook_func = cast(DecoratedHookFn, func)
@@ -616,14 +925,14 @@ def hook(
             "selectors": selectors or {},
             "priority": priority,
             "custom": custom,
-            "deme_selector": deme_selector,
+            "deme_selector": deme,
         }
         hook_func.compiled = None
         hook_func.event = event
         hook_func.selectors = selectors or {}
         hook_func.priority = priority
         hook_func.custom = custom
-        hook_func.deme_selector = deme_selector
+        hook_func.deme_selector = deme
 
         def register(
             pop: BasePopulation[Any],
@@ -635,7 +944,7 @@ def hook(
             from .types import CompiledHookDescriptor
 
             actual_event = event_override or event
-            actual_deme_selector = deme_selector if deme_selector_override is None else deme_selector_override
+            actual_deme_selector: DemeSelector = deme if deme_selector_override is None else deme_selector_override
             if actual_event is None:
                 raise ValueError(
                     f"Event not specified for hook '{func.__name__}'. "

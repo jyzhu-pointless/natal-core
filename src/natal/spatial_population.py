@@ -32,8 +32,6 @@ from natal.hook_dsl import (
 )
 from natal.kernels.spatial_simulation_kernels import (
     run_spatial_migration,
-    run_spatial_steps_with_migration,
-    run_spatial_tick_with_migration,
 )
 from natal.numba_utils import is_numba_enabled
 from natal.population_config import PopulationConfig
@@ -537,7 +535,11 @@ class SpatialPopulation:
         compile: bool = True,
         deme_selector: Optional[DemeSelector] = None,
     ) -> None:
-        """Register an event hook for all demes.
+        """Register an event hook for selected demes.
+
+        If the function carries ``@hook(deme=...)`` metadata and no explicit
+        ``deme_selector`` is given, the metadata value is used automatically
+        — you don't need to repeat the selector.
 
         Args:
             event_name: Event name (must exist in ALLOWED_EVENTS).
@@ -545,7 +547,8 @@ class SpatialPopulation:
             hook_id: Numeric execution priority (optional, auto-assigned if omitted).
             hook_name: Optional human-readable name for debugging.
             compile: Whether to try compiling @hook-decorated functions.
-            deme_selector: Optional deme selector.
+            deme_selector: Optional deme selector.  If omitted, reads from
+                ``@hook`` metadata automatically.
 
         Note:
             This API is a spatial convenience entrypoint. ``deme_selector`` is
@@ -553,6 +556,14 @@ class SpatialPopulation:
             registered on selected demes with panmictic selector semantics.
             Compiler-level selector fields are transport-only metadata.
         """
+        # Auto-read deme from @hook metadata when no explicit selector given.
+        if deme_selector is None:
+            meta = getattr(func, 'meta', None)
+            if meta is not None:
+                demean_meta = meta.get('deme_selector')
+                if demean_meta is not None and demean_meta != "*":
+                    deme_selector = demean_meta
+
         # Spatial-level selector handling: select target demes here and avoid
         # passing non-wildcard selectors into BasePopulation.
         for deme_id, deme in enumerate(self._demes):
@@ -1115,6 +1126,16 @@ class SpatialPopulation:
         # one ndarray for all call sites.
         return np.zeros((1, 1), dtype=np.float64)
 
+    def _is_discrete_demes(self) -> bool:
+        """Return whether all demes are discrete-generation (no sperm storage).
+
+        Checks the first deme's state; all demes in a SpatialPopulation are
+        expected to share the same population model type.
+        """
+        if not self._demes:
+            return False
+        return not hasattr(self._demes[0].state, "sperm_storage")
+
     def _has_python_hooks(self) -> bool:
         """Return whether any managed deme currently owns Python-layer hooks.
 
@@ -1154,20 +1175,20 @@ class SpatialPopulation:
 
         Returns:
             ``True`` if local hook execution is required for this spatial run.
-            ``False`` when the simulation can use the hook-free compiled fast
-            path end-to-end.
+            ``False`` when the simulation can use the compiled njit fast
+            path end-to-end (including hooks and heterogeneous configs).
 
         Note:
-            Spatial compiled kernels currently do not execute local per-deme
-            hook timelines. We therefore keep Python dispatch whenever hooks
-            are present, when global Numba is disabled, or when deme configs
-            are heterogeneous by value.
+            The spatial lifecycle wrapper now supports per-deme hook execution
+            (CSR registry) and heterogeneous configs (config bank) inside njit
+            with ``prange``. Python dispatch is only needed when Numba is
+            disabled or when legacy Python hook callbacks are present.
         """
         if not is_numba_enabled():
             return True
-        if self._has_python_hooks() or self._has_compiled_hooks():
+        if self._has_python_hooks():
             return True
-        return self._has_heterogeneous_configs()
+        return False
 
     def _config_equivalence_groups(self) -> list[tuple[ConfigObject, list[int]]]:
         """Group deme indices by value-equivalent exported configs.
@@ -1275,46 +1296,65 @@ class SpatialPopulation:
         return False
 
     def _run_codegen_wrapper_tick(self) -> bool:
-        """Run one tick through the njit spatial kernel path."""
-        config = cast(PopulationConfig, self._shared_config())
+        """Run one tick through the njit spatial lifecycle wrapper.
+
+        Uses the pre-compiled spatial lifecycle wrapper from
+        ``CompiledEventHooks``, which handles per-deme hook execution inside
+        ``prange`` followed by migration — all in compiled Numba code.
+        """
         ind_all, sperm_all = self._stack_deme_state_arrays()
+        config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
         effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
-        ind, sperm, tick = run_spatial_tick_with_migration(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            config=config,
-            tick=int(self._tick),
-            adjacency=effective_adjacency,
-            migration_mode=effective_migration_mode_code,
-            topology_rows=0 if self._topology is None else int(self._topology.rows),
-            topology_cols=0 if self._topology is None else int(self._topology.cols),
-            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
-            migration_kernel=self._migration_kernel_array(),
-            kernel_include_center=bool(self._kernel_include_center),
-            migration_rate=float(self._migration_rate),
+
+        if self._is_discrete_demes():
+            tick_fn = self._hooks.spatial_discrete_tick_fn
+        else:
+            tick_fn = self._hooks.spatial_tick_fn
+        assert tick_fn is not None, "spatial lifecycle wrapper not compiled (Numba disabled?)"
+
+        ind, sperm, tick, was_stopped = tick_fn(
+            ind_all, sperm_all,
+            config_bank, deme_config_ids,
+            self._hooks.registry, int(self._tick),
+            effective_adjacency, effective_migration_mode_code,
+            0 if self._topology is None else int(self._topology.rows),
+            0 if self._topology is None else int(self._topology.cols),
+            False if self._topology is None else bool(self._topology.wrap),
+            self._migration_kernel_array(),
+            bool(self._kernel_include_center),
+            float(self._migration_rate),
         )
         self._apply_stacked_state(ind, sperm, int(tick))
-        return False
+        return bool(was_stopped)
 
     def _run_codegen_wrapper_steps(self, n_steps: int, *, record_every: int) -> bool:
-        """Run multiple ticks through the njit spatial kernel path."""
-        config = cast(PopulationConfig, self._shared_config())
+        """Run multiple ticks through the njit spatial lifecycle wrapper.
+
+        Uses the pre-compiled spatial lifecycle ``run`` function, which handles
+        per-deme hook execution, migration, and optional history recording
+        entirely in compiled Numba code.
+        """
         ind_all, sperm_all = self._stack_deme_state_arrays()
+        config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
         effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
-        final_state_tuple, _history, was_stopped = run_spatial_steps_with_migration(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            config=config,
-            tick=int(self._tick),
-            n_steps=int(n_steps),
-            adjacency=effective_adjacency,
-            migration_mode=effective_migration_mode_code,
-            topology_rows=0 if self._topology is None else int(self._topology.rows),
-            topology_cols=0 if self._topology is None else int(self._topology.cols),
-            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
-            migration_kernel=self._migration_kernel_array(),
-            kernel_include_center=bool(self._kernel_include_center),
-            migration_rate=float(self._migration_rate),
+
+        if self._is_discrete_demes():
+            run_fn = self._hooks.spatial_discrete_run_fn
+        else:
+            run_fn = self._hooks.spatial_run_fn
+        assert run_fn is not None, "spatial lifecycle run wrapper not compiled (Numba disabled?)"
+
+        final_state_tuple, _unused_history, was_stopped = run_fn(
+            ind_all, sperm_all,
+            config_bank, deme_config_ids,
+            self._hooks.registry, int(self._tick), int(n_steps),
+            effective_adjacency, effective_migration_mode_code,
+            0 if self._topology is None else int(self._topology.rows),
+            0 if self._topology is None else int(self._topology.cols),
+            False if self._topology is None else bool(self._topology.wrap),
+            self._migration_kernel_array(),
+            bool(self._kernel_include_center),
+            float(self._migration_rate),
             record_interval=int(record_every),
         )
         self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))

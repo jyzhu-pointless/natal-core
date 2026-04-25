@@ -1,10 +1,9 @@
 """Base population model helpers and abstractions.
 
 This module provides the abstract base class and utilities for population
-models (Wright-Fisher, age-structured non-Wright-Fisher, and related
-architectures). The base class defines common interfaces, hook management,
-modifier registration, and helpers that are implemented by concrete
-population classes.
+models (discrete-generation and age-structured). The base class defines
+common interfaces, evolution methods, history management, and helpers
+that are implemented by concrete population classes.
 
 This module provides a common abstraction layer for population models while
 keeping internal state representations compatible with NumPy/Numba kernels.
