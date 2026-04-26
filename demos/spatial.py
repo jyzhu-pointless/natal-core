@@ -1,7 +1,7 @@
 """Minimal spatial population demo.
 
-This demo builds four age-structured demes on a 2x2 grid, then runs a short
-spatial simulation with adjacency-based migration.
+Builds four age-structured demes on a 2x2 grid using the spatial builder
+with batch_setting for heterogeneous initial states.
 """
 
 from __future__ import annotations
@@ -12,60 +12,26 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal as nt
+from natal.spatial_builder import batch_setting
 from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import (  # pyright: ignore[reportUnknownVariableType]
+from natal.spatial_topology import (
     SquareGrid,
     build_adjacency_matrix,
 )
 
 
-def build_deme(
-    species: nt.Species,
-    *,
-    name: str,
-    wt_adults: float,
-    drive_adults: float,
-) -> nt.AgeStructuredPopulation:
-    """Build one deterministic deme with a simple adult-only initial state."""
-    return (
-        nt.AgeStructuredPopulation
-        .setup(species=species, name=name, stochastic=False)
-        .age_structure(n_ages=4, new_adult_age=1)
-        .initial_state(
-            individual_count={
-                "female": {
-                    "WT|WT": [0.0, wt_adults, 0.0, 0.0],
-                    "Dr|WT": [0.0, drive_adults, 0.0, 0.0],
-                },
-                "male": {
-                    "WT|WT": [0.0, wt_adults, 0.0, 0.0],
-                    "Dr|WT": [0.0, drive_adults, 0.0, 0.0],
-                },
-            }
-        )
-        .survival(
-            female_age_based_survival_rates=[1.0, 0.95, 0.8, 0.0],
-            male_age_based_survival_rates=[1.0, 0.95, 0.8, 0.0],
-        )
-        .reproduction(
-            female_age_based_mating_rates=[0.0, 1.0, 1.0, 0.0],
-            male_age_based_mating_rates=[0.0, 1.0, 1.0, 0.0],
-            eggs_per_female=8.0,
-            use_sperm_storage=False,
-        )
-        .competition(
-            juvenile_growth_mode="logistic",
-            expected_num_adult_females=200,
-        )
-        .build()
-    )
-
-
-def share_config(demes: list[nt.AgeStructuredPopulation]) -> None:
-    """Share one config object across demes for the current spatial runner."""
-    shared_config = demes[0].export_config()
-    for deme in demes[1:]:
-        deme.import_config(shared_config)
+def _make_initial_count(wt: float, dr: float) -> dict[str, dict[str, list[float]]]:
+    """Build an age-structured initial count dict for given WT and drive adults."""
+    return {
+        "female": {
+            "WT|WT": [0.0, wt, 0.0, 0.0],
+            "Dr|WT": [0.0, dr, 0.0, 0.0],
+        },
+        "male": {
+            "WT|WT": [0.0, wt, 0.0, 0.0],
+            "Dr|WT": [0.0, dr, 0.0, 0.0],
+        },
+    }
 
 
 def summarize(spatial: SpatialPopulation) -> None:
@@ -108,20 +74,8 @@ def main() -> None:
 
     species = nt.Species.from_dict(
         name="SpatialDemoSpecies",
-        structure={
-            "chr1": {
-                "loc": ["WT", "Dr"],
-            }
-        },
+        structure={"chr1": {"loc": ["WT", "Dr"]}},
     )
-
-    demes = [
-        build_deme(species, name="deme_0", wt_adults=120.0, drive_adults=0.0),
-        build_deme(species, name="deme_1", wt_adults=40.0, drive_adults=20.0),
-        build_deme(species, name="deme_2", wt_adults=10.0, drive_adults=60.0),
-        build_deme(species, name="deme_3", wt_adults=0.0, drive_adults=120.0),
-    ]
-    share_config(demes)
 
     adjacency = cast(
         NDArray[np.float64],
@@ -131,11 +85,38 @@ def main() -> None:
         ),
     )
 
-    spatial = SpatialPopulation(
-        demes=demes,
-        adjacency=adjacency,
-        migration_rate=0.15,
-        name="SpatialDemo",
+    spatial = (
+        SpatialPopulation.builder(
+            species,
+            n_demes=4,
+            pop_type="age_structured",
+        )
+        .setup(name="deme", stochastic=False)
+        .age_structure(n_ages=4, new_adult_age=1)
+        .initial_state(
+            individual_count=batch_setting([
+                _make_initial_count(120.0, 0.0),
+                _make_initial_count(40.0, 20.0),
+                _make_initial_count(10.0, 60.0),
+                _make_initial_count(0.0, 120.0),
+            ])
+        )
+        .survival(
+            female_age_based_survival_rates=[1.0, 0.95, 0.8, 0.0],
+            male_age_based_survival_rates=[1.0, 0.95, 0.8, 0.0],
+        )
+        .reproduction(
+            female_age_based_mating_rates=[0.0, 1.0, 1.0, 0.0],
+            male_age_based_mating_rates=[0.0, 1.0, 1.0, 0.0],
+            eggs_per_female=8.0,
+            use_sperm_storage=False,
+        )
+        .competition(
+            juvenile_growth_mode="logistic",
+            expected_num_adult_females=200,
+        )
+        .migration(adjacency=adjacency, migration_rate=0.15)
+        .build()
     )
 
     print("Initial state")

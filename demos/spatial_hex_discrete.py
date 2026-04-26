@@ -1,7 +1,8 @@
-"""Launch a hex-topology spatial dashboard demo.
+"""Spatial hex discrete-generation perf demo.
 
-This demo builds a 4x4 spatial population with heterogeneous initial demes and
-starts the NiceGUI spatial dashboard on a hex grid.
+Builds SIZE * SIZE homogeneous demes on a SIZE hex grid using the spatial
+builder. Tests construction and simulation performance for large-scale
+homogeneous spatial models.
 """
 
 from __future__ import annotations
@@ -14,58 +15,14 @@ import natal as nt
 from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 
+SIZE = 501
 
-def build_deme(
-    species: nt.Species,
-    *,
-    name: str,
-    wt_adults: float,
-    drive_adults: float,
-) -> nt.DiscreteGenerationPopulation:
-    """Build one deterministic deme for the UI demo."""
-    return (
-        nt.DiscreteGenerationPopulation
-        .setup(species=species, name=name, stochastic=False)
-        .initial_state(
-            individual_count={
-                "female": {
-                    "WT|WT": wt_adults,
-                    "Dr|WT": drive_adults,
-                },
-                "male": {
-                    "WT|WT": wt_adults,
-                    "Dr|WT": drive_adults,
-                },
-            }
-        )
-        .reproduction(
-            eggs_per_female=50.0,
-        )
-        .competition(
-            juvenile_growth_mode="concave",
-            carrying_capacity=300,
-            low_density_growth_rate=6
-        )
-        .build()
-    )
-
-
-def share_config(demes: list[nt.DiscreteGenerationPopulation]) -> None:
-    """Share one compiled config object across demes."""
-    shared_config = demes[0].config
-    for deme in demes[1:]:
-        deme._config = shared_config  # type:ignore
-
-
-def build_symmetric_kernel(size: int = 11, sigma: float = 10.0) -> np.ndarray:
+def build_symmetric_kernel(size: int = 5, sigma: float = 10.0) -> np.ndarray:
     """Build a normalized symmetric migration kernel."""
     center = (size - 1) / 2.0
     y_idx, x_idx = np.indices((size, size), dtype=np.float64)
     dist_sq = (x_idx - center) ** 2 + (y_idx - center) ** 2
     kernel = np.exp(-dist_sq / (2.0 * sigma ** 2)).astype(np.float64, copy=False)
-    kernel /= np.sum(kernel)
-
-    # Enforce exact symmetry to avoid tiny floating-point asymmetries.
     kernel = 0.25 * (
         kernel
         + np.flip(kernel, axis=0)
@@ -77,47 +34,43 @@ def build_symmetric_kernel(size: int = 11, sigma: float = 10.0) -> np.ndarray:
 
 
 def build_hex_spatial_population() -> SpatialPopulation:
-    """Construct the hex-grid spatial demo population."""
+    """Construct a SIZE * SIZE homogeneous discrete-gen hex spatial population."""
     species = nt.Species.from_dict(
-        name="SpatialHexUiDemoSpecies",
-        structure={
-            "chr1": {
-                "loc": ["WT", "Dr"],
-            }
-        },
+        name="SpatialHexDemoSpecies",
+        structure={"chr1": {"loc": ["WT", "Dr"]}},
     )
 
-    initial_pairs = [
-        (0.0, 255.0),
-    ]*10000
-    demes = [
-        build_deme(
+    kernel = build_symmetric_kernel(size=5, sigma=10.0)
+
+    return (
+        SpatialPopulation.builder(
             species,
-            name=f"hex_deme_{idx}",
-            wt_adults=wt_adults,
-            drive_adults=drive_adults,
+            n_demes=SIZE * SIZE,
+            topology=HexGrid(rows=SIZE, cols=SIZE, wrap=False),
+            pop_type="discrete_generation",
         )
-        for idx, (wt_adults, drive_adults) in enumerate(initial_pairs)
-    ]
-    share_config(demes)
-
-    kernel_11x11 = build_symmetric_kernel(size=11, sigma=10.0)
-
-    return SpatialPopulation(
-        demes=demes,
-        topology=HexGrid(rows=100, cols=100, wrap=False),
-        migration_kernel=kernel_11x11,
-        migration_rate=0.2,
-        name="SpatialHexUiDemo",
+        .setup(name="hex_deme", stochastic=True, use_continuous_sampling=True)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": 500.0, "Dr|WT": 0.0},
+                "male": {"WT|WT": 0.0, "Dr|WT": 500.0},
+            }
+        )
+        .reproduction(eggs_per_female=50.0)
+        .competition(
+            juvenile_growth_mode="concave",
+            carrying_capacity=1000,
+            low_density_growth_rate=6,
+        )
+        .migration(kernel=kernel, migration_rate=0.5)
+        .build()
     )
 
 
 def main() -> None:
-    """Launch the hex-grid spatial UI demo."""
-    # nt.disable_numba()
+    """Build + run the hex-grid spatial demo and report timing."""
     spatial = build_hex_spatial_population()
-    # warm up
-    spatial.run(1)
+    spatial.run(1)  # warm-up (Numba compilation)
     print("start")
     start = time.perf_counter()
     spatial.run(3)

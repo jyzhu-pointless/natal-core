@@ -1,7 +1,7 @@
-"""Launch a hex-topology spatial dashboard demo.
+"""Spatial hex age-structured demo.
 
-This demo builds a 4x4 spatial population with heterogeneous initial demes and
-starts the NiceGUI spatial dashboard on a hex grid.
+Builds 25 homogeneous age-structured demes on a 5x5 hex grid using the spatial
+builder. Tests construction and simulation performance.
 """
 
 from __future__ import annotations
@@ -15,27 +15,31 @@ from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 
 
-def build_deme(
-    species: nt.Species,
-    *,
-    name: str,
-    wt_adults: float,
-    drive_adults: float,
-) -> nt.AgeStructuredPopulation:
-    """Build one deterministic deme for the UI demo."""
+def build_hex_spatial_population() -> SpatialPopulation:
+    """Construct a 5x5 homogeneous age-structured hex spatial population."""
+    species = nt.Species.from_dict(
+        name="SpatialHexDemoSpecies",
+        structure={"chr1": {"loc": ["WT", "Dr"]}},
+    )
+
     return (
-        nt.AgeStructuredPopulation
-        .setup(species=species, name=name, stochastic=True, use_continuous_sampling=True)
+        SpatialPopulation.builder(
+            species,
+            n_demes=25,
+            topology=HexGrid(rows=5, cols=5, wrap=False),
+            pop_type="age_structured",
+        )
+        .setup(name="hex_deme", stochastic=True, use_continuous_sampling=True)
         .age_structure(n_ages=5, new_adult_age=1)
         .initial_state(
             individual_count={
                 "female": {
-                    "WT|WT": [0.0, wt_adults, 0.0, 0.0, 0.0],
-                    "Dr|WT": [0.0, drive_adults, 0.0, 0.0, 0.0],
+                    "WT|WT": [0.0, 0.0, 0.0, 0.0, 0.0],
+                    "Dr|WT": [0.0, 255.0, 0.0, 0.0, 0.0],
                 },
                 "male": {
-                    "WT|WT": [0.0, wt_adults, 0.0, 0.0, 0.0],
-                    "Dr|WT": [0.0, drive_adults, 0.0, 0.0, 0.0],
+                    "WT|WT": [0.0, 0.0, 0.0, 0.0, 0.0],
+                    "Dr|WT": [0.0, 255.0, 0.0, 0.0, 0.0],
                 },
             }
         )
@@ -53,65 +57,25 @@ def build_deme(
             juvenile_growth_mode="logistic",
             expected_num_adult_females=240,
         )
+        .migration(
+            kernel=np.array(
+                [
+                    [0.00, 0.10, 0.05],
+                    [0.10, 0.00, 0.10],
+                    [0.05, 0.10, 0.00],
+                ],
+                dtype=np.float64,
+            ),
+            migration_rate=0.2,
+        )
         .build()
     )
 
 
-def share_config(demes: list[nt.AgeStructuredPopulation]) -> None:
-    """Share one compiled config object across demes."""
-    shared_config = demes[0].export_config()
-    for deme in demes[1:]:
-        deme.import_config(shared_config)
-
-
-def build_hex_spatial_population() -> SpatialPopulation:
-    """Construct the hex-grid spatial demo population."""
-    species = nt.Species.from_dict(
-        name="SpatialHexUiDemoSpecies",
-        structure={
-            "chr1": {
-                "loc": ["WT", "Dr"],
-            }
-        },
-    )
-
-    initial_pairs = [
-        (0.0, 255.0),
-    ]*25
-    demes = [
-        build_deme(
-            species,
-            name=f"hex_deme_{idx}",
-            wt_adults=wt_adults,
-            drive_adults=drive_adults,
-        )
-        for idx, (wt_adults, drive_adults) in enumerate(initial_pairs)
-    ]
-    share_config(demes)
-
-    # Hex kernels still use a 3x3 matrix; valid offsets are interpreted by HexGrid.
-    return SpatialPopulation(
-        demes=demes,
-        topology=HexGrid(rows=5, cols=5, wrap=False),
-        migration_kernel=np.array(
-            [
-                [0.00, 0.10, 0.05],
-                [0.10, 0.00, 0.10],
-                [0.05, 0.10, 0.00],
-            ],
-            dtype=np.float64,
-        ),
-        migration_rate=0.2,
-        name="SpatialHexUiDemo",
-    )
-
-
 def main() -> None:
-    """Launch the hex-grid spatial UI demo."""
-    # nt.disable_numba()
+    """Build + run the hex-grid spatial demo and report timing."""
     spatial = build_hex_spatial_population()
-    # warm up
-    spatial.run(1)
+    spatial.run(1)  # warm-up (Numba compilation)
     print("start")
     start = time.perf_counter()
     spatial.run(5)
