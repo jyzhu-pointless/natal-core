@@ -50,6 +50,7 @@ def TICK_FN_NAME(
     migration_kernel: np.ndarray,
     kernel_include_center: bool,
     migration_rate: float,
+    normalize_kernel: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, int, bool]:
     """Execute one spatial tick with sperm storage: per-deme lifecycle in prange, then migration.
 
@@ -72,6 +73,7 @@ def TICK_FN_NAME(
         migration_kernel: Migration kernel weight matrix.
         kernel_include_center: Whether kernel includes center cell.
         migration_rate: Per-capita migration rate.
+        normalize_kernel: Whether to normalize kernel weights per deme.
 
     Returns:
         (ind_count_all, sperm_store_all, tick + 1, was_stopped).
@@ -96,7 +98,7 @@ def TICK_FN_NAME(
         ind_count_all, sperm_store_all, adjacency, migration_mode,
         topology_rows, topology_cols, topology_wrap,
         migration_kernel, kernel_include_center,
-        config_bank[0], migration_rate,
+        config_bank[0], migration_rate, normalize_kernel,
     )
 
     was_stopped = False
@@ -124,6 +126,7 @@ def RUN_FN_NAME(
     migration_kernel: np.ndarray,
     kernel_include_center: bool,
     migration_rate: float,
+    normalize_kernel: bool = True,
     record_interval: int = 0,
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], Optional[np.ndarray], bool]:
     """Execute multiple spatial ticks with sperm storage, with optional history recording.
@@ -166,7 +169,7 @@ def RUN_FN_NAME(
         ind, sperm, tick_cur, step_stopped = TICK_FN_NAME(
             ind, sperm, config_bank, deme_config_ids, registry, tick_cur,
             adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,
-            migration_kernel, kernel_include_center, migration_rate,
+            migration_kernel, kernel_include_center, migration_rate, normalize_kernel,
         )
         if step_stopped:
             was_stopped = True

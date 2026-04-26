@@ -362,6 +362,7 @@ class SpatialBuilder:
         self._kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None
         self._deme_kernel_ids: Optional[NDArray[np.int64]] = None
         self._kernel_include_center: bool = False
+        self._normalize_kernel: bool = True
 
         # Container-level name.
         self._spatial_name: str = "SpatialPopulation"
@@ -799,6 +800,7 @@ class SpatialBuilder:
         kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
+        normalize_kernel: bool = True,
     ) -> SpatialBuilder:
         """Configure spatial migration parameters.
 
@@ -811,6 +813,11 @@ class SpatialBuilder:
             kernel_bank: Optional heterogeneous kernel bank.
             deme_kernel_ids: Per-deme kernel ids into ``kernel_bank``.
             kernel_include_center: Whether kernel includes center cell.
+            normalize_kernel: Whether to normalize kernel weights per deme.
+                When False, total migration is proportional to neighbor count
+                (boundary demes naturally migrate less). Setting kernel values
+                to 1.0 with normalize_kernel=False makes each neighbor
+                contribute migration_rate migrants.
 
         Returns:
             Self for chaining.
@@ -826,6 +833,7 @@ class SpatialBuilder:
         if deme_kernel_ids is not None:
             self._deme_kernel_ids = np.asarray(deme_kernel_ids, dtype=np.int64)
         self._kernel_include_center = bool(kernel_include_center)
+        self._normalize_kernel = bool(normalize_kernel)
         return self
 
     # ------------------------------------------------------------------
@@ -868,6 +876,7 @@ class SpatialBuilder:
             deme_kernel_ids=self._deme_kernel_ids,
             kernel_include_center=self._kernel_include_center,
             migration_rate=self._migration_rate,
+            normalize_kernel=self._normalize_kernel,
             name=self._spatial_name,
         )
 
@@ -976,6 +985,7 @@ class SpatialBuilder:
             deme_kernel_ids=self._deme_kernel_ids,
             kernel_include_center=self._kernel_include_center,
             migration_rate=self._migration_rate,
+            normalize_kernel=self._normalize_kernel,
             name=self._spatial_name,
         )
 

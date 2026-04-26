@@ -291,6 +291,7 @@ class SpatialPopulation:
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
         migration_rate: float = 0.0,
+        normalize_kernel: bool = True,
         name: str = "SpatialPopulation",
     ) -> None:
         """Initialize a spatial population container from existing demes.
@@ -317,6 +318,9 @@ class SpatialPopulation:
             kernel_include_center: Whether kernel migration includes the kernel
                 center as an outbound target for the source deme.
             migration_rate: Fraction of each deme that migrates each tick.
+            normalize_kernel: Whether to normalize kernel weights per deme.
+                When False, total migration is proportional to neighbor count
+                (boundary demes with fewer neighbors naturally migrate less).
             name: Human-readable container name.
 
         Raises:
@@ -471,6 +475,7 @@ class SpatialPopulation:
         self._kernel_include_center = bool(kernel_include_center)
         self._migration_mode_code = 0 if migration_mode == "adjacency" else 1
         self._migration_rate = float(migration_rate)
+        self._normalize_kernel = bool(normalize_kernel)
         # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
 
@@ -543,6 +548,11 @@ class SpatialPopulation:
     @migration_rate.setter
     def migration_rate(self, value: float) -> None:
         self._migration_rate = float(value)
+
+    @property
+    def normalize_kernel(self) -> bool:
+        """bool: Whether kernel weights are normalized per deme."""
+        return self._normalize_kernel
 
     def deme(self, idx: int) -> DemePopulation:
         """Return one deme by positional index.
@@ -1334,6 +1344,7 @@ class SpatialPopulation:
             kernel_include_center=bool(self._kernel_include_center),
             config=cast(PopulationConfig, config),
             migration_rate=float(self._migration_rate),
+            normalize_kernel=bool(self._normalize_kernel),
         )
         self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
         return False
@@ -1366,6 +1377,7 @@ class SpatialPopulation:
             self._migration_kernel_array(),
             bool(self._kernel_include_center),
             float(self._migration_rate),
+            bool(self._normalize_kernel),
         )
         self._apply_stacked_state(ind, sperm, int(tick))
         return bool(was_stopped)
@@ -1398,6 +1410,7 @@ class SpatialPopulation:
             self._migration_kernel_array(),
             bool(self._kernel_include_center),
             float(self._migration_rate),
+            bool(self._normalize_kernel),
             record_interval=int(record_every),
         )
         self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))

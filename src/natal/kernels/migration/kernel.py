@@ -101,6 +101,7 @@ def _build_source_kernel_sparse_row(
     kernel_nnz: int,
     row_dst_idx: NDArray[np.int64],
     row_dst_prob: NDArray[np.float64],
+    normalize: bool = True,
 ) -> int:
     """Populate migration probability distribution for a single source deme (in-place).
 
@@ -113,7 +114,12 @@ def _build_source_kernel_sparse_row(
     2. Convert flattened source index to grid coordinates
     3. Apply kernel offsets and handle boundary conditions
     4. Write valid destination indices and weights to buffers
-    5. Normalize probabilities to sum to 1.0
+    5. Normalize probabilities to sum to 1.0 (if normalize=True)
+
+    When ``normalize=False``, raw kernel weights are preserved. This makes total
+    migration proportional to neighbor count — boundary demes with fewer valid
+    neighbors naturally migrate less total mass. The caller's ``rate`` parameter
+    then becomes a simple global scaling factor.
 
     Note: The actual migration distribution is written to row_dst_idx and row_dst_prob
     buffers in-place. Only the first [return_value] entries in these buffers contain valid data.
@@ -129,6 +135,9 @@ def _build_source_kernel_sparse_row(
         kernel_nnz: Number of valid non-zero kernel offsets
         row_dst_idx: Destination index output buffer (modified in-place)
         row_dst_prob: Migration probability output buffer (modified in-place)
+        normalize: Whether to normalize probabilities to sum to 1.0.
+            When False, raw weights are preserved, making total migration
+            proportional to valid neighbor count.
 
     Returns:
         Number of valid destinations written to the output buffers
@@ -170,7 +179,7 @@ def _build_source_kernel_sparse_row(
         total += weights[idx]
         count += 1
 
-    if total > 0.0:
+    if normalize and total > 0.0:
         # Normalize only the written prefix so row probabilities sum to one.
         inv_total = 1.0 / total
         for idx in range(count):
@@ -191,6 +200,7 @@ def apply_spatial_kernel_migration(
     rate: float,
     is_stochastic: bool,
     use_continuous_sampling: bool,
+    normalize_kernel: bool = True,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Apply one synchronized migration step in kernel-topology backend mode.
 
@@ -204,6 +214,11 @@ def apply_spatial_kernel_migration(
     - Deterministic mode: exact mathematical calculation
     - Stochastic mode: probabilistic sampling with discrete/continuous options
 
+    When ``normalize_kernel=False``, raw kernel weights are not normalized.
+    This makes total migration proportional to valid neighbor count — boundary
+    demes with fewer neighbors naturally migrate less total mass. The ``rate``
+    parameter becomes a simple global scaling factor applied to raw weights.
+
     Args:
         ind_count_all: Stacked individual-count tensor.
         sperm_store_all: Stacked sperm-storage tensor.
@@ -215,6 +230,8 @@ def apply_spatial_kernel_migration(
         rate: Migration probability for each scalar bucket.
         is_stochastic: Whether to use stochastic migration sampling.
         use_continuous_sampling: Whether to use continuous approximation samplers.
+        normalize_kernel: Whether to normalize kernel weights per deme.
+            When False, total migration is proportional to neighbor count.
 
     Returns:
         A tuple ``(ind_next, sperm_next)`` after one migration step.
@@ -261,6 +278,7 @@ def apply_spatial_kernel_migration(
             kernel_nnz=kernel_nnz,
             row_dst_idx=row_dst_idx,
             row_dst_prob=row_dst_prob,
+            normalize=normalize_kernel,
         )
 
         # Female buckets are split into virgin + sperm-coupled parts.

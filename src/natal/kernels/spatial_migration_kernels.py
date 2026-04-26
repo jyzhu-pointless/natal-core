@@ -40,6 +40,7 @@ def apply_spatial_adjacency_migration(
     rate: float,
     is_stochastic: bool,
     use_continuous_sampling: bool,
+    normalize_kernel: bool = True,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Apply one synchronized migration step over the deme axis.
 
@@ -62,6 +63,7 @@ def apply_spatial_adjacency_migration(
             rate=rate,
             is_stochastic=is_stochastic,
             use_continuous_sampling=use_continuous_sampling,
+            normalize_kernel=normalize_kernel,
         )
 
     return apply_spatial_adjacency_mode(
@@ -93,6 +95,7 @@ def run_spatial_migration(
     kernel_include_center: bool,
     config: PopulationConfig,
     migration_rate: float,
+    normalize_kernel: bool = True,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Run migration stage for all demes with config-carried stochastic flags."""
     if migration_rate <= 0.0:
@@ -111,4 +114,5 @@ def run_spatial_migration(
         rate=migration_rate,
         is_stochastic=bool(config.is_stochastic),
         use_continuous_sampling=bool(config.use_continuous_sampling),
+        normalize_kernel=normalize_kernel,
     )
