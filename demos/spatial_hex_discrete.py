@@ -3,10 +3,6 @@
 Builds SIZE * SIZE homogeneous demes on a SIZE hex grid using the spatial
 builder. Tests construction and simulation performance for large-scale
 homogeneous spatial models.
-
-With normalize_kernel=False, total migration is proportional to neighbor count,
-so boundary demes naturally migrate less. Set kernel values to 1.0 and each
-neighbor contributes migration_rate migrants.
 """
 
 from __future__ import annotations
@@ -44,10 +40,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
         structure={"chr1": {"loc": ["WT", "Dr"]}},
     )
 
-    # Simple uniform kernel: each neighbor contributes migration_rate migrants.
-    # With normalize_kernel=False, boundary demes have fewer neighbors
-    # and thus naturally migrate less total mass.
-    kernel = np.ones((3, 3), dtype=np.float64)
+    kernel = build_symmetric_kernel(size=5, sigma=10.0)
 
     return (
         SpatialPopulation.builder(
@@ -69,7 +62,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
             carrying_capacity=1000,
             low_density_growth_rate=6,
         )
-        .migration(kernel=kernel, migration_rate=0.05, normalize_kernel=False)
+        .migration(kernel=kernel, migration_rate=0.5)
         .build()
     )
 

@@ -1,6 +1,8 @@
-# 种群模型
+# 种群模型（Panmictic）
 
 `Population` 类是 NATAL Core 的核心组件，负责管理种群的遗传状态和模拟过程。
+
+> **说明**：本章及 [种群初始化](2_population_initialization.md) 介绍的是 **panmictic（单 deme、均匀混合）** 种群模型。如需构建多 deme 空间种群、配置迁移拓扑或异构 deme 参数，请参见第三部分 —— [Spatial 模拟指南](3_spatial_simulation.md)。
 
 ## 种群类型
 

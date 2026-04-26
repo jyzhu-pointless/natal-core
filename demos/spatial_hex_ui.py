@@ -83,15 +83,14 @@ def build_hex_spatial_population() -> SpatialPopulation:
         .migration(
             kernel=np.array(
                 [
-                    [0.0, 1.0, 1.0],
-                    [1.0, 1.0, 1.0],
-                    [1.0, 1.0, 0.0],
+                    [0.0, 0.10, 0.10],
+                    [0.10, 0.40, 0.10],
+                    [0.10, 0.10, 0.0],
                 ],
                 dtype=np.float64,
             ),
             kernel_include_center=True,
-            migration_rate=0.1,
-            normalize_kernel=False,
+            migration_rate=1.0,
         )
         .build()
     )

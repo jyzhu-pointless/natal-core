@@ -1,6 +1,8 @@
-# 种群初始化
+# 种群初始化（Panmictic）
 
 种群初始化是 NATAL Core 模拟的第一步，通过链式 API 配置和构建种群。
+
+> **说明**：本章介绍的是 **panmictic（单 deme、均匀混合）** 种群的链式配置。如需构建多 deme 空间种群（含拓扑、迁移、`batch_setting` 异构配置），请参见 [Spatial 模拟指南](3_spatial_simulation.md)。空间种群的链式语法与本章基本一致，额外增加了 `.migration()` 方法和 `batch_setting` 支持。
 
 ## 快速开始：链式 API 配置
 
