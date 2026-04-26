@@ -27,6 +27,7 @@ from typing import (
     Literal,
     Optional,
     Sequence,
+    Tuple,
     Union,
     cast,
 )
@@ -34,15 +35,29 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.age_structured_population import AgeStructuredPopulation
+from natal.discrete_generation_population import DiscreteGenerationPopulation
 from natal.genetic_structures import Species
-
-# Lazy imports to avoid circular dependency at module level.
-# SpatialPopulation and builder classes are imported at function-call time.
+from natal.population_builder import (
+    AgeStructuredPopulationBuilder,
+    DiscreteGenerationPopulationBuilder,
+)
+from natal.population_config import PopulationConfig
+from natal.spatial_population import SpatialPopulation
+from natal.spatial_topology import GridTopology
 
 __all__ = [
     "BatchSetting",
     "batch_setting",
     "SpatialBuilder",
+]
+
+# Type aliases for population and builder types used throughout.
+_PopulationInstance = Union[AgeStructuredPopulation, DiscreteGenerationPopulation]
+_TemplateBuilder = Union[AgeStructuredPopulationBuilder, DiscreteGenerationPopulationBuilder]
+_HookItem = Union[
+    Callable[..., object],
+    Dict[str, List[Tuple[Callable[..., object], Optional[str], Optional[int]]]],
 ]
 
 
@@ -60,9 +75,12 @@ class BatchSetting:
     - **scalar**: A Python sequence (list/tuple), one element per deme.
       Each element can be a scalar or an array (e.g. per-deme
       equilibrium distributions).
-    - **array**: A 1D numpy array, one element per deme.
-    - **spatial**: A callable ``(topology, deme_idx) -> float``, expanded at
-      build time.
+    - **array**: A 1D or 2D numpy array. 1D arrays have one element per deme
+      (flat-index order); 2D arrays use ``(row, col)`` layout matching the
+      topology grid and are flattened in row-major order at build time.
+    - **spatial**: A callable ``(flat_idx) -> float`` or
+      ``(row, col) -> float`` (auto-detected by parameter count),
+      expanded at build time.
 
     ``SpatialBuilder`` detects ``BatchSetting`` values in builder method
     calls, stores them, and expands them during ``build()``.
@@ -77,6 +95,7 @@ class BatchSetting:
         values: Union[Sequence[Any], NDArray[np.floating[Any]], Callable[..., float]],
     ):
         self._fn: Optional[Callable[..., float]] = None
+        self._fn_param_count: Optional[int] = None
         self._values: Optional[List[Any]] = None
         self._values_array: Optional[NDArray[np.floating[Any]]] = None
         self._n_demes: Optional[int] = None
@@ -85,13 +104,13 @@ class BatchSetting:
             self._kind: str = self._KIND_SPATIAL
             self._fn = values
         elif isinstance(values, np.ndarray):
-            if values.ndim != 1:
+            if values.ndim not in (1, 2):
                 raise ValueError(
-                    f"BatchSetting array must be 1D, got shape {values.shape}"
+                    f"BatchSetting array must be 1D or 2D, got shape {values.shape}"
                 )
             self._kind = self._KIND_ARRAY
             self._values_array = np.asarray(values)
-            self._n_demes = int(self._values_array.shape[0])
+            self._n_demes = int(self._values_array.size)
         else:
             self._kind = self._KIND_SCALAR
             self._values = list(values)
@@ -110,9 +129,15 @@ class BatchSetting:
     def expand(
         self,
         n_demes: int,
-        topology: Any = None,  # GridTopology, imported lazily
+        topology: Optional[GridTopology] = None,
     ) -> List[Any]:
         """Expand to a concrete list of per-deme values.
+
+        - **scalar/array**: validate length, return as list (2D arrays are
+          flattened row-major).
+        - **spatial**: call the function for each deme index.  Parameter
+          count is auto-detected: 1 param → ``fn(flat_idx)``,
+          2 params → ``fn(row, col)``.
 
         Args:
             n_demes: Number of demes to expand to.
@@ -142,7 +167,15 @@ class BatchSetting:
                     f"BatchSetting array has {self._n_demes} values "
                     f"but {n_demes} demes are required"
                 )
-            return self._values_array.tolist()
+            arr = self._values_array
+            if arr.ndim == 2:
+                if topology is not None and arr.shape != (topology.rows, topology.cols):
+                    raise ValueError(
+                        f"BatchSetting 2D array shape {arr.shape} does not match "
+                        f"topology shape ({topology.rows}, {topology.cols})"
+                    )
+                return arr.ravel(order="C").tolist()
+            return arr.tolist()
 
         elif self._kind == self._KIND_SPATIAL:
             if topology is None:
@@ -150,7 +183,20 @@ class BatchSetting:
                     "Spatial BatchSetting requires topology for expansion."
                 )
             fn = cast(Callable[..., float], self._fn)
-            return [float(fn(topology, i)) for i in range(n_demes)]
+            # Auto-detect parameter count: 2 → (row, col), else (flat_idx).
+            if self._fn_param_count is None:
+                import inspect
+                try:
+                    sig = inspect.signature(fn)
+                    self._fn_param_count = len(sig.parameters)
+                except (ValueError, TypeError):
+                    self._fn_param_count = 1
+            if self._fn_param_count >= 2:
+                return [
+                    float(fn(*topology.from_index(i)))
+                    for i in range(n_demes)
+                ]
+            return [float(fn(i)) for i in range(n_demes)]
 
         raise ValueError(f"Unknown kind: {self._kind}")
 
@@ -172,8 +218,10 @@ class BatchSetting:
         if self._kind == self._KIND_SCALAR:
             return self._values[0] if self._values else None
         elif self._kind == self._KIND_ARRAY:
-            if self._values_array is not None and len(self._values_array) > 0:
-                return self._values_array[0].item() if hasattr(self._values_array[0], 'item') else self._values_array[0]
+            if self._values_array is not None and self._values_array.size > 0:
+                flat = self._values_array.ravel(order="C")
+                val = flat[0]
+                return val.item() if hasattr(val, 'item') else val
             return None
         return None  # spatial kind: deferred until expand() has topology
 
@@ -186,8 +234,10 @@ def batch_setting(
     Args:
         values: One of:
             - A list/tuple of scalars of length ``n_demes``.
-            - A 1D numpy array of length ``n_demes``.
-            - A callable ``(topology: GridTopology, deme_idx: int) -> float``.
+            - A 1D or 2D numpy array. 2D arrays use ``(row, col)`` layout and
+              are flattened in row-major order.
+            - A callable ``(flat_idx) -> float`` or ``(row, col) -> float``
+              (auto-detected by parameter count).
             - An existing ``BatchSetting`` (returned as-is).
 
     Returns:
@@ -232,15 +282,28 @@ def _make_hashable(value: Any) -> Any:
 
 
 def _clone_deme(
-    template: Any,
-    config: Any,
+    template: _PopulationInstance,
+    config: PopulationConfig,
     name: str,
-) -> Any:
+) -> _PopulationInstance:
     """Create a lightweight functional copy of a template deme.
 
-    Delegates to the population instance's ``_clone`` method, which shares
-    compiled hooks, config arrays, registry, and modifiers with the template.
-    Only state arrays are independent.
+    Delegates to the population instance's ``_clone`` method.  The clone
+    **shares** the following with the template (same object reference):
+
+    - ``_config`` — PopulationConfig (and all ndarrays within it)
+    - ``_species``, ``_index_registry``, ``_registry``
+    - ``_hooks``, ``_compiled_hooks``, ``_hook_executor``
+    - ``_gamete_modifiers``, ``_zygote_modifiers``
+
+    Only these are **independent copies**:
+
+    - ``_state`` (individual_count, sperm_storage arrays)
+    - ``_name``
+    - ``_initial_population_snapshot``
+
+    This means N clones of the same template share one copy of all compiled
+    hook data and config arrays; only the mutable state arrays differ.
 
     Args:
         template: A fully-built population instance (``AgeStructuredPopulation``
@@ -251,7 +314,7 @@ def _clone_deme(
     Returns:
         A new population instance of the same type as *template*.
     """
-    return template._clone(name=name, config=config)
+    return template._clone(name=name, config=config)  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +391,7 @@ class SpatialBuilder:
         self,
         species: Species,
         n_demes: int,
-        topology: Any = None,  # GridTopology, imported lazily
+        topology: Optional[GridTopology] = None,
         *,
         pop_type: Literal["age_structured", "discrete_generation"] = "age_structured",
     ):
@@ -342,11 +405,9 @@ class SpatialBuilder:
 
         # Create the template single-deme builder.
         if pop_type == "age_structured":
-            from natal.population_builder import AgeStructuredPopulationBuilder
-            self._template: Any = AgeStructuredPopulationBuilder(species)
+            self._template: _TemplateBuilder = AgeStructuredPopulationBuilder(species)
         else:
-            from natal.population_builder import DiscreteGenerationPopulationBuilder
-            self._template: Any = DiscreteGenerationPopulationBuilder(species)
+            self._template: _TemplateBuilder = DiscreteGenerationPopulationBuilder(species)
 
         # Accumulated batch settings: param_name -> BatchSetting.
         self._batch_settings: Dict[str, BatchSetting] = {}
@@ -356,13 +417,14 @@ class SpatialBuilder:
 
         # Spatial migration parameters.
         self._migration_kernel: Optional[NDArray[np.float64]] = None
+        self._migration_kernel_batch: Optional[BatchSetting] = None
         self._migration_rate: float = 0.0
-        self._migration_strategy: str = "auto"
+        self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto"
         self._migration_adjacency: Optional[object] = None
         self._kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None
         self._deme_kernel_ids: Optional[NDArray[np.int64]] = None
         self._kernel_include_center: bool = False
-        self._normalize_kernel: bool = True
+        self._adjust_migration_on_edge: bool = False
 
         # Container-level name.
         self._spatial_name: str = "SpatialPopulation"
@@ -379,6 +441,23 @@ class SpatialBuilder:
         """Detect BatchSetting values in kwargs, store them, and delegate
         concrete (non-batch) values to the template builder's method.
 
+        **Dual-store pattern**::
+
+            Each chainable call does two things simultaneously:
+
+            1. **Record** the raw kwargs (including BatchSetting objects) in
+               ``_replay_log`` — used later by ``_build_template_for_group``
+               to replay the full builder pipeline for each config group.
+            2. **Delegate** a sanitised version to the template builder —
+               ``BatchSetting`` values are replaced with their first element
+               so the single-deme builder can proceed through its build()
+               pipeline without errors.
+
+            At the end of the chain, the template builder has been fully
+            configured with the *first* value of every BatchSetting.  The
+            complete per-deme lists are stored in ``_batch_settings`` and
+            expanded at ``build()`` time.
+
         Args:
             method_name: Name of the method on the template builder.
             kwargs: Keyword arguments passed by the user.
@@ -389,21 +468,22 @@ class SpatialBuilder:
         concrete: Dict[str, Any] = {}
         for key, value in kwargs.items():
             if isinstance(value, BatchSetting):
+                # Store the full per-deme spec for later expansion.
                 self._batch_settings[key] = value
-                # Template builder only understands scalar values —
-                # feed it the first element so it can proceed through
-                # its own build() pipeline. The full per-deme list is
-                # stored in _batch_settings for later expansion.
+                # Feed the first element to the template builder so it
+                # can proceed through setup() → … → build() without
+                # errors.  The full per-deme list is expanded at build().
                 first = value.first_value()
                 if first is not None:
                     concrete[key] = first
             else:
                 concrete[key] = value
 
-        # Record the original call (with BatchSetting values preserved).
+        # Record the original call with BatchSetting objects preserved,
+        # for full replay in _build_template_for_group.
         self._replay_log.append((method_name, dict(kwargs)))
 
-        # Delegate to template builder (filter out None values).
+        # Delegate sanitised kwargs to template builder.
         template_method = getattr(self._template, method_name)
         filtered = {k: v for k, v in concrete.items() if v is not None}
         template_method(**filtered)
@@ -412,7 +492,7 @@ class SpatialBuilder:
     def _delegate_positional(
         self,
         method_name: str,
-        args: tuple[Any, ...],
+        args: tuple[object, ...],
         kwargs: Dict[str, Any],
     ) -> SpatialBuilder:
         """Like ``_detect_and_delegate`` but accepts positional args.
@@ -575,9 +655,9 @@ class SpatialBuilder:
 
     def reproduction(
         self,
-        # Shared params
-        eggs_per_female: Any = 50.0,
-        sex_ratio: Any = 0.5,
+        # Shared params (accept BatchSetting for per-deme variation)
+        eggs_per_female: Union[float, BatchSetting] = 50.0,
+        sex_ratio: Union[float, BatchSetting] = 0.5,
         use_fixed_egg_count: bool = False,
         # Age-structured params
         female_age_based_mating_rates: Optional[Any] = None,
@@ -638,14 +718,14 @@ class SpatialBuilder:
         self,
         # Age-structured params
         competition_strength: float = 5.0,
-        juvenile_growth_mode: Any = "logistic",
-        low_density_growth_rate: Any = 6.0,
-        age_1_carrying_capacity: Any = None,
-        old_juvenile_carrying_capacity: Any = None,
-        expected_num_adult_females: Any = None,
-        equilibrium_distribution: Any = None,
+        juvenile_growth_mode: Union[int, str, BatchSetting] = "logistic",
+        low_density_growth_rate: Union[float, BatchSetting] = 6.0,
+        age_1_carrying_capacity: Union[int, None, BatchSetting] = None,
+        old_juvenile_carrying_capacity: Union[int, None, BatchSetting] = None,
+        expected_num_adult_females: Union[int, None, BatchSetting] = None,
+        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64], BatchSetting]] = None,
         # Discrete-generation params
-        carrying_capacity: Any = None,
+        carrying_capacity: Union[int, None, BatchSetting] = None,
     ) -> SpatialBuilder:
         """Configure competition and density-dependence.
 
@@ -693,7 +773,7 @@ class SpatialBuilder:
                 },
             )
 
-    def presets(self, *preset_list: Any) -> SpatialBuilder:
+    def presets(self, *preset_list: object) -> SpatialBuilder:
         """Add gene-drive presets (applied during build).
 
         Each positional argument may be a ``BatchSetting`` of preset objects,
@@ -707,7 +787,7 @@ class SpatialBuilder:
             Self for chaining.
         """
         # Detect BatchSetting in positional args.
-        concrete_args: list[Any] = []
+        concrete_args: list[object] = []
         for i, item in enumerate(preset_list):
             if isinstance(item, BatchSetting):
                 self._batch_settings[f"_preset_{i}"] = item
@@ -752,7 +832,7 @@ class SpatialBuilder:
             },
         )
 
-    def hooks(self, *hook_items: Any) -> SpatialBuilder:
+    def hooks(self, *hook_items: _HookItem) -> SpatialBuilder:
         """Register lifecycle hooks.
 
         Args:
@@ -767,8 +847,8 @@ class SpatialBuilder:
 
     def modifiers(
         self,
-        gamete_modifiers: Optional[Any] = None,
-        zygote_modifiers: Optional[Any] = None,
+        gamete_modifiers: Optional[List[Tuple[int, Optional[str], Callable[..., object]]]] = None,
+        zygote_modifiers: Optional[List[Tuple[int, Optional[str], Callable[..., object]]]] = None,
     ) -> SpatialBuilder:
         """Configure custom modifier functions.
 
@@ -800,7 +880,7 @@ class SpatialBuilder:
         kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
-        normalize_kernel: bool = True,
+        adjust_migration_on_edge: bool = False,
     ) -> SpatialBuilder:
         """Configure spatial migration parameters.
 
@@ -813,16 +893,27 @@ class SpatialBuilder:
             kernel_bank: Optional heterogeneous kernel bank.
             deme_kernel_ids: Per-deme kernel ids into ``kernel_bank``.
             kernel_include_center: Whether kernel includes center cell.
-            normalize_kernel: Whether to normalize kernel weights per deme.
-                When False, total migration is proportional to neighbor count
-                (boundary demes naturally migrate less). Setting kernel values
-                to 1.0 with normalize_kernel=False makes each neighbor
-                contribute migration_rate migrants.
+            adjust_migration_on_edge: Whether to adjust migration rates on
+                boundaries. When False (default), boundary demes migrate less
+                due to fewer valid neighbors. When True, all demes have the
+                same total migration rate regardless of position.
 
         Returns:
             Self for chaining.
         """
-        if kernel is not None:
+        if isinstance(kernel, BatchSetting):
+            if kernel_bank is not None or self._kernel_bank is not None:
+                raise ValueError(
+                    "Cannot use batch_setting for kernel when kernel_bank "
+                    "is also provided. Use one or the other."
+                )
+            if deme_kernel_ids is not None or self._deme_kernel_ids is not None:
+                raise ValueError(
+                    "Cannot use batch_setting for kernel when deme_kernel_ids "
+                    "is also provided — indices would conflict."
+                )
+            self._migration_kernel_batch = kernel
+        elif kernel is not None:
             self._migration_kernel = np.asarray(kernel, dtype=np.float64)
         self._migration_rate = float(migration_rate)
         self._migration_strategy = strategy
@@ -833,14 +924,43 @@ class SpatialBuilder:
         if deme_kernel_ids is not None:
             self._deme_kernel_ids = np.asarray(deme_kernel_ids, dtype=np.int64)
         self._kernel_include_center = bool(kernel_include_center)
-        self._normalize_kernel = bool(normalize_kernel)
+        self._adjust_migration_on_edge = bool(adjust_migration_on_edge)
         return self
 
     # ------------------------------------------------------------------
     # Build
     # ------------------------------------------------------------------
 
-    def build(self) -> Any:
+    def _resolve_migration_kernels(
+        self,
+    ) -> tuple[Optional[Sequence[NDArray[np.float64]]], Optional[NDArray[np.int64]]]:
+        """Convert batch kernel to ``(kernel_bank, deme_kernel_ids)`` if needed.
+
+        When ``.migration(kernel=batch_setting([...]))`` was used, this expands
+        the per-deme kernel list, deduplicates unique kernels into a bank, and
+        builds the index mapping.
+
+        Returns:
+            ``(kernel_bank, deme_kernel_ids)`` if batch kernel was set,
+            otherwise ``(self._kernel_bank, self._deme_kernel_ids)``.
+        """
+        if self._migration_kernel_batch is None:
+            return self._kernel_bank, self._deme_kernel_ids
+
+        kernels = self._migration_kernel_batch.expand(self._n_demes, self._topology)
+        unique: list[NDArray[np.float64]] = []
+        kernel_map: dict[object, int] = {}
+        ids: list[int] = []
+        for k in kernels:
+            arr = np.asarray(k, dtype=np.float64)
+            key = _make_hashable(arr)
+            if key not in kernel_map:
+                kernel_map[key] = len(unique)
+                unique.append(arr)
+            ids.append(kernel_map[key])
+        return tuple(unique), np.array(ids, dtype=np.int64)
+
+    def build(self) -> SpatialPopulation:
         """Build and return the configured ``SpatialPopulation``.
 
         Returns:
@@ -850,14 +970,12 @@ class SpatialBuilder:
             return self._build_homogeneous()
         return self._build_heterogeneous()
 
-    def _build_homogeneous(self) -> Any:
+    def _build_homogeneous(self) -> SpatialPopulation:
         """Phase 1a: Build one template deme, clone N-1 times."""
-        from natal.spatial_population import SpatialPopulation
-
         template = self._template.build()
         tpl_config = template.export_config()
 
-        demes: List[Any] = [template]
+        demes: List[_PopulationInstance] = [template]
         for i in range(1, self._n_demes):
             clone = _clone_deme(
                 template,
@@ -866,39 +984,61 @@ class SpatialBuilder:
             )
             demes.append(clone)
 
+        kernel_bank, deme_kernel_ids = self._resolve_migration_kernels()
+
         return SpatialPopulation(
             demes=demes,
             topology=self._topology,
             adjacency=self._migration_adjacency,
             migration_kernel=self._migration_kernel,
-            migration_strategy=cast(Any, self._migration_strategy),
-            kernel_bank=self._kernel_bank,
-            deme_kernel_ids=self._deme_kernel_ids,
+            migration_strategy=self._migration_strategy,
+            kernel_bank=kernel_bank,
+            deme_kernel_ids=deme_kernel_ids,
             kernel_include_center=self._kernel_include_center,
             migration_rate=self._migration_rate,
-            normalize_kernel=self._normalize_kernel,
+            adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
 
-    def _build_heterogeneous(self) -> Any:
+    def _build_heterogeneous(self) -> SpatialPopulation:
         """Phase 1b: Group demes by config equivalence, build one template
-        per group.
+        per group, then clone within each group.
 
-        The first group is built via the full builder pipeline. Subsequent
-        groups use ``_replace`` on the base config when only scalar fields
-        differ — this shares all heavy arrays (genotype maps, fitness arrays,
-        etc.) and avoids re-running the builder pipeline. When batch settings
-        include non-scalar values (initial_state dicts, rate arrays) a full
-        rebuild is used as fallback.
+        **Grouping algorithm**::
+
+            1. Expand every ``BatchSetting`` → per-deme value list.
+            2. For each deme, build a hashable signature from its batch-param values.
+            3. Demes with identical signatures share a config → same group.
+            4. For each group:
+               a. Build ONE template (full replay or ``_replace``).
+               b. Clone the template for remaining demes in the group.
+
+        **Example** — 2601 demes, K = [10000, ..., 5000, ..., 10000]::
+
+            Signatures: 10000 × 2600, 5000 × 1  →  2 groups  →  2 builds, not 2601.
+
+        **Config sharing across groups**::
+
+            The first group is built via full builder replay. Subsequent
+            groups use ``PopulationConfig._replace`` when only scalar /
+            known-array fields differ — this is a NamedTuple shallow copy:
+            unchanged fields (genotype maps, fitness arrays, survival rates,
+            etc.) point to the **same ndarray objects** as the first group's
+            config.  Only the fields that actually differ are new values.
+
+            When a group has non-scalar differences that ``_can_use_replace``
+            cannot handle (e.g. fitness dicts), a full builder replay is used
+            as fallback — all arrays are rebuilt from scratch for that group.
         """
-        from natal.spatial_population import SpatialPopulation
-
-        # 1. Expand all batch settings to per-deme value lists.
+        # 1. Expand every BatchSetting → concrete per-deme list.
+        #    e.g. K=batch_setting([10000,5000,5000,8000]) → [10000, 5000, 5000, 8000]
         expanded: Dict[str, List[Any]] = {}
         for param_name, batch in self._batch_settings.items():
             expanded[param_name] = batch.expand(self._n_demes, self._topology)
 
-        # 2. Compute per-deme config signatures from batch param values.
+        # 2. Hash each deme's batch-param values into a signature.
+        #    ndarray values → bytes; dict values → sorted kv tuples.
+        #    Two demes with identical signatures share a config.
         batch_param_names = sorted(expanded.keys())
         signatures: List[tuple[tuple[str, Any], ...]] = []
         for i in range(self._n_demes):
@@ -909,16 +1049,17 @@ class SpatialBuilder:
             signatures.append(sig)
 
         # 3. Group deme indices by signature.
+        #    [1,1,1,...,2,...,1] → 2 groups, not n_demes groups.
         groups: defaultdict[tuple[tuple[str, Any], ...], List[int]] = defaultdict(list)
         for idx, sig in enumerate(signatures):
             groups[sig].append(idx)
 
-        # 4. Build one template per group. The first group is built via the
-        #    full builder pipeline; subsequent groups use _replace when possible
-        #    to share heavy arrays (genotype maps, fitness arrays, etc.).
-        demes: List[Any] = [None] * self._n_demes
-        base_config: Any = None
-        base_template: Any = None
+        # 4. Build one template per group.  The first group always runs the
+        #    full builder pipeline.  Subsequent groups try ``_replace`` first
+        #    (shares heavy ndarrays), falling back to full replay.
+        demes: List[_PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]
+        base_config: Optional[PopulationConfig] = None   # config from first group — reused via _replace
+        base_template: Optional[_PopulationInstance] = None   # template deme from first group — cloned via _clone_deme
 
         for _sig, indices in groups.items():
             first_idx = indices[0]
@@ -928,13 +1069,15 @@ class SpatialBuilder:
             }
 
             if base_config is None:
-                # First group: full builder pipeline.
+                # First group: full builder replay (no base_config to _replace from).
                 group_template = self._build_template_for_group(sig_map)
                 base_config = group_template.export_config()
                 base_template = group_template
             elif self._can_use_replace(sig_map, base_config):
-                # Only known-replaceable fields differ: share big arrays
-                # via _replace, rebuilding only the arrays that changed.
+                # Fast path: only scalar / known-array fields differ.
+                # _replace creates a shallow copy — unchanged ndarrays
+                # (genotype maps, fitness, survival) are shared with base_config.
+                assert base_template is not None  # set in first-group branch above
                 variant_config = self._build_variant_config(
                     sig_map, base_config,
                     species=self._species,
@@ -945,16 +1088,16 @@ class SpatialBuilder:
                     config=variant_config,
                     name=f"{self._spatial_name}_deme_{first_idx}",
                 )
-                # _clone copies state and snapshot from base_template;
-                # overwrite with per-group config values.
-                state = group_template._require_state()
+                # _clone_deme copies state arrays from base_template;
+                # overwrite them with the variant group's own values.
+                state = group_template._require_state()  # pyright: ignore[reportPrivateUsage]
                 if "individual_count" in sig_map:
                     state.individual_count[:] = variant_config.initial_individual_count
                 if "sperm_storage" in sig_map:
                     ss = getattr(state, 'sperm_storage', None)
                     if ss is not None:
                         ss[:] = variant_config.initial_sperm_storage
-                # Update snapshot so reset() restores per-group state.
+                # Update snapshot so reset() restores per-group initial state.
                 ss_snap = getattr(state, 'sperm_storage', None)
                 object.__setattr__(group_template, '_initial_population_snapshot', (
                     state.individual_count.copy(),
@@ -962,11 +1105,16 @@ class SpatialBuilder:
                     None,
                 ))
             else:
-                # Non-scalar differences (initial_state dicts, etc.): full rebuild.
+                # Fallback: parameter not recognised by _can_use_replace
+                # (e.g. fitness dict, custom modifier). Full builder replay —
+                # all arrays freshly allocated, no sharing with base_config.
                 group_template = self._build_template_for_group(sig_map)
 
             demes[first_idx] = group_template
 
+            # Clone the group template for remaining demes in this group.
+            # Clones share the group's config by reference (including all
+            # ndarrays); only state arrays are independent copies.
             tpl_config = group_template.export_config()
             for idx in indices[1:]:
                 demes[idx] = _clone_deme(
@@ -975,24 +1123,37 @@ class SpatialBuilder:
                     name=f"{self._spatial_name}_deme_{idx}",
                 )
 
+        kernel_bank, deme_kernel_ids = self._resolve_migration_kernels()
+
         return SpatialPopulation(
             demes=demes,
             topology=self._topology,
             adjacency=self._migration_adjacency,
             migration_kernel=self._migration_kernel,
-            migration_strategy=cast(Any, self._migration_strategy),
-            kernel_bank=self._kernel_bank,
-            deme_kernel_ids=self._deme_kernel_ids,
+            migration_strategy=self._migration_strategy,
+            kernel_bank=kernel_bank,
+            deme_kernel_ids=deme_kernel_ids,
             kernel_include_center=self._kernel_include_center,
             migration_rate=self._migration_rate,
-            normalize_kernel=self._normalize_kernel,
+            adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
 
     @staticmethod
-    def _can_use_replace(sig_map: Dict[str, Any], base_config: Any) -> bool:
-        """Return True if every kwarg in *sig_map* maps to a known or
-        discoverable config field."""
+    def _can_use_replace(sig_map: Dict[str, object], base_config: PopulationConfig) -> bool:
+        """Return True if every kwarg in *sig_map* can be applied via ``_replace``.
+
+        ``_replace`` is a NamedTuple shallow copy — it creates a new config
+        where only the specified fields differ; all other fields (including
+        heavy ndarrays like genotype maps, fitness tensors, survival vectors)
+        share the same memory as *base_config*.
+
+        This check gates whether a group can use the fast ``_replace`` path
+        or must fall back to a full builder replay.  A kwarg qualifies if it
+        appears in ``_ARRAY_KWARGS``, ``_KWARG_MULTI_FIELD``,
+        ``_KWARG_RENAMES``, or exists as a direct field name on
+        ``PopulationConfig``.
+        """
         for name in sig_map:
             if name in _ARRAY_KWARGS:
                 continue
@@ -1008,22 +1169,35 @@ class SpatialBuilder:
 
     @staticmethod
     def _build_variant_config(
-        sig_map: Dict[str, Any],
-        base_config: Any,
+        sig_map: Dict[str, object],
+        base_config: PopulationConfig,
         *,
-        species: Any = None,
+        species: Species,
         pop_type: str = "age_structured",
-    ) -> Any:
+    ) -> PopulationConfig:
         """Create a variant config via ``_replace``, sharing all heavy arrays.
 
-        Dispatch order:
-        1. Array kwargs (individual_count, sperm_storage) — dict→array conversion.
-        2. Multi-field kwargs (carrying_capacity) — replace base + scaled fields.
-        3. Rename kwargs (eggs_per_female→expected_eggs_per_female).
-        4. Any other kwarg — direct ``_replace`` if the field exists on the
-           config (validated by ``_can_use_replace`` beforehand).
+        ``PopulationConfig`` is a NamedTuple.  ``_replace(**kwargs)`` creates
+        a **shallow copy**: fields named in *kwargs* get new values; every
+        other field keeps its original reference.  This means genotype maps,
+        fitness tensors, survival vectors, and all other unchanging ndarrays
+        are shared between *base_config* and the returned variant — no copy,
+        no extra memory.
 
-        Equilibrium metrics are recomputed when capacity / eggs / sex-ratio change.
+        Dispatch order (only fields in *sig_map* are touched):
+
+        1. **Array kwargs** (individual_count, sperm_storage) —
+           convert the per-group dict to a **new ndarray** (this array
+           genuinely differs between groups), then ``_replace`` it.
+        2. **Multi-field kwargs** (carrying_capacity variants) —
+           ``_replace`` both the base and population-scale fields.
+        3. **Rename kwargs** (eggs_per_female → expected_eggs_per_female) —
+           ``_replace`` under the config-side field name.
+        4. **Any other kwarg** — direct ``_replace`` by field name
+           (pre-validated by ``_can_use_replace``).
+
+        Equilibrium metrics are recomputed when capacity / eggs / sex-ratio
+        change, since these affect the equilibrium competition strength.
 
         Args:
             sig_map: Mapping from batch kwarg name to group's concrete value.
@@ -1041,7 +1215,11 @@ class SpatialBuilder:
         replace_kwargs: Dict[str, Any] = {}
         needs_equilibrium = False
 
-        for kwarg, val in sig_map.items():
+        for kwarg, raw_val in sig_map.items():
+            # sig_map values are genuinely polymorphic (float, int, dict, …);
+            # their correctness is pre-validated by _can_use_replace.
+            val = cast(Any, raw_val)
+
             # --- 1. array-valued: dict → array conversion ---
             if kwarg == "individual_count":
                 if pop_type == "age_structured":
@@ -1111,12 +1289,21 @@ class SpatialBuilder:
 
         return variant
 
-    def _build_template_for_group(self, sig_map: Dict[str, Any]) -> Any:
+    def _build_template_for_group(self, sig_map: Dict[str, object]) -> _PopulationInstance:
         """Build a single template deme for one config-signature group.
 
-        Replays all recorded method calls on a fresh builder, substituting
-        batch-setting parameters with the group-specific scalar values from
-        *sig_map*.
+        Creates a fresh panmictic builder and replays every method call
+        recorded in ``_replay_log``, substituting ``BatchSetting`` values
+        with the group-specific concrete values from *sig_map*.
+
+        This is the **full-rebuild fallback** — used when the group's
+        differing parameters can't be applied via ``_replace`` (e.g. fitness
+        dicts, or anything ``_can_use_replace`` doesn't recognise).
+        All arrays (genotype maps, fitness, survival, etc.) are freshly
+        allocated.
+
+        For scalar-only differences, prefer ``_build_variant_config`` which
+        shares heavy arrays via ``_replace``.
 
         Args:
             sig_map: Mapping from batch parameter name to the group's
@@ -1125,11 +1312,10 @@ class SpatialBuilder:
         Returns:
             A fully-built population instance for this group.
         """
+        builder: _TemplateBuilder
         if self._pop_type == "age_structured":
-            from natal.population_builder import AgeStructuredPopulationBuilder
-            builder: Any = AgeStructuredPopulationBuilder(self._species)
+            builder = AgeStructuredPopulationBuilder(self._species)
         else:
-            from natal.population_builder import DiscreteGenerationPopulationBuilder
             builder = DiscreteGenerationPopulationBuilder(self._species)
 
         for method_name, kwargs in self._replay_log:
@@ -1138,7 +1324,7 @@ class SpatialBuilder:
                 continue
 
             # Substitute batch-setting values for this group.
-            resolved: Dict[str, Any] = {}
+            resolved: Dict[str, object] = {}
             for key, value in kwargs.items():
                 if key in sig_map:
                     resolved[key] = sig_map[key]
@@ -1153,15 +1339,15 @@ class SpatialBuilder:
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":
-                # Cast to Any: dict.pop with default=() types as tuple[()], which
+                # Cast: dict.pop with default=() types as tuple[()], which
                 # makes enumerate yield Never elements.
-                raw_preset_list: Any = cast(Any, resolved.pop("preset_list", ()))
-                expanded_presets: list[Any] = []
+                raw_preset_list = cast(Any, resolved.pop("preset_list", ()))
+                expanded_presets: list[object] = []
                 for i, item in enumerate(raw_preset_list):
                     key = f"_preset_{i}"
-                    val: Any = sig_map.get(key)
-                    if val is not None:
-                        expanded_presets.append(val)
+                    preset_val = sig_map.get(key)
+                    if preset_val is not None:
+                        expanded_presets.append(preset_val)
                     elif isinstance(item, BatchSetting):
                         first = item.first_value()
                         if first is not None:
@@ -1171,7 +1357,7 @@ class SpatialBuilder:
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(*expanded_presets, **filtered)
             elif method_name == "hooks":
-                hook_items = resolved.pop("hook_items", ())
+                hook_items = cast(Any, resolved.pop("hook_items", ()))
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(*hook_items, **filtered)
             else:
