@@ -25,14 +25,18 @@ from natal.kernels.migration.adjacency import (
 )
 from natal.numba_utils import njit_switch
 
-__all__ = ["apply_spatial_kernel_migration"]
+__all__ = [
+    "apply_spatial_kernel_migration",
+    "apply_spatial_kernel_migration_heterogeneous",
+    "_build_kernel_offset_table",
+]
 
 
 @njit_switch(cache=True)
 def _build_kernel_offset_table(
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-) -> Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.float64], int]:
+) -> Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.float64], int, float]:
     """Build compact non-zero kernel offsets once per migration call.
 
     The migration kernel is source-relative. This helper converts kernel matrix
@@ -47,12 +51,14 @@ def _build_kernel_offset_table(
             outbound routing.
 
     Returns:
-        A tuple ``(d_row, d_col, weights, nnz)`` where:
+        A tuple ``(d_row, d_col, weights, nnz, kernel_total_sum)`` where:
 
         - ``d_row`` stores row offsets relative to each source.
         - ``d_col`` stores column offsets relative to each source.
         - ``weights`` stores raw positive kernel weights.
         - ``nnz`` is the number of valid entries in those arrays.
+        - ``kernel_total_sum`` is the sum of all positive kernel weights
+          (used for boundary-aware normalization).
     """
     # Kernel shape and center index are used to convert matrix coordinates
     # into source-relative offsets.
@@ -70,6 +76,7 @@ def _build_kernel_offset_table(
 
     # Write cursor of the compact representation.
     nnz = 0
+    kernel_total_sum = 0.0
     for kernel_row in range(kernel_rows):
         for kernel_col in range(kernel_cols):
             # Optionally exclude self-loop from the kernel center.
@@ -84,9 +91,10 @@ def _build_kernel_offset_table(
             d_row[nnz] = kernel_row - center_row
             d_col[nnz] = kernel_col - center_col
             weights[nnz] = weight
+            kernel_total_sum += weight
             nnz += 1
 
-    return d_row, d_col, weights, nnz
+    return d_row, d_col, weights, nnz, kernel_total_sum
 
 
 @njit_switch(cache=True)
@@ -99,9 +107,10 @@ def _build_source_kernel_sparse_row(
     d_col: NDArray[np.int64],
     weights: NDArray[np.float64],
     kernel_nnz: int,
+    kernel_total_sum: float,
     row_dst_idx: NDArray[np.int64],
     row_dst_prob: NDArray[np.float64],
-    normalize: bool = True,
+    adjust_on_edge: bool = False,
 ) -> int:
     """Populate migration probability distribution for a single source deme (in-place).
 
@@ -114,12 +123,16 @@ def _build_source_kernel_sparse_row(
     2. Convert flattened source index to grid coordinates
     3. Apply kernel offsets and handle boundary conditions
     4. Write valid destination indices and weights to buffers
-    5. Normalize probabilities to sum to 1.0 (if normalize=True)
+    5. Apply scaling based on ``adjust_on_edge`` parameter
 
-    When ``normalize=False``, raw kernel weights are preserved. This makes total
-    migration proportional to neighbor count — boundary demes with fewer valid
-    neighbors naturally migrate less total mass. The caller's ``rate`` parameter
-    then becomes a simple global scaling factor.
+    Edge handling modes:
+    - ``adjust_on_edge=False`` (default): Probabilities scaled by ``weight / kernel_total_sum``.
+      Total migration rate is proportional to valid neighbor count, making
+      boundary demes naturally migrate less. The caller's ``rate`` parameter
+      represents the migration rate for a deme with all kernel neighbors valid.
+    - ``adjust_on_edge=True``: Probabilities sum to 1.0. All demes have same total
+      migration rate, distributed according to kernel weights among valid neighbors.
+      This "adjusts" migration on edges to maintain uniform total rate.
 
     Note: The actual migration distribution is written to row_dst_idx and row_dst_prob
     buffers in-place. Only the first [return_value] entries in these buffers contain valid data.
@@ -133,11 +146,12 @@ def _build_source_kernel_sparse_row(
         d_col: Column offset vector from _build_kernel_offset_table
         weights: Raw weight vector from _build_kernel_offset_table
         kernel_nnz: Number of valid non-zero kernel offsets
+        kernel_total_sum: Sum of all positive kernel weights (reference for boundary scaling)
         row_dst_idx: Destination index output buffer (modified in-place)
         row_dst_prob: Migration probability output buffer (modified in-place)
-        normalize: Whether to normalize probabilities to sum to 1.0.
-            When False, raw weights are preserved, making total migration
-            proportional to valid neighbor count.
+        adjust_on_edge: Whether to adjust migration rates on boundaries.
+            When False (default), boundary demes migrate less due to fewer neighbors.
+            When True, all demes have the same total migration rate.
 
     Returns:
         Number of valid destinations written to the output buffers
@@ -156,7 +170,7 @@ def _build_source_kernel_sparse_row(
     src_row = source_idx // topology_cols
     src_col = source_idx % topology_cols
 
-    # ``total`` tracks raw weight mass for later normalization.
+    # ``total`` tracks effective weight sum for this deme's valid neighbors.
     total = 0.0
     # ``count`` is the number of valid destinations written so far.
     count = 0
@@ -179,85 +193,68 @@ def _build_source_kernel_sparse_row(
         total += weights[idx]
         count += 1
 
-    if normalize and total > 0.0:
-        # Normalize only the written prefix so row probabilities sum to one.
-        inv_total = 1.0 / total
-        for idx in range(count):
-            row_dst_prob[idx] *= inv_total
+    if count == 0:
+        return 0
+
+    if adjust_on_edge:
+        # Normalize so probabilities sum to 1.0 (same total migration for all demes).
+        # This "adjusts" boundary demes to have the same total rate as interior.
+        if total > 0.0:
+            inv_total = 1.0 / total
+            for idx in range(count):
+                row_dst_prob[idx] *= inv_total
+    else:
+        # Scale by kernel_total_sum: migration rate proportional to neighbor count.
+        # Each neighbor's probability = weight / kernel_total_sum
+        # Total migration = rate * (total / kernel_total_sum)
+        if kernel_total_sum > 0.0:
+            inv_kernel_sum = 1.0 / kernel_total_sum
+            for idx in range(count):
+                row_dst_prob[idx] *= inv_kernel_sum
 
     return count
 
 
 @njit_switch(cache=True, parallel=True)
-def apply_spatial_kernel_migration(
+def _apply_kernel_migration_core(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
     topology_rows: int,
     topology_cols: int,
     topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
     rate: float,
     is_stochastic: bool,
     use_continuous_sampling: bool,
-    normalize_kernel: bool = True,
+    adjust_on_edge: bool,
+    kernel_d_row_arr: NDArray[np.int64],
+    kernel_d_col_arr: NDArray[np.int64],
+    kernel_weights_arr: NDArray[np.float64],
+    kernel_nnzs_arr: NDArray[np.int64],
+    kernel_total_sums_arr: NDArray[np.float64],
+    deme_kernel_ids_arr: NDArray[np.int64],
+    effective_max_nnz: int,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Apply one synchronized migration step in kernel-topology backend mode.
-
-    Unlike adjacency-mode kernels that may prebuild full sparse rows for all
-    source demes, this function constructs one sparse row on-the-fly per source
-    inside ``prange``. For fixed small kernels this keeps routing work close to
-    ``O(kernel_nnz * n_demes)``.
-
-    The migration behavior is controlled by the is_stochastic and
-    use_continuous_sampling parameters:
-    - Deterministic mode: exact mathematical calculation
-    - Stochastic mode: probabilistic sampling with discrete/continuous options
-
-    When ``normalize_kernel=False``, raw kernel weights are not normalized.
-    This makes total migration proportional to valid neighbor count — boundary
-    demes with fewer neighbors naturally migrate less total mass. The ``rate``
-    parameter becomes a simple global scaling factor applied to raw weights.
-
-    Args:
-        ind_count_all: Stacked individual-count tensor.
-        sperm_store_all: Stacked sperm-storage tensor.
-        topology_rows: Number of rows in the topology grid.
-        topology_cols: Number of columns in the topology grid.
-        topology_wrap: Whether topology wraps around borders.
-        migration_kernel: Odd-sized kernel interpreted as source-relative offsets.
-        kernel_include_center: Whether center kernel cell contributes.
-        rate: Migration probability for each scalar bucket.
-        is_stochastic: Whether to use stochastic migration sampling.
-        use_continuous_sampling: Whether to use continuous approximation samplers.
-        normalize_kernel: Whether to normalize kernel weights per deme.
-            When False, total migration is proportional to neighbor count.
-
-    Returns:
-        A tuple ``(ind_next, sperm_next)`` after one migration step.
-    """
-    # Leading dimensions are read once for tighter inner loops.
+    """Shared migration body — pre-resolved kernel arrays, no optional params."""
     n_demes = ind_count_all.shape[0]
     n_sexes = ind_count_all.shape[1]
     n_ages = ind_count_all.shape[2]
     n_genotypes = ind_count_all.shape[3]
 
-    # Build compact kernel offsets once and reuse across all source demes.
-    d_row, d_col, weights, kernel_nnz = _build_kernel_offset_table(
-        migration_kernel=migration_kernel,
-        kernel_include_center=kernel_include_center,
-    )
-
     # Use thread-local output tensors to avoid write races in ``prange``.
     out_ind_by_thread = np.zeros((numba_max_threads,) + ind_count_all.shape, dtype=np.float64)
     out_sperm_by_thread = np.zeros((numba_max_threads,) + sperm_store_all.shape, dtype=np.float64)
-    # Per-thread sparse-row buffers avoid cross-thread mutation conflicts.
-    row_dst_idx_by_thread = np.full((numba_max_threads, max(1, kernel_nnz)), -1, dtype=np.int64)
-    row_dst_prob_by_thread = np.zeros((numba_max_threads, max(1, kernel_nnz)), dtype=np.float64)
+    # Per-thread sparse-row buffers sized for the largest kernel.
+    row_dst_idx_by_thread = np.full((numba_max_threads, max(1, effective_max_nnz)), -1, dtype=np.int64)
+    row_dst_prob_by_thread = np.zeros((numba_max_threads, max(1, effective_max_nnz)), dtype=np.float64)
     # Per-thread scratch vector for outbound destination split.
-    distributed_by_thread = np.zeros((numba_max_threads, max(1, kernel_nnz)), dtype=np.float64)
+    distributed_by_thread = np.zeros((numba_max_threads, max(1, effective_max_nnz)), dtype=np.float64)
 
     for src in prange(n_demes):
+        # Select kernel for this deme.
+        kid = int(deme_kernel_ids_arr[src])
+        nnz_k = kernel_nnzs_arr[kid]
+        total_k = kernel_total_sums_arr[kid]
+
         # Resolve current thread lane and lane-local buffers.
         thread_id = get_thread_id()
         out_ind = out_ind_by_thread[thread_id]
@@ -266,19 +263,20 @@ def apply_spatial_kernel_migration(
         row_dst_prob = row_dst_prob_by_thread[thread_id]
         distributed = distributed_by_thread[thread_id]
 
-        # Build sparse outbound row for this source only.
+        # Build sparse outbound row for this source using selected kernel.
         src_nnz = _build_source_kernel_sparse_row(
             source_idx=src,
             topology_rows=topology_rows,
             topology_cols=topology_cols,
             topology_wrap=topology_wrap,
-            d_row=d_row,
-            d_col=d_col,
-            weights=weights,
-            kernel_nnz=kernel_nnz,
+            d_row=kernel_d_row_arr[kid],
+            d_col=kernel_d_col_arr[kid],
+            weights=kernel_weights_arr[kid],
+            kernel_nnz=nnz_k,
+            kernel_total_sum=total_k,
             row_dst_idx=row_dst_idx,
             row_dst_prob=row_dst_prob,
-            normalize=normalize_kernel,
+            adjust_on_edge=adjust_on_edge,
         )
 
         # Female buckets are split into virgin + sperm-coupled parts.
@@ -359,3 +357,95 @@ def apply_spatial_kernel_migration(
         out_sperm += out_sperm_by_thread[thread_id]
 
     return out_ind, out_sperm
+
+
+@njit_switch(cache=True)
+def apply_spatial_kernel_migration(
+    ind_count_all: NDArray[np.float64],
+    sperm_store_all: NDArray[np.float64],
+    topology_rows: int,
+    topology_cols: int,
+    topology_wrap: bool,
+    migration_kernel: NDArray[np.float64],
+    kernel_include_center: bool,
+    rate: float,
+    is_stochastic: bool,
+    use_continuous_sampling: bool,
+    adjust_on_edge: bool = False,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Apply one migration step with a single kernel for all demes."""
+    n_demes = ind_count_all.shape[0]
+
+    d_row, d_col, w_k, kernel_nnz, kernel_total_sum = _build_kernel_offset_table(
+        migration_kernel=migration_kernel,
+        kernel_include_center=kernel_include_center,
+    )
+
+    kernel_d_row_arr = d_row.reshape(1, -1)
+    kernel_d_col_arr = d_col.reshape(1, -1)
+    kernel_weights_arr = w_k.reshape(1, -1)
+    kernel_nnzs_arr = np.array([kernel_nnz], dtype=np.int64)
+    kernel_total_sums_arr = np.array([kernel_total_sum], dtype=np.float64)
+    deme_kernel_ids_arr = np.zeros(n_demes, dtype=np.int64)
+
+    return _apply_kernel_migration_core(
+        ind_count_all=ind_count_all,
+        sperm_store_all=sperm_store_all,
+        topology_rows=topology_rows,
+        topology_cols=topology_cols,
+        topology_wrap=topology_wrap,
+        rate=rate,
+        is_stochastic=is_stochastic,
+        use_continuous_sampling=use_continuous_sampling,
+        adjust_on_edge=adjust_on_edge,
+        kernel_d_row_arr=kernel_d_row_arr,
+        kernel_d_col_arr=kernel_d_col_arr,
+        kernel_weights_arr=kernel_weights_arr,
+        kernel_nnzs_arr=kernel_nnzs_arr,
+        kernel_total_sums_arr=kernel_total_sums_arr,
+        deme_kernel_ids_arr=deme_kernel_ids_arr,
+        effective_max_nnz=kernel_nnz,
+    )
+
+
+@njit_switch(cache=True)
+def apply_spatial_kernel_migration_heterogeneous(
+    ind_count_all: NDArray[np.float64],
+    sperm_store_all: NDArray[np.float64],
+    topology_rows: int,
+    topology_cols: int,
+    topology_wrap: bool,
+    rate: float,
+    is_stochastic: bool,
+    use_continuous_sampling: bool,
+    adjust_on_edge: bool,
+    kernel_d_row: NDArray[np.int64],
+    kernel_d_col: NDArray[np.int64],
+    kernel_weights: NDArray[np.float64],
+    kernel_nnzs: NDArray[np.int64],
+    kernel_total_sums: NDArray[np.float64],
+    deme_kernel_ids: NDArray[np.int64],
+    max_nnz: int,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Apply one migration step with per-deme kernel selection.
+
+    All kernel-bank arrays are required (no optional params).
+    """
+    return _apply_kernel_migration_core(
+        ind_count_all=ind_count_all,
+        sperm_store_all=sperm_store_all,
+        topology_rows=topology_rows,
+        topology_cols=topology_cols,
+        topology_wrap=topology_wrap,
+        rate=rate,
+        is_stochastic=is_stochastic,
+        use_continuous_sampling=use_continuous_sampling,
+        adjust_on_edge=adjust_on_edge,
+        kernel_d_row_arr=kernel_d_row,
+        kernel_d_col_arr=kernel_d_col,
+        kernel_weights_arr=kernel_weights,
+        kernel_nnzs_arr=kernel_nnzs,
+        kernel_total_sums_arr=kernel_total_sums,
+        deme_kernel_ids_arr=deme_kernel_ids,
+        effective_max_nnz=max_nnz,
+    )

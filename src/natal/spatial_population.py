@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     List,
     Literal,
@@ -155,65 +156,6 @@ def _coerce_adjacency_dense(
     return dense
 
 
-def _build_heterogeneous_kernel_adjacency(
-    topology: GridTopology,
-    kernel_bank: tuple[NDArray[np.float64], ...],
-    deme_kernel_ids: NDArray[np.int64],
-    kernel_include_center: bool,
-) -> NDArray[np.float64]:
-    """Build one dense effective adjacency from per-deme kernel assignments.
-
-    Each source deme selects one kernel by ``deme_kernel_ids[src]``. The
-    selected kernel is projected onto topology coordinates to build one
-    normalized outbound row for that source.
-
-    Args:
-        topology: Grid topology for coordinate/index conversion.
-        kernel_bank: Available kernels.
-        deme_kernel_ids: Per-source kernel id mapping.
-        kernel_include_center: Whether the center cell is included.
-
-    Returns:
-        A dense row-normalized adjacency matrix.
-    """
-    n_demes = topology.n_demes
-    adjacency = np.zeros((n_demes, n_demes), dtype=np.float64)
-
-    # Build one outbound row per source deme, then row-normalize.
-    for src in range(n_demes):
-        kernel_id = int(deme_kernel_ids[src])
-        kernel = kernel_bank[kernel_id]
-        center_row = kernel.shape[0] // 2
-        center_col = kernel.shape[1] // 2
-        src_coord = topology.from_index(src)
-
-        row_total = 0.0
-        for row in range(kernel.shape[0]):
-            for col in range(kernel.shape[1]):
-                if (not kernel_include_center) and row == center_row and col == center_col:
-                    continue
-                weight = float(kernel[row, col])
-                if weight <= 0.0:
-                    continue
-
-                mapped = topology.normalize_coord(
-                    src_coord[0] + row - center_row,
-                    src_coord[1] + col - center_col,
-                )
-                if mapped is None:
-                    continue
-                dst = topology.to_index(mapped)
-                adjacency[src, dst] += weight
-                row_total += weight
-
-        # Normalize each source row so migration code can treat it as
-        # probability weights directly.
-        if row_total > 0.0:
-            adjacency[src, :] /= row_total
-
-    return adjacency
-
-
 class SpatialPopulation:
     """Spatial container composed of per-deme population objects.
 
@@ -291,7 +233,7 @@ class SpatialPopulation:
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
         migration_rate: float = 0.0,
-        normalize_kernel: bool = True,
+        adjust_migration_on_edge: bool = False,
         name: str = "SpatialPopulation",
     ) -> None:
         """Initialize a spatial population container from existing demes.
@@ -318,9 +260,10 @@ class SpatialPopulation:
             kernel_include_center: Whether kernel migration includes the kernel
                 center as an outbound target for the source deme.
             migration_rate: Fraction of each deme that migrates each tick.
-            normalize_kernel: Whether to normalize kernel weights per deme.
-                When False, total migration is proportional to neighbor count
-                (boundary demes with fewer neighbors naturally migrate less).
+            adjust_migration_on_edge: Whether to adjust migration rates on
+                boundaries. When False (default), boundary demes migrate less
+                due to fewer valid neighbors. When True, all demes have the
+                same total migration rate regardless of position.
             name: Human-readable container name.
 
         Raises:
@@ -446,16 +389,10 @@ class SpatialPopulation:
         # must always be rebuilt from all demes.
         self._hooks = self._compile_spatial_hooks_from_demes()
 
-        heterogeneous_kernel_adjacency: NDArray[np.float64] | None = None
-        if topology is not None and normalized_kernel_bank is not None and normalized_deme_kernel_ids is not None:
-            # Pre-build dense effective routing matrix once so runtime kernels
-            # can stay simple even under per-deme heterogeneous kernels.
-            heterogeneous_kernel_adjacency = _build_heterogeneous_kernel_adjacency(
-                topology=topology,
-                kernel_bank=normalized_kernel_bank,
-                deme_kernel_ids=normalized_deme_kernel_ids,
-                kernel_include_center=bool(kernel_include_center),
-            )
+        # Heterogeneous kernels use kernel mode directly (no dense pre-build).
+        # The kernel migration function selects per-deme kernels on-the-fly.
+        if migration_mode == "adjacency" and normalized_kernel_bank is not None and normalized_deme_kernel_ids is not None:
+            migration_mode = "kernel"
 
         self._name = name
         self._topology = topology
@@ -463,19 +400,12 @@ class SpatialPopulation:
         self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = migration_strategy
         self._migration_mode: Literal["adjacency", "kernel"] = migration_mode
         self._migration_kernel = migration_kernel
-        # Effective adjacency compiled from per-deme kernels. When present,
-        # run_tick/run dispatch migration through adjacency mode so the
-        # heterogeneous kernel assignment is active end-to-end.
-        self._heterogeneous_kernel_adjacency = heterogeneous_kernel_adjacency
-        # TODO(spatial-migration/heterogeneous-kernel-kernelpath): Replace
-        # adjacency-mode fallback with a dedicated heterogeneous-kernel kernel
-        # execution path to avoid dense materialization for very large grids.
         self._kernel_bank = normalized_kernel_bank
         self._deme_kernel_ids = normalized_deme_kernel_ids
         self._kernel_include_center = bool(kernel_include_center)
         self._migration_mode_code = 0 if migration_mode == "adjacency" else 1
         self._migration_rate = float(migration_rate)
-        self._normalize_kernel = bool(normalize_kernel)
+        self._adjust_migration_on_edge = bool(adjust_migration_on_edge)
         # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
 
@@ -550,9 +480,9 @@ class SpatialPopulation:
         self._migration_rate = float(value)
 
     @property
-    def normalize_kernel(self) -> bool:
-        """bool: Whether kernel weights are normalized per deme."""
-        return self._normalize_kernel
+    def adjust_migration_on_edge(self) -> bool:
+        """bool: Whether to adjust migration rates on boundaries."""
+        return self._adjust_migration_on_edge
 
     def deme(self, idx: int) -> DemePopulation:
         """Return one deme by positional index.
@@ -940,10 +870,6 @@ class SpatialPopulation:
             A dense float64 vector of length ``n_demes`` with outbound weights
             from ``source_idx``.
         """
-        if self._heterogeneous_kernel_adjacency is not None:
-            # Fast path: precomputed dense matrix for heterogeneous kernels.
-            return self._heterogeneous_kernel_adjacency[source_idx].astype(np.float64, copy=True)
-
         if self._migration_mode == "adjacency":
             weights = self._adjacency[source_idx].astype(np.float64, copy=True)
             total = float(weights.sum())
@@ -952,11 +878,16 @@ class SpatialPopulation:
             return weights
 
         assert self._topology is not None, "topology is required for kernel migration"
-        assert self._migration_kernel is not None, "migration_kernel is required for kernel migration"
+
+        # Select kernel (single or from bank).
+        if self._deme_kernel_ids is not None and self._kernel_bank is not None:
+            kernel = self._kernel_bank[int(self._deme_kernel_ids[source_idx])]
+        else:
+            assert self._migration_kernel is not None, "migration_kernel required"
+            kernel = self._migration_kernel
 
         weights = np.zeros(self.n_demes, dtype=np.float64)
         src_coord = self._topology.from_index(source_idx)
-        kernel = self._migration_kernel
         kr = kernel.shape[0] // 2
         kc = kernel.shape[1] // 2
 
@@ -1179,6 +1110,51 @@ class SpatialPopulation:
         # one ndarray for all call sites.
         return np.zeros((1, 1), dtype=np.float64)
 
+    def _build_heterogeneous_kernel_arrays(self):
+        """Build per-kernel offset tables for heterogeneous kernel routing.
+
+        Only called when ``kernel_bank`` + ``deme_kernel_ids`` are both set.
+        Returns a dict of pre-built arrays to pass to the migration kernel.
+        """
+        from natal.kernels.migration.kernel import (
+            _build_kernel_offset_table,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        if self._kernel_bank is None or self._deme_kernel_ids is None:
+            return None
+
+        n_kernels = len(self._kernel_bank)
+        max_kernel_size = max(k.shape[0] * k.shape[1] for k in self._kernel_bank)
+
+        kernel_d_row = np.zeros((n_kernels, max_kernel_size), dtype=np.int64)
+        kernel_d_col = np.zeros((n_kernels, max_kernel_size), dtype=np.int64)
+        kernel_weights = np.zeros((n_kernels, max_kernel_size), dtype=np.float64)
+        kernel_nnzs = np.zeros(n_kernels, dtype=np.int64)
+        kernel_total_sums = np.zeros(n_kernels, dtype=np.float64)
+        max_nnz = 0
+        for k in range(n_kernels):
+            d_r, d_c, w, nnz, total_sum = _build_kernel_offset_table(
+                migration_kernel=self._kernel_bank[k],
+                kernel_include_center=bool(self._kernel_include_center),
+            )
+            kernel_d_row[k, :nnz] = d_r[:nnz]
+            kernel_d_col[k, :nnz] = d_c[:nnz]
+            kernel_weights[k, :nnz] = w[:nnz]
+            kernel_nnzs[k] = nnz
+            kernel_total_sums[k] = total_sum
+            if nnz > max_nnz:
+                max_nnz = nnz
+
+        return {
+            "deme_kernel_ids": self._deme_kernel_ids,
+            "kernel_d_row": kernel_d_row,
+            "kernel_d_col": kernel_d_col,
+            "kernel_weights": kernel_weights,
+            "kernel_nnzs": kernel_nnzs,
+            "kernel_total_sums": kernel_total_sums,
+            "max_nnz": max_nnz,
+        }
+
     def _is_discrete_demes(self) -> bool:
         """Return whether all demes are discrete-generation (no sperm storage).
 
@@ -1303,8 +1279,6 @@ class SpatialPopulation:
 
     def _effective_migration_route(self) -> tuple[NDArray[np.float64], int]:
         """Return effective migration adjacency and mode code."""
-        if self._heterogeneous_kernel_adjacency is not None:
-            return self._heterogeneous_kernel_adjacency, 0
         return self._adjacency, self._migration_mode_code
 
     def _ensure_demes_runnable(self, *, context: str) -> None:
@@ -1332,6 +1306,9 @@ class SpatialPopulation:
         ind_all, sperm_all = self._stack_deme_state_arrays()
         effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
 
+        # Build heterogeneous kernel arrays if needed, else pass None values.
+        het = self._build_heterogeneous_kernel_arrays()
+
         ind_all, sperm_all = run_spatial_migration(
             ind_count_all=ind_all,
             sperm_store_all=sperm_all,
@@ -1344,7 +1321,14 @@ class SpatialPopulation:
             kernel_include_center=bool(self._kernel_include_center),
             config=cast(PopulationConfig, config),
             migration_rate=float(self._migration_rate),
-            normalize_kernel=bool(self._normalize_kernel),
+            adjust_migration_on_edge=bool(self._adjust_migration_on_edge),
+            deme_kernel_ids=cast(Any, het["deme_kernel_ids"]) if het is not None else None,
+            kernel_d_row=cast(Any, het["kernel_d_row"]) if het is not None else None,
+            kernel_d_col=cast(Any, het["kernel_d_col"]) if het is not None else None,
+            kernel_weights=cast(Any, het["kernel_weights"]) if het is not None else None,
+            kernel_nnzs=cast(Any, het["kernel_nnzs"]) if het is not None else None,
+            kernel_total_sums=cast(Any, het["kernel_total_sums"]) if het is not None else None,
+            max_nnz=cast(Any, het["max_nnz"]) if het is not None else 0,
         )
         self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
         return False
@@ -1366,6 +1350,7 @@ class SpatialPopulation:
             tick_fn = self._hooks.spatial_tick_fn
         assert tick_fn is not None, "spatial lifecycle wrapper not compiled (Numba disabled?)"
 
+        het = self._build_heterogeneous_kernel_arrays()
         ind, sperm, tick, was_stopped = tick_fn(
             ind_all, sperm_all,
             config_bank, deme_config_ids,
@@ -1377,7 +1362,14 @@ class SpatialPopulation:
             self._migration_kernel_array(),
             bool(self._kernel_include_center),
             float(self._migration_rate),
-            bool(self._normalize_kernel),
+            bool(self._adjust_migration_on_edge),
+            cast(Any, het["deme_kernel_ids"]) if het is not None else None,
+            cast(Any, het["kernel_d_row"]) if het is not None else None,
+            cast(Any, het["kernel_d_col"]) if het is not None else None,
+            cast(Any, het["kernel_weights"]) if het is not None else None,
+            cast(Any, het["kernel_nnzs"]) if het is not None else None,
+            cast(Any, het["kernel_total_sums"]) if het is not None else None,
+            cast(Any, het["max_nnz"]) if het is not None else 0,
         )
         self._apply_stacked_state(ind, sperm, int(tick))
         return bool(was_stopped)
@@ -1399,7 +1391,8 @@ class SpatialPopulation:
             run_fn = self._hooks.spatial_run_fn
         assert run_fn is not None, "spatial lifecycle run wrapper not compiled (Numba disabled?)"
 
-        final_state_tuple, _unused_history, was_stopped = run_fn(
+        het = self._build_heterogeneous_kernel_arrays()
+        final_state_tuple, _, was_stopped = run_fn(
             ind_all, sperm_all,
             config_bank, deme_config_ids,
             self._hooks.registry, int(self._tick), int(n_steps),
@@ -1410,7 +1403,14 @@ class SpatialPopulation:
             self._migration_kernel_array(),
             bool(self._kernel_include_center),
             float(self._migration_rate),
-            bool(self._normalize_kernel),
+            bool(self._adjust_migration_on_edge),
+            cast(Any, het["deme_kernel_ids"]) if het is not None else None,
+            cast(Any, het["kernel_d_row"]) if het is not None else None,
+            cast(Any, het["kernel_d_col"]) if het is not None else None,
+            cast(Any, het["kernel_weights"]) if het is not None else None,
+            cast(Any, het["kernel_nnzs"]) if het is not None else None,
+            cast(Any, het["kernel_total_sums"]) if het is not None else None,
+            cast(Any, het["max_nnz"]) if het is not None else 0,
             record_interval=int(record_every),
         )
         self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
