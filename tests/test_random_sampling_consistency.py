@@ -15,6 +15,7 @@ from natal.algorithms import (
     recruit_juveniles_given_scaling_factor_sampling
 )
 
+EPS_ERROR = 1e-10
 
 def test_fertilization_sampling_consistency():
     """Test that fertilization functions behave consistently across sampling modes."""
@@ -51,7 +52,7 @@ def test_fertilization_sampling_consistency():
             fertility_f=fertility_f,
             fertility_m=fertility_m,
             offspring_probability=offspring_probability,
-            average_eggs_per_wt_female=10.0,
+            average_eggs_per_wt_female=25.0,
             adult_start_idx=adult_start_idx,
             n_ages=n_ages,
             n_genotypes=n_genotypes,
@@ -122,7 +123,7 @@ def test_competition_sampling_consistency():
 
         # Total should not exceed carrying capacity (allow small numerical error)
         total = female_new.sum() + male_new.sum()
-        assert total <= carrying_capacity + 1e-5  # Allow small numerical error
+        assert total <= carrying_capacity + EPS_ERROR  # Allow small numerical error
 
     # Verify consistency
     deterministic_total = results["deterministic"][0] + results["deterministic"][1]
@@ -131,7 +132,7 @@ def test_competition_sampling_consistency():
         stochastic_total = results[mode_name][0] + results[mode_name][1]
         # Stochastic results should be reasonable
         assert stochastic_total >= 0
-        assert stochastic_total <= carrying_capacity
+        assert stochastic_total <= carrying_capacity + EPS_ERROR  # continuous Dirichlet may overshoot by epsilon
 
 
 def test_scaling_sampling_consistency():
@@ -169,7 +170,7 @@ def test_scaling_sampling_consistency():
     expected_total = original_total * scaling_factor
 
     deterministic_total = results["deterministic"][0] + results["deterministic"][1]
-    assert abs(deterministic_total - expected_total) < 1e-6
+    assert abs(deterministic_total - expected_total) < EPS_ERROR
 
     for mode_name in ["discrete_stochastic", "continuous_stochastic"]:
         stochastic_total = results[mode_name][0] + results[mode_name][1]

@@ -195,6 +195,96 @@ class BasePopulation(ABC, Generic[T_State]):
         self._pending_hooks.clear()
         self._hook_executor = None
 
+    def _clone(self, name: str, config: Optional[PopulationConfig] = None) -> Any:
+        """Create a lightweight functional copy sharing compiled state and config.
+
+        Used by ``SpatialBuilder`` to efficiently clone template demes without
+        re-running hook compilation or preset application. The clone shares
+        compiled hooks, index registry, modifier pipelines, and config arrays
+        with the template. Only state arrays and history are independent.
+
+        Args:
+            name: Unique name for the clone.
+            config: Optional ``PopulationConfig`` to use (default: template's config).
+
+        Returns:
+            A new population instance of the same type with shared compiled state.
+        """
+        cls = type(self)
+        clone = cls.__new__(cls)
+
+        # --- shared identity ---
+        clone._species = self._species
+        clone._name = name
+        clone._hook_slot = self._hook_slot
+        clone._tick = int(self._tick)
+
+        # --- shared hooks (compiled, read-only during simulation) ---
+        clone._hooks = self._hooks
+        clone._pending_hooks = []
+        clone._compiled_hooks = self._compiled_hooks
+        clone._hook_executor = self._hook_executor
+
+        # --- shared registry ---
+        clone._index_registry = self._index_registry
+        clone._registry = self._registry
+
+        # --- shared modifiers (shallow-copy the list) ---
+        clone._gamete_modifiers = list(self._gamete_modifiers)
+        clone._zygote_modifiers = list(self._zygote_modifiers)
+
+        # --- config (shared reference for homogeneous, group-specific for heterogeneous) ---
+        resolved_config = config if config is not None else self._config
+        if resolved_config is None:
+            raise ValueError("Cannot clone: population config is not initialized")
+        clone._config = resolved_config
+
+        # --- subclass-specific genotype caches ---
+        for _attr in ('_genotypes_list', '_haploid_genotypes_list'):
+            _val = getattr(self, _attr, None)
+            if _val is not None:
+                object.__setattr__(clone, _attr, _val)
+
+        # --- fresh state: copy data from template ---
+        state_cls = type(self._require_state())
+        new_state = state_cls.create(
+            n_genotypes=resolved_config.n_genotypes,
+            n_sexes=resolved_config.n_sexes,
+            n_ages=resolved_config.n_ages,
+        )
+        object.__setattr__(clone, '_state', new_state)
+        clone_state_nn = clone._require_state()
+        self_state_nn = self._require_state()
+        clone_state_nn.individual_count[:] = self_state_nn.individual_count
+        # sperm_storage only exists on PopulationState (age-structured), not
+        # on DiscretePopulationState — use getattr for type-safe access.
+        clone_sperm = getattr(clone_state_nn, 'sperm_storage', None)
+        self_sperm = getattr(self_state_nn, 'sperm_storage', None)
+        if clone_sperm is not None and self_sperm is not None:
+            clone_sperm[:] = self_sperm
+
+        # --- snapshot (handle both age-structured and discrete-generation formats) ---
+        snap = getattr(self, '_initial_population_snapshot', None)
+        if snap is not None:
+            object.__setattr__(clone, '_initial_population_snapshot', (
+                snap[0].copy(),
+                snap[1].copy() if snap[1] is not None else None,
+                snap[2],
+            ))
+
+        # --- runtime state (independent per deme) ---
+        clone._history = []
+        clone._finished = False
+        clone._running = False
+        clone.record_every = int(self.record_every)
+        clone.max_history = int(self.max_history)
+
+        # subclass-specific runtime state (e.g. AgeStructuredPopulation.snapshots)
+        if hasattr(self, 'snapshots'):
+            object.__setattr__(clone, 'snapshots', {})
+
+        return clone
+
     # ========================================================================
     # Registry and Genotype Initialization
     # ========================================================================
@@ -1573,7 +1663,8 @@ class BasePopulation(ABC, Generic[T_State]):
         registry = self._build_hook_program()
         return CompiledEventHooks.from_compiled_hooks(
             self._compiled_hooks,
-            registry=registry
+            registry=registry,
+            include_spatial_wrappers=False,
         )
 
     def __repr__(self) -> str:

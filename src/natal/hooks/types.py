@@ -97,7 +97,7 @@ def _write_codegen_module(stem: str, source: str) -> Path:
     with _HOOK_CODEGEN_LOCK:
         _HOOK_CODEGEN_DIR.mkdir(parents=True, exist_ok=True)
         module_path = _HOOK_CODEGEN_DIR / f"{stem}.py"
-        if not module_path.exists():
+        if not module_path.exists() or module_path.read_text(encoding="utf-8") != source:
             module_path.write_text(source, encoding="utf-8")
         return module_path
 

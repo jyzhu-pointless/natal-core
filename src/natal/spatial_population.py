@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import (
+    TYPE_CHECKING,
     Callable,
     List,
     Literal,
@@ -40,6 +41,9 @@ from natal.spatial_topology import (
     GridTopology,
     build_adjacency_matrix,
 )
+
+if TYPE_CHECKING:
+    from natal.spatial_builder import SpatialBuilder
 
 __all__ = ["SpatialPopulation"]
 
@@ -239,6 +243,41 @@ class SpatialPopulation:
             migration on each tick.
         tick (int): Current shared simulation tick across all demes.
     """
+
+    @classmethod
+    def builder(
+        cls,
+        species: Species,
+        n_demes: int,
+        topology: Optional[GridTopology] = None,
+        *,
+        pop_type: Literal["age_structured", "discrete_generation"] = "age_structured",
+    ) -> SpatialBuilder:
+        """Create a ``SpatialBuilder`` for fluent spatial population construction.
+
+        Args:
+            species: Genetic architecture shared by all demes.
+            n_demes: Number of demes in the spatial layout.
+            topology: Optional grid topology for migration.
+            pop_type: ``"age_structured"`` (default) or ``"discrete_generation"``.
+
+        Returns:
+            A ``SpatialBuilder`` instance ready for chaining.
+
+        Examples:
+            >>> pop = SpatialPopulation.builder(species, n_demes=100) \\
+            ...     .setup(name="demo") \\
+            ...     .initial_state(...) \\
+            ...     .competition(carrying_capacity=batch_setting([...])) \\
+            ...     .build()
+        """
+        from natal.spatial_builder import SpatialBuilder
+        return SpatialBuilder(
+            species=species,
+            n_demes=n_demes,
+            topology=topology,
+            pop_type=pop_type,
+        )
 
     def __init__(
         self,
@@ -788,7 +827,11 @@ class SpatialPopulation:
         """
         compiled_hooks = self._collect_effective_compiled_hooks()
         registry = self._build_hook_program(compiled_hooks)
-        return CompiledEventHooks.from_compiled_hooks(compiled_hooks, registry=registry)
+        return CompiledEventHooks.from_compiled_hooks(
+            compiled_hooks,
+            registry=registry,
+            include_spatial_wrappers=True,
+        )
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """Trigger an event and execute all registered hooks for a specific deme.

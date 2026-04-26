@@ -76,7 +76,7 @@ class DecoratedHookFn(Protocol):
     register: Callable[..., Any]
 
 @njit_switch(cache=True)
-def _noop_hook(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> int:
+def _noop_hook(ind_count: np.ndarray, tick: int, deme_id: int = -1) -> int:
     """Default hook implementation used for missing event handlers."""
     return 0
 
@@ -282,10 +282,10 @@ def _gen_spatial_lifecycle_source(
     """
     name = "spatial_lifecycle_discrete.tmpl.py" if is_discrete else "spatial_lifecycle_structured.tmpl.py"
     return (_read_template(name)
-        .replace("TICK_FN_NAME", tick_fn_name)
-        .replace("RUN_FN_NAME", run_fn_name)
+        .replace("PANMICTIC_TICK_FN_NAME", panmictic_tick_fn_name)
         .replace("PANMICTIC_STEM", panmictic_stem)
-        .replace("PANMICTIC_TICK_FN_NAME", panmictic_tick_fn_name))
+        .replace("TICK_FN_NAME", tick_fn_name)
+        .replace("RUN_FN_NAME", run_fn_name))
 
 
 def compile_spatial_lifecycle_wrapper(
@@ -412,7 +412,11 @@ class CompiledEventHooks:
         setattr(self, event_name, hook_fn)
 
     @staticmethod
-    def from_compiled_hooks(compiled_hooks: List[CompiledHookDescriptor], registry: Optional[HookProgram] = None) -> CompiledEventHooks:
+    def from_compiled_hooks(
+        compiled_hooks: List[CompiledHookDescriptor],
+        registry: Optional[HookProgram] = None,
+        include_spatial_wrappers: bool = False,
+    ) -> CompiledEventHooks:
         """Build event-wise combined callables and lifecycle wrappers.
 
         Unlike the previous Jinja2-codegen approach, this method generates
@@ -466,12 +470,13 @@ class CompiledEventHooks:
                 True, first_hook, early_hook, late_hook,
             )
 
-            result.spatial_tick_fn, result.spatial_run_fn = compile_spatial_lifecycle_wrapper(
-                False, first_hook, early_hook, late_hook,
-            )
-            result.spatial_discrete_tick_fn, result.spatial_discrete_run_fn = compile_spatial_lifecycle_wrapper(
-                True, first_hook, early_hook, late_hook,
-            )
+            if include_spatial_wrappers:
+                result.spatial_tick_fn, result.spatial_run_fn = compile_spatial_lifecycle_wrapper(
+                    False, first_hook, early_hook, late_hook,
+                )
+                result.spatial_discrete_tick_fn, result.spatial_discrete_run_fn = compile_spatial_lifecycle_wrapper(
+                    True, first_hook, early_hook, late_hook,
+                )
 
         return result
 
