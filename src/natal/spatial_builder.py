@@ -38,6 +38,7 @@ from numpy.typing import NDArray
 from natal.age_structured_population import AgeStructuredPopulation
 from natal.discrete_generation_population import DiscreteGenerationPopulation
 from natal.genetic_structures import Species
+from natal.observation import GroupsInput
 from natal.population_builder import (
     AgeStructuredPopulationBuilder,
     DiscreteGenerationPopulationBuilder,
@@ -402,6 +403,10 @@ class SpatialBuilder:
         self._n_demes = n_demes
         self._topology = topology
         self._pop_type: Literal["age_structured", "discrete_generation"] = pop_type
+
+        # Observation groups (optional, applied at build time).
+        self._observation_groups: Optional[GroupsInput] = None
+        self._observation_collapse_age: bool = False
 
         # Create the template single-deme builder.
         if pop_type == "age_structured":
@@ -867,6 +872,31 @@ class SpatialBuilder:
             },
         )
 
+    def with_observation(
+        self,
+        groups: GroupsInput,
+        *,
+        collapse_age: bool = False,
+    ) -> SpatialBuilder:
+        """Register observation groups for compressed history recording.
+
+        The groups are compiled into a binary mask at build time and passed
+        to the spatial simulation kernel on each ``run()`` call. Once set,
+        history records store aggregated observation data instead of raw
+        flattened state across all demes.
+
+        Args:
+            groups: Observation groups (dict of name -> spec, list of specs,
+                or None for one-group-per-genotype).
+            collapse_age: Whether to collapse the age axis in exports.
+
+        Returns:
+            SpatialBuilder: Self for chaining.
+        """
+        self._observation_groups = groups
+        self._observation_collapse_age = collapse_age
+        return self
+
     # ------------------------------------------------------------------
     # Spatial-specific methods
     # ------------------------------------------------------------------
@@ -986,7 +1016,7 @@ class SpatialBuilder:
 
         kernel_bank, deme_kernel_ids = self._resolve_migration_kernels()
 
-        return SpatialPopulation(
+        spatial = SpatialPopulation(
             demes=demes,
             topology=self._topology,
             adjacency=self._migration_adjacency,
@@ -999,6 +1029,12 @@ class SpatialBuilder:
             adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
+        if self._observation_groups is not None:
+            spatial.set_observations(
+                self._observation_groups,
+                collapse_age=self._observation_collapse_age,
+            )
+        return spatial
 
     def _build_heterogeneous(self) -> SpatialPopulation:
         """Phase 1b: Group demes by config equivalence, build one template
@@ -1125,7 +1161,7 @@ class SpatialBuilder:
 
         kernel_bank, deme_kernel_ids = self._resolve_migration_kernels()
 
-        return SpatialPopulation(
+        spatial = SpatialPopulation(
             demes=demes,
             topology=self._topology,
             adjacency=self._migration_adjacency,
@@ -1138,6 +1174,12 @@ class SpatialBuilder:
             adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
+        if self._observation_groups is not None:
+            spatial.set_observations(
+                self._observation_groups,
+                collapse_age=self._observation_collapse_age,
+            )
+        return spatial
 
     @staticmethod
     def _can_use_replace(sig_map: Dict[str, object], base_config: PopulationConfig) -> bool:
