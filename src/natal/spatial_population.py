@@ -6,6 +6,7 @@ Each deme is represented by one concrete ``BasePopulation`` subclass instance.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import (
@@ -44,6 +45,7 @@ from natal.spatial_topology import (
 )
 
 if TYPE_CHECKING:
+    from natal.observation import Observation
     from natal.spatial_builder import SpatialBuilder
 
 __all__ = ["SpatialPopulation"]
@@ -280,6 +282,20 @@ class SpatialPopulation:
         # tuple view to prevent accidental external mutation.
         self._demes: List[DemePopulation] = list(demes)
 
+        # Warn if any deme has per-deme record_observation set — spatial
+        # population uses its own container-level observation and the per-deme
+        # setting will be silently ignored during spatial run() / run_tick().
+        for deme_idx, deme in enumerate(self._demes):
+            if getattr(deme, "record_observation", None) is not None:
+                warnings.warn(
+                    f"deme[{deme_idx}] has record_observation set, but SpatialPopulation "
+                    "uses its own observation mask from the container level. "
+                    "The per-deme setting will be ignored during spatial run(). "
+                    "Use spatial.record_observation or spatial.set_observations() instead.",
+                    stacklevel=2,
+                )
+                break
+
         # Spatial container expects all demes to share one Species object so
         # genotype indexing and config semantics are globally consistent.
         first_species = self._demes[0].species
@@ -409,6 +425,17 @@ class SpatialPopulation:
         # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
 
+        # Observation-based history recording.
+        self._observation: Optional[Observation] = None  # type: ignore[valid-type]
+        self._observation_mask: Optional[NDArray[np.float64]] = None
+        self._deme_selector: Optional[NDArray[np.float64]] = None
+
+        # Evolution history as (tick, flattened_array) tuples.
+        self._history: List[Tuple[int, NDArray[np.float64]]] = []
+
+        # History config
+        self.max_history: int = 5000  # Default rolling window size
+
         for idx, deme in enumerate(self._demes[1:], start=1):
             if int(deme.tick) != self._tick:
                 raise ValueError(
@@ -499,6 +526,186 @@ class SpatialPopulation:
     def tick(self) -> int:
         """int: Shared simulation tick across all demes."""
         return self._tick
+
+    @property
+    def history(self) -> List[Tuple[int, NDArray[np.float64]]]:
+        """A list of recorded historical states as ``(tick, flattened_array)`` tuples.
+
+        Each flattened array contains the full stacked spatial state:
+        ``[tick, ind_all.ravel(), sperm_all.ravel()]``.
+        """
+        return list(self._history)
+
+    def get_history(self) -> NDArray[np.float64]:
+        """Return the recorded history as a stacked 2D array.
+
+        Each row is ``(tick, ind_all.ravel(), sperm_all.ravel())``.
+        Returns a zero-row array if no history has been recorded.
+        """
+        if len(self._history) == 0:
+            return np.zeros((0, 0), dtype=np.float64)
+        return np.array([rec[1] for rec in self._history], dtype=np.float64)
+
+    def clear_history(self) -> None:
+        """Clear all recorded history."""
+        self._history.clear()
+
+    def _enforce_history_limit(self) -> None:
+        """Ensure history size does not exceed max_history by dropping oldest entries."""
+        if self.max_history > 0:
+            excess = len(self._history) - self.max_history
+            if excess > 0:
+                self._history = self._history[excess:]
+
+    def _process_kernel_history(
+        self,
+        history_new: Optional[NDArray[np.float64]],
+        clear_history_on_start: bool,
+    ) -> None:
+        """Process and append history array returned from spatial simulation kernels.
+
+        Handles duplication checking (overlapping start/end ticks) and enforces limit.
+        """
+        if history_new is None or history_new.shape[0] == 0:
+            return
+
+        if clear_history_on_start:
+            self.clear_history()
+
+        for row_idx in range(history_new.shape[0]):
+            row = history_new[row_idx, :]
+            tick = int(row[0])
+            # Skip duplicate entry if continuing history (overlap check)
+            if not clear_history_on_start and self._history and self._history[-1][0] == tick:
+                continue
+            self._history.append((tick, row.copy()))
+
+        self._enforce_history_limit()
+
+    # ========================================================================
+    # Observation-based history recording
+    # ========================================================================
+
+    @property
+    def record_observation(self) -> Optional[Observation]:
+        """The compiled Observation used for observation-mode history."""
+        return self._observation
+
+    @record_observation.setter
+    def record_observation(self, obs: Optional[Observation]) -> None:
+        self._observation = obs
+        if obs is not None:
+            ref_deme = self._demes[0]
+            state = ref_deme.state
+            self._observation_mask = obs.build_mask(
+                n_sexes=state.individual_count.shape[0],
+                n_ages=state.individual_count.shape[1] if state.individual_count.ndim == 3 else 1,
+                n_genotypes=state.individual_count.shape[-1],
+            )
+            self._deme_selector = self._build_deme_selector()
+
+    def set_observations(
+        self,
+        groups: Any,
+        *,
+        collapse_age: bool = False,
+    ) -> None:
+        """Register observation groups and immediately compile the binary mask.
+
+        Similar to ``BasePopulation.set_observations`` but also builds the
+        per-group deme selector from optional ``"deme"`` keys in each spec.
+
+        Args:
+            groups: Observation groups (dict of name -> spec, list of specs,
+                or None for one-group-per-genotype).
+            collapse_age: Whether to collapse the age axis during projection.
+        """
+        from natal.observation import ObservationFilter
+
+        ref_deme = self._demes[0]
+        obs_filter = ObservationFilter(ref_deme.index_registry)
+        self._observation = obs_filter.build_filter(
+            diploid_genotypes=ref_deme.species,
+            groups=groups,
+            collapse_age=bool(collapse_age),
+        )
+        state = ref_deme.state
+        ind = state.individual_count
+        self._observation_mask = self._observation.build_mask(
+            n_sexes=ind.shape[0],
+            n_ages=ind.shape[1] if ind.ndim == 3 else 1,
+            n_genotypes=ind.shape[-1],
+        )
+        self._deme_selector = self._build_deme_selector()
+
+    def _build_deme_selector(self) -> Optional[NDArray[np.float64]]:
+        """Build ``(n_groups, n_demes)`` binary selector from group specs.
+
+        Each group spec may contain an optional ``"deme"`` key:
+          - ``"all"`` or absent → every deme is included (1.0)
+          - list of ``int`` → flat deme indices
+          - list of ``(row, col)`` tuples → 2-D coordinates resolved via topology
+
+        Returns:
+            Float64 array of shape ``(n_groups, n_demes)``, or ``None`` when
+            every group selects all demes (the common case).
+        """
+        obs = self._observation
+        if obs is None:
+            return None
+
+        n_demes = len(self._demes)
+        n_groups = len(obs.labels)
+        selector = np.ones((n_groups, n_demes), dtype=np.float64)
+        has_restriction = False
+
+        for gi, (_name, spec) in enumerate(obs.specs):
+            deme_spec_raw = spec.get("deme")
+            if deme_spec_raw is None or deme_spec_raw == "all":
+                continue
+
+            selector[gi, :] = 0.0
+            has_restriction = True
+
+            if isinstance(deme_spec_raw, (list, tuple)):
+                for item in deme_spec_raw:  # pyright: ignore[reportUnknownVariableType]
+                    if isinstance(item, (list, tuple)) and len(item) == 2:  # pyright: ignore[reportUnknownArgumentType]
+                        r_idx = cast(int, item[0])  # pyright: ignore[reportUnknownArgumentType]
+                        c_idx = cast(int, item[1])  # pyright: ignore[reportUnknownArgumentType]
+                        if self._topology is not None:
+                            selector[gi, self._topology.to_index((r_idx, c_idx))] = 1.0
+                        else:
+                            selector[gi, r_idx] = 1.0
+                    elif isinstance(item, (int, float)):
+                        selector[gi, int(item)] = 1.0
+
+        return selector if has_restriction else None
+
+    def _record_snapshot(self) -> None:
+        """Manually record the current stacked spatial state as a history entry.
+
+        When ``_observation_mask`` is set, records observation-aggregated
+        snapshots instead of raw stacked state.
+        """
+        ind_all, sperm_all = self._stack_deme_state_arrays()
+        if self._observation_mask is not None:
+            observed = np.sum(
+                self._observation_mask[None, :, :, :, :] * ind_all[:, None, :, :, :],
+                axis=-1,
+            )
+            sel = self._deme_selector
+            if sel is not None:
+                observed = observed * sel.T[:, :, None, None]
+            flat = np.empty(1 + observed.size, dtype=np.float64)
+            flat[0] = float(self._tick)
+            flat[1:] = observed.ravel()
+        else:
+            flat = np.empty(1 + ind_all.size + sperm_all.size, dtype=np.float64)
+            flat[0] = float(self._tick)
+            flat[1:1 + ind_all.size] = ind_all.ravel()
+            flat[1 + ind_all.size:] = sperm_all.ravel()
+        self._history.append((self._tick, flat))
+        self._enforce_history_limit()
 
     @property
     def hooks(self) -> CompiledEventHooks:
@@ -1374,7 +1581,7 @@ class SpatialPopulation:
         self._apply_stacked_state(ind, sperm, int(tick))
         return bool(was_stopped)
 
-    def _run_codegen_wrapper_steps(self, n_steps: int, *, record_every: int) -> bool:
+    def _run_codegen_wrapper_steps(self, n_steps: int, *, record_every: int, clear_history_on_start: bool = True) -> bool:
         """Run multiple ticks through the njit spatial lifecycle wrapper.
 
         Uses the pre-compiled spatial lifecycle ``run`` function, which handles
@@ -1392,7 +1599,10 @@ class SpatialPopulation:
         assert run_fn is not None, "spatial lifecycle run wrapper not compiled (Numba disabled?)"
 
         het = self._build_heterogeneous_kernel_arrays()
-        final_state_tuple, _, was_stopped = run_fn(
+        obs_mask = self._observation_mask
+        n_obs = len(self._observation.labels) if self._observation is not None else 0
+        demean_sel = self._deme_selector
+        final_state_tuple, history_new, was_stopped = run_fn(
             ind_all, sperm_all,
             config_bank, deme_config_ids,
             self._hooks.registry, int(self._tick), int(n_steps),
@@ -1412,9 +1622,13 @@ class SpatialPopulation:
             cast(Any, het["kernel_total_sums"]) if het is not None else None,
             cast(Any, het["max_nnz"]) if het is not None else 0,
             record_interval=int(record_every),
+            observation_mask=obs_mask,
+            n_obs_groups=n_obs,
+            deme_selector=demean_sel,
         )
         self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
-        return was_stopped
+        self._process_kernel_history(history_new, clear_history_on_start)
+        return bool(was_stopped)
 
     def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick via the spatial kernel.
@@ -1442,6 +1656,7 @@ class SpatialPopulation:
         n_steps: int,
         record_every: int = 1,
         finish: bool = False,
+        clear_history_on_start: bool = False,
     ) -> SpatialPopulation:
         """Run multiple spatial ticks via the spatial kernel.
 
@@ -1451,6 +1666,8 @@ class SpatialPopulation:
                 spatial kernel.
             finish: Whether to mark all demes finished when the run completes
                 without an early stop event.
+            clear_history_on_start: Whether to clear existing history before
+                appending new snapshots.
 
         Returns:
             This spatial population instance after in-place state update.
@@ -1464,16 +1681,27 @@ class SpatialPopulation:
 
         self._ensure_demes_runnable(context="run spatial simulation")
 
+        if clear_history_on_start:
+            self.clear_history()
+
         if self._should_use_python_dispatch():
             # Hook-aware fallback: keep local hook timeline semantics.
             was_stopped = False
+            if record_every > 0 and (self._tick % record_every == 0):
+                self._record_snapshot()
             for _ in range(n_steps):
                 if self._run_python_dispatch_tick():
                     was_stopped = True
                     break
+                if record_every > 0 and (self._tick % record_every == 0):
+                    self._record_snapshot()
         else:
             # Global Numba path: run batched spatial kernel.
-            was_stopped = self._run_codegen_wrapper_steps(n_steps, record_every=int(record_every))
+            was_stopped = self._run_codegen_wrapper_steps(
+                n_steps,
+                record_every=int(record_every),
+                clear_history_on_start=clear_history_on_start,
+            )
         if bool(was_stopped):
             self._mark_all_demes_stopped()
         elif finish:
