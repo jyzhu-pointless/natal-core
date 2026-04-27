@@ -141,16 +141,24 @@ def RUN_FN_NAME(
     kernel_total_sums: np.ndarray | None = None,
     max_nnz: int = 0,
     record_interval: int = 0,
+    observation_mask: Optional[np.ndarray] = None,
+    n_obs_groups: int = 0,
+    deme_selector: Optional[np.ndarray] = None,
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], Optional[np.ndarray], bool]:
     """Execute multiple spatial ticks in sequence, with optional history recording.
 
     Calls TICK_FN_NAME in a loop and optionally records flattened snapshots
     of the full state at each ``record_interval`` tick.
+    When ``observation_mask`` is provided, history stores observation-reduced
+    snapshots instead.
 
     Args:
         Same as TICK_FN_NAME, plus:
         n_steps: Number of ticks to execute.
         record_interval: Recording interval (0 means no recording).
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        n_obs_groups: Number of observation groups.
+        deme_selector: Optional per-group deme filter ``(n_groups, n_demes)``.
 
     Returns:
         ((ind_count_all, sperm_store_all, tick), history_array_or_None, was_stopped).
@@ -159,9 +167,14 @@ def RUN_FN_NAME(
     ind = ind_count_all.copy()
     sperm = sperm_store_all.copy()
     tick_cur = tick
-    ind_size = ind.size
-    sperm_size = sperm.size
-    flatten_size = 1 + ind_size + sperm_size
+
+    if observation_mask is not None:
+        n_demes_ = ind.shape[0]
+        n_sexes_ = ind.shape[1]
+        n_ages_ = ind.shape[2]
+        flatten_size = 1 + n_demes_ * n_obs_groups * n_sexes_ * n_ages_
+    else:
+        flatten_size = 1 + ind.size + sperm.size
 
     if record_interval > 0:
         estimated_size = (n_steps // record_interval) + 2
@@ -173,8 +186,14 @@ def RUN_FN_NAME(
     if record_interval > 0 and (tick_cur % record_interval == 0):
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick_cur
-        flat_state[1:1 + ind_size] = ind.flatten()
-        flat_state[1 + ind_size:] = sperm.flatten()
+        if observation_mask is not None:
+            observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
+            if deme_selector is not None:
+                observed = observed * deme_selector.T[:, :, None, None]
+            flat_state[1:] = observed.flatten()
+        else:
+            flat_state[1:1 + ind.size] = ind.flatten()
+            flat_state[1 + ind.size:] = sperm.flatten()
         history_array[history_count, :] = flat_state
         history_count += 1
 
@@ -193,8 +212,14 @@ def RUN_FN_NAME(
         if record_interval > 0 and (tick_cur % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick_cur
-            flat_state[1:1 + ind_size] = ind.flatten()
-            flat_state[1 + ind_size:] = sperm.flatten()
+            if observation_mask is not None:
+                observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
+                if deme_selector is not None:
+                    observed = observed * deme_selector.T[:, :, None, None]
+                flat_state[1:] = observed.flatten()
+            else:
+                flat_state[1:1 + ind.size] = ind.flatten()
+                flat_state[1 + ind.size:] = sperm.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
 

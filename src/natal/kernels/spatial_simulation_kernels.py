@@ -269,6 +269,9 @@ def run_spatial_steps_with_migration(
     kernel_include_center: bool,
     migration_rate: float,
     record_interval: int = 0,
+    observation_mask: Optional[NDArray[np.float64]] = None,
+    n_obs_groups: int = 0,
+    deme_selector: Optional[NDArray[np.float64]] = None,
 ) -> Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
     """Execute multiple spatial ticks with migration and optional history recording.
 
@@ -289,6 +292,9 @@ def run_spatial_steps_with_migration(
         kernel_include_center: Whether kernel center is an outbound target.
         migration_rate: Fraction of each deme that migrates each tick.
         record_interval: History recording interval (0 = no recording).
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        n_obs_groups: Number of observation groups.
+        deme_selector: Optional per-group deme filter ``(n_groups, n_demes)``.
 
     Returns:
         A tuple ``(state_tuple, history, was_stopped)``.
@@ -298,9 +304,13 @@ def run_spatial_steps_with_migration(
     sperm = sperm_store_all.copy()
     tick_cur = tick
 
-    ind_size = ind.size
-    sperm_size = sperm.size
-    flatten_size = 1 + ind_size + sperm_size
+    if observation_mask is not None:
+        n_demes_ = ind.shape[0]
+        n_sexes_ = ind.shape[1]
+        n_ages_ = ind.shape[2]
+        flatten_size = 1 + n_demes_ * n_obs_groups * n_sexes_ * n_ages_
+    else:
+        flatten_size = 1 + ind.size + sperm.size
 
     if record_interval > 0:
         estimated_size = (n_steps // record_interval) + 2
@@ -312,8 +322,14 @@ def run_spatial_steps_with_migration(
     if record_interval > 0 and (tick_cur % record_interval == 0):
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick_cur
-        flat_state[1:1 + ind_size] = ind.flatten()
-        flat_state[1 + ind_size:] = sperm.flatten()
+        if observation_mask is not None:
+            observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
+            if deme_selector is not None:
+                observed = observed * deme_selector.T[:, :, None, None]
+            flat_state[1:] = observed.flatten()
+        else:
+            flat_state[1:1 + ind.size] = ind.flatten()
+            flat_state[1 + ind.size:] = sperm.flatten()
         history_array[history_count, :] = flat_state
         history_count += 1
 
@@ -336,8 +352,14 @@ def run_spatial_steps_with_migration(
         if record_interval > 0 and (tick_cur % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick_cur
-            flat_state[1:1 + ind_size] = ind.flatten()
-            flat_state[1 + ind_size:] = sperm.flatten()
+            if observation_mask is not None:
+                observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
+                if deme_selector is not None:
+                    observed = observed * deme_selector.T[:, :, None, None]
+                flat_state[1:] = observed.flatten()
+            else:
+                flat_state[1:1 + ind.size] = ind.flatten()
+                flat_state[1 + ind.size:] = sperm.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
 
