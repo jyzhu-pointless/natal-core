@@ -29,6 +29,7 @@ import natal.population_config as _population_config
 from natal.genetic_entities import Genotype, HaploidGenome
 from natal.genetic_structures import Species
 from natal.helpers import resolve_sex_label
+from natal.observation import GroupsInput
 from natal.population_config import (
     BEVERTON_HOLT,
     CONCAVE,
@@ -945,6 +946,32 @@ class PopulationBuilderBase:
         """
         self.species = species
         self._presets: List[Any] = []
+        self._observation_groups: Optional[GroupsInput] = None
+        self._observation_collapse_age: bool = False
+
+    def with_observation(
+        self,
+        groups: GroupsInput,
+        *,
+        collapse_age: bool = False,
+    ) -> 'PopulationBuilderBase':
+        """Register observation groups for compressed history recording.
+
+        The groups are compiled into a binary mask and passed to the
+        simulation kernel on each ``run()`` call. Once set, history records
+        store aggregated observation data instead of raw flattened state.
+
+        Args:
+            groups: Observation groups (dict of name -> spec, list of specs,
+                or None for one-group-per-genotype).
+            collapse_age: Whether to collapse the age axis in exports.
+
+        Returns:
+            PopulationBuilderBase: Self for chaining.
+        """
+        self._observation_groups = groups
+        self._observation_collapse_age = collapse_age
+        return self
 
     @staticmethod
     def _resolve_viability_age(age_key: object, n_ages: int) -> int:
@@ -1672,6 +1699,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                                     val *= current
                                 pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
 
+        # 8️⃣ Apply observation groups if set
+        if self._observation_groups is not None:
+            pop.set_observations(
+                self._observation_groups,
+                collapse_age=self._observation_collapse_age,
+            )
+
         return pop
 
 
@@ -2168,5 +2202,12 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                                     current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
                                     val *= current
                                 pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
+
+        # Apply observation groups if set
+        if self._observation_groups is not None:
+            pop.set_observations(
+                self._observation_groups,
+                collapse_age=self._observation_collapse_age,
+            )
 
         return pop

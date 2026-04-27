@@ -160,6 +160,10 @@ class BasePopulation(ABC, Generic[T_State]):
         # Re-entrancy guard flag.
         self._running = False
 
+        # Observation-based history recording.
+        self._observation: Optional[Observation] = None
+        self._observation_mask: Optional[np.ndarray] = None
+
         # Hooks queued for deferred compilation after subclass initialization.
         # Format: [(event_name, func, hook_name, hook_id), ...]
         self._pending_hooks: List[PendingHook] = []
@@ -273,6 +277,10 @@ class BasePopulation(ABC, Generic[T_State]):
             ))
 
         # --- runtime state (independent per deme) ---
+        # --- observation recording (independent per deme) ---
+        clone._observation = None
+        clone._observation_mask = None
+
         clone._history = []
         clone._finished = False
         clone._running = False
@@ -284,6 +292,55 @@ class BasePopulation(ABC, Generic[T_State]):
             object.__setattr__(clone, 'snapshots', {})
 
         return clone
+
+    # ========================================================================
+    # Observation-based history recording
+    # ========================================================================
+
+    @property
+    def record_observation(self) -> Optional[Observation]:
+        """The compiled Observation used for observation-mode history."""
+        return self._observation
+
+    @record_observation.setter
+    def record_observation(self, obs: Optional[Observation]) -> None:
+        self._observation = obs
+        if obs is not None:
+            self._observation_mask = self._build_observation_mask(obs)
+
+    def set_observations(self, groups: GroupsInput, *, collapse_age: bool = False) -> None:
+        """Register observation groups and immediately compile the binary mask.
+
+        Once set, the mask is passed to simulation kernels to record
+        observation-aggregated snapshots (compressed format) instead of raw
+        flattened state.
+
+        Args:
+            groups: Observation groups passed to ``ObservationFilter``.
+                When ``None``, one group per genotype index is used.
+            collapse_age: Whether to collapse the age axis during projection.
+                The stored kernel mask is always 4-D; collapse_age is recorded
+                as metadata and respected by export functions.
+        """
+        from natal.observation import ObservationFilter
+
+        obs_filter = ObservationFilter(self.index_registry)
+        self._observation = obs_filter.build_filter(
+            diploid_genotypes=self.species,
+            groups=groups,
+            collapse_age=bool(collapse_age),
+        )
+        self._observation_mask = self._build_observation_mask(self._observation)
+
+    def _build_observation_mask(self, obs: Observation) -> np.ndarray:
+        """Build the 4-D binary mask from an Observation and current state dims."""
+        state = self._require_state()
+        ind = state.individual_count
+        return obs.build_mask(
+            n_sexes=ind.shape[0],
+            n_ages=ind.shape[1] if ind.ndim == 3 else 1,
+            n_genotypes=ind.shape[-1],
+        )
 
     # ========================================================================
     # Registry and Genotype Initialization
