@@ -15,7 +15,7 @@ import natal as nt
 from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 
-SIZE = 501
+MAP_SIZE: int = 501
 
 def build_symmetric_kernel(size: int = 5, sigma: float = 10.0) -> np.ndarray:
     """Build a normalized symmetric migration kernel."""
@@ -45,8 +45,8 @@ def build_hex_spatial_population() -> SpatialPopulation:
     return (
         SpatialPopulation.builder(
             species,
-            n_demes=SIZE * SIZE,
-            topology=HexGrid(rows=SIZE, cols=SIZE, wrap=False),
+            n_demes=MAP_SIZE * MAP_SIZE,
+            topology=HexGrid(rows=MAP_SIZE, cols=MAP_SIZE, wrap=False),
             pop_type="discrete_generation",
         )
         .setup(name="hex_deme", stochastic=True, use_continuous_sampling=True)

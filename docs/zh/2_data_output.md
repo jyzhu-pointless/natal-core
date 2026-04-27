@@ -50,6 +50,204 @@ print("历史观察数据:", history["observed"])
 
 这种写法可复用观测定义，并将维度有效性校验延迟到应用/输出阶段。
 
+## 基于 Observation 的历史记录（压缩模式）
+
+大模拟中（大量 genotype、大量 deme），全量原始历史记录的存储开销极高——每个快照包含所有 genotype 的计数。Observation 系统能将 genotype 维度投影到用户关心的分组上，在 recording 阶段直接做聚合，只需记录聚合后的结果，大幅减少内存占用。
+
+### 两种模式对比
+
+| 模式 | 记录内容 | 每行大小 | 导出时是否需重新解析 |
+|------|---------|---------|-----------------|
+| 原始 | `[tick, ind.ravel(), sperm.ravel()]` | `1 + n_sexes×n_ages×n_geno + …` | 需要，按 genotype 展开 |
+| 观测 | `[tick, observed.ravel()]` | `1 + n_groups×n_sexes×n_ages` | 不需要，直接按分组名展开 |
+
+当 `n_groups << n_genotypes` 时（常见场景），压缩比约为 `n_genotypes / n_groups` 倍。
+
+### 配置方式
+
+两种方式均可激活观测模式：
+
+**方式一：先创建 Observation，再设置 `record_observation`**
+
+```python
+obs = pop.create_observation(
+    groups={
+        "wt": {"genotype": ["WT|WT"]},
+        "het": {"genotype": ["WT|Dr"]},
+        "hom": {"genotype": ["Dr|Dr"]},
+    },
+    collapse_age=True,
+)
+pop.record_observation = obs  # 激活观测模式
+pop.run(n_steps=100, record_every=10)
+```
+
+**方式二：直接使用 `set_observations()`**
+
+```python
+pop.set_observations(
+    groups={
+        "wt": {"genotype": ["WT|WT"]},
+        "het": {"genotype": ["WT|Dr"]},
+        "hom": {"genotype": ["Dr|Dr"]},
+    },
+    collapse_age=True,
+)
+pop.run(n_steps=100, record_every=10)
+```
+
+`record_observation` 被设置后，内核在 recording 时自动使用观测聚合模式。`output_history()` 自动检测并选择正确的导出路径：
+
+```python
+history = pop.output_history()
+# 自动按观测模式导出，每行包含：
+# - tick
+# - labels: ["wt", "het", "hom"]
+# - observed: { "wt": { "female": ..., "male": ... }, ... }
+```
+
+### Panmictic 示例
+
+```python
+import natal as nt
+
+species = nt.Species.from_dict(
+    name="demo",
+    structure={"chr1": {"loc": ["WT", "Dr"]}},
+)
+
+pop = (
+    nt.DiscreteGenerationPopulation
+    .setup(species=species, name="obs_demo", stochastic=False)
+    .initial_state(individual_count={
+        "female": {"WT|WT": 500, "Dr|WT": 50},
+        "male": {"WT|WT": 500, "Dr|WT": 50},
+    })
+    .reproduction(eggs_per_female=50)
+    .competition(carrying_capacity=10000)
+    .build()
+)
+
+# 激活观测模式
+pop.set_observations(
+    groups={
+        "wildtype": {"genotype": ["WT|WT"]},
+        "drive_het": {"genotype": ["WT|Dr"]},
+        "drive_hom": {"genotype": ["Dr|Dr"]},
+    },
+    collapse_age=True,
+)
+pop.run(n_steps=100, record_every=10)
+
+# 导出——自动使用观测模式
+history = pop.output_history()
+for snap in history["snapshots"]:
+    print(f"tick {snap['tick']}: {snap['observed']}")
+
+# 可以随时切回原始模式查看
+pop.record_observation = None  # 关闭观测模式
+# 后续 run() 将恢复原始 recording
+```
+
+### Spatial 示例
+
+```python
+from natal import SpatialPopulation, HexGrid
+import numpy as np
+
+species = nt.Species.from_dict(
+    name="spatial_obs",
+    structure={"chr1": {"loc": ["WT", "Dr"]}},
+)
+
+kernel = np.array([
+    [0.0, 1.0, 0.0],
+    [1.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0],
+], dtype=np.float64)
+
+spatial = (
+    SpatialPopulation.builder(species, n_demes=9, topology=HexGrid(3, 3))
+    .setup(name="spatial_obs_demo", stochastic=False)
+    .initial_state(individual_count={
+        "female": {"WT|WT": 500}, "male": {"WT|WT": 500},
+    })
+    .reproduction(eggs_per_female=50)
+    .competition(carrying_capacity=10000)
+    .migration(kernel=kernel, migration_rate=0.2)
+    .build()
+)
+
+# 激活观测模式
+spatial.set_observations(
+    groups={
+        "wt": {"genotype": ["WT|WT"]},
+        "dr": {"genotype": ["WT|Dr", "Dr|Dr"]},
+    },
+    collapse_age=True,
+)
+spatial.run(n_steps=50, record_every=5)
+
+# 导出——按 deme 逐个展开，附带跨 deme 汇总
+history = spatial.output_history()
+for snap in history["snapshots"]:
+    print(f"tick {snap['tick']}")
+    for deme_key, deme_obs in snap["demes"].items():
+        print(f"  {deme_key}: {deme_obs}")
+    print(f"  aggregate: {snap['aggregate']}")
+```
+
+### Post-hoc 观测（不修改 recording 模式）
+
+如果不想改变 recording 模式，但需要以观测格式查看历史，可以传入 `observation` 参数：
+
+```python
+obs = pop.create_observation(groups={
+    "females": {"sex": "female"},
+    "males": {"sex": "male"},
+})
+
+# 对已经记录的原始历史做 post-hoc 观测
+history = pop.output_history(observation=obs)
+# 注意：如果历史是原始模式（未设置 record_observation），
+# 观测会在导出时按每个快照重新计算（慢但无需重跑模拟）。
+# 如果历史是观测模式，则直接读取压缩后的数据。
+```
+
+### Spatial 的 Deme 选择器
+
+Spatial 模式下，group spec 支持 `"deme"` 键来控制哪些 deme 纳入该分组：
+
+```python
+spatial.set_observations(
+    groups={
+        "center_release": {
+            "genotype": ["Dr|Dr"],
+            "deme": [(1, 1)],          # 只观察中心 deme
+        },
+        "all_wt": {
+            "genotype": ["WT|WT"],
+            "deme": "all",             # 所有 deme（默认）
+        },
+    },
+)
+```
+
+`"deme"` 支持：
+- `"all"` 或省略：所有 deme
+- 整数列表：扁平索引，如 `[0, 2, 4]`
+- 坐标列表：`(row, col)` 元组，自动通过 topology 解析
+
+### 何时使用观测模式 vs post-hoc
+
+| 场景 | 推荐方式 |
+|------|---------|
+| 需要全量 genotype 数据的精细分析 | 原始历史（默认） |
+| 只关心几个分组的时间序列 | `record_observation` 观测模式 |
+| 需要事后按不同分组反复查看 | 原始历史 + post-hoc `output_history(observation=obs)` |
+| 大规模 spatial（数千 deme） | `record_observation` 观测模式 |
+| 内存受限环境 | `record_observation` 观测模式 |
+
 ## 历史记录系统
 
 ### 历史记录配置
