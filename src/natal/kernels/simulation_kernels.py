@@ -515,6 +515,8 @@ def run_with_hooks(
     late_hook: Callable[..., Any],
     n_ticks: int,
     record_interval: int = 0,
+    observation_mask: Optional[NDArray[np.float64]] = None,
+    n_obs_groups: int = 0,
 ) -> tuple[tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
     """Execute multiple age-structured ticks with hook execution and history recording.
 
@@ -529,6 +531,8 @@ def run_with_hooks(
         late_hook: Combined njit function for ``late`` event.
         n_ticks: Number of ticks to execute.
         record_interval: History recording interval (0 = no recording).
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        n_obs_groups: Number of observation groups.
 
     Returns:
         A tuple ``(state_tuple, history, was_stopped)``.
@@ -537,9 +541,13 @@ def run_with_hooks(
     ind_count = state.individual_count.copy()
     sperm_store = state.sperm_storage.copy()
     tick = state.n_tick
-    ind_size = ind_count.size
-    sperm_size = sperm_store.size
-    flatten_size = 1 + ind_size + sperm_size
+
+    if observation_mask is not None:
+        n_sexes_ = ind_count.shape[0]
+        n_ages_ = ind_count.shape[1]
+        flatten_size = 1 + n_obs_groups * n_sexes_ * n_ages_
+    else:
+        flatten_size = 1 + ind_count.size + sperm_store.size
 
     if record_interval > 0:
         estimated_size = (n_ticks // record_interval) + 2
@@ -551,8 +559,12 @@ def run_with_hooks(
     if record_interval > 0 and (tick % record_interval == 0):
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick
-        flat_state[1:1 + ind_size] = ind_count.flatten()
-        flat_state[1 + ind_size:] = sperm_store.flatten()
+        if observation_mask is not None:
+            observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
+            flat_state[1:] = observed.flatten()
+        else:
+            flat_state[1:1 + ind_count.size] = ind_count.flatten()
+            flat_state[1 + ind_count.size:] = sperm_store.flatten()
         history_array[history_count, :] = flat_state
         history_count += 1
 
@@ -568,8 +580,12 @@ def run_with_hooks(
         if record_interval > 0 and (tick % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
-            flat_state[1:1 + ind_size] = ind_count.flatten()
-            flat_state[1 + ind_size:] = sperm_store.flatten()
+            if observation_mask is not None:
+                observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
+                flat_state[1:] = observed.flatten()
+            else:
+                flat_state[1:1 + ind_count.size] = ind_count.flatten()
+                flat_state[1 + ind_count.size:] = sperm_store.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
 
@@ -660,6 +676,8 @@ def run_discrete_with_hooks(
     late_hook: Callable[..., Any],
     n_ticks: int,
     record_interval: int = 0,
+    observation_mask: Optional[NDArray[np.float64]] = None,
+    n_obs_groups: int = 0,
 ) -> tuple[tuple[NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
     """Execute multiple discrete-generation ticks with hook execution and history.
 
@@ -674,6 +692,8 @@ def run_discrete_with_hooks(
         late_hook: Combined njit function for ``late`` event.
         n_ticks: Number of ticks to execute.
         record_interval: History recording interval (0 = no recording).
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        n_obs_groups: Number of observation groups.
 
     Returns:
         A tuple ``(state_tuple, history, was_stopped)``.
@@ -682,7 +702,13 @@ def run_discrete_with_hooks(
     ind_count = state.individual_count.copy()
     tick = state.n_tick
     ind_size = ind_count.size
-    flatten_size = 1 + ind_size
+
+    if observation_mask is not None:
+        n_sexes_ = ind_count.shape[0]
+        n_ages_ = ind_count.shape[1]
+        flatten_size = 1 + n_obs_groups * n_sexes_ * n_ages_
+    else:
+        flatten_size = 1 + ind_size
 
     if record_interval > 0:
         estimated_size = (n_ticks // record_interval) + 2
@@ -694,7 +720,11 @@ def run_discrete_with_hooks(
     if record_interval > 0 and (tick % record_interval == 0):
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick
-        flat_state[1:1 + ind_size] = ind_count.flatten()
+        if observation_mask is not None:
+            observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
+            flat_state[1:] = observed.flatten()
+        else:
+            flat_state[1:1 + ind_size] = ind_count.flatten()
         history_array[history_count, :] = flat_state
         history_count += 1
 
@@ -710,7 +740,11 @@ def run_discrete_with_hooks(
         if record_interval > 0 and (tick % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
-            flat_state[1:1 + ind_size] = ind_count.flatten()
+            if observation_mask is not None:
+                observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
+                flat_state[1:] = observed.flatten()
+            else:
+                flat_state[1:1 + ind_size] = ind_count.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
 

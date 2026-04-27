@@ -122,6 +122,8 @@ def RUN_FN_NAME(
     registry: HookProgram,
     n_ticks: int,
     record_interval: int = 0,
+    observation_mask: Optional[np.ndarray] = None,
+    n_obs_groups: int = 0,
 ) -> tuple[tuple[np.ndarray, int], Optional[np.ndarray], bool]:
     """Execute multiple lifecycle ticks in sequence, with optional history recording.
 
@@ -131,6 +133,10 @@ def RUN_FN_NAME(
         registry: HookProgram for CSR event programs.
         n_ticks: Number of ticks to execute.
         record_interval: Recording interval (0 means no recording).
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+            When provided, history stores observation-reduced snapshots instead
+            of the full flattened state.
+        n_obs_groups: Number of observation groups (first axis of mask).
 
     Returns:
         ((individual_count, tick), history_array_or_None, was_stopped).
@@ -138,8 +144,13 @@ def RUN_FN_NAME(
     was_stopped = False
     ind_count = state.individual_count.copy()
     tick = state.n_tick
-    ind_size = ind_count.size
-    flatten_size = 1 + ind_size
+
+    if observation_mask is not None:
+        n_sexes_ = ind_count.shape[0]
+        n_ages_ = ind_count.shape[1]
+        flatten_size = 1 + n_obs_groups * n_sexes_ * n_ages_
+    else:
+        flatten_size = 1 + ind_count.size
 
     if record_interval > 0:
         estimated_size = (n_ticks // record_interval) + 2
@@ -151,7 +162,11 @@ def RUN_FN_NAME(
     if record_interval > 0 and (tick % record_interval == 0):
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick
-        flat_state[1:1 + ind_size] = ind_count.flatten()
+        if observation_mask is not None:
+            observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
+            flat_state[1:] = observed.flatten()
+        else:
+            flat_state[1:] = ind_count.flatten()
         history_array[history_count, :] = flat_state
         history_count += 1
 
@@ -165,7 +180,11 @@ def RUN_FN_NAME(
         if record_interval > 0 and (tick % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
-            flat_state[1:1 + ind_size] = ind_count.flatten()
+            if observation_mask is not None:
+                observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
+                flat_state[1:] = observed.flatten()
+            else:
+                flat_state[1:] = ind_count.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
 

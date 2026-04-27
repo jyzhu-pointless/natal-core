@@ -697,6 +697,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         assert hooks.registry is not None, "hooks.registry should always be initialized"
 
+        obs_mask = self._observation_mask
+        n_obs = len(self._observation.labels) if self._observation is not None else 0
+
         if hooks.run_fn is not None:
             final_state_tuple, history_new, was_stopped = hooks.run_fn(
                 state=self._state_nn,
@@ -704,6 +707,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 registry=hooks.registry,
                 n_ticks=n_steps,
                 record_interval=record_every,
+                observation_mask=obs_mask,
+                n_obs_groups=n_obs,
             )
         else:
             from natal.kernels.simulation_kernels import run_with_hooks
@@ -717,6 +722,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 late_hook=hooks.late,
                 n_ticks=n_steps,
                 record_interval=record_every,
+                observation_mask=obs_mask,
+                n_obs_groups=n_obs,
             )
 
         # Process final state (tuple format: ind_count, sperm, tick)
