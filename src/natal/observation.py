@@ -7,7 +7,7 @@ from user-friendly group specifications and to apply those rules to a
 Design choices in this simplified version:
 - Keep logic minimal and easy to read.
 - Accept group specs as list/tuple (unnamed) or dict (named), each spec is
-  a dict with optional keys: `genotype`, `age`, `sex`, `unordered`.
+  a dict with optional keys: `genotype`, `age`, `sex`.
 - `genotype` selectors may be ints, strings, or Genotype objects (requires
   `diploid_genotypes` to resolve strings/objects to indices).
 - Provide a pure function `apply_rule(individual_count, rule)` for projection.
@@ -57,12 +57,10 @@ class GroupSpec:
         genotype: Genotype selector specification.
         age: Age specification.
         sex: Sex specification.
-        unordered: Whether to treat genotypes as unordered (A|a == a|A).
     """
     genotype: Optional[Iterable[Any]] = None
     age: AgeSpec = None
     sex: SexSpec = None
-    unordered: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,6 +108,45 @@ class Observation:
             collapse_age=collapse_age,
         )
         return apply_rule(individual_count, rule)
+
+    def build_mask(
+        self,
+        n_sexes: int,
+        n_ages: int,
+        n_genotypes: int,
+    ) -> NDArray[np.float64]:
+        """Build a 4-D binary mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+
+        The mask can be used inside Numba kernels via broadcast multiplication
+        and genotype-axis summation:
+
+        ``observed = np.sum(mask[None, ...] * ind[:, None, ...], axis=-1)``
+
+        Args:
+            n_sexes: Number of sexes in the target population.
+            n_ages: Number of age classes.
+            n_genotypes: Number of diploid genotypes.
+
+        Returns:
+            Float64 mask with shape ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        """
+        resolved_diploid = self.filter.resolve_diploid_genotypes(self.diploid_genotypes)
+        return self.filter.build_mask_from_specs(
+            n_sexes=n_sexes,
+            n_ages=n_ages,
+            n_genotypes=n_genotypes,
+            diploid_genotypes=resolved_diploid,
+            specs=self.specs,
+            collapse_age=False,  # kernel always uses full 4-D mask
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize observation metadata for export."""
+        return {
+            "labels": list(self.labels),
+            "collapse_age": self.collapse_age,
+            "n_groups": len(self.labels),
+        }
 
 
 # Type aliases for backward compatibility and flexibility
@@ -182,8 +219,6 @@ class ObservationFilter:
                         spec_dict["age"] = item.age
                     if item.sex is not None:
                         spec_dict["sex"] = item.sex
-                    if item.unordered:
-                        spec_dict["unordered"] = item.unordered
                     specs.append((name, spec_dict))
                 else:
                     specs.append((name, item))
@@ -199,8 +234,6 @@ class ObservationFilter:
                         spec_dict["age"] = item.age
                     if item.sex is not None:
                         spec_dict["sex"] = item.sex
-                    if item.unordered:
-                        spec_dict["unordered"] = item.unordered
                     specs.append((str(name), spec_dict))
                 else:
                     specs.append((str(name), item))
@@ -230,8 +263,7 @@ class ObservationFilter:
 
         for _, spec in specs:
             gen_spec = self._get_gen_spec(spec)
-            unordered = bool(spec.get("unordered", False))
-            gen_list = self._resolve_genotype_list(gen_spec, resolved_diploid, unordered)  # type: ignore[arg-type]
+            gen_list = self._resolve_genotype_list(gen_spec, resolved_diploid)  # type: ignore[arg-type]
             per_genotypes.append(gen_list)
 
             sex_spec = self._get_sex_spec(spec)
@@ -281,55 +313,14 @@ class ObservationFilter:
             return None
 
     @staticmethod
-    def _normalize_genotype_key(g: Any) -> str:
-        """Return a canonical string for a diploid genotype for unordered grouping.
-
-        Prefer `to_string()` where available; split on '|' and sort parts.
-
-        Args:
-            g: Genotype object to normalize.
-
-        Returns:
-            Canonical string representation.
-        """
-        try:
-            s = g.to_string()
-        except Exception:
-            s = str(g)
-        if "|" in s:
-            a, b = s.split("|", 1)
-            parts = sorted([a.strip(), b.strip()])
-            return "::".join(parts)
-        return s
-
-    @staticmethod
     def _make_age_predicate(age_spec: AgeSpec) -> Callable[[int], bool]:
         """Build an age predicate supporting several shorthand forms.
-
-        Supported forms:
-        - None -> all ages
-        - callable(a) -> used directly
-        - single tuple/list (start, end) -> closed interval [start, end]
-        - iterable of ints -> explicit ages
-        - iterable of (start,end) pairs -> union of closed intervals
-
-        Args:
-            age_spec: Age specification in one of the supported forms.
-
-        Returns:
-            Predicate function that returns True for allowed ages.
-
-        Examples:
-            [2,3,4] -> explicit ages
-            [ [2,7] ] -> ages 2..7 inclusive
-            [ [2,4], [6,7] ] -> ages 2,3,4,6,7
         """
         if age_spec is None:
             return lambda a: True
         if callable(age_spec):
             return age_spec
 
-        # Handle single interval case
         if isinstance(age_spec, (list, tuple)) and len(age_spec) == 2:
             start_val, end_val = age_spec
             if isinstance(start_val, int) and isinstance(end_val, int):
@@ -352,13 +343,6 @@ class ObservationFilter:
     @staticmethod
     def _resolve_sexes(spec_sex: SexSpec, n_sexes: int) -> List[int]:
         """Resolve sex specification to a list of sex indices.
-
-        Args:
-            spec_sex: Sex specification (None, str, int, Sex, or iterable).
-            n_sexes: Number of sexes in the population.
-
-        Returns:
-            List of resolved sex indices.
         """
         if spec_sex is None:
             return list(range(n_sexes))
@@ -379,28 +363,10 @@ class ObservationFilter:
             res.extend(ObservationFilter._resolve_sexes(x, n_sexes))
         return sorted(set(res))
 
-    def _build_unordered_map(
-        self, diploid_genotypes: Sequence[Any]
-    ) -> Dict[str, List[int]]:
-        """Build mapping canonical_key -> list of genotype indices.
-
-        Args:
-            diploid_genotypes: Sequence of diploid genotypes.
-
-        Returns:
-            Dictionary mapping canonical keys to lists of indices.
-        """
-        mp: Dict[str, List[int]] = {}
-        for i, g in enumerate(diploid_genotypes):
-            key = self._normalize_genotype_key(g)
-            mp.setdefault(key, []).append(i)
-        return mp
-
     def _resolve_genotype_list(
         self,
         gen_spec: Optional[Iterable[Any]],
         diploid_genotypes: Optional[Sequence[Any]],
-        unordered: bool,
     ) -> List[int]:
         """Resolve genotype selectors into a list of indices.
 
@@ -409,7 +375,6 @@ class ObservationFilter:
         Args:
             gen_spec: Genotype selector specification.
             diploid_genotypes: Sequence of diploid genotypes.
-            unordered: Whether to treat genotypes as unordered (A|a == a|A).
 
         Returns:
             List of resolved genotype indices.
@@ -437,10 +402,6 @@ class ObservationFilter:
             if diploid_genotypes is None:
                 raise ValueError("diploid_genotypes required to resolve genotype selectors")
 
-            unordered_map: Optional[Dict[str, List[int]]] = None
-            if unordered:
-                unordered_map = self._build_unordered_map(diploid_genotypes)
-
             out: List[int] = []
             for sel in gen_spec:
                 if isinstance(sel, int):
@@ -449,22 +410,7 @@ class ObservationFilter:
                 idx = self._resolve_genotype_index(diploid_genotypes, sel)
                 if idx is not None:
                     out.append(idx)
-                    if unordered and isinstance(sel, str) and unordered_map is not None:
-                        key = sel
-                        if "|" in key:
-                            parts = key.split("|", 1)
-                            key = "::".join(sorted([parts[0].strip(), parts[1].strip()]))
-                        if key in unordered_map:
-                            out.extend(unordered_map[key])
                     continue
-                if unordered and isinstance(sel, str):
-                    key = sel
-                    if "|" in key:
-                        parts = key.split("|", 1)
-                        key = "::".join(sorted([parts[0].strip(), parts[1].strip()]))
-                    if unordered_map is not None and key in unordered_map:
-                        out.extend(unordered_map[key])
-                        continue
                 for i, g in enumerate(diploid_genotypes):
                     try:
                         if hasattr(g, "to_string") and g.to_string() == str(sel):
@@ -476,7 +422,7 @@ class ObservationFilter:
         else:
             # Use the new GenotypeSelector for better pattern matching
             selector = GenotypeSelector(species)
-            return selector.resolve_genotype_indices(gen_spec, diploid_genotypes, unordered)
+            return selector.resolve_genotype_indices(gen_spec, diploid_genotypes)
 
     def _get_gen_spec(self, spec: Dict[str, Any]) -> Optional[Iterable[Any]]:
         """Extract genotype specification from a spec item.
