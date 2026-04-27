@@ -268,25 +268,40 @@ class PopulationConfigBuilder:
         # ===== Parse juvenile growth mode =====
         juvenile_growth_mode_int = PopulationConfigBuilder._resolve_growth_mode(juvenile_growth_mode)
 
-        # ===== Compute carrying capacity =====
-        resolved_carrying_capacity = PopulationConfigBuilder._resolve_carrying_capacity(
-            carrying_capacity=None,  # Not used in _resolve_carrying_capacity
+        # ===== Resolve carrying capacity K (age-1 total at equilibrium) =====
+        K = PopulationConfigBuilder._resolve_carrying_capacity(
             age_1_carrying_capacity=age_1_carrying_capacity,
             old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
-            expected_num_adult_females=expected_num_adult_females,
-            expected_eggs_per_female=expected_eggs_per_female,
-            age_based_survival_rates=age_based_survival_rates,
-            age_based_mating_rates=age_based_mating_rates,
-            age_based_reproduction_rates=female_reproduction,
-            female_age_based_relative_fertility=female_fertility,
-            sex_ratio=sex_ratio,
-            new_adult_age=new_adult_age,
-            n_ages=n_ages,
-            age_based_relative_competition_strength=age_based_relative_competition_strength,
             initial_individual_count=initial_individual_count,
         )
 
-        # print("🔧 Initializing population configuration...")
+        # ===== Build equilibrium distribution =====
+        if equilibrium_individual_distribution is not None:
+            eq_dist = equilibrium_individual_distribution
+        else:
+            eq_dist = PopulationConfigBuilder._build_equilibrium_distribution(
+                K=K,
+                sex_ratio=sex_ratio,
+                age_based_survival_rates=age_based_survival_rates,
+                n_ages=n_ages,
+            )
+
+        # ===== Compute expected egg production =====
+        # expected_num_adult_females independently determines expected eggs;
+        # otherwise fall back to the equilibrium distribution's adult females.
+        if expected_num_adult_females is not None:
+            external_eggs = PopulationConfigBuilder._compute_expected_eggs_from_females(
+                expected_num_adult_females=expected_num_adult_females,
+                expected_eggs_per_female=expected_eggs_per_female,
+                age_based_survival_rates=age_based_survival_rates,
+                age_based_reproduction_rates=female_reproduction,
+                female_age_based_relative_fertility=female_fertility,
+                sex_ratio=sex_ratio,
+                new_adult_age=new_adult_age,
+                n_ages=n_ages,
+            )
+        else:
+            external_eggs = None
 
         # ===== Create and return PopulationConfig =====
         cfg = build_population_config(
@@ -310,14 +325,15 @@ class PopulationConfigBuilder:
             sperm_displacement_rate=sperm_displacement_rate,
             expected_eggs_per_female=expected_eggs_per_female,
             use_fixed_egg_count=use_fixed_egg_count,
-            carrying_capacity=resolved_carrying_capacity,
+            carrying_capacity=K,
             sex_ratio=sex_ratio,
             low_density_growth_rate=low_density_growth_rate,
             juvenile_growth_mode=juvenile_growth_mode_int,
             age_1_carrying_capacity=age_1_carrying_capacity or old_juvenile_carrying_capacity,
-            old_juvenile_carrying_capacity=None,  # Not used, use age_1_carrying_capacity
+            old_juvenile_carrying_capacity=None,
             expected_num_adult_females=expected_num_adult_females,
-            equilibrium_individual_distribution=equilibrium_individual_distribution,
+            equilibrium_individual_distribution=eq_dist,
+            external_expected_eggs=external_eggs,
             genotype_to_gametes_map=gamete_map,
             gametes_to_zygote_map=zygote_map,
             generation_time=generation_time,
@@ -326,8 +342,6 @@ class PopulationConfigBuilder:
 
         if initial_sperm_storage is not None:
             cfg = cfg._replace(initial_sperm_storage=initial_sperm_storage.copy())
-
-        # print("✅ Population configuration initialized")
 
         return cfg
 
@@ -366,54 +380,11 @@ class PopulationConfigBuilder:
 
     @staticmethod
     def _resolve_carrying_capacity(
-        carrying_capacity: Optional[float],
         age_1_carrying_capacity: Optional[float],
         old_juvenile_carrying_capacity: Optional[float],
-        expected_num_adult_females: Optional[float],
-        expected_eggs_per_female: float,
-        age_based_survival_rates: Optional[NDArray[np.float64]] = None,
-        age_based_mating_rates: Optional[NDArray[np.float64]] = None,
-        age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,
-        female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
-        sex_ratio: float = 0.5,
-        new_adult_age: int = 1,
-        n_ages: Optional[int] = None,
-        age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
         initial_individual_count: Optional[NDArray[np.float64]] = None,
     ) -> float:
-        """Logic to resolve carrying capacity from multiple possible sources.
-
-        Args:
-            carrying_capacity: Unused (kept for compatibility).
-            age_1_carrying_capacity: Population carrying capacity at age=1.
-            old_juvenile_carrying_capacity: Alias for age_1_carrying_capacity (deprecated).
-            expected_num_adult_females: Target adult female count (can infer K from this).
-            expected_eggs_per_female: Base egg production per female.
-            age_based_survival_rates: Survival rates array with shape (2, n_ages).
-            age_based_mating_rates: Mating rates array with shape (2, n_ages).
-            age_based_reproduction_rates: Female reproduction participation rates
-                with shape (n_ages,).
-            female_age_based_relative_fertility: Female fertility by age (n_ages,).
-            sex_ratio: Offspring sex ratio.
-            new_adult_age: Minimum age for adults.
-            n_ages: Total number of age classes.
-            age_based_relative_competition_strength: Competition weights by age.
-            initial_individual_count: Initial population distribution (2, n_ages).
-
-        Returns:
-            float: Resolved carrying capacity.
-
-        Raises:
-            ValueError: If no valid carrying capacity source found.
-
-        Note:
-            Priority order:
-            1. age_1_carrying_capacity (preferred name)
-            2. old_juvenile_carrying_capacity (alias, for backward compatibility)
-            3. expected_num_adult_females (compute via equilibrium if rates available)
-            4. initial_individual_count (fallback, use for inference)
-        """
-        # Priority 1: age_1_carrying_capacity (new preferred name)
+        # Priority 1: age_1_carrying_capacity
         if age_1_carrying_capacity is not None:
             return float(age_1_carrying_capacity)
 
@@ -421,174 +392,132 @@ class PopulationConfigBuilder:
         if old_juvenile_carrying_capacity is not None:
             return float(old_juvenile_carrying_capacity)
 
-        # Priority 3: expected_num_adult_females with equilibrium inference
-        if expected_num_adult_females is not None:
-            # Try equilibrium-based approach if all necessary parameters available
-            if (age_based_survival_rates is not None and
-                age_based_mating_rates is not None and
-                female_age_based_relative_fertility is not None and
-                n_ages is not None):
-                # Build equilibrium distribution from expected_num_adult_females
-                k_val = PopulationConfigBuilder._compute_equilibrium_carrying_capacity_from_female_count(
-                    expected_num_adult_females=expected_num_adult_females,
-                    expected_eggs_per_female=expected_eggs_per_female,
-                    age_based_survival_rates=age_based_survival_rates,
-                    age_based_mating_rates=age_based_mating_rates,
-                    age_based_reproduction_rates=age_based_reproduction_rates,
-                    female_age_based_relative_fertility=female_age_based_relative_fertility,
-                    sex_ratio=sex_ratio,
-                    new_adult_age=new_adult_age,
-                    n_ages=n_ages,
-                )
-                return k_val
-
-            # Fallback without rates: just scale by egg production
-            return float(expected_num_adult_females) * expected_eggs_per_female
-
-        # Priority 4: initial_individual_count (fallback for no explicit sources)
+        # Priority 3: initial_individual_count (fallback)
+        # K is age-1 total, so extract age-1 count specifically.
         if initial_individual_count is not None:
-            total_females = initial_individual_count[0].sum()
-            if total_females > 0.1:
-                total_males = initial_individual_count[1].sum()
-                # Use initial population as proxy for carrying capacity
-                # Calculate sex ratio from initial state
-                total_both = total_females + total_males
-                if total_both > 0:
-                    observed_sex_ratio = total_females / total_both
-                else:
-                    observed_sex_ratio = sex_ratio
+            n_ages = initial_individual_count.shape[1]
+            if n_ages >= 2:
+                age_1_count = float(initial_individual_count[:, 1, :].sum())
+                if age_1_count >= 0.5:
+                    return age_1_count
+            # Fallback for edge cases (n_ages=1 or zero age-1)
+            total_both = float(initial_individual_count.sum())
+            if total_both >= 0.5:
+                return total_both
 
-                # If rates are available, try equilibrium inference
-                if (age_based_survival_rates is not None and
-                    age_based_mating_rates is not None and
-                    female_age_based_relative_fertility is not None and
-                    n_ages is not None):
-                    try:
-                        k_val = PopulationConfigBuilder._compute_equilibrium_carrying_capacity_from_female_count(
-                            expected_num_adult_females=float(total_females),
-                            expected_eggs_per_female=expected_eggs_per_female,
-                            age_based_survival_rates=age_based_survival_rates,
-                            age_based_mating_rates=age_based_mating_rates,
-                            age_based_reproduction_rates=age_based_reproduction_rates,
-                            female_age_based_relative_fertility=female_age_based_relative_fertility,
-                            sex_ratio=observed_sex_ratio,
-                            new_adult_age=new_adult_age,
-                            n_ages=n_ages,
-                        )
-                        return k_val
-                    except Exception:
-                        # If equilibrium inference fails, fall through to simple estimate
-                        pass
-
-                # Simple estimate: use total population or scale from females
-                if total_both > 0:
-                    return total_both
-                else:
-                    return total_females * expected_eggs_per_female
-
-        raise ValueError("No valid carrying capacity source found.")
-
+        raise ValueError(
+            "No valid carrying capacity source. Provide age_1_carrying_capacity "
+            "or initial_individual_count."
+        )
 
     @staticmethod
-    def _compute_equilibrium_carrying_capacity_from_female_count(
+    def _build_equilibrium_distribution(
+        K: float,
+        sex_ratio: float,
+        age_based_survival_rates: NDArray[np.float64],
+        n_ages: int,
+    ) -> NDArray[np.float64]:
+        """Build equilibrium individual distribution by forward propagation from K.
+
+        Age-1 is allocated as ``(K * sex_ratio, K * (1-sex_ratio))`` for females
+        and males. Subsequent ages are propagated forward via survival rates.
+
+        Args:
+            K: Carrying capacity (total individuals at age=1).
+            sex_ratio: Female proportion.
+            age_based_survival_rates: (2, n_ages) survival array.
+            n_ages: Number of age classes.
+
+        Returns:
+            NDArray of shape (2, n_ages) with the equilibrium distribution.
+        """
+        dist = np.zeros((2, n_ages), dtype=np.float64)
+        dist[0, 1] = K * sex_ratio
+        dist[1, 1] = K * (1.0 - sex_ratio)
+        for age in range(2, n_ages):
+            dist[0, age] = dist[0, age - 1] * age_based_survival_rates[0, age - 1]
+            dist[1, age] = dist[1, age - 1] * age_based_survival_rates[1, age - 1]
+        return dist
+
+    @staticmethod
+    def _compute_expected_eggs_from_females(
         expected_num_adult_females: float,
         expected_eggs_per_female: float,
         age_based_survival_rates: NDArray[np.float64],
-        age_based_mating_rates: NDArray[np.float64],
         age_based_reproduction_rates: Optional[NDArray[np.float64]],
         female_age_based_relative_fertility: NDArray[np.float64],
         sex_ratio: float,
         new_adult_age: int,
         n_ages: int,
     ) -> float:
-        """Compute carrying capacity (K at age=1) from expected adult female count.
+        """Compute total expected egg production from a target adult female count.
 
-        Uses equilibrium distribution inference similar to compute_equilibrium_metrics:
-        1. Distribute expected_num_adult_females across ages using survival rates
-        2. Calculate expected age-0 egg production from adult females
-        3. Infer K as the age-1 total at equilibrium
+        Forward-propagates ``expected_num_adult_females`` across adult ages via
+        survival rates (same direction as ``compute_equilibrium_metrics``), then
+        computes total egg production from the resulting age-specific female counts.
 
         Args:
-            expected_num_adult_females: Target count of adult females.
-            expected_eggs_per_female: Base egg production per female.
-            age_based_survival_rates: Survival rates (2, n_ages).
-            age_based_mating_rates: Mating rates (2, n_ages).
-            age_based_reproduction_rates: Female reproduction participation rates (n_ages).
+            expected_num_adult_females: Number of adult females at new_adult_age.
+            expected_eggs_per_female: Base eggs per female.
+            age_based_survival_rates: (2, n_ages) survival array.
+            age_based_reproduction_rates: Female reproduction participation by age.
                 If None, falls back to female mating rates.
-            female_age_based_relative_fertility: Female fertility by age (n_ages,).
-            sex_ratio: Offspring sex ratio.
-            new_adult_age: Minimum adult age.
-            n_ages: Total number of age classes.
+            female_age_based_relative_fertility: Relative fertility by age.
+            sex_ratio: Sex ratio (not directly used in forward propagation).
+            new_adult_age: First adult age class.
+            n_ages: Total age classes.
 
         Returns:
-            float: Inferred carrying capacity at age=1.
-
-        Note:
-            This method mirrors the logic in compute_equilibrium_metrics but
-            works in reverse: given adult female count, infer the age-1 total.
+            float: Total expected egg production.
         """
-        # Build equilibrium distribution centered at age=new_adult_age
-        expected_distribution = np.zeros((2, n_ages), dtype=np.float64)
-
-        # Distribute expected_num_adult_females across adult ages.
-        # Assume proportional distribution based on relative survival to each age.
-        # Age progression backward from a reference age (new_adult_age).
-        # Forward: N(age) = N(age-1) * survival(age-1)
-        # Backward: If total adults should be expected_num_adult_females,
-        # allocate at new_adult_age as the reference point.
-        expected_distribution[0, new_adult_age] = expected_num_adult_females
-
-        # Backward propagation: age < new_adult_age (juveniles)
-        for age in range(new_adult_age - 1, -1, -1):
-            if age > 0:
-                expected_distribution[0, age] = expected_distribution[0, age + 1] / (age_based_survival_rates[0, age] + 1e-10)
-            else:
-                # Age 0: from age 0 to age 1 via survival_rate[0]
-                expected_distribution[0, age] = expected_distribution[0, 1] / (age_based_survival_rates[0, 0] + 1e-10)
-
-        # Forward propagation: age > new_adult_age (older adults)
-        for age in range(new_adult_age + 1, n_ages):
-            expected_distribution[0, age] = expected_distribution[0, age - 1] * age_based_survival_rates[0, age - 1]
-
-        # For males, assume proportional distribution
-        for age in range(n_ages):
-            if age >= new_adult_age:
-                if age == new_adult_age:
-                    # At reference age, allocate males proportionally
-                    male_count = expected_num_adult_females * (1.0 - sex_ratio) / sex_ratio
-                    expected_distribution[1, age] = male_count
-                else:
-                    # Older males: forward propagation
-                    expected_distribution[1, age] = expected_distribution[1, age - 1] * age_based_survival_rates[1, age - 1]
-
-        # Equilibrium calibration uses explicit reproduction participation
-        # rates for each female age.
-        p_reproducing = np.zeros(n_ages, dtype=np.float64)
         if age_based_reproduction_rates is None:
-            reproduction_rates = age_based_mating_rates[0, :]
+            reproduction_rates = np.ones(n_ages, dtype=np.float64)
+            reproduction_rates[:new_adult_age] = 0.0
         else:
             reproduction_rates = age_based_reproduction_rates
+
+        # Build female-only adult distribution (forward propagation)
+        female_dist = np.zeros(n_ages, dtype=np.float64)
+        female_dist[new_adult_age] = expected_num_adult_females
+        for age in range(new_adult_age + 1, n_ages):
+            female_dist[age] = female_dist[age - 1] * age_based_survival_rates[0, age - 1]
+
+        # Compute total expected eggs
+        eggs = 0.0
         for age in range(new_adult_age, n_ages):
-            p_reproducing[age] = min(1.0, max(0.0, float(reproduction_rates[age])))
+            p_reproducing = min(1.0, max(0.0, float(reproduction_rates[age])))
+            eggs += female_dist[age] * p_reproducing * female_age_based_relative_fertility[age] * expected_eggs_per_female
 
-        # Calculate produced age-0 eggs
-        produced_age_0 = 0.0
+        return eggs
+
+    @staticmethod
+    def _compute_expected_eggs_from_distribution(
+        equilibrium_distribution: NDArray[np.float64],
+        expected_eggs_per_female: float,
+        age_based_reproduction_rates: NDArray[np.float64],
+        female_age_based_relative_fertility: NDArray[np.float64],
+        new_adult_age: int,
+        n_ages: int,
+    ) -> float:
+        """Compute total expected egg production from an equilibrium distribution.
+
+        Args:
+            equilibrium_distribution: (2, n_ages) equilibrium distribution.
+            expected_eggs_per_female: Base eggs per female.
+            age_based_reproduction_rates: Female reproduction participation by age.
+            female_age_based_relative_fertility: Relative fertility by age.
+            new_adult_age: First adult age class.
+            n_ages: Total age classes.
+
+        Returns:
+            float: Total expected egg production.
+        """
+        eggs = 0.0
         for age in range(new_adult_age, n_ages):
-            n_f = expected_distribution[0, age]
-            produced_age_0 += n_f * p_reproducing[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
-
-        # Calculate sex-weighted age-0 survival rate
-        s_0_avg = sex_ratio * age_based_survival_rates[0, 0] + (1.0 - sex_ratio) * age_based_survival_rates[1, 0]
-
-        # Infer carrying capacity: at equilibrium, age-1 total = produced_age_0 * s_0_avg * expected_survival_rate
-        # For simplicity, assume expected_survival_rate ≈ 1.0 at equilibrium
-        # => K ≈ produced_age_0 * s_0_avg
-        if produced_age_0 > 1e-10:
-            carrying_capacity = produced_age_0 * s_0_avg
-        else:
-            carrying_capacity = expected_eggs_per_female * expected_num_adult_females
-
-        return max(1.0, carrying_capacity)
+            n_f = float(equilibrium_distribution[0, age])
+            p_reproducing = min(1.0, max(0.0, float(age_based_reproduction_rates[age])))
+            eggs += n_f * p_reproducing * female_age_based_relative_fertility[age] * expected_eggs_per_female
+        return eggs
 
     @staticmethod
     def _get_all_haploid_genotypes(species: Species) -> List[HaploidGenome]:

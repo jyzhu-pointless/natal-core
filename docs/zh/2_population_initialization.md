@@ -72,7 +72,7 @@ NATAL Core 提供两种主要的种群类型：
 | `n_ages` | `int` | 年龄阶段总数 | `8` | 全流程（数组维度） | 约束初始状态、存活率向量等数组长度；必须与所有年龄相关参数长度一致 |
 | `new_adult_age` | `int` | 个体进入成年阶段的年龄索引 | `2` | reproduction / survival | 建议与目标物种的生命史阶段对齐；低于此年龄的个体视为幼体 |
 | `generation_time` | `Optional[int]` | 代时标记 | `None` | 编译参数 | 仅用于建模解释；与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的 |
-| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 平衡分布辅助参数 | `None` | competition / 初始化标度 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的；仅在需要显式稳态标定时使用 |
+| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `survival`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节） |
 
 ### `initial_state(...)` – 初始状态
 
@@ -125,7 +125,7 @@ NATAL Core 提供两种主要的种群类型：
 | `female_age_based_survival_rates` | `Optional` | 雌性按年龄的存活率。 | `None` | survival | 支持标量、序列、映射、函数等；`None` 表示使用默认曲线；取值 `[0, 1]`。 |
 | `male_age_based_survival_rates` | `Optional` | 雄性按年龄的存活率。 | `None` | survival | 同上。 |
 | `generation_time` | `Optional[int]` | 代时标记。 | `None` | 编译参数 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的。 |
-| `equilibrium_distribution` | `Optional` | 平衡分布的辅助参数。 | `None` | 标度辅助 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的。 |
+| `equilibrium_distribution` | `Optional` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `age_structure`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节）。 |
 
 **代码示例**（来自 `_resolve_survival_param`）：
 
@@ -173,20 +173,67 @@ NATAL Core 提供两种主要的种群类型：
 | `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |
-| `expected_num_adult_females` | `Optional[int]` | 预期的成体雌性数量。 | `None` | 容量推导 | 用于通过平衡分布分析来反推承载容量（详见下文）。 |
-| `equilibrium_distribution` | `Optional` | 平衡分布的辅助参数。 | `None` | 标度辅助 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的。 |
+| `expected_num_adult_females` | `Optional[int]` | 预期的成体雌性数量，用于独立计算期望产卵量。 | `None` | 期望产卵量推导 | 与 `age_1_carrying_capacity` 解耦：一个定容量，一个定产卵量（详见下文）。 |
+| `equilibrium_distribution` | `Optional` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 可通过 `age_structure`、`survival` 或 `competition` 传入，后设置的会覆盖先设置的。 |
 
 **承载容量的解析逻辑**：
 
-当没有显式指定 `age_1_carrying_capacity` 或 `old_juvenile_carrying_capacity` 时，系统会尝试通过平衡分布分析，利用 `expected_num_adult_females` 来推导承载容量：
+承载容量 $K$ 和期望产卵量是两个独立的概念，系统遵循分离原则：
 
-1. 如果提供了 `age_1_carrying_capacity` 或 `old_juvenile_carrying_capacity`（遗留别名），直接使用该值（最高优先级）。
-2. 否则，如果提供了 `expected_num_adult_females`，系统会根据年龄相关的存活率，把这个数量分配到各个年龄阶段。
-3. 基于平衡的年龄分布，计算来自成体雌性的期望 age=0 卵子产量（考虑交配率和生育力权重）。
-4. 根据 age=0 的产量以及从 age=0 到 age=1 的基础存活率，反推出承载容量（即 age=1 时的 $K$ 值）。
-5. 如果没有任何可用的承载容量来源，系统会尝试从 `initial_state()` 中推导（前提是初始状态已提供）。
+- `age_1_carrying_capacity`（或遗留别名 `old_juvenile_carrying_capacity`）直接指定 **age=1 的承载容量 $K$**
+- `expected_num_adult_females` 独立指定 **期望产卵量**（不反推 $K$）
 
-这套方法可以确保承载容量与平衡种群分布保持一致，而不是简单地使用一个幼稚的缩放因子。
+初始化路径分为三种：
+
+1. **显式指定平衡分布**（通过 `age_structure().equilibrium_distribution` 或相关参数）：
+   - 直接从平衡分布读取 age=1 的总数作为 $K$
+   - 根据平衡分布、雌性交配率和相对生育力、产卵量计算总期望产卵量
+   - 平衡存活率 = $K$ / 总期望产卵量
+
+2. **同时提供 `age_1_carrying_capacity` 和 `expected_num_adult_females`**：
+   - `age_1_carrying_capacity` 直接作为 $K$
+   - 将 `expected_num_adult_females` 按存活率向前传播到各个成年年龄组，得到雌性平衡分布
+   - 根据该分布计算期望产卵量（考虑交配率和相对生育力）
+   - 系统利用 $K$（来自 `age_1_carrying_capacity`）和期望产卵量（来自 `expected_num_adult_females`）独立计算平衡存活率
+
+3. **两者中缺失的项从初始状态推断**（假定初始状态为平衡态）：
+   - 若缺少 $K$：使用初始状态的年龄-1 个体总数
+   - 若缺少期望产卵量：从初始状态的雌性分布计算期望产卵量
+
+无论走哪种途径，系统都会真正构建出平衡分布，然后从平衡分布计算出所有竞争相关指标。这确保了 $K$、期望产卵量和平衡存活率三者之间的一致性。
+
+**期望产卵量的计算公式**：
+
+总期望产卵量的计算方式为：
+
+```
+total_expected_eggs = Σ( N_f[age] × P_reproducing[age] × fertility[age] × eggs_per_female )
+                     对所有 age ∈ [new_adult_age, n_ages)
+```
+
+其中：
+- `N_f[age]`：平衡状态下该年龄的雌性个体数
+  - 来自 `expected_num_adult_females` 时：从 new_adult_age 开始按雌性存活率向前传播
+  - 来自平衡分布时：直接从分布中的雌性行读取
+- `P_reproducing[age]`：该年龄雌性参与繁殖的比例，来自 `female_age_based_reproduction_rates`（如未设置则使用 `female_age_based_mating_rates` 的雌性行）
+- `fertility[age]`：该年龄的相对生育力权重，来自 `female_age_based_relative_fertility`（默认为全 1）
+- `eggs_per_female`：每只雌性的基础产卵数
+
+**external_expected_eggs 的含义**：
+
+当提供了 `expected_num_adult_females`（即路径 2）时，系统会用它计算出独立于平衡分布的期望产卵量，称为 **external_expected_eggs**。这个值仅用于存活率计算：
+
+```
+平衡存活率 = K / (external_expected_eggs × s_0_avg)
+```
+
+而不影响竞争强度计算（竞争强度始终使用平衡分布自身的产卵量）。这实现了容量 $K$ 和期望产卵量的独立控制。
+
+**关于平衡分布的 age=0**：
+
+在显式传入平衡分布时，分布中 age=0 的值**被忽略**。系统总是通过成年雌性（`age >= new_adult_age`）的分布来计算 `produced_age_0`（期望 age=0 产卵量），而不是读取分布中的 age=0 值。这是因为在 tick 之间，state 中的 age-0 数量始终为 0（age-0 个体在每个 tick 开始时被产生，并在同一个 tick 中被密度调控）。
+
+同理，当系统自动构建平衡分布（从 $K$ 向前传播）时，age=0 也始终被设为 0。
 
 ### `presets(...)` – 预设配置
 

@@ -403,6 +403,7 @@ def build_population_config(
     expected_num_adult_females: Optional[float] = None,
     infer_capacity_from_initial_state: bool = True,
     equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None,
+    external_expected_eggs: Optional[float] = None,
 ) -> PopulationConfig:
     """Build an immutable PopulationConfig directly (legacy‑free path).
 
@@ -458,6 +459,10 @@ def build_population_config(
             compute base capacity from initial_individual_count.
         equilibrium_individual_distribution: Optional distribution used to compute
             equilibrium metrics.
+        external_expected_eggs: Optional override for ``produced_age_0`` in the
+            survival rate calculation. When provided, the expected survival rate is
+            computed as ``total_age_1 / (external_expected_eggs * s_0_avg)`` instead
+            of using the distribution-computed egg count.
 
     Returns:
         A fully populated PopulationConfig instance.
@@ -606,6 +611,7 @@ def build_population_config(
         new_adult_age=new_adult_age_i,
         n_ages=n_ages_i,
         equilibrium_individual_count=equilibrium_individual_distribution,
+        external_expected_eggs=external_expected_eggs,
     )
 
     if generation_time is None:

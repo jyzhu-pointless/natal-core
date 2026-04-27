@@ -1672,10 +1672,18 @@ def compute_equilibrium_metrics(
     n_ages: int,
     age_based_reproduction_rates: Optional[NDArray[np.float64]] = None, # (age,)
     equilibrium_individual_count: Optional[NDArray[np.float64]] = None, # (sex, age, genotype_sum)
+    external_expected_eggs: Optional[float] = None,  # overrides produced_age_0 for survival rate
 ) -> Tuple[float, float]:
     """Calculate competition strength and survival rate metrics under equilibrium.
 
     These metrics are used for LOGISTIC and BEVERTON_HOLT density-dependent modes.
+
+    The equilibrium distribution (from ``equilibrium_individual_count`` or built from
+    ``carrying_capacity``) is always used for ``expected_competition_strength``.
+    The ``expected_survival_rate`` is computed as ``total_age_1 / (produced_age_0 * s_0_avg)``.
+    When ``external_expected_eggs`` is given, it replaces ``produced_age_0`` in the survival
+    rate formula but NOT in the competition strength formula (competition uses the actual
+    equilibrium distribution's egg production).
 
     Args:
         carrying_capacity: Total carrying capacity K based on age=1
@@ -1691,6 +1699,9 @@ def compute_equilibrium_metrics(
         new_adult_age: Adult starting age
         n_ages: Total number of ages
         equilibrium_individual_count: Optional user-provided equilibrium distribution (2, n_ages)
+        external_expected_eggs: If provided, overrides ``produced_age_0`` in the survival
+            rate computation. This enables ``expected_num_adult_females`` to independently
+            determine expected egg production separate from the equilibrium distribution.
 
     Returns:
         Tuple[expected_competition_strength, expected_survival_rate]
@@ -1747,6 +1758,8 @@ def compute_equilibrium_metrics(
     # Calculate total expected competition strength (limited to larvae participating in competition, i.e., age < new_adult_age)
     # Age 0 is produced Egg count; Age 1+ are survivors in distribution
     # Competition strength is weighted sum of "larvae count * corresponding competition weight".
+    # NOTE: competition strength always uses the equilibrium distribution's own produced_age_0,
+    # NOT external_expected_eggs (which only affects the survival rate).
     expected_competition_strength = produced_age_0 * relative_competition_strength[0]
     for age in range(1, new_adult_age):
         n_total = expected_distribution[0, age] + expected_distribution[1, age]
@@ -1757,11 +1770,13 @@ def compute_equilibrium_metrics(
     # Where s_0_avg is base survival rate from Age 0 to Age 1
     s_0_avg = sex_ratio * age_based_survival_rates[0, 0] + (1.0 - sex_ratio) * age_based_survival_rates[1, 0]
 
-    if produced_age_0 > 0 and s_0_avg > 1e-10:
-        # Derive from equilibrium relationship:
-        # total_age_1 = produced_age_0 * expected_survival_rate * s_0_avg
-        # => expected_survival_rate = total_age_1 / (produced_age_0 * s_0_avg)
-        expected_survival_rate = total_age_1 / (produced_age_0 * s_0_avg)
+    # When external_expected_eggs is provided (from expected_num_adult_females),
+    # use it for the survival rate formula instead of the distribution-computed produced_age_0.
+    # This allows independent specification of capacity (K) and expected egg production.
+    survival_eggs = external_expected_eggs if external_expected_eggs is not None else produced_age_0
+
+    if survival_eggs > 0 and s_0_avg > 1e-10:
+        expected_survival_rate = total_age_1 / (survival_eggs * s_0_avg)
     else:
         expected_survival_rate = 1.0
 

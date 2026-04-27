@@ -33,6 +33,7 @@ def _make_deme(species: nt.Species, name: str, adult_count: float) -> nt.AgeStru
         .competition(
             juvenile_growth_mode="logistic",
             expected_num_adult_females=100,
+            old_juvenile_carrying_capacity=200.0,
         )
         .build()
     )
