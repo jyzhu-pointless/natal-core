@@ -19,7 +19,6 @@ from typing import (
     Optional,
     Tuple,
     Union,
-    cast,
 )
 
 import numpy as np
@@ -28,6 +27,7 @@ from numpy.typing import NDArray
 from natal.base_population import BasePopulation
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
+from natal.hooks.types import RESULT_CONTINUE
 from natal.population_config import PopulationConfig
 from natal.population_state import (
     DiscretePopulationState,
@@ -258,17 +258,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             record_every = self.record_every
 
         if self.should_use_python_dispatch():
-            from natal.hooks.executor import run_discrete_with_hooks
-
-            return cast(
-                DiscreteGenerationPopulation,
-                run_discrete_with_hooks(
+            return self._run_python_dispatch(
                 n_steps=n_steps,
                 record_every=record_every,
                 finish=finish,
                 clear_history_on_start=clear_history_on_start,
-                population=self,
-            ),
             )
 
         hooks = self.get_compiled_event_hooks()
@@ -327,6 +321,70 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         which correctly handles compiled hooks.
         """
         return self.run(n_steps=1, record_every=self.record_every)
+
+    def _run_python_dispatch(
+        self,
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> DiscreteGenerationPopulation:
+        """Python-level simulation loop using HookExecutor for event dispatch."""
+        from natal.kernels import simulation_kernels as sk
+        from natal.population_state import DiscretePopulationState
+
+        self.ensure_hook_executor()
+
+        if clear_history_on_start:
+            self.clear_history()
+
+        if record_every > 0 and (self._tick % record_every == 0):
+            self.create_history_snapshot()
+
+        was_stopped = False
+        for _ in range(n_steps):
+            if self.trigger_event("first", deme_id=-1) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            self._state_nn.individual_count[:] = sk.run_discrete_reproduction(
+                self._state_nn.individual_count,
+                self._config_nn,
+            )
+
+            if self.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            self._state_nn.individual_count[:] = sk.run_discrete_survival(
+                self._state_nn.individual_count,
+                self._config_nn,
+            )
+
+            if self.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            self._state_nn.individual_count[:] = sk.run_discrete_aging(
+                self._state_nn.individual_count,
+            )
+
+            self._tick += 1
+            self._state = DiscretePopulationState(
+                n_tick=int(self._tick),
+                individual_count=self._state_nn.individual_count,
+            )
+
+            if record_every > 0 and (self._tick % record_every == 0):
+                self.create_history_snapshot()
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
 
     def reset(self) -> None:
         """Reset the population to its initial state."""

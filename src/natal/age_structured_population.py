@@ -26,6 +26,7 @@ import natal.kernels.simulation_kernels as sk
 from natal.base_population import BasePopulation, HookRegistrationMap
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
+from natal.hooks.types import RESULT_CONTINUE
 from natal.index_registry import IndexRegistry
 from natal.population_config import PopulationConfig
 from natal.population_state import PopulationState
@@ -678,17 +679,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             record_every = self.record_every
 
         if self.should_use_python_dispatch():
-            from natal.hooks.executor import run_age_structured_with_hooks
-
-            return cast(
-                AgeStructuredPopulation,
-                run_age_structured_with_hooks(
+            return self._run_python_dispatch(
                 n_steps=n_steps,
                 record_every=record_every,
                 finish=finish,
                 clear_history_on_start=clear_history_on_start,
-                population=self,
-            ),
             )
 
         config = sk.export_config(self)
@@ -758,6 +753,81 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             RuntimeError: If the population is already finished and cannot continue.
         """
         return self.run(n_steps=1, record_every=self.record_every, clear_history_on_start=False)
+
+    def _run_python_dispatch(
+        self,
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> 'AgeStructuredPopulation':
+        """Python-level simulation loop using HookExecutor for event dispatch."""
+        from natal.kernels import simulation_kernels as sk
+        from natal.population_state import PopulationState
+
+        self.ensure_hook_executor()
+
+        if clear_history_on_start:
+            self.clear_history()
+
+        if record_every > 0 and (self.tick % record_every == 0):
+            self.create_history_snapshot()
+
+        was_stopped = False
+        for _ in range(n_steps):
+            if self.trigger_event("first", deme_id=-1) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            ind_next, sperm_next = sk.run_reproduction(
+                self.state.individual_count,
+                self.state.sperm_storage,
+                self.config,
+            )
+            self.state.individual_count[:] = ind_next
+            self.state.sperm_storage[:] = sperm_next
+
+            if self.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            ind_next, sperm_next = sk.run_survival(
+                self.state.individual_count,
+                self.state.sperm_storage,
+                self.config,
+            )
+            self.state.individual_count[:] = ind_next
+            self.state.sperm_storage[:] = sperm_next
+
+            if self.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
+                was_stopped = True
+                break
+
+            ind_next, sperm_next = sk.run_aging(
+                self.state.individual_count,
+                self.state.sperm_storage,
+                self.config,
+            )
+            self.state.individual_count[:] = ind_next
+            self.state.sperm_storage[:] = sperm_next
+
+            self._tick += 1
+            self._state = PopulationState(
+                n_tick=self.tick,
+                individual_count=self.state.individual_count,
+                sperm_storage=self.state.sperm_storage,
+            )
+
+            if record_every > 0 and (self.tick % record_every == 0):
+                self.create_history_snapshot()
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
 
     def get_age_distribution(self, sex: str = 'both') -> np.ndarray:
         """Return the age distribution for the requested sex.
