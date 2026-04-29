@@ -45,7 +45,6 @@ from natal.algorithms import (
     recruit_juveniles_sampling,
     sample_mating,
     sample_survival_with_sperm_storage,
-    sample_viability_with_sperm_storage,
 )
 from natal.numba_utils import numba_disabled
 
@@ -963,15 +962,15 @@ class TestApplySurvivalRatesDeterministic2D:
 
 
 # ===========================================================================
-# sample_survival_with_sperm_storage — deterministic path
+# apply_survival_rates_deterministic_with_sperm_storage
 # ===========================================================================
 
-class TestSampleSurvivalWithSpermStorage:
-    """Tests for sample_survival_with_sperm_storage (deterministic path with
-    Numba bypass)."""
+class TestDeterministicSurvivalWithSpermStorage:
+    """Tests for apply_survival_rates_deterministic_with_sperm_storage (exact
+    multiplication path, no sampling)."""
 
-    def test_deterministic_basic(self) -> None:
-        _func = sample_survival_with_sperm_storage
+    def test_basic(self) -> None:
+        _func = apply_survival_rates_deterministic_with_sperm_storage
         if hasattr(_func, 'py_func'):
             _func = _func.py_func
 
@@ -988,49 +987,14 @@ class TestSampleSurvivalWithSpermStorage:
             (female, male), sperm, surv_f, surv_m,
             n_genotypes=n_genotypes, n_ages=n_ages,
         )
-        # sample_survival_with_sperm_storage always uses stochastic binomial
-        # draws internally — verify results are in a reasonable range.
-        assert np.allclose(f_new[0], female[0] * 0.9, atol=5.0)
-        assert np.allclose(f_new[1], female[1] * 0.8, atol=5.0)
-        assert np.allclose(m_new[0], male[0] * 0.8, atol=5.0)
-        assert np.allclose(m_new[1], male[1] * 0.7, atol=5.0)
+        # Deterministic: exact multiplication, no sampling.
+        np.testing.assert_array_equal(f_new[0], female[0] * 0.9)
+        np.testing.assert_array_equal(f_new[1], female[1] * 0.8)
+        np.testing.assert_array_equal(m_new[0], male[0] * 0.8)
+        np.testing.assert_array_equal(m_new[1], male[1] * 0.7)
+        np.testing.assert_array_equal(s_new[1, 0, 0], 4.0 * 0.8)
 
 
-# ===========================================================================
-# sample_viability_with_sperm_storage — deterministic path
-# ===========================================================================
-
-class TestSampleViabilityWithSpermStorage:
-    """Tests for sample_viability_with_sperm_storage (deterministic path with
-    Numba bypass)."""
-
-    def test_deterministic_basic(self) -> None:
-        _func = sample_viability_with_sperm_storage
-        if hasattr(_func, 'py_func'):
-            _func = _func.py_func
-
-        n_ages = 2
-        n_genotypes = 2
-        target_age = 1
-        female = np.array([[10.0, 20.0], [30.0, 40.0]], dtype=np.float64)
-        male = np.array([[5.0, 10.0], [15.0, 20.0]], dtype=np.float64)
-        sperm = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm[1, 0, 0] = 8.0
-        f_v = np.array([0.9, 0.8], dtype=np.float64)
-        m_v = np.array([0.8, 0.7], dtype=np.float64)
-
-        f_new, m_new, s_new = _func(
-            (female, male), sperm, f_v, m_v,
-            n_genotypes=n_genotypes, n_ages=n_ages,
-            target_age=target_age,
-        )
-        # Non-target ages unchanged
-        assert np.allclose(f_new[0], female[0])
-        assert np.allclose(m_new[0], male[0])
-        # Target age sampled — deterministic binomial with rates
-        assert 0 < f_new[1, 0] <= female[1, 0]
-        assert 0 < m_new[1, 0] <= male[1, 0]
-        assert 0 < s_new[1, 0, 0] <= 8.0
 
 
 # ===========================================================================
@@ -1376,63 +1340,6 @@ class TestSampleSurvivalWithSpermStorageContinuous:
 
 
 # ===========================================================================
-# sample_viability_with_sperm_storage — continuous sampling path
-# ===========================================================================
-
-class TestSampleViabilityWithSpermStorageContinuous:
-    """Continuous-sampling path for sample_viability_with_sperm_storage."""
-
-    def test_continuous_sampling(self) -> None:
-        _func = sample_viability_with_sperm_storage
-        if hasattr(_func, 'py_func'):
-            _func = _func.py_func
-
-        n_ages = 2
-        n_genotypes = 2
-        target_age = 1
-        female = np.array([[10.0, 20.0], [30.0, 40.0]], dtype=np.float64)
-        male = np.array([[5.0, 10.0], [15.0, 20.0]], dtype=np.float64)
-        sperm = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm[1, 0, 0] = 8.0
-        f_v = np.array([0.9, 0.8], dtype=np.float64)
-        m_v = np.array([0.8, 0.7], dtype=np.float64)
-
-        f_new, m_new, s_new = _func(
-            (female, male), sperm, f_v, m_v,
-            n_genotypes=n_genotypes, n_ages=n_ages, target_age=target_age,
-        )
-        assert f_new.shape == female.shape
-        assert m_new.shape == male.shape
-        assert s_new.shape == sperm.shape
-        """has_sex_chromosomes=True with female_only sex chrom — all female."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 5.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        female_only = np.array([True, False], dtype=np.bool_)
-        male_only = np.array([False, False], dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=np.ones(2, dtype=np.float64),
-            male_genotype_compatibility=np.ones(2, dtype=np.float64),
-            female_only_by_sex_chrom=female_only,
-            male_only_by_sex_chrom=male_only,
-            is_stochastic=True, has_sex_chromosomes=True,
-            sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        # Genotype 0 is female-only -> all offspring should be female
-        assert n_f.sum() > 0
-        assert n_m.sum() == 0
 
     def test_sex_chromosome_male_only_path(self) -> None:
         """has_sex_chromosomes=True with male_only sex chrom (covers line 523)."""
