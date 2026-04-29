@@ -129,7 +129,6 @@ def compile_combined_hook(
 
     Args:
         njit_fns: List of njit-compiled hook functions.
-        name: Human-readable name for the generated function.
         deme_selectors: Optional per-function deme target.  When ``None``
             or all ``"*"``, no guards are generated (panmictic-safe).
     """
