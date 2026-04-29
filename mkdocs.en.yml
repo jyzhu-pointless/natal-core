@@ -16,7 +16,7 @@ theme:
   features:
     - navigation.tabs
     - navigation.sections
-    - toc.integrate
+    - navigation.footer
     - search.suggest
     - search.highlight
     - content.tabs.link
@@ -38,6 +38,8 @@ theme:
         name: Switch to light mode
 
 markdown_extensions:
+  - toc:
+      toc_depth: 3
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -53,6 +55,10 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 plugins:
   - autorefs:
@@ -83,23 +89,36 @@ plugins:
 
 nav:
   - Home: index.md
-  - Guides:
-    - Quickstart: quickstart.md
-    - Genetic Structures: genetic_structures.md
-    - Builder System: builder_system.md
-    - Index Registry: index_registry.md
-    - Population State & Config: population_state_config.md
-    - Simulation Kernels: simulation_kernels.md
-    - Numba Optimization: numba_optimization.md
-    - Modifiers: modifiers.md
-    - Hooks: hooks.md
-    - Genetic Presets: genetic_presets.md
-    - Spatial Simulation Guide: spatial_simulation_guide.md
-    - Observation Rules: observation_rules.md
-    - Genotype Pattern Matching: genotype_patterns.md
+  - Quickstart: 1_quickstart.md
+  - Practical Components:
+    - 2_genetics.md
+    - 2_population.md
+    - 2_population_initialization.md
+    - 2_data_output.md
+    - 2_genetic_presets.md
+    - 2_hooks.md
+    - 2_genotype_patterns.md
+  - Advanced Guides:
+    - 3_custom_presets.md
+    - 3_advanced_hooks.md
+    - 3_modifiers.md
+    - 3_spatial_simulation.md
+  - Internal Implementation:
+    - 4_index_registry.md
+    - 4_simulation_kernels.md
+    - 4_numba_optimization.md
+    - 4_population_state_config.md
+  - Appendix:
     - Allele Conversion Rules: allele_conversion_rules.md
+    - Caching and Codegen: caching_and_codegen.md
     - Genotype Filter: genotype_filter.md
-    - Preset Encapsulation Validation: preset_encapsulation_and_validation.md
+    - Migration Kernel Implementation: migration_kernel_impl.md
+    - Observation Implementation: observation_impl.md
+    - Preset Encapsulation and Validation: preset_encapsulation_and_validation.md
+    - Spatial Builder: spatial_builder.md
+    - Spatial Config Replace: spatial_config_replace.md
+    - Spatial Initialization Plan: spatial_initialization_plan.md
+    - Spatial Lifecycle Wrapper: spatial_lifecycle_wrapper.md
   - API Reference:
     - Overview: api/index.md
     - genetic_structures: api/genetic_structures.md

@@ -12,37 +12,37 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-**NATAL Core** is a high-performance forward-time population genetics simulation engine that supports configurable lifecycles of species. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and simulation kernels accelerated by Numba. NATAL Core is especially useful for **modeling gene drive systems** in insect populations, but its flexible architecture allows it to be applied to a wide range of population genetics scenarios.
+**NATAL Core** is a high-performance forward-time population genetics simulation engine with configurable species lifecycles. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and Numba-accelerated simulation kernels. NATAL Core is especially suited for **modeling gene drive systems in insect populations**, but its flexible architecture also makes it applicable to a wide range of population genetics scenarios.
 
-NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for parameter inference in population genetics models based on NATAL Core.
+NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for inferring population genetics model parameters based on NATAL Core.
 
 ## Key Features
 
-- 🪲 Forward-time configurable population modeling (age-structured and discrete-generation).
-- 🧬 Genetic architecture definition with chromosomes, loci, and alleles.
-- 🚀 Numba-accelerated kernels for high performance.
-- 🧩 Built-in genetic presets, especially for homing drives and toxin-antidote drives.
-- 🪝 Hook system for custom interventions during simulation.
-- 🔍 Observation and filtering utilities for downstream analysis.
-- 🗺️ Spatial simulation support across multiple demes.
+- 🪲 Forward-time simulation with flexible population lifecycles (age-structured and discrete-generation populations)
+- 🧬 Definable genetic structures including chromosomes, loci, and alleles
+- 🚀 Numba-accelerated computation core with excellent performance
+- 🧩 Built-in gene drive presets, especially homing drive and toxin-antidote drive
+- 🪝 Hook system for inserting custom intervention logic during simulation
+- 🔍 Observation and filtering tools for downstream analysis
+- 🗺️ Multi-deme (subpopulation) spatial simulation support
 
 ## Installation
 
-### 1. Create a virtual environment
+### 1. Create a Virtual Environment
 
 It is strongly recommended to use a virtual environment to manage dependencies.
 
-Choose one of the following commands. **Python 3.12** is recommended, but any Python version >= 3.9 should work.
+Please choose one of the following commands. **Python 3.12 is recommended**, but any Python version >= 3.9 should work.
 
 ```bash
 uv venv --python 3.12 .venv            # uv (recommended)
-python -m venv .venv                   # venv (please ensure Python >= 3.9 is used)
+python -m venv .venv                   # venv (please ensure Python >= 3.9)
 conda create -n natal-env python=3.12  # conda
 ```
 
 On Windows, you can run `py -3.12 -m venv .venv` to specify Python 3.12 as the interpreter for the virtual environment.
 
-### 2. Activate the virtual environment
+### 2. Activate the Virtual Environment
 
 Linux / macOS:
 
@@ -54,7 +54,6 @@ conda activate natal-env     # conda
 Windows:
 
 ```powershell
-
 .venv\Scripts\activate       # uv / venv
 conda activate natal-env     # conda
 ```
@@ -73,7 +72,7 @@ pip install natal-core
 import natal as nt
 from natal.ui import launch
 
-# 1. Define the genetics architecture of a species
+# 1. Define the species' genetic architecture
 sp = nt.Species.from_dict(
     name="TestSpecies",
     structure={
@@ -107,7 +106,7 @@ def release_drive_carriers():
         nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
     ]
 
-# 4. Build a panmictic population
+# 4. Build a random-mating population
 pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
@@ -129,39 +128,63 @@ pop = (nt.DiscreteGenerationPopulation
     )
     .presets(drive).hooks(release_drive_carriers).build())
 
-# 5. Launch interactive WebUI and run simulation
+# 5. Launch the interactive WebUI and run the simulation
 launch(pop)
 ```
 
 For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) directory in the GitHub repository.
 
-## Learning Path (in recommended order)
+## Documentation Index
 
-1. [Quick Start: 15 Minutes to NATAL](quickstart.md)
-2. [Genetic Structures and Entities](genetic_structures.md)
-3. [Builder System Explained](builder_system.md)
-4. [IndexRegistry Indexing Mechanism](index_registry.md)
-5. [PopulationState and PopulationConfig](population_state_config.md)
-6. [Deep Dive into Simulation Kernels](simulation_kernels.md)
-7. [Numba Optimization Guide](numba_optimization.md)
-8. [Modifier Mechanism](modifiers.md)
-9. [Hook System](hooks.md)
-10. [Genetic Presets Usage Guide](genetic_presets.md)
-11. [Spatial Simulation Guide](spatial_simulation_guide.md)
-12. [Population Observation Rules](observation_rules.md)
-13. [Pattern Matching and Extensible Configuration](genotype_patterns.md)
-14. [Design Your Own Preset (1): Starting from Allele Conversion Rules](allele_conversion_rules.md)
-15. [Design Your Own Preset (2): Using genotype_filter to Control Rule Scope](genotype_filter.md)
-16. [Design Your Own Preset (3): Encapsulation, Validation, and Pre‑release Checks](preset_encapsulation_and_validation.md)
+It is recommended to start with Part 1 to get up to speed, then use Part 2 as a project-driven reference, and selectively read Parts 3 and 4 as needed.
+
+### Part 1: Quick Start
+
+> This section introduces the basic concepts and usage of NATAL Core, helping you get started quickly.
+
+1. [Quick Start: NATAL in 15 Minutes](1_quickstart.md)
+
+### Part 2: Practical Components
+
+> This section introduces the main components of NATAL Core, which are the primary features used in daily work.
+
+2. [Genetic Structures and Entities](2_genetics.md)
+3. [Population Initialization](2_population_initialization.md)
+4. [Random-Mating Population](2_population.md)
+5. [Genetic Presets Usage Guide](2_genetic_presets.md)
+6. [Hook System](2_hooks.md)
+7. [Pattern Matching and Extensible Configuration](2_genotype_patterns.md)
+8. [Extracting Population Simulation Data](2_data_output.md)
+
+### Part 3: Advanced Guide
+
+> This section introduces advanced features of NATAL Core, including spatial simulation and more custom configuration.
+
+9. [Spatial Simulation Guide](3_spatial_simulation.md)
+10. [Designing Your Own Presets](3_custom_presets.md)
+11. [Modifier Mechanism](3_modifiers.md)
+12. [Advanced Hook Tutorial](3_advanced_hooks.md)
+
+### Part 4: Internal Implementation
+
+> This section introduces the underlying implementation mechanisms of NATAL Core that are not directly user-facing, helping you understand how NATAL Core works internally.
+
+<!--TODO: numba related content can be moved forward as appropriate-->
+
+13. [IndexRegistry Indexing Mechanism](4_index_registry.md)
+14. [PopulationState and PopulationConfig](4_population_state_config.md)
+15. [Simulation Kernels in Depth](4_simulation_kernels.md)
+16. [Numba Optimization Guide](4_numba_optimization.md)
+17. [Observation History Recording Implementation](observation_impl.md)
 
 ## API Documentation
 
-- [Full API Index](api/index.md)
+- [Complete API Index](api/index.md)
 
 ## Links
 
-- GitHub repository: https://github.com/jyzhu-pointless/natal-core
-- PyPI package: https://pypi.org/project/natal-core/
+- GitHub Repository: https://github.com/jyzhu-pointless/natal-core
+- PyPI Package: https://pypi.org/project/natal-core/
 
 ## License
 

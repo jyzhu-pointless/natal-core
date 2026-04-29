@@ -1,1 +1,0 @@
-../spatial_simulation_guide.md

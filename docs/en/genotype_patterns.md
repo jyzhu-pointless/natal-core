@@ -1,1 +1,0 @@
-../genotype_patterns.md

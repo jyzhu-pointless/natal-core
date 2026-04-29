@@ -1,1 +1,0 @@
-../../api/discrete_generation_population.md

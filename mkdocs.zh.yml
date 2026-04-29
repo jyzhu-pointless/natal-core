@@ -108,10 +108,21 @@ nav:
     - 4_simulation_kernels.md
     - 4_numba_optimization.md
     - 4_population_state_config.md
+  - 附录:
+    - 等位基因转换规则: allele_conversion_rules.md
+    - 缓存与代码生成: caching_and_codegen.md
+    - 基因型筛选器: genotype_filter.md
+    - 迁移核实现: migration_kernel_impl.md
+    - 观测实现: observation_impl.md
+    - 预设封装与验证: preset_encapsulation_and_validation.md
+    - 空间构建器: spatial_builder.md
+    - 空间配置替换: spatial_config_replace.md
+    - 空间初始化方案: spatial_initialization_plan.md
+    - 空间生命周期包装器: spatial_lifecycle_wrapper.md
   - API 参考:
     - API 概览: api/index.md
-    - 遗传实体: api/genetic_entities.md
     - 遗传结构: api/genetic_structures.md
+    - 遗传实体: api/genetic_entities.md
     - 遗传模式: api/genetic_patterns.md
     - 遗传预设: api/genetic_presets.md
     - 种群状态: api/population_state.md

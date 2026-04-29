@@ -1,1 +1,0 @@
-../../api/algorithms.md

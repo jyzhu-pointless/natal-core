@@ -1,26 +1,22 @@
-# Designing Your Own Preset (2): Using `genotype_filter` to Control Rule Scope
+# Designing Your Own Preset (2): Using genotype_filter to Control Rule Scope
 
-In the previous chapter you defined conversion rules. This chapter continues the main line and solves a key problem:
+After defining conversion rules, `genotype_filter` solves a key problem: **the same conversion rule should generally not apply to all genotypes**.
 
-**A single conversion rule should usually not apply to all genotypes.**
+`genotype_filter` applies pattern matching results to the rule's scope, enabling precise control over rules.
 
-This is the role of `genotype_filter` – applying the results of pattern matching to the rule’s scope.
+## Understanding genotype_filter
 
-## 1. What is `genotype_filter`
+`genotype_filter` is a function that takes a `Genotype` as input and returns `True` or `False`:
 
-`genotype_filter` is a function that:
-
-- Input: `Genotype`
-- Output: `True` or `False`
-
-When it returns `True`, the rule applies to that genotype; when it returns `False`, it does not.
+- Returns `True`: the rule applies to this genotype
+- Returns `False`: the rule does not apply to this genotype
 
 ```python
 def my_filter(genotype):
     return True  # or False
 ```
 
-## 2. Main Line Example: `W->D` Only in `W|D` Heterozygotes
+## Core Example: W->D Only in W::D Heterozygotes
 
 ```python
 from natal.gamete_allele_conversion import GameteConversionRuleSet
@@ -40,25 +36,22 @@ ruleset.add_convert(
 )
 ```
 
-This makes the “mechanism scope” explicit.
+This clearly defines the scope of the mechanism.
 
-## 3. Common Filtering Patterns
+## Common Filtering Patterns
 
-### 3.1 Carries a certain allele
+### Carrying a Specific Allele
+Suitable for scenarios like "trigger whenever the drive allele is present".
 
-Suitable for scenarios where “any individual carrying the drive triggers the effect”.
+### Specifying Heterozygous/Homozygous
+Suitable for scenarios like "cleavage only in heterozygotes" or "effective only in homozygotes".
 
-### 3.2 Specify heterozygote / homozygote
+### Combinatorial Logic
+Multiple filters can be combined with AND/OR/NOT logic to keep rules readable.
 
-Suitable for scenarios where “cutting only in heterozygotes” or “effect only in homozygotes”.
+## Integration with Pattern Matching Syntax
 
-### 3.3 Combining logic
-
-You can combine multiple filters with AND/OR/NOT logic to keep rules readable.
-
-## 4. Integrating with Pattern Matching Syntax (Chapter 13)
-
-When the rule condition is complex, it is recommended to reuse the pattern syntax from Chapter 13 instead of writing hand‑crafted string‑containment checks.
+When rule conditions are complex, it is recommended to reuse the pattern syntax from Chapter 13 rather than writing fragile string containment checks.
 
 ```python
 def build_filter_from_pattern(species, pattern: str):
@@ -76,61 +69,96 @@ ruleset.add_convert(
 )
 ```
 
-Advantages:
+Benefits of this approach:
 
-1. Semantic unification: consistent with the pattern expansion rules from the Observation chapter.
-2. Maintainability: patterns can be placed directly into experiment configuration files.
-3. Testability: the pattern’s matched set can be verified independently.
+1. Unified semantics: consistent with the pattern expansion rules from the Observation chapter
+2. Maintainable: patterns can be placed directly in experimental configuration files
+3. Testable: pattern-matched sets can be independently verified
 
-## 5. Practical Advice for Designing Filters
+## Practical Advice for Designing Filters
 
-1. Filters should have a single responsibility.
-2. Start with the simplest readable version, then optimise for performance later.
-3. Write unit tests for complex filters to avoid incorrect filtering.
-4. Record the filter name and semantics in experiment logs.
+1. Filters should have a "single responsibility"
+2. Start with the simplest readable version, then optimize for performance
+3. Write unit tests for complex filters to avoid mis-screening
+4. Record filter names and semantics in experiment logs
 
-## 6. Keeping Statistical Consistency with Observation
+## Combining with Pattern Matching (Recommended Practice)
+
+When the rule scope is complex, it is recommended to use the species' pattern parsing capability to generate `genotype_filter`, avoiding fragile string comparisons.
+
+```python
+class PatternBasedPreset(GeneticPreset):
+    def __init__(self, pattern: str, conversion_rate: float = 0.95):
+        super().__init__(name="PatternBasedPreset")
+        self.pattern = pattern
+        self.conversion_rate = conversion_rate
+
+    def gamete_modifier(self, population):
+        from natal.gamete_allele_conversion import GameteConversionRuleSet
+
+        ruleset = GameteConversionRuleSet("PatternBased")
+        pattern_filter = population.species.parse_genotype_pattern(self.pattern)
+
+        ruleset.add_convert(
+            from_allele="WT",
+            to_allele="Drive",
+            rate=self.conversion_rate,
+            genotype_filter=pattern_filter,
+        )
+        return ruleset.to_gamete_modifier(population)
+```
+
+Practical advice:
+
+1. Maintain pattern strings in configuration files
+2. The Preset is responsible for compiling the pattern internally
+3. Observation grouping should also use the same pattern or be expanded from the same pattern, ensuring statistical scope aligns with rule scope
+
+## Conditional Mutation (Genotype-Dependent)
+
+```python
+class ConditionalMutation(GeneticPreset):
+    """Conditional Mutation - only occurs in specific genetic backgrounds"""
+
+    def __init__(self, target_allele: str = "B", required_background: str = "A"):
+        super().__init__(name="ConditionalMutation")
+        self.target_allele = target_allele
+        self.required_background = required_background
+
+    def gamete_modifier(self, population):
+        from natal.gamete_allele_conversion import GameteConversionRuleSet
+
+        ruleset = GameteConversionRuleSet("ConditionalMutation")
+
+        # Mutation only occurs when the background allele is present
+        ruleset.add_convert(
+            from_allele=self.target_allele,
+            to_allele=f"{self.target_allele}_mutant",
+            rate=1e-4,
+            genotype_filter=lambda gt: self.required_background in str(gt)
+        )
+
+        return ruleset.to_gamete_modifier(population)
+```
+
+## Maintaining Consistency with Observation Statistics
 
 It is recommended to use the same pattern for both:
 
-1. The Preset’s `genotype_filter` (which determines who is affected by the rule).
-2. The Observation’s `groups["genotype"]` (which determines who is counted).
+1. The Preset's `genotype_filter` (determining who is affected by the rule)
+2. Observation's `groups["genotype"]` (determining who is counted)
 
-If different definitions are used on both sides, common symptoms are “the rule seems to work, but the observed metrics do not move” or “observed changes do not match the expected mechanism”.
+If different definitions are used on both sides, common symptoms include "the rule appears to take effect, but the observation metric does not change" or "observed changes are inconsistent with mechanism expectations."
 
-## 7. Debugging Methods
+## Debugging Methods
 
-It is recommended to check the “hit rate” on a small sample:
+When the filter does not behave as expected, you can:
 
-1. Enumerate the genotypes of interest.
-2. For each genotype, print the result of `genotype_filter`.
-3. Verify that it matches the biological expectation.
+1. Print the filter's hit results
+2. Check whether the pattern compiles correctly
+3. Verify the string representation of genotypes
+4. Compare expected and actual genotype sets
 
-This step often prevents many invalid simulations in advance.
+## Chapter Summary
 
-## 8. Making Rules More Maintainable
-
-When the number of rules grows, split filters by semantics:
-
-- `is_drive_carrier`
-- `is_target_heterozygote`
-- `is_male_specific_target`
-
-Then combine them to build the final filter, rather than writing one huge function.
-
-## 9. Chapter Summary
-
-You have completed the core two steps of Preset design:
-
-1. Define the rules (Chapter 1).
-2. Refine the rule scope (this chapter).
-
-The next chapter will engineer these concepts and explain how to encapsulate rules and filters into reusable Preset classes.
-
----
-
-## Next Chapters
-
-- [Designing Your Own Preset (3): Encapsulation, Validation, and Pre‑release Checks](preset_encapsulation_and_validation.md)
-- [Genotype Pattern Matching](genotype_patterns.md)
-- [Population Observation Rules](observation_rules.md)
+Through `genotype_filter`, you can precisely control the scope of conversion rules. The next chapter will teach you how to encapsulate these rules into reusable Presets.
