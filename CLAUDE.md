@@ -8,18 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-```bash
-# Run all tests (with verbose output)
-pytest
+The virtual environment is auto-activated for Claude Code agents. Run commands directly — do not prepend `source .venv/bin/activate`.
 
-# Run a single test file or test
-pytest tests/test_discrete_population.py
-pytest tests/test_discrete_population.py::test_some_function
+```bash
+# Run all tests
+pytest
 
 # Type checking (strict mode)
 pyright
 
-# Lint (ruff) — check and optionally auto-fix
+# Lint — check and optionally auto-fix
 ruff check src demos
 ruff check src demos --fix
 
@@ -29,7 +27,24 @@ python scripts/generate_init_pyi.py
 
 ## Validation gates
 
-Before committing any code change, run **all three** of `pytest`, `pyright`, and `ruff check src demos`. Activate the virtual environment before running pyright so it resolves against project-installed dependencies.
+Before committing any code change, run **all three** of `pytest`, `pyright`, and `ruff check src demos`. Fix **every** issue in modified files before committing — no suppression shortcuts.
+
+### Fix-everything policy
+
+- **Modified files**: All pyright / ruff / pytest failures must be fixed, regardless of whether they pre-existed.
+- **Other files affected by the change**: If a signature or import change causes failures elsewhere, those must be fixed too.
+- **Pre-existing issues in untouched files**: Explicitly note and analyse them; fixing is encouraged but not required for the current commit.
+- **`cast(Any, …)` is forbidden**. Never use it to bypass type checking.
+- **`Any` in function parameter lists is forbidden** unless accompanied by a concrete, documented justification.
+- **`cast(T, x)`** may be used only when static analysis cannot prove `x: T` at all (e.g., narrowing an `Optional` after a guard) and the error is otherwise unavoidable. Prefer type-narrowing assertions or restructuring before reaching for `cast`.
+- **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line.
+
+### Test coverage
+
+- **New modules**: ≥95% line coverage.
+- **New code in existing modules**: ≥95% line coverage.
+- **Deterministic simulations** (`stochastic=False`): require exact numerical assertions on counts, frequencies, or derived statistics.
+- **Stochastic simulations**: require statistical validation — multiple runs, confidence intervals, or distributional checks. A single passing run is not sufficient.
 
 ## Architecture overview
 

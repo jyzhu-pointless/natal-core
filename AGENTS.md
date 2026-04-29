@@ -15,20 +15,35 @@ If rules conflict, prefer the English specification files.
 
 ## 2) Mandatory quality gates before proposing completion
 
-For code changes, run and pass all of the following:
+The virtual environment is auto-activated — run commands directly, do not prepend `source .venv/bin/activate`.
+
 ```bash
 pytest
 pyright
 ruff check src demos
 ```
 
-Activate the repository virtual environment before running `pyright` so it uses
-the project-installed dependencies and configuration.
-
-After those commands complete, review `docs/` for any needed documentation updates and apply them before finalizing the change.
+After those commands complete, review `docs/` for any needed documentation updates.
 
 If API exports changed, also run:
 - python scripts/generate_init_pyi.py
+
+### Fix-everything policy
+
+- **Modified files**: Fix ALL pyright / ruff / pytest failures, regardless of whether they pre-existed.
+- **Other files affected by the change** (e.g., signature or import changes): must be fixed too.
+- **Pre-existing issues in untouched files**: explicitly note and analyse them. Fixing is encouraged but not strictly required for the current commit.
+- **`cast(Any, …)` is forbidden**. Never bypass type checking this way.
+- **`Any` in function parameter lists is forbidden** unless accompanied by a concrete, documented justification.
+- **`cast(T, x)`** may be used only when static analysis cannot prove `x: T` at all (e.g., narrowing `Optional` after an explicit guard) and the error is otherwise unavoidable. Prefer type-narrowing assertions or restructuring before `cast`.
+- **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line.
+
+### Test coverage
+
+- **New modules**: ≥95% line coverage.
+- **New code in existing modules**: ≥95% line coverage.
+- **Deterministic simulations** (`stochastic=False`): exact numerical assertions on counts, frequencies, or derived statistics.
+- **Stochastic simulations**: statistical validation — multiple runs with confidence intervals or distributional checks. A single passing run is insufficient.
 
 ## 3) Docstring requirements
 

@@ -48,8 +48,7 @@ pyright
 ruff check src demos
 ```
 
-Activate the repository virtual environment before running `pyright` so it
-resolves against the project-installed dependencies and interpreter.
+For Claude Code agents, the virtual environment is auto-activated; run commands directly without `source .venv/bin/activate`.
 
 After these commands pass, review the `docs/` directory to determine whether the change requires accompanying documentation updates and add or mark the necessary updates before proposing completion.
 
@@ -96,7 +95,14 @@ Every non-trivial code change must add or update tests that cover:
 - Invalid inputs and error paths (when relevant)
 - Regression scenario for the bug being fixed (if applicable)
 
-### 3.5 Prohibited testing practices
+### 3.5 Coverage requirements
+
+- **New modules**: ≥95% line coverage.
+- **New code in existing modules**: ≥95% line coverage.
+- **Deterministic simulations** (`stochastic=False`): require exact numerical assertions on counts, frequencies, or derived statistics. A passing run with no assertion on the output value is insufficient.
+- **Stochastic simulations**: require statistical validation — multiple independent runs with confidence intervals or distributional checks. A single passing run is insufficient.
+
+### 3.6 Prohibited testing practices
 
 - Do not skip tests without a clear reason.
 - Do not leave temporary debug assertions or print-based checks.
@@ -125,7 +131,17 @@ Pyright must pass with repository configuration:
 - Use `cast(...)` only when a runtime invariant is known and cannot be expressed directly.
 - `# type: ignore` is allowed only as a last resort and must include a short, specific reason.
 
-### 4.4 Backward compatibility and typing
+### 4.4 Fix-everything policy for pyright
+
+- **Modified files**: All pyright failures must be fixed, regardless of whether they pre-existed.
+- **Other files affected by the change** (e.g., signature or import changes): failures in those files must be fixed too.
+- **Pre-existing issues in untouched files**: explicitly note and analyse them. Fixing is encouraged but not strictly required for the current commit.
+- **`cast(Any, …)` is forbidden**. Never use it to bypass type checking.
+- **`Any` in function parameter lists is forbidden** unless accompanied by a concrete, documented justification.
+- **`cast(T, x)`** may be used only when static analysis cannot prove `x: T` at all (e.g., narrowing `Optional` after an explicit guard) and the error is otherwise unavoidable. Prefer type-narrowing assertions or restructuring before `cast`.
+- **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line.
+
+### 4.5 Backward compatibility and typing
 
 - Keep runtime behavior unchanged when introducing type-only refactors.
 - If a typing change tightens API contracts, update tests and docs in the same change.

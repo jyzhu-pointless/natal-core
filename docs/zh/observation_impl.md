@@ -4,14 +4,30 @@
 
 ## 整体架构
 
-Observation 历史记录涉及四个层次：
+Observation 历史记录涉及四个层次，并通过 NamedTuple 参数束在 Kernel 层传递：
 
 ```
 用户层 API          →  BasePopulation / SpatialPopulation 的 record_observation 属性
+                       SpatialPopulation 的 _spatial_topo / _migration_params / _compact_meta
 Observation 层     →  observation.py: Observation, ObservationFilter, build_mask
-Kernel 层          →  simulation_kernels.py / spatial_simulation_kernels.py 中的 recording 通路
+                       observation_record.py: CompactMeta, build_observation_row_spatial
+Kernel 层          →  spatial_simulation_kernels.py 中的 recording 通路
+                       spatial_lifecycle_*.tmpl.py 代码生模板
 导出层             →  state_translation.py: output_history / *observation_history_to_readable_dict
 ```
+
+## NamedTuple 参数束
+
+为避免散落的 13+ 个参数在多层函数间传递，空间内核调度使用四个 NamedTuple 收敛参数：
+
+| NamedTuple | 定义位置 | 收敛的参数 | 生命周期 |
+|-----------|---------|-----------|---------|
+| `SpatialTopology` | `spatial_topology.py` | `rows`, `cols`, `wrap` | 构造时固化 |
+| `MigrationParams` | `spatial_topology.py` | `kernel`, `include_center`, `rate`, `adjust_on_edge` | 构造时固化 |
+| `HeterogeneousKernelParams` | `spatial_topology.py` | `deme_kernel_ids`, `d_row`, `d_col`, `weights`, `nnzs`, `total_sums`, `max_nnz` | 每次 `run()` 重建 |
+| `CompactMeta` | `observation_record.py` | `offsets`, `deme_map`, `n_demes_per_group`, `selected_n`, `mode_aggregate`, `row_size` | `record_observation` 设置时重建 |
+
+`migration_mode` 和 `adjacency` 不包含在 `MigrationParams` 中，因为它们由 `_effective_migration_route()` 在每次调用时动态解析（可选择 adjacency / kernel / auto），属于**路由策略**而非**迁移参数**。
 
 ## 数据流
 
@@ -22,13 +38,15 @@ ObservationFilter.build_filter(groups) → Observation 对象（含 specs、labe
        ↓
 BasePopulation._build_observation_mask(obs) → 4D float64 mask (n_groups, n_sexes, n_ages, n_genotypes)
        ↓
-mask 传入 Numba kernel（observation_mask 参数）
+_build_deme_info() → demean_modes dict → build_compact_metadata() → CompactMeta
+       ↓
+mask + CompactMeta 传入 Numba kernel（observation_mask + compact_meta 参数）
        ↓
 kernel 每个 record_every 步：
-  observed = sum(mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
-  row = [tick, observed.ravel()]
+  build_observation_row_spatial(ind, mask, compact_meta) → 紧凑 flat row
+  row = [tick, compact_row]
        ↓
-Python 层：history.append((tick, row.copy()))  →  _process_kernel_history()
+Python 层：_process_kernel_history() → history.append((tick, row.copy()))
        ↓
 导出：output_history() 自动检测 record_observation →  dispatch 到 *observation_history_to_readable_dict
 ```
@@ -143,78 +161,97 @@ def set_observations(self, groups, *, collapse_age=False):
 
 #### Panmictic 内核（simulation_kernels.py）
 
-`run_simulation` 函数的 `record_single_tick()` 内部：
+`run_with_hooks` / `run_discrete_with_hooks` 内部调用 `build_observation_row_panmictic()`：
 
 ```python
 if observation_mask is not None:
-    observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
-    row[1:] = observed.ravel()
+    flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
 else:
-    row[1:1+ind_size] = ind_count.ravel()
-    row[1+ind_size:] = sperm_storage.ravel()  # 如有
+    flat_state[1:1+ind_size] = ind_count.ravel()
+    flat_state[1+ind_size:] = sperm_store.ravel()  # 如有
 ```
 
 关键参数：
 - `observation_mask: Optional[NDArray[np.float64]]` — 4D 掩码
-- `n_obs_groups: int` — 观测分组数，决定 row 大小
+- `build_observation_row_panmictic` 是 `observation_record.py` 中的独立 njit 函数
 
-#### Spatial 内核（spatial_simulation_kernels.py）
+#### Spatial 内核（observation_record.py）
 
-`spatial_run_simulation` 的 `record_single_tick()` 内部：
+`build_observation_row_spatial()` 负责紧凑行的构建，替代了原先内联的 broadcast + `deme_selector` 掩码方式：
 
 ```python
-if observation_mask is not None:
-    observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
-    if deme_selector is not None:
-        observed = observed * deme_selector.T[:, :, None, None]
-    row[1:] = observed.ravel()
-else:
-    # 拼接所有 deme 的 ind 和 sperm
+# observation_record.py
+@njit_switch(cache=True)
+def build_observation_row_spatial(
+    individual_count: NDArray[np.float64],  # (n_demes, n_sexes, n_ages, n_genotypes)
+    observation_mask: NDArray[np.float64],  # (n_groups, n_sexes, n_ages, n_genotypes)
+    compact: CompactMeta,
+) -> NDArray[np.float64]:
+    for gi in range(len(compact.offsets)):
+        if compact.mode_aggregate[gi]:
+            # aggregate: 选中 deme 求和为一个 chunk
+            agg = sum(observation_mask[gi] * individual_count[d] for d in selected)
+            result[offset:offset+sex_ages] = agg.ravel()
+        else:
+            for di in range(nd):
+                if di < compact.selected_n[gi]:
+                    # 选中 deme → 真实数据
+                    result[...] = (observation_mask * ind).sum(axis=-1).ravel()
+                else:
+                    # 未选中 deme → -1.0 sentinel
+                    result[...] = -1.0
 ```
 
-注意 spatial 的 broadcast 多了一个 `n_demes` 维度：
-- `ind`: `(n_demes, n_sexes, n_ages, n_genotypes)`
-- `mask`: `(n_groups, n_sexes, n_ages, n_genotypes)`
-- `mask[None, :, :, :, :] * ind[:, None, :, :, :]` → `(n_demes, n_groups, n_sexes, n_ages, n_genotypes)`
-- `sum(axis=-1)` → `(n_demes, n_groups, n_sexes, n_ages)`
+#### Deme 选择：三种模式
 
-#### Deme Selector（spatial 特有）
+`CompactMeta` 内置三种 per-group 模式，由 group spec 中的 `"deme"` 键控制：
 
-`deme_selector: Optional[NDArray[np.float64]]` 的 shape 为 `(n_groups, n_demes)`。其作用是在观测聚合后对 deme 维度做逐分组的掩码：
-- 值为 1.0 表示该 deme 计入当前分组
-- 值为 0.0 表示该 deme 被排除
+| 模式 | spec 格式 | 记录行为 | 导出行为 |
+|------|---------|---------|---------|
+| `mask`（默认） | `"deme": [0, 2]` 或 `list` | 全 `n_demes` 写入，未选中 = `-1.0` | 未选中显示 `"masked"`，不参与 aggregate |
+| `expand` | `"deme": {"demes": [0,2], "mode": "expand"}` | 仅写入选中 deme | 仅展示选中 deme |
+| `aggregate` | `"deme": {"demes": [0,2], "mode": "aggregate"}` | 求和为一个 chunk | 单个统计量 |
 
-实现：`observed = observed * deme_selector.T[:, :, None, None]` — 利用 broadcast 在 n_demes 维度上施加掩码。
+-1.0 sentinel 确保"deme 真正 0 只"和"被 mask 掉"可区分，避免了旧 `deme_selector` 归零方式的歧义。
 
-`_build_deme_selector()` 从 group spec 中的 `"deme"` 键构建该数组:
-- `"deme": "all"` 或省略 → selector 全 1.0
-- `"deme": [0, 2, 4]` → 对应列设为 1.0
-- `"deme": [(1, 1)]` → 通过 topology 解析坐标后设为 1.0
+#### Codegen 传递路径与模板签名
 
-当所有分组都是 `"all"` 时，`deme_selector` 为 `None`（kernel 跳过乘法以优化性能）。
-
-#### Codegen 传递路径
-
-`_run_codegen_wrapper_steps()` 将 observation 参数传递给 wrapper：
+`_run_codegen_wrapper_steps()` 使用 NamedTuple 束传递到模板：
 
 ```python
-obs_mask = self._observation_mask
-n_obs = len(self._observation.labels) if self._observation is not None else 0
-demean_sel = self._deme_selector
-final_state_tuple, history_new, was_stopped = run_fn(
-    ...,
-    record_interval=int(record_every),
-    observation_mask=obs_mask,
-    n_obs_groups=n_obs,
-    deme_selector=demean_sel,
+run_fn(
+    ind_all, sperm_all,
+    config_bank, deme_config_ids, registry, tick, n_steps,
+    adjacency, migration_mode,
+    self._spatial_topo,         # SpatialTopology (rows, cols, wrap)
+    self._migration_params,     # MigrationParams (kernel, include_center, rate, adjust_on_edge)
+    het,                        # HeterogeneousKernelParams | None
+    record_interval, observation_mask, compact_meta,
 )
 ```
+
+模板 `RUN_FN_NAME` 签名从原先 35 个参数精简为 17 个：
+
+```python
+def RUN_FN_NAME(
+    ind, sperm, config_bank, deme_config_ids, registry, tick, n_steps,
+    adjacency, migration_mode,
+    spatial_topo: SpatialTopology,
+    migration: MigrationParams,
+    het_kernel: HeterogeneousKernelParams | None,
+    record_interval: int,
+    observation_mask: Optional[np.ndarray],
+    compact_meta: Optional[CompactMeta],
+) -> ...:
+```
+
+其中 `migration_mode` 和 `adjacency` 不纳入 `MigrationParams`，因为它们属于**路由策略**（由 `_effective_migration_route()` 动态解析），而非**迁移参数**本身。
 
 ### 4. Spatial 特有路径（spatial_population.py）
 
 #### record_observation 属性
 
-与 panmictic 类似，但 `_build_observation_mask` 通过第一个 deme 的 state shape 来编译 mask（所有 deme 的 genotype 数量和维度一致）：
+设置时自动调用 `_build_deme_info()` 解析 `"deme"` spec，再调用 `build_compact_metadata()` 构建 `CompactMeta`：
 
 ```python
 @record_observation.setter
@@ -223,17 +260,18 @@ def record_observation(self, obs: Optional[Observation]) -> None:
     if obs is not None:
         ref_deme = self._demes[0]
         state = ref_deme.state
-        self._observation_mask = obs.build_mask(
-            n_sexes=state.individual_count.shape[0],
-            n_ages=state.individual_count.shape[1] if state.individual_count.ndim == 3 else 1,
-            n_genotypes=state.individual_count.shape[-1],
-        )
-        self._deme_selector = self._build_deme_selector()
+        self._observation_mask = obs.build_mask(...)
+        self._rebuild_compact_meta()   # → _build_deme_info() + build_compact_metadata()
 ```
+
+`_build_deme_info()` 解析 group spec 中的 `"deme"` 键，支持三种格式：
+- 缺失 / `"all"` → 不在 dict 中（默认全 deme）
+- `list[int | (row, col)]` → `("mask", flat_indices)`（向后兼容）
+- `{"demes": [...], "mode": "aggregate" | "expand" | "mask"}` → dict 格式新语义
 
 #### Python Dispatch 路径
 
-当使用 Python dispatch（hook-aware 回退路径）时，recording 在 Python 层手动打点：
+当使用 Python dispatch（hook-aware 回退路径）时，recording 在 Python 层手动打点，复用同一 `build_observation_row_spatial()`：
 
 ```python
 # run() → _should_use_python_dispatch() → True
@@ -247,14 +285,16 @@ for _ in range(n_steps):
         self._record_snapshot()
 ```
 
-`_record_snapshot()` 在观测模式下用广播乘法聚合：
+`_record_snapshot()` 在观测模式下调用独立 njit 函数：
 
 ```python
-if self._observation_mask is not None:
-    observed = np.sum(
-        self._observation_mask[None, :, :, :, :] * ind_all[:, None, :, :, :],
-        axis=-1,
+if self._observation_mask is not None and self._compact_meta is not None:
+    row = build_observation_row_spatial(
+        ind_all, self._observation_mask, self._compact_meta,
     )
+    flat = np.empty(1 + self._compact_meta.row_size, dtype=np.float64)
+    flat[0] = float(self._tick)
+    flat[1:] = row
 ```
 
 ### 5. 导出层（state_translation.py）
