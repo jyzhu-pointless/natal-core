@@ -18,6 +18,7 @@ from natal.hooks.types import (
 )
 from natal.numba_compat import binomial
 from natal.numba_utils import njit_switch
+from natal.observation_record import build_observation_row_panmictic
 from natal.population_config import FIXED, LOGISTIC, NO_COMPETITION, PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
 
@@ -532,6 +533,9 @@ def run_with_hooks(
         n_ticks: Number of ticks to execute.
         record_interval: History recording interval (0 = no recording).
         observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+            When set, history records observation-aggregated rows.  Panmictic
+            does not need ``CompactMeta`` — the row layout is uniform
+            ``(n_groups, n_sexes, n_ages)`` with no deme axis.
         n_obs_groups: Number of observation groups.
 
     Returns:
@@ -560,8 +564,7 @@ def run_with_hooks(
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick
         if observation_mask is not None:
-            observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
-            flat_state[1:] = observed.flatten()
+            flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
         else:
             flat_state[1:1 + ind_count.size] = ind_count.flatten()
             flat_state[1 + ind_count.size:] = sperm_store.flatten()
@@ -581,8 +584,7 @@ def run_with_hooks(
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
             if observation_mask is not None:
-                observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
-                flat_state[1:] = observed.flatten()
+                flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
             else:
                 flat_state[1:1 + ind_count.size] = ind_count.flatten()
                 flat_state[1 + ind_count.size:] = sperm_store.flatten()
@@ -693,6 +695,9 @@ def run_discrete_with_hooks(
         n_ticks: Number of ticks to execute.
         record_interval: History recording interval (0 = no recording).
         observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+            When set, history records observation-aggregated rows.  Panmictic
+            does not need ``CompactMeta`` — the row layout is uniform
+            ``(n_groups, n_sexes, n_ages)`` with no deme axis.
         n_obs_groups: Number of observation groups.
 
     Returns:
@@ -721,8 +726,7 @@ def run_discrete_with_hooks(
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick
         if observation_mask is not None:
-            observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
-            flat_state[1:] = observed.flatten()
+            flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
         else:
             flat_state[1:1 + ind_size] = ind_count.flatten()
         history_array[history_count, :] = flat_state
@@ -741,8 +745,7 @@ def run_discrete_with_hooks(
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
             if observation_mask is not None:
-                observed = np.sum(observation_mask * ind_count[None, :, :, :], axis=-1)
-                flat_state[1:] = observed.flatten()
+                flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
             else:
                 flat_state[1:1 + ind_size] = ind_count.flatten()
             history_array[history_count, :] = flat_state
