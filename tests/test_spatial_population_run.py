@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest  # type: ignore
+
 from typing import Any, cast
 
 import numpy as np
@@ -233,6 +235,7 @@ def test_spatial_population_run_stop_marks_finish():
     assert d0.finish_events == 1 and d1.finish_events == 1
 
 
+@pytest.mark.numba_off
 def test_spatial_population_stochastic_discrete_migration_preserves_integer_counts():
     species = _make_species("spatial_run_stochastic_discrete")
     shared_config = _make_population_config(species)._replace(
@@ -268,6 +271,7 @@ def test_spatial_population_stochastic_discrete_migration_preserves_integer_coun
         assert np.allclose(deme.state.individual_count, np.round(deme.state.individual_count))
 
 
+@pytest.mark.numba_off
 def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency():
     species = _make_species("spatial_run_stochastic_age")
     shared_config = _make_population_config(species)._replace(
@@ -314,6 +318,7 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         assert np.allclose(deme.state.sperm_storage, np.round(deme.state.sperm_storage))
 
 
+@pytest.mark.numba_off
 def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
     species = _make_species("spatial_mixed_priority")
     calls_np = np.zeros(8, dtype=np.int32)  # 0: py, 1: njit
@@ -440,6 +445,7 @@ def test_spatial_compiled_hooks_are_pinned_to_owning_deme() -> None:
     assert registry.deme_selector_data[sel1_start:sel1_end].tolist() == [1]
 
 
+@pytest.mark.numba_off
 def test_spatial_mixed_priority_is_local_per_deme() -> None:
     species = _make_species("spatial_local_priority_per_deme")
     calls_np = np.zeros(4, dtype=np.int32)  # 0: d0_py, 1: d0_njit, 2: d1_py, 3: d1_njit
@@ -541,6 +547,7 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     assert observed_d1_early_np[0] == 19.0
 
 
+@pytest.mark.numba_off
 def test_spatial_compiled_local_hooks_still_take_effect() -> None:
     species = _make_species("spatial_compiled_local_hook_effect")
 

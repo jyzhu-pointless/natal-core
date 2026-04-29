@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest  # type: ignore
+
 import natal as nt
 import numpy as np
 import pytest
@@ -39,6 +41,7 @@ def _make_deme(species: nt.Species, name: str, adult_count: float) -> nt.AgeStru
     )
 
 
+@pytest.mark.numba_off
 def test_spatial_population_run_tick_with_real_demes_updates_state(simple_species: nt.Species) -> None:
     demes = [
         _make_deme(simple_species, "deme_0", adult_count=100.0),
@@ -72,6 +75,7 @@ def test_spatial_population_run_tick_with_real_demes_updates_state(simple_specie
     assert sum(totals) == 200.0
 
 
+@pytest.mark.numba_off
 def test_spatial_population_kernel_migration_updates_state(simple_species: nt.Species) -> None:
     demes = [
         _make_deme(simple_species, "deme_0", adult_count=0.0),
@@ -164,6 +168,7 @@ def test_spatial_population_hex_kernel_row_matches_valid_border_offsets(
     assert np.allclose(row, expected)
 
 
+@pytest.mark.numba_off
 def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
     simple_species: nt.Species,
 ) -> None:
@@ -200,6 +205,7 @@ def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
     assert np.isclose(sum(totals), 200.0)
 
 
+@pytest.mark.numba_off
 def test_spatial_population_heterogeneous_kernel_bank_routes_per_source(
     simple_species: nt.Species,
 ) -> None:
@@ -240,6 +246,7 @@ def test_spatial_population_heterogeneous_kernel_bank_routes_per_source(
     assert np.isclose(sum(totals), 400.0)
 
 
+@pytest.mark.numba_off
 def test_spatial_population_run_tick_supports_heterogeneous_deme_configs(
     simple_species: nt.Species,
 ) -> None:
@@ -267,6 +274,7 @@ def test_spatial_population_run_tick_supports_heterogeneous_deme_configs(
     assert np.isclose(sum(totals), 400.0)
 
 
+@pytest.mark.numba_off
 def test_spatial_population_migration_rejects_inconsistent_sampling_modes(
     simple_species: nt.Species,
 ) -> None:
@@ -291,6 +299,7 @@ def test_spatial_population_migration_rejects_inconsistent_sampling_modes(
         spatial.run_tick()
 
 
+@pytest.mark.numba_off
 def test_spatial_population_heterogeneous_configs_use_python_hook_dispatch(
     simple_species: nt.Species,
     monkeypatch: pytest.MonkeyPatch,
@@ -322,6 +331,7 @@ def test_spatial_population_heterogeneous_configs_use_python_hook_dispatch(
     assert spatial.tick == 1
 
 
+@pytest.mark.numba_off
 def test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_step(
     simple_species: nt.Species,
     monkeypatch: pytest.MonkeyPatch,
@@ -355,6 +365,7 @@ def test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_st
     assert spatial.tick == 3
 
 
+@pytest.mark.numba_off
 def test_spatial_population_comprehensive_matches_two_deme_migration_theory(
     simple_species: nt.Species,
 ) -> None:

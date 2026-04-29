@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import pytest  # type: ignore
+
 from typing import List
 
 import natal as nt
@@ -40,6 +42,7 @@ def _build_discrete_population(name: str) -> nt.DiscreteGenerationPopulation:
     )
 
 
+@pytest.mark.numba_off
 def test_mixed_priority_ordering_first_event() -> None:
     pop = _build_discrete_population("mixed_priority_first_event")
     calls: List[str] = []
@@ -79,6 +82,7 @@ def test_mixed_priority_ordering_first_event() -> None:
     assert observed["early_seen"] == 15.0
 
 
+@pytest.mark.numba_off
 def test_mixed_priority_ordering_early_event() -> None:
     pop = _build_discrete_population("mixed_priority_early_event")
     calls: List[str] = []
@@ -117,6 +121,7 @@ def test_mixed_priority_ordering_early_event() -> None:
     assert observed["late_seen"] == 15.0
 
 
+@pytest.mark.numba_off
 def test_numba_disabled_python_hook_runs_via_run_without_manual_trigger() -> None:
     pop = _build_discrete_population("python_hook_auto_run")
     calls: List[str] = []

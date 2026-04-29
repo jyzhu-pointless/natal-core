@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest  # type: ignore
+
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +17,7 @@ from natal.spatial_simulation_kernels import (  # noqa: E402
 )
 
 
+@pytest.mark.numba_on
 def test_run_spatial_tick_is_numba_dispatcher():
     # njit_switch should expose a dispatcher with py_func when numba is enabled.
     assert not is_numba_enabled() or hasattr(run_spatial_tick, "py_func")
