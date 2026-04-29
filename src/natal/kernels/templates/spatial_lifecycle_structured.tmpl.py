@@ -24,8 +24,14 @@ from numba import prange  # type: ignore[reportMissingTypeStubs]
 from natal.hooks.types import RESULT_CONTINUE, HookProgram
 from natal.kernels.spatial_migration_kernels import run_spatial_migration
 from natal.numba_utils import njit_switch
+from natal.observation_record import CompactMeta, build_observation_row_spatial
 from natal.population_config import PopulationConfig
 from natal.population_state import PopulationState
+from natal.spatial_topology import (
+    HeterogeneousKernelParams,
+    MigrationParams,
+    SpatialTopology,
+)
 
 # pyright cannot see the dynamically-generated panmictic module, so cast
 # the imported tick function to the expected signature for type safety.
@@ -42,22 +48,9 @@ def TICK_FN_NAME(
     deme_config_ids: np.ndarray,
     registry: HookProgram,
     tick: int,
-    adjacency: np.ndarray,
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: np.ndarray,
-    kernel_include_center: bool,
-    migration_rate: float,
-    adjust_migration_on_edge: bool = False,
-    deme_kernel_ids: np.ndarray | None = None,
-    kernel_d_row: np.ndarray | None = None,
-    kernel_d_col: np.ndarray | None = None,
-    kernel_weights: np.ndarray | None = None,
-    kernel_nnzs: np.ndarray | None = None,
-    kernel_total_sums: np.ndarray | None = None,
-    max_nnz: int = 0,
+    spatial_topo: SpatialTopology,
+    migration: MigrationParams,
+    het_kernel: HeterogeneousKernelParams | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, bool]:
     """Execute one spatial tick with sperm storage: per-deme lifecycle in prange, then migration.
 
@@ -66,24 +59,24 @@ def TICK_FN_NAME(
     ``run_spatial_migration`` exchanges both individuals and sperm across demes.
 
     Args:
-        ind_count_all: 2-D array of individual counts, shape (n_demes, n_age_groups).
-        sperm_store_all: 3-D array of sperm storage, shape (n_demes, ...).
-        config_bank: List of PopulationConfigs indexed by deme_config_ids.
-        deme_config_ids: Integer array mapping each deme to a config index.
-        registry: HookProgram for CSR event programs.
+        ind_count_all: ``(n_demes, n_sexes, n_ages, n_genotypes)`` stacked
+            individual count arrays.
+        sperm_store_all: ``(n_demes, n_ages, n_genotypes, n_genotypes)``
+            stacked sperm-storage arrays.
+        config_bank: List of ``PopulationConfig`` indexed by *deme_config_ids*.
+        deme_config_ids: ``(n_demes,)`` int64 array mapping each deme to a
+            config index.
+        registry: ``HookProgram`` for CSR event programs.
         tick: Current tick number (same for all demes).
-        adjacency: Adjacency matrix for migration.
-        migration_mode: Migration mode identifier.
-        topology_rows: Number of rows in spatial topology.
-        topology_cols: Number of columns in spatial topology.
-        topology_wrap: Whether topology wraps around (toroidal).
-        migration_kernel: Migration kernel weight matrix.
-        kernel_include_center: Whether kernel includes center cell.
-        migration_rate: Per-capita migration rate.
-        adjust_migration_on_edge: Whether to adjust migration rates on boundaries.
+        spatial_topo: ``SpatialTopology`` with *rows*, *cols*, *wrap*.
+        migration: ``MigrationParams`` with *kernel*, *include_center*,
+            *rate*, *adjust_on_edge*, *adjacency*, *mode_code*.
+        het_kernel: ``HeterogeneousKernelParams`` with *deme_kernel_ids*,
+            *d_row*, *d_col*, *weights*, *nnzs*, *total_sums*, *max_nnz*.
+            ``None`` when all demes share the same kernel.
 
     Returns:
-        (ind_count_all, sperm_store_all, tick + 1, was_stopped).
+        ``(ind_count_all, sperm_store_all, tick + 1, was_stopped)``.
     """
     n_demes = ind_count_all.shape[0]
     stopped = np.zeros(n_demes, dtype=np.bool_)
@@ -102,12 +95,12 @@ def TICK_FN_NAME(
         sperm_store_all[d] = sperm
 
     ind_count_all, sperm_store_all = run_spatial_migration(
-        ind_count_all, sperm_store_all, adjacency, migration_mode,
-        topology_rows, topology_cols, topology_wrap,
-        migration_kernel, kernel_include_center,
-        config_bank[0], migration_rate, adjust_migration_on_edge,
-        deme_kernel_ids, kernel_d_row, kernel_d_col,
-        kernel_weights, kernel_nnzs, kernel_total_sums, max_nnz,
+        ind_count_all, sperm_store_all, migration.adjacency, migration.mode_code,
+        spatial_topo.rows, spatial_topo.cols, spatial_topo.wrap,
+        migration.kernel, migration.include_center,
+        config_bank[0], migration.rate, migration.adjust_on_edge,
+        (het_kernel.deme_kernel_ids if het_kernel is not None else None), (het_kernel.d_row if het_kernel is not None else None), (het_kernel.d_col if het_kernel is not None else None),
+        (het_kernel.weights if het_kernel is not None else None), (het_kernel.nnzs if het_kernel is not None else None), (het_kernel.total_sums if het_kernel is not None else None), (het_kernel.max_nnz if het_kernel is not None else 0),
     )
 
     was_stopped = False
@@ -127,44 +120,32 @@ def RUN_FN_NAME(
     registry: HookProgram,
     tick: int,
     n_steps: int,
-    adjacency: np.ndarray,
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: np.ndarray,
-    kernel_include_center: bool,
-    migration_rate: float,
-    adjust_migration_on_edge: bool = False,
-    deme_kernel_ids: np.ndarray | None = None,
-    kernel_d_row: np.ndarray | None = None,
-    kernel_d_col: np.ndarray | None = None,
-    kernel_weights: np.ndarray | None = None,
-    kernel_nnzs: np.ndarray | None = None,
-    kernel_total_sums: np.ndarray | None = None,
-    max_nnz: int = 0,
+    spatial_topo: SpatialTopology,
+    migration: MigrationParams,
+    het_kernel: HeterogeneousKernelParams | None = None,
     record_interval: int = 0,
     observation_mask: Optional[np.ndarray] = None,
-    n_obs_groups: int = 0,
-    deme_selector: Optional[np.ndarray] = None,
+    compact_meta: Optional[CompactMeta] = None,
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], Optional[np.ndarray], bool]:
     """Execute multiple spatial ticks with sperm storage, with optional history recording.
 
     Calls TICK_FN_NAME in a loop and optionally records flattened snapshots
     of the full state (individuals + sperm) at each ``record_interval`` tick.
     When ``observation_mask`` is provided, history stores observation-reduced
-    snapshots instead.
+    compact snapshots instead.
 
     Args:
         Same as TICK_FN_NAME, plus:
         n_steps: Number of ticks to execute.
-        record_interval: Recording interval (0 means no recording).
-        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
-        n_obs_groups: Number of observation groups.
-        deme_selector: Optional per-group deme filter ``(n_groups, n_demes)``.
+        record_interval: Recording interval (``0`` means no recording).
+        observation_mask: Optional 4-D binary mask
+            ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        compact_meta: Optional ``CompactMeta`` with *offsets*, *deme_map*,
+            *n_demes_per_group*, *selected_n*, *mode_aggregate*, *row_size*.
+            ``None`` when recording raw state.
 
     Returns:
-        ((ind_count_all, sperm_store_all, tick), history_array_or_None, was_stopped).
+        ``((ind_count_all, sperm_store_all, tick), history_array_or_None, was_stopped)``.
     """
     was_stopped = False
     ind = ind_count_all.copy()
@@ -172,10 +153,7 @@ def RUN_FN_NAME(
     tick_cur = tick
 
     if observation_mask is not None:
-        n_demes_ = ind.shape[0]
-        n_sexes_ = ind.shape[1]
-        n_ages_ = ind.shape[2]
-        flatten_size = 1 + n_demes_ * n_obs_groups * n_sexes_ * n_ages_
+        flatten_size = 1 + cast(CompactMeta, compact_meta).row_size
     else:
         flatten_size = 1 + ind.size + sperm.size
 
@@ -190,10 +168,9 @@ def RUN_FN_NAME(
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick_cur
         if observation_mask is not None:
-            observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
-            if deme_selector is not None:
-                observed = observed * deme_selector.T[:, :, None, None]
-            flat_state[1:] = observed.flatten()
+            flat_state[1:] = build_observation_row_spatial(
+                ind, observation_mask, cast(CompactMeta, compact_meta),
+            )
         else:
             flat_state[1:1 + ind.size] = ind.flatten()
             flat_state[1 + ind.size:] = sperm.flatten()
@@ -203,10 +180,7 @@ def RUN_FN_NAME(
     for _ in range(n_steps):
         ind, sperm, tick_cur, step_stopped = TICK_FN_NAME(
             ind, sperm, config_bank, deme_config_ids, registry, tick_cur,
-            adjacency, migration_mode, topology_rows, topology_cols, topology_wrap,
-            migration_kernel, kernel_include_center, migration_rate, adjust_migration_on_edge,
-            deme_kernel_ids, kernel_d_row, kernel_d_col,
-            kernel_weights, kernel_nnzs, kernel_total_sums, max_nnz,
+            spatial_topo, migration, het_kernel,
         )
         if step_stopped:
             was_stopped = True
@@ -216,10 +190,9 @@ def RUN_FN_NAME(
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick_cur
             if observation_mask is not None:
-                observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
-                if deme_selector is not None:
-                    observed = observed * deme_selector.T[:, :, None, None]
-                flat_state[1:] = observed.flatten()
+                flat_state[1:] = build_observation_row_spatial(
+                    ind, observation_mask, cast(CompactMeta, compact_meta),
+                )
             else:
                 flat_state[1:1 + ind.size] = ind.flatten()
                 flat_state[1 + ind.size:] = sperm.flatten()

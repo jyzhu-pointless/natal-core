@@ -6,7 +6,7 @@ Migration kernels were split into ``natal.kernels.spatial_migration_kernels``.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,6 +24,7 @@ from natal.kernels.simulation_kernels import (
 )
 from natal.kernels.spatial_migration_kernels import run_spatial_migration
 from natal.numba_utils import njit_switch
+from natal.observation_record import CompactMeta, build_observation_row_spatial
 from natal.population_config import PopulationConfig
 
 __all__ = [
@@ -270,8 +271,7 @@ def run_spatial_steps_with_migration(
     migration_rate: float,
     record_interval: int = 0,
     observation_mask: Optional[NDArray[np.float64]] = None,
-    n_obs_groups: int = 0,
-    deme_selector: Optional[NDArray[np.float64]] = None,
+    compact_meta: Optional[CompactMeta] = None,
 ) -> Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
     """Execute multiple spatial ticks with migration and optional history recording.
 
@@ -293,8 +293,12 @@ def run_spatial_steps_with_migration(
         migration_rate: Fraction of each deme that migrates each tick.
         record_interval: History recording interval (0 = no recording).
         observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
-        n_obs_groups: Number of observation groups.
-        deme_selector: Optional per-group deme filter ``(n_groups, n_demes)``.
+        group_offsets: Start position per group in compact row, from
+            ``build_compact_metadata``.
+        group_deme_map: ``(n_groups, max_demes)`` lookup, -1 padded.
+        group_n_demes: Valid deme entries per group.
+        mode_aggregate: Whether each group uses aggregate mode.
+        compact_row_size: Total float64 count for an observation snapshot row.
 
     Returns:
         A tuple ``(state_tuple, history, was_stopped)``.
@@ -305,10 +309,7 @@ def run_spatial_steps_with_migration(
     tick_cur = tick
 
     if observation_mask is not None:
-        n_demes_ = ind.shape[0]
-        n_sexes_ = ind.shape[1]
-        n_ages_ = ind.shape[2]
-        flatten_size = 1 + n_demes_ * n_obs_groups * n_sexes_ * n_ages_
+        flatten_size = 1 + cast(CompactMeta, compact_meta).row_size
     else:
         flatten_size = 1 + ind.size + sperm.size
 
@@ -323,10 +324,9 @@ def run_spatial_steps_with_migration(
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick_cur
         if observation_mask is not None:
-            observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
-            if deme_selector is not None:
-                observed = observed * deme_selector.T[:, :, None, None]
-            flat_state[1:] = observed.flatten()
+            flat_state[1:] = build_observation_row_spatial(
+                ind, observation_mask, cast(CompactMeta, compact_meta),
+            )
         else:
             flat_state[1:1 + ind.size] = ind.flatten()
             flat_state[1 + ind.size:] = sperm.flatten()
@@ -353,10 +353,9 @@ def run_spatial_steps_with_migration(
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick_cur
             if observation_mask is not None:
-                observed = np.sum(observation_mask[None, :, :, :, :] * ind[:, None, :, :, :], axis=-1)
-                if deme_selector is not None:
-                    observed = observed * deme_selector.T[:, :, None, None]
-                flat_state[1:] = observed.flatten()
+                flat_state[1:] = build_observation_row_spatial(
+                    ind, observation_mask, cast(CompactMeta, compact_meta),
+                )
             else:
                 flat_state[1:1 + ind.size] = ind.flatten()
                 flat_state[1 + ind.size:] = sperm.flatten()
