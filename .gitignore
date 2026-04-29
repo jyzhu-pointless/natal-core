@@ -39,3 +39,4 @@ diagnose*
 demos/test*
 
 *.png
+.coverage
