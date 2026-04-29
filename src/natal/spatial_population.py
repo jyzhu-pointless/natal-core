@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Dict,
     List,
     Literal,
     Optional,
@@ -37,10 +38,18 @@ from natal.kernels.spatial_simulation_kernels import (
     run_spatial_migration,
 )
 from natal.numba_utils import is_numba_enabled
+from natal.observation_record import (
+    CompactMeta,
+    build_compact_metadata,
+    build_observation_row_spatial,
+)
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
 from natal.spatial_topology import (
     GridTopology,
+    HeterogeneousKernelParams,
+    MigrationParams,
+    SpatialTopology,
     build_adjacency_matrix,
 )
 
@@ -54,13 +63,11 @@ ConfigObject: TypeAlias = object
 SpatialStateTuple: TypeAlias = tuple[NDArray[np.float64], NDArray[np.float64], int]
 DemePopulation: TypeAlias = BasePopulation[PopulationState] | BasePopulation[DiscretePopulationState]
 
-
 class _ConfigBankProtocol(Protocol):
     """Minimal mutable config bank interface for heterogeneous dispatch."""
 
     def append(self, value: ConfigObject) -> None:
         """Append one config object."""
-
 
 def _coerce_adjacency_dense(
     adjacency: object,
@@ -156,7 +163,6 @@ def _coerce_adjacency_dense(
         )
 
     return dense
-
 
 class SpatialPopulation:
     """Spatial container composed of per-deme population objects.
@@ -425,10 +431,28 @@ class SpatialPopulation:
         # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
 
+        # Pre-built parameter bundles for kernel dispatch.
+        self._spatial_topo = SpatialTopology(
+            rows=0 if topology is None else int(topology.rows),
+            cols=0 if topology is None else int(topology.cols),
+            wrap=False if topology is None else bool(topology.wrap),
+        )
+        self._migration_params = MigrationParams(
+            kernel=self._migration_kernel_array(),
+            include_center=bool(kernel_include_center),
+            rate=float(migration_rate),
+            adjust_on_edge=bool(adjust_migration_on_edge),
+            adjacency=adjacency_dense,
+            mode_code=0 if migration_mode == "adjacency" else 1,
+        )
+
         # Observation-based history recording.
         self._observation: Optional[Observation] = None  # type: ignore[valid-type]
         self._observation_mask: Optional[NDArray[np.float64]] = None
-        self._deme_selector: Optional[NDArray[np.float64]] = None
+
+        # Compact observation metadata (populated when record_observation is set).
+        self._compact_meta: Optional[CompactMeta] = None
+        self._deme_modes: Dict[int, Tuple[str, List[int]]] = {}
 
         # Evolution history as (tick, flattened_array) tuples.
         self._history: List[Tuple[int, NDArray[np.float64]]] = []
@@ -602,7 +626,7 @@ class SpatialPopulation:
                 n_ages=state.individual_count.shape[1] if state.individual_count.ndim == 3 else 1,
                 n_genotypes=state.individual_count.shape[-1],
             )
-            self._deme_selector = self._build_deme_selector()
+            self._rebuild_compact_meta()
 
     def set_observations(
         self,
@@ -636,50 +660,87 @@ class SpatialPopulation:
             n_ages=ind.shape[1] if ind.ndim == 3 else 1,
             n_genotypes=ind.shape[-1],
         )
-        self._deme_selector = self._build_deme_selector()
+        self._rebuild_compact_meta()
 
-    def _build_deme_selector(self) -> Optional[NDArray[np.float64]]:
-        """Build ``(n_groups, n_demes)`` binary selector from group specs.
+    def _build_deme_info(self) -> Dict[int, Tuple[str, List[int]]]:
+        """Parse per-group ``"deme"`` spec keys into ``{group_idx: (mode, [indices])}``.
 
         Each group spec may contain an optional ``"deme"`` key:
-          - ``"all"`` or absent → every deme is included (1.0)
-          - list of ``int`` → flat deme indices
-          - list of ``(row, col)`` tuples → 2-D coordinates resolved via topology
+          - absent / ``"all"`` → excluded from the dict (defaults to full mask).
+          - ``list[int | (row, col)]`` → ``("mask", flat_indices)``.
+          - ``{"demes": [...], "mode": "aggregate" | "expand" | "mask"}``.
 
-        Returns:
-            Float64 array of shape ``(n_groups, n_demes)``, or ``None`` when
-            every group selects all demes (the common case).
+        Coordinates are resolved via topology when available.
         """
         obs = self._observation
         if obs is None:
-            return None
+            return {}
 
-        n_demes = len(self._demes)
-        n_groups = len(obs.labels)
-        selector = np.ones((n_groups, n_demes), dtype=np.float64)
-        has_restriction = False
+        deme_info: Dict[int, Tuple[str, List[int]]] = {}
 
         for gi, (_name, spec) in enumerate(obs.specs):
-            deme_spec_raw = spec.get("deme")
-            if deme_spec_raw is None or deme_spec_raw == "all":
+            demean_raw = spec.get("deme")
+            if demean_raw is None or demean_raw == "all":
                 continue
 
-            selector[gi, :] = 0.0
-            has_restriction = True
+            if isinstance(demean_raw, dict):
+                demean_spec: Dict[str, object] = cast(Dict[str, object], demean_raw)
+                mode_raw: object = demean_spec.get("mode", "mask")
+                mode = str(mode_raw) if mode_raw is not None else "mask"
+                raw_items: object = demean_spec.get("demes", [])
+            elif isinstance(demean_raw, (list, tuple)):
+                mode = "mask"
+                raw_items = list(cast(Sequence[object], demean_raw))
+            else:
+                continue
 
-            if isinstance(deme_spec_raw, (list, tuple)):
-                for item in deme_spec_raw:  # pyright: ignore[reportUnknownVariableType]
-                    if isinstance(item, (list, tuple)) and len(item) == 2:  # pyright: ignore[reportUnknownArgumentType]
-                        r_idx = cast(int, item[0])  # pyright: ignore[reportUnknownArgumentType]
-                        c_idx = cast(int, item[1])  # pyright: ignore[reportUnknownArgumentType]
+            items_list: list[object] = cast(list[object], raw_items) if isinstance(raw_items, list) else []
+
+            flat: List[int] = []
+            for item in items_list:
+                if isinstance(item, int):
+                    flat.append(item)
+                elif isinstance(item, float):
+                    flat.append(int(item))
+                elif isinstance(item, (list, tuple)):
+                    seq: Sequence[object] = cast(Sequence[object], item)
+                    if len(seq) == 2:
+                        a = cast(int, seq[0])
+                        b = cast(int, seq[1])
                         if self._topology is not None:
-                            selector[gi, self._topology.to_index((r_idx, c_idx))] = 1.0
+                            flat.append(self._topology.to_index((a, b)))
                         else:
-                            selector[gi, r_idx] = 1.0
-                    elif isinstance(item, (int, float)):
-                        selector[gi, int(item)] = 1.0
+                            flat.append(a)
 
-        return selector if has_restriction else None
+            if flat:
+                deme_info[gi] = (mode, flat)
+            # "aggregate"/"mask" with empty list = no-op; skip to avoid
+            # blowing up compact_row_size with zero-width groups.
+
+        return deme_info
+
+    def _rebuild_compact_meta(self) -> None:
+        """Rebuild compact observation metadata from the current deme info."""
+        obs = self._observation
+        if obs is None or self._observation_mask is None:
+            self._compact_meta = None
+            self._deme_modes = {}
+            return
+
+        ref_deme = self._demes[0]
+        state = ref_deme.state
+        ind = state.individual_count
+        n_sexes = int(ind.shape[0])
+        n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
+
+        self._deme_modes = self._build_deme_info()
+        self._compact_meta = build_compact_metadata(
+            n_demes=len(self._demes),
+            n_groups=len(obs.labels),
+            n_sexes=n_sexes,
+            n_ages=n_ages,
+            demean_modes=self._deme_modes,
+        )
 
     def _record_snapshot(self) -> None:
         """Manually record the current stacked spatial state as a history entry.
@@ -688,17 +749,13 @@ class SpatialPopulation:
         snapshots instead of raw stacked state.
         """
         ind_all, sperm_all = self._stack_deme_state_arrays()
-        if self._observation_mask is not None:
-            observed = np.sum(
-                self._observation_mask[None, :, :, :, :] * ind_all[:, None, :, :, :],
-                axis=-1,
+        if self._observation_mask is not None and self._compact_meta is not None:
+            row = build_observation_row_spatial(
+                ind_all, self._observation_mask, self._compact_meta,
             )
-            sel = self._deme_selector
-            if sel is not None:
-                observed = observed * sel.T[:, :, None, None]
-            flat = np.empty(1 + observed.size, dtype=np.float64)
+            flat = np.empty(1 + self._compact_meta.row_size, dtype=np.float64)
             flat[0] = float(self._tick)
-            flat[1:] = observed.ravel()
+            flat[1:] = row
         else:
             flat = np.empty(1 + ind_all.size + sperm_all.size, dtype=np.float64)
             flat[0] = float(self._tick)
@@ -1317,11 +1374,12 @@ class SpatialPopulation:
         # one ndarray for all call sites.
         return np.zeros((1, 1), dtype=np.float64)
 
-    def _build_heterogeneous_kernel_arrays(self):
+    def _build_heterogeneous_kernel_arrays(self) -> Optional[HeterogeneousKernelParams]:
         """Build per-kernel offset tables for heterogeneous kernel routing.
 
-        Only called when ``kernel_bank`` + ``deme_kernel_ids`` are both set.
-        Returns a dict of pre-built arrays to pass to the migration kernel.
+        Returns:
+            ``HeterogeneousKernelParams`` when ``kernel_bank`` and
+            ``deme_kernel_ids`` are both set; ``None`` otherwise.
         """
         from natal.kernels.migration.kernel import (
             _build_kernel_offset_table,  # pyright: ignore[reportPrivateUsage]
@@ -1352,15 +1410,15 @@ class SpatialPopulation:
             if nnz > max_nnz:
                 max_nnz = nnz
 
-        return {
-            "deme_kernel_ids": self._deme_kernel_ids,
-            "kernel_d_row": kernel_d_row,
-            "kernel_d_col": kernel_d_col,
-            "kernel_weights": kernel_weights,
-            "kernel_nnzs": kernel_nnzs,
-            "kernel_total_sums": kernel_total_sums,
-            "max_nnz": max_nnz,
-        }
+        return HeterogeneousKernelParams(
+            deme_kernel_ids=self._deme_kernel_ids,
+            d_row=kernel_d_row,
+            d_col=kernel_d_col,
+            weights=kernel_weights,
+            nnzs=kernel_nnzs,
+            total_sums=kernel_total_sums,
+            max_nnz=max_nnz,
+        )
 
     def _is_discrete_demes(self) -> bool:
         """Return whether all demes are discrete-generation (no sperm storage).
@@ -1484,10 +1542,6 @@ class SpatialPopulation:
 
         return cast(object, config_bank), deme_config_ids
 
-    def _effective_migration_route(self) -> tuple[NDArray[np.float64], int]:
-        """Return effective migration adjacency and mode code."""
-        return self._adjacency, self._migration_mode_code
-
     def _ensure_demes_runnable(self, *, context: str) -> None:
         """Raise if any deme is already finished before execution."""
         for idx, deme in enumerate(self._demes):
@@ -1511,7 +1565,6 @@ class SpatialPopulation:
 
         config = self._migration_config()
         ind_all, sperm_all = self._stack_deme_state_arrays()
-        effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
 
         # Build heterogeneous kernel arrays if needed, else pass None values.
         het = self._build_heterogeneous_kernel_arrays()
@@ -1519,23 +1572,23 @@ class SpatialPopulation:
         ind_all, sperm_all = run_spatial_migration(
             ind_count_all=ind_all,
             sperm_store_all=sperm_all,
-            adjacency=effective_adjacency,
-            migration_mode=effective_migration_mode_code,
-            topology_rows=0 if self._topology is None else int(self._topology.rows),
-            topology_cols=0 if self._topology is None else int(self._topology.cols),
-            topology_wrap=False if self._topology is None else bool(self._topology.wrap),
-            migration_kernel=self._migration_kernel_array(),
-            kernel_include_center=bool(self._kernel_include_center),
+            adjacency=self._migration_params.adjacency,
+            migration_mode=self._migration_params.mode_code,
+            topology_rows=self._spatial_topo.rows,
+            topology_cols=self._spatial_topo.cols,
+            topology_wrap=self._spatial_topo.wrap,
+            migration_kernel=self._migration_params.kernel,
+            kernel_include_center=self._migration_params.include_center,
             config=cast(PopulationConfig, config),
-            migration_rate=float(self._migration_rate),
-            adjust_migration_on_edge=bool(self._adjust_migration_on_edge),
-            deme_kernel_ids=cast(Any, het["deme_kernel_ids"]) if het is not None else None,
-            kernel_d_row=cast(Any, het["kernel_d_row"]) if het is not None else None,
-            kernel_d_col=cast(Any, het["kernel_d_col"]) if het is not None else None,
-            kernel_weights=cast(Any, het["kernel_weights"]) if het is not None else None,
-            kernel_nnzs=cast(Any, het["kernel_nnzs"]) if het is not None else None,
-            kernel_total_sums=cast(Any, het["kernel_total_sums"]) if het is not None else None,
-            max_nnz=cast(Any, het["max_nnz"]) if het is not None else 0,
+            migration_rate=self._migration_params.rate,
+            adjust_migration_on_edge=self._migration_params.adjust_on_edge,
+            deme_kernel_ids=het.deme_kernel_ids if het is not None else None,
+            kernel_d_row=het.d_row if het is not None else None,
+            kernel_d_col=het.d_col if het is not None else None,
+            kernel_weights=het.weights if het is not None else None,
+            kernel_nnzs=het.nnzs if het is not None else None,
+            kernel_total_sums=het.total_sums if het is not None else None,
+            max_nnz=het.max_nnz if het is not None else 0,
         )
         self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
         return False
@@ -1549,34 +1602,22 @@ class SpatialPopulation:
         """
         ind_all, sperm_all = self._stack_deme_state_arrays()
         config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
-        effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
 
         if self._is_discrete_demes():
             tick_fn = self._hooks.spatial_discrete_tick_fn
         else:
             tick_fn = self._hooks.spatial_tick_fn
         assert tick_fn is not None, "spatial lifecycle wrapper not compiled (Numba disabled?)"
+        assert self._hooks.registry is not None, "spatial hooks must have a compiled registry"  # type: ignore[unreachable-code]
 
         het = self._build_heterogeneous_kernel_arrays()
         ind, sperm, tick, was_stopped = tick_fn(
             ind_all, sperm_all,
             config_bank, deme_config_ids,
             self._hooks.registry, int(self._tick),
-            effective_adjacency, effective_migration_mode_code,
-            0 if self._topology is None else int(self._topology.rows),
-            0 if self._topology is None else int(self._topology.cols),
-            False if self._topology is None else bool(self._topology.wrap),
-            self._migration_kernel_array(),
-            bool(self._kernel_include_center),
-            float(self._migration_rate),
-            bool(self._adjust_migration_on_edge),
-            cast(Any, het["deme_kernel_ids"]) if het is not None else None,
-            cast(Any, het["kernel_d_row"]) if het is not None else None,
-            cast(Any, het["kernel_d_col"]) if het is not None else None,
-            cast(Any, het["kernel_weights"]) if het is not None else None,
-            cast(Any, het["kernel_nnzs"]) if het is not None else None,
-            cast(Any, het["kernel_total_sums"]) if het is not None else None,
-            cast(Any, het["max_nnz"]) if het is not None else 0,
+            self._spatial_topo,
+            self._migration_params,
+            het,
         )
         self._apply_stacked_state(ind, sperm, int(tick))
         return bool(was_stopped)
@@ -1590,41 +1631,25 @@ class SpatialPopulation:
         """
         ind_all, sperm_all = self._stack_deme_state_arrays()
         config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
-        effective_adjacency, effective_migration_mode_code = self._effective_migration_route()
 
         if self._is_discrete_demes():
             run_fn = self._hooks.spatial_discrete_run_fn
         else:
             run_fn = self._hooks.spatial_run_fn
         assert run_fn is not None, "spatial lifecycle run wrapper not compiled (Numba disabled?)"
+        assert self._hooks.registry is not None, "spatial hooks must have a compiled registry"  # pyright: ignore[reportUnreachable]
 
         het = self._build_heterogeneous_kernel_arrays()
-        obs_mask = self._observation_mask
-        n_obs = len(self._observation.labels) if self._observation is not None else 0
-        demean_sel = self._deme_selector
         final_state_tuple, history_new, was_stopped = run_fn(
             ind_all, sperm_all,
             config_bank, deme_config_ids,
             self._hooks.registry, int(self._tick), int(n_steps),
-            effective_adjacency, effective_migration_mode_code,
-            0 if self._topology is None else int(self._topology.rows),
-            0 if self._topology is None else int(self._topology.cols),
-            False if self._topology is None else bool(self._topology.wrap),
-            self._migration_kernel_array(),
-            bool(self._kernel_include_center),
-            float(self._migration_rate),
-            bool(self._adjust_migration_on_edge),
-            cast(Any, het["deme_kernel_ids"]) if het is not None else None,
-            cast(Any, het["kernel_d_row"]) if het is not None else None,
-            cast(Any, het["kernel_d_col"]) if het is not None else None,
-            cast(Any, het["kernel_weights"]) if het is not None else None,
-            cast(Any, het["kernel_nnzs"]) if het is not None else None,
-            cast(Any, het["kernel_total_sums"]) if het is not None else None,
-            cast(Any, het["max_nnz"]) if het is not None else 0,
+            self._spatial_topo,
+            self._migration_params,
+            het,
             record_interval=int(record_every),
-            observation_mask=obs_mask,
-            n_obs_groups=n_obs,
-            deme_selector=demean_sel,
+            observation_mask=self._observation_mask,
+            compact_meta=self._compact_meta,
         )
         self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
         self._process_kernel_history(history_new, clear_history_on_start)
