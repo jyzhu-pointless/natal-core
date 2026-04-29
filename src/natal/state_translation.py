@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import numpy as np
 
+from natal.observation_record import CompactMeta
 from natal.population_state import (
     DiscretePopulationState,
     PopulationState,
@@ -1269,36 +1270,84 @@ def spatial_population_observation_history_to_readable_dict(
     if history_array.ndim != 2:
         raise ValueError(f"history must be a 2D array, got shape {history_array.shape}")
 
+    compact = getattr(spatial_population, "_compact_meta", None)
+    sex_ages = n_sexes * n_ages
+    has_compact = compact is not None
+
     snapshots: List[Dict[str, Any]] = []
     for idx in range(int(history_array.shape[0])):
         row = history_array[idx, :]
         tick = int(row[0])
-        observed = row[1:].reshape(n_demes, n_groups, n_sexes, n_ages)
+
+        collapse = bool(obs.collapse_age)
+        if collapse:
+            agg_arr: np.ndarray = np.zeros((n_groups, n_sexes), dtype=np.float64)
+        else:
+            agg_arr = np.zeros((n_groups, n_sexes, n_ages), dtype=np.float64)
 
         per_deme: Dict[str, Any] = {}
-        for d in range(n_demes):
-            deme_obs = observed[d]  # (n_groups, n_sexes, n_ages)
-            per_deme[f"deme_{d}"] = _build_observation_payload(
-                observed=deme_obs,
-                labels=labels,
-                sex_labels=sex_labels,
-                include_zero_counts=include_zero_counts,
-            )
 
-        # Aggregate across demes (sum)
-        aggregate_obs = observed.sum(axis=0)  # (n_groups, n_sexes, n_ages)
+        if has_compact:
+            meta = cast(CompactMeta, compact)
+
+            for gi in range(n_groups):
+                label = labels[gi]
+                off = int(meta.offsets[gi])
+                nd = int(meta.n_demes_per_group[gi])
+                sn = int(meta.selected_n[gi])
+
+                if meta.mode_aggregate[gi]:
+                    chunk = row[1 + off : 1 + off + sex_ages]
+                    obs_chunk = chunk.reshape(1, n_sexes, n_ages)
+                    entry = _build_observation_payload(
+                        observed=obs_chunk, labels=[label],
+                        sex_labels=sex_labels, include_zero_counts=include_zero_counts,
+                    )
+                    per_deme.setdefault("aggregate", {}).update(entry)
+                    chunk_2d = chunk.reshape(n_sexes, n_ages)
+                    if collapse:
+                        agg_arr[gi] += chunk_2d.sum(axis=1)
+                    else:
+                        agg_arr[gi] += chunk_2d
+                else:
+                    for di in range(nd):
+                        d = int(meta.deme_map[gi, di])
+                        chunk = row[1 + off + di * sex_ages : 1 + off + (di + 1) * sex_ages]
+                        if di >= sn:
+                            per_deme.setdefault(f"deme_{d}", {})[label] = "masked"
+                        else:
+                            obs_chunk = chunk.reshape(1, n_sexes, n_ages)
+                            entry = _build_observation_payload(
+                                observed=obs_chunk, labels=[label],
+                                sex_labels=sex_labels, include_zero_counts=include_zero_counts,
+                            )
+                            per_deme.setdefault(f"deme_{d}", {}).update(entry)
+                            chunk_2d = chunk.reshape(n_sexes, n_ages)
+                            if collapse:
+                                agg_arr[gi] += chunk_2d.sum(axis=1)
+                            else:
+                                agg_arr[gi] += chunk_2d
+        else:
+            observed = row[1:].reshape(n_demes, n_groups, n_sexes, n_ages)
+            for d in range(n_demes):
+                deme_obs = observed[d]
+                per_deme[f"deme_{d}"] = _build_observation_payload(
+                    observed=deme_obs, labels=labels,
+                    sex_labels=sex_labels, include_zero_counts=include_zero_counts,
+                )
+            agg_arr = observed.sum(axis=0)
+
+        aggregate_payload = _build_observation_payload(
+            observed=agg_arr, labels=labels,
+            sex_labels=sex_labels, include_zero_counts=include_zero_counts,
+        )
 
         snapshots.append({
             "tick": tick,
             "labels": labels,
             "collapse_age": bool(obs.collapse_age),
             "demes": per_deme,
-            "aggregate": _build_observation_payload(
-                observed=aggregate_obs,
-                labels=labels,
-                sex_labels=sex_labels,
-                include_zero_counts=include_zero_counts,
-            ),
+            "aggregate": aggregate_payload,
         })
 
     return {
