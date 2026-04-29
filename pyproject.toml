@@ -1,6 +1,6 @@
 [project]
 name = "natal-core"
-version = "0.1.2"
+version = "0.1.3"
 description = "Numba-Accelerated Toolkit for Analysis of Lifecycles, a high-performance forward-time population genetics simulation engine especially designed for gene drive modeling."
 readme = "README.md"
 authors = [

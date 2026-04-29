@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.4.29 (v0.1.3)
+- **feat(spatial-topology)**: add `build_gaussian_kernel` public API with hex/square distance metric
+- **feat(observation)**: add `CompactMeta` and `observation_record` module; integrate with builder and kernels via `record_observation` / `observation_mask`
+- **feat(spatial-builder)**: add `SpatialBuilder` with `_replace` optimization for heterogeneous configs; support `with_observation`
+- **feat(migration)**: add `normalize_kernel` option for boundary-aware migration; split kernel function and add heterogeneous routing
+- **refactor(competition)**: separate carrying capacity from expected egg counts, remove backward-propagation bug
+- **refactor(hooks)**: replace codegen with lifecycle wrappers for Numba caching; fix panmictic deme_id default to `-1`
+- **refactor(observation)**: remove deprecated `unordered` parameter; use `CompactMeta` for spatial observation history export
+
 ## 2026.4.24 (v0.1.2)
 - **feat(genetic_entities)**: check for duplicate gene names in species
 - **feat(genetic_structures)**: add `Chromosome.get_locus`, `Species.get_gene/has_gene`; warn on duplicate names; fix recombination rate handling on position reorder/insertion
