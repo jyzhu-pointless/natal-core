@@ -13,18 +13,94 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import List, Literal, Tuple
+from typing import List, Literal, NamedTuple, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 
 __all__ = [
     "GridTopology",
+    "HeterogeneousKernelParams",
+    "MigrationParams",
+    "SpatialTopology",
     "SquareGrid",
     "HexGrid",
     "build_adjacency_matrix",
     "apply_migration_adjacency",
     "apply_migration_convolution",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Frozen parameter bundles for spatial kernel dispatch
+# ---------------------------------------------------------------------------
+
+
+class SpatialTopology(NamedTuple):
+    """Resolved topology dimensions for kernel routing.
+
+    Built once from ``GridTopology`` at construction time. When no
+    topology is set, all fields default to zero / ``False``.
+
+    Attributes:
+        rows: Number of grid rows (0 if no topology).
+        cols: Number of grid columns (0 if no topology).
+        wrap: Whether periodic boundary conditions apply.
+    """
+
+    rows: int
+    cols: int
+    wrap: bool
+
+
+class MigrationParams(NamedTuple):
+    """Fixed migration configuration for spatial kernels.
+
+    All fields are determined at construction time and never change
+    during a simulation.
+
+    Attributes:
+        kernel: Migration kernel weight matrix.  A ``(1, 1)`` zero array
+            when no kernel is set (adjacency mode).
+        include_center: Whether the kernel centre contributes outbound mass.
+        rate: Fraction of each deme that migrates per tick.
+        adjust_on_edge: Whether boundary demes normalise to match internal
+            total outbound rate.
+        adjacency: Dense ``(n_demes, n_demes)`` outbound migration matrix.
+        mode_code: Backend selector (``0`` = adjacency, ``1`` = kernel).
+    """
+
+    kernel: NDArray[np.float64]
+    include_center: bool
+    rate: float
+    adjust_on_edge: bool
+    adjacency: NDArray[np.float64]
+    mode_code: int
+
+
+class HeterogeneousKernelParams(NamedTuple):
+    """Per-kernel offset tables for heterogeneous kernel routing.
+
+    Only populated when ``kernel_bank`` and ``deme_kernel_ids`` are both
+    set on the spatial population.
+
+    Attributes:
+        deme_kernel_ids: ``(n_demes,)`` int64 — kernel index per source deme.
+        d_row: ``(n_kernels, max_nnz)`` int64 — row offsets per kernel.
+        d_col: ``(n_kernels, max_nnz)`` int64 — column offsets per kernel.
+        weights: ``(n_kernels, max_nnz)`` float64 — per-offset weights.
+        nnzs: ``(n_kernels,)`` int64 — number of valid entries per kernel.
+        total_sums: ``(n_kernels,)`` float64 — sum of all weights per kernel.
+        max_nnz: Maximum valid entries across all kernels.
+    """
+
+    deme_kernel_ids: NDArray[np.int64]
+    d_row: NDArray[np.int64]
+    d_col: NDArray[np.int64]
+    weights: NDArray[np.float64]
+    nnzs: NDArray[np.int64]
+    total_sums: NDArray[np.float64]
+    max_nnz: int
 
 
 Coord = Tuple[int, int]
