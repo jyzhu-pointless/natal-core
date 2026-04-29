@@ -26,6 +26,7 @@ __all__ = [
     "SquareGrid",
     "HexGrid",
     "build_adjacency_matrix",
+    "build_gaussian_kernel",
     "apply_migration_adjacency",
     "apply_migration_convolution",
 ]
@@ -135,6 +136,12 @@ class GridTopology:
     cols: int
     wrap: bool = False
 
+    # cos(θ) where θ is the angle opposite the resultant of the two
+    # basis vectors. For a square grid basis vectors are 90° apart →
+    # θ = 90°, cos 90° = 0, so the cross-term in the law of cosines
+    # vanishes: dist² = dr² + dc² (Cartesian).
+    COS_OPPOSITE_ANGLE: float = 0.0
+
     @property
     def n_demes(self) -> int:
         """int: Total number of demes in the grid."""
@@ -227,6 +234,19 @@ class GridTopology:
             x1, y1 = self.to_xy(n_coord)
             vectors.append((x1 - x0, y1 - y0))
         return vectors
+
+    def offset_dist_sq(self, dr: NDArray[np.float64], dc: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Squared distance between grid coords offset by ``(dr, dc)``.
+
+        Uses the law of cosines with ``_COS_OPPOSITE_ANGLE``::
+
+            dist² = dr² + dc² - 2·dr·dc·cos(θ)
+
+        For square grids cos(90°) = 0 → Cartesian distance. Subclasses
+        override the class attribute ``_COS_OPPOSITE_ANGLE`` to change the
+        metric (e.g. hex grids set cos(120°) = -0.5).
+        """
+        return dr**2 + dc**2 - 2.0 * self.COS_OPPOSITE_ANGLE * dr * dc
 
     def neighbors(self, index: int) -> List[int]:
         """Return neighboring deme indices for one flattened deme index.
@@ -323,7 +343,10 @@ class HexGrid(GridTopology):
 
     _SQRT3_OVER_2 = math.sqrt(3.0) / 2.0
 
-
+    # Basis vectors are 60° apart → angle opposite the resultant is
+    # 180° - 60° = 120°. cos(120°) = -0.5 introduces the cross-term
+    # dr·dc in the distance formula.
+    COS_OPPOSITE_ANGLE: float = -0.5
 
     def to_xy(self, coord: Coord) -> Tuple[float, float]:
         """Map parallelogram coordinate to pointy-top Cartesian coordinates.
@@ -387,6 +410,89 @@ class HexGrid(GridTopology):
             if normalized is not None:
                 result.append(normalized)
         return result
+
+
+def build_gaussian_kernel(
+    topology_cls: Literal["square", "hex"] | type[GridTopology] = "hex",
+    size: int = 5,
+    sigma: float | None = None,
+    mean_dispersal: float | None = None,
+) -> np.ndarray:
+    """Build a normalized Gaussian migration kernel for a grid topology.
+
+    The kernel is a ``(size, size)`` matrix where each entry ``[r, c]`` is
+    the outbound migration weight from a virtual centre cell to the grid
+    cell at offset ``(r - centre, c - centre)``. Distances are computed
+    via the topology's ``COS_OPPOSITE_ANGLE``, so the correct metric is
+    used for square grids (Cartesian) vs hex grids (oblique /
+    law-of-cosines).
+
+    At runtime the spatial migration kernel slides this matrix over every
+    source deme and re-normalises valid destinations at boundaries.
+
+    Args:
+        topology_cls: Grid topology class (e.g. ``SquareGrid``, ``HexGrid``)
+            or a string shorthand ``"hex"`` / ``"square"``.
+        size: Odd integer kernel size (default 5). Larger kernels capture
+            longer-range dispersal but increase the non-zero offset table.
+        sigma: Gaussian width parameter. Defaults to 1.0 when neither
+            ``sigma`` nor ``mean_dispersal`` is given.
+        mean_dispersal: Target mean dispersal distance. When provided,
+            ``sigma`` is derived via the 2D Rayleigh mean formula::
+
+                sigma = mean_dispersal / sqrt(π / 2)
+
+            Mutually exclusive with ``sigma``.
+
+    Returns:
+        Normalised ``(size, size)`` float64 kernel summing to 1.
+
+    Raises:
+        ValueError: If ``size`` is even, both ``sigma`` and
+            ``mean_dispersal`` are given, or ``topology_cls`` is an unknown
+            string.
+
+    Examples:
+        Via sigma::
+
+            kernel = build_gaussian_kernel("hex", size=11, sigma=1.5)
+
+        Via mean dispersal::
+
+            kernel = build_gaussian_kernel("hex", size=11, mean_dispersal=2.0)
+    """
+    if sigma is not None and mean_dispersal is not None:
+        raise ValueError(
+            "sigma and mean_dispersal are mutually exclusive; "
+            "specify one or neither, not both"
+        )
+    if mean_dispersal is not None:
+        sigma = mean_dispersal / math.sqrt(math.pi / 2.0)
+    elif sigma is None:
+        sigma = 1.0
+
+    if isinstance(topology_cls, str):
+        if topology_cls == "hex":
+            topology_cls = HexGrid
+        elif topology_cls == "square":
+            topology_cls = SquareGrid
+        else:
+            raise ValueError(
+                f"Unknown topology shorthand {topology_cls!r}, expected 'hex' or 'square'"
+            )
+
+    if size % 2 == 0:
+        raise ValueError(f"kernel size must be odd, got {size}")
+
+    center = (size - 1) / 2.0
+    y_idx, x_idx = np.indices((size, size), dtype=np.float64)
+    dr = y_idx - center
+    dc = x_idx - center
+    cos_opposite = topology_cls.COS_OPPOSITE_ANGLE
+    dist_sq = dr**2 + dc**2 - 2.0 * cos_opposite * dr * dc
+    kernel = np.exp(-dist_sq / (2.0 * sigma**2)).astype(np.float64, copy=False)
+    kernel /= np.sum(kernel)
+    return kernel
 
 
 def build_adjacency_matrix(

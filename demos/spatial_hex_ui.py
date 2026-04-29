@@ -9,15 +9,13 @@ from __future__ import annotations
 
 from typing import Any, Callable  # noqa: E402
 
-import numpy as np
-
 import natal as nt
 from natal.spatial_builder import batch_setting
 from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import HexGrid
 from natal.ui import launch
 
-MAP_SIZE = 51
+MAP_SIZE = 9
 LOCAL_CAPACITY = 10000
 INITIAL_LOCAL_DRIVE_CARRIER_RATIO = 0.02
 
@@ -81,14 +79,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
         .presets(drive)
         .fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}})
         .migration(
-            kernel=np.array(
-                [
-                    [0.0, 0.10, 0.10],
-                    [0.10, 0.40, 0.10],
-                    [0.10, 0.10, 0.0],
-                ],
-                dtype=np.float64,
-            ),
+            kernel=nt.build_gaussian_kernel("hex", size=11, sigma=1.5),
             kernel_include_center=True,
             migration_rate=1.0,
         )

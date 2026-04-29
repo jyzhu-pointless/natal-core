@@ -81,7 +81,18 @@ from .hook_dsl import (
     RESULT_STOP,
 )
 
-from .numba_compat import binomial_2d, multinomial_rows, multinomial, set_numba_seed
+from .numba_compat import (
+    EPS,
+    binomial,
+    binomial_2d,
+    multinomial_rows,
+    multinomial,
+    continuous_poisson,
+    continuous_binomial,
+    continuous_multinomial,
+    set_numba_seed,
+    clamp01,
+)
 
 from .numba_utils import (
     NUMBA_ENABLED,
@@ -114,6 +125,13 @@ from .observation import (
     Observation,
     ObservationFilter,
     apply_rule,
+)
+
+from .observation_record import (
+    CompactMeta,
+    build_compact_metadata,
+    build_observation_row_panmictic,
+    build_observation_row_spatial,
 )
 
 from .population_builder import (
@@ -164,6 +182,8 @@ from .simulation_kernels import (
     run_discrete_aging,
 )
 
+from .spatial_builder import BatchSetting, batch_setting, SpatialBuilder
+
 from .spatial_population import SpatialPopulation
 
 from .spatial_simulation_kernels import (
@@ -177,9 +197,13 @@ from .spatial_simulation_kernels import (
 
 from .spatial_topology import (
     GridTopology,
+    HeterogeneousKernelParams,
+    MigrationParams,
+    SpatialTopology,
     SquareGrid,
     HexGrid,
     build_adjacency_matrix,
+    build_gaussian_kernel,
     apply_migration_adjacency,
     apply_migration_convolution,
 )
@@ -195,10 +219,17 @@ from .state_translation import (
     population_to_readable_json,
     population_history_to_readable_dict,
     population_history_to_readable_json,
+    population_observation_history_to_readable_dict,
+    population_observation_history_to_readable_json,
     spatial_population_to_readable_dict,
     spatial_population_to_readable_json,
     spatial_population_to_observation_dict,
     spatial_population_to_observation_json,
+    spatial_population_history_to_readable_dict,
+    spatial_population_history_to_readable_json,
+    spatial_population_observation_history_to_readable_dict,
+    spatial_population_observation_history_to_readable_json,
+    spatial_population_output_history,
 )
 
 from .type_def import Sex, Age, GameteLabel
@@ -218,6 +249,7 @@ __all__ = [
     "AgeStructuredPopulationBuilder",
     "Allele",
     "BEVERTON_HOLT",
+    "BatchSetting",
     "CONCAVE",
     "COND_ALWAYS",
     "COND_TICK_EQ",
@@ -227,6 +259,7 @@ __all__ = [
     "COND_TICK_LT",
     "COND_TICK_MOD",
     "Chromosome",
+    "CompactMeta",
     "CompiledEventHooks",
     "CompiledHookDescriptor",
     "CompiledHookPlan",
@@ -236,6 +269,7 @@ __all__ = [
     "DiscreteGenerationPopulation",
     "DiscreteGenerationPopulationBuilder",
     "DiscretePopulationState",
+    "EPS",
     "EVENT_EARLY",
     "EVENT_FINISH",
     "EVENT_FIRST",
@@ -261,6 +295,7 @@ __all__ = [
     "HaploidGenome",
     "HaploidGenotype",
     "Haplotype",
+    "HeterogeneousKernelParams",
     "HexGrid",
     "HomingDrive",
     "HookExecutor",
@@ -271,6 +306,7 @@ __all__ = [
     "LOGISTIC",
     "Linkage",
     "Locus",
+    "MigrationParams",
     "NO_COMPETITION",
     "NUMBA_CACHE_DIR",
     "NUMBA_ENABLED",
@@ -289,7 +325,9 @@ __all__ = [
     "RESULT_STOP",
     "Sex",
     "SexSpec",
+    "SpatialBuilder",
     "SpatialPopulation",
+    "SpatialTopology",
     "Species",
     "SquareGrid",
     "ToxinAntidoteDrive",
@@ -301,13 +339,23 @@ __all__ = [
     "apply_preset_to_population",
     "apply_rule",
     "apply_spatial_adjacency_migration",
+    "batch_setting",
+    "binomial",
     "binomial_2d",
     "build_adjacency_matrix",
+    "build_compact_metadata",
+    "build_gaussian_kernel",
     "build_hook_program",
+    "build_observation_row_panmictic",
+    "build_observation_row_spatial",
     "build_population_config",
+    "clamp01",
     "compile_combined_hook",
     "compile_declarative_hook",
     "compile_selector_hook",
+    "continuous_binomial",
+    "continuous_multinomial",
+    "continuous_poisson",
     "deme_selector_matches",
     "disable_numba",
     "disable_numba_log",
@@ -349,6 +397,8 @@ __all__ = [
     "parse_flattened_state",
     "population_history_to_readable_dict",
     "population_history_to_readable_json",
+    "population_observation_history_to_readable_dict",
+    "population_observation_history_to_readable_json",
     "population_state_to_dict",
     "population_state_to_json",
     "population_to_readable_dict",
@@ -366,6 +416,11 @@ __all__ = [
     "run_spatial_tick_with_migration",
     "run_survival",
     "set_numba_seed",
+    "spatial_population_history_to_readable_dict",
+    "spatial_population_history_to_readable_json",
+    "spatial_population_observation_history_to_readable_dict",
+    "spatial_population_observation_history_to_readable_json",
+    "spatial_population_output_history",
     "spatial_population_to_observation_dict",
     "spatial_population_to_observation_json",
     "spatial_population_to_readable_dict",

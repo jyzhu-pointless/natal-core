@@ -564,6 +564,30 @@ $$p_n = \frac{w_n}{S_{\text{ref}}}, \quad S_{\text{ref}} = \begin{cases} \sum_{m
 
 ### 构造常用 Kernel
 
+NATAL 提供 `build_gaussian_kernel()` 工厂函数，自动根据拓扑类型使用正确的距离度量：
+
+```python
+from natal.spatial_topology import build_gaussian_kernel, HexGrid, SquareGrid
+
+# 六边形网格高斯核 —— 自动使用余弦定理距离公式
+hex_kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
+
+# 方形网格高斯核 —— 使用 Cartesian 距离
+square_kernel = build_gaussian_kernel(SquareGrid, size=7, sigma=2.0)
+
+# 字符串简写
+hex_kernel = build_gaussian_kernel("hex", size=11, sigma=1.5)
+
+# 通过 mean_dispersal 指定平均扩散距离（更直观）
+# sigma = mean_dispersal / sqrt(π/2)
+hex_kernel = build_gaussian_kernel("hex", size=11, mean_dispersal=2.0)
+```
+
+`sigma` 与 `mean_dispersal` 互斥。2D 各向同性高斯分布中，平均位移遵循 Rayleigh 分布：
+$\bar{d} = \sigma\sqrt{\pi/2}$。
+
+也可以手动构造 kernel（兼容旧代码）：
+
 ```python
 import numpy as np
 
@@ -577,15 +601,6 @@ von_neumann = np.array([
 # Moore 3x3（8 邻居，不含中心）
 moore = np.ones((3, 3), dtype=np.float64)
 moore[1, 1] = 0.0
-
-# 5x5 高斯核
-size, sigma = 5, 10.0
-c = (size - 1) / 2.0
-y, x = np.indices((size, size), dtype=np.float64)
-dist_sq = (x - c)**2 + (y - c)**2
-gaussian = np.exp(-dist_sq / (2 * sigma**2)).astype(np.float64)
-gaussian[c.astype(int), c.astype(int)] = 0.0  # 排除中心（可选）
-gaussian /= gaussian.sum()                      # 权重和为 1
 ```
 
 ## 拓扑结构
@@ -683,13 +698,13 @@ pop.run(10)
 ### 完整示例：HexGrid
 
 ```python
-import numpy as np
 from natal import Species, SpatialPopulation, HexGrid
+from natal.spatial_topology import build_gaussian_kernel
 
 species = Species.from_dict(name="hex", structure={"chr1": {"loc": ["WT", "Dr"]}})
 
-kernel = np.ones((3, 3), dtype=np.float64)
-kernel[1, 1] = 0.0
+# 使用 build_gaussian_kernel 自动处理 hex 坐标的距离度量
+kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
 
 pop = (
     SpatialPopulation.builder(species, n_demes=100, topology=HexGrid(10, 10, wrap=False))
