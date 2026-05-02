@@ -8,7 +8,7 @@ across deterministic, discrete stochastic, and continuous stochastic modes.
 import numpy as np
 import pytest
 
-from natal.algorithms import (
+from natal.kernels.algorithms import (
     _fertilize_with_precomputed_offspring_probability,
     _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction,
     recruit_juveniles_sampling,

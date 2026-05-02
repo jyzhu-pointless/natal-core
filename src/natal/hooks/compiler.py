@@ -210,13 +210,26 @@ def _gen_lifecycle_source(
     is_discrete: bool,
     tick_fn_name: str,
     run_fn_name: str,
+    v2: bool = False,
 ) -> str:
     """Generate the source code for a lifecycle wrapper module.
 
     Reads the template from ``kernels/templates/`` and substitutes
     ``TICK_FN_NAME`` and ``RUN_FN_NAME`` placeholders.
+
+    Args:
+        is_discrete: If True, use discrete-generation template.
+        tick_fn_name: Name for the tick function.
+        run_fn_name: Name for the run function.
+        v2: If True and is_discrete=True, use the v2 template that uses
+            ``DiscretePopulationConfig`` and dedicated discrete kernels.
     """
-    name = "lifecycle_discrete.tmpl.py" if is_discrete else "lifecycle_structured.tmpl.py"
+    if is_discrete and v2:
+        name = "lifecycle_discrete_v2.tmpl.py"
+    elif is_discrete:
+        name = "lifecycle_discrete.tmpl.py"
+    else:
+        name = "lifecycle_structured.tmpl.py"
     return (_read_template(name)
         .replace("TICK_FN_NAME", tick_fn_name)
         .replace("RUN_FN_NAME", run_fn_name))
@@ -227,6 +240,7 @@ def compile_lifecycle_wrapper(
     first_hook: HookCallable,
     early_hook: HookCallable,
     late_hook: HookCallable,
+    use_discrete_config: bool = False,
 ) -> tuple[HookCallable, HookCallable]:
     """Generate a lifecycle wrapper module with hooks as module-level globals.
 
@@ -241,12 +255,15 @@ def compile_lifecycle_wrapper(
         first_hook: Combined njit function for the ``first`` event.
         early_hook: Combined njit function for the ``early`` event.
         late_hook: Combined njit function for the ``late`` event.
+        use_discrete_config: If True and is_discrete=True, use the v2
+            template with ``DiscretePopulationConfig`` and dedicated kernels.
 
     Returns:
         A tuple ``(tick_fn, run_fn)`` where ``tick_fn`` executes one tick
         and ``run_fn`` executes multiple ticks with history recording.
     """
-    mode = "discrete" if is_discrete else "structured"
+    v2 = bool(is_discrete and use_discrete_config)
+    mode = "discrete_v2" if v2 else ("discrete" if is_discrete else "structured")
     parts = [f"lifecycle_{mode}"] + [
         stable_callable_identity(fn) for fn in [first_hook, early_hook, late_hook]
     ]
@@ -255,7 +272,7 @@ def compile_lifecycle_wrapper(
     tick_fn_name = f"_lifecycle_tick_{key}"
     run_fn_name = f"_lifecycle_run_{key}"
 
-    source = _gen_lifecycle_source(is_discrete, tick_fn_name, run_fn_name)
+    source = _gen_lifecycle_source(is_discrete, tick_fn_name, run_fn_name, v2=v2)
     module_path = write_codegen_module(module_stem, source)
     module = load_codegen_module(module_stem, module_path)
 
@@ -365,6 +382,8 @@ class CompiledEventHooks:
         "run_fn",
         "run_discrete_tick_fn",
         "run_discrete_fn",
+        "run_discrete_tick_fn_v2",
+        "run_discrete_fn_v2",
         "spatial_tick_fn",
         "spatial_run_fn",
         "spatial_discrete_tick_fn",
@@ -381,6 +400,8 @@ class CompiledEventHooks:
     run_fn: Optional[HookCallable]
     run_discrete_tick_fn: Optional[HookCallable]
     run_discrete_fn: Optional[HookCallable]
+    run_discrete_tick_fn_v2: Optional[HookCallable]
+    run_discrete_fn_v2: Optional[HookCallable]
     spatial_tick_fn: Optional[HookCallable]
     spatial_run_fn: Optional[HookCallable]
     spatial_discrete_tick_fn: Optional[HookCallable]
@@ -397,6 +418,8 @@ class CompiledEventHooks:
         self.run_fn = None
         self.run_discrete_tick_fn = None
         self.run_discrete_fn = None
+        self.run_discrete_tick_fn_v2 = None
+        self.run_discrete_fn_v2 = None
         self.spatial_tick_fn = None
         self.spatial_run_fn = None
         self.spatial_discrete_tick_fn = None
@@ -467,6 +490,11 @@ class CompiledEventHooks:
             )
             result.run_discrete_tick_fn, result.run_discrete_fn = compile_lifecycle_wrapper(
                 True, first_hook, early_hook, late_hook,
+            )
+            # V2 discrete wrappers use DiscretePopulationConfig and dedicated kernels.
+            result.run_discrete_tick_fn_v2, result.run_discrete_fn_v2 = compile_lifecycle_wrapper(
+                True, first_hook, early_hook, late_hook,
+                use_discrete_config=True,
             )
 
             if include_spatial_wrappers:

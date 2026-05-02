@@ -16,7 +16,7 @@ from typing import Any, Callable, List, NamedTuple, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.algorithms as alg
+import natal.kernels.algorithms as alg
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.index_registry import compress_hg_glab, decompress_hg_glab
 from natal.type_def import Sex
@@ -154,6 +154,7 @@ class PopulationConfig(NamedTuple):
     adult_ages: NDArray[np.int64]
     genotype_to_gametes_map: NDArray[np.float64]
     gametes_to_zygote_map: NDArray[np.float64]
+    offspring_tensor: NDArray[np.float64]                       # (g, g, g) — precomputed from meiosis × zygote maps
     initial_individual_count: NDArray[np.float64]
     initial_sperm_storage: NDArray[np.float64]
     population_scale: float
@@ -345,6 +346,7 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         adult_ages=config.adult_ages.copy() if copy else config.adult_ages,
         genotype_to_gametes_map=_maybe_copy_array(config.genotype_to_gametes_map, copy),
         gametes_to_zygote_map=_maybe_copy_array(config.gametes_to_zygote_map, copy),
+        offspring_tensor=_maybe_copy_array(config.offspring_tensor, copy),
         initial_individual_count=_maybe_copy_array(config.initial_individual_count, copy),
         initial_sperm_storage=_maybe_copy_array(config.initial_sperm_storage, copy),
         population_scale=float(config.population_scale),
@@ -614,6 +616,15 @@ def build_population_config(
         external_expected_eggs=external_expected_eggs,
     )
 
+    # Precompute offspring probability tensor from meiosis and zygote maps.
+    offspring_tensor = alg.compute_offspring_probability_tensor(
+        meiosis_f=g2g[0], meiosis_m=g2g[1],
+        haplo_to_genotype_map=g2z,
+        n_genotypes=n_genotypes_i,
+        n_haplogenotypes=n_haploid_genotypes_i,
+        n_glabs=n_glabs_i,
+    )
+
     if generation_time is None:
         temp_cfg = PopulationConfig(
             is_stochastic=bool(is_stochastic),
@@ -652,6 +663,7 @@ def build_population_config(
             adult_ages=adult_ages,
             genotype_to_gametes_map=g2g,
             gametes_to_zygote_map=g2z,
+            offspring_tensor=offspring_tensor,
             initial_individual_count=init_ind,
             initial_sperm_storage=init_sperm,
             population_scale=population_scale_f,
@@ -699,6 +711,7 @@ def build_population_config(
         adult_ages=adult_ages,
         genotype_to_gametes_map=g2g,
         gametes_to_zygote_map=g2z,
+        offspring_tensor=offspring_tensor,
         initial_individual_count=init_ind,
         initial_sperm_storage=init_sperm,
         population_scale=population_scale_f,

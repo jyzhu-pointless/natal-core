@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.algorithms as alg
+import natal.kernels.algorithms as alg
 import natal.numba_compat as nbc
 from natal.hooks.executor import execute_csr_event_program_with_state
 from natal.hooks.types import (
@@ -212,19 +212,11 @@ def run_reproduction(
     Returns:
         Tuple[ind_count, sperm_store]: Updated arrays.
     """
-    offspring_probability = alg.compute_offspring_probability_tensor(
-        meiosis_f=config.genotype_to_gametes_map[0],
-        meiosis_m=config.genotype_to_gametes_map[1],
-        haplo_to_genotype_map=config.gametes_to_zygote_map,
-        n_genotypes=config.n_genotypes,
-        n_haplogenotypes=config.n_haploid_genotypes,
-        n_glabs=config.n_glabs,
-    )
     return run_reproduction_with_precomputed_offspring_probability(
         ind_count=ind_count,
         sperm_store=sperm_store,
         config=config,
-        offspring_probability=offspring_probability,
+        offspring_probability=config.offspring_tensor,
     )
 
 @njit_switch(cache=True)

@@ -25,9 +25,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
+from natal.discrete_population_config import from_population_config
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
 from natal.hooks.types import RESULT_CONTINUE
+from natal.kernels import (
+    discrete_kernels as dk,  # noqa: F401 — module-level import ensures njit compilation
+)
 from natal.population_config import PopulationConfig
 from natal.population_state import (
     DiscretePopulationState,
@@ -93,6 +97,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         super().__init__(species, name, hooks=hooks or {})
 
         self._config = self._normalize_config(population_config)
+        self._discrete_config = from_population_config(self._config)
 
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
@@ -272,7 +277,18 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         obs_mask = self._observation_mask
         n_obs = len(self._observation.labels) if self._observation is not None else 0
 
-        if hooks.run_discrete_fn is not None:
+        # Prefer v2 codegen path (DiscretePopulationConfig + dedicated kernels).
+        if hooks.run_discrete_fn_v2 is not None:
+            final_state_tuple, history_new, was_stopped = hooks.run_discrete_fn_v2(
+                state=self._state_nn,
+                config=self._discrete_config,
+                registry=hooks.registry,
+                n_ticks=n_steps,
+                record_interval=record_every,
+                observation_mask=obs_mask,
+                n_obs_groups=n_obs,
+            )
+        elif hooks.run_discrete_fn is not None:
             final_state_tuple, history_new, was_stopped = hooks.run_discrete_fn(
                 state=self._state_nn,
                 config=self._config_nn,
@@ -330,7 +346,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         clear_history_on_start: bool,
     ) -> DiscreteGenerationPopulation:
         """Python-level simulation loop using HookExecutor for event dispatch."""
-        from natal.kernels import simulation_kernels as sk
         from natal.population_state import DiscretePopulationState
 
         self.ensure_hook_executor()
@@ -347,25 +362,25 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 was_stopped = True
                 break
 
-            self._state_nn.individual_count[:] = sk.run_discrete_reproduction(
+            self._state_nn.individual_count[:] = dk.run_discrete_reproduction(
                 self._state_nn.individual_count,
-                self._config_nn,
+                self._discrete_config,
             )
 
             if self.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
                 was_stopped = True
                 break
 
-            self._state_nn.individual_count[:] = sk.run_discrete_survival(
+            self._state_nn.individual_count[:] = dk.run_discrete_survival(
                 self._state_nn.individual_count,
-                self._config_nn,
+                self._discrete_config,
             )
 
             if self.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
                 was_stopped = True
                 break
 
-            self._state_nn.individual_count[:] = sk.run_discrete_aging(
+            self._state_nn.individual_count[:] = dk.run_discrete_aging(
                 self._state_nn.individual_count,
             )
 

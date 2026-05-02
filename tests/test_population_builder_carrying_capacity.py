@@ -215,7 +215,7 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.algorithms import compute_equilibrium_metrics
+        from natal.kernels.algorithms import compute_equilibrium_metrics
         from natal.population_config import build_population_config
 
         comp, surv = compute_equilibrium_metrics(
@@ -279,7 +279,7 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.algorithms import compute_equilibrium_metrics
+        from natal.kernels.algorithms import compute_equilibrium_metrics
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=K,
@@ -615,7 +615,7 @@ class TestChamperModel:
 
     def test_competition_and_survival_consistency_explicit_dist(self) -> None:
         """End-to-end: compute_equilibrium_metrics with explicit distribution is self-consistent."""
-        from natal.algorithms import compute_equilibrium_metrics
+        from natal.kernels.algorithms import compute_equilibrium_metrics
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([
@@ -649,7 +649,7 @@ class TestChamperModel:
 
     def test_competition_and_survival_external_eggs(self) -> None:
         """End-to-end: external_expected_eggs affects survival, not competition."""
-        from natal.algorithms import compute_equilibrium_metrics
+        from natal.kernels.algorithms import compute_equilibrium_metrics
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([

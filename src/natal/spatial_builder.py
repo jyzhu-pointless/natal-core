@@ -1251,7 +1251,7 @@ class SpatialBuilder:
             A new ``PopulationConfig`` sharing all unchanged array references
             with *base_config*.
         """
-        from natal.algorithms import compute_equilibrium_metrics
+        from natal.kernels.algorithms import compute_equilibrium_metrics
         from natal.population_builder import PopulationConfigBuilder
 
         replace_kwargs: Dict[str, Any] = {}

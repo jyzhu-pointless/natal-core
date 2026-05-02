@@ -575,9 +575,20 @@ class BasePopulation(ABC, Generic[T_State]):
             zygote_modifiers=zygote_funcs,
         )
 
+        import natal.kernels.algorithms as _alg
+
+        offspring_tensor = _alg.compute_offspring_probability_tensor(
+            meiosis_f=genotype_to_gametes_map[0],
+            meiosis_m=genotype_to_gametes_map[1],
+            haplo_to_genotype_map=gametes_to_zygote_map,
+            n_genotypes=int(self._config.n_genotypes),
+            n_haplogenotypes=int(self._config.n_haploid_genotypes),
+            n_glabs=n_glabs,
+        )
         self._config = self._config._replace(
             genotype_to_gametes_map=genotype_to_gametes_map,
             gametes_to_zygote_map=gametes_to_zygote_map,
+            offspring_tensor=offspring_tensor,
         )
 
     def refresh_modifier_maps(self) -> None:

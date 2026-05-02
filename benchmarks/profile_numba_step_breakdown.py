@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 import natal as nt
-import natal.algorithms as alg
+import natal.kernels.algorithms as alg
 from natal.kernels.spatial_simulation_kernels import (
     run_spatial_migration,
     run_spatial_tick,

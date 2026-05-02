@@ -16,7 +16,6 @@ try:
 except ImportError:
     prange = range  # type: ignore[assignment]
 
-import natal.algorithms as alg
 from natal.kernels.simulation_kernels import (
     run_aging,
     run_reproduction_with_precomputed_offspring_probability,
@@ -59,19 +58,7 @@ def run_spatial_tick(
         preserving per-deme lifecycle ordering.
     """
     # Spatial ticks intentionally reuse the single-deme lifecycle ordering.
-    # To avoid stage-by-stage global synchronization, run a full local tick
-    # for each deme inside one prange pass, then apply migration separately.
-    # The offspring tensor depends only on static config, so compute once and
-    # reuse for every deme in this tick.
-    offspring_probability = alg.compute_offspring_probability_tensor(
-        meiosis_f=config.genotype_to_gametes_map[0],
-        meiosis_m=config.genotype_to_gametes_map[1],
-        haplo_to_genotype_map=config.gametes_to_zygote_map,
-        n_genotypes=config.n_genotypes,
-        n_haplogenotypes=config.n_haploid_genotypes,
-        n_glabs=config.n_glabs,
-    )
-
+    # Offspring tensor is precomputed and shared across all demes.
     for deme_id in prange(ind_count_all.shape[0]):
         # Work on one deme-local pair of arrays; there are no cross-deme reads
         # until the migration stage, so this section is parallel-safe.
@@ -79,7 +66,7 @@ def run_spatial_tick(
             ind_count=ind_count_all[deme_id],
             sperm_store=sperm_store_all[deme_id],
             config=config,
-            offspring_probability=offspring_probability,
+            offspring_probability=config.offspring_tensor,
         )
         # Keep lifecycle order identical to non-spatial single-population kernels.
         ind_d, sperm_d = run_survival(
@@ -124,20 +111,12 @@ def run_spatial_tick_heterogeneous(
     """
     for deme_id in prange(ind_count_all.shape[0]):
         cfg = config_bank[int(deme_config_ids[deme_id])]
-        offspring_probability = alg.compute_offspring_probability_tensor(
-            meiosis_f=cfg.genotype_to_gametes_map[0],
-            meiosis_m=cfg.genotype_to_gametes_map[1],
-            haplo_to_genotype_map=cfg.gametes_to_zygote_map,
-            n_genotypes=cfg.n_genotypes,
-            n_haplogenotypes=cfg.n_haploid_genotypes,
-            n_glabs=cfg.n_glabs,
-        )
 
         ind_d, sperm_d = run_reproduction_with_precomputed_offspring_probability(
             ind_count=ind_count_all[deme_id],
             sperm_store=sperm_store_all[deme_id],
             config=cfg,
-            offspring_probability=offspring_probability,
+            offspring_probability=cfg.offspring_tensor,
         )
         ind_d, sperm_d = run_survival(
             ind_count=ind_d,
