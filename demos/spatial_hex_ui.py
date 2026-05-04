@@ -79,7 +79,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
         .presets(drive)
         .fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}})
         .migration(
-            kernel=nt.build_gaussian_kernel("hex", size=11, sigma=1.5),
+            kernel=nt.build_gaussian_kernel("hex", size=11, mean_dispersal=0.5),
             kernel_include_center=True,
             migration_rate=1.0,
         )
