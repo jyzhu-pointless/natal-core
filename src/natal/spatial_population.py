@@ -1448,6 +1448,20 @@ class SpatialPopulation:
         """
         return any(deme.has_mixed_hook_types() for deme in self._demes)
 
+    def get_compiled_hooks(self, event: Optional[str] = None) -> list[Any]:
+        """Get compiled hook descriptors, optionally filtered by event.
+
+        Args:
+            event: Optional event name to filter by.
+
+        Returns:
+            List of ``CompiledHookDescriptor`` sorted by priority.
+        """
+        hooks = self._collect_effective_compiled_hooks()
+        if event is not None:
+            hooks = [h for h in hooks if h.event == event]
+        return sorted(hooks, key=lambda h: h.priority)
+
     def _has_compiled_hooks(self) -> bool:
         """Return whether any managed deme has compiled (CSR/njit) hooks.
 
@@ -1460,7 +1474,7 @@ class SpatialPopulation:
                 if len(deme.get_compiled_hooks()) > 0:
                     return True
             except AttributeError:
-                # Some test doubles do not implement compiled-hook APIs.
+                # Some test suites do not implement compiled-hook APIs.
                 continue
         return False
 
