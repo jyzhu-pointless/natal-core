@@ -93,6 +93,7 @@ def compile_selector_hook(
     selectors_spec: Dict[str, SelectorSpec],
     priority: int = 0,
     deme_selector: DemeSelector = "*",
+    mode: str = "auto",
 ) -> CompiledHookDescriptor:
     """Compile selector hook into njit or python descriptor.
 
@@ -120,17 +121,32 @@ def compile_selector_hook(
 
     is_njit_fn = is_numba_dispatcher(func)
 
+    # Detect parameter layout based on *mode*.
+    py_func = getattr(func, "py_func", func)
+    sig = inspect.signature(py_func)
+    pos_params = [p for p in sig.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+    selector_key_set = set(resolved.keys())
+
+    extra_params = [p for p in pos_params[2:] if p.name != "deme_id"]
+    has_deme_id = any(p.name == "deme_id" for p in pos_params[2:])
+
+    if mode == "aggregate":
+        use_namedtuple = True
+        nt_param_name = extra_params[0].name if extra_params else "sel"
+    elif mode == "expand":
+        use_namedtuple = False
+        nt_param_name = "sel"
+    else:  # "auto"
+        use_namedtuple = (
+            len(extra_params) == 1
+            and extra_params[0].name not in selector_key_set
+        )
+        nt_param_name = extra_params[0].name if use_namedtuple else "sel"
+
     if is_njit_fn or NUMBA_ENABLED:
-        # Numba path: generate a thin wrapper with literal selector args.
-        # The wrapper will call the user function (whether @njit or not)
-
-        # Handle signature normalization for user function (2 or 3 args before selectors)
-        py_func = getattr(func, "py_func", func)
-        sig = inspect.signature(py_func)
-        # Check if user fn expects deme_id (3 positional args before kwargs)
-        has_deme_id = len([p for p in sig.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]) >= 3
-
-        njit_fn = _compile_selector_njit_wrapper(func, resolved, has_deme_id)
+        njit_fn = _compile_selector_njit_wrapper(
+            func, resolved, has_deme_id, use_namedtuple, nt_param_name,
+        )
         return CompiledHookDescriptor(
             name=func.__name__,
             event=event,
@@ -141,10 +157,18 @@ def compile_selector_hook(
             njit_fn=njit_fn,
         )
 
-    # Python path: pass scalar for length-1 selectors, full array otherwise.
-    def py_wrapper(population: BasePopulation[Any]) -> None:
-        kwargs = _build_selector_python_kwargs(resolved)
-        func(population, **kwargs)
+    # Python path
+    if use_namedtuple:
+        _Sel = _build_namedtuple_class(list(resolved.keys()))
+        runtime_values = _build_selector_njit_runtime_values(resolved)
+
+        def py_wrapper(population: BasePopulation[Any]) -> None:
+            nt = _Sel(**runtime_values)
+            func(population, nt)
+    else:
+        def py_wrapper(population: BasePopulation[Any]) -> None:
+            kwargs = _build_selector_python_kwargs(resolved)
+            func(population, **kwargs)
 
     return CompiledHookDescriptor(
         name=func.__name__,
@@ -161,18 +185,26 @@ def _compile_selector_njit_wrapper(
     user_fn: Callable[..., Any],
     resolved_selectors: Dict[str, NDArray[np.int32]],
     has_deme_id: bool,
+    use_namedtuple: bool = False,
+    nt_param_name: str = "sel",
 ) -> Callable[..., Any]:
     """Generate a Numba wrapper with selector constants baked in.
 
-    The generated module imports ``njit_switch`` from ``hook_dsl`` so wrapper
-    compilation respects the same global Numba switch and cache configuration.
-    """
-    args_str = _build_selector_njit_literal_args(resolved_selectors)
+    When ``use_namedtuple`` is True, packs all selectors into a single
+    ``namedtuple`` argument::
 
-    # Build deterministic identity key so repeated registrations reuse the same
-    # generated module file and compiled cache entry.
+        nt = _Sel(_SEL_target, _SEL_drive)
+        return _USER_FN(ind_count, tick, deme_id, nt)
+
+    Otherwise the original per-selector keyword-arg style is used.
+    """
+    selector_keys = list(resolved_selectors.keys())
+
+    # Deterministic identity key for caching
     selector_parts = ["selector", stable_callable_identity(user_fn)]
-    for key in sorted(resolved_selectors.keys()):
+    if use_namedtuple:
+        selector_parts.append("namedtuple")
+    for key in sorted(selector_keys):
         values = ",".join(str(int(v)) for v in resolved_selectors[key].tolist())
         selector_parts.append(f"{key}={values}")
 
@@ -180,32 +212,55 @@ def _compile_selector_njit_wrapper(
     fn_name = f"_selector_wrapper_{key}"
     module_stem = f"selector_wrapper_{key}"
 
-    selector_placeholders = [f"_SEL_{name}" for name in resolved_selectors.keys()]
-    code_lines = [
-        "from natal.hook_dsl import njit_switch",
-        "_USER_FN = None",
-    ]
-    code_lines.extend([f"{placeholder} = None" for placeholder in selector_placeholders])
+    selector_placeholders = [f"_SEL_{name}" for name in selector_keys]
+    code_lines = ["from natal.hook_dsl import njit_switch"]
+
+    if use_namedtuple:
+        nt_fields = ", ".join(f"'{k}'" for k in selector_keys)
+        code_lines.extend([
+            "from collections import namedtuple",
+            f"_Sel = namedtuple('_Sel', [{nt_fields}])",
+        ])
+
+    code_lines.append("_USER_FN = None")
+    code_lines.extend([f"{p} = None" for p in selector_placeholders])
 
     call_args = "ind_count, tick, deme_id" if has_deme_id else "ind_count, tick"
 
-    code_lines.extend(
-        [
+    if use_namedtuple:
+        nt_args = ", ".join(f"_SEL_{k}" for k in selector_keys)
+        code_lines.extend([
+            "",
+            "@njit_switch(cache=True)",
+            f"def {fn_name}(ind_count, tick, deme_id=-1):",
+            f"    {nt_param_name} = _Sel({nt_args})",
+            f"    return _USER_FN({call_args}, {nt_param_name})",
+            "",
+        ])
+    else:
+        args_str = _build_selector_njit_literal_args(resolved_selectors)
+        code_lines.extend([
             "",
             "@njit_switch(cache=True)",
             f"def {fn_name}(ind_count, tick, deme_id=-1):",
             f"    return _USER_FN({call_args}, {args_str})",
             "",
-        ]
-    )
+        ])
+
     code = "\n".join(code_lines)
 
     module_path = write_codegen_module(module_stem, code)
     module = load_codegen_module(module_stem, module_path)
-    setattr(module, "_USER_FN", user_fn)  # noqa: B010
+    module._USER_FN = user_fn  # type: ignore[assignment]
     for name, value in _build_selector_njit_runtime_values(resolved_selectors).items():
-        setattr(module, f"_SEL_{name}", value)
+        setattr(module, f"_SEL_{name}", value)  # type: ignore[assignment]
     return getattr(module, fn_name)
+
+
+def _build_namedtuple_class(field_names: list[str]) -> type:  # type: ignore[return]
+    """Build a namedtuple class from selector field names (Python path only)."""
+    from collections import namedtuple
+    return namedtuple("_Sel", field_names)  # type: ignore[return-value]
 
 
 def _build_selector_python_kwargs(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, Any]:

@@ -540,6 +540,7 @@ def hook(
     priority: int = 0,
     custom: bool = False,
     deme: DemeSelector = "*",
+    mode: str = "auto",
 ) -> Callable[[Callable[..., Any]], DecoratedHookFn]:
     """Decorator entrypoint for all supported hook authoring styles.
 
@@ -567,7 +568,14 @@ def hook(
         custom: If True, treat as custom hook (function is called directly).
         deme: Target deme(s) for spatial populations.  ``"*"`` (default)
             means all demes.  Accepts a single int, list, tuple, or range.
+        mode: Selector passing style.  ``"auto"`` (default) detects from
+            function signature.  ``"expand"`` passes each selector as a
+            separate keyword argument.  ``"aggregate"`` packs all selectors
+            into a single namedtuple argument.
     """
+    if mode not in ("auto", "expand", "aggregate"):
+        raise ValueError(f"mode must be 'auto', 'expand', or 'aggregate', got {mode!r}")
+
     def decorator(func: Callable[..., Any]) -> DecoratedHookFn:
         hook_func = cast(DecoratedHookFn, func)
         hook_func.meta = {
@@ -576,6 +584,7 @@ def hook(
             "priority": priority,
             "custom": custom,
             "deme_selector": deme,
+            "mode": mode,
         }
         hook_func.compiled = None
         hook_func.event = event
@@ -614,6 +623,7 @@ def hook(
                         selectors,
                         priority,
                         deme_selector=actual_deme_selector,
+                        mode=mode,
                     )
                 else:
                     if is_njit_function(func):
