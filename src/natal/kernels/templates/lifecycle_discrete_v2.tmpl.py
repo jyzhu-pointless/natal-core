@@ -16,11 +16,6 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from natal.kernels.discrete_kernels import (
-    run_discrete_aging,
-    run_discrete_reproduction,
-    run_discrete_survival,
-)
 from natal.discrete_population_config import DiscretePopulationConfig
 from natal.hooks.executor import execute_csr_event_program_with_state
 from natal.hooks.types import (
@@ -30,6 +25,11 @@ from natal.hooks.types import (
     RESULT_CONTINUE,
     RESULT_STOP,
     HookProgram,
+)
+from natal.kernels.discrete_kernels import (
+    run_discrete_aging,
+    run_discrete_reproduction,
+    run_discrete_survival,
 )
 from natal.numba_utils import njit_switch
 from natal.population_state import DiscretePopulationState
