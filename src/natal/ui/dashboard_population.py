@@ -8,7 +8,6 @@ and accesses the population object directly in memory.
 """
 
 import bisect
-import inspect
 import json
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -22,11 +21,19 @@ except ImportError:
     HAS_NICEGUI = False
 
 from natal.age_structured_population import AgeStructuredPopulation
-from natal.population_config import CONCAVE, FIXED, LINEAR, NO_COMPETITION
 from natal.population_state import (
     PopulationState,
     parse_flattened_discrete_state,
     parse_flattened_state,
+)
+from natal.ui.dashboard_helpers import (
+    ObservationPanel,
+    get_hooks_data,
+    get_unordered_genotype_labels,
+    growth_mode_name,
+    jsonable_config_value,
+    numpy_converter,
+    render_hooks_panel,
 )
 from natal.visualization import get_allele_color, render_cell_svg
 
@@ -63,6 +70,15 @@ class Dashboard:
         self.inspected_tick: Optional[int] = None
         self.inspection_mode = False # False = Current, True = History
 
+        # Observation panel (reusable component)
+        self.obs_panel = ObservationPanel(
+            genotype_labels=get_unordered_genotype_labels(
+                self.pop.registry.index_to_genotype
+            ),
+            get_state=lambda: self.pop.state,
+            get_registry=lambda: self.pop.registry,
+        )
+
     async def _run_step(self):
         """Execute one simulation step."""
         if self.is_processing:
@@ -72,41 +88,41 @@ class Dashboard:
         self.status_spinner.visible = True
         self.status_label.text = "Compiling/Running..."
 
-        # If we were inspecting history, switch back to live view on step
-        if self.inspection_mode:
-            self.inspection_mode = False
-            self.inspected_tick = None
-            self.tabs_main.set_value('inspection')
+        try:
+            # If we were inspecting history, switch back to live view on step
+            if self.inspection_mode:
+                self.inspection_mode = False
+                self.inspected_tick = None
+                self.tabs_main.set_value('inspection')
 
-        if not self.pop.is_finished:
-            # Run blocking simulation step in a separate thread executor
-            # This allows the UI loop (including spinner) to keep running
-            if self.slider_speed.value <= 0:
-                # Turbo mode: Run in batches (render periodically)
-                # Execute ticks for ~100ms before yielding back to UI
-                def run_batch():
-                    start = time.time()
-                    # Run until 100ms passed, finished, or batch limit reached
-                    ticks = 0
-                    while time.time() - start < 0.1 and not self.pop.is_finished and ticks < 50:
-                        self.pop.run_tick()
-                        ticks += 1
+            if not self.pop.is_finished:
+                if self.slider_speed.value <= 0:
+                    def run_batch():
+                        start = time.time()
+                        ticks = 0
+                        while time.time() - start < 0.1 and not self.pop.is_finished and ticks < 50:
+                            self.pop.run_tick()
+                            ticks += 1
 
-                await run.io_bound(run_batch)
-            else:
-                # Normal mode: Single tick
-                await run.io_bound(self.pop.run_tick)
+                    await run.io_bound(run_batch)
+                else:
+                    await run.io_bound(self.pop.run_tick)
 
-            self.refresh_ui()
+                self.refresh_ui()
 
-        if self.pop.is_finished:
-            self.is_running = False
-            self.btn_play.props('icon=play_arrow')
-            self.btn_play.text = "Play"
-            self.status_label.text = "Finished"
+            if self.pop.is_finished:
+                self.is_running = False
+                self.btn_play.props('icon=play_arrow')
+                self.btn_play.text = "Play"
+                self.status_label.text = "Finished"
 
-        if not self.pop.is_finished:
-            self.status_label.text = "Ready"
+            if not self.pop.is_finished:
+                self.status_label.text = "Ready"
+        except Exception as e:
+            import traceback
+
+            self.status_label.text = f"ERROR: {e}"
+            traceback.print_exc()
 
         self.status_spinner.visible = False
         self.is_processing = False
@@ -673,73 +689,7 @@ class Dashboard:
 
     def _get_hooks_data(self):
         """Serialize hook information for export."""
-        from natal.hooks.types import OpType
-
-        op_type_name_map = {
-            OpType.SCALE: "scale",
-            OpType.SET: "set_count",
-            OpType.ADD: "add",
-            OpType.SUBTRACT: "subtract",
-            OpType.KILL: "kill",
-            OpType.SAMPLE: "sample",
-            OpType.STOP_IF_ZERO: "stop_if_zero",
-            OpType.STOP_IF_BELOW: "stop_if_below",
-            OpType.STOP_IF_ABOVE: "stop_if_above",
-            OpType.STOP_IF_EXTINCTION: "stop_if_extinction",
-        }
-
-        def normalize_op_type(op_type) -> str:
-            try:
-                enum_value = OpType(int(op_type))
-                return op_type_name_map.get(enum_value, enum_value.name.lower())
-            except (ValueError, TypeError):
-                if hasattr(op_type, "name"):
-                    return str(op_type.name).lower()
-                return str(op_type).lower()
-
-        def normalize_ages(ages):
-            if ages == "*":
-                return "*"
-            if isinstance(ages, range):
-                return [float(a) for a in ages]
-            if isinstance(ages, (list, tuple, np.ndarray)):
-                return [float(a) for a in ages]
-            if isinstance(ages, (int, float, np.integer, np.floating)):
-                return float(ages)
-            return str(ages)
-
-        hooks_data = []
-        for desc in self.pop.get_compiled_hooks():
-            hook_info = {
-                "event": desc.event,
-                "name": desc.name,
-                "priority": desc.priority,
-            }
-            if hasattr(desc, 'ops') and desc.ops:
-                hook_info["type"] = "declarative"
-                op_list = []
-                for op in desc.ops:
-                    op_dict = {
-                        "type": normalize_op_type(op.op_type),
-                        "genotypes": op.genotypes,
-                        "ages": normalize_ages(op.ages),
-                        "sex": op.sex,
-                        "param": op.param,
-                        "condition": op.condition,
-                    }
-                    op_list.append(op_dict)
-                hook_info["operations"] = op_list
-            else:
-                hook_info["type"] = "custom"
-                target_fn = desc.njit_fn or desc.py_wrapper
-                if target_fn:
-                    try:
-                        sig = inspect.signature(target_fn)
-                        hook_info["signature"] = str(sig)
-                    except (ValueError, TypeError):
-                        hook_info["signature"] = "N/A"
-            hooks_data.append(hook_info)
-        return hooks_data
+        return get_hooks_data(self.pop)
 
     def _get_sexual_selection_data(self):
         """Helper to get sexual selection fitness data for export."""
@@ -761,16 +711,6 @@ class Dashboard:
 
     def _do_export_logic(self, include_config: bool, include_history: bool, include_hooks: bool):
         """The core logic for exporting data to JSON."""
-        def numpy_converter(obj):
-            if isinstance(obj, np.integer):
-                return int(obj)
-            if isinstance(obj, np.floating):
-                return float(obj)
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            if isinstance(obj, np.bool_):
-                return bool(obj)
-            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
         def semanticize_state(state):
             registry = self.pop.registry
@@ -921,30 +861,10 @@ class Dashboard:
         }
 
     def _growth_mode_name(self, mode: int) -> str:
-        mapping = {
-            NO_COMPETITION: "NO_COMPETITION",
-            FIXED: "FIXED",
-            LINEAR: "LINEAR",
-            CONCAVE: "CONCAVE",
-        }
-        return mapping.get(int(mode), f"UNKNOWN_{mode}")
+        return growth_mode_name(mode)
 
     def _jsonable_config_value(self, value):
-        if isinstance(value, np.ndarray):
-            return value.tolist()
-        if isinstance(value, np.integer):
-            return int(value)
-        if isinstance(value, np.floating):
-            return float(value)
-        if isinstance(value, np.bool_):
-            return bool(value)
-        if isinstance(value, tuple):
-            return [self._jsonable_config_value(v) for v in value]
-        if isinstance(value, list):
-            return [self._jsonable_config_value(v) for v in value]
-        if isinstance(value, dict):
-            return {k: self._jsonable_config_value(v) for k, v in value.items()}
-        return value
+        return jsonable_config_value(value)
 
     def _get_full_config_data(self):
         conf = self.pop.export_config()
@@ -1179,6 +1099,7 @@ class Dashboard:
                 tab_inspect = ui.tab(name='inspection', label='Inspection', icon='search')
                 tab_config = ui.tab('Configuration', icon='settings')
                 tab_hooks = ui.tab('Hooks', icon='extension')
+                tab_observation = ui.tab('Observation', icon='visibility')
                 tab_rules = ui.tab('Genetics', icon='biotech')
 
             with ui.tab_panels(tabs, value='inspection').classes('w-full bg-transparent p-0'):
@@ -1239,77 +1160,14 @@ class Dashboard:
                                     ], rows=self._get_fecundity_data()).props('dense flat').classes('w-full')
 
                 # --- Tab 3: Hooks ---
-                def format_op(op) -> str:
-                    """Format a declarative HookOp into a human-readable string."""
-                    from natal.hooks.declarative import OpType
-
-                    try:
-                        normalized_type = OpType(int(op.op_type))
-                        type_name = normalized_type.name.lower()
-                    except (ValueError, TypeError):
-                        type_name = str(op.op_type).split('.')[-1].lower()
-
-                    parts = [f"<b>{type_name}</b>"]
-
-                    # Genotypes
-                    if op.genotypes == "*":
-                        parts.append("ALL genotypes")
-                    elif isinstance(op.genotypes, list):
-                        parts.append(f"genotypes {op.genotypes}")
-                    else:
-                        parts.append(f"genotype {op.genotypes}")
-
-                    # Sex
-                    if op.sex != "both":
-                        parts.append(f"({op.sex} only)")
-
-                    # Param
-                    if op.op_type in (OpType.SCALE, OpType.KILL):
-                        parts.append(f"by factor {op.param}")
-                    elif op.op_type in (OpType.ADD, OpType.SUBTRACT):
-                        parts.append(f"by {op.param}")
-                    elif op.op_type == OpType.SET:
-                        parts.append(f"to {op.param}")
-
-                    # Ages
-                    if op.ages != "*":
-                        parts.append(f"at ages {op.ages}")
-
-                    # Condition
-                    if op.condition:
-                        parts.append(f"WHEN <span class='text-blue-600 font-mono'>{op.condition}</span>")
-
-                    return " ".join(parts)
-
                 with ui.tab_panel(tab_hooks):
-                    hooks = self.pop.get_compiled_hooks()
-                    if not hooks:
-                        ui.label("No hooks registered.").classes('text-gray-500 italic')
-                    else:
-                        for desc in hooks:
-                            with ui.expansion(f"{desc.name} ({desc.event})", icon='code').classes('w-full border rounded mb-2'):
-                                with ui.column().classes('p-2'):
-                                    ui.label(f"Priority: {desc.priority}").classes('text-xs text-gray-500')
+                    render_hooks_panel(self.pop)
 
-                                    if desc.plan:
-                                        if hasattr(desc, 'ops') and desc.ops:
-                                            ui.label("Declarative Operations:").classes('font-bold text-base')
-                                            with ui.column().classes('gap-1'):
-                                                for op in desc.ops:
-                                                    ui.html(format_op(op)).classes('text-sm font-mono p-1 border-b bg-gray-50 rounded')
-                                        else:
-                                            ui.label("Compiled Plan (Low-level arrays)").classes('text-sm text-gray-400')
-                                    else:
-                                        if desc.py_wrapper:
-                                            try:
-                                                code = inspect.getsource(desc.py_wrapper)
-                                                ui.code(code, language='python').classes('w-full text-sm')
-                                            except OSError:
-                                                ui.label("(Source code unavailable)").classes('italic')
-                                        elif desc.njit_fn:
-                                            ui.label("Custom Numba Hook").classes('font-bold')
+                # --- Tab 4: Observation ---
+                with ui.tab_panel(tab_observation):
+                    self.obs_panel.build(ui.column())
 
-                # --- Tab 4: Genetics ---
+                # --- Tab 5: Genetics ---
                 with ui.tab_panel(tab_rules):
                     with ui.column().classes('w-full gap-6'):
                         ui.label('Meiosis (Genotype -> Gametes)').classes('font-bold text-gray-700 text-xl')
@@ -1361,7 +1219,6 @@ def launch(population: 'BasePopulation[Any]', port: int = 8080, title: str = "NA
 
     @ui.page('/')
     def main_page():
-        ui.add_head_html('<link rel="icon" href="/favicon.svg" type="image/svg+xml">')
         dashboard = Dashboard(population)
         dashboard.build_layout()
 
