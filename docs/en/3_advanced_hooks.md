@@ -74,7 +74,9 @@ def custom_culling_hook(ind_count, tick, deme_id=-1):
 
 ## Selector-based Hooks
 
-Selector-based Hooks are a form of Custom Hook that allows you to first select a target (e.g., a specific genotype) and then execute custom logic based on those selections.
+Selector-based Hooks allow you to specify target genotypes by symbolic name (e.g. ``"Drive|WT"``).
+The framework resolves symbols to integer indices at registration time and bakes them into
+the compiled code.
 
 ### Basic Usage
 
@@ -89,31 +91,116 @@ def cap_target(ind_count, tick, target_gt):
         ind_count[:, :, target_gt] *= 0.95
 ```
 
-### Features
+### Selector Resolution Rules
 
-- Selectors are resolved at registration time; the resulting index values are baked into the generated code
-- No need to manually manage genotype-to-index mappings
-- Suitable for scenarios requiring logic based on specific targets
+`selectors` values support the following types:
 
-### Complete Example
+| Type | Example | Resolution |
+|------|---------|-----------|
+| `str` (genotype label) | `"WT\|WT"` | single index |
+| `str` (wildcard) | `"*"` | all genotype indices |
+| `int` | `3` | used directly |
+| `range` | `range(3)` | `[0, 1, 2]` |
+| `list` / `tuple` | `["WT\|Dr", 4]` | multiple indices |
+| `Genotype` object | `species.genotypes[0]` | corresponding index |
+
+> **Note**: Selectors use `IndexRegistry.resolve_genotype_index()` for exact string
+> matching. Pattern syntax (`::`, `|*`, etc.) is not supported. Use `GenotypeSelector`
+> to pre-resolve patterns to index arrays if needed.
+
+### Parameter Passing Mode
+
+Selector Hooks support three parameter passing modes via the `mode` argument:
+
+| mode | Behavior | Example signature |
+|------|---------|-------------------|
+| `"auto"` (default) | Auto-detect: pack if param name not in keys | See below |
+| `"expand"` | Each selector as an individual keyword argument | `fn(ind_count, tick, a, b)` |
+| `"aggregate"` | All selectors packed into a single namedtuple | `fn(ind_count, tick, ctx)` |
+
+#### mode="expand"
+
+Each selector key becomes a separate function parameter:
 
 ```python
-from natal.hooks import hook
-
-
-@hook(event="early", selectors={"drive_gt": "Drive|WT", "wt_gt": "WT|WT"}, priority=5)
-def balance_population(ind_count, tick, drive_gt, wt_gt):
-    # Balance the ratio between drive genotype and wild type
-    drive_count = ind_count[:, :, drive_gt].sum()
-    wt_count = ind_count[:, :, wt_gt].sum()
+@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="expand")
+def balance_population(ind_count, tick, drive, wt):
+    # drive and wt are both int (genotype indices)
+    drive_count = ind_count[:, :, drive].sum()
+    wt_count = ind_count[:, :, wt].sum()
 
     if drive_count > wt_count * 2:
-        ind_count[:, :, drive_gt] *= 0.8
-    elif wt_count > drive_count * 2:
-        ind_count[:, :, wt_gt] *= 0.8
+        ind_count[:, :, drive] *= 0.8
 
     return 0
 ```
+
+#### mode="aggregate"
+
+All selectors are packed into a namedtuple, accessed via attributes:
+
+```python
+@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="aggregate")
+def balance_population(ind_count, tick, sel):
+    # sel.drive and sel.wt are both int (genotype indices)
+    # namedtuple attribute access is fully supported in Numba
+    drive_count = ind_count[:, :, sel.drive].sum()
+    wt_count = ind_count[:, :, sel.wt].sum()
+
+    if drive_count > wt_count * 2:
+        ind_count[:, :, sel.drive] *= 0.8
+
+    return 0
+```
+
+**Advantage**: Adding a new selector only requires updating the `selectors` dict,
+not the function signature. The parameter name can be any valid identifier
+(e.g. `sel`, `ctx`, `params`).
+
+#### mode="auto" (default)
+
+When no `mode` is specified, the framework detects the style from the function
+signature:
+
+- Extra positional parameter name **not in** selector keys → aggregate mode
+- Extra positional parameter name **in** selector keys → expand mode
+
+```python
+# "ctx" ∉ {"drive", "wt"} → auto aggregate
+@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"})
+def hook_agg(ind_count, tick, ctx):
+    ctx.drive, ctx.wt  # namedtuple attributes
+
+# "wt" ∈ {"wt"} → auto expand (backward compatible)
+@hook(event="early", selectors={"wt": "WT|WT"})
+def hook_exp(ind_count, tick, wt):
+    ...  # wt is a plain int parameter
+```
+
+### Using deme_id
+
+All three modes support the `deme_id` parameter for spatial populations:
+
+```python
+# Expand + deme_id
+@hook(event="early", selectors={"target": "Dr|Dr"}, mode="expand")
+def hook1(ind_count, tick, deme_id, target):
+    if deme_id == 0:
+        ind_count[:, :, target] = 0
+
+# Aggregate + deme_id
+@hook(event="early", selectors={"target": "Dr|Dr"}, mode="aggregate")
+def hook2(ind_count, tick, deme_id, sel):
+    if deme_id == 0:
+        ind_count[:, :, sel.target] = 0
+```
+
+### Features
+
+- Selectors are resolved at registration time and baked into generated Numba code
+- Aggregate mode uses `collections.namedtuple`; field access is natively supported in Numba
+- Single-value selectors (e.g. `"WT|WT"`) are unboxed to `int`; multi-value selectors remain `np.ndarray[int32]`
+- Suitable for scenarios requiring logic based on specific targets
 
 ## Numba-Compatible Random Sampling
 
@@ -231,10 +318,10 @@ def release_hook():
     return [Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")]
 
 
-# Selector-based Hook: selector-driven operations
-@hook(event="first", priority=7, selectors={"drive_gt": "Drive|WT"})
-def check_drive_threshold(ind_count, tick, drive_gt):
-    drive_count = ind_count[:, :, drive_gt].sum()
+# Selector-based Hook (aggregate mode): selector-driven operations
+@hook(event="first", priority=7, selectors={"drive": "Drive|WT"}, mode="aggregate")
+def check_drive_threshold(ind_count, tick, sel):
+    drive_count = ind_count[:, :, sel.drive].sum()
     if drive_count > 10000:
         # Log or record state here
         pass

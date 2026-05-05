@@ -74,7 +74,8 @@ def custom_culling_hook(ind_count, tick, deme_id=-1):
 
 ## Selector-based Hook
 
-Selector-based Hook 是自定义 Hook 的一种形式，允许你先选定某个目标（例如特定基因型），然后基于这些选择执行自定义逻辑。
+Selector-based Hook 是自定义 Hook 的一种形式，允许你通过符号名称（如 `"Drive|WT"`）
+指定目标基因型，框架在注册时自动将符号解析为整数索引并烘焙到编译后的代码中。
 
 ### 基本用法
 
@@ -89,31 +90,114 @@ def cap_target(ind_count, tick, target_gt):
         ind_count[:, :, target_gt] *= 0.95
 ```
 
-### 特点
+### 选择器解析规则
 
-- 选择器在注册时解析，得到的索引值会烘焙到生成的代码中
-- 无需手动管理基因型到索引的映射
-- 适合需要基于特定目标执行逻辑的场景
+`selectors` 的值支持以下类型：
 
-### 完整示例
+| 类型 | 示例 | 解析结果 |
+|------|------|---------|
+| `str`（基因型标签） | `"WT\|WT"` | 单个索引 |
+| `str`（通配符） | `"*"` | 所有基因型索引 |
+| `int` | `3` | 直接用作索引 |
+| `range` | `range(3)` | `[0, 1, 2]` |
+| `list` / `tuple` | `["WT\|Dr", 4]` | 多个索引 |
+| `Genotype` 对象 | `species.genotypes[0]` | 对应索引 |
+
+> **注意**：选择器使用 `IndexRegistry.resolve_genotype_index()` 做精确字符串匹配。
+> 不支持 pattern 语法（`::`、`|*` 等）。如需 pattern 匹配，请在注册前自行调用
+> `GenotypeSelector` 转换为索引数组。
+
+### 参数传递模式（mode）
+
+Selector Hook 提供三种参数传递模式，通过 `mode` 参数指定：
+
+| mode | 行为 | 函数签名示例 |
+|------|------|------------|
+| `"auto"`（默认） | 自动检测：参数名不在 selector key 中则打包 | 见下方 |
+| `"expand"` | 每个 selector 作为独立关键字参数 | `fn(ind_count, tick, a, b)` |
+| `"aggregate"` | 所有 selector 打包为一个 namedtuple | `fn(ind_count, tick, ctx)` |
+
+#### mode="expand"（展开模式）
+
+每个 selector key 成为函数的一个独立参数：
 
 ```python
-from natal.hooks import hook
-
-
-@hook(event="early", selectors={"drive_gt": "Drive|WT", "wt_gt": "WT|WT"}, priority=5)
-def balance_population(ind_count, tick, drive_gt, wt_gt):
-    # 平衡驱动基因型和野生型的比例
-    drive_count = ind_count[:, :, drive_gt].sum()
-    wt_count = ind_count[:, :, wt_gt].sum()
+@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="expand")
+def balance_population(ind_count, tick, drive, wt):
+    # drive 和 wt 都是 int（基因型索引）
+    drive_count = ind_count[:, :, drive].sum()
+    wt_count = ind_count[:, :, wt].sum()
 
     if drive_count > wt_count * 2:
-        ind_count[:, :, drive_gt] *= 0.8
-    elif wt_count > drive_count * 2:
-        ind_count[:, :, wt_gt] *= 0.8
+        ind_count[:, :, drive] *= 0.8
 
     return 0
 ```
+
+#### mode="aggregate"（聚合模式）
+
+所有 selector 打包为一个 namedtuple，通过属性访问：
+
+```python
+@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="aggregate")
+def balance_population(ind_count, tick, sel):
+    # sel.drive 和 sel.wt 都是 int（基因型索引）
+    # namedtuple 的属性访问在 Numba 中完全支持
+    drive_count = ind_count[:, :, sel.drive].sum()
+    wt_count = ind_count[:, :, sel.wt].sum()
+
+    if drive_count > wt_count * 2:
+        ind_count[:, :, sel.drive] *= 0.8
+
+    return 0
+```
+
+**优点**：新增 selector 只需要在 `selectors` 字典中添加键值对，无需修改函数签名。
+参数名可以是任意合法的 Python 标识符（如 `sel`、`ctx`、`params` 等）。
+
+#### mode="auto"（自动检测，默认）
+
+当不指定 `mode` 时，框架根据函数签名自动选择模式：
+
+- 额外位置参数（`ind_count`, `tick` 之后）的名字**不在** selector key 中 → 聚合模式
+- 额外位置参数的名字**在** selector key 中 → 展开模式
+
+```python
+# 参数名 "ctx" 不在 selectors key 中 → 自动聚合
+@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"})
+def hook_agg(ind_count, tick, ctx):
+    ctx.drive, ctx.wt  # namedtuple 属性
+
+# 参数名 "wt" 匹配 selector key "wt" → 自动展开（向后兼容）
+@hook(event="early", selectors={"wt": "WT|WT"})
+def hook_exp(ind_count, tick, wt):
+    # wt 是单独的 int 参数
+```
+
+### 配合 deme_id
+
+三种模式都支持 `deme_id` 参数，适用于空间种群：
+
+```python
+# 展开模式 + deme_id
+@hook(event="early", selectors={"target": "Dr|Dr"}, mode="expand")
+def hook1(ind_count, tick, deme_id, target):
+    if deme_id == 0:
+        ind_count[:, :, target] = 0
+
+# 聚合模式 + deme_id
+@hook(event="early", selectors={"target": "Dr|Dr"}, mode="aggregate")
+def hook2(ind_count, tick, deme_id, sel):
+    if deme_id == 0:
+        ind_count[:, :, sel.target] = 0
+```
+
+### 特点
+
+- 选择器在注册时解析，得到的索引值烘焙到生成的 Numba 代码中
+- `aggregate` 模式使用 `collections.namedtuple`，字段访问在 Numba 中原生支持
+- 单值选择器（如 `"WT|WT"`）自动拆箱为 `int`，多值选择器保留为 `np.ndarray[int32]`
+- 适合需要基于特定目标执行逻辑的场景
 
 ## Numba 兼容的随机采样
 
@@ -231,10 +315,10 @@ def release_hook():
     return [Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")]
 
 
-# Selector-based Hook：基于选择器的操作
-@hook(event="first", priority=7, selectors={"drive_gt": "Drive|WT"})
-def check_drive_threshold(ind_count, tick, drive_gt):
-    drive_count = ind_count[:, :, drive_gt].sum()
+# Selector-based Hook（聚合模式）：基于选择器的操作
+@hook(event="first", priority=7, selectors={"drive": "Drive|WT"}, mode="aggregate")
+def check_drive_threshold(ind_count, tick, sel):
+    drive_count = ind_count[:, :, sel.drive].sum()
     if drive_count > 10000:
         # 可以在这里添加日志或状态记录
         pass
