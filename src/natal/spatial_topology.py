@@ -73,7 +73,7 @@ class MigrationParams(NamedTuple):
 
     kernel: NDArray[np.float64]
     include_center: bool
-    rate: float
+    rate: NDArray[np.float64]
     adjust_on_edge: bool
     adjacency: NDArray[np.float64]
     mode_code: int

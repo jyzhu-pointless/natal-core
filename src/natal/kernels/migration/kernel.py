@@ -222,7 +222,7 @@ def _apply_kernel_migration_core(
     topology_rows: int,
     topology_cols: int,
     topology_wrap: bool,
-    rate: float,
+    rate: NDArray[np.float64],
     is_stochastic: bool,
     use_continuous_sampling: bool,
     adjust_on_edge: bool,
@@ -239,6 +239,11 @@ def _apply_kernel_migration_core(
     n_sexes = ind_count_all.shape[1]
     n_ages = ind_count_all.shape[2]
     n_genotypes = ind_count_all.shape[3]
+
+    # Resolve rate array to age count: scalar broadcast to all ages.
+    rate_arr = rate
+    if rate_arr.shape[0] == 1 and n_ages > 1:
+        rate_arr = np.full(n_ages, rate_arr[0], dtype=np.float64)
 
     # Use thread-local output tensors to avoid write races in ``prange``.
     out_ind_by_thread = np.zeros((numba_max_threads,) + ind_count_all.shape, dtype=np.float64)
@@ -299,7 +304,7 @@ def _apply_kernel_migration_core(
                     row_dst_idx=row_dst_idx,
                     row_dst_prob=row_dst_prob,
                     row_dst_count=src_nnz,
-                    rate=rate,
+                    rate=rate_arr[age],
                     is_stochastic=is_stochastic,
                     use_continuous_sampling=use_continuous_sampling,
                     distributed=distributed,
@@ -317,7 +322,7 @@ def _apply_kernel_migration_core(
                         row_dst_idx=row_dst_idx,
                         row_dst_prob=row_dst_prob,
                         row_dst_count=src_nnz,
-                        rate=rate,
+                        rate=rate_arr[age],
                         is_stochastic=is_stochastic,
                         use_continuous_sampling=use_continuous_sampling,
                         distributed=distributed,
@@ -338,7 +343,7 @@ def _apply_kernel_migration_core(
                         row_dst_idx=row_dst_idx,
                         row_dst_prob=row_dst_prob,
                         row_dst_count=src_nnz,
-                        rate=rate,
+                        rate=rate_arr[age],
                         is_stochastic=is_stochastic,
                         use_continuous_sampling=use_continuous_sampling,
                         distributed=distributed,
@@ -368,7 +373,7 @@ def apply_spatial_kernel_migration(
     topology_wrap: bool,
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-    rate: float,
+    rate: NDArray[np.float64],
     is_stochastic: bool,
     use_continuous_sampling: bool,
     adjust_on_edge: bool = False,
@@ -415,7 +420,7 @@ def apply_spatial_kernel_migration_heterogeneous(
     topology_rows: int,
     topology_cols: int,
     topology_wrap: bool,
-    rate: float,
+    rate: NDArray[np.float64],
     is_stochastic: bool,
     use_continuous_sampling: bool,
     adjust_on_edge: bool,

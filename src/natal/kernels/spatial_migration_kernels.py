@@ -40,7 +40,7 @@ def apply_spatial_adjacency_migration(
     topology_wrap: bool,
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-    rate: float,
+    rate: NDArray[np.float64],
     is_stochastic: bool,
     use_continuous_sampling: bool,
     adjust_migration_on_edge: bool = False,
@@ -61,7 +61,7 @@ def apply_spatial_adjacency_migration(
     When ``deme_kernel_ids`` is provided, per-deme kernel selection is active
     and the pre-built per-kernel arrays are used instead of a single kernel.
     """
-    if rate <= 0.0:
+    if np.all(rate <= 0.0):
         return ind_count_all, sperm_store_all
 
     if migration_mode == 1:
@@ -134,7 +134,7 @@ def run_spatial_migration(
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
     config: PopulationConfig,
-    migration_rate: float,
+    migration_rate: NDArray[np.float64],
     adjust_migration_on_edge: bool = False,
     deme_kernel_ids: NDArray[np.int64] | None = None,
     kernel_d_row: NDArray[np.int64] | None = None,
@@ -145,7 +145,7 @@ def run_spatial_migration(
     max_nnz: int = 0,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Run migration stage for all demes with config-carried stochastic flags."""
-    if migration_rate <= 0.0:
+    if np.all(migration_rate <= 0.0):
         return ind_count_all, sperm_store_all
 
     return apply_spatial_adjacency_migration(

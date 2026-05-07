@@ -80,7 +80,7 @@ The `SpatialPopulation` constructor supports these most commonly used parameters
 - `migration_kernel`: Migration kernel, used when following the kernel path.
 - `kernel_bank`: Optional collection of kernels, used when different source demes use different kernels.
 - `deme_kernel_ids`: Optional per-deme kernel ids, indexing into `kernel_bank`.
-- `migration_rate`: Proportion of individuals migrating per step.
+- `migration_rate`: Proportion of individuals migrating per step. A scalar applies only to adult ages (>= `new_adult_age` from config); juveniles default to 0. Pass a `(n_ages,)` array for explicit per-age rates.
 - `migration_strategy`: `auto`, `adjacency`, `kernel`, or `hybrid`; default is `auto`.
 - `kernel_include_center`: Whether to include the center cell as a migration target in the kernel path, default `False`.
 - `adjust_migration_on_edge`: Whether to adjust migration volume at boundaries (see "migration_rate and Boundary Effects" section), default `False`.
@@ -131,7 +131,7 @@ Detailed parameter descriptions for each method can be found in [Population Init
 ```python
 .migration(
     kernel=None,                     # [B] NDArray: odd-dimension migration kernel
-    migration_rate=0.0,             # float: migration proportion
+    migration_rate=0.0,             # float | NDArray | Sequence: migration proportion (scalar broadcasts to all ages)
     strategy="auto",                # "auto" | "adjacency" | "kernel" | "hybrid"
     adjacency=None,                 # Explicit adjacency matrix
     kernel_bank=None,               # Heterogeneous kernel collection
@@ -491,11 +491,25 @@ If a deme triggers a termination condition first (e.g., population extinction), 
 
 ### migration_rate
 
-`migration_rate` controls the proportion of mass involved in cross-deme flow per step:
+`migration_rate` controls the proportion of mass involved in cross-deme flow per step. Two forms are supported:
 
-- `0.0`: No migration.
-- `0.1`: 10% of mass participates in migration per step.
-- `1.0`: All mass is redistributed according to adjacency/migration kernel each step.
+- **Scalar** (`float`): Only adult ages (>= population's `new_adult_age`) receive the rate; juveniles default to 0. In discrete-generation populations the single age class receives the full rate.
+- **Age-specific array** (`NDArray[np.float64]` or `Sequence[float]`, shape `(n_ages,)`): Each age is set explicitly.
+
+```python
+# Scalar — juveniles age < new_adult_age emigrate 0%, adults emigrate 10%
+spatial = SpatialPopulation(demes, migration_rate=0.1)
+
+# Age-specific — explicit per-age (default new_adult_age=2)
+spatial = SpatialPopulation(demes, migration_rate=[0.0, 0.0, 0.3, 0.1])
+
+# Runtime update
+spatial.migration_rate = 0.2                 # adult ages only
+spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # per-age
+```
+
+- `0.0`: No migration (all ages).
+- `0.1`: Adult ages (>= new_adult_age) emigrate 10% per step; discrete-generation populations emigrate 10% overall.
 
 ### Boundary Effect and adjust_migration_on_edge
 

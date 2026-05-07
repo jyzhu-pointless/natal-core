@@ -164,6 +164,33 @@ def _coerce_adjacency_dense(
 
     return dense
 
+
+def _normalize_migration_rate(
+    rate: float | NDArray[np.float64] | Sequence[float],
+    n_ages: int,
+    adult_start_age: int,
+) -> NDArray[np.float64]:
+    """Normalize migration rate to an age-indexed array.
+
+    Scalar inputs: the rate applies only to adult ages (>= adult_start_age);
+    juvenile ages (< adult_start_age) default to 0.  In discrete populations
+    (n_ages == 1) the single age gets the full rate regardless of
+    adult_start_age.  Explicit arrays are used as-is.
+    """
+    arr = np.atleast_1d(np.asarray(rate, dtype=np.float64))
+    if arr.shape == (1,):
+        if n_ages > 1 and adult_start_age > 0:
+            result = np.full(n_ages, arr[0], dtype=np.float64)
+            result[:adult_start_age] = 0.0
+            return result
+        return np.full(n_ages, arr[0], dtype=np.float64)
+    if arr.shape == (n_ages,):
+        return arr
+    raise ValueError(
+        f"migration_rate shape {arr.shape} does not match n_ages={n_ages}"
+    )
+
+
 class SpatialPopulation:
     """Spatial container composed of per-deme population objects.
 
@@ -240,7 +267,7 @@ class SpatialPopulation:
         kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
-        migration_rate: float = 0.0,
+        migration_rate: float | NDArray[np.float64] | Sequence[float] = 0.0,
         adjust_migration_on_edge: bool = False,
         name: str = "SpatialPopulation",
     ) -> None:
@@ -268,6 +295,8 @@ class SpatialPopulation:
             kernel_include_center: Whether kernel migration includes the kernel
                 center as an outbound target for the source deme.
             migration_rate: Fraction of each deme that migrates each tick.
+                Scalar applies only to adult ages (>= new_adult_age from
+                config); juvenile ages default to 0.  Array indexed by age.
             adjust_migration_on_edge: Whether to adjust migration rates on
                 boundaries. When False (default), boundary demes migrate less
                 due to fewer valid neighbors. When True, all demes have the
@@ -426,7 +455,10 @@ class SpatialPopulation:
         self._deme_kernel_ids = normalized_deme_kernel_ids
         self._kernel_include_center = bool(kernel_include_center)
         self._migration_mode_code = 0 if migration_mode == "adjacency" else 1
-        self._migration_rate = float(migration_rate)
+        ind = self._demes[0].state.individual_count
+        n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
+        adult_start_age = self._adult_start_age(n_ages)
+        self._migration_rate = _normalize_migration_rate(migration_rate, n_ages, adult_start_age)
         self._adjust_migration_on_edge = bool(adjust_migration_on_edge)
         # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
@@ -440,7 +472,7 @@ class SpatialPopulation:
         self._migration_params = MigrationParams(
             kernel=self._migration_kernel_array(),
             include_center=bool(kernel_include_center),
-            rate=float(migration_rate),
+            rate=self._migration_rate,
             adjust_on_edge=bool(adjust_migration_on_edge),
             adjacency=adjacency_dense,
             mode_code=0 if migration_mode == "adjacency" else 1,
@@ -521,14 +553,31 @@ class SpatialPopulation:
         """NDArray[np.int64] | None: Reserved per-deme kernel ids."""
         return self._deme_kernel_ids
 
+    def _adult_start_age(self, n_ages: int) -> int:
+        """Resolve adult start age from the first deme's config.
+
+        Falls back to 1 for age-structured populations when config is
+        unavailable (e.g. test fixtures).
+        """
+        try:
+            return int(self._demes[0].config.new_adult_age)
+        except AttributeError:
+            return 1 if n_ages > 1 else 0
+
     @property
-    def migration_rate(self) -> float:
-        """float: Fraction of each deme that migrates on each tick."""
+    def migration_rate(self) -> NDArray[np.float64]:
+        """NDArray[np.float64]: Age-specific migration rate per tick."""
         return self._migration_rate
 
     @migration_rate.setter
-    def migration_rate(self, value: float) -> None:
-        self._migration_rate = float(value)
+    def migration_rate(self, value: float | NDArray[np.float64] | Sequence[float]) -> None:
+        ind = self._demes[0].state.individual_count
+        n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
+        adult_start_age = self._adult_start_age(n_ages)
+        self._migration_rate = _normalize_migration_rate(value, n_ages, adult_start_age)
+        # Rebuild MigrationParams so the updated rate reaches both
+        # the Python dispatch path and the codegen wrapper path.
+        self._migration_params = self._migration_params._replace(rate=self._migration_rate)
 
     @property
     def adjust_migration_on_edge(self) -> bool:
@@ -1283,7 +1332,7 @@ class SpatialPopulation:
             raise TypeError("deme[0] does not implement export_config()")
         cfg = export_fn()
 
-        if float(self._migration_rate) <= 0.0:
+        if np.all(self._migration_rate <= 0.0):
             return cfg
 
         cfg_is_stochastic = bool(getattr(cfg, "is_stochastic", False))

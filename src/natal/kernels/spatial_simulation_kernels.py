@@ -148,7 +148,7 @@ def run_spatial_tick_with_migration(
     topology_wrap: bool,
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-    migration_rate: float,
+    migration_rate: NDArray[np.float64],
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64], int]:
     """Run one spatial tick with migration applied after aging.
 
@@ -214,7 +214,7 @@ def run_spatial_tick_with_adjacency_migration(
     topology_wrap: bool,
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-    migration_rate: float,
+    migration_rate: NDArray[np.float64],
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64], int]:
     """Backward-compatible alias for migration-enabled spatial tick."""
     return run_spatial_tick_with_migration(
@@ -247,7 +247,7 @@ def run_spatial_steps_with_migration(
     topology_wrap: bool,
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-    migration_rate: float,
+    migration_rate: NDArray[np.float64],
     record_interval: int = 0,
     observation_mask: Optional[NDArray[np.float64]] = None,
     compact_meta: Optional[CompactMeta] = None,

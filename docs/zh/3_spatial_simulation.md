@@ -80,7 +80,7 @@ spatial = SpatialPopulation(
 - `migration_kernel`：迁移核，走 kernel 路径时使用。
 - `kernel_bank`：可选的 kernel 集合，用于不同 source deme 使用不同 kernel。
 - `deme_kernel_ids`：可选的 per-deme kernel id，索引到 `kernel_bank`。
-- `migration_rate`：每步参与迁移的比例。
+- `migration_rate`：每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；也可传入 `(n_ages,)` 数组按年龄精确配置。
 - `migration_strategy`：`auto`、`adjacency`、`kernel`、`hybrid`，默认 `auto`。
 - `kernel_include_center`：kernel 路径下是否把中心格也算进迁移目标。
 - `adjust_migration_on_edge`：是否在边界调整迁移量（见「migration_rate 与边界效应」一节），默认 `False`。
@@ -131,7 +131,7 @@ pop = (
 ```python
 .migration(
     kernel=None,                     # [B] NDArray: 奇数维迁移核
-    migration_rate=0.0,             # float: 迁移比例
+    migration_rate=0.0,             # float | NDArray | Sequence: 迁移比例（标量广播到所有年龄）
     strategy=”auto”,                # “auto” | “adjacency” | “kernel” | “hybrid”
     adjacency=None,                 # 显式邻接矩阵
     kernel_bank=None,               # 异构 kernel 集合
@@ -491,11 +491,25 @@ history = pop.output_history(observation=observation)
 
 ### migration_rate
 
-`migration_rate` 控制每一步中参与跨 deme 流动的质量比例：
+`migration_rate` 控制每一步中参与跨 deme 流动的质量比例。支持两种形式：
 
-- `0.0`：不迁移。
-- `0.1`：每步有 10% 的质量参与迁移。
-- `1.0`：每步全部按邻接/迁移核重新分配。
+- **标量**（`float`）：仅成年年龄（>= 种群的 `new_adult_age`）使用该迁移率，幼年迁移率默认为 0。离散世代种群中 age 0 代表整个种群，标量正常广播。
+- **按年龄的数组**（`NDArray[np.float64]` 或 `Sequence[float]`，形状 `(n_ages,)`）：每个年龄按传入值精确配置。
+
+```python
+# 标量 — age < new_adult_age 迁出 0%，成年迁出 10%（默认 new_adult_age=2）
+spatial = SpatialPopulation(demes, migration_rate=0.1)
+
+# 按年龄 — 精确指定每个年龄的迁移率
+spatial = SpatialPopulation(demes, migration_rate=[0.0, 0.0, 0.3, 0.1])
+
+# 运行时修改
+spatial.migration_rate = 0.2                 # 仅成年年龄生效
+spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # 按年龄精确设置
+```
+
+- `0.0`：不迁移（所有年龄）。
+- `0.1`：成年年龄（>= new_adult_age）每步迁出 10%，离散世代下全种群迁出 10%。
 
 ### 边界效应与 adjust_migration_on_edge
 

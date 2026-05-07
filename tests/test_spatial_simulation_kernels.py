@@ -41,7 +41,7 @@ def test_apply_spatial_adjacency_migration_deterministic_preserves_totals() -> N
         topology_wrap=False,
         migration_kernel=kernel,
         kernel_include_center=False,
-        rate=0.25,
+        rate=np.array([0.25], dtype=np.float64),
         is_stochastic=False,
         use_continuous_sampling=False,
     )
@@ -79,7 +79,7 @@ def test_apply_spatial_adjacency_migration_stochastic_preserves_totals() -> None
         topology_wrap=False,
         migration_kernel=kernel,
         kernel_include_center=False,
-        rate=0.4,
+        rate=np.array([0.4], dtype=np.float64),
         is_stochastic=True,
         use_continuous_sampling=False,
     )

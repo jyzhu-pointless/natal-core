@@ -36,7 +36,7 @@ def _apply_spatial_adjacency_migration_internal(
     row_dst_idx: NDArray[np.int64],
     row_dst_prob: NDArray[np.float64],
     row_nnz: NDArray[np.int64],
-    rate: float,
+    rate: NDArray[np.float64],
     is_stochastic: bool,
     use_continuous_sampling: bool,
     n_threads: int,
@@ -66,6 +66,11 @@ def _apply_spatial_adjacency_migration_internal(
     n_ages = ind_count_all.shape[2]
     n_genotypes = ind_count_all.shape[3]
     max_nnz = row_dst_idx.shape[1]
+
+    # Resolve rate array to age count: scalar broadcast to all ages.
+    rate_arr = rate
+    if rate_arr.shape[0] == 1 and n_ages > 1:
+        rate_arr = np.full(n_ages, rate_arr[0], dtype=np.float64)
 
     # Thread-local accumulation avoids write conflicts across ``prange`` source lanes.
     out_ind_by_thread = np.zeros((n_threads,) + ind_count_all.shape, dtype=np.float64)
@@ -100,7 +105,7 @@ def _apply_spatial_adjacency_migration_internal(
                         row_dst_idx=row_dst_idx[src],
                         row_dst_prob=row_dst_prob[src],
                         row_dst_count=src_nnz,
-                        rate=rate,
+                        rate=rate_arr[age],
                         is_stochastic=True,
                         use_continuous_sampling=use_continuous_sampling,
                         distributed=distributed,
@@ -113,7 +118,7 @@ def _apply_spatial_adjacency_migration_internal(
                 else:
                     # Deterministic calculation
                     if src_nnz > 0:
-                        outbound = virgin_count * rate
+                        outbound = virgin_count * rate_arr[age]
                         stay = virgin_count - outbound
                         out_ind[src, 0, age, female_genotype] += stay
                         for nnz_idx in range(src_nnz):
@@ -132,7 +137,7 @@ def _apply_spatial_adjacency_migration_internal(
                             row_dst_idx=row_dst_idx[src],
                             row_dst_prob=row_dst_prob[src],
                             row_dst_count=src_nnz,
-                            rate=rate,
+                            rate=rate_arr[age],
                             is_stochastic=True,
                             use_continuous_sampling=use_continuous_sampling,
                             distributed=distributed,
@@ -146,7 +151,7 @@ def _apply_spatial_adjacency_migration_internal(
                     else:
                         # Deterministic calculation
                         if src_nnz > 0:
-                            outbound_sperm = sperm_value * rate
+                            outbound_sperm = sperm_value * rate_arr[age]
                             stay_sperm = sperm_value - outbound_sperm
                             out_sperm[src, age, female_genotype, male_genotype] += stay_sperm
                             out_ind[src, 0, age, female_genotype] += stay_sperm
@@ -172,7 +177,7 @@ def _apply_spatial_adjacency_migration_internal(
                             row_dst_idx=row_dst_idx[src],
                             row_dst_prob=row_dst_prob[src],
                             row_dst_count=src_nnz,
-                            rate=rate,
+                            rate=rate_arr[age],
                             is_stochastic=True,
                             use_continuous_sampling=use_continuous_sampling,
                             distributed=distributed,
@@ -185,7 +190,7 @@ def _apply_spatial_adjacency_migration_internal(
                     else:
                         # Deterministic calculation
                         if src_nnz > 0:
-                            outbound = value * rate
+                            outbound = value * rate_arr[age]
                             stay = value - outbound
                             out_ind[src, sex, age, genotype] += stay
                             for nnz_idx in range(src_nnz):
@@ -213,7 +218,7 @@ def _apply_spatial_adjacency_migration_deterministic_parallel(
     row_dst_prob: NDArray[np.float64],
     row_nnz: NDArray[np.int64],
     row_total: NDArray[np.float64],
-    rate: float,
+    rate: NDArray[np.float64],
     n_threads: int,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Apply one deterministic migration step using sparse per-source rows."""
@@ -237,7 +242,7 @@ def _apply_spatial_adjacency_migration_stochastic_parallel(
     row_dst_idx: NDArray[np.int64],
     row_dst_prob: NDArray[np.float64],
     row_nnz: NDArray[np.int64],
-    rate: float,
+    rate: NDArray[np.float64],
     use_continuous_sampling: bool,
     n_threads: int,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -265,7 +270,7 @@ def apply_spatial_adjacency_mode(
     topology_wrap: bool,
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-    rate: float,
+    rate: NDArray[np.float64],
     is_stochastic: bool,
     use_continuous_sampling: bool,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
