@@ -136,6 +136,14 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._finalize_hooks()
 
+    def _clone(self, name: str, config: PopulationConfig | None = None) -> Any:
+        """Clone with correct _discrete_config for the new config."""
+        clone = super()._clone(name, config=config)
+        from natal.discrete_population_config import from_population_config
+
+        object.__setattr__(clone, "_discrete_config", from_population_config(clone._config))  # type: ignore[union-attr]
+        return clone
+
     @classmethod
     def setup(
         cls,
