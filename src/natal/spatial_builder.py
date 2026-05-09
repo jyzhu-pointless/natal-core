@@ -431,7 +431,8 @@ class SpatialBuilder:
         self._kernel_include_center: bool = False
         self._adjust_migration_on_edge: bool = False
 
-        # Container-level name.
+        # Parameter registry (mirrors PopulationBuilderBase._param_values).
+        self._param_values: dict[str, object] = {}
         self._spatial_name: str = "SpatialPopulation"
 
     # ------------------------------------------------------------------
@@ -955,7 +956,36 @@ class SpatialBuilder:
             self._deme_kernel_ids = np.asarray(deme_kernel_ids, dtype=np.int64)
         self._kernel_include_center = bool(kernel_include_center)
         self._adjust_migration_on_edge = bool(adjust_migration_on_edge)
+        self._param_values["migration.migration_rate"] = float(migration_rate)
         return self
+
+    # ------------------------------------------------------------------
+    # Parameter introspection (mirrors PopulationBuilderBase)
+    # ------------------------------------------------------------------
+
+    def get_params(self) -> dict[str, object]:
+        """Return all registered parameter values.
+
+        Merges the template builder's values with spatial-specific params.
+        """
+        params = dict(self._template.get_params())
+        params.update(self._param_values)
+        return params
+
+    def get_param(self, domain: str, name: str) -> object | None:
+        """Look up a single registered parameter value.
+
+        Args:
+            domain: Parameter domain (e.g. ``"migration"``).
+            name: Parameter name (e.g. ``"migration_rate"``).
+
+        Returns:
+            The stored value, or ``None`` if not registered.
+        """
+        key = f"{domain}.{name}"
+        if key in self._param_values:
+            return self._param_values[key]
+        return self._template.get_params().get(key)
 
     # ------------------------------------------------------------------
     # Build

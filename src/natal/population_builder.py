@@ -948,6 +948,20 @@ class PopulationBuilderBase:
         self._presets: List[Any] = []
         self._observation_groups: Optional[GroupsInput] = None
         self._observation_collapse_age: bool = False
+        self._params: dict[str, object] = {}
+
+    def _param(self, key: str, default: object = None) -> object:
+        return self._params.get(key, default)
+
+    def _set_param(self, key: str, value: object) -> None:
+        self._params[key] = value
+
+    def _set_params(self, domain: str, **kwargs: object) -> None:
+        for k, v in kwargs.items():
+            self._params[f"{domain}.{k}"] = v
+
+    def get_params(self) -> dict[str, object]:
+        return dict(self._params)
 
     def with_observation(
         self,
@@ -1144,23 +1158,32 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
         use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False
+        use_fixed_egg_count: bool = False,
+        **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure basic population settings.
 
+        Named parameters provide IDE hints; additional setup-domain
+        parameters are forwarded via **kwargs.
+
         Args:
-            name (str): Human-readable population name.
-            stochastic (bool): Whether to use stochastic sampling.
-            use_continuous_sampling (bool): If True, use Dirichlet; else standard sampling.
-            use_fixed_egg_count (bool): If True, egg count is fixed; if False, Poisson.
+            name: Human-readable population name.
+            stochastic: Whether to use stochastic sampling.
+            use_continuous_sampling: If True, use Dirichlet.
+            use_fixed_egg_count: If True, egg count is fixed.
+            **kwargs: Additional setup-domain parameters.
 
         Returns:
-            AgeStructuredPopulationBuilder: Self for chaining.
+            Self for chaining.
         """
         self.name = name
         self.is_stochastic = stochastic
         self.use_continuous_sampling = use_continuous_sampling
         self.use_fixed_egg_count = use_fixed_egg_count
+        self._set_param("setup.stochastic", stochastic)
+        self._set_param("setup.continuous_sampling", use_continuous_sampling)
+        self._set_param("setup.fixed_egg_count", use_fixed_egg_count)
+        self._set_params(domain="setup", **kwargs)
         return self
 
     def age_structure(
@@ -1168,25 +1191,20 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         n_ages: int = 8,
         new_adult_age: int = 2,
         generation_time: Optional[int] = None,
-        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
+        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
-        """Configure age structure and generation time.
-
-        Args:
-            n_ages (int): Number of age classes.
-            new_adult_age (int): Age at which individuals become adults.
-            generation_time (Optional[int]): Optional time for one generation.
-            equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
-
-        Returns:
-            AgeStructuredPopulationBuilder: Self for chaining.
-        """
+        """Configure age structure and generation time."""
         self.n_ages = n_ages
         self.new_adult_age = new_adult_age
+        self._set_param("age_structure.n_ages", n_ages)
+        self._set_param("age_structure.new_adult_age", new_adult_age)
         if generation_time is not None:
             self.generation_time = generation_time
+            self._set_param("age_structure.generation_time", generation_time)
         if equilibrium_distribution is not None:
             self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
+        self._set_params(domain="age_structure", **kwargs)
         return self
 
     @overload
@@ -1238,19 +1256,10 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         female_age_based_survival_rates: Optional[Any] = None,
         male_age_based_survival_rates: Optional[Any] = None,
         generation_time: Optional[int] = None,
-        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
+        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
-        """Configure survival rates and related parameters.
-
-        Args:
-            female_age_based_survival_rates (Optional[Any]): Per-age female survival rates.
-            male_age_based_survival_rates (Optional[Any]): Per-age male survival rates.
-            generation_time (Optional[int]): Optional time scale for generation.
-            equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
-
-        Returns:
-            AgeStructuredPopulationBuilder: Self for chaining.
-        """
+        """Configure survival rates."""
         if female_age_based_survival_rates is not None:
             self.female_age_based_survival_rates = female_age_based_survival_rates
         if male_age_based_survival_rates is not None:
@@ -1259,6 +1268,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             self.generation_time = generation_time
         if equilibrium_distribution is not None:
             self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
+        self._set_params(domain="survival", **kwargs)
         return self
 
     def reproduction(
@@ -1271,25 +1281,10 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         use_fixed_egg_count: bool = False,
         sex_ratio: float = 0.5,
         use_sperm_storage: bool = True,
-        sperm_displacement_rate: float = 0.05
+        sperm_displacement_rate: float = 0.05,
+        **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
-        """Configure reproduction parameters including mating, fertility, and sperm storage.
-
-        Args:
-            female_age_based_mating_rates (Optional[Union[List, NDArray]]): Female mating rates.
-            male_age_based_mating_rates (Optional[Union[List, NDArray]]): Male mating rates.
-            female_age_based_reproduction_rates (Optional[Union[List, NDArray]]): Female
-                reproduction participation rates by age.
-            female_age_based_relative_fertility (Optional[Union[List, NDArray]]): Fertility weights.
-            eggs_per_female (float): Baseline eggs per adult female.
-            use_fixed_egg_count (bool): If True, egg count is fixed; else Poisson.
-            sex_ratio (float): Proportion of offspring that are female (0-1).
-            use_sperm_storage (bool): Whether to model sperm storage.
-            sperm_displacement_rate (float): Rate of sperm displacement (0-1).
-
-        Returns:
-            AgeStructuredPopulationBuilder: Self for chaining.
-        """
+        """Configure reproduction parameters."""
         if female_age_based_mating_rates is not None:
             self.female_age_based_mating_rates = np.array(female_age_based_mating_rates)
         if male_age_based_mating_rates is not None:
@@ -1303,6 +1298,10 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.sex_ratio = sex_ratio
         self.use_sperm_storage = use_sperm_storage
         self.sperm_displacement_rate = sperm_displacement_rate
+        self._set_param("reproduction.eggs_per_female", eggs_per_female)
+        self._set_param("reproduction.sex_ratio", sex_ratio)
+        self._set_param("reproduction.sperm_displacement_rate", sperm_displacement_rate)
+        self._set_params(domain="reproduction", **kwargs)
         return self
 
     def competition(
@@ -1313,23 +1312,10 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         age_1_carrying_capacity: Optional[float] = None,
         old_juvenile_carrying_capacity: Optional[float] = None,
         expected_num_adult_females: Optional[float] = None,
-        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None
+        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
-        """Configure competition, carrying capacity, and density-dependent parameters.
-
-        Args:
-            competition_strength (float): Relative competition factor for age-1
-                juveniles (age-0 remains baseline competition weight 1.0).
-            juvenile_growth_mode (Union[int, str]): Growth model ("logistic", etc.).
-            low_density_growth_rate (float): Growth rate at low density.
-            age_1_carrying_capacity (Optional[float]): Population capacity at age=1.
-            old_juvenile_carrying_capacity (Optional[float]): Alias for age_1_carrying_capacity (deprecated).
-            expected_num_adult_females (Optional[float]): Equilibrium number of adult females.
-            equilibrium_distribution (Optional[Union[List, NDArray]]): Scaling distribution.
-
-        Returns:
-            AgeStructuredPopulationBuilder: Self for chaining.
-        """
+        """Configure competition and density-dependence."""
         self.relative_competition_factor = competition_strength
         self.juvenile_growth_mode = juvenile_growth_mode
         self.low_density_growth_rate = low_density_growth_rate
@@ -1341,6 +1327,11 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             self.expected_num_adult_females = expected_num_adult_females
         if equilibrium_distribution is not None:
             self.equilibrium_individual_distribution = np.array(equilibrium_distribution)
+        self._set_param("competition.competition_strength", competition_strength)
+        self._set_param("competition.low_density_growth_rate", low_density_growth_rate)
+        if self.age_1_carrying_capacity is not None:
+            self._set_param("competition.carrying_capacity", self.age_1_carrying_capacity)
+        self._set_params(domain="competition", **kwargs)
         return self
 
     def presets(self, *preset_list: Any) -> 'AgeStructuredPopulationBuilder':
@@ -1857,23 +1848,18 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
         use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False
+        use_fixed_egg_count: bool = False,
+        **kwargs: object,
     ) -> 'DiscreteGenerationPopulationBuilder':
-        """Configure basic population settings.
-
-        Args:
-            name (str): Human-readable population name.
-            stochastic (bool): Whether to use stochastic sampling.
-            use_continuous_sampling (bool): If True, use Dirichlet; else standard sampling.
-            use_fixed_egg_count (bool): If True, egg count is fixed; if False, Poisson.
-
-        Returns:
-            DiscreteGenerationPopulationBuilder: Self for chaining.
-        """
+        """Configure basic population settings."""
         self.name = name
         self.is_stochastic = stochastic
         self.use_continuous_sampling = use_continuous_sampling
         self.use_fixed_egg_count = use_fixed_egg_count
+        self._set_param("setup.stochastic", stochastic)
+        self._set_param("setup.continuous_sampling", use_continuous_sampling)
+        self._set_param("setup.fixed_egg_count", use_fixed_egg_count)
+        self._set_params(domain="setup", **kwargs)
         return self
 
     @overload
@@ -1901,15 +1887,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self,
         individual_count: InitialIndividualCountInput,
     ) -> "DiscreteGenerationPopulationBuilder":
-        """Configure the initial population state.
-
-        Args:
-            individual_count (Dict): Initial abundance mapping grouped by sex and genotype.
-                Value can be an age-indexed sequence/map or a scalar.
-
-        Returns:
-            DiscreteGenerationPopulationBuilder: Self for chaining.
-        """
+        """Configure the initial population state."""
         self.initial_individual_count = individual_count
         return self
 
@@ -1919,22 +1897,18 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         sex_ratio: float = 0.5,
         female_adult_mating_rate: float = 1.0,
         male_adult_mating_rate: float = 1.0,
+        **kwargs: object,
     ) -> "DiscreteGenerationPopulationBuilder":
-        """Configure reproduction and mating parameters.
-
-        Args:
-            eggs_per_female (float): Expected offspring produced per adult female.
-            sex_ratio (float): Proportion of female offspring in [0, 1].
-            female_adult_mating_rate (float): Adult female mating rate.
-            male_adult_mating_rate (float): Adult male mating rate.
-
-        Returns:
-            DiscreteGenerationPopulationBuilder: Self for chaining.
-        """
+        """Configure reproduction parameters."""
         self.expected_eggs_per_female = eggs_per_female
         self.sex_ratio = sex_ratio
         self.female_adult_mating_rate = female_adult_mating_rate
         self.male_adult_mating_rate = male_adult_mating_rate
+        self._set_param("reproduction.eggs_per_female", eggs_per_female)
+        self._set_param("reproduction.sex_ratio", sex_ratio)
+        self._set_param("reproduction.female_adult_mating_rate", female_adult_mating_rate)
+        self._set_param("reproduction.male_adult_mating_rate", male_adult_mating_rate)
+        self._set_params(domain="reproduction", **kwargs)
         return self
 
     def survival(
@@ -1942,20 +1916,16 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         female_age0_survival: float = 1.0,
         male_age0_survival: float = 1.0,
         adult_survival: float = 0.0,
+        **kwargs: object,
     ) -> "DiscreteGenerationPopulationBuilder":
-        """Configure survival probabilities for juvenile and adult stages.
-
-        Args:
-            female_age0_survival (float): Female survival probability from age-0 stage.
-            male_age0_survival (float): Male survival probability from age-0 stage.
-            adult_survival (float): Adult survival probability to the next step.
-
-        Returns:
-            DiscreteGenerationPopulationBuilder: Self for chaining.
-        """
+        """Configure survival probabilities."""
         self.female_age0_survival = female_age0_survival
         self.male_age0_survival = male_age0_survival
         self.adult_survival = adult_survival
+        self._set_param("survival.female_age0_survival", female_age0_survival)
+        self._set_param("survival.male_age0_survival", male_age0_survival)
+        self._set_param("survival.adult_survival", adult_survival)
+        self._set_params(domain="survival", **kwargs)
         return self
 
     def competition(
@@ -1963,20 +1933,17 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         juvenile_growth_mode: Union[int, str] = "logistic",
         low_density_growth_rate: float = 1.0,
         carrying_capacity: Optional[float] = None,
+        **kwargs: object,
     ) -> "DiscreteGenerationPopulationBuilder":
-        """Configure juvenile growth mode and density-dependence parameters.
-
-        Args:
-            juvenile_growth_mode (Union[int, str]): Growth model identifier.
-            low_density_growth_rate (float): Per-step growth factor at low density.
-            carrying_capacity (Optional[float]): Optional carrying capacity.
-
-        Returns:
-            DiscreteGenerationPopulationBuilder: Self for chaining.
-        """
+        """Configure density-dependence parameters."""
         self.juvenile_growth_mode = juvenile_growth_mode
         self.low_density_growth_rate = low_density_growth_rate
         self.carrying_capacity = carrying_capacity
+        self._set_param("competition.juvenile_growth_mode", juvenile_growth_mode)
+        self._set_param("competition.low_density_growth_rate", low_density_growth_rate)
+        if carrying_capacity is not None:
+            self._set_param("competition.carrying_capacity", carrying_capacity)
+        self._set_params(domain="competition", **kwargs)
         return self
 
     def hooks(
