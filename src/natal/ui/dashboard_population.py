@@ -148,7 +148,29 @@ class Dashboard:
         # If > 0, use value as delay
         self._tick_timer.interval = 0.01 if val <= 0 else val
 
-    def _compute_metrics_from_flat(self, tick: int, flat_state: np.ndarray) -> Tuple[int, Dict[str, float]]:
+    def _discrete_display(self) -> bool:
+        """Whether individual counts should be displayed as integers."""
+        config = self.pop._config
+        return bool(getattr(config, "is_stochastic", True)) and not bool(
+            getattr(config, "use_continuous_sampling", False)
+        )
+
+    def _fmt_count(self, value: float) -> str:
+        """Format a count for display — integer for discrete, 6 sig-figs otherwise."""
+        if self._discrete_display():
+            return f"{int(round(value)):,}"
+        return f"{value:.6g}"
+
+    def _to_count(self, value: float) -> float:
+        """Return numeric count — int for discrete, cleaned float otherwise."""
+        if self._discrete_display():
+            return float(int(round(value)))
+        rounded = round(value)
+        if abs(value - rounded) < 1e-10:
+            return float(rounded)
+        return float(f"{value:.6g}")
+
+    def _compute_metrics_from_flat(self, tick: int, flat_state: np.ndarray) -> Tuple[float, Dict[str, float]]:
         """Extract total population and allele frequencies from a flattened state array."""
         config = self.pop._config
         registry = self.pop.registry
@@ -166,7 +188,7 @@ class Dashboard:
             return 0, {} # Should not happen
 
         ind_flat = flat_state[start_idx:end_idx]
-        total_pop = int(np.sum(ind_flat))
+        total_pop = self._to_count(np.sum(ind_flat))
 
         # Compute allele frequencies
         # Reshape to (n_sexes, n_ages, n_genotypes) then sum to (n_genotypes,)
@@ -400,14 +422,14 @@ class Dashboard:
     def _update_inspection_view(self, state: 'PopulationState', tick: int, is_history: bool = False):
         """Update the Inspection tab with details from a specific state."""
         # Update Header Stats
-        total = int(state.individual_count.sum())
-        females = int(state.individual_count[0].sum())
-        males = int(state.individual_count[1].sum())
+        total = self._fmt_count(state.individual_count.sum())
+        females = self._fmt_count(state.individual_count[0].sum())
+        males = self._fmt_count(state.individual_count[1].sum())
 
         self.lbl_tick.text = f"{tick}"
-        self.lbl_total.text = f"{total}"
-        self.lbl_females.text = f"{females}"
-        self.lbl_males.text = f"{males}"
+        self.lbl_total.text = total
+        self.lbl_females.text = females
+        self.lbl_males.text = males
         self.lbl_history_count.text = f'(Current: {len(self.pop.history)} snapshots)'
 
         if is_history:
@@ -422,13 +444,13 @@ class Dashboard:
         with self.summary_sex_container:
             with ui.row().classes('w-full justify-between items-center py-1'):
                 ui.label('Female').classes('font-semibold text-base text-pink-600')
-                ui.label(f"{females:,}").classes('font-mono text-base')
+                ui.label(females).classes('font-mono text-base')
             with ui.row().classes('w-full justify-between items-center py-1'):
                 ui.label('Male').classes('font-semibold text-base text-blue-600')
-                ui.label(f"{males:,}").classes('font-mono text-base')
+                ui.label(males).classes('font-mono text-base')
             with ui.row().classes('w-full justify-between items-center border-t pt-2 mt-1'):
                 ui.label('Total').classes('font-bold text-lg text-gray-700')
-                ui.label(f"{total:,}").classes('font-mono font-bold text-lg')
+                ui.label(total).classes('font-mono font-bold text-lg')
 
         if self._is_age_structured_population:
             self.age_summary_card.visible = True
@@ -466,8 +488,8 @@ class Dashboard:
         with self.genotype_container:
             for i, gt in enumerate(genotypes):
                 # Compute total for card summary
-                total_f = int(ind_count[0, :, i].sum())
-                total_m = int(ind_count[1, :, i].sum())
+                total_f = self._fmt_count(ind_count[0, :, i].sum())
+                total_m = self._fmt_count(ind_count[1, :, i].sum())
 
                 with ui.card().classes('items-center p-2 border rounded shadow-sm w-40'):
                     # SVG
@@ -490,8 +512,8 @@ class Dashboard:
                         ui.label("Female").classes('text-sm font-bold text-pink-600 leading-none')
                         ui.label("Male").classes('text-sm font-bold text-blue-600 leading-none')
                     with ui.row().classes('w-full justify-between px-1'):
-                        ui.label(f"{total_f}").classes('text-base font-bold text-pink-600 leading-none')
-                        ui.label(f"{total_m}").classes('text-base font-bold text-blue-600 leading-none')
+                        ui.label(total_f).classes('text-base font-bold text-pink-600 leading-none')
+                        ui.label(total_m).classes('text-base font-bold text-blue-600 leading-none')
 
                     # Detailed age breakdown (skipping Age 0)
                     if self._is_age_structured_population:
@@ -1062,7 +1084,10 @@ class Dashboard:
                         'title': {'text': 'Population Size'},
                         'chart': {'type': 'line', 'animation': False, 'height': 300, 'zoomType': 'x'},
                         'xAxis': {'title': {'text': 'Tick'}},
-                        'yAxis': {'title': {'text': 'Count'}},
+                        'yAxis': {
+                            'title': {'text': 'Count'},
+                            'allowDecimals': not self._discrete_display(),
+                        },
                         'series': [{'name': 'TotalPop', 'data': []}],
                         'plotOptions': {
                             'series': {

@@ -91,6 +91,29 @@ class SpatialDashboard:
         self._rebuild_chart_history()
         self._record_snapshot()
 
+    def _discrete_display(self) -> bool:
+        """Whether individual counts should be displayed as integers."""
+        config = self.pop.deme(0)._config
+        return bool(getattr(config, "is_stochastic", True)) and not bool(
+            getattr(config, "use_continuous_sampling", False)
+        )
+
+    def _fmt_count(self, value: float, comma: bool = False) -> str:
+        """Format a count for display — integer for discrete, 6 sig-figs otherwise."""
+        if self._discrete_display():
+            n = int(round(value))
+            return f"{n:,}" if comma else str(n)
+        return f"{value:.6g}"
+
+    def _to_count(self, value: float) -> float:
+        """Return numeric count — int for discrete, cleaned float otherwise."""
+        if self._discrete_display():
+            return float(int(round(value)))
+        rounded = round(value)
+        if abs(value - rounded) < 1e-10:
+            return float(rounded)
+        return float(f"{value:.6g}")
+
     async def _run_step(self) -> None:
         """Execute one spatial simulation step."""
         if self.is_processing:
@@ -173,7 +196,7 @@ class SpatialDashboard:
         """Return (label, format_fn) for the current landscape metric."""
         metric = getattr(self, "landscape_metric", None)
         if metric is None or metric.value == "total":
-            return "Count", lambda v: f"{int(v):,}"
+            return "Count", lambda v: self._fmt_count(v, comma=True)
         return "Freq", lambda v: f"{float(v):.4f}"
 
     def _get_color_for_value(self, value: float, min_val: float, max_val: float) -> str:
@@ -259,7 +282,7 @@ class SpatialDashboard:
         """Build one scalable row/col heatmap for large landscapes."""
         if format_val is None:
 
-            def format_val(v): return f"{int(v):,}"
+            def format_val(v): return self._fmt_count(v, comma=True)
 
         z = np.zeros((topology.rows, topology.cols), dtype=np.float64)
         customdata = np.zeros((topology.rows, topology.cols), dtype=np.int64)
@@ -797,9 +820,9 @@ class SpatialDashboard:
             rows.append(
                 {
                     "age": int(age_idx),
-                    "female": int(age_female_totals[age_idx]),
-                    "male": int(age_male_totals[age_idx]),
-                    "total": int(age_totals[age_idx]),
+                    "female": self._to_count(age_female_totals[age_idx]),
+                    "male": self._to_count(age_male_totals[age_idx]),
+                    "total": self._to_count(age_totals[age_idx]),
                 }
             )
         return rows
@@ -817,16 +840,16 @@ class SpatialDashboard:
 
         rows: list[dict[str, Any]] = []
         for genotype_idx, genotype in enumerate(genotypes):
-            female_total = int(ind_count[0, :, genotype_idx].sum())
-            male_total = int(ind_count[1, :, genotype_idx].sum())
+            female_total = self._to_count(ind_count[0, :, genotype_idx].sum())
+            male_total = self._to_count(ind_count[1, :, genotype_idx].sum())
             if female_total <= 0 and male_total <= 0:
                 continue
 
             age_rows: list[dict[str, int]] = []
             if ind_count.ndim == 3:
                 for age_idx in range(1, n_ages):
-                    female_age = int(ind_count[0, age_idx, genotype_idx])
-                    male_age = int(ind_count[1, age_idx, genotype_idx])
+                    female_age = self._to_count(ind_count[0, age_idx, genotype_idx])
+                    male_age = self._to_count(ind_count[1, age_idx, genotype_idx])
                     if female_age > 0 or male_age > 0:
                         age_rows.append(
                             {
@@ -1530,7 +1553,10 @@ class SpatialDashboard:
                             "title": {"text": "Total Population"},
                             "chart": {"type": "line", "animation": False, "height": 300},
                             "xAxis": {"title": {"text": "Tick"}},
-                            "yAxis": {"title": {"text": "Count"}},
+                            "yAxis": {
+                                "title": {"text": "Count"},
+                                "allowDecimals": not self._discrete_display(),
+                            },
                             "series": [{"name": "TotalPop", "data": []}],
                             "plotOptions": {"series": {"marker": {"enabled": False}}},
                         }

@@ -7,6 +7,8 @@ from .age_structured_population import AgeStructuredPopulation
 
 from .discrete_generation_population import DiscreteGenerationPopulation
 
+from .discrete_population_config import DiscretePopulationConfig, from_population_config
+
 from .gamete_allele_conversion import (
     GameteAlleleConversionRule,
     GameteHaploidGenomeConversionRule,
@@ -134,6 +136,13 @@ from .observation_record import (
     build_observation_row_spatial,
 )
 
+from .parameters import (
+    ParameterDomain,
+    ParamDescriptor,
+    ALL_PARAMETERS,
+    PARAMETERS_BY_DOMAIN,
+)
+
 from .population_builder import (
     AgeStructuredPopulationBuilder,
     DiscreteGenerationPopulationBuilder,
@@ -243,6 +252,7 @@ from .zygote_allele_conversion import (
 )
 
 __all__ = [
+    "ALL_PARAMETERS",
     "Age",
     "AgeSpec",
     "AgeStructuredPopulation",
@@ -268,6 +278,7 @@ __all__ = [
     "DiploidGenotype",
     "DiscreteGenerationPopulation",
     "DiscreteGenerationPopulationBuilder",
+    "DiscretePopulationConfig",
     "DiscretePopulationState",
     "EPS",
     "EVENT_EARLY",
@@ -316,6 +327,9 @@ __all__ = [
     "ObservationFilter",
     "Op",
     "OpType",
+    "PARAMETERS_BY_DOMAIN",
+    "ParamDescriptor",
+    "ParameterDomain",
     "PlainDiscretePopulationState",
     "PlainPopulationConfig",
     "PlainPopulationState",
@@ -376,6 +390,7 @@ __all__ = [
     "from_plain_discrete_population_state",
     "from_plain_population_config",
     "from_plain_population_state",
+    "from_population_config",
     "get_allele_color",
     "get_numba_cache_dir",
     "hook",

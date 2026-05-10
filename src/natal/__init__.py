@@ -11,6 +11,8 @@ import pkgutil
 from pathlib import Path
 from typing import Any, Dict, List, cast
 
+__version__ = "0.1.3"
+
 # Maps exported symbol names to the module that defines them.
 #
 # The package intentionally does not import any child modules during initialization.

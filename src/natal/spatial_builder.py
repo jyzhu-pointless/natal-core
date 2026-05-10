@@ -37,6 +37,7 @@ from numpy.typing import NDArray
 
 from natal.age_structured_population import AgeStructuredPopulation
 from natal.discrete_generation_population import DiscreteGenerationPopulation
+from natal.discrete_population_config import DiscretePopulationConfig
 from natal.genetic_structures import Species
 from natal.observation import GroupsInput
 from natal.population_builder import (
@@ -284,7 +285,7 @@ def _make_hashable(value: Any) -> Any:
 
 def _clone_deme(
     template: _PopulationInstance,
-    config: PopulationConfig,
+    config: PopulationConfig | DiscretePopulationConfig,
     name: str,
 ) -> _PopulationInstance:
     """Create a lightweight functional copy of a template deme.
@@ -315,7 +316,7 @@ def _clone_deme(
     Returns:
         A new population instance of the same type as *template*.
     """
-    return template._clone(name=name, config=config)  # pyright: ignore[reportPrivateUsage]
+    return template._clone(name=name, config=config)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -1124,7 +1125,7 @@ class SpatialBuilder:
         #    full builder pipeline.  Subsequent groups try ``_replace`` first
         #    (shares heavy ndarrays), falling back to full replay.
         demes: List[_PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]
-        base_config: Optional[PopulationConfig] = None   # config from first group — reused via _replace
+        base_config: PopulationConfig | DiscretePopulationConfig | None = None
         base_template: Optional[_PopulationInstance] = None   # template deme from first group — cloned via _clone_deme
 
         for _sig, indices in groups.items():
@@ -1212,7 +1213,7 @@ class SpatialBuilder:
         return spatial
 
     @staticmethod
-    def _can_use_replace(sig_map: Dict[str, object], base_config: PopulationConfig) -> bool:
+    def _can_use_replace(sig_map: Dict[str, object], base_config: PopulationConfig | DiscretePopulationConfig) -> bool:
         """Return True if every kwarg in *sig_map* can be applied via ``_replace``.
 
         ``_replace`` is a NamedTuple shallow copy — it creates a new config
@@ -1242,11 +1243,11 @@ class SpatialBuilder:
     @staticmethod
     def _build_variant_config(
         sig_map: Dict[str, object],
-        base_config: PopulationConfig,
+        base_config: PopulationConfig | DiscretePopulationConfig,
         *,
         species: Species,
         pop_type: str = "age_structured",
-    ) -> PopulationConfig:
+    ) -> PopulationConfig | DiscretePopulationConfig:
         """Create a variant config via ``_replace``, sharing all heavy arrays.
 
         ``PopulationConfig`` is a NamedTuple.  ``_replace(**kwargs)`` creates

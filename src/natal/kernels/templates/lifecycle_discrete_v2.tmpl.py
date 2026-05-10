@@ -26,6 +26,7 @@ from natal.hooks.types import (
     RESULT_STOP,
     HookProgram,
 )
+from natal.kernels.discrete_algorithms import EPS
 from natal.kernels.discrete_kernels import (
     run_discrete_aging,
     run_discrete_reproduction,
@@ -97,6 +98,7 @@ def TICK_FN_NAME(
         return (ind_count, tick), RESULT_STOP
 
     ind_count = run_discrete_aging(ind_count)
+    ind_count = np.round(ind_count / EPS) * EPS
     return (ind_count, tick + 1), RESULT_CONTINUE
 
 
