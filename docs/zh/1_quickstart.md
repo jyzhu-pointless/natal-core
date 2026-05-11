@@ -228,7 +228,7 @@ pop = (nt.AgeStructuredPopulation
 **Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观：
 
 ```python
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 @hook(event='first')
 def release_drive_males():
@@ -378,7 +378,7 @@ launch(pop, port=8080, title="My Simulation")
 ```python
 import natal as nt
 from natal.genetic_presets import HomingDrive
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="FruitFly",
@@ -417,7 +417,7 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 ```python
 import natal as nt
 from natal.genetic_presets import HomingDrive
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="AnophelesGambiae",

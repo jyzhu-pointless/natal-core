@@ -157,7 +157,7 @@ def compile_combined_hook(
     placeholder_names = [f"_FN_{i}" for i in range(len(njit_fns))]
 
     # Generated module imports the same switch helper as the rest of hook DSL.
-    lines = ["from natal.hook_dsl import njit_switch"]
+    lines = ["from natal.numba_utils import njit_switch"]
     lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
     lines.extend(
         [

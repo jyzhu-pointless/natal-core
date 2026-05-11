@@ -1,13 +1,13 @@
-# hook_dsl Module
+# hookse
 
 Domain-Specific Language for simulation hooks.
 
 ## Overview
 
-The `hook_dsl` module provides the core components for the declarative hook system.
+The `hooksle provides the core components for the declarative hook system.
 
 ## Complete Module Reference
 
-::: natal.hook_dsl
+::: natal.hooks
     options:
       heading_level: 3

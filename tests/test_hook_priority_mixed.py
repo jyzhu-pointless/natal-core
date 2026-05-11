@@ -8,7 +8,7 @@ import pytest  # type: ignore
 from typing import List
 
 import natal as nt
-from natal.hook_dsl import Op, hook
+from natal.hooks import Op, hook
 
 
 def _make_species(name: str) -> nt.Species:

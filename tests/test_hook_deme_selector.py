@@ -9,7 +9,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from natal.hook_dsl import (  # noqa: E402
+from natal.hooks import (  # noqa: E402
     EVENT_EARLY,
     RESULT_CONTINUE,
     CompiledHookDescriptor,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import natal as nt
 import pytest
-from natal.hook_dsl import Op, hook
+from natal.hooks import Op, hook
 from natal.spatial_population import SpatialPopulation
 
 

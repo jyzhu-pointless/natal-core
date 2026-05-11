@@ -213,7 +213,7 @@ def _compile_selector_njit_wrapper(
     module_stem = f"selector_wrapper_{key}"
 
     selector_placeholders = [f"_SEL_{name}" for name in selector_keys]
-    code_lines = ["from natal.hook_dsl import njit_switch"]
+    code_lines = ["from natal.numba_utils import njit_switch"]
 
     if use_namedtuple:
         nt_fields = ", ".join(f"'{k}'" for k in selector_keys)

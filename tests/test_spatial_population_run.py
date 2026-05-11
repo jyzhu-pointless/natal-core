@@ -12,7 +12,7 @@ import natal as nt
 from natal.base_population import BasePopulation
 from natal.numba_utils import numba_disabled
 from natal.genetic_structures import Species
-from natal.hook_dsl import CompiledEventHooks, Op, hook
+from natal.hooks import CompiledEventHooks, Op, hook
 from natal import numba_compat as nbc
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState

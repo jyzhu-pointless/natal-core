@@ -38,7 +38,7 @@ from natal.engine.simulation.age_structured import compute_offspring_probability
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.genetic_structures import Species
 from natal.helpers import resolve_sex_label
-from natal.hook_dsl import CompiledEventHooks
+from natal.hooks import CompiledEventHooks
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.numba_utils import is_numba_enabled
@@ -55,7 +55,7 @@ T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationStat
 
 if TYPE_CHECKING:
     from natal.genetic_presets import GeneticPreset
-    from natal.hook_dsl import CompiledHookDescriptor, DemeSelector, HookProgram
+    from natal.hooks import CompiledHookDescriptor, DemeSelector, HookProgram
     from natal.observation import GroupsInput, Observation
 
 HookCallback = Callable[..., object]
@@ -1326,11 +1326,11 @@ class BasePopulation(ABC, Generic[T_State]):
             >>> if result == RESULT_STOP:
             ...     print("Simulation stopped by hook")
         """
-        from natal.hook_dsl import RESULT_CONTINUE
+        from natal.hooks import RESULT_CONTINUE
 
         # Prefer HookExecutor when available.
         if self._hook_executor is not None:
-            from natal.hook_dsl import EVENT_ID_MAP
+            from natal.hooks import EVENT_ID_MAP
             event_id = EVENT_ID_MAP.get(event_name)
             if event_id is not None:
                 result = self._hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)
@@ -1383,7 +1383,7 @@ class BasePopulation(ABC, Generic[T_State]):
         """Register a compiled hook descriptor.
 
         Args:
-            desc: CompiledHookDescriptor from hook_dsl module.
+            desc: CompiledHookDescriptor from hooks module.
 
         Note:
             To avoid maintaining two divergent hook sources, this method only
@@ -1497,7 +1497,7 @@ class BasePopulation(ABC, Generic[T_State]):
             CompiledHookDescriptor: The compiled descriptor
 
         Examples:
-            >>> from natal.hook_dsl import Op
+            >>> from natal.hooks import Op
             >>> pop.register_declarative_hook(
             ...     event='early',
             ...     ops=[
@@ -1507,7 +1507,7 @@ class BasePopulation(ABC, Generic[T_State]):
             ...     name='juvenile_control'
             ... )
         """
-        from natal.hook_dsl import compile_declarative_hook
+        from natal.hooks import compile_declarative_hook
         desc = compile_declarative_hook(
             ops,
             self,
@@ -1527,7 +1527,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             HookProgram: Compiled hook program data
         """
-        from natal.hook_dsl import EVENT_NAMES, HookProgram
+        from natal.hooks import EVENT_NAMES, HookProgram
 
         events = EVENT_NAMES
         n_events = len(events)
@@ -1655,7 +1655,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             HookExecutor: Executor instance, or None if no hooks compiled
         """
-        from natal.hook_dsl import HookExecutor
+        from natal.hooks import HookExecutor
 
         # Get or build HookProgram for CSR operations
         program = self._build_hook_program()
@@ -1681,7 +1681,7 @@ class BasePopulation(ABC, Generic[T_State]):
         Used when there are no declarative Op.* operations,
         but there are njit_fn or py_wrapper hooks.
         """
-        from natal.hook_dsl import NUM_EVENTS, HookProgram
+        from natal.hooks import NUM_EVENTS, HookProgram
 
         n_events = NUM_EVENTS
 
@@ -1725,7 +1725,7 @@ class BasePopulation(ABC, Generic[T_State]):
             >>> hooks.run_fn is not None
             True
         """
-        from natal.hook_dsl import CompiledEventHooks
+        from natal.hooks import CompiledEventHooks
 
         registry = self._build_hook_program()
         return CompiledEventHooks.from_compiled_hooks(

@@ -230,7 +230,7 @@ pop = (nt.AgeStructuredPopulation
 The **Hook system** allows you to inject custom interventions or monitoring logic at key points in the simulation loop (e.g., at the beginning of each step, after survival selection, etc.). Using declarative `Op` syntax is the most efficient and intuitive way:
 
 ```python
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 @hook(event='first')
 def release_drive_males():
@@ -387,7 +387,7 @@ This process is transparent to the user, but understanding it is important. See 
 ```python
 import natal as nt
 from natal.genetic_presets import HomingDrive
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="FruitFly",
@@ -426,7 +426,7 @@ print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 ```python
 import natal as nt
 from natal.genetic_presets import HomingDrive
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="AnophelesGambiae",

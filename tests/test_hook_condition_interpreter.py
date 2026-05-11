@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from natal.hook_dsl import eval_csr_condition_program, parse_condition  # noqa: E402
+from natal.hooks import eval_csr_condition_program, parse_condition  # noqa: E402
 
 
 def eval_expr(expr: str, tick: int) -> bool:

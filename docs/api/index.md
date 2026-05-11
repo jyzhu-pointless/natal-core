@@ -24,4 +24,4 @@ This section provides module-level API references.
 ## Extension System
 
 - [modifiers](modifiers.md)
-- [hook_dsl](hook_dsl.md)
+- [hooksoohooks

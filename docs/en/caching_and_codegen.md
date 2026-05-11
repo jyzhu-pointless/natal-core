@@ -67,7 +67,7 @@ Merges multiple @njit hooks for the same event into a single function to avoid t
 **Generation logic** (`natal/hooks/compiler.py`):
 
 ```python
-lines = ["from natal.hook_dsl import njit_switch"]
+lines = ["from natal.hooks import njit_switch"]
 lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
 lines.append(f"def {fn_name}(ind_count, tick, deme_id=-1):")
 for placeholder in placeholder_names:

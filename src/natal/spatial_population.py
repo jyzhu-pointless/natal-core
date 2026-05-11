@@ -31,7 +31,7 @@ from natal.engine.spatial_simulator import (
     run_spatial_migration,
 )
 from natal.genetic_structures import Species
-from natal.hook_dsl import (
+from natal.hooks import (
     CompiledEventHooks,
     CompiledHookDescriptor,
     DemeSelector,
@@ -962,7 +962,7 @@ class SpatialPopulation:
             buffers to keep downstream execution loops vectorizable and
             allocation-free during runtime dispatch.
         """
-        from natal.hook_dsl import EVENT_NAMES
+        from natal.hooks import EVENT_NAMES
 
         events = EVENT_NAMES
         n_events = len(events)

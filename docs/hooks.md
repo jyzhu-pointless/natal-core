@@ -35,7 +35,7 @@ When choosing an event, clarify whether your intervention should happen “befor
 For most users, it is recommended to use `@hook` together with `Op.*`, and then bind the hook to a population using `set_hook(...)`:
 
 ```python
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 
 @hook(event="first", priority=10)
@@ -89,7 +89,7 @@ when="tick % 7 == 0 and not (tick == 14)"
 When you want to first select a target (e.g., a specific genotype) and then apply logic, you can use the selector pattern:
 
 ```python
-from natal.hook_dsl import hook
+from natal.hooks import hook
 
 
 @hook(event="late", selectors={"target_gt": "Drive|WT"})
@@ -144,7 +144,7 @@ Therefore, users generally do not need to trigger hooks manually; you only need 
 ## 10. Minimal Combined Example
 
 ```python
-from natal.hook_dsl import hook, Op
+from natal.hooks import hook, Op
 
 
 @hook(event="initialization", priority=0)

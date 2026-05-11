@@ -37,7 +37,7 @@ from .genetic_structures import (
     Locus,
     Species,
 )
-from .hook_dsl import (
+from .hooks import (
     COND_ALWAYS,
     COND_TICK_EQ,
     COND_TICK_GE,
@@ -71,7 +71,6 @@ from .hook_dsl import (
     execute_csr_event_program,
     execute_csr_event_program_with_state,
     hook,
-    njit_switch,
     noop_hook,
 )
 from .numba_compat import (
