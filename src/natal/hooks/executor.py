@@ -1,8 +1,8 @@
-"""CSR execution kernels and Python-level hook executor.
+"""CSR execution engine and Python-level hook executor.
 
 Runtime flow for one event:
 
-1) Evaluate declarative CSR plans in njit kernels (fast data path)
+1) Evaluate declarative CSR plans in njit engine (fast data path)
 2) Execute compiled custom ``njit_fn`` hooks
 3) Execute Python wrappers (only when Numba mode allows it)
 
@@ -556,7 +556,7 @@ class HookExecutor:
 
         ind_count = population.state.individual_count
 
-        # Prepare optional sperm-storage arrays for kernels that require them.
+        # Prepare optional sperm-storage arrays for engine that require them.
         sperm_store = getattr(population.state, "sperm_storage", None)
         has_sperm_storage = sperm_store is not None and sperm_store.size > 0
         if not has_sperm_storage:

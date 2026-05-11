@@ -3,7 +3,7 @@
 This chapter introduces the two most critical data objects in NATAL simulations:
 
 - `PopulationState` (and its discrete‑generation counterpart `DiscretePopulationState`): used to store the dynamic state during a simulation.
-- `PopulationConfig`: used to store simulation parameters and genetic mappings; it is the configuration object read when running kernels.
+- `PopulationConfig`: used to store simulation parameters and genetic mappings; it is the configuration object read when running engine.
 
 Understanding these two objects helps you organise initialisation, execution, and result interpretation more reliably.
 
@@ -271,7 +271,7 @@ data = population_state_to_dict(
 ## Related Chapters
 
 - [Builder System](builder_system.md)
-- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [Deep Dive into the Simulation Engine](simulation_engine.md)
 - [Modifier Mechanism](modifiers.md)
 - [Hook System](hooks.md)
 - [Population Observation Rules](observation_rules.md)

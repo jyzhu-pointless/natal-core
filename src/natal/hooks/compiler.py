@@ -39,11 +39,11 @@ from .types import (
     write_codegen_module,
 )
 
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "kernels" / "templates"
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "engine" / "templates"
 
 
 def _read_template(name: str) -> str:
-    """Read a lifecycle codegen template from ``kernels/templates/``."""
+    """Read a lifecycle codegen template from ``engine/templates/``."""
     return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
 
 
@@ -120,7 +120,7 @@ def compile_combined_hook(
     """Combine multiple njit hooks into one generated njit function.
 
     We generate source code instead of composing Python closures so the result
-    remains callable from njit kernels.
+    remains callable from njit engine.
 
     When ``deme_selectors`` is provided and contains non-wildcard values,
     each hook call is wrapped with an ``if deme_id == X`` guard so that
@@ -213,7 +213,7 @@ def _gen_lifecycle_source(
 ) -> str:
     """Generate the source code for a lifecycle wrapper module.
 
-    Reads the template from ``kernels/templates/`` and substitutes
+    Reads the template from ``engine/templates/`` and substitutes
     ``TICK_FN_NAME`` and ``RUN_FN_NAME`` placeholders.
     """
     name = "lifecycle_discrete_v2.tmpl.py" if is_discrete else "lifecycle_structured.tmpl.py"
@@ -237,7 +237,7 @@ def compile_lifecycle_wrapper(
 
     Args:
         is_discrete: If True, generate discrete-generation (no sperm storage)
-            wrappers using ``DiscretePopulationConfig`` and dedicated kernels.
+            wrappers using ``DiscretePopulationConfig`` and dedicated engine.
             Otherwise generate age-structured wrappers.
         first_hook: Combined njit function for the ``first`` event.
         early_hook: Combined njit function for the ``early`` event.
@@ -276,7 +276,7 @@ def _gen_spatial_lifecycle_source(
 ) -> str:
     """Generate source for a spatial lifecycle wrapper module.
 
-    Reads the template from ``kernels/templates/`` and substitutes
+    Reads the template from ``engine/templates/`` and substitutes
     ``TICK_FN_NAME``, ``RUN_FN_NAME``, ``PANMICTIC_STEM``,
     ``PANMICTIC_TICK_FN_NAME`` placeholders.
     """

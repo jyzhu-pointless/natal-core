@@ -108,7 +108,7 @@ def _combined_hook_19a81f6c(...):
 
 ```python
 import numpy as np
-from natal.kernels.simulation_kernels import (
+from natal.engine.simulator import (
     run_discrete_reproduction, run_discrete_survival, run_discrete_aging,
 )
 from natal.hooks.executor import execute_csr_event_program_with_state

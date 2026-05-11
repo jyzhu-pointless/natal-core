@@ -11,10 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from natal import is_numba_enabled  # noqa: E402
-from natal.spatial_simulation_kernels import (  # noqa: E402
-    apply_spatial_adjacency_migration,
-    run_spatial_tick,
-)
+from natal.engine.spatial_simulator import run_spatial_tick
+from natal.engine.spatial_migrator import apply_spatial_adjacency_migration
 
 
 @pytest.mark.numba_on

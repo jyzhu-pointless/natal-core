@@ -28,14 +28,14 @@ from natal.discrete_population_config import (
     DiscretePopulationConfig,
     from_population_config,
 )
-from natal.genetic_entities import Genotype
-from natal.genetic_structures import Species
-from natal.hooks.types import RESULT_CONTINUE
-from natal.kernels.discrete_kernels import (
+from natal.engine.discrete_generation_simulator import (
     run_discrete_aging,
     run_discrete_reproduction,
     run_discrete_survival,
 )
+from natal.genetic_entities import Genotype
+from natal.genetic_structures import Species
+from natal.hooks.types import RESULT_CONTINUE
 from natal.population_config import PopulationConfig
 from natal.population_state import (
     DiscretePopulationState,
@@ -165,7 +165,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             zygote_modifiers=zygote_funcs,
         )
 
-        import natal.kernels.algorithms as _alg
+        import natal.engine.simulation.age_structured as _alg
 
         self._config = self._config._replace(  # type: ignore[assignment]
             genotype_to_gametes_map=z2g,

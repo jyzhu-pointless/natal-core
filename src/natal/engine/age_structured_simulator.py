@@ -1,11 +1,11 @@
-"""Pure-function simulation kernels run outside Population with Numba support."""
+"""Pure-function simulation engine run outside Population with Numba support."""
 
 from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.kernels.algorithms as alg
+import natal.engine.simulation.age_structured as alg
 import natal.numba_compat as nbc
 from natal.hooks.executor import execute_csr_event_program_with_state
 from natal.hooks.types import (

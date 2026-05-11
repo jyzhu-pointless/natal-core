@@ -73,8 +73,8 @@ spatial 模块不再包含自己的 `_FIRST_HOOK`/`_EARLY_HOOK`/`_LATE_HOOK` 全
 ```python
 # 重构前：6 个 import、3 个 hook 全局变量
 import numpy as np
-from natal.kernels.simulation_kernels import (run_reproduction, ...)
-from natal.kernels.spatial_migration_kernels import run_spatial_migration
+from natal.engine.simulator import (run_reproduction, ...)
+from natal.engine.spatial_migrator import run_spatial_migration
 from natal.hooks.executor import execute_csr_event_program_with_state
 from natal.hooks.types import EVENT_FIRST, EVENT_EARLY, EVENT_LATE, ...
 from natal.numba_utils import njit_switch, prange
@@ -85,7 +85,7 @@ _LATE_HOOK = None
 
 # 重构后：3 个 import + 1 个 panmictic tick import
 import numpy as np
-from natal.kernels.spatial_migration_kernels import run_spatial_migration
+from natal.engine.spatial_migrator import run_spatial_migration
 from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP
 from natal.numba_utils import njit_switch, prange
 from natal.population_state import PopulationState

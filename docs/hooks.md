@@ -187,6 +187,6 @@ At the user level, follow three steps:
 ## Related Chapters
 
 - [Modifier Mechanism](modifiers.md)
-- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [Deep Dive into the Simulation Engine](simulator.md)
 - [Numba Optimization Guide](numba_optimization.md)
 - [Quick Start](quickstart.md)

@@ -1,16 +1,17 @@
-"""Codegen template for spatial discrete-generation lifecycle wrappers.
+"""Codegen template for spatial age-structured lifecycle wrappers.
 
-The compiler (:func:`compile_spatial_lifecycle_wrapper`) reads this file and
-substitutes ``TICK_FN_NAME``, ``RUN_FN_NAME``, ``PANMICTIC_STEM``, and
+Same delegation pattern as :file:`spatial_lifecycle_discrete.tmpl.py` but
+with sperm storage management — per-deme lifecycle state includes
+``sperm_store``, and migration exchanges both individuals and sperm across
+demes.
+
+The compiler (:func:`compile_spatial_lifecycle_wrapper`) substitutes
+``TICK_FN_NAME``, ``RUN_FN_NAME``, ``PANMICTIC_STEM``, and
 ``PANMICTIC_TICK_FN_NAME`` placeholders.
 
-The generated spatial module delegates per-deme lifecycle execution to the
-panmictic lifecycle tick (imported from the dynamically-generated panmictic
-module) inside a ``prange`` loop, then runs migration across all demes.
-
 Hook globals (``_FIRST_HOOK``/``_EARLY_HOOK``/``_LATE_HOOK``) live on the
-panmictic module, not here. The spatial tick imports and calls the panmictic
-tick, which resolves hooks via its own module globals.
+panmictic module, not here. See :file:`spatial_lifecycle_discrete.tmpl.py`
+for details.
 """
 from typing import Callable, Optional, cast
 
@@ -20,12 +21,12 @@ from natal._hook_codegen_PANMICTIC_STEM import (  # type: ignore[reportMissingIm
 )
 from numba import prange  # type: ignore[reportMissingTypeStubs]
 
+from natal.engine.spatial_migrator import run_spatial_migration
 from natal.hooks.types import RESULT_CONTINUE, HookProgram
-from natal.kernels.spatial_migration_kernels import run_spatial_migration
 from natal.numba_utils import njit_switch
 from natal.observation_record import CompactMeta, build_observation_row_spatial
 from natal.population_config import PopulationConfig
-from natal.population_state import DiscretePopulationState
+from natal.population_state import PopulationState
 from natal.spatial_topology import (
     HeterogeneousKernelParams,
     MigrationParams,
@@ -34,8 +35,8 @@ from natal.spatial_topology import (
 
 # pyright cannot see the dynamically-generated panmictic module, so cast
 # the imported tick function to the expected signature for type safety.
-_run_deme_tick: Callable[..., tuple[tuple[np.ndarray, int], int]] = cast(
-    Callable[..., tuple[tuple[np.ndarray, int], int]], _raw_run_deme_tick
+_run_deme_tick: Callable[..., tuple[tuple[np.ndarray, np.ndarray, int], int]] = cast(
+    Callable[..., tuple[tuple[np.ndarray, np.ndarray, int], int]], _raw_run_deme_tick
 )
 
 
@@ -51,17 +52,17 @@ def TICK_FN_NAME(
     migration: MigrationParams,
     het_kernel: HeterogeneousKernelParams | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, bool]:
-    """Execute one spatial tick: per-deme lifecycle in prange, then migration.
+    """Execute one spatial tick with sperm storage: per-deme lifecycle in prange, then migration.
 
-    Each deme runs the panmictic lifecycle tick independently inside
-    ``prange``. After all demes complete, ``run_spatial_migration`` exchanges
-    individuals between demes according to the migration topology.
+    Each deme runs the age-structured panmictic lifecycle tick (with sperm
+    storage) independently inside ``prange``. After all demes complete,
+    ``run_spatial_migration`` exchanges both individuals and sperm across demes.
 
     Args:
-        ind_count_all: ``(n_demes, n_sexes, n_genotypes)`` stacked individual
-            count arrays.
-        sperm_store_all: Stacked sperm-storage arrays (unused for discrete
-            generation; kept for signature compatibility).
+        ind_count_all: ``(n_demes, n_sexes, n_ages, n_genotypes)`` stacked
+            individual count arrays.
+        sperm_store_all: ``(n_demes, n_ages, n_genotypes, n_genotypes)``
+            stacked sperm-storage arrays.
         config_bank: List of ``PopulationConfig`` indexed by *deme_config_ids*.
         deme_config_ids: ``(n_demes,)`` int64 array mapping each deme to a
             config index.
@@ -82,14 +83,16 @@ def TICK_FN_NAME(
     for d in prange(n_demes):
         cfg = config_bank[int(deme_config_ids[d])]
         ind = ind_count_all[d].copy()
+        sperm = sperm_store_all[d].copy()
 
-        state = DiscretePopulationState(n_tick=tick, individual_count=ind)
-        (ind, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
+        state = PopulationState(n_tick=tick, individual_count=ind, sperm_storage=sperm)
+        (ind, sperm, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
 
         if result != RESULT_CONTINUE:
             stopped[d] = True
 
         ind_count_all[d] = ind
+        sperm_store_all[d] = sperm
 
     ind_count_all, sperm_store_all = run_spatial_migration(
         ind_count_all, sperm_store_all, migration.adjacency, migration.mode_code,
@@ -124,10 +127,10 @@ def RUN_FN_NAME(
     observation_mask: Optional[np.ndarray] = None,
     compact_meta: Optional[CompactMeta] = None,
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], Optional[np.ndarray], bool]:
-    """Execute multiple spatial ticks in sequence, with optional history recording.
+    """Execute multiple spatial ticks with sperm storage, with optional history recording.
 
-    Calls TICK_FN_NAME in a loop and optionally records flattened compact
-    snapshots at each ``record_interval`` tick.
+    Calls TICK_FN_NAME in a loop and optionally records flattened snapshots
+    of the full state (individuals + sperm) at each ``record_interval`` tick.
     When ``observation_mask`` is provided, history stores observation-reduced
     compact snapshots instead.
 

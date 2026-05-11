@@ -7,7 +7,7 @@ It also offers helper functions to compress/decompress combined
 
 The registry is used throughout the simulation to translate domain objects
 (e.g., ``Genotype`` instances, strings) into compact integer indices that
-are suitable for NumPy arrays and Numba‑accelerated kernels.
+are suitable for NumPy arrays and Numba‑accelerated engine.
 """
 
 from __future__ import annotations

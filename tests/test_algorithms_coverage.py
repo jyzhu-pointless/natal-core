@@ -27,7 +27,7 @@ import pytest
 # test execution, but the decorators are already applied at import time.
 # For functions with pre-existing Numba type-unstable paths (e.g. 2D survival
 # rates), we test only the input types that Numba can compile.
-from natal.kernels.algorithms import (
+from natal.engine.simulation.age_structured import (
     _fertilize_with_precomputed_offspring_probability,
     apply_survival_rates_deterministic,
     apply_survival_rates_deterministic_with_sperm_storage,

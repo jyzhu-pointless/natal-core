@@ -1,6 +1,6 @@
 import numpy as np
 
-from natal.kernels.algorithms import fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction
+from natal.engine.simulation.age_structured import fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction
 
 
 def test_fertilize_offspring_sex_is_genotype_determined_when_constrained() -> None:

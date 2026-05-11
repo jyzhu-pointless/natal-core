@@ -4,251 +4,206 @@
 # Do not edit it manually; re-run the generator after changing public exports.
 
 from .age_structured_population import AgeStructuredPopulation
-
 from .discrete_generation_population import DiscreteGenerationPopulation
-
 from .discrete_population_config import DiscretePopulationConfig, from_population_config
-
 from .gamete_allele_conversion import (
     GameteAlleleConversionRule,
-    GameteHaploidGenomeConversionRule,
     GameteConversionRuleSet,
+    GameteHaploidGenomeConversionRule,
 )
-
 from .genetic_entities import (
-    Gene,
     Allele,
-    Haplotype,
+    DiploidGenome,
+    DiploidGenotype,
+    Gene,
+    Genome,
+    Genotype,
     HaploidGenome,
     HaploidGenotype,
-    Genotype,
-    Genome,
-    DiploidGenotype,
-    DiploidGenome,
+    Haplotype,
 )
-
 from .genetic_patterns import GenotypePatternParser, GenotypeSelector
-
 from .genetic_presets import (
     GeneticPreset,
     HomingDrive,
     ToxinAntidoteDrive,
     apply_preset_to_population,
 )
-
 from .genetic_structures import (
-    Locus,
     Chromosome,
-    Linkage,
-    Species,
     GenomeTemplate,
     Karyotype,
+    Linkage,
+    Locus,
+    Species,
 )
-
 from .hook_dsl import (
-    OpType,
-    DemeSelector,
-    deme_selector_matches,
-    HookOp,
-    Op,
-    CompiledHookPlan,
-    CompiledHookDescriptor,
-    HookProgram,
-    HookExecutor,
-    execute_csr_event_arrays,
-    execute_csr_event_program,
-    execute_csr_event_program_with_state,
-    build_hook_program,
-    njit_switch,
-    noop_hook,
-    compile_combined_hook,
-    CompiledEventHooks,
-    hook,
-    compile_declarative_hook,
-    compile_selector_hook,
     COND_ALWAYS,
     COND_TICK_EQ,
-    COND_TICK_MOD,
     COND_TICK_GE,
     COND_TICK_GT,
     COND_TICK_LE,
     COND_TICK_LT,
-    EVENT_FIRST,
+    COND_TICK_MOD,
     EVENT_EARLY,
-    EVENT_LATE,
     EVENT_FINISH,
-    EVENT_NAMES,
+    EVENT_FIRST,
     EVENT_ID_MAP,
+    EVENT_LATE,
+    EVENT_NAMES,
     RESULT_CONTINUE,
     RESULT_STOP,
+    CompiledEventHooks,
+    CompiledHookDescriptor,
+    CompiledHookPlan,
+    DemeSelector,
+    HookExecutor,
+    HookOp,
+    HookProgram,
+    Op,
+    OpType,
+    build_hook_program,
+    compile_combined_hook,
+    compile_declarative_hook,
+    compile_selector_hook,
+    deme_selector_matches,
+    execute_csr_event_arrays,
+    execute_csr_event_program,
+    execute_csr_event_program_with_state,
+    hook,
+    njit_switch,
+    noop_hook,
 )
-
 from .numba_compat import (
     EPS,
     binomial,
     binomial_2d,
-    multinomial_rows,
-    multinomial,
-    continuous_poisson,
+    clamp01,
     continuous_binomial,
     continuous_multinomial,
+    continuous_poisson,
+    multinomial,
+    multinomial_rows,
     set_numba_seed,
-    clamp01,
 )
-
 from .numba_utils import (
-    NUMBA_ENABLED,
-    is_numba_enabled,
-    enable_numba,
-    disable_numba,
-    NUMBA_LOG_ENABLED,
-    is_numba_log_enabled,
-    enable_numba_log,
-    disable_numba_log,
-    NUMBA_SIGNATURE_TRACE_ENABLED,
-    is_numba_signature_trace_enabled,
-    enable_numba_signature_trace,
-    disable_numba_signature_trace,
     NUMBA_CACHE_DIR,
+    NUMBA_ENABLED,
+    NUMBA_LOG_ENABLED,
+    NUMBA_SIGNATURE_TRACE_ENABLED,
+    disable_numba,
+    disable_numba_log,
+    disable_numba_signature_trace,
+    enable_numba,
+    enable_numba_log,
+    enable_numba_signature_trace,
     get_numba_cache_dir,
+    is_numba_enabled,
+    is_numba_log_enabled,
+    is_numba_signature_trace_enabled,
     njit_switch,
     numba_disabled,
     numba_enabled,
     with_numba_disabled,
     with_numba_enabled,
 )
-
 from .observation import (
     AgeSpec,
-    SexSpec,
+    GroupsInput,
     GroupSpec,
     GroupSpecDict,
-    GroupsInput,
     Observation,
     ObservationFilter,
+    SexSpec,
     apply_rule,
 )
-
 from .observation_record import (
     CompactMeta,
     build_compact_metadata,
     build_observation_row_panmictic,
     build_observation_row_spatial,
 )
-
 from .parameters import (
-    ParameterDomain,
-    ParamDescriptor,
     ALL_PARAMETERS,
     PARAMETERS_BY_DOMAIN,
+    ParamDescriptor,
+    ParameterDomain,
 )
-
 from .population_builder import (
     AgeStructuredPopulationBuilder,
     DiscreteGenerationPopulationBuilder,
 )
-
 from .population_config import (
-    NO_COMPETITION,
-    FIXED,
-    LOGISTIC,
-    LINEAR,
-    CONCAVE,
     BEVERTON_HOLT,
+    CONCAVE,
+    FIXED,
+    LINEAR,
+    LOGISTIC,
+    NO_COMPETITION,
+    PlainPopulationConfig,
     PopulationConfig,
     build_population_config,
-    PlainPopulationConfig,
-    to_plain_population_config,
-    from_plain_population_config,
     extract_gamete_frequencies,
     extract_gamete_frequencies_by_glab,
     extract_zygote_frequencies,
+    from_plain_population_config,
+    to_plain_population_config,
 )
-
 from .population_state import (
-    PopulationState,
     DiscretePopulationState,
-    PlainPopulationState,
     PlainDiscretePopulationState,
-    to_plain_population_state,
-    to_plain_discrete_population_state,
-    from_plain_population_state,
+    PlainPopulationState,
+    PopulationState,
     from_plain_discrete_population_state,
-    parse_flattened_state,
+    from_plain_population_state,
     parse_flattened_discrete_state,
+    parse_flattened_state,
+    to_plain_discrete_population_state,
+    to_plain_population_state,
 )
-
-from .simulation_kernels import (
-    export_config,
-    import_config,
-    export_state,
-    import_state,
-    run_reproduction,
-    run_survival,
-    run_aging,
-    run_discrete_reproduction,
-    run_discrete_survival,
-    run_discrete_aging,
-)
-
-from .spatial_builder import BatchSetting, batch_setting, SpatialBuilder
-
+from .spatial_builder import BatchSetting, SpatialBuilder, batch_setting
 from .spatial_population import SpatialPopulation
-
-from .spatial_simulation_kernels import (
-    run_spatial_tick,
-    run_spatial_tick_heterogeneous,
-    run_spatial_tick_with_migration,
-    run_spatial_tick_with_adjacency_migration,
-    apply_spatial_adjacency_migration,
-    run_spatial_migration,
-)
-
 from .spatial_topology import (
     GridTopology,
     HeterogeneousKernelParams,
+    HexGrid,
     MigrationParams,
     SpatialTopology,
     SquareGrid,
-    HexGrid,
-    build_adjacency_matrix,
-    build_gaussian_kernel,
     apply_migration_adjacency,
     apply_migration_convolution,
+    build_adjacency_matrix,
+    build_gaussian_kernel,
 )
-
 from .state_translation import (
-    population_state_to_dict,
-    population_state_to_json,
     discrete_population_state_to_dict,
     discrete_population_state_to_json,
     output_current_state,
     output_history,
-    population_to_readable_dict,
-    population_to_readable_json,
     population_history_to_readable_dict,
     population_history_to_readable_json,
     population_observation_history_to_readable_dict,
     population_observation_history_to_readable_json,
-    spatial_population_to_readable_dict,
-    spatial_population_to_readable_json,
-    spatial_population_to_observation_dict,
-    spatial_population_to_observation_json,
+    population_state_to_dict,
+    population_state_to_json,
+    population_to_readable_dict,
+    population_to_readable_json,
     spatial_population_history_to_readable_dict,
     spatial_population_history_to_readable_json,
     spatial_population_observation_history_to_readable_dict,
     spatial_population_observation_history_to_readable_json,
     spatial_population_output_history,
+    spatial_population_to_observation_dict,
+    spatial_population_to_observation_json,
+    spatial_population_to_readable_dict,
+    spatial_population_to_readable_json,
 )
-
-from .type_def import Sex, Age, GameteLabel
-
+from .type_def import Age, GameteLabel, Sex
 from .visualization import get_allele_color, render_cell_svg
-
 from .zygote_allele_conversion import (
     ZygoteAlleleConversionRule,
-    ZygoteGenotypeConversionRule,
     ZygoteConversionRuleSet,
+    ZygoteGenotypeConversionRule,
 )
 
 __all__ = [
@@ -352,7 +307,6 @@ __all__ = [
     "apply_migration_convolution",
     "apply_preset_to_population",
     "apply_rule",
-    "apply_spatial_adjacency_migration",
     "batch_setting",
     "binomial",
     "binomial_2d",
@@ -382,8 +336,6 @@ __all__ = [
     "execute_csr_event_arrays",
     "execute_csr_event_program",
     "execute_csr_event_program_with_state",
-    "export_config",
-    "export_state",
     "extract_gamete_frequencies",
     "extract_gamete_frequencies_by_glab",
     "extract_zygote_frequencies",
@@ -394,8 +346,6 @@ __all__ = [
     "get_allele_color",
     "get_numba_cache_dir",
     "hook",
-    "import_config",
-    "import_state",
     "is_numba_enabled",
     "is_numba_log_enabled",
     "is_numba_signature_trace_enabled",
@@ -419,17 +369,6 @@ __all__ = [
     "population_to_readable_dict",
     "population_to_readable_json",
     "render_cell_svg",
-    "run_aging",
-    "run_discrete_aging",
-    "run_discrete_reproduction",
-    "run_discrete_survival",
-    "run_reproduction",
-    "run_spatial_migration",
-    "run_spatial_tick",
-    "run_spatial_tick_heterogeneous",
-    "run_spatial_tick_with_adjacency_migration",
-    "run_spatial_tick_with_migration",
-    "run_survival",
     "set_numba_seed",
     "spatial_population_history_to_readable_dict",
     "spatial_population_history_to_readable_json",

@@ -7,7 +7,7 @@ This module is the "front-end compiler" for Op-based hooks:
 3) Condition strings are compiled into an RPN token stream.
 4) Everything is packed into a ``CompiledHookPlan`` (CSR-like arrays).
 
-The resulting plan is pure data and can be executed inside njit kernels.
+The resulting plan is pure data and can be executed inside njit engine.
 """
 
 from __future__ import annotations
@@ -598,7 +598,7 @@ def compile_declarative_hook(
 
     The compiler packs all per-op fields into parallel arrays. Offsets arrays
     (``*_offsets``) define CSR spans for variable-length selector/condition
-    data and avoid Python object usage in runtime kernels.
+    data and avoid Python object usage in runtime engine.
     """
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry

@@ -117,7 +117,7 @@ class Observation:
     ) -> NDArray[np.float64]:
         """Build a 4-D binary mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
 
-        The mask can be used inside Numba kernels via broadcast multiplication
+        The mask can be used inside Numba engine via broadcast multiplication
         and genotype-axis summation:
 
         ``observed = np.sum(mask[None, ...] * ind[:, None, ...], axis=-1)``

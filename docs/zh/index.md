@@ -173,7 +173,7 @@ launch(pop)
 
 13. [IndexRegistry 索引机制](4_index_registry.md)
 14. [PopulationState 与 PopulationConfig](4_population_state_config.md)
-15. [模拟内核深度解析](4_simulation_kernels.md)
+15. [模拟内核深度解析](4_simulator.md)
 16. [Numba 优化指南](4_numba_optimization.md)
 17. [Observation 历史记录实现解析](observation_impl.md)
 

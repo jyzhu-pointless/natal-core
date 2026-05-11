@@ -10,13 +10,13 @@ This chapter does not pursue theoretical details but focuses on the most common 
 
 ## 1. The Role of Numba in NATAL
 
-The core stage computations in NATAL are performed by numerical kernels, and Numba handles JIT-compiling these kernels into efficient machine code.
+The core stage computations in NATAL are performed by numerical engine, and Numba handles JIT-compiling these engine into efficient machine code.
 
 For users, there is one key takeaway:
 
 - Numba is enabled by default, and this is typically the recommended configuration.
 
-You do not need to manually add decorators to framework kernels; you only need to learn to "temporarily disable" it during debugging and keep it "enabled by default" in production.
+You do not need to manually add decorators to framework engine; you only need to learn to "temporarily disable" it during debugging and keep it "enabled by default" in production.
 
 ## 2. Default Behavior and Toggle Methods
 
@@ -65,7 +65,7 @@ Common workflow:
 
 ## 4. Debug Output and Common Practices
 
-In the context of numerical kernels, prefer simple, stable output methods.
+In the context of numerical engine, prefer simple, stable output methods.
 
 Example:
 
@@ -166,7 +166,7 @@ For most modeling tasks, following these principles is sufficient:
 
 ## Related Sections
 
-- [Simulation Kernels Deep Dive](4_simulation_kernels.md)
+- [the Simulation Engine Deep Dive](4_simulation_engine.md)
 - [PopulationState and PopulationConfig](4_population_state_config.md)
 - [Hook System](2_hooks.md)
 - [Quick Start](1_quickstart.md)

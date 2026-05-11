@@ -1,4 +1,4 @@
-"""Adjacency-mode spatial migration kernels."""
+"""Adjacency-mode spatial migration engine."""
 
 from __future__ import annotations
 

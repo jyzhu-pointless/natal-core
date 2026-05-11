@@ -1,7 +1,7 @@
 """Codegen template for discrete-generation lifecycle wrappers (v2).
 
-Uses ``DiscretePopulationConfig`` and dedicated discrete kernels instead of
-the full ``PopulationConfig`` and shared age-structured kernels.
+Uses ``DiscretePopulationConfig`` and dedicated discrete engine instead of
+the full ``PopulationConfig`` and shared age-structured engine.
 
 The compiler (:func:`compile_lifecycle_wrapper`) reads this file and performs
 string substitution:
@@ -17,6 +17,12 @@ from typing import Callable, Optional
 import numpy as np
 
 from natal.discrete_population_config import DiscretePopulationConfig
+from natal.engine.discrete_generation_simulator import (
+    run_discrete_aging,
+    run_discrete_reproduction,
+    run_discrete_survival,
+)
+from natal.engine.simulation.discrete_generation import EPS
 from natal.hooks.executor import execute_csr_event_program_with_state
 from natal.hooks.types import (
     EVENT_EARLY,
@@ -25,12 +31,6 @@ from natal.hooks.types import (
     RESULT_CONTINUE,
     RESULT_STOP,
     HookProgram,
-)
-from natal.kernels.discrete_algorithms import EPS
-from natal.kernels.discrete_kernels import (
-    run_discrete_aging,
-    run_discrete_reproduction,
-    run_discrete_survival,
 )
 from natal.numba_utils import njit_switch
 from natal.population_state import DiscretePopulationState

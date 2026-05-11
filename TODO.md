@@ -58,7 +58,7 @@
 base_population.py (line 51)
 types.py (line 124)
 kernel 加速路径目前只执行 first/early/late（CSR+chain）。
-simulation_kernels.py (line 382)
+simulator.py (line 382)
 finish 是 Python 层触发（run 结束或 finish_simulation()），不在 kernel 事件链里。
 age_structured_population.py (line 878)
 discrete_generation_population.py (line 233)

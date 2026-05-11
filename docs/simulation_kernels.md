@@ -1,4 +1,4 @@
-# Simulation Kernels Deep Dive
+# the Simulation Engine Deep Dive
 
 This chapter explains the simulation execution chain of NATAL from a user perspective:
 
@@ -26,7 +26,7 @@ Internally, the execution path can be summarized as:
 population.run(...) / population.run_tick()
   → obtain compiled event hooks
   → bind codegen runner
-  → call stage kernels in order (reproduction/survival/aging)
+  → call stage engine in order (reproduction/survival/aging)
   → update state and history
 ```
 
@@ -48,7 +48,7 @@ pop.run(n_steps=100, record_every=10)
 pop.run_tick()
 ```
 
-The calling convention is identical for both; differences lie mainly in the internal state structure and the stage kernels.
+The calling convention is identical for both; differences lie mainly in the internal state structure and the stage engine.
 
 ## 3. Stage Order Within One Tick
 
@@ -117,9 +117,9 @@ Additionally, the reproduction stage is influenced by `use_fixed_egg_count`:
 - `True`: lays eggs according to a fixed expected number.
 - `False`: lays eggs according to a Poisson mechanism (in stochastic mode this manifests as random egg numbers).
 
-## 4. Responsibilities of the `simulation_kernels` Module
+## 4. Responsibilities of the `simulation_engine` Module
 
-`src/natal/kernels/simulation_kernels.py` mainly provides “stage‑level kernel functions”, including:
+`src/natal/engine/simulation_engine.py` mainly provides “stage‑level kernel functions”, including:
 
 - For the age‑structured model: `run_reproduction`, `run_survival`, `run_aging`.
 - For the discrete‑generation model: `run_discrete_reproduction`, `run_discrete_survival`, `run_discrete_aging`.
@@ -128,14 +128,14 @@ The module also provides lightweight wrapper functions for importing/exporting s
 
 ### 4.1 Spatial Migration Backend Layout
 
-Spatial migration kernels are now organized as a package under
-`src/natal/kernels/migration/`:
+Spatial migration engine are now organized as a package under
+`src/natal/engine/migration/`:
 
 - `adjacency.py`: adjacency-row backend (dense/sparse row routing).
 - `kernel.py`: topology + migration-kernel backend.
 - `__init__.py`: package-level re-exports for backend entry points.
 
-The compatibility facade `src/natal/kernels/spatial_migration_kernels.py`
+The compatibility facade `src/natal/engine/spatial_migration_engine.py`
 keeps the legacy public API stable while dispatching by backend mode:
 
 - `migration_mode == 0` -> adjacency backend (`adjacency.py`)
@@ -146,7 +146,7 @@ entry points such as `run_spatial_migration(...)`.
 
 ## 5. Relationship with `state` / `config`
 
-When the simulation runs, the kernels read and write two core objects:
+When the simulation runs, the engine read and write two core objects:
 
 - `state`: the current population distribution and time step.
 - `config`: rule parameters such as survival rates, mating rates, fitness values, mapping matrices, etc.

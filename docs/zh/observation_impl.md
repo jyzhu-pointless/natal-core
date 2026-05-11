@@ -11,7 +11,7 @@ Observation 历史记录涉及四个层次，并通过 NamedTuple 参数束在 K
                        SpatialPopulation 的 _spatial_topo / _migration_params / _compact_meta
 Observation 层     →  observation.py: Observation, ObservationFilter, build_mask
                        observation_record.py: CompactMeta, build_observation_row_spatial
-Kernel 层          →  spatial_simulation_kernels.py 中的 recording 通路
+Kernel 层          →  spatial_simulator.py 中的 recording 通路
                        spatial_lifecycle_*.tmpl.py 代码生模板
 导出层             →  state_translation.py: output_history / *observation_history_to_readable_dict
 ```
@@ -159,7 +159,7 @@ def set_observations(self, groups, *, collapse_age=False):
 
 ### 3. Kernel 集成
 
-#### Panmictic 内核（simulation_kernels.py）
+#### Panmictic 内核（simulator.py）
 
 `run_with_hooks` / `run_discrete_with_hooks` 内部调用 `build_observation_row_panmictic()`：
 

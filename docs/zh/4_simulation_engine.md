@@ -119,9 +119,9 @@ pop.run_tick()
 - `True`：按固定期望卵数产卵。
 - `False`：按 Poisson 机制产卵（在随机模式下体现为随机卵数）。
 
-## 4. `simulation_kernels` 模块的职责
+## 4. `simulator` 模块的职责
 
-`src/natal/kernels/simulation_kernels.py` 主要提供“阶段级内核函数”，包括：
+`src/natal/engine/simulator.py` 主要提供“阶段级内核函数”，包括：
 
 - 年龄结构模型：`run_reproduction`、`run_survival`、`run_aging`
 - 离散世代模型：`run_discrete_reproduction`、`run_discrete_survival`、`run_discrete_aging`
@@ -131,13 +131,13 @@ pop.run_tick()
 ### 4.1 Spatial migration 后端模块布局
 
 Spatial migration 相关内核现已按后端拆分到目录模块
-`src/natal/kernels/migration/` 下：
+`src/natal/engine/migration/` 下：
 
 - `adjacency.py`：邻接行后端（dense/sparse row 路由）。
 - `kernel.py`：拓扑 + migration-kernel 后端。
 - `__init__.py`：包级后端入口重导出。
 
-兼容入口 `src/natal/kernels/spatial_migration_kernels.py`
+兼容入口 `src/natal/engine/spatial_migrator.py`
 保持旧 API 不变，并按后端模式分发：
 
 - `migration_mode == 0` -> adjacency 后端（`adjacency.py`）

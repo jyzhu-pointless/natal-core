@@ -277,7 +277,7 @@ The practical usage of `SpatialPopulation` can be remembered as four steps:
 
 ## Related Chapters
 
-- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [Deep Dive into the Simulation Engine](simulator.md)
 - [Hook System](hooks.md)
 - [Modifier Mechanism](modifiers.md)
 - [PopulationState and PopulationConfig](population_state_config.md)

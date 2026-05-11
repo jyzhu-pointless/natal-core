@@ -4,7 +4,7 @@ This module defines the immutable configuration structure ``PopulationConfig``,
 functions to build, convert, and inspect configuration objects, as well as
 helpers to initialise genotype/gamete mapping arrays.
 
-The configuration is designed to be passed into simulation kernels and remains
+The configuration is designed to be passed into simulation engine and remains
 compatible with Numba.  Scalar fields are immutable (rebuild with ``_replace``),
 while NumPy arrays can be mutated in place.
 """
@@ -16,7 +16,7 @@ from typing import Any, Callable, List, NamedTuple, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.kernels.algorithms as alg
+import natal.engine.simulation.age_structured as alg
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.index_registry import compress_hg_glab, decompress_hg_glab
 from natal.type_def import Sex
@@ -154,7 +154,7 @@ class PopulationConfig(NamedTuple):
     adult_ages: NDArray[np.int64]
     genotype_to_gametes_map: NDArray[np.float64]
     gametes_to_zygote_map: NDArray[np.float64]
-    offspring_tensor: NDArray[np.float64]                       # (g, g, g) — precomputed from meiosis × zygote maps
+    offspring_tensor: NDArray[np.float64]    # (g, g, g) — precomputed from meiosis × zygote maps
     initial_individual_count: NDArray[np.float64]
     initial_sperm_storage: NDArray[np.float64]
     population_scale: float

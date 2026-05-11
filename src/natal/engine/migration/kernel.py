@@ -1,4 +1,4 @@
-"""Kernel-topology-mode spatial migration kernels."""
+"""Kernel-topology-mode spatial migration engine."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ except ImportError:
 
     numba_max_threads = 1
 
-from natal.kernels.migration.adjacency import (
+from natal.engine.migration.adjacency import (
     migrate_scalar_bucket,
     migrate_sperm_bucket,
 )

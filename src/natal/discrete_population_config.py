@@ -1,8 +1,8 @@
 """Discrete-generation population configuration.
 
 A dedicated config for the non-overlapping generation model.  All age-
-dimensioned arrays are at most length 2.  Scalar fields accessible to
-compiled kernels eliminate runtime array-indexing overhead.
+dimensioned arrays are at most length 2. Scalar fields accessible to
+compiled engine eliminate runtime array-indexing overhead.
 """
 
 from __future__ import annotations

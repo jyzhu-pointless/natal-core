@@ -25,7 +25,7 @@ Builder chained configuration
 Related chapters:
 
 - [PopulationState & PopulationConfig: Compilation and Configuration](population_state_config.md)
-- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [Deep Dive into the Simulation Engine](simulator.md)
 
 ## 2. Two Types of Builder
 

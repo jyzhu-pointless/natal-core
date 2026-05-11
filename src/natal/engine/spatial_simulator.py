@@ -1,7 +1,7 @@
-"""Spatial simulation kernels.
+"""Spatial simulation engine.
 
-Core multi-deme lifecycle kernels live under ``natal.kernels``.
-Migration kernels were split into ``natal.kernels.spatial_migration_kernels``.
+Core multi-deme lifecycle engine live under ``natal.engine``.
+Migration engine were split into ``natal.engine.spatial_migrator``.
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ try:
 except ImportError:
     prange = range  # type: ignore[assignment]
 
-from natal.kernels.simulation_kernels import (
+from natal.engine.age_structured_simulator import (
     run_aging,
     run_reproduction_with_precomputed_offspring_probability,
     run_survival,
 )
-from natal.kernels.spatial_migration_kernels import run_spatial_migration
+from natal.engine.spatial_migrator import run_spatial_migration
 from natal.numba_utils import njit_switch
 from natal.observation_record import CompactMeta, build_observation_row_spatial
 from natal.population_config import PopulationConfig
@@ -68,7 +68,7 @@ def run_spatial_tick(
             config=config,
             offspring_probability=config.offspring_tensor,
         )
-        # Keep lifecycle order identical to non-spatial single-population kernels.
+        # Keep lifecycle order identical to non-spatial single-population engine.
         ind_d, sperm_d = run_survival(
             ind_count=ind_d,
             sperm_store=sperm_d,

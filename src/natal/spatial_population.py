@@ -27,15 +27,15 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
+from natal.engine.spatial_simulator import (
+    run_spatial_migration,
+)
 from natal.genetic_structures import Species
 from natal.hook_dsl import (
     CompiledEventHooks,
     CompiledHookDescriptor,
     DemeSelector,
     HookProgram,
-)
-from natal.kernels.spatial_simulation_kernels import (
-    run_spatial_migration,
 )
 from natal.numba_utils import is_numba_enabled
 from natal.observation_record import (
@@ -635,7 +635,7 @@ class SpatialPopulation:
         history_new: Optional[NDArray[np.float64]],
         clear_history_on_start: bool,
     ) -> None:
-        """Process and append history array returned from spatial simulation kernels.
+        """Process and append history array returned from spatial simulation engine.
 
         Handles duplication checking (overlapping start/end ticks) and enforces limit.
         """
@@ -1430,7 +1430,7 @@ class SpatialPopulation:
             ``HeterogeneousKernelParams`` when ``kernel_bank`` and
             ``deme_kernel_ids`` are both set; ``None`` otherwise.
         """
-        from natal.kernels.migration.kernel import (
+        from natal.engine.migration.kernel import (
             _build_kernel_offset_table,  # pyright: ignore[reportPrivateUsage]
         )
 

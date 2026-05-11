@@ -344,7 +344,7 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
     d0 = _build_deme("mixed_d0")
     d1 = _build_deme("mixed_d1")
 
-    # Spatial kernels require one shared config object.
+    # Spatial engine require one shared config object.
     d1._config = d0.export_config()  # type: ignore[attr-defined]
 
     from numba import njit

@@ -22,7 +22,7 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.kernels.simulation_kernels as sk
+import natal.engine.age_structured_simulator as sk
 from natal.base_population import BasePopulation, HookRegistrationMap
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
@@ -447,7 +447,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return self._config_nn.sexual_selection_fitness[f_idx, m_idx]
 
     # ========================================================================
-    # State export/import (simulation_kernels interface)
+    # State export/import (simulator interface)
     # ========================================================================
 
     def export_config(self) -> 'PopulationConfig':
@@ -639,7 +639,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     # ========================================================================
 
     def _get_kernel_config(self) -> Tuple[Any, ...]:
-        """Build configuration tuple for simulation kernels.
+        """Build configuration tuple for simulation engine.
 
         Returns:
             tuple: A Numba-compatible configuration tuple.
@@ -653,7 +653,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         finish: bool = False,
         clear_history_on_start: bool = False
     ) -> 'AgeStructuredPopulation':
-        """Run multi-step evolution using optimized simulation kernels.
+        """Run multi-step evolution using optimized simulation engine.
 
         Args:
             n_steps: Number of steps to evolve.
@@ -706,9 +706,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 n_obs_groups=n_obs,
             )
         else:
-            from natal.kernels.simulation_kernels import run_with_hooks
-
-            final_state_tuple, history_new, was_stopped = run_with_hooks(
+            final_state_tuple, history_new, was_stopped = sk.run_with_hooks(
                 state=self._state_nn,
                 config=config,
                 registry=hooks.registry,
@@ -762,9 +760,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         clear_history_on_start: bool,
     ) -> 'AgeStructuredPopulation':
         """Python-level simulation loop using HookExecutor for event dispatch."""
-        from natal.kernels import simulation_kernels as sk
-        from natal.population_state import PopulationState
-
         self.ensure_hook_executor()
 
         if clear_history_on_start:

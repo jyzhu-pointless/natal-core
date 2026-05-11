@@ -360,5 +360,5 @@ When mixing different types of Hooks:
 
 - [Hook System](2_hooks.md) - Basic Hook concepts and declarative Hook usage
 - [Modifier Mechanism](3_modifiers.md) - Genetic modifier mechanism
-- [Simulation Kernels Deep Dive](4_simulation_kernels.md) - How simulation kernels work
+- [the Simulation Engine Deep Dive](4_simulation_engine.md) - How simulation engine work
 - [Numba Optimization Guide](4_numba_optimization.md) - Numba optimization techniques

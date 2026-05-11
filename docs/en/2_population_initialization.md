@@ -40,7 +40,7 @@ Population.setup() → chainable configuration method calls
   → reproduction → survival → aging (and hooks)
 ```
 
-After configuration, you can use the returned population object to call `run()` or `run_tick()` methods to start the simulation (see [Simulation Kernels Deep Dive](4_simulation_kernels.md)).
+After configuration, you can use the returned population object to call `run()` or `run_tick()` methods to start the simulation (see [the Simulation Engine Deep Dive](4_simulator.md)).
 
 ## Two Types of Configuration Interfaces
 
@@ -503,7 +503,7 @@ Population initialization provides a concise and intuitive configuration approac
 - [Hook System](2_hooks.md) - Detailed usage of hook functions
 - [Genotype Pattern Matching](2_genotype_patterns.md) - Detailed genotype matching rules
 - [PopulationState & PopulationConfig: Compilation and Configuration](4_population_state_config.md) - Detailed underlying configuration objects
-- [Simulation Kernels Deep Dive](4_simulation_kernels.md) - Simulation execution flow and algorithm implementation
+- [the Simulation Engine Deep Dive](4_simulator.md) - Simulation execution flow and algorithm implementation
 
 ***
 

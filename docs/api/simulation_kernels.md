@@ -1,13 +1,13 @@
-# simulation_kernels Module
+# simulation_engine Module
 
-Core simulation kernels and execution logic.
+Core simulation engineand execution logic.
 
 ## Overview
 
-The `simulation_kernels` module provides the fundamental Numba-accelerated kernels for population simulation.
+The `simulation_engine` module provides the fundamental Numba-accengine engine for population simulation.
 
 ## Complete Module Reference
 
-::: natal.kernels.simulation_kernels
+::: natal.engine.simulation_engine
     options:
       heading_level: 3

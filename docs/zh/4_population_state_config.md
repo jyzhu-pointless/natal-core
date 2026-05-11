@@ -202,7 +202,7 @@ data = population_state_to_dict(
 ## 相关章节
 
 - [种群初始化](2_population_initialization.md)
-- [模拟内核深度解析](4_simulation_kernels.md)
+- [模拟内核深度解析](4_simulator.md)
 - [Modifier 机制](3_modifiers.md)
 - [Hook 系统](2_hooks.md)
 - [种群观测规则](2_data_output.md)

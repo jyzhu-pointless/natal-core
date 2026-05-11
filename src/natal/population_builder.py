@@ -1707,7 +1707,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
     Note:
         This builder fixes ``n_ages=2`` and ``new_adult_age=1``.
-        In discrete kernels, juvenile competition strength is computed from
+        In discrete engine, juvenile competition strength is computed from
         total age-0 abundance directly.
     """
 

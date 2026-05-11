@@ -3,7 +3,7 @@
 `PopulationState` and `PopulationConfig` are the two most critical data objects in the NATAL simulation framework:
 
 - `PopulationState` (and its discrete-generation counterpart `DiscretePopulationState`) is responsible for maintaining the dynamic state during simulation
-- `PopulationConfig` is responsible for storing simulation parameters and genetic mappings, serving as the configuration object read by kernels at runtime
+- `PopulationConfig` is responsible for storing simulation parameters and genetic mappings, serving as the configuration object read by engine at runtime
 
 Understanding these two objects helps in organizing initialization, execution, and result interpretation more reliably.
 
@@ -202,7 +202,7 @@ data = population_state_to_dict(
 ## Related Sections
 
 - [Population Initialization](2_population_initialization.md)
-- [Simulation Kernels Deep Dive](4_simulation_kernels.md)
+- [the Simulation Engine Deep Dive](4_simulation_engine.md)
 - [Modifier Mechanism](3_modifiers.md)
 - [Hook System](2_hooks.md)
 - [Population Observation Rules](2_data_output.md)

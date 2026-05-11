@@ -1,4 +1,4 @@
-"""Discrete-generation lifecycle kernels.
+"""Discrete-generation lifecycle engine.
 
 Orchestrate the three lifecycle stages using dedicated discrete algorithms.
 Each function takes ``DiscretePopulationConfig``.
@@ -7,10 +7,13 @@ Each function takes ``DiscretePopulationConfig``.
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.kernels.algorithms as alg
+import natal.engine.simulation.age_structured as alg
 from natal import numba_compat as nbc
 from natal.discrete_population_config import DiscretePopulationConfig
-from natal.kernels.discrete_algorithms import fertilize_discrete, mate_discrete
+from natal.engine.simulation.discrete_generation import (
+    fertilize_discrete,
+    mate_discrete,
+)
 from natal.numba_utils import njit_switch
 from natal.population_config import FIXED, LOGISTIC, NO_COMPETITION
 

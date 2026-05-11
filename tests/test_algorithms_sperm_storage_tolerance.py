@@ -1,6 +1,6 @@
 import numpy as np
 
-from natal.kernels.algorithms import (
+from natal.engine.simulation.age_structured import (
     EPS,
     sample_survival_with_sperm_storage,
 )

@@ -12,7 +12,7 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-**NATAL Core** is a high-performance forward-time population genetics simulation engine with configurable species lifecycles. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and Numba-accelerated simulation kernels. NATAL Core is especially suited for **modeling gene drive systems in insect populations**, but its flexible architecture also makes it applicable to a wide range of population genetics scenarios.
+**NATAL Core** is a high-performance forward-time population genetics simulation engine with configurable species lifecycles. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and Numba-accelerated simulation engine. NATAL Core is especially suited for **modeling gene drive systems in insect populations**, but its flexible architecture also makes it applicable to a wide range of population genetics scenarios.
 
 NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for inferring population genetics model parameters based on NATAL Core.
 
@@ -173,7 +173,7 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 
 13. [IndexRegistry Indexing Mechanism](4_index_registry.md)
 14. [PopulationState and PopulationConfig](4_population_state_config.md)
-15. [Simulation Kernels in Depth](4_simulation_kernels.md)
+15. [the Simulation Engine in Depth](4_simulator.md)
 16. [Numba Optimization Guide](4_numba_optimization.md)
 17. [Observation History Recording Implementation](observation_impl.md)
 

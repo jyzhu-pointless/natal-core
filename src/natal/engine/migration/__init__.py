@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from natal.kernels.migration.adjacency import apply_spatial_adjacency_mode
-from natal.kernels.migration.kernel import (
+from natal.engine.migration.adjacency import apply_spatial_adjacency_mode
+from natal.engine.migration.kernel import (
     apply_spatial_kernel_migration,
     apply_spatial_kernel_migration_heterogeneous,
 )

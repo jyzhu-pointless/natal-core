@@ -1,7 +1,7 @@
 """Population state containers based on NamedTuple.
 
 These containers keep scalar metadata immutable while allowing in-place mutation
-of NumPy array contents, which remains compatible with Numba kernels.
+of NumPy array contents, which remains compatible with Numba engine.
 """
 
 from __future__ import annotations

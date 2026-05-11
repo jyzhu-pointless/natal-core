@@ -6,7 +6,7 @@ common interfaces, evolution methods, history management, and helpers
 that are implemented by concrete population classes.
 
 This module provides a common abstraction layer for population models while
-keeping internal state representations compatible with NumPy/Numba kernels.
+keeping internal state representations compatible with NumPy/Numba engine.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ import numpy as np
 
 import natal.modifiers as _modifiers
 import natal.population_config as _population_config
+from natal.engine.simulation.age_structured import compute_offspring_probability_tensor
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.genetic_structures import Species
 from natal.helpers import resolve_sex_label
@@ -311,7 +312,7 @@ class BasePopulation(ABC, Generic[T_State]):
     def set_observations(self, groups: GroupsInput, *, collapse_age: bool = False) -> None:
         """Register observation groups and immediately compile the binary mask.
 
-        Once set, the mask is passed to simulation kernels to record
+        Once set, the mask is passed to simulation engine to record
         observation-aggregated snapshots (compressed format) instead of raw
         flattened state.
 
@@ -506,7 +507,7 @@ class BasePopulation(ABC, Generic[T_State]):
         history_new: Optional[np.ndarray],
         clear_history_on_start: bool
     ) -> None:
-        """Process and append history array returned from simulation kernels.
+        """Process and append history array returned from simulation engine.
 
         Handles duplication checking (overlapping start/end ticks) and enforces limit.
         """
@@ -575,9 +576,7 @@ class BasePopulation(ABC, Generic[T_State]):
             zygote_modifiers=zygote_funcs,
         )
 
-        import natal.kernels.algorithms as _alg
-
-        offspring_tensor = _alg.compute_offspring_probability_tensor(
+        offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=genotype_to_gametes_map[0],
             meiosis_m=genotype_to_gametes_map[1],
             haplo_to_genotype_map=gametes_to_zygote_map,
@@ -1318,7 +1317,7 @@ class BasePopulation(ABC, Generic[T_State]):
                         - Prefer HookExecutor (unified three-layer coordination).
                         - If executor is not built, fall back to traditional ``_hooks``
                             (Python callbacks only).
-                        - In accelerated ``run()``, core events are mostly executed by kernels;
+                        - In accelerated ``run()``, core events are mostly executed by engine;
                             ``trigger_event`` is used mainly for explicit events (for example ``finish``)
                             and compatibility paths.
 
@@ -1390,7 +1389,7 @@ class BasePopulation(ABC, Generic[T_State]):
             To avoid maintaining two divergent hook sources, this method only
             mirrors compiled hooks into traditional ``_hooks`` when a real
             Python wrapper exists (selector-mode hooks). Pure declarative and
-            njit hooks stay in ``_compiled_hooks`` and are executed by kernels
+            njit hooks stay in ``_compiled_hooks`` and are executed by engine
             (or by HookExecutor when trigger_event is used).
         """
         self._compiled_hooks.append(desc)

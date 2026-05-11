@@ -11,7 +11,7 @@ This section provides module-level API references.
 - [population_state](population_state.md)
 - [state_translation](state_translation.md)
 - [population_config](population_config.md)
-- [simulation_kernels](simulation_kernels.md)
+- [simulator](simulator.md)
 - [algorithms](algorithms.md)
 
 ## Genetics

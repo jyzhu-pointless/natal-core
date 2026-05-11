@@ -1,6 +1,6 @@
 """Spatial migration kernels compatibility facade.
 
-Core implementations are split by backend under ``natal.kernels.migration``:
+Core implementations are split by backend under ``natal.engine.migration``:
 
 - ``adjacency``: dense/sparse adjacency-row routing backend.
 - ``kernel``: topology + migration-kernel routing backend.
@@ -15,8 +15,8 @@ from typing import Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.kernels.migration.adjacency import apply_spatial_adjacency_mode
-from natal.kernels.migration.kernel import (
+from natal.engine.migration.adjacency import apply_spatial_adjacency_mode
+from natal.engine.migration.kernel import (
     apply_spatial_kernel_migration,
     apply_spatial_kernel_migration_heterogeneous,
 )

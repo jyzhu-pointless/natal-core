@@ -208,5 +208,5 @@ Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
 
 - [遗传预设系统](2_genetic_presets.md)
 - [Hook 系统](2_hooks.md)
-- [模拟内核深度解析](4_simulation_kernels.md)
+- [模拟内核深度解析](4_simulator.md)
 - [PopulationState 与 PopulationConfig](4_population_state_config.md)

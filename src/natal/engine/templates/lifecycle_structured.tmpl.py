@@ -9,6 +9,11 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from natal.engine.age_structured_simulator import (
+    run_aging,
+    run_reproduction,
+    run_survival,
+)
 from natal.hooks.executor import execute_csr_event_program_with_state
 from natal.hooks.types import (
     EVENT_EARLY,
@@ -17,11 +22,6 @@ from natal.hooks.types import (
     RESULT_CONTINUE,
     RESULT_STOP,
     HookProgram,
-)
-from natal.kernels.simulation_kernels import (
-    run_aging,
-    run_reproduction,
-    run_survival,
 )
 from natal.numba_utils import njit_switch
 from natal.population_config import PopulationConfig

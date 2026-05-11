@@ -307,8 +307,8 @@ if virgin_count < 0.0 and abs(virgin_count) < 1e-10:
 
 | File | Content |
 |------|---------|
-| `src/natal/kernels/migration/kernel.py` | `_build_kernel_offset_table`, `_build_source_kernel_sparse_row`, `apply_spatial_kernel_migration` |
-| `src/natal/kernels/migration/adjacency.py` | `migrate_scalar_bucket`, `migrate_sperm_bucket` |
-| `src/natal/kernels/spatial_migration_kernels.py` | `run_spatial_migration`, `apply_spatial_adjacency_migration` (dispatch entry points) |
+| `src/natal/engine/migration/kernel.py` | `_build_kernel_offset_table`, `_build_source_kernel_sparse_row`, `apply_spatial_kernel_migration` |
+| `src/natal/engine/migration/adjacency.py` | `migrate_scalar_bucket`, `migrate_sperm_bucket` |
+| `src/natal/engine/spatial_migrator.py` | `run_spatial_migration`, `apply_spatial_adjacency_migration` (dispatch entry points) |
 | `src/natal/spatial_population.py` | `_build_heterogeneous_kernel_arrays`, runtime scheduling |
-| `src/natal/kernels/templates/spatial_lifecycle_*.tmpl.py` | Code generation templates (calling `run_spatial_migration` in the njit path) |
+| `src/natal/engine/templates/spatial_lifecycle_*.tmpl.py` | Code generation templates (calling `run_spatial_migration` in the njit path) |

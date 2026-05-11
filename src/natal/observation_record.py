@@ -1,8 +1,8 @@
-"""Observation record builders for simulation kernels (Numba-accelerated).
+"""Observation record builders for simulation engine (Numba-accelerated).
 
 Provides independent njit functions that construct flat observation rows
 from individual count arrays and pre-compiled observation masks.  Called
-from both the Numba simulation kernels and Python-layer manual recording.
+from both the Numba simulation engine and Python-layer manual recording.
 
 Panmictic vs spatial
 --------------------

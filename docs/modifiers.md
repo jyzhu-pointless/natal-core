@@ -208,5 +208,5 @@ Using them together allows you to model most advanced genetic mechanisms.
 
 - [Genetic Preset System](genetic_presets.md)
 - [Hook System](hooks.md)
-- [Deep Dive into Simulation Kernels](simulation_kernels.md)
+- [Deep Dive into the Simulation Engine](simulator.md)
 - [PopulationState and PopulationConfig](population_state_config.md)

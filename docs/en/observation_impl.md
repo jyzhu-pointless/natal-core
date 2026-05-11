@@ -11,7 +11,7 @@ User-facing API         →  BasePopulation / SpatialPopulation's record_observa
                            SpatialPopulation's _spatial_topo / _migration_params / _compact_meta
 Observation layer      →  observation.py: Observation, ObservationFilter, build_mask
                            observation_record.py: CompactMeta, build_observation_row_spatial
-Kernel layer           →  recording pathway in spatial_simulation_kernels.py
+Kernel layer           →  recording pathway in spatial_simulator.py
                            spatial_lifecycle_*.tmpl.py code generation templates
 Export layer           →  state_translation.py: output_history / *observation_history_to_readable_dict
 ```
@@ -159,7 +159,7 @@ Internal flow: create `ObservationFilter` → `build_filter` → compile mask �
 
 ### 3. Kernel Integration
 
-#### Panmictic Kernels (simulation_kernels.py)
+#### Panmictic Kernels (simulator.py)
 
 `run_with_hooks` / `run_discrete_with_hooks` internally call `build_observation_row_panmictic()`:
 

@@ -783,5 +783,5 @@ SpatialPopulation 的实际使用顺序可以记成四步：
 - [SpatialBuilder：批量构造](spatial_builder.md)
 - [空间生命周期包装器](spatial_lifecycle_wrapper.md)
 - [Migration Kernel 底层实现](migration_kernel_impl.md)
-- [模拟内核深度解析](4_simulation_kernels.md)
+- [模拟内核深度解析](4_simulator.md)
 - [Hook 系统](2_hooks.md)

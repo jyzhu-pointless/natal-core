@@ -40,7 +40,7 @@ Population.setup() → 链式配置方法调用
   → reproduction → survival → aging（以及 hooks）
 ```
 
-配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulation_kernels.md)）。
+配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulator.md)）。
 
 ## 两类配置接口
 
@@ -504,7 +504,7 @@ def release_drive_carriers():
 - [Hook 系统](2_hooks.md) - 钩子函数的详细使用方法
 - [基因型模式匹配](2_genotype_patterns.md) - 基因型匹配规则详解
 - [PopulationState & PopulationConfig：编译与配置](4_population_state_config.md) - 底层配置对象详解
-- [模拟内核深度解析](4_simulation_kernels.md) - 模拟执行流程和算法实现
+- [模拟内核深度解析](4_simulator.md) - 模拟执行流程和算法实现
 
 ***
 

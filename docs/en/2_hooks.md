@@ -160,7 +160,7 @@ If multiple Hooks are present, it is recommended to use `priority` to explicitly
 NATAL Core's Hook system supports two execution modes, controlled by the global `NUMBA_ENABLED` switch:
 
 - **When `NUMBA_ENABLED=True` (default)**:
-  - Declarative Hooks are compiled into pure data structures (CSR format) and executed efficiently inside Numba-compiled kernels
+  - Declarative Hooks are compiled into pure data structures (CSR format) and executed efficiently inside Numba-compiled engine
   - Custom Hooks and Selector-based Hooks must follow Numba syntax
   - Python-layer Hooks are rejected at registration time (except for `initialization` and `finish` events)
 
@@ -215,6 +215,6 @@ pop.run(n_steps=200, record_every=10)
 - [Advanced Hook Tutorial](3_advanced_hooks.md)
 - [Population Initialization](2_population_initialization.md)
 - [Modifier Mechanism](3_modifiers.md)
-- [Simulation Kernels Deep Dive](4_simulation_kernels.md)
+- [the Simulation Engine Deep Dive](4_simulation_engine.md)
 - [Numba Optimization Guide](4_numba_optimization.md)
 - [Quick Start](1_quickstart.md)

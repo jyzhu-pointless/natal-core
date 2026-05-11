@@ -357,5 +357,5 @@ pop = builder.hooks(release_hook, check_drive_threshold, custom_process_hook).bu
 
 - [Hook 系统](2_hooks.md) - 基础 Hook 概念和声明式 Hook 使用
 - [Modifier 机制](3_modifiers.md) - 遗传修饰器机制
-- [模拟内核深度解析](4_simulation_kernels.md) - 模拟内核的工作原理
+- [模拟内核深度解析](4_simulator.md) - 模拟内核的工作原理
 - [Numba 优化指南](4_numba_optimization.md) - Numba 优化技巧
