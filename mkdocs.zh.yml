@@ -105,7 +105,7 @@ nav:
     - 3_spatial_simulation.md
   - 内部实现:
     - 4_index_registry.md
-    - 4_simulation_kernels.md
+    - 4_simulator.md
     - 4_numba_optimization.md
     - 4_population_state_config.md
   - 附录:
@@ -133,6 +133,6 @@ nav:
     - 年龄结构种群: api/age_structured_population.md
     - 种群构建器: api/population_builder.md
     - 修饰器: api/modifiers.md
-    - Hook DSL: api/hook_dsl.md
-    - 模拟内核: api/simulation_kernels.md
+    - Hook DSL: api/hooks.md
+    - 模拟内核: api/simulator.md
     - 算法: api/algorithms.md

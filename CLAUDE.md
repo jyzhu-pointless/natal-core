@@ -87,20 +87,19 @@ natal/
 │   ├── executor.py                   # Hook execution engine (CSR-based event arrays)
 │   ├── selector.py                   # Deme-aware hook selectors
 │   └── types.py                      # Hook enums, opcodes, data structures
-├── kernels/                          # Numba-accelerated simulation kernels
+├── engine/                          # Numba-accelerated simulation engine
 │   ├── codegen.py                    # Dynamic kernel wrapper code generation
-│   ├── simulation_kernels.py         # Core panmictic simulation loops
-│   ├── spatial_simulation_kernels.py # Per-deme simulation for spatial models
-│   ├── spatial_migration_kernels.py  # Migration between demes
+│   ├── simulation_engine.py         # Core panmictic simulation loops
+│   ├── spatial_simulation_engine.py # Per-deme simulation for spatial models
+│   ├── spatial_migration_engine.py  # Migration between demes
 │   ├── migration/
 │   │   ├── adjacency.py              # Adjacency matrix helpers
 │   │   └── kernel.py                 # Migration kernel
 │   └── templates/                    # Jinja2-style templates for wrapper codegen
-├── ui/                               # NiceGUI-based interactive dashboards
-│   ├── dashboard.py                  # Panmictic population dashboard
-│   ├── dashboard_population.py       # Population display components
-│   └── spatial_dashboard.py          # Spatial simulation dashboard
-└── hook_dsl.py                       # Legacy compatibility shim (star re-exports)
+└── ui/                               # NiceGUI-based interactive dashboards
+    ├── dashboard.py                  # Panmictic population dashboard
+    ├── dashboard_population.py       # Population display components
+    └── spatial_dashboard.py          # Spatial simulation dashboard
 ```
 
 ### Key architectural layers
@@ -114,11 +113,11 @@ natal/
    - **AgeStructuredPopulation** — overlapping generations with age classes
    - **SpatialPopulation** — multi-deme, wraps either model per deme with migration
 
-4. **Hook system** (`hooks/`): Event-driven intervention system with five events: `initialization`, `first`, `early`, `late`, `finish`. Hooks can be Python callables (for flexibility) or compiled to Numba njit kernels (for performance). The compiler path uses CSR (Compressed Sparse Row) event arrays and code generation from templates (`kernels/codegen.py`). Two hook styles:
+4. **Hook system** (`hooks/`): Event-driven intervention system with five events: `initialization`, `first`, `early`, `late`, `finish`. Hooks can be Python callables (for flexibility) or compiled to Numba njit engine (for performance). The compiler path uses CSR (Compressed Sparse Row) event arrays and code generation from templates (`engine/codegen.py`). Two hook styles:
    - **Declarative hooks**: `Op.add(genotypes="...", ages=..., sex="...", delta=..., when="tick == N")`
    - **Python function hooks**: Decorated with `@hook(event="early", priority=0)` to return Op lists or raw operations
 
-5. **Kernel layer** (`kernels/`): Numba-accelerated simulation kernels for the hot loop. Custom codegen (`codegen.py`) dynamically generates optimized wrapper modules from Jinja2 templates, combining user hooks into compiled njit functions. Shared kernel source files handle both panmictic and spatial simulations.
+5. **Kernel layer** (`engine/`): Numba-accelerated simulation engine for the hot loop. Custom codegen (`codegen.py`) dynamically generates optimized wrapper modules from Jinja2 templates, combining user hooks into compiled njit functions. Shared kernel source files handle both panmictic and spatial simulations.
 
 6. **Genetic presets** (`genetic_presets.py`): `HomingDrive` and `ToxinAntidoteDrive` presets that encapsulate gamete modifiers, zygote modifiers, and fitness effects. The `apply_preset_to_population()` function wires them into a population.
 

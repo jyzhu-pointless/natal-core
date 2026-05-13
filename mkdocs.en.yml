@@ -105,7 +105,7 @@ nav:
     - 3_spatial_simulation.md
   - Internal Implementation:
     - 4_index_registry.md
-    - 4_simulation_kernels.md
+    - 4_simulator.md
     - 4_numba_optimization.md
     - 4_population_state_config.md
   - Appendix:
@@ -130,11 +130,11 @@ nav:
     - age_structured_population: api/age_structured_population.md
     - discrete_generation_population: api/discrete_generation_population.md
     - algorithms: api/algorithms.md
-    - simulation_kernels: api/simulation_kernels.md
+    - simulator: api/simulator.md
     - population_builder: api/population_builder.md
     - genetic_patterns: api/genetic_patterns.md
     - modifiers: api/modifiers.md
-    - hook_dsl: api/hook_dsl.md
+    - hooks: api/hooks.md
     - genetic_presets: api/genetic_presets.md
 
 extra_css:
