@@ -5,25 +5,19 @@ from __future__ import annotations
 from typing import Tuple
 
 import numpy as np
+from numba import get_num_threads, prange  # pyright: ignore[reportMissingTypeStubs]
+from numba.np.ufunc.parallel import (  # pyright: ignore[reportMissingTypeStubs]
+    get_thread_id,
+)
 from numpy.typing import NDArray
-
-try:
-    from numba import get_num_threads, prange  # pyright: ignore
-    from numba.np.ufunc.parallel import get_thread_id  # pyright: ignore
-    numba_max_threads = int(get_num_threads())
-except ImportError:
-    prange = range  # type: ignore[assignment]
-
-    def get_thread_id() -> int:
-        return 0
-
-    numba_max_threads = 1
 
 from natal.engine.migration.adjacency import (
     migrate_scalar_bucket,
     migrate_sperm_bucket,
 )
 from natal.numba_utils import njit_switch
+
+numba_max_threads = int(get_num_threads())
 
 __all__ = [
     "apply_spatial_kernel_migration",
