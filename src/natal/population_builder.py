@@ -160,8 +160,6 @@ class PopulationConfigBuilder:
             TypeError: If input types are incorrect.
 
         """
-        # print("⏳ Building population config...")
-
         # ===== Validation =====
         if n_ages <= 1:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")
@@ -196,8 +194,8 @@ class PopulationConfigBuilder:
         )
 
         # ===== Resolve survival rates =====
-        _default_female = [1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0.0]
-        _default_male = [1.0, 1.0, 2/3, 1/2, 0.0, 0.0, 0.0, 0.0]
+        _default_female = np.ones(n_ages - 1, dtype=np.float64)
+        _default_male = np.ones(n_ages - 1, dtype=np.float64)
 
         female_survival = PopulationConfigBuilder._resolve_survival_param(
             female_age_based_survival_rates, n_ages, _default_female
@@ -208,6 +206,7 @@ class PopulationConfigBuilder:
 
         age_based_survival_rates = np.array([female_survival, male_survival], dtype=np.float64)
 
+        # TODO: 所有的 age-based 参数都应当支持类似 survival_rates 的灵活输入格式
         # ===== Mating rates =====
         if female_age_based_mating_rates is not None:
             if len(female_age_based_mating_rates) != n_ages:
@@ -536,7 +535,7 @@ class PopulationConfigBuilder:
     def _resolve_survival_param(
         param: Optional[Any],
         expected_length: int,
-        default: List[float]
+        default: List[float] | NDArray[np.float64],
     ) -> NDArray[np.float64]:
         """Resolve flexible survival spec into a 1D float array.
 
