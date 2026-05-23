@@ -2,8 +2,8 @@
 
 Each ``ParamDescriptor`` maps a user-facing Builder parameter to its
 ``PopulationConfig`` field and array path.  This is the single source
-of truth shared by the Builder API and the inference layer
-(``natal-inferencer``).
+of truth shared by the Builder API, ``Configurator``, the spatial
+builder dispatch, and the inference layer (``natal-inferencer``).
 
 Usage::
 
@@ -54,25 +54,41 @@ class ParameterDomain(enum.Enum):
 
 @dataclass(frozen=True)
 class ParamDescriptor:
-    """Describes one estimable parameter of the population model.
+    """Describes one parameter of the population model.
 
     Attributes:
         domain: Builder method that sets this parameter.
         name: User-facing name (e.g. ``"carrying_capacity"``).
-        config_field: ``PopulationConfig`` field name.
+        config_field: ``PopulationConfig`` field name, or ``None`` if the
+            parameter lives outside PopulationConfig (e.g. spatial-only).
         config_path: Index path into the config array.  Scalars use ``()``.
         dtype: Python type (``float``, ``int``, or ``bool``).
         bounds: Plausible range ``(lo, hi)`` for prior construction.
         doc: One-line description.
+        aliases: Historical names that map to this parameter.
+        is_tensor: If True, the config field is a multi-dimensional array
+            (e.g. fitness tensors) rather than a scalar or 1-D array element.
+        is_0d: If True, the config field is a 0-d ndarray (writable via
+            ``field[()] = v``).  Python scalars should leave this as False.
+        is_array: If True, the parameter writes to a 1-D or 2-D array slice
+            (e.g. ``field[0, :] = values``).  Not handled by ``set_param``
+            or ``set_config_param`` — Configurator writes directly.
+        target: Where the parameter lives — ``"config"`` (PopulationConfig),
+            ``"spatial"`` (SpatialPopulation), or ``"hook"`` (hook runtime).
     """
 
     domain: ParameterDomain
     name: str
-    config_field: str
+    config_field: str | None
     config_path: tuple[int, ...]
     dtype: type
     bounds: tuple[float, float]
     doc: str = ""
+    aliases: tuple[str, ...] = ()
+    is_tensor: bool = False
+    is_0d: bool = False
+    is_array: bool = False
+    target: str = "config"
 
 
 # ---------------------------------------------------------------------------
@@ -82,84 +98,419 @@ class ParamDescriptor:
 _PARAMS: list[ParamDescriptor] = []
 
 
-def _reg(
+def _register(
     domain: ParameterDomain,
     name: str,
-    config_field: str,
+    config_field: str | None,
     config_path: tuple[int, ...],
     dtype: type,
     bounds: tuple[float, float],
     doc: str = "",
+    *,
+    aliases: tuple[str, ...] = (),
+    is_tensor: bool = False,
+    is_0d: bool = False,
+    is_array: bool = False,
+    target: str = "config",
 ) -> ParamDescriptor:
-    d = ParamDescriptor(domain, name, config_field, config_path, dtype, bounds, doc)
+    d = ParamDescriptor(
+        domain, name, config_field, config_path, dtype, bounds,
+        doc=doc, aliases=aliases, is_tensor=is_tensor, is_0d=is_0d,
+        is_array=is_array, target=target,
+    )
     _PARAMS.append(d)
     return d
 
+
+D = ParameterDomain
 
 # =============================================================================
 # SETUP
 # =============================================================================
 
-D = ParameterDomain
+_register(
+    domain=D.SETUP, name="stochastic",
+    config_field="is_stochastic", config_path=(),
+    dtype=bool, bounds=(0, 1)
+)
 
-_reg(D.SETUP, "stochastic", "is_stochastic", (), bool, (0, 1))
-_reg(D.SETUP, "continuous_sampling", "use_continuous_sampling", (), bool, (0, 1))
-_reg(D.SETUP, "fixed_egg_count", "use_fixed_egg_count", (), bool, (0, 1))
+_register(
+    domain=D.SETUP, name="continuous_sampling",
+    config_field="use_continuous_sampling", config_path=(),
+    dtype=bool, bounds=(0, 1)
+)
+
+_register(
+    domain=D.SETUP, name="fixed_egg_count",
+    config_field="use_fixed_egg_count", config_path=(),
+    dtype=bool, bounds=(0, 1)
+)
+
+_register(
+    domain=D.SETUP, name="population_scale",
+    config_field="population_scale", config_path=(),
+    dtype=float, bounds=(0.01, 1e6)
+)
+
+_register(
+    domain=D.SETUP, name="has_sex_chromosomes",
+    config_field="has_sex_chromosomes", config_path=(),
+    dtype=bool, bounds=(0, 1)
+)
 
 # =============================================================================
 # AGE_STRUCTURE
 # =============================================================================
 
-_reg(D.AGE_STRUCTURE, "n_ages", "n_ages", (), int, (1, 200))
-_reg(D.AGE_STRUCTURE, "new_adult_age", "new_adult_age", (), int, (1, 100))
-_reg(D.AGE_STRUCTURE, "generation_time", "generation_time", (), float, (0.01, 100))
+_register(
+    domain=D.AGE_STRUCTURE, name="n_ages",
+    config_field="n_ages", config_path=(),
+    dtype=int, bounds=(1, 200)
+)
+
+_register(
+    domain=D.AGE_STRUCTURE, name="n_sexes",
+    config_field="n_sexes", config_path=(),
+    dtype=int, bounds=(1, 10)
+)
+
+_register(
+    domain=D.AGE_STRUCTURE, name="n_genotypes",
+    config_field="n_genotypes", config_path=(),
+    dtype=int, bounds=(1, 100_000)
+)
+
+_register(
+    domain=D.AGE_STRUCTURE, name="n_haploid_genotypes",
+    config_field="n_haploid_genotypes", config_path=(),
+    dtype=int, bounds=(1, 100_000)
+)
+
+_register(
+    domain=D.AGE_STRUCTURE, name="n_glabs",
+    config_field="n_glabs", config_path=(),
+    dtype=int, bounds=(1, 100)
+)
+
+_register(
+    domain=D.AGE_STRUCTURE, name="new_adult_age",
+    config_field="new_adult_age", config_path=(),
+    dtype=int, bounds=(1, 100)
+)
+
+_register(
+    domain=D.AGE_STRUCTURE, name="generation_time",
+    config_field="generation_time", config_path=(),
+    dtype=float, bounds=(0.01, 100),
+    is_0d=True,
+)
+
+# =============================================================================
+# INITIAL_STATE
+# =============================================================================
+
+_register(
+    domain=D.INITIAL_STATE, name="initial_individual_count",
+    config_field="initial_individual_count", config_path=(),
+    dtype=float, bounds=(0, 1e12),
+    is_tensor=True,
+    doc="(n_sexes, n_ages, n_genotypes) initial population distribution"
+)
+
+_register(
+    domain=D.INITIAL_STATE, name="initial_sperm_storage",
+    config_field="initial_sperm_storage", config_path=(),
+    dtype=float, bounds=(0, 1e12),
+    is_tensor=True,
+    doc="(n_ages, n_genotypes, n_genotypes) initial sperm storage"
+)
 
 # =============================================================================
 # SURVIVAL
 # =============================================================================
 
-_reg(D.SURVIVAL, "female_survival", "age_based_survival_rates", (0,), float, (0, 1))
-_reg(D.SURVIVAL, "male_survival", "age_based_survival_rates", (1,), float, (0, 1))
-_reg(D.SURVIVAL, "female_age0_survival", "age_based_survival_rates", (0, 0), float, (0, 1))
-_reg(D.SURVIVAL, "male_age0_survival", "age_based_survival_rates", (1, 0), float, (0, 1))
-_reg(D.SURVIVAL, "adult_survival", "age_based_survival_rates", (0, 1), float, (0, 1))
+_register(
+    domain=D.SURVIVAL, name="female_survival",
+    config_field="age_based_survival_rates", config_path=(0,),
+    dtype=float, bounds=(0, 1),
+    doc="(n_ages,) female survival rates — use per-age sub-params for scalar estimation"
+)
+
+_register(
+    domain=D.SURVIVAL, name="male_survival",
+    config_field="age_based_survival_rates", config_path=(1,),
+    dtype=float, bounds=(0, 1),
+    doc="(n_ages,) male survival rates"
+)
+
+_register(
+    domain=D.SURVIVAL, name="female_age0_survival",
+    config_field="age_based_survival_rates", config_path=(0, 0),
+    dtype=float, bounds=(0, 1)
+)
+
+_register(
+    domain=D.SURVIVAL, name="male_age0_survival",
+    config_field="age_based_survival_rates", config_path=(1, 0),
+    dtype=float, bounds=(0, 1)
+)
+
+_register(
+    domain=D.SURVIVAL, name="female_survival_rates",
+    config_field="age_based_survival_rates", config_path=(0,),
+    dtype=float, bounds=(0, 1),
+    is_array=True,
+    doc="(n_ages,) per-age female survival — array write via resolve_age_param"
+)
+
+_register(
+    domain=D.SURVIVAL, name="male_survival_rates",
+    config_field="age_based_survival_rates", config_path=(1,),
+    dtype=float, bounds=(0, 1),
+    is_array=True,
+    doc="(n_ages,) per-age male survival — array write via resolve_age_param"
+)
+
+_register(
+    domain=D.SURVIVAL, name="adult_survival",
+    config_field="age_based_survival_rates", config_path=(),
+    dtype=float, bounds=(0, 1),
+    doc="scalar applied to all adult ages (≥ new_adult_age)"
+)
 
 # =============================================================================
 # REPRODUCTION
 # =============================================================================
 
-_reg(D.REPRODUCTION, "eggs_per_female", "expected_eggs_per_female", (), float, (0, 1e6))
-_reg(D.REPRODUCTION, "sex_ratio", "sex_ratio", (), float, (0, 1))
-_reg(D.REPRODUCTION, "female_mating_rate", "age_based_mating_rates", (0,), float, (0, 1))
-_reg(D.REPRODUCTION, "male_mating_rate", "age_based_mating_rates", (1,), float, (0, 1))
-_reg(D.REPRODUCTION, "female_adult_mating_rate", "age_based_mating_rates", (0, 1), float, (0, 1))
-_reg(D.REPRODUCTION, "male_adult_mating_rate", "age_based_mating_rates", (1, 1), float, (0, 1))
-_reg(D.REPRODUCTION, "reproduction_rate", "age_based_reproduction_rates", (), float, (0, 1))
-_reg(D.REPRODUCTION, "sperm_displacement_rate", "sperm_displacement_rate", (), float, (0, 1))
+_register(
+    domain=D.REPRODUCTION, name="eggs_per_female",
+    config_field="expected_eggs_per_female", config_path=(),
+    dtype=float, bounds=(0, 1e6),
+    aliases=("expected_eggs_per_female",),
+    is_0d=True,
+)
+
+_register(
+    domain=D.REPRODUCTION, name="sex_ratio",
+    config_field="sex_ratio", config_path=(),
+    dtype=float, bounds=(0, 1),
+    is_0d=True,
+)
+
+_register(
+    domain=D.REPRODUCTION, name="female_mating_rate",
+    config_field="age_based_mating_rates", config_path=(0,),
+    dtype=float, bounds=(0, 1),
+    doc="(n_ages,) female mating rates — use per-age sub-params for scalar estimation"
+)
+
+_register(
+    domain=D.REPRODUCTION, name="male_mating_rate",
+    config_field="age_based_mating_rates", config_path=(1,),
+    dtype=float, bounds=(0, 1),
+    doc="(n_ages,) male mating rates"
+)
+
+_register(
+    domain=D.REPRODUCTION, name="female_adult_mating_rate",
+    config_field="age_based_mating_rates", config_path=(0, 1),
+    dtype=float, bounds=(0, 1)
+)
+
+_register(
+    domain=D.REPRODUCTION, name="male_adult_mating_rate",
+    config_field="age_based_mating_rates", config_path=(1, 1),
+    dtype=float, bounds=(0, 1)
+)
+
+_register(
+    domain=D.REPRODUCTION, name="reproduction_rate",
+    config_field="age_based_reproduction_rates", config_path=(1,),
+    dtype=float, bounds=(0, 1)
+)
+
+_register(
+    domain=D.REPRODUCTION, name="sperm_displacement_rate",
+    config_field="sperm_displacement_rate", config_path=(),
+    dtype=float, bounds=(0, 1),
+    is_0d=True,
+)
+
+_register(
+    domain=D.REPRODUCTION, name="female_fertility",
+    config_field="female_age_based_relative_fertility", config_path=(0,),
+    dtype=float, bounds=(0, 1),
+    doc="(n_ages,) female relative fertility"
+)
+
+_register(
+    domain=D.REPRODUCTION, name="female_mating_rates",
+    config_field="age_based_mating_rates", config_path=(0,),
+    dtype=float, bounds=(0, 1),
+    is_array=True,
+    doc="(n_ages,) per-age female mating rates — array write via resolve_age_param"
+)
+
+_register(
+    domain=D.REPRODUCTION, name="male_mating_rates",
+    config_field="age_based_mating_rates", config_path=(1,),
+    dtype=float, bounds=(0, 1),
+    is_array=True,
+    doc="(n_ages,) per-age male mating rates — array write via resolve_age_param"
+)
+
+_register(
+    domain=D.REPRODUCTION, name="reproduction_rates",
+    config_field="age_based_reproduction_rates", config_path=(),
+    dtype=float, bounds=(0, 1),
+    is_array=True,
+    doc="(n_ages,) per-age female reproduction participation"
+)
+
+_register(
+    domain=D.REPRODUCTION, name="female_fertility_rates",
+    config_field="female_age_based_relative_fertility", config_path=(),
+    dtype=float, bounds=(0, 1),
+    is_array=True,
+    doc="(n_ages,) per-age female relative fertility — array write via resolve_age_param"
+)
 
 # =============================================================================
 # COMPETITION
 # =============================================================================
 
-_reg(D.COMPETITION, "competition_strength", "age_based_relative_competition_strength", (1,), float, (0, 1e6))
-_reg(D.COMPETITION, "juvenile_growth_mode", "juvenile_growth_mode", (), int, (0, 2))
-_reg(D.COMPETITION, "low_density_growth_rate", "low_density_growth_rate", (), float, (0, 1e6))
-_reg(D.COMPETITION, "carrying_capacity", "carrying_capacity", (), float, (0, 1e12))
+_register(
+    domain=D.COMPETITION, name="competition_strength",
+    config_field="age_based_relative_competition_strength", config_path=(1,),
+    dtype=float, bounds=(0, 1e6),
+    aliases=("relative_competition_factor",)
+)
+
+_register(
+    domain=D.COMPETITION, name="juvenile_growth_mode",
+    config_field="juvenile_growth_mode", config_path=(),
+    dtype=int, bounds=(0, 3),
+    is_0d=True,
+)
+
+_register(
+    domain=D.COMPETITION, name="low_density_growth_rate",
+    config_field="low_density_growth_rate", config_path=(),
+    dtype=float, bounds=(0, 1e6),
+    is_0d=True,
+)
+
+_register(
+    domain=D.COMPETITION, name="carrying_capacity",
+    config_field="carrying_capacity", config_path=(),
+    dtype=float, bounds=(0, 1e12),
+    aliases=("age_1_carrying_capacity", "old_juvenile_carrying_capacity"),
+    is_0d=True,
+)
+
+_register(
+    domain=D.COMPETITION, name="base_carrying_capacity",
+    config_field="base_carrying_capacity", config_path=(),
+    dtype=float, bounds=(0, 1e12)
+)
+
+_register(
+    domain=D.COMPETITION, name="base_expected_num_adult_females",
+    config_field="base_expected_num_adult_females", config_path=(),
+    dtype=float, bounds=(0, 1e12)
+)
+
+_register(
+    domain=D.COMPETITION, name="expected_competition_strength",
+    config_field="expected_competition_strength", config_path=(),
+    dtype=float, bounds=(0, 1e6),
+    is_0d=True,
+)
+
+_register(
+    domain=D.COMPETITION, name="expected_survival_rate",
+    config_field="expected_survival_rate", config_path=(),
+    dtype=float, bounds=(0, 1),
+    is_0d=True,
+)
 
 # =============================================================================
 # FITNESS
 # =============================================================================
 
-_reg(D.FITNESS, "viability", "viability_fitness", (), float, (0, 100))
-_reg(D.FITNESS, "fecundity", "fecundity_fitness", (), float, (0, 100))
-_reg(D.FITNESS, "sexual_selection", "sexual_selection_fitness", (), float, (0, 100))
-_reg(D.FITNESS, "zygote_viability", "zygote_viability_fitness", (), float, (0, 100))
+_register(
+    domain=D.FITNESS, name="viability",
+    config_field="viability_fitness", config_path=(),
+    dtype=float, bounds=(0, 100),
+    is_tensor=True,
+    doc="(n_sexes, n_ages, n_genotypes) viability fitness tensor"
+)
+
+_register(
+    domain=D.FITNESS, name="fecundity",
+    config_field="fecundity_fitness", config_path=(),
+    dtype=float, bounds=(0, 100),
+    is_tensor=True,
+    doc="(n_sexes, n_genotypes) fecundity fitness"
+)
+
+_register(
+    domain=D.FITNESS, name="sexual_selection",
+    config_field="sexual_selection_fitness", config_path=(),
+    dtype=float, bounds=(0, 100),
+    is_tensor=True,
+    doc="(n_genotypes, n_genotypes) sexual selection matrix"
+)
+
+_register(
+    domain=D.FITNESS, name="zygote_viability",
+    config_field="zygote_viability_fitness", config_path=(),
+    dtype=float, bounds=(0, 100),
+    is_tensor=True,
+    doc="(n_sexes, n_genotypes) zygote viability fitness"
+)
+
+# =============================================================================
+# HOOK
+# =============================================================================
+
+_register(
+    domain=D.HOOK, name="hook_slot",
+    config_field="hook_slot", config_path=(),
+    dtype=int, bounds=(0, 100)
+)
 
 # =============================================================================
 # MIGRATION (spatial only)
 # =============================================================================
 
-_reg(D.MIGRATION, "migration_rate", "migration_rate", (), float, (0, 1))
+_register(
+    domain=D.MIGRATION, name="migration_rate",
+    config_field=None, config_path=(),
+    dtype=float, bounds=(0, 1),
+    target="spatial",
+    doc="Migration rate stored on SpatialPopulation, not PopulationConfig"
+)
+
+# =============================================================================
+# Sex-chromosome arrays (tensors, for introspection)
+# =============================================================================
+
+_register(
+    domain=D.FITNESS, name="female_genotype_compatibility",
+    config_field="female_genotype_compatibility", config_path=(),
+    dtype=float, bounds=(0, 1),
+    is_tensor=True,
+    doc="(n_genotypes,) female-side compatibility weights"
+)
+
+_register(
+    domain=D.FITNESS, name="male_genotype_compatibility",
+    config_field="male_genotype_compatibility", config_path=(),
+    dtype=float, bounds=(0, 1),
+    is_tensor=True,
+    doc="(n_genotypes,) male-side compatibility weights"
+)
 
 # =============================================================================
 # Build the registry dicts
@@ -172,3 +523,56 @@ ALL_PARAMETERS: dict[str, ParamDescriptor] = {
 PARAMETERS_BY_DOMAIN: dict[ParameterDomain, dict[str, ParamDescriptor]] = {}
 for d in _PARAMS:
     PARAMETERS_BY_DOMAIN.setdefault(d.domain, {})[d.name] = d
+
+# ── Numba param IDs (compile-time lookup for set_config_param) ─────────────────
+
+_PARAM_IDS: dict[str, int] = {}
+for _i, _d in enumerate(_PARAMS):
+    key = f"{_d.domain.value}.{_d.name}"
+    _PARAM_IDS[key] = _i
+
+
+def generate_numba_setter() -> str:
+    """Generate source code for a ``set_config_param`` Numba function.
+
+    Each writable parameter becomes an ``if param_id == N`` branch that
+    writes the value to the correct config field and index path.
+
+    Returns:
+        Python source code suitable for ``exec()`` or ``@njit_switch``.
+    """
+    lines = [
+        "from __future__ import annotations",
+        "",
+        "from natal.numba_utils import njit_switch",
+        "from natal.population_config import PopulationConfig",
+        "",
+        "@njit_switch(cache=True)",
+        "def set_config_param(config: PopulationConfig, param_id: int, value: float) -> None:",
+    ]
+    for d in _PARAMS:
+        if d.config_field is None or d.is_tensor or d.is_array:
+            continue
+        # Only generate branches for 0-d ndarray fields and array-indexed fields.
+        # Python scalar fields (is_0d=False with path==()) are not writable via [()].
+        if not d.config_path and not d.is_0d:
+            continue
+        key = f"{d.domain.value}.{d.name}"
+        pid = _PARAM_IDS[key]
+        field = d.config_field
+        if d.config_path:
+            index_str = "".join(f"[{idx}]" for idx in d.config_path)
+            write = f"config.{field}{index_str} = value"
+        else:
+            write = f"config.{field}[()] = value"
+        lines.extend([
+            f"    if param_id == {pid}:",
+            f"        {write}",
+            "        return",
+        ])
+    lines.append("    pass  # unknown param_id or tensor — no-op")
+    return "\n".join(lines)
+
+
+# Export param IDs for users writing hooks.
+PARAM_IDS: dict[str, int] = _PARAM_IDS

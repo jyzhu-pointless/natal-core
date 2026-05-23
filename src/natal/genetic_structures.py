@@ -3336,6 +3336,100 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         return list(self.iter_genotypes())
 
+    # -- gamete / zygote map builders ---------------------------------------------
+
+    def build_gamete_map(
+        self,
+        gamete_modifiers: Optional[list[Callable[..., Any]]] = None,
+    ) -> NDArray[np.float64]:
+        """Build the genotype → gamete map for this species.
+
+        When *gamete_modifiers* is None, returns the Mendelian baseline.
+        """
+        from natal.population_config import initialize_gamete_map as _impl
+
+        return _impl(
+            diploid_genotypes=self.get_all_genotypes(),
+            haploid_genotypes=self.get_all_haploid_genotypes(),
+            n_glabs=len(self.gamete_labels or ["default"]),
+            gamete_modifiers=gamete_modifiers,
+        )
+
+    def build_zygote_map(
+        self,
+        zygote_modifiers: Optional[list[Callable[..., Any]]] = None,
+    ) -> NDArray[np.float64]:
+        """Build the gamete pair → diploid genotype map for this species.
+
+        When *zygote_modifiers* is None, returns the Mendelian baseline.
+        """
+        from natal.population_config import initialize_zygote_map as _impl
+
+        return _impl(
+            haploid_genotypes=self.get_all_haploid_genotypes(),
+            diploid_genotypes=self.get_all_genotypes(),
+            n_glabs=len(self.gamete_labels or ["default"]),
+            zygote_modifiers=zygote_modifiers,
+        )
+
+    # -- lazy-loaded config blueprint ---------------------------------------------
+
+    _config_blueprint: Optional[dict[str, Any]] = None
+
+    def get_config_blueprint(self) -> dict[str, Any]:
+        """Return arrays that depend only on the species, not on user parameters.
+
+        This layer is built once per species and then cached.  It includes
+        genotype / gamete maps, the offspring probability tensor, and
+        genotype compatibility arrays.  These never change at runtime —
+        only user-facing parameters (carrying capacity, survival rates,
+        fitness values, …) do.
+
+        Configurator and PopulationBuilder call this during build to avoid
+        recomputing the species-derived arrays every time.
+        """
+        if self._config_blueprint is not None:
+            return self._config_blueprint
+
+        from natal.engine.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        genotypes = self.get_all_genotypes()
+        haplotypes = self.get_all_haploid_genotypes()
+        n_glabs = len(self.gamete_labels or ["default"])
+        n_g = len(genotypes)
+        n_hg = len(haplotypes)
+
+        g2g = self.build_gamete_map()
+        g2z = self.build_zygote_map()
+        offspring = compute_offspring_probability_tensor(
+            meiosis_f=g2g[0],
+            meiosis_m=g2g[1],
+            haplo_to_genotype_map=g2z,
+            n_genotypes=n_g,
+            n_haplogenotypes=n_hg,
+            n_glabs=n_glabs,
+        )
+
+        # Genotype compatibility: sum of gamete production per sex per genotype.
+        # Female genotype compatibility = self-produced gametes (maternal).
+        # Male genotype compatibility   = cross-produced gametes (paternal).
+        f_compat = g2g[0].sum(axis=1)  # female side
+        m_compat = g2g[1].sum(axis=1)  # male side
+
+        self._config_blueprint = {
+            "n_genotypes": n_g,
+            "n_haploid_genotypes": n_hg,
+            "n_glabs": n_glabs,
+            "genotype_to_gametes_map": g2g,
+            "gametes_to_zygote_map": g2z,
+            "offspring_tensor": offspring,
+            "female_genotype_compatibility": f_compat,
+            "male_genotype_compatibility": m_compat,
+        }
+        return self._config_blueprint
+
 
 # Aliases for backward compatibility
 Linkage = Chromosome
