@@ -115,14 +115,14 @@ cfg.setup(name="MyPop", stochastic=False)
 ```
 配置模拟标志和种群名称。
 
-### `initial_state(distribution, sperm_storage=None)`
+### `initial_state(individual_count, sperm_storage=None)`
 ```python
-cfg.initial_state({
+cfg.initial_state(individual_count={
     "female": {"WT|WT": [0, 200, 150, 100]},
     "male":   {"WT|WT": [0, 200, 150, 100]},
 })
 ```
-设置初始种群分布。
+设置初始种群分布。*individual_count* 是必选参数，格式为 `{性别: {基因型: 年龄数据}}`。
 
 ### `custom(**fields)`
 ```python
@@ -218,6 +218,18 @@ set_param(config, "competition.carrying_capacity", 5000.0)
 set_param(config, "carrying_capacity", 5000.0)  # 短名也支持
 ```
 所有高层 API 的底层实现。从 `parameters.py` 注册表解析参数名，定位 config 字段和索引，原地写入。equilibrium-sensitive 参数（K/eggs/sr）自动触发 sync。
+
+### `hook_set_param(config, name, value)`
+```python
+from natal.configurator import hook_set_param
+
+@nt.hook(event="early", custom=True)
+def my_hook(state, config, deme_id):
+    hook_set_param(config, "carrying_capacity", 5000.0)
+    hook_set_param(config, "reproduction.eggs_per_female", 100.0)
+    return 0
+```
+封装了 `objmode` + `set_param`，在 Hook 的 njit 环境中可直接调用。适合需要字符串参数名路由的场景。最快路径仍然是直接 `config.field[()] = v`。
 
 ### `Configurator.for_config(config)`
 ```python

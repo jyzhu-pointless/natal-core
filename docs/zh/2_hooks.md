@@ -229,7 +229,20 @@ def heatwave(state: DiscretePopulationState,
 
 Hook 签名统一为 `(state, config, deme_id) → int`。`config` 允许原地修改，修改后的值对当前 tick 的后续 hook 和流程立即可见。
 
-自定义字段通过 `config.custom['name'][()]` 读写，构建时通过 `.custom(temperature=25.0)` 初始化，运行时可通过 `pop.update().custom(...)` 修改。
+如果需要字符串参数名路由，可以用 `hook_set_param`——它封装了 `objmode` + `set_param`：
+
+```python
+from natal.configurator import hook_set_param
+
+@nt.hook(event="early", custom=True)
+def recovery_hook(state, config, deme_id):
+    if state.n_tick == 10:
+        hook_set_param(config, "carrying_capacity", 5000.0)
+        hook_set_param(config, "eggs_per_female", 100.0)
+    return 0
+```
+
+性能介于直接写（nopython）和裸 `with objmode()` 之间。自定义字段通过 `config.custom['name'][()]` 读写，构建时通过 `.custom(temperature=25.0)` 初始化，运行时可通过 `pop.update().custom(...)` 修改。
 
 ## 相关章节
 

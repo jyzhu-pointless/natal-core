@@ -79,7 +79,25 @@ def environment_change(
 |---|---|---|
 | `config.field[()] = v` | Fastest (nopython) | You know the field name |
 | `set_config_param(config, ID, v)` | Fast (nopython, integer routing) | Dynamic param selection |
-| `objmode + set_param(config, "name", v)` | Slow (Python fallback) | Need Python ecosystem |
+| `hook_set_param(config, "name", v)` | Same as below (convenient single call) | Need string param names — cleaner syntax for single calls |
+| `with objmode(): ...` | Same objmode cost | General Python fallback, can batch multiple calls in one block |
+
+`hook_set_param` wraps `objmode` + `set_param` for convenient single-call usage. Performance is
+identical to bare `with objmode()` — both cross the same Numba→Python boundary.
+
+```python
+from natal.configurator import hook_set_param
+
+@nt.hook(event="early", custom=True)
+def hook_with_names(state, config, deme_id):
+    hook_set_param(config, "carrying_capacity", 5000.0)
+    hook_set_param(config, "reproduction.eggs_per_female", 100.0)
+    return 0
+```
+
+Note: multiple `hook_set_param` calls cross the objmode boundary multiple times.
+For batch modification of many parameters, bare `with objmode()` is more efficient —
+a single boundary crossing for all calls.
 
 ## 4. Custom Fields — `config.custom`
 

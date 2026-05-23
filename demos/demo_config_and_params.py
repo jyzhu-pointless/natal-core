@@ -10,15 +10,13 @@
   2. 运行时 — pop.update().method(...)
   3. Python 侧 — set_param(config, "name", v)
   4. Hook 内直接写 — config.field[()] = v  （nopython，最快）
-  5. Hook 内 objmode — set_param(config, "name", v)  （Python 回退，字符串名）
+  5. Hook 内 hook_set_param — hook_set_param(config, "name", v)  （objmode 封装）
 """
 
 from __future__ import annotations
 
-from numba import objmode  # pyright: ignore[reportMissingTypeStubs] -- unavoidable
-
 import natal as nt
-from natal.configurator import set_param
+from natal.configurator import hook_set_param, set_param
 from natal.discrete_population_config import DiscretePopulationConfig
 from natal.population_config import CONCAVE
 from natal.population_state import DiscretePopulationState
@@ -152,9 +150,9 @@ def hook_direct(
     return 0
 
 
-# ── 写法 B：objmode + set_param（字符串参数名）──
-# 适用：需要在 hook 中用 Python 生态（打印日志、计算复杂逻辑等）。
-# 代价：objmode 退出 njit 编译，性能较低。
+# ── 写法 B：hook_set_param（字符串参数名，objmode 封装在内部）──
+# 适用：需要字符串名路由，或 hook 内需要混合 Python 逻辑。
+# 代价：每次调用有 objmode 边界开销（~微秒级）。
 
 
 @nt.hook(event="early", custom=True)
@@ -164,12 +162,9 @@ def hook_objmode(
     _deme_id: int,
 ) -> int:
     if state.n_tick == 8:
-        with objmode():
-            # objmode 内可以调用任意 Python 代码
-            print(f"  [hook_objmode] tick={state.n_tick}, 紧急恢复中...")
-            set_param(config, "carrying_capacity", 10000.0)
-            set_param(config, "reproduction.eggs_per_female", 50.0)
-            set_param(config, "reproduction.sex_ratio", 0.5)
+        hook_set_param(config, "carrying_capacity", 10000.0)
+        hook_set_param(config, "reproduction.eggs_per_female", 50.0)
+        hook_set_param(config, "reproduction.sex_ratio", 0.5)
     return 0
 
 
@@ -225,8 +220,7 @@ print("""
   pop.update().method(...) | between-tick | Python | 运行时链式修改，最易用
   set_param(config,n,v)   | between-tick | Python | 底层接口，字符串名路由
   config.field[()] = v    | hook nopython| 最快   | 直接写 0-d ndarray
-  with objmode():         | hook 内      | 慢     | Python 回退，灵活
-    set_param(config,...)"
+  hook_set_param(c,n,v)   | hook 内      | 同 objmode | objmode 封装，单次调用便捷"
 """)
 
 print("演示完成 ✅")

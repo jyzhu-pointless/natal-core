@@ -1,31 +1,32 @@
-# 种群模型（Panmictic）
+# Population Model (Panmictic)
 
-`Population` 类是 NATAL Core 的核心组件，负责管理种群的遗传状态和模拟过程。
+The `Population` class is the core component of NATAL Core, responsible for managing the genetic state and simulation process of the population.
 
-> **说明**：本章及 [种群初始化](2_population_initialization.md) 介绍的是 **panmictic（单 deme、均匀混合）** 种群模型。如需构建多 deme 空间种群、配置迁移拓扑或异构 deme 参数，请参见第三部分 —— [Spatial 模拟指南](3_spatial_simulation.md)。
+> **Note**: This chapter and [Population Initialization](2_population_initialization.md) cover the **panmictic (single deme, well-mixed)** population model. For building multi-deme spatial populations, configuring migration topology, or heterogeneous deme parameters, please refer to Part 3 -- [Spatial Simulation Guide](3_spatial_simulation.md).
 
-## 种群类型
+## Population Types
 
-NATAL Core 提供两种主要的种群类型：
+NATAL Core provides two main population types:
 
-### 离散世代种群
-`DiscreteGenerationPopulation` 适用于世代不重叠的物种，每代完全替换，模拟过程简单高效。固定 2 个年龄：age-0（幼体）和 age-1（成体）。
+### Discrete Generation Population
+`DiscreteGenerationPopulation` is suitable for species with non-overlapping generations, where each generation completely replaces the previous one. The simulation process is simple and efficient.
 
-### 年龄结构化种群
-`AgeStructuredPopulation` 适用于世代重叠的物种，支持年龄依赖的生存和繁殖力，可配置精子储存机制。
+### Age-Structured Population
+`AgeStructuredPopulation` is suitable for species with overlapping generations, supporting age-dependent survival and fecundity, and configurable sperm storage mechanisms.
 
-> 这两种种群均为 `BasePopulation` 的子类，共享大多数方法。
+> Both population types are subclasses of `BasePopulation` and share most methods.
 
-## 创建种群
+## Creating a Population
 
-通过链式 API 创建种群。默认使用 `Configurator` 路径（即时写入参数），旧 `Builder` 类通过 `legacy_path=True` 访问。
+Use the fluent chain API. The default `Configurator` path writes parameters immediately.
+See [Population Initialization](2_population_initialization.md) for details.
 
 ```python
 import natal as nt
 
 sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
 
-# 离散世代种群
+# Discrete-generation
 pop = (
     nt.DiscreteGenerationPopulation.setup(sp)
     .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -34,7 +35,7 @@ pop = (
     .build()
 )
 
-# 年龄结构化种群
+# Age-structured
 pop = (
     nt.AgeStructuredPopulation.setup(sp, legacy_path=False)
     .age_structure(n_ages=8, new_adult_age=2)
@@ -42,166 +43,154 @@ pop = (
         "female": {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
         "male":   {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
     })
-    .survival(
-        female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
-        male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
-    )
-    .reproduction(
-        eggs_per_female=100,
-        female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0],
-    )
+    .survival(female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
+              male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0])
+    .reproduction(eggs_per_female=100,
+                  female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0])
     .competition(carrying_capacity=5000, low_density_growth_rate=6.0,
                  juvenile_growth_mode="logistic")
     .build()
 )
 ```
 
-### 运行时修改参数
+### Runtime Parameter Modification
 
-所有参数可在模拟运行时修改，无需重建种群：
+All parameters can be changed during simulation without rebuilding:
 
 ```python
-# 修改承载力
 pop.update().competition(carrying_capacity=5000)
-
-# 链式修改多个参数
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
-
-# 自定义字段——Hook 内可通过 config.custom['name'][()] 读写
-pop.update().custom(temperature=35.0)
 ```
 
-修改通过 `set_param(config, name, value)` 原地写入 0-d ndarray，立即生效。
+See [Runtime Parameter Modification](3_runtime_modification.md) for details.
 
-### 底层 set_param
+## Running Simulations
 
-```python
-from natal.configurator import set_param
-
-# 支持全名、短名、别名
-set_param(config, "competition.carrying_capacity", 5000.0)
-set_param(config, "carrying_capacity", 5000.0)      # 短名
-set_param(config, "expected_eggs_per_female", 100.0) # 别名
-```
-
-## 启动模拟
-
-### 单步模拟
+### Single-Step Simulation
 
 ```python
-# 模拟一步（一个时间单位）
+# Simulate one step (one time unit)
 pop.run_tick()
 
-# 模拟多步，打印每步状态
+# Simulate multiple steps, printing state after each step
 for _ in range(100):
     pop.run_tick()
     print(pop.output_current_state())
 ```
 
-### 批量模拟
+### Batch Simulation
 
 ```python
-# 模拟100步
+# Simulate 100 steps
 pop.run(100)
-# 或
+# or
 pop.run(n_steps=100)
 ```
 
-## 访问种群状态
+## Accessing Population State
 
-### 当前状态信息
+### Current State Information
 
 ```python
-# 种群大小
+# Population size
 current_size = pop.total_population_size
-print(f"当前种群大小: {current_size}")
+print(f"Current population size: {current_size}")
 
-# 雌性数量
+# Female count
 female_count = pop.total_females
-print(f"雌性数量: {female_count}")
+print(f"Female count: {female_count}")
 
-# 雄性数量
+# Male count
 male_count = pop.total_males
-print(f"雄性数量: {male_count}")
+print(f"Male count: {male_count}")
 
-# 性别比例
+# Sex ratio
 ratio = pop.sex_ratio
-print(f"性别比例（雌性/雄性）: {ratio}")
+print(f"Sex ratio (female/male): {ratio}")
 
-# 当前时间步
+# Current time step
 current_tick = pop.tick
-print(f"当前时间步: {current_tick}")
+print(f"Current tick: {current_tick}")
 ```
 
-### 等位基因频率
+### Allele Frequencies
 
 ```python
-# 计算等位基因频率
+# Compute allele frequencies
 allele_freqs = pop.compute_allele_frequencies()
-print("等位基因频率:", allele_freqs)
+print("Allele frequencies:", allele_freqs)
 
-# 获取特定等位基因频率
+# Get specific allele frequency
 drive_freq = allele_freqs.get("D", 0.0)
-print(f"驱动等位基因频率: {drive_freq}")
+print(f"Drive allele frequency: {drive_freq}")
 ```
 
-## 历史记录系统
+## History Recording System
 
-### 历史记录配置
+### History Configuration
 
-种群对象内置历史记录功能，可配置记录频率和存储格式：
+The population object has built-in history recording functionality, with configurable recording frequency and storage format:
 
 ```python
-# 配置历史记录
-pop.record_every = 10  # 每10步记录一次
-pop.max_history = 1000  # 最多保存1000个快照
+# Configure history recording
+pop.record_every = 10  # Record every 10 steps
+pop.max_history = 1000  # Maximum of 1000 snapshots
 
-# 运行模拟并记录历史
+# Run simulation with history recording
 results = pop.run(n_steps=500, record_every=5)
 ```
 
-### 历史数据访问
+### History Data Access
 
 ```python
-# 获取完整历史记录
+# Get complete history
 full_history = pop.output_history()
-print("历史记录数量:", len(full_history["snapshots"]))
-print("最后一步数据:", full_history["snapshots"][-1])
+print("Number of history records:", len(full_history["snapshots"]))
+print("Last step data:", full_history["snapshots"][-1])
 
-# 获取历史记录的时间步列表
+# Get history at a specific tick
+history_at_tick_100 = pop.output_history(tick=100)
+print("State at tick 100:", history_at_tick_100)
+
+# Get list of recorded time steps
 ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
-print("记录的时间步:", ticks)
+print("Recorded ticks:", ticks)
 ```
 
-### 历史记录管理
+### History Management
 
 ```python
-# 清空历史记录以节省内存
+# Clear history to save memory
 pop.clear_history()
 
-# 重新开始记录
+# Restart recording
 results = pop.run(n_steps=100, record_every=5)
 ```
 
-## 输出功能
+## Output Functions
 
-### 当前状态输出
+### Current State Output
 
 ```python
-# 获取当前状态的详细快照
+# Get detailed snapshot of current state
 current_state = pop.output_current_state()
-print("当前状态:", current_state)
+print("Current state:", current_state)
 
-# 获取JSON格式（便于传输和存储）
-json_state = pop.output_current_state(output_path="state.json")
+# Get readable dictionary format
+readable_state = pop.output_current_state(as_dict=True)
+print("Readable state:", readable_state)
+
+# Get JSON format (for transport and storage)
+json_state = pop.output_current_state(as_json=True)
+print("JSON state:", json_state[:200])  # Show first 200 characters
 ```
 
-### 与观察规则集成
+### Integration with Observation Rules
 
-结合观察规则可从种群状态中提取特定子群体的数据，详细方法参见 [提取种群模拟数据](2_data_output.md)。
+Combined with observation rules, specific subpopulation data can be extracted from the population state. For detailed methods, see [Extracting Population Simulation Data](2_data_output.md).
 
 ```python
-# 创建观察规则
+# Create observation rules
 observation = pop.create_observation(
     groups={
         "adult_wt": {"genotype": ["WT|WT"], "age": [1]},
@@ -210,37 +199,37 @@ observation = pop.create_observation(
     collapse_age=False,
 )
 
-# 使用观察规则获取当前状态
+# Get current state with observation rules
 current = pop.output_current_state(observation=observation)
-print("当前观察数据:", current["observed"])
+print("Current observation data:", current["observed"])
 
-# 使用观察规则获取历史数据
+# Get history data with observation rules
 history = pop.output_history(observation=observation)
-print("历史观察数据:", history["observed"])
+print("History observation data:", history["observed"])
 ```
 
-## 重置和重新开始
+## Reset and Restart
 
 ```python
-# 重置到初始状态
+# Reset to initial state
 pop.reset()
 
-# 重置后重新模拟
+# Re-simulate after reset
 pop.reset()
 results = pop.run(n_steps=50)
 ```
 
-## 模拟控制
+## Simulation Control
 
-### 检查模拟状态
+### Check Simulation Status
 
 ```python
-# 检查模拟是否完成
+# Check if simulation is finished
 if pop.is_finished:
-    print("模拟已完成")
+    print("Simulation complete")
 else:
-    print("模拟仍在进行中")
+    print("Simulation still running")
 
-# 手动结束模拟
+# Manually finish simulation
 pop.finish_simulation()
 ```

@@ -12,11 +12,13 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Self, cast
 
 import numpy as np
+from numba import objmode  # pyright: ignore[reportMissingTypeStubs]
 from numpy.typing import NDArray
 
 from natal.discrete_population_config import DiscretePopulationConfig
 from natal.genetic_structures import Species
 from natal.index_registry import IndexRegistry
+from natal.numba_utils import njit_switch
 from natal.parameters import ALL_PARAMETERS, ParamDescriptor
 from natal.population_config import PopulationConfig
 
@@ -1335,6 +1337,28 @@ class AgeStructuredConfigurator(Configurator):
 
 
 # -- parameter name resolution -----------------------------------------------
+
+
+@njit_switch(cache=True)
+def hook_set_param(config: object, name: str, value: float) -> None:
+    """Set a simulation parameter from inside a Numba hook.
+
+    Wraps :func:`set_param` in an objmode context so the call is valid
+    from nopython-compiled hook functions.  Use when you need the
+    flexibility of string-name lookup at the cost of an objmode boundary
+    (~microseconds per call).
+
+    For the fastest path, write ``config.field[()] = v`` directly in
+    nopython — no objmode overhead.
+
+    Args:
+        config: The PopulationConfig or DiscretePopulationConfig.
+        name: Parameter name — ``"competition.carrying_capacity"``,
+              ``"carrying_capacity"``, or any registered alias.
+        value: New scalar value.
+    """
+    with objmode():
+        set_param(config, name, value)  # pyright: ignore[reportArgumentType] — objmode converts njit types to Python
 
 
 def _resolve_param(name: str) -> ParamDescriptor | None:

@@ -85,7 +85,36 @@ def environment_change(
 |---|---|---|
 | `config.carrying_capacity[()] = v` | 最快（nopython） | 你知道字段名 |
 | `set_config_param(config, PARAM_ID, v)` | 快（nopython，整数路由） | 需要动态参数选择 |
-| `with objmode(): set_param(config, "name", v)` | 慢（Python 回退） | 需要 Python 生态 |
+| `hook_set_param(config, "name", v)` | 同下（单次调用便捷） | 需要字符串参数名——单次调用语法更简洁 |
+| `with objmode(): ...` | 同 objmode 边界开销 | 通用 Python 回退，可一次 objmode 内做多件事 |
+
+`hook_set_param` 将 `objmode` + `set_param` 封装为一个函数，导入后即可在 Hook 中调用。性能与裸 `with objmode()` 完全相同——两者跨越同一个 objmode 边界：
+
+```python
+from natal.configurator import hook_set_param
+
+@nt.hook(event="early", custom=True)
+def hook_with_string_names(state, config, deme_id):
+    if state.n_tick == 10:
+        hook_set_param(config, "carrying_capacity", 5000.0)
+        hook_set_param(config, "reproduction.eggs_per_female", 100.0)
+    return 0
+```
+
+注意：多次 `hook_set_param` 调用会多次跨越 objmode 边界。如果需要批量修改多个参数，裸 `with objmode()` 更高效——只需付一次边界开销。`hook_set_param` 的优势是单次调用时语法更简洁。
+
+```python
+from natal.configurator import hook_set_param
+
+@nt.hook(event="early", custom=True)
+def hook_with_string_names(state, config, deme_id):
+    if state.n_tick == 10:
+        hook_set_param(config, "carrying_capacity", 5000.0)
+        hook_set_param(config, "reproduction.eggs_per_female", 100.0)
+    return 0
+```
+
+如果需要 Hook 内执行日志、文件 I/O 等任意 Python 操作，仍然使用 `with objmode()` 包裹。
 
 ## 4. 自定义字段——`config.custom`
 
