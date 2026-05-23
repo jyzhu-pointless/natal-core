@@ -54,6 +54,8 @@ from natal.spatial_topology import (
 )
 
 if TYPE_CHECKING:
+    from natal.configurator import Configurator
+    from natal.genetic_presets import GeneticPreset
     from natal.observation import Observation
     from natal.spatial_builder import SpatialBuilder
 
@@ -189,6 +191,114 @@ def _normalize_migration_rate(
     raise ValueError(
         f"migration_rate shape {arr.shape} does not match n_ages={n_ages}"
     )
+
+
+class _SpatialUpdate:
+    """Wrapper returned by :meth:`SpatialPopulation.update`.
+
+    Each chainable method accepts the same parameters as ``Configurator``,
+    plus ``BatchSetting`` values for per-deme parameter variation — same API
+    as ``SpatialBuilder`` at build time.
+    """
+
+    # Chain methods that support BatchSetting expansion across demes.
+    _BATCHABLE_METHODS = frozenset({
+        "competition", "reproduction", "survival", "initial_state",
+        "fitness", "custom", "setup",
+    })
+
+    def __init__(
+        self, spatial_pop: SpatialPopulation, *, deme: int | None = None,
+    ) -> None:
+        self._pop = spatial_pop
+        self._deme = deme
+
+    def competition(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("competition", kwargs)
+        return self
+
+    def reproduction(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("reproduction", kwargs)
+        return self
+
+    def survival(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("survival", kwargs)
+        return self
+
+    def fitness(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("fitness", kwargs)
+        return self
+
+    def custom(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("custom", kwargs)
+        return self
+
+    def setup(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("setup", kwargs)
+        return self
+
+    def modifiers(self, **kwargs: object) -> _SpatialUpdate:
+        self._dispatch_scalar("modifiers", kwargs)
+        return self
+
+    def presets(self, *presets: GeneticPreset) -> _SpatialUpdate:
+        from natal.configurator import Configurator
+
+        if self._deme is not None:
+            self._pop.update_deme(self._deme).presets(*presets)
+        else:
+            Configurator.for_config(self._pop.demes[0].config).presets(*presets)
+        return self
+
+    def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:
+        from natal.configurator import Configurator
+
+        if self._deme is not None:
+            self._pop.update_deme(self._deme).hooks(*hook_items)
+        else:
+            Configurator.for_config(self._pop.demes[0].config).hooks(*hook_items)
+        return self
+
+    def _apply_batch_or_scalar(self, method_name: str, kwargs: dict[str, object]) -> None:
+        """Dispatch kwargs: BatchSetting values → per-deme; scalars → all demes."""
+        from natal.spatial_builder import BatchSetting
+
+        batch_keys = [k for k, v in kwargs.items() if isinstance(v, BatchSetting)]
+        if not batch_keys:
+            self._dispatch_scalar(method_name, kwargs)
+            return
+
+        n_demes = len(self._pop.demes)
+        # Expand all batch keys into per-deme value lists
+        expanded: dict[str, list[object]] = {}
+        for batch_key in batch_keys:
+            batch: BatchSetting = kwargs.pop(batch_key)  # type: ignore[assignment]
+            expanded[batch_key] = batch.expand(n_demes, self._pop.topology)
+
+        # Apply per-deme: each deme gets its slice of batch values + shared scalars.
+        # None values in batch lists mean "skip this deme for this parameter".
+        for i in range(n_demes):
+            per_deme_kwargs: dict[str, object] = dict(kwargs)
+            all_none = True
+            for batch_key, vals in expanded.items():
+                val = vals[i]
+                if val is not None:
+                    per_deme_kwargs[batch_key] = val
+                    all_none = False
+            # Skip demes where every batch value is None (no modification needed)
+            if all_none and not kwargs:
+                continue
+            cfg = self._pop.update_deme(i)
+            getattr(cfg, method_name)(**per_deme_kwargs)
+
+    def _dispatch_scalar(self, method_name: str, kwargs: dict[str, object]) -> None:
+        if self._deme is not None:
+            cfg = self._pop.update_deme(self._deme)
+        else:
+            from natal.configurator import Configurator
+
+            cfg = Configurator.for_config(self._pop.demes[0].config)
+        getattr(cfg, method_name)(**kwargs)
 
 
 class SpatialPopulation:
@@ -594,6 +704,53 @@ class SpatialPopulation:
             The deme population at ``idx``.
         """
         return self._demes[idx]
+
+    def update(self, deme: int | None = None) -> _SpatialUpdate:
+        """Return an updater for modifying this population's config.
+
+        Supports both scalar and ``batch_setting`` values in chain calls,
+        matching the ``SpatialBuilder`` API::
+
+            # Modify all demes simultaneously
+            pop.update().competition(carrying_capacity=5000)
+
+            # Modify a specific deme (auto-detaches shared config)
+            pop.update(deme=3).competition(carrying_capacity=8000)
+
+            # Batch per-deme modification (same API as build time)
+            from natal.spatial_builder import batch_setting
+            pop.update().competition(
+                carrying_capacity=batch_setting([100, 200, 300, 400])
+            )
+        """
+        return _SpatialUpdate(self, deme=deme)
+
+    def update_deme(self, demi: int) -> Configurator:
+        """Get a Configurator for a specific deme with clone-on-write."""
+        from natal.configurator import Configurator
+
+        target = self._demes[demi]
+        config = target.config
+
+        k_array = config.carrying_capacity
+        shared_count = sum(
+            1 for d in self._demes if d.config.carrying_capacity is k_array
+        )
+        if shared_count > 1:
+            private = config._replace(
+                carrying_capacity=config.carrying_capacity.copy(),
+                expected_eggs_per_female=config.expected_eggs_per_female.copy(),
+                sex_ratio=config.sex_ratio.copy(),
+                sperm_displacement_rate=config.sperm_displacement_rate.copy(),
+                low_density_growth_rate=config.low_density_growth_rate.copy(),
+                juvenile_growth_mode=config.juvenile_growth_mode.copy(),
+                expected_competition_strength=config.expected_competition_strength.copy(),
+                expected_survival_rate=config.expected_survival_rate.copy(),
+            )
+            object.__setattr__(target, '_config', private)
+            config = private
+
+        return Configurator(config)
 
     @property
     def tick(self) -> int:
