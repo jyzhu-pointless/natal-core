@@ -2,7 +2,7 @@
 
 Population initialization is the first step of NATAL Core simulation, which configures and constructs a population through a chainable API.
 
-> **Note**: This chapter covers the chainable configuration of **panmictic (single deme, well-mixed)** populations. For building multi-deme spatial populations (with topology, migration, and `batch_setting` heterogeneous configuration), please refer to the [Spatial Simulation Guide](3_spatial_simulation.md). The chainable syntax for spatial populations is essentially the same as this chapter, with the addition of a `.migration()` method and `batch_setting` support.
+> **Note**: This covers **panmictic (single-deme, well-mixed)** population configuration. For spatial populations with topology, migration, and `batch_setting`, see [Spatial Simulation Guide](3_spatial_simulation.md). Both use the same chainable syntax; spatial adds `.migration()` and `batch_setting` support.
 
 ## Quick Start: Chainable API Configuration
 
@@ -488,9 +488,9 @@ The legacy `Builder` classes (`DiscreteGenerationPopulationBuilder` /
 `AgeStructuredPopulationBuilder`) are still available via `setup(legacy_path=True)`.
 New code should use the default `Configurator` path.
 
-## Chapter Summary
+## Summary
 
-Population initialization provides a concise and intuitive configuration approach through the `Configurator` chainable API. Parameters are written immediately to `PopulationConfig` arrays, and `build()` creates the `Population` object. The same API serves both build-time and runtime (`pop.update()`) modification.
+The `Configurator` chainable API writes parameters immediately to `PopulationConfig` arrays. `build()` creates the `Population` object. The same API serves both build-time and runtime (`pop.update()`) modification.
 
 ## Related Chapters
 

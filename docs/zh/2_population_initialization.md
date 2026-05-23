@@ -2,7 +2,7 @@
 
 种群初始化是 NATAL Core 模拟的第一步，通过链式 API（`Configurator`）配置和构建种群。
 
-> **说明**：本章介绍的是 **panmictic（单 deme、均匀混合）** 种群的链式配置。如需构建多 deme 空间种群（含拓扑、迁移、`batch_setting` 异构配置），请参见 [Spatial 模拟指南](3_spatial_simulation.md)。空间种群的链式语法与本章基本一致，额外增加了 `.migration()` 方法和 `batch_setting` 支持。
+> **说明**：此文档覆盖 **panmictic（单 deme、均匀混合）** 种群的链式配置。空间种群（含拓扑、迁移、`batch_setting` 异构配置）见 [Spatial 模拟指南](3_spatial_simulation.md)。两者的链式语法一致，空间种群额外增加了 `.migration()` 方法和 `batch_setting` 支持。
 
 ## 快速开始：链式 API 配置
 
@@ -491,9 +491,9 @@ def release_drive_carriers():
 
 旧 `Builder` 类（`DiscreteGenerationPopulationBuilder` / `AgeStructuredPopulationBuilder`）仍可通过 `setup(legacy_path=True)` 使用。新代码推荐默认的 `Configurator` 路径。
 
-## 本章小结
+## 小结
 
-种群初始化通过链式 API 提供了一种简洁、直观的配置方式，将种群的参数组织成可分类、可链式配置的流程，并在构建时注册到底层 `PopulationConfig` 中，以此实现高层易用性和底层高性能的统一。
+链式 API（`Configurator`）将种群参数组织为可链式配置的流程。每个方法立即写入 `PopulationConfig`，`build()` 执行 sync 并创建 `Population` 对象。同一 API 同时服务于构建时和运行时（`pop.update()`）。
 
 
 ## 相关章节

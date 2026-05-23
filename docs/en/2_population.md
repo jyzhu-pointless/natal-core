@@ -2,7 +2,7 @@
 
 The `Population` class is the core component of NATAL Core, responsible for managing the genetic state and simulation process of the population.
 
-> **Note**: This chapter and [Population Initialization](2_population_initialization.md) cover the **panmictic (single deme, well-mixed)** population model. For building multi-deme spatial populations, configuring migration topology, or heterogeneous deme parameters, please refer to Part 3 -- [Spatial Simulation Guide](3_spatial_simulation.md).
+> **Note**: `DiscreteGenerationPopulation` and `AgeStructuredPopulation` are **panmictic (single-deme, well-mixed)** models. For multi-deme spatial populations with migration topology and heterogeneous parameters, see [Spatial Simulation Guide](3_spatial_simulation.md).
 
 ## Population Types
 
