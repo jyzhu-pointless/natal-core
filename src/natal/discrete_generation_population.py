@@ -15,9 +15,11 @@ from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Tuple,
     Union,
+    overload,
 )
 
 import numpy as np
@@ -44,9 +46,9 @@ from natal.population_state import (
 from natal.type_def import Sex
 
 if TYPE_CHECKING:
+    from natal.configurator import DiscreteConfigurator
     from natal.index_registry import IndexRegistry
     from natal.population_builder import DiscreteGenerationPopulationBuilder
-
 
 __all__ = ["DiscreteGenerationPopulation"]
 
@@ -186,6 +188,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return clone
 
     @classmethod
+    @overload
     def setup(
         cls,
         species: Species,
@@ -193,17 +196,58 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         stochastic: bool = True,
         use_continuous_sampling: bool = False,
         use_fixed_egg_count: bool = False,
-    ) -> DiscreteGenerationPopulationBuilder:
-        from natal.population_builder import DiscreteGenerationPopulationBuilder
+        *,
+        legacy_path: Literal[True],
+    ) -> DiscreteGenerationPopulationBuilder: ...
 
-        builder = DiscreteGenerationPopulationBuilder(species)
-        builder.setup(
-            name=name,
+    @classmethod
+    @overload
+    def setup(
+        cls,
+        species: Species,
+        name: str = "DiscreteGenerationPop",
+        stochastic: bool = True,
+        use_continuous_sampling: bool = False,
+        use_fixed_egg_count: bool = False,
+        *,
+        legacy_path: Literal[False] = False,
+    ) -> DiscreteConfigurator: ...
+
+    @classmethod
+    def setup(
+        cls,
+        species: Species,
+        name: str = "DiscreteGenerationPop",
+        stochastic: bool = True,
+        use_continuous_sampling: bool = False,
+        use_fixed_egg_count: bool = False,
+        *,
+        legacy_path: bool = False,
+    ) -> DiscreteGenerationPopulationBuilder | DiscreteConfigurator:
+        """Fluent population construction entry point.
+
+        By default returns a ``DiscreteConfigurator`` (the new path).  Chain
+        domain methods and end with ``.build()`` to create a Population.
+
+        Pass ``legacy_path=True`` to use the classic Builder API.
+        """
+        if legacy_path:
+            from natal.population_builder import DiscreteGenerationPopulationBuilder
+
+            return DiscreteGenerationPopulationBuilder(species).setup(
+                name=name,
+                stochastic=stochastic,
+                use_continuous_sampling=use_continuous_sampling,
+                use_fixed_egg_count=use_fixed_egg_count,
+            )
+
+        from natal.configurator import Configurator
+
+        return Configurator.for_discrete(species).setup(
             stochastic=stochastic,
             use_continuous_sampling=use_continuous_sampling,
             use_fixed_egg_count=use_fixed_egg_count,
         )
-        return builder
 
     def _resolve_age_distribution(
         self,
@@ -464,6 +508,13 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     @property
     def _registry_nn(self) -> IndexRegistry:
         return self._require_registry()
+
+    def update(self) -> DiscreteConfigurator:
+        """Return a ``DiscreteConfigurator`` for modifying this population's config."""
+        from typing import cast
+
+        result = super().update()
+        return cast('DiscreteConfigurator', result)
 
     def __repr__(self) -> str:
         status = "Finished" if self._finished else "Active"

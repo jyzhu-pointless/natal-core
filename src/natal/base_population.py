@@ -54,6 +54,7 @@ from natal.state_translation import (
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
 if TYPE_CHECKING:
+    from natal.configurator import Configurator
     from natal.genetic_presets import GeneticPreset
     from natal.hooks import CompiledHookDescriptor, DemeSelector, HookProgram
     from natal.observation import GroupsInput, Observation
@@ -468,6 +469,24 @@ class BasePopulation(ABC, Generic[T_State]):
         if self._config is None:
             raise AttributeError("Population config has not been initialized.")
         return self._config
+
+    def update(self) -> Configurator:
+        """Return a ``Configurator`` for modifying this population's config.
+
+        All chainable methods (``.competition()``, ``.reproduction()``, …)
+        write changes immediately — no ``.apply()`` or ``.freeze()`` needed
+        for simple parameter updates.
+
+        Usage::
+
+            pop.update().competition(carrying_capacity=5000)
+            pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+
+        .. versionadded:: NEXT
+        """
+        from natal.configurator import Configurator
+
+        return Configurator.for_config(self._require_config())
 
     def _require_state(self) -> T_State:
         """Return the initialized state or raise a clear initialization error."""

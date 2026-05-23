@@ -107,7 +107,7 @@ class PopulationConfig(NamedTuple):
             probability of forming a given diploid genotype from two gametes.
         initial_individual_count: Shape (n_sexes, n_ages, n_genotypes) – initial
             population distribution.
-        initial_sperm_storage: Shape (n_ages, n_genotypes, n_genotypes) – initial
+        initial_sperm_storage: Shape (n_ages, n_genotypes, n_hg * n_glabs) – initial
             stored sperm counts.
         population_scale: Scaling factor applied to carrying capacity and expected
             adult females.
@@ -133,16 +133,16 @@ class PopulationConfig(NamedTuple):
     sexual_selection_fitness: NDArray[np.float64]
     zygote_viability_fitness: NDArray[np.float64]
     age_based_relative_competition_strength: NDArray[np.float64]
-    sperm_displacement_rate: float
-    expected_eggs_per_female: float
+    sperm_displacement_rate: NDArray[np.float64]           # 0-d, mutable
+    expected_eggs_per_female: NDArray[np.float64]          # 0-d, mutable
     use_fixed_egg_count: bool
-    carrying_capacity: float
-    sex_ratio: float
-    low_density_growth_rate: float
-    juvenile_growth_mode: int
-    expected_competition_strength: float
-    expected_survival_rate: float
-    generation_time: float
+    carrying_capacity: NDArray[np.float64]                 # 0-d, mutable
+    sex_ratio: NDArray[np.float64]                         # 0-d, mutable
+    low_density_growth_rate: NDArray[np.float64]           # 0-d, mutable
+    juvenile_growth_mode: NDArray[np.int64]                # 0-d, mutable
+    expected_competition_strength: NDArray[np.float64]     # 0-d, mutable
+    expected_survival_rate: NDArray[np.float64]            # 0-d, mutable
+    generation_time: NDArray[np.float64]                   # 0-d, mutable
     new_adult_age: int
     hook_slot: int
     has_sex_chromosomes: bool
@@ -160,6 +160,9 @@ class PopulationConfig(NamedTuple):
     population_scale: float
     base_carrying_capacity: float
     base_expected_num_adult_females: float
+
+    # -- custom fields (structured numpy scalar, set via Configurator.custom()) --
+    custom: NDArray[Any]  # typed structured array when custom fields registered; float64 placeholder otherwise
 
     def set_viability_fitness(self, sex: int, genotype_idx: int, value: float, age: int = -1) -> None:
         """Set viability fitness for a specific (sex, genotype, age) combination.
@@ -222,7 +225,7 @@ class PopulationConfig(NamedTuple):
         scale_f = float(scale)
         return self._replace(
             population_scale=scale_f,
-            carrying_capacity=float(self.base_carrying_capacity) * scale_f,
+            carrying_capacity=np.array(float(self.base_carrying_capacity) * scale_f),
         )
 
     def get_effective_carrying_capacity(self) -> float:
@@ -326,16 +329,16 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         sexual_selection_fitness=_maybe_copy_array(config.sexual_selection_fitness, copy),
         zygote_viability_fitness=_maybe_copy_array(config.zygote_viability_fitness, copy),
         age_based_relative_competition_strength=_maybe_copy_array(config.age_based_relative_competition_strength, copy),
-        sperm_displacement_rate=float(config.sperm_displacement_rate),
-        expected_eggs_per_female=float(config.expected_eggs_per_female),
+        sperm_displacement_rate=config.sperm_displacement_rate.copy() if copy else config.sperm_displacement_rate,
+        expected_eggs_per_female=config.expected_eggs_per_female.copy() if copy else config.expected_eggs_per_female,
         use_fixed_egg_count=bool(config.use_fixed_egg_count),
-        carrying_capacity=float(config.carrying_capacity),
-        sex_ratio=float(config.sex_ratio),
-        low_density_growth_rate=float(config.low_density_growth_rate),
-        juvenile_growth_mode=int(config.juvenile_growth_mode),
-        expected_competition_strength=float(config.expected_competition_strength),
-        expected_survival_rate=float(config.expected_survival_rate),
-        generation_time=float(config.generation_time),
+        carrying_capacity=config.carrying_capacity.copy() if copy else config.carrying_capacity,
+        sex_ratio=config.sex_ratio.copy() if copy else config.sex_ratio,
+        low_density_growth_rate=config.low_density_growth_rate.copy() if copy else config.low_density_growth_rate,
+        juvenile_growth_mode=config.juvenile_growth_mode.copy() if copy else config.juvenile_growth_mode,
+        expected_competition_strength=config.expected_competition_strength.copy() if copy else config.expected_competition_strength,
+        expected_survival_rate=config.expected_survival_rate.copy() if copy else config.expected_survival_rate,
+        generation_time=config.generation_time.copy() if copy else config.generation_time,
         new_adult_age=int(config.new_adult_age),
         hook_slot=int(config.hook_slot),
         has_sex_chromosomes=bool(config.has_sex_chromosomes),
@@ -352,6 +355,7 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         population_scale=float(config.population_scale),
         base_carrying_capacity=float(config.base_carrying_capacity),
         base_expected_num_adult_females=float(config.base_expected_num_adult_females),
+        custom=config.custom.copy() if copy else config.custom,
     )
 
 
@@ -520,7 +524,7 @@ def build_population_config(
         base_expected_num_adult_females = 500.0
 
     population_scale_f = float(population_scale)
-    carrying_capacity_f = float(base_carrying_capacity) * population_scale_f
+    carrying_capacity_f = np.array(float(base_carrying_capacity) * population_scale_f)
 
     def _validate_or_default_array(
         arr: Optional[NDArray[np.float64]],
@@ -602,7 +606,7 @@ def build_population_config(
             male_only_by_sex_chrom[g_off] = m_ok and not f_ok
 
     expected_competition_strength, expected_survival_rate = alg.compute_equilibrium_metrics(
-        carrying_capacity=carrying_capacity_f,
+        carrying_capacity=float(carrying_capacity_f),
         expected_eggs_per_female=float(expected_eggs_per_female),
         age_based_survival_rates=survival,
         age_based_mating_rates=mating,
@@ -643,16 +647,16 @@ def build_population_config(
             sexual_selection_fitness=sexual,
             zygote_viability_fitness=zygote,
             age_based_relative_competition_strength=competition,
-            sperm_displacement_rate=float(sperm_displacement_rate),
-            expected_eggs_per_female=float(expected_eggs_per_female),
+            sperm_displacement_rate=np.array(float(sperm_displacement_rate)),
+            expected_eggs_per_female=np.array(float(expected_eggs_per_female)),
             use_fixed_egg_count=bool(use_fixed_egg_count),
             carrying_capacity=carrying_capacity_f,
-            sex_ratio=float(sex_ratio),
-            low_density_growth_rate=float(low_density_growth_rate),
-            juvenile_growth_mode=int(juvenile_growth_mode),
-            expected_competition_strength=float(expected_competition_strength),
-            expected_survival_rate=float(expected_survival_rate),
-            generation_time=0.0,
+            sex_ratio=np.array(float(sex_ratio)),
+            low_density_growth_rate=np.array(float(low_density_growth_rate)),
+            juvenile_growth_mode=np.array(int(juvenile_growth_mode), dtype=np.int64),
+            expected_competition_strength=np.array(float(expected_competition_strength)),
+            expected_survival_rate=np.array(float(expected_survival_rate)),
+            generation_time=np.array(0.0),
             new_adult_age=new_adult_age_i,
             hook_slot=int(hook_slot),
             has_sex_chromosomes=bool(has_sex_chromosomes),
@@ -669,10 +673,11 @@ def build_population_config(
             population_scale=population_scale_f,
             base_carrying_capacity=float(base_carrying_capacity),
             base_expected_num_adult_females=float(base_expected_num_adult_females),
+            custom=np.zeros(0, dtype=np.float64),
         )
-        generation_time_f = float(temp_cfg.compute_generation_time())
+        generation_time_f = np.array(float(temp_cfg.compute_generation_time()))
     else:
-        generation_time_f = float(generation_time)
+        generation_time_f = np.array(float(generation_time))
 
     return PopulationConfig(
         is_stochastic=bool(is_stochastic),
@@ -691,15 +696,15 @@ def build_population_config(
         sexual_selection_fitness=sexual,
         zygote_viability_fitness=zygote,
         age_based_relative_competition_strength=competition,
-        sperm_displacement_rate=float(sperm_displacement_rate),
-        expected_eggs_per_female=float(expected_eggs_per_female),
+        sperm_displacement_rate=np.array(float(sperm_displacement_rate)),
+        expected_eggs_per_female=np.array(float(expected_eggs_per_female)),
         use_fixed_egg_count=bool(use_fixed_egg_count),
         carrying_capacity=carrying_capacity_f,
-        sex_ratio=float(sex_ratio),
-        low_density_growth_rate=float(low_density_growth_rate),
-        juvenile_growth_mode=int(juvenile_growth_mode),
-        expected_competition_strength=float(expected_competition_strength),
-        expected_survival_rate=float(expected_survival_rate),
+        sex_ratio=np.array(float(sex_ratio)),
+        low_density_growth_rate=np.array(float(low_density_growth_rate)),
+        juvenile_growth_mode=np.array(int(juvenile_growth_mode), dtype=np.int64),
+        expected_competition_strength=np.array(float(expected_competition_strength)),
+        expected_survival_rate=np.array(float(expected_survival_rate)),
         generation_time=generation_time_f,
         new_adult_age=new_adult_age_i,
         hook_slot=int(hook_slot),
@@ -717,6 +722,7 @@ def build_population_config(
         population_scale=population_scale_f,
         base_carrying_capacity=float(base_carrying_capacity),
         base_expected_num_adult_females=float(base_expected_num_adult_females),
+        custom=np.zeros(0, dtype=np.float64),
     )
 
 

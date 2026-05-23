@@ -111,7 +111,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         sperm_store,
         mating_prob,
         config.age_based_mating_rates[0, :],  # female age-specific mating rates
-        config.sperm_displacement_rate,
+        config.sperm_displacement_rate[()],  # pyright: ignore[reportArgumentType]
         adult_start_age,
         n_ages,
         n_gen,
@@ -132,7 +132,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.fecundity_fitness[0], # sex=0 is FEMALE
         config.fecundity_fitness[1], # sex=1 is MALE
         offspring_probability,
-        config.expected_eggs_per_female,
+        config.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
         adult_start_age,
         n_ages,
         n_gen,
@@ -145,7 +145,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.age_based_reproduction_rates,  # 直接传递年龄特定的繁殖率
         config.female_age_based_relative_fertility,  # 传递年龄特定的相对生育率
         config.use_fixed_egg_count, # fixed_eggs
-        config.sex_ratio,
+        config.sex_ratio[()],  # pyright: ignore[reportArgumentType]
         has_sex_chromosomes=has_sex_chromosomes,
         is_stochastic=is_stochastic,
         use_continuous_sampling=use_continuous_sampling
@@ -252,7 +252,7 @@ def run_survival(
     # =========================================================================
     # Use the unified recruit_juveniles_given_scaling_factor_sampling API.
     # Mode constants: 0=NO_COMPETITION, 1=FIXED, 2=LOGISTIC/LINEAR, 3=BEVERTON_HOLT/CONCAVE
-    juvenile_growth_mode = config.juvenile_growth_mode
+    juvenile_growth_mode = config.juvenile_growth_mode[()]  # pyright: ignore[reportArgumentType]
     new_adult_age = config.new_adult_age
 
     # Compute scaling_factor.
@@ -266,7 +266,7 @@ def run_survival(
         # Mode 1: FIXED - scale down proportionally when above K.
         scaling_factor = alg.compute_scaling_factor_fixed(
             total_age_0=total_age_0,
-            carrying_capacity=config.carrying_capacity,
+            carrying_capacity=config.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
         )
     else:
         # Mode 2 (LOGISTIC/LINEAR) or Mode 3 (BEVERTON_HOLT/CONCAVE).
@@ -284,16 +284,16 @@ def run_survival(
         if juvenile_growth_mode == LOGISTIC:
             scaling_factor = alg.compute_scaling_factor_logistic(
                 actual_competition_strength=actual_comp,
-                expected_competition_strength=config.expected_competition_strength,
-                expected_survival_rate=config.expected_survival_rate,
-                low_density_growth_rate=config.low_density_growth_rate,
+                expected_competition_strength=config.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
+                expected_survival_rate=config.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
+                low_density_growth_rate=config.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
             )
         else: # Mode 3: BEVERTON_HOLT / CONCAVE
             scaling_factor = alg.compute_scaling_factor_beverton_holt(
                 actual_competition_strength=actual_comp,
-                expected_competition_strength=config.expected_competition_strength,
-                expected_survival_rate=config.expected_survival_rate,
-                low_density_growth_rate=config.low_density_growth_rate,
+                expected_competition_strength=config.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
+                expected_survival_rate=config.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
+                low_density_growth_rate=config.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
             )
 
     # Unified call to recruit_juveniles_given_scaling_factor_sampling.

@@ -21,8 +21,6 @@ from typing import (
     cast,
 )
 
-import numpy as np
-
 from natal.hooks.declarative import compile_declarative_hook
 from natal.hooks.selector import compile_selector_hook
 from natal.numba_utils import njit_switch
@@ -76,42 +74,43 @@ class DecoratedHookFn(Protocol):
     register: Callable[..., Any]
 
 @njit_switch(cache=True)
-def _noop_hook(ind_count: np.ndarray, tick: int, deme_id: int = -1) -> int:
-    """Default hook implementation used for missing event handlers."""
+def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:
+    """Default hook: (state, config, deme_id) -> 0."""
     return 0
 
 noop_hook = _noop_hook
 
 def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
-    """Ensure an njit hook matches the internal (ind_count, tick, deme_id) signature.
+    """Ensure an njit hook matches (state, config, deme_id).
 
-    If the user provided a 2-arg function, wrap it.
+    Wraps older signatures:
+      - 2-arg (ind_count, tick) — legacy
+      - 3-arg (ind_count, tick, deme_id) — legacy
+    to the current 3-arg (state, config, deme_id).
     """
     py_fn = getattr(fn, "py_func", fn)
     sig = inspect.signature(py_fn)
     params = list(sig.parameters.values())
-    # If it already matches or has varargs, assume it handles 3 args.
     if len(params) >= 3:
         return fn
-    # Wrap 2-arg function: (ind_count, tick) -> (ind_count, tick, deme_id)
+    # Wrap legacy 2-arg: (ind_count, tick) -> (state, config, deme_id)
     @njit_switch(cache=True)
-    def wrapped(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> object:
-        return fn(ind_count, tick)
-    return wrapped
-
+    def wrapped2(state: Any, config: Any = None, deme_id: int = 0) -> object:
+        return fn(state.individual_count, state.n_tick)
+    return wrapped2
 
 def _normalize_py_hook(fn: HookCallable) -> HookCallable:
-    """Ensure a Python custom hook matches the (ind_count, tick, deme_id) signature.
+    """Ensure a Python hook matches (state, config, deme_id).
 
-    If user provided a 2-arg function, wrap it.
+    Wraps older signatures to the current 3-arg signature.
     """
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
     if len(params) >= 3:
         return fn
-    def wrapped(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> object:
-        return fn(ind_count, tick)
-    return wrapped
+    def wrapped2(state: Any, config: Any = None, deme_id: int = 0) -> object:
+        return fn(state.individual_count, state.n_tick)
+    return wrapped2
 
 def compile_combined_hook(
     njit_fns: List[HookCallable],
@@ -163,36 +162,36 @@ def compile_combined_hook(
         [
             "",
             "@njit_switch(cache=True)",
-            f"def {fn_name}(ind_count, tick, deme_id=-1):",
+            f"def {fn_name}(state, config=None, deme_id=-1):",
         ]
     )
 
     if needs_guard:
         for placeholder, ds in zip(placeholder_names, ds_list):
             if ds == "*":
-                lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append(f"    _result = {placeholder}(state, config, deme_id)")
                 lines.append("    if _result != 0:")
                 lines.append("        return _result")
             elif isinstance(ds, int):
                 lines.append(f"    if deme_id == {int(ds)}:")
-                lines.append(f"        _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append(f"        _result = {placeholder}(state, config, deme_id)")
                 lines.append("        if _result != 0:")
                 lines.append("            return _result")
             elif isinstance(ds, range):
                 lines.append(f"    if {ds.start} <= deme_id < {ds.stop}:")
-                lines.append(f"        _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append(f"        _result = {placeholder}(state, config, deme_id)")
                 lines.append("        if _result != 0:")
                 lines.append("            return _result")
             else:
                 # List or tuple — generate a tuple literal for Numba's ``in``.
                 items = ", ".join(str(int(x)) for x in ds)
                 lines.append(f"    if deme_id in ({items}):")
-                lines.append(f"        _result = {placeholder}(ind_count, tick, deme_id)")
+                lines.append(f"        _result = {placeholder}(state, config, deme_id)")
                 lines.append("        if _result != 0:")
                 lines.append("            return _result")
     else:
         for placeholder in placeholder_names:
-            lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
+            lines.append(f"    _result = {placeholder}(state, config, deme_id)")
             lines.append("    if _result != 0:")
             lines.append("        return _result")
     lines.append("    return 0")

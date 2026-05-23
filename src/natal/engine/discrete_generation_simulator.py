@@ -47,12 +47,20 @@ def run_discrete_reproduction(
         cfg.sexual_selection_fitness, effective_males, g,
     )
 
-    sperm = mate_discrete(females, mating_prob, cfg.female_mating_rate, stochastic, continuous)
+    sperm = mate_discrete(
+        females,
+        mating_prob,
+        cfg.female_mating_rate,
+        stochastic,
+        continuous
+    )
 
     n_f, n_m = fertilize_discrete(
         sperm, cfg.offspring_tensor,
         cfg.fecundity_f, cfg.fecundity_m,
-        cfg.expected_eggs_per_female, cfg.reproduction_rate, cfg.sex_ratio,
+        cfg.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
+        cfg.reproduction_rate,
+        cfg.sex_ratio[()],  # pyright: ignore[reportArgumentType]
         cfg.has_sex_chromosomes,
         cfg.female_genotype_compatibility, cfg.male_genotype_compatibility,
         cfg.female_only_by_sex_chrom, cfg.male_only_by_sex_chrom,
@@ -77,24 +85,39 @@ def run_discrete_survival(
     g = cfg.n_genotypes
     stochastic = cfg.is_stochastic
     continuous = cfg.use_continuous_sampling
-    mode = cfg.juvenile_growth_mode
+    mode = cfg.juvenile_growth_mode[()]  # pyright: ignore[reportArgumentType]
 
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
 
     if mode == NO_COMPETITION:
         scaling = 1.0
     elif mode == FIXED:
-        scaling = alg.compute_scaling_factor_fixed(total_age_0, cfg.carrying_capacity)
-    elif mode == LOGISTIC:
-        scaling = alg.compute_scaling_factor_logistic(
-            total_age_0, cfg.expected_competition_strength,
-            cfg.expected_survival_rate, cfg.low_density_growth_rate,
-        )
+        scaling = alg.compute_scaling_factor_fixed(total_age_0, cfg.carrying_capacity[()])  # pyright: ignore[reportArgumentType]
     else:
-        scaling = alg.compute_scaling_factor_beverton_holt(
-            total_age_0, cfg.expected_competition_strength,
-            cfg.expected_survival_rate, cfg.low_density_growth_rate,
+        # Compute equilibrium ref values inline from current config.
+        # This picks up runtime modifications to carrying_capacity / eggs / sex_ratio.
+        expected_comp, expected_surv = alg.compute_equilibrium_metrics(
+            carrying_capacity=cfg.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
+            expected_eggs_per_female=cfg.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
+            age_based_survival_rates=cfg.age_based_survival_rates,
+            age_based_mating_rates=cfg.age_based_mating_rates,
+            age_based_reproduction_rates=cfg.age_based_reproduction_rates,
+            female_age_based_relative_fertility=cfg.female_age_based_relative_fertility,
+            relative_competition_strength=cfg.age_based_relative_competition_strength,
+            sex_ratio=cfg.sex_ratio[()],  # pyright: ignore[reportArgumentType]
+            new_adult_age=cfg.new_adult_age,
+            n_ages=cfg.n_ages,
         )
+        if mode == LOGISTIC:
+            scaling = alg.compute_scaling_factor_logistic(
+                total_age_0, expected_comp, expected_surv,
+                cfg.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
+            )  # pyright: ignore[reportArgumentType]
+        else:
+            scaling = alg.compute_scaling_factor_beverton_holt(
+                total_age_0, expected_comp, expected_surv,
+                cfg.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
+            )  # pyright: ignore[reportArgumentType]
 
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         (ind_count[0, 0, :], ind_count[1, 0, :]),

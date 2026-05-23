@@ -74,6 +74,97 @@ InitializeMapFn = Callable[..., NDArray[np.float64]]
 initialize_gamete_map = cast(InitializeMapFn, _population_config.initialize_gamete_map)
 initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygote_map)
 
+def build_custom_array(
+    specs: dict[str, bool | int | float | NDArray[np.float64]],
+) -> NDArray[np.void]:
+    """Build a 0-d structured numpy array from custom field specs.
+
+    Called during :meth:`PopulationConfigBuilder.build` when the builder's
+    :meth:`custom` method was used.
+
+    Each entry in *specs* becomes a named field in the output array:
+
+    - ``bool`` values produce a ``np.bool_`` field.
+    - ``int`` values produce a ``np.int64`` field.
+    - ``float`` values produce a ``np.float64`` field.
+    - 3-D ``np.ndarray`` values produce a fixed-shape sub-array field
+      ``np.float64`` with the array's shape, accessed as
+      ``config.custom['name'][sex, age, genotype]``.
+    - 1-D or 2-D ``np.ndarray`` values … (see reshape note below).
+
+    All scalar fields are accessed via ``config.custom['name'][()]``.
+    Fields are sorted alphabetically to produce a stable dtype.  The
+    returned array is 0-d (scalar structured array), compatible with
+    Numba's ``njit`` functions via bracket or attribute access.
+
+    Args:
+        specs: ``{name: value}`` mapping from :meth:`PopulationBuilderBase.custom`.
+
+    Returns:
+        A 0-d structured ``np.ndarray`` for ``PopulationConfig.custom``.
+
+    Raises:
+        TypeError: If a value has an unsupported type.
+    """
+    # Empty specs → 0-d array with empty structured dtype.
+    # np.dtype([]) produces a void-typed dtype with no fields, so the
+    # return type always satisfies NDArray[np.void].
+    if not specs:
+        return np.zeros((), dtype=np.dtype([]))
+
+    # == Stage 1: determine dtype fields from each value's Python type ==
+    # Each element is (name, dtype) or (name, dtype, shape).
+    # sorted() guarantees a stable, alphabetical field order so that two
+    # builders with the same specs produce byte-identical dtypes.
+    fields: list[tuple[str, Any] | tuple[str, Any, tuple[int, ...]]] = []
+    for name in sorted(specs):
+        val = specs[name]
+
+        # ndarray → fixed-shape sub-array (must be 3-D: sex × age × genotype)
+        if isinstance(val, np.ndarray):
+            if val.ndim == 3:
+                fields.append((name, np.float64, val.shape))
+            else:
+                raise TypeError(
+                    f"custom field '{name}' is a {val.ndim}-D ndarray. "
+                    f"Only 3-D (sex, age, genotype) arrays are supported. "
+                    f"Reshape your array to (1, n, m) if needed."
+                )
+
+        # bool checked before int – bool is a subclass of int in Python
+        elif isinstance(val, bool):
+            fields.append((name, np.bool_))
+
+        # Python int → np.int64 (preserves integer semantics in Numba)
+        elif isinstance(val, int):
+            fields.append((name, np.int64))
+
+        # float / np.floating → np.float64
+        else:
+            fields.append((name, np.float64))
+
+    # == Stage 2: build the structured dtype and allocate the 0-d array ==
+    dtype = np.dtype(fields)
+    custom = np.zeros((), dtype=dtype)
+
+    # == Stage 3: write initial values ==
+    for name in sorted(specs):
+        val = specs[name]
+
+        # Sub-array field: copy the whole block
+        if isinstance(val, np.ndarray):
+            custom[name][...] = val
+
+        # Scalar field: assign through [()] (0-d element access).
+        # e.g. custom["temperature"][()] = 25.0
+        elif isinstance(val, bool):
+            custom[name][()] = val
+        else:
+            custom[name][()] = val
+
+    return custom
+
+
 class PopulationConfigBuilder:
     """Internal builder for constructing PopulationConfig.
 
@@ -114,10 +205,12 @@ class PopulationConfigBuilder:
         gamete_modifiers: Optional[List[ModifierSpec]],
         zygote_modifiers: Optional[List[ModifierSpec]],
         # Generation time
-        generation_time: Optional[int],
+        generation_time: Optional[float],
         # Initial state arrays (already parsed by builder)
         initial_individual_count: Optional[NDArray[np.float64]] = None,
         initial_sperm_storage: Optional[NDArray[np.float64]] = None,
+        # Custom fields
+        custom_specs: Optional[dict[str, float | int | NDArray[np.float64]]] = None,
     ) -> PopulationConfig:
         """Construct a complete PopulationConfig from builder parameters.
 
@@ -197,10 +290,10 @@ class PopulationConfigBuilder:
         _default_female = np.ones(n_ages - 1, dtype=np.float64)
         _default_male = np.ones(n_ages - 1, dtype=np.float64)
 
-        female_survival = PopulationConfigBuilder._resolve_survival_param(
+        female_survival = PopulationConfigBuilder.resolve_age_param(
             female_age_based_survival_rates, n_ages, _default_female
         )
-        male_survival = PopulationConfigBuilder._resolve_survival_param(
+        male_survival = PopulationConfigBuilder.resolve_age_param(
             male_age_based_survival_rates, n_ages, _default_male
         )
 
@@ -290,7 +383,7 @@ class PopulationConfigBuilder:
         # expected_num_adult_females independently determines expected eggs;
         # otherwise fall back to the equilibrium distribution's adult females.
         if expected_num_adult_females is not None:
-            external_eggs = PopulationConfigBuilder._compute_expected_eggs_from_females(
+            external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
                 expected_num_adult_females=expected_num_adult_females,
                 expected_eggs_per_female=expected_eggs_per_female,
                 age_based_survival_rates=age_based_survival_rates,
@@ -342,6 +435,10 @@ class PopulationConfigBuilder:
 
         if initial_sperm_storage is not None:
             cfg = cfg._replace(initial_sperm_storage=initial_sperm_storage.copy())
+
+        # Build structured custom array from builder .custom() specs
+        if custom_specs:
+            cfg = cfg._replace(custom=build_custom_array(custom_specs))
 
         return cfg
 
@@ -440,7 +537,7 @@ class PopulationConfigBuilder:
         return dist
 
     @staticmethod
-    def _compute_expected_eggs_from_females(
+    def compute_expected_eggs_from_females(
         expected_num_adult_females: float,
         expected_eggs_per_female: float,
         age_based_survival_rates: NDArray[np.float64],
@@ -532,7 +629,7 @@ class PopulationConfigBuilder:
         return list(species.iter_haploid_genotypes())
 
     @staticmethod
-    def _resolve_survival_param(
+    def resolve_age_param(
         param: Optional[Any],
         expected_length: int,
         default: List[float] | NDArray[np.float64],
@@ -948,6 +1045,7 @@ class PopulationBuilderBase:
         self._observation_groups: Optional[GroupsInput] = None
         self._observation_collapse_age: bool = False
         self._params: dict[str, object] = {}
+        self._custom_specs: dict[str, float | NDArray[np.float64]] = {}
 
     def _param(self, key: str, default: object = None) -> object:
         return self._params.get(key, default)
@@ -984,6 +1082,29 @@ class PopulationBuilderBase:
         """
         self._observation_groups = groups
         self._observation_collapse_age = collapse_age
+        return self
+
+    def custom(
+        self,
+        **kwargs: bool | int | float | NDArray[np.float64],
+    ) -> 'PopulationBuilderBase':
+        """Register custom named fields stored on ``config.custom``.
+
+        Scalar values (float, int) become scalar fields.
+        ndarray values become a (sex, age, genotype) shaped sub-array.
+
+        Usage::
+
+            builder.custom(temperature=25.0, habitat=habitat_array)
+
+        Args:
+            **kwargs: Field name → value. Scalars or 3-D ndarray.
+
+        Returns:
+            PopulationBuilderBase: Self for chaining.
+        """
+        for name, value in kwargs.items():
+            self._custom_specs[name] = value
         return self
 
     @staticmethod
@@ -1115,7 +1236,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         # Age structure
         self.n_ages: int = 8
         self.new_adult_age: int = 2
-        self.generation_time: Optional[int] = None
+        self.generation_time: Optional[float] = None
         self.equilibrium_individual_distribution: Optional[ArrayF64] = None
 
         # Initial state (required)
@@ -1189,7 +1310,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self,
         n_ages: int = 8,
         new_adult_age: int = 2,
-        generation_time: Optional[int] = None,
+        generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
         **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
@@ -1254,7 +1375,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self,
         female_age_based_survival_rates: Optional[Any] = None,
         male_age_based_survival_rates: Optional[Any] = None,
-        generation_time: Optional[int] = None,
+        generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
         **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
@@ -1564,6 +1685,7 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             generation_time=self.generation_time,
             initial_individual_count=initial_individual_count,
             initial_sperm_storage=initial_sperm_storage,
+            custom_specs=self._custom_specs or None,
         )
 
         # 2️⃣ Create population with PopulationConfig and hooks
@@ -1725,7 +1847,6 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
         self.female_age0_survival: float = 1.0
         self.male_age0_survival: float = 1.0
-        self.adult_survival: float = 0.0
 
         self.female_adult_mating_rate: float = 1.0
         self.male_adult_mating_rate: float = 1.0
@@ -1914,16 +2035,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self,
         female_age0_survival: float = 1.0,
         male_age0_survival: float = 1.0,
-        adult_survival: float = 0.0,
         **kwargs: object,
     ) -> "DiscreteGenerationPopulationBuilder":
         """Configure survival probabilities."""
         self.female_age0_survival = female_age0_survival
         self.male_age0_survival = male_age0_survival
-        self.adult_survival = adult_survival
         self._set_param("survival.female_age0_survival", female_age0_survival)
         self._set_param("survival.male_age0_survival", male_age0_survival)
-        self._set_param("survival.adult_survival", adult_survival)
         self._set_params(domain="survival", **kwargs)
         return self
 
@@ -2007,8 +2125,8 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             distribution=self.initial_individual_count,
         )
 
-        female_survival = [self.female_age0_survival, self.adult_survival]
-        male_survival = [self.male_age0_survival, self.adult_survival]
+        female_survival = [self.female_age0_survival, 0.0]
+        male_survival = [self.male_age0_survival, 0.0]
 
         female_mating = np.array([0.0, self.female_adult_mating_rate], dtype=np.float64)
         male_mating = np.array([0.0, self.male_adult_mating_rate], dtype=np.float64)
@@ -2047,6 +2165,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             zygote_modifiers=self.zygote_modifiers,
             generation_time=1,
             initial_individual_count=initial_individual_count,
+            custom_specs=self._custom_specs or None,
         )
 
         pop = DiscreteGenerationPopulation(

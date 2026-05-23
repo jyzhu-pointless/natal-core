@@ -50,10 +50,10 @@ class DiscretePopulationConfig(NamedTuple):
     age_based_relative_competition_strength: NDArray[np.float64]  # (2,)
 
     # -- Reproduction scalars --
-    expected_eggs_per_female: float
+    expected_eggs_per_female: NDArray[np.float64]          # 0-d, mutable
     use_fixed_egg_count: bool
-    sex_ratio: float
-    sperm_displacement_rate: float
+    sex_ratio: NDArray[np.float64]                         # 0-d, mutable
+    sperm_displacement_rate: NDArray[np.float64]           # 0-d, mutable
 
     # -- Per-sex scalars (pre-extracted for kernel performance) --
     male_mating_rate: float
@@ -83,14 +83,14 @@ class DiscretePopulationConfig(NamedTuple):
     male_only_by_sex_chrom: NDArray[np.bool_]             # (g,)
 
     # -- Competition scalars --
-    juvenile_growth_mode: int
-    carrying_capacity: float
+    juvenile_growth_mode: NDArray[np.int64]                # 0-d, mutable
+    carrying_capacity: NDArray[np.float64]                 # 0-d, mutable
     base_carrying_capacity: float
     base_expected_num_adult_females: float
-    expected_competition_strength: float
-    expected_survival_rate: float
-    low_density_growth_rate: float
-    generation_time: float
+    expected_competition_strength: NDArray[np.float64]     # 0-d, mutable
+    expected_survival_rate: NDArray[np.float64]            # 0-d, mutable
+    low_density_growth_rate: NDArray[np.float64]           # 0-d, mutable
+    generation_time: NDArray[np.float64]                   # 0-d, mutable
 
     # -- Age structure --
     new_adult_age: int
@@ -101,6 +101,9 @@ class DiscretePopulationConfig(NamedTuple):
     initial_sperm_storage: NDArray[np.float64]            # (2, g, g) — empty for discrete
     population_scale: float
     hook_slot: int
+
+    # -- custom fields (structured numpy scalar, set via Configurator.custom()) --
+    custom: NDArray[np.void]
 
     # ── methods ──────────────────────────────────────────────────────────────
 
@@ -135,7 +138,7 @@ class DiscretePopulationConfig(NamedTuple):
         self.zygote_viability_fitness[sex, genotype_idx] = value
 
     def get_effective_carrying_capacity(self) -> float:
-        return self.carrying_capacity * float(self.population_scale)
+        return float(self.carrying_capacity) * float(self.population_scale)
 
     def get_effective_expected_adult_females(self) -> float:
         return self.base_expected_num_adult_females * float(self.population_scale)
@@ -173,11 +176,11 @@ def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
         use_fixed_egg_count=cfg.use_fixed_egg_count,
         sex_ratio=cfg.sex_ratio,
         sperm_displacement_rate=cfg.sperm_displacement_rate,
-        male_mating_rate=float(cfg.age_based_mating_rates[1, 1]),
-        female_mating_rate=float(cfg.age_based_mating_rates[0, 1]),
-        reproduction_rate=float(cfg.age_based_reproduction_rates[1]),
-        base_survival_f=float(cfg.age_based_survival_rates[0, 0]),
-        base_survival_m=float(cfg.age_based_survival_rates[1, 0]),
+        male_mating_rate=cfg.age_based_mating_rates[1, 1],
+        female_mating_rate=cfg.age_based_mating_rates[0, 1],
+        reproduction_rate=cfg.age_based_reproduction_rates[1],
+        base_survival_f=cfg.age_based_survival_rates[0, 0],
+        base_survival_m=cfg.age_based_survival_rates[1, 0],
         genotype_to_gametes_map=cfg.genotype_to_gametes_map,
         gametes_to_zygote_map=cfg.gametes_to_zygote_map,
         offspring_tensor=cfg.offspring_tensor,
@@ -206,4 +209,5 @@ def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
         initial_sperm_storage=cfg.initial_sperm_storage,
         population_scale=cfg.population_scale,
         hook_slot=int(cfg.hook_slot),
+        custom=cfg.custom,
     )

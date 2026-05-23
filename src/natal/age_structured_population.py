@@ -5,6 +5,8 @@ models and utilities for survival, reproduction, juvenile recruitment, and
 fitness management.
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
@@ -12,11 +14,13 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     Set,
     Tuple,
     Union,
     cast,
+    overload,
 )
 
 import numpy as np
@@ -33,6 +37,7 @@ from natal.population_state import PopulationState
 from natal.type_def import Sex
 
 if TYPE_CHECKING:
+    from natal.configurator import AgeStructuredConfigurator
     from natal.population_builder import AgeStructuredPopulationBuilder
 
 __all__ = ["AgeStructuredPopulation"]
@@ -134,6 +139,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._finalize_hooks()
 
     @classmethod
+    @overload
     def setup(
         cls,
         species: Species,
@@ -142,32 +148,60 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         use_continuous_sampling: bool = False,
         gamete_labels: Optional[List[str]] = None,
         use_fixed_egg_count: bool = False,
-    ) -> 'AgeStructuredPopulationBuilder':
-        """Create and preconfigure an age-structured population builder.
+        *,
+        legacy_path: Literal[True],
+    ) -> AgeStructuredPopulationBuilder: ...
 
-        Args:
-            species: Species definition used to initialize the builder.
-            name: Population name.
-            stochastic: Whether to use stochastic sampling.
-            use_continuous_sampling: Whether to use Dirichlet sampling.
-            gamete_labels: Optional labels for gamete tracking.
-            use_fixed_egg_count: Whether egg count is deterministic.
+    @classmethod
+    @overload
+    def setup(
+        cls,
+        species: Species,
+        name: str = "AgeStructuredPop",
+        stochastic: bool = True,
+        use_continuous_sampling: bool = False,
+        gamete_labels: Optional[List[str]] = None,
+        use_fixed_egg_count: bool = False,
+        *,
+        legacy_path: Literal[False] = False,
+    ) -> AgeStructuredConfigurator: ...
 
-        Returns:
-            A configured ``AgeStructuredPopulationBuilder`` for fluent chaining.
+    @classmethod
+    def setup(
+        cls,
+        species: Species,
+        name: str = "AgeStructuredPop",
+        stochastic: bool = True,
+        use_continuous_sampling: bool = False,
+        gamete_labels: Optional[List[str]] = None,
+        use_fixed_egg_count: bool = False,
+        *,
+        legacy_path: bool = False,
+    ) -> AgeStructuredPopulationBuilder | AgeStructuredConfigurator:
+        """Fluent population construction entry point.
 
-        Examples:
-            ``AgeStructuredPopulation.setup(species).age_structure(...).initial_state(...).build()``
+        By default returns an ``AgeStructuredPopulationBuilder`` (legacy path).
+        Pass ``legacy_path=False`` for the new Configurator-based path.
         """
-        from natal.population_builder import AgeStructuredPopulationBuilder
-        builder = AgeStructuredPopulationBuilder(species)
-        builder.setup(
-            name=name,
+        if legacy_path:
+            from natal.population_builder import AgeStructuredPopulationBuilder
+
+            builder = AgeStructuredPopulationBuilder(species)
+            builder.setup(
+                name=name,
+                stochastic=stochastic,
+                use_continuous_sampling=use_continuous_sampling,
+                use_fixed_egg_count=use_fixed_egg_count,
+            )
+            return builder
+
+        from natal.configurator import Configurator
+
+        return Configurator.for_age_structured(species).setup(
             stochastic=stochastic,
             use_continuous_sampling=use_continuous_sampling,
-            use_fixed_egg_count=use_fixed_egg_count
+            use_fixed_egg_count=use_fixed_egg_count,
         )
-        return builder
 
     def _distribute_initial_population(
         self,
@@ -450,7 +484,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     # State export/import (simulator interface)
     # ========================================================================
 
-    def export_config(self) -> 'PopulationConfig':
+    def export_config(self) -> PopulationConfig:
         """Export population configuration to Config jitclass.
 
         Returns:
@@ -458,7 +492,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         return self._config_nn
 
-    def import_config(self, config: 'PopulationConfig') -> None:
+    def import_config(self, config: PopulationConfig) -> None:
         """Import configuration into the population.
 
         Args:
@@ -510,7 +544,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         history = self.get_history() if self._history else None
         return state_flat, history
 
-    def import_state(self, state: Union['PopulationState', NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]],
+    def import_state(self, state: Union[PopulationState, NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]],
                      history: Optional[np.ndarray] = None) -> None:
         """Import state and optional history records.
 
@@ -652,7 +686,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         record_every: Optional[int] = None,
         finish: bool = False,
         clear_history_on_start: bool = False
-    ) -> 'AgeStructuredPopulation':
+    ) -> AgeStructuredPopulation:
         """Run multi-step evolution using optimized simulation engine.
 
         Args:
@@ -740,7 +774,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         return self
 
-    def run_tick(self) -> 'AgeStructuredPopulation':
+    def run_tick(self) -> AgeStructuredPopulation:
         """
         Execute a single tick of evolution.
 
@@ -758,7 +792,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         record_every: int,
         finish: bool,
         clear_history_on_start: bool,
-    ) -> 'AgeStructuredPopulation':
+    ) -> AgeStructuredPopulation:
         """Python-level simulation loop using HookExecutor for event dispatch."""
         self.ensure_hook_executor()
 
@@ -870,6 +904,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             if total_count > 0:
                 present.add(genotype)
         return present
+
+    def update(self) -> AgeStructuredConfigurator:
+        """Return an ``AgeStructuredConfigurator`` for modifying this population's config."""
+        from typing import cast
+
+        result = super().update()
+        return cast('AgeStructuredConfigurator', result)
 
     def __repr__(self) -> str:
         """Return a compact string representation of the population."""
