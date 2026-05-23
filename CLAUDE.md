@@ -1,146 +1,94 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+> 这是中文版。另见：[English version](./CLAUDE.en.md)
+>
+> 任一一版更新时，另一版必须同步更新。
 
-## Language
+## 语言
 
 默认使用中文回答。仅在用户明确使用英文提问时用英文回复。
 
-## Commands
+## 行为指南
 
-The virtual environment is auto-activated for Claude Code agents. Run commands directly — do not prepend `source .venv/bin/activate`.
+遵循 Karpathy 编码指南（Claude Code 命令：`/andrej-karpathy-skills:karpathy-guidelines`）：
+
+1. **先想后写** — 不确定时停下来问，不要猜。有更简单方案时直接说。
+2. **简洁优先** — 只写解决问题所需的最少代码。不为单次使用建抽象，不为不可能的场景加错误处理。
+3. **精准修改** — 只碰必须改的。不动相邻代码，不改格式，不顺手重构。
+4. **目标驱动** — 把任务转化为可验证目标。多步骤任务先列计划再执行。
+
+项目补充规则：
+
+- 任何方案、计划或非平凡修改，必须先向用户说明并获得批准后再执行。不得擅自实施。
+- 倾向于写注释。注释应解释 WHY（设计意图、约束、非显而易见的逻辑），而非 WHAT（代码本身已经说明）。
+- 不要创建文档文件（*.md），除非用户明确要求。
+- 不要过早抽象。不为假想需求设计。
+- 修改后使用文字详细解释你的修改内容，包括为什么修改以及修改后的效果。避免使用模糊的表述，如“我改了这个函数”，而是具体说明改了什么（如“我将 `foo` 函数的参数从 `x` 改为 `y`，以支持新的用例”）。
+- 在文字表述中，尽可能使用通俗易懂的语言。如引入专业的软件工程术语（本项目架构中已引入的概念除外），必须详细解释其含义。例子：
+  - 不这样说："preset 参数由 Configurator 的 deferred 管理，运行时也是 Configurator 来改。"
+  - 而是说："遗传预设（preset）的参数比较特殊——它不能在构建过程中直接写入配置，必须等 Population 对象创建完成后才能生效。所以 Configurator 会先把这些参数暂存起来（deferred），等 `build()` 真正执行时再统一应用。运行时修改 preset 参数也是通过 Configurator 的 `update()` 入口。"
+
+## 门禁检查
+
+每次修改后，必须运行以下命令：
 
 ```bash
-# Run all tests
-pytest
-
-# Type checking (strict mode)
-pyright
-
-# Lint — check and optionally auto-fix
-ruff check src demos
-ruff check src demos --fix
-
-# If public API exports changed, regenerate stub:
-python scripts/generate_init_pyi.py
+pytest                          # 运行全部测试
+pyright                         # 类型检查（strict mode）
+ruff check src demos             # Lint 检查
+ruff check src demos --fix       # Lint 自动修复
+python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 ```
 
-## Validation gates
+虚拟环境已自动激活，直接运行命令即可。
 
-Before committing any code change, run **all three** of `pytest`, `pyright`, and `ruff check src demos`. Fix **every** issue in modified files before committing — no suppression shortcuts.
+提交前必须通过 **全部三项**：`pytest` + `pyright` + `ruff check src demos`。不压制、不绕过。
 
-### Fix-everything policy
+### 修复策略
 
-- **Modified files**: All pyright / ruff / pytest failures must be fixed, regardless of whether they pre-existed.
-- **Other files affected by the change**: If a signature or import change causes failures elsewhere, those must be fixed too.
-- **Pre-existing issues in untouched files**: Explicitly note and analyse them; fixing is encouraged but not required for the current commit.
-- **`cast(Any, …)` is forbidden**. Never use it to bypass type checking.
-- **`Any` in function parameter lists is forbidden** unless accompanied by a concrete, documented justification.
-- **`cast(T, x)`** may be used only when static analysis cannot prove `x: T` at all (e.g., narrowing an `Optional` after a guard) and the error is otherwise unavoidable. Prefer type-narrowing assertions or restructuring before reaching for `cast`.
-- **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line.
+- **修改的文件**：所有 pyright / ruff / pytest 报错必须修，无论是否预先存在。
+- **被改动波及的文件**：签名或 import 变更导致的其他文件报错也必须修。
+- **未修改文件的既有问题**：指出即可，不强制修。
+- **`cast(Any, …)` 禁止**。不能用它绕过类型检查。
+- **函数参数禁止 `Any`**，除非有具体、书面的理由。
+- **`cast(T, x)`** 仅在静态分析完全无法证明 `x: T` 时可用（如 guard 后 narrow Optional）。优先用类型窄化断言或重构。
+- **`# type: ignore`** 是最后手段。每个 ignore 必须附带简短原因。
 
-### Test coverage
+### 测试覆盖
 
-- **New modules**: ≥95% line coverage.
-- **New code in existing modules**: ≥95% line coverage.
-- **Deterministic simulations** (`stochastic=False`): require exact numerical assertions on counts, frequencies, or derived statistics.
-- **Stochastic simulations**: require statistical validation — multiple runs, confidence intervals, or distributional checks. A single passing run is not sufficient.
+- **新模块**：≥95% 行覆盖。
+- **已有模块新增代码**：≥95% 行覆盖。
+- **确定性模拟** (`stochastic=False`)：精确数值断言。
+- **随机模拟**：需统计验证（多次运行、置信区间或分布检验），单次通过不算。
 
-## Architecture overview
+## 架构
 
-### Package structure
+`natal` 包使用 **lazy loading**——`__init__.py` 通过 AST 解析 `__all__` 构建名称索引，`__getattr__` 按需导入，启动近乎即时。
 
-The `natal` package uses **lazy loading** — child modules are never imported at `import natal` time. Instead, `natal/__init__.py` parses each module's `__all__` via AST and builds a name-to-module map. Accessing `natal.SomeSymbol` triggers `__getattr__`, which dynamically imports the owning module. This keeps startup nearly instant.
+### 核心模块
 
-Key modules and their responsibilities:
+| 层 | 模块 | 职责 |
+|---|---|---|
+| 遗传结构 | `genetic_structures.py`, `genetic_entities.py` | Species / Chromosome / Locus 不可变蓝图；Gene / Genotype / Haplotype 实体 |
+| 配置与状态 | `population_config.py`, `population_state.py` | PopulationConfig（静态 NamedTuple，9 个生态参数为 0-d ndarray）+ PopulationState（可变数组） |
+| 群体模型 | `discrete_generation_population.py`, `age_structured_population.py`, `spatial_population.py` | Wright-Fisher / 年龄结构 / 空间多 deme 模拟 |
+| Builder | `population_builder.py`, `configurator.py` | 链式建造 API + Configurator 运行时修改 |
+| Hook 系统 | `hooks/` | 事件驱动干预（init/first/early/late/finish），声明式 + Python 函数式 |
+| 引擎 | `engine/` | Numba 加速模拟循环 + codegen 动态生成 wrapper |
+| 预设 | `genetic_presets.py` | HomingDrive / ToxinAntidoteDrive，封装 modifier + fitness |
+| 参数注册 | `parameters.py` | ParamDescriptor 注册表 + Numba setter codegen |
 
-```
-natal/
-├── __init__.py              # Lazy-loading package root
-├── type_def.py              # Core type aliases (Sex, Age, IndividualType, GameteType)
-├── genetic_structures.py    # Immutable species architecture: Species, Chromosome, Locus
-├── genetic_entities.py      # Mutable biological entities (Gene, Genotype, Haplotype, etc.)
-├── genetic_presets.py       # Gene drive presets: HomingDrive, ToxinAntidoteDrive
-├── genetic_patterns.py      # Genotype/pattern matching and string-based genotype DSL
-├── index_registry.py        # Lookup tables for genotypes, haplotypes, gamete labels
-├── population_config.py     # PopulationConfig NamedTuple — static simulation parameters
-├── population_state.py      # Mutable simulation state (individual counts, gamete pools)
-├── population_builder.py    # Fluent builder API for constructing populations
-├── base_population.py       # Abstract base for all population models (hook mgmt, modifiers)
-├── discrete_generation_population.py  # Wright-Fisher discrete-generation model
-├── age_structured_population.py       # Age-structured (non-Wright-Fisher) model
-├── spatial_population.py             # Multi-deme spatial simulation
-├── spatial_topology.py               # Deme adjacency and migration topology
-├── state_translation.py              # Exporting state to history / DataFrame
-├── observation.py                    # Simplified observation/filter helpers
-├── algorithms.py                     # Core algorithms (competition, sampling, etc.)
-├── modifiers.py                      # GameteModifier / ZygoteModifier pipelines
-├── gamete_allele_conversion.py       # Haploid-stage allele conversion rules
-├── zygote_allele_conversion.py       # Diploid-stage allele conversion rules
-├── helpers.py                        # Shared utility functions
-├── visualization.py                  # Plotting utilities
-├── numba_utils.py                    # Numba enable/disable and cache dir
-├── numba_compat.py                   # Numba compatibility shims
-├── hooks/                            # Event-driven hook system
-│   ├── compiler.py                   # Hook compilation (njit path)
-│   ├── declarative.py                # Declarative hooks (Op.add, Op.remove, etc.)
-│   ├── executor.py                   # Hook execution engine (CSR-based event arrays)
-│   ├── selector.py                   # Deme-aware hook selectors
-│   └── types.py                      # Hook enums, opcodes, data structures
-├── engine/                          # Numba-accelerated simulation engine
-│   ├── codegen.py                    # Dynamic kernel wrapper code generation
-│   ├── simulation_engine.py         # Core panmictic simulation loops
-│   ├── spatial_simulation_engine.py # Per-deme simulation for spatial models
-│   ├── spatial_migration_engine.py  # Migration between demes
-│   ├── migration/
-│   │   ├── adjacency.py              # Adjacency matrix helpers
-│   │   └── kernel.py                 # Migration kernel
-│   └── templates/                    # Jinja2-style templates for wrapper codegen
-└── ui/                               # NiceGUI-based interactive dashboards
-    ├── dashboard.py                  # Panmictic population dashboard
-    ├── dashboard_population.py       # Population display components
-    └── spatial_dashboard.py          # Spatial simulation dashboard
-```
-
-### Key architectural layers
-
-1. **Genetic structure layer** (`genetic_structures.py`, `genetic_entities.py`): Defines the immutable species blueprint (chromosomes, loci, alleles) and concrete entity instances (genes, genotypes, haplotypes). Entities auto-register to structures. The `Species` class provides string-based genotype pattern resolution (e.g., `"WT|Dr"` → `Genotype`).
-
-2. **Configuration & state layer** (`population_config.py`, `population_state.py`): Separates static configuration (`PopulationConfig` NamedTuple — fitness arrays, rates, carrying capacities) from mutable simulation state (`PopulationState` / `DiscretePopulationState` — individual count arrays, gamete pools). Config scalars are immutable (rebuild via `_replace`); NumPy arrays are mutable in-place.
-
-3. **Population model layer** (`base_population.py`, `discrete_generation_population.py`, `age_structured_population.py`, `spatial_population.py`): Concrete population models implementing the simulation loop. The **fluent builder pattern** in `population_builder.py` provides `.setup().initial_state().reproduction().competition().presets().hooks().build()` chaining for construction. Two main models:
-   - **DiscreteGenerationPopulation** — Wright-Fisher, non-overlapping generations
-   - **AgeStructuredPopulation** — overlapping generations with age classes
-   - **SpatialPopulation** — multi-deme, wraps either model per deme with migration
-
-4. **Hook system** (`hooks/`): Event-driven intervention system with five events: `initialization`, `first`, `early`, `late`, `finish`. Hooks can be Python callables (for flexibility) or compiled to Numba njit engine (for performance). The compiler path uses CSR (Compressed Sparse Row) event arrays and code generation from templates (`engine/codegen.py`). Two hook styles:
-   - **Declarative hooks**: `Op.add(genotypes="...", ages=..., sex="...", delta=..., when="tick == N")`
-   - **Python function hooks**: Decorated with `@hook(event="early", priority=0)` to return Op lists or raw operations
-
-5. **Kernel layer** (`engine/`): Numba-accelerated simulation engine for the hot loop. Custom codegen (`codegen.py`) dynamically generates optimized wrapper modules from Jinja2 templates, combining user hooks into compiled njit functions. Shared kernel source files handle both panmictic and spatial simulations.
-
-6. **Genetic presets** (`genetic_presets.py`): `HomingDrive` and `ToxinAntidoteDrive` presets that encapsulate gamete modifiers, zygote modifiers, and fitness effects. The `apply_preset_to_population()` function wires them into a population.
-
-### Data flow
+### 数据流
 
 ```
-Species definition → IndexRegistry (all genotype/haplotype/glab mappings)
-         ↓
-PopulationBuilder → PopulationConfig (static tensors) + PopulationState (mutable arrays)
-         ↓
-Simulation loop (per tick):
-  → Hook events (first/early/late) — modify state via Op arrays or Python
-  → Reproduction (gametogenesis → mating → fertilization)
-  → Competition / density regulation
-  → Survival / aging (age-structured only)
-  → Observation recording
-  → For spatial: per-deme simulation → migration between demes
+Species → IndexRegistry → PopulationConfig + PopulationState
+  → 每 tick: Hooks → Reproduction → Competition → Survival → Observation
+  → 空间模型: per-deme 模拟 → migration
 ```
 
-### Key design decisions
+### 关键设计
 
-- **Lazy loading**: `natal` package never imports child modules at init. The `__init__.py` builds a name index via AST parsing, then `__getattr__` imports on first access.
-- **Numba-first but Python-fallback**: Core simulation can run with or without Numba (controlled by `numba_utils.is_numba_enabled()`). The hook compiler has both njit and pure-Python paths.
-- **Fitness is multi-layered**: `viability_fitness`, `fecundity_fitness`, `sexual_selection_fitness`, and `zygote_viability_fitness` are applied at different stages of the life cycle.
-- **Builder pattern**: Population construction uses a multi-stage builder with dedicated methods for each configuration domain (initial state, reproduction, competition, presets, hooks).
-- **Codegen caching**: Generated kernel wrappers are cached in a Numba cache directory with content-addressed hashing, so repeated simulations reuse compiled modules.
+- **0-d ndarray**：9 个生态参数（K, eggs, sex_ratio 等）可在 hook 内 `config.field[()] = v` 原地修改。
+- **Hook 签名**：`hook(state, config, deme_id) → int`，config 直接传入。
+- **Numba-first, Python-fallback**：核心模拟兼容两种模式，`njit_switch` 自动降级。
+- **Codegen 缓存**：生成的 kernel wrapper 按内容哈希缓存，重复运行复用编译结果。
