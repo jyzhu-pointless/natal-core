@@ -1,20 +1,19 @@
-# Population Initialization (Panmictic)
+# 种群初始化（Panmictic）
 
-Population initialization is the first step of NATAL Core simulation, which configures and constructs a population through a chainable API.
+种群初始化是 NATAL Core 模拟的第一步，通过链式 API（`Configurator`）配置和构建种群。
 
-> **Note**: This chapter covers the chainable configuration of **panmictic (single deme, well-mixed)** populations. For building multi-deme spatial populations (with topology, migration, and `batch_setting` heterogeneous configuration), please refer to the [Spatial Simulation Guide](3_spatial_simulation.md). The chainable syntax for spatial populations is essentially the same as this chapter, with the addition of a `.migration()` method and `batch_setting` support.
+> **说明**：本章介绍的是 **panmictic（单 deme、均匀混合）** 种群的链式配置。如需构建多 deme 空间种群（含拓扑、迁移、`batch_setting` 异构配置），请参见 [Spatial 模拟指南](3_spatial_simulation.md)。空间种群的链式语法与本章基本一致，额外增加了 `.migration()` 方法和 `batch_setting` 支持。
 
-## Quick Start: Chainable API Configuration
-
-NATAL Core provides a concise chainable API for configuring populations, which is the recommended usage:
+## 快速开始：链式 API 配置
 
 ```python
 import natal as nt
 
-# Chainable API configuration (recommended)
+sp = nt.Species.from_dict(...)
+
+# 年龄结构化种群
 pop = (
-    nt.AgeStructuredPopulation
-    .setup(species=my_species)
+    nt.AgeStructuredPopulation.setup(sp)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 100},
@@ -28,293 +27,305 @@ pop = (
 )
 ```
 
-## Configuration Flow
+### 运行时修改
 
-The complete configuration flow is as follows:
+构建完成后，参数仍可通过 `pop.update()` 随时修改——无需重建种群：
+
+```python
+pop.update().competition(carrying_capacity=5000)
+pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+```
+
+参见 [Configurator API 参考](../api/configurator.md)。
+```
+
+## 配置流程
+
+完整配置流程如下：
 
 ```text
-Population.setup() → chainable configuration method calls
+Population.setup() → 链式配置方法调用
   → build()
   → PopulationConfig / PopulationState
   → run_tick / run
-  → reproduction → survival → aging (and hooks)
+  → reproduction → survival → aging（以及 hooks）
 ```
 
-After configuration, you can use the returned population object to call `run()` or `run_tick()` methods to start the simulation (see [the Simulation Engine Deep Dive](4_simulator.md)).
+配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulator.md)）。
 
-## Two Types of Configuration Interfaces
+## 两类配置接口
 
-NATAL Core provides two main population types:
+NATAL Core 提供两种主要的种群类型：
 
-- **`AgeStructuredPopulation`**: Suitable for multi-age-class models, supporting configurable numbers of age stages, per-age vector inputs, and optional sperm storage mechanisms.
-- **`DiscreteGenerationPopulation`**: Suitable for discrete generation models, defaulting to two age stages (`n_ages=2`, `new_adult_age=1`), simplifying the modeling of non-overlapping generations.
+- **`AgeStructuredPopulation`**：适用于多年龄层模型，支持可配置的年龄阶段数量、按年龄向量输入参数以及可选的精子存储机制。
+- **`DiscreteGenerationPopulation`**：适用于离散世代模型，默认使用两个年龄阶段（`n_ages=2`，`new_adult_age=1`），简化了世代交替的建模。
 
-## AgeStructuredPopulation Parameter Reference
+## AgeStructuredPopulation 参数类型
 
-### `setup(...)` – Basic Setup
+### `setup(...)` – 基本设置
 
-Configure basic population information and randomness.
+配置种群的基本信息及随机性。
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `name` | `str` | Population identification name | `"AgeStructuredPop"` | Entire workflow | Used only for logging and identification, does not affect dynamics; explicitly name experiments for clarity |
-| `stochastic` | `bool` | Whether to use random sampling | `True` | Sampling stages (reproduction / survival, etc.) | `True` for random, `False` for deterministic; use `False` during parameter tuning |
-| `use_continuous_sampling` | `bool` | Sampling strategy selection | `False` | Probability sampling details | Controls the sampling method; keep default for most scenarios |
-| `use_fixed_egg_count` | `bool` | Whether egg count is fixed | `False` | reproduction | `True` for fixed egg count, `False` for more realistic random egg production |
-| `species` | `Species` | Species object | Required | Entire workflow | Defines the genetic structure of the population; core configuration parameter |
+| `name` | `str` | 种群标识名称 | `"AgeStructuredPop"` | 全流程 | 仅用于日志和标识，不影响动力学；实验时建议显式命名以便区分 |
+| `stochastic` | `bool` | 是否采用随机采样 | `True` | reproduction / survival 等采样阶段 | `True` 表示随机，`False` 表示确定性；调参阶段建议先使用 `False` |
+| `use_continuous_sampling` | `bool` | 采样策略选择 | `False` | 概率采样细节 | 控制采样方式，大多数场景保持默认即可 |
+| `use_fixed_egg_count` | `bool` | 产卵数是否固定 | `False` | reproduction | `True` 表示固定产卵数，`False` 更接近随机产卵过程 |
+| `species` | `Species` | 物种对象 | 必填 | 全流程 | 定义种群的遗传结构，是配置的核心参数 |
 
-### `age_structure(...)` – Age Structure
+### `age_structure(...)` – 年龄结构
 
-Configure the population's age structure, including the total number of age stages and the juvenile/adult division.
+配置种群的年龄结构，包括年龄阶段总数和幼年/成年的划分等。
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `n_ages` | `int` | Total number of age stages | `8` | Entire workflow (array dimensions) | Constrains array lengths for initial state, survival rates, etc.; must match lengths of all age-related parameters |
-| `new_adult_age` | `int` | Age index at which individuals enter the adult stage | `2` | reproduction / survival | Recommended to align with the life history stage of the target species; individuals below this age are considered juveniles |
-| `generation_time` | `Optional[int]` | Generation time marker | `None` | Compilation parameter | Used only for modeling interpretation; mutually exclusive with the same-named parameter in `age_structure`, the later one takes precedence |
-| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Mutually exclusive with the same-named parameter in `survival` and `competition`; later one takes precedence; age=0 value is ignored (see competition section) |
+| `n_ages` | `int` | 年龄阶段总数 | `8` | 全流程（数组维度） | 约束初始状态、存活率向量等数组长度；必须与所有年龄相关参数长度一致 |
+| `new_adult_age` | `int` | 个体进入成年阶段的年龄索引 | `2` | reproduction / survival | 建议与目标物种的生命史阶段对齐；低于此年龄的个体视为幼体 |
+| `generation_time` | `Optional[int]` | 代时标记 | `None` | 编译参数 | 仅用于建模解释；与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的 |
+| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `survival`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节） |
 
-### `initial_state(...)` – Initial State
+### `initial_state(...)` – 初始状态
 
-Initial state parameters take effect at the start of the simulation, providing base data for various sampling functions in `algorithms.py`. The initial individual count distribution directly affects subsequent reproduction and survival calculations; sperm storage data is used by the `sample_mating` function during the reproduction phase.
+初始状态参数在模拟开始时生效，为 `algorithms.py` 中的各种采样函数提供基础数据。初始个体数量分布直接影响后续的繁殖和生存计算，精子存储数据在繁殖阶段被 `sample_mating` 函数使用。
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `individual_count` | `Mapping` | Initial individual count distribution, format `{sex: {genotype: age_data}}` | Required | Initial state | If not set, `build()` will raise an error; supports scalar, sequence, mapping, and other formats |
-| `sperm_storage` | `Optional[Mapping]` | Initial sperm storage (only needed when sperm storage is enabled) | `None` | reproduction | Required only when `use_sperm_storage=True`; format is a three-level mapping |
+| `individual_count` | `Mapping` | 初始个体数量分布，格式为 `{性别: {基因型: 年龄数据}}` | 必填 | 初始状态 | 如未设置，`build()` 会报错；支持标量、序列、映射等多种格式 |
+| `sperm_storage` | `Optional[Mapping]` | 初始精子库存（仅在启用储精时需要） | `None` | reproduction | 仅在 `use_sperm_storage=True` 时必需；格式为三层映射 |
 
-**Age data (`age_data`) format** (all counts must be non-negative):
+**年龄数据（`age_data`）的格式**（所有计数必须为非负数）：
 
-- **Scalar**: Assigned to all ages in the range `[new_adult_age, n_ages)`
-- **List / Tuple / Array**: Written sequentially by age index; excess elements are truncated, missing elements are filled with `0`
-- **Dictionary**: Explicitly specifies values for specific ages, e.g., `{2: 100, 3: 80}`
+- **标量**：分配到 `[new_adult_age, n_ages)` 范围内的所有年龄
+- **列表 / 元组 / 数组**：按年龄索引依次写入，超长部分截断，不足部分补 `0`
+- **字典**：显式指定特定年龄的数值，例如 `{2: 100, 3: 80}`
 
-Examples:
+示例：
 
 ```python
-# Scalar: all adult ages (>= new_adult_age) assigned 100
+# 标量：所有成年年龄（>= new_adult_age）都分配 100
 {"female": {"WT|WT": 100.0}}
 
-# Sequence: written in age order
+# 序列：按年龄顺序写入
 {"female": {"WT|WT": [0, 100, 80, 60]}}
 
-# Mapping: assign values only to some ages
+# 映射：只给部分年龄赋值
 {"female": {"WT|WT": {2: 100, 3: 80}}}
 ```
 
-**Sperm storage (`sperm_storage`) format** (three-level mapping):
+**精子存储（`sperm_storage`）的格式**（三层映射）：
 
 ```python
 {
-  "WT|WT": {                 # Female genotype
-    "Drive|WT": [0, 0, 20],  # Male genotype -> sperm count by age
+  "WT|WT": {                 # 雌性基因型
+    "Drive|WT": [0, 0, 20],  # 雄性基因型 -> 按年龄的精子数量
   }
 }
 ```
 
-Validation rules:
+校验规则：
 
-- Age index must be in the range `[0, n_ages)`
-- All counts must be `>= 0`
-- Genotype strings must be correctly parseable by the current `Species`
+- 年龄索引必须在 `[0, n_ages)` 范围内
+- 所有计数必须 `>= 0`
+- 基因型字符串必须能被当前的 `Species` 正确解析
 
-### `survival(...)` – Survival Parameters
+### `survival(...)` – 存活参数
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `female_age_based_survival_rates` | `Optional` | Female per-age survival rates | `None` | survival | Supports scalar, sequence, mapping, function, etc.; `None` uses default curve; range `[0, 1]` |
-| `male_age_based_survival_rates` | `Optional` | Male per-age survival rates | `None` | survival | Same as above |
-| `generation_time` | `Optional[int]` | Generation time marker | `None` | Compilation parameter | Mutually exclusive with the same-named parameter in `age_structure`; later one takes precedence |
-| `equilibrium_distribution` | `Optional` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Mutually exclusive with the same-named parameter in `age_structure` and `competition`; later one takes precedence; age=0 value is ignored (see competition section) |
+| `female_age_based_survival_rates` | `Optional` | 雌性按年龄的存活率。 | `None` | survival | 支持标量、序列、映射、函数等；`None` 表示使用默认曲线；取值 `[0, 1]`。 |
+| `male_age_based_survival_rates` | `Optional` | 雄性按年龄的存活率。 | `None` | survival | 同上。 |
+| `generation_time` | `Optional[int]` | 代时标记。 | `None` | 编译参数 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的。 |
+| `equilibrium_distribution` | `Optional` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `age_structure`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节）。 |
 
-**Code examples** (from `_resolve_survival_param`):
+**代码示例**（来自 `resolve_age_param`）：
 
 ```python
-# A) None → use default curve
+# A) None → 使用默认曲线
 .survival(female_age_based_survival_rates=None)
 
-# B) Scalar → same value for all ages
+# B) 标量 → 所有年龄使用相同值
 .survival(female_age_based_survival_rates=0.85)
 
-# C) Sequence → written per age, missing filled with 0, excess truncated
+# C) 序列 → 按年龄依次写入，不足补 0，超长截断
 .survival(female_age_based_survival_rates=[1.0, 1.0, 0.9, 0.7])
 
-# D) Sparse mapping → unspecified ages default to 1.0
+# D) 稀疏映射 → 未指定的年龄默认为 1.0
 .survival(female_age_based_survival_rates={0: 1.0, 1: 0.95, 2: 0.8})
 
-# E) Function → must accept an age parameter and return a value
+# E) 函数 → 必须接收一个 age 参数并返回数值
 .survival(female_age_based_survival_rates=lambda age: 1.0 if age < 2 else 0.8)
 
-# F) Sequence with None sentinel at end → filled with last non-None value
+# F) 序列末尾用 None 哨兵 → 末尾用最后一个非 None 值填充
 .survival(female_age_based_survival_rates=[1.0, 0.9, None])
 ```
 
-### `reproduction(...)` – Reproduction Parameters
+### `reproduction(...)` – 繁殖参数
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `female_age_based_mating_rates` | `Optional` | Female per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
-| `male_age_based_mating_rates` | `Optional` | Male per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
-| `female_age_based_relative_fertility` | `Optional` | Female per-age relative fertility weights | `None` | reproduction | Length must equal `n_ages`; used to modulate egg production contribution across ages |
-| `eggs_per_female` | `float` | Base number of eggs per female | `50.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
-| `use_fixed_egg_count` | `bool` | Whether egg count is fixed | `False` | reproduction | `True` for fixed egg count, `False` for random egg production |
-| `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
-| `use_sperm_storage` | `bool` | Whether to enable sperm storage mechanism | `True` | reproduction | `True` enables, `False` disables (only current mating considered) |
-| `sperm_displacement_rate` | `float` | Rate at which new sperm replaces old sperm | `0.05` | reproduction | Typical range `(0, 1]`; larger values mean faster replacement |
+| `female_age_based_mating_rates` | `Optional` | 雌性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
+| `male_age_based_mating_rates` | `Optional` | 雄性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
+| `female_age_based_relative_fertility` | `Optional` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度必须等于 `n_ages`；用于调节不同年龄雌性的产卵贡献。 |
+| `eggs_per_female` | `float` | 每只雌性的基础产卵数。 | `50.0` | reproduction | 作为种群产卵数的基准；调参时可从中性值开始。 |
+| `use_fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 表示固定产卵数，`False` 表示随机产卵。 |
+| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
+| `use_sperm_storage` | `bool` | 是否启用精子存储机制。 | `True` | reproduction | `True` 启用，`False` 禁用（此时仅考虑当次交配）。 |
+| `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 取值范围通常为 `(0, 1]`；值越大表示新精子替换速度越快。 |
 
-### `competition(...)` – Competition and Density Regulation
+### `competition(...)` – 竞争与密度调节
 
-Competition parameters take effect during the survival phase of the population.
+竞争参数在种群的生存阶段生效。
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | Relative competition factor for old juveniles (age=1) | `5.0` | Juvenile density regulation | Competition weights vary by age: age=0 fixed at `1.0`, age=1 uses `competition_strength` |
-| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Supports `"logistic"`, `"beverton_holt"`, etc.; usually `"logistic"` |
-| `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
-| `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
-| `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
-| `expected_num_adult_females` | `Optional[int]` | Expected number of adult females, used to independently calculate expected egg production | `None` | Expected egg production derivation | Decoupled from `age_1_carrying_capacity`: one sets capacity, the other sets egg production (see below) |
-| `equilibrium_distribution` | `Optional` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Can be passed via `age_structure`, `survival`, or `competition`; later one takes precedence |
+| `competition_strength` | `float` | 老幼体（age=1）的相对竞争因子。 | `5.0` | 幼体密度调节 | 竞争权重按年龄区分：age=0 固定为 `1.0`，age=1 使用 `competition_strength`。 |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`、`"beverton_holt"` 等模式，通常使用 `"logistic"`。 |
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
+| `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
+| `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |
+| `expected_num_adult_females` | `Optional[int]` | 预期的成体雌性数量，用于独立计算期望产卵量。 | `None` | 期望产卵量推导 | 与 `age_1_carrying_capacity` 解耦：一个定容量，一个定产卵量（详见下文）。 |
+| `equilibrium_distribution` | `Optional` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 可通过 `age_structure`、`survival` 或 `competition` 传入，后设置的会覆盖先设置的。 |
 
-**Carrying capacity resolution logic**:
+**承载容量的解析逻辑**：
 
-Carrying capacity $K$ and expected egg production are two independent concepts. The system follows a separation principle:
+承载容量 $K$ 和期望产卵量是两个独立的概念，系统遵循分离原则：
 
-- `age_1_carrying_capacity` (or legacy alias `old_juvenile_carrying_capacity`) directly specifies the **carrying capacity at age=1 $K$**
-- `expected_num_adult_females` independently specifies the **expected egg production** (does not back-calculate $K$)
+- `age_1_carrying_capacity`（或遗留别名 `old_juvenile_carrying_capacity`）直接指定 **age=1 的承载容量 $K$**
+- `expected_num_adult_females` 独立指定 **期望产卵量**（不反推 $K$）
 
-The initialization path has three scenarios:
+初始化路径分为三种：
 
-1. **Explicitly specified equilibrium distribution** (via `age_structure().equilibrium_distribution` or related parameters):
-   - Directly reads the age=1 total from the equilibrium distribution as $K$
-   - Calculates total expected egg production based on the equilibrium distribution, female mating rates, relative fertility, and egg production
-   - Equilibrium survival rate = $K$ / total expected egg production
+1. **显式指定平衡分布**（通过 `age_structure().equilibrium_distribution` 或相关参数）：
+   - 直接从平衡分布读取 age=1 的总数作为 $K$
+   - 根据平衡分布、雌性交配率和相对生育力、产卵量计算总期望产卵量
+   - 平衡存活率 = $K$ / 总期望产卵量
 
-2. **Both `age_1_carrying_capacity` and `expected_num_adult_females` provided**:
-   - `age_1_carrying_capacity` is directly used as $K$
-   - Propagates `expected_num_adult_females` forward through survival rates to each adult age group, producing the female equilibrium distribution
-   - Calculates expected egg production based on this distribution (considering mating rates and relative fertility)
-   - The system independently calculates the equilibrium survival rate using $K$ (from `age_1_carrying_capacity`) and expected egg production (from `expected_num_adult_females`)
+2. **同时提供 `age_1_carrying_capacity` 和 `expected_num_adult_females`**：
+   - `age_1_carrying_capacity` 直接作为 $K$
+   - 将 `expected_num_adult_females` 按存活率向前传播到各个成年年龄组，得到雌性平衡分布
+   - 根据该分布计算期望产卵量（考虑交配率和相对生育力）
+   - 系统利用 $K$（来自 `age_1_carrying_capacity`）和期望产卵量（来自 `expected_num_adult_females`）独立计算平衡存活率
 
-3. **Missing items inferred from initial state** (assuming the initial state is at equilibrium):
-   - If $K$ is missing: uses the total count of age-1 individuals from the initial state
-   - If expected egg production is missing: calculates expected egg production from the female distribution in the initial state
+3. **两者中缺失的项从初始状态推断**（假定初始状态为平衡态）：
+   - 若缺少 $K$：使用初始状态的年龄-1 个体总数
+   - 若缺少期望产卵量：从初始状态的雌性分布计算期望产卵量
 
-Regardless of the path taken, the system will genuinely construct the equilibrium distribution, then compute all competition metrics from it. This ensures consistency among $K$, expected egg production, and the equilibrium survival rate.
+无论走哪种途径，系统都会真正构建出平衡分布，然后从平衡分布计算出所有竞争相关指标。这确保了 $K$、期望产卵量和平衡存活率三者之间的一致性。
 
-**Expected egg production formula**:
+**期望产卵量的计算公式**：
 
-Total expected egg production is calculated as:
+总期望产卵量的计算方式为：
 
 ```
 total_expected_eggs = Σ( N_f[age] × P_reproducing[age] × fertility[age] × eggs_per_female )
-                     for all age ∈ [new_adult_age, n_ages)
+                     对所有 age ∈ [new_adult_age, n_ages)
 ```
 
-Where:
-- `N_f[age]`: Number of females at that age at equilibrium
-  - When derived from `expected_num_adult_females`: propagated forward from new_adult_age using female survival rates
-  - When derived from the equilibrium distribution: read directly from the female row in the distribution
-- `P_reproducing[age]`: Proportion of females of that age participating in reproduction, from `female_age_based_reproduction_rates` (if not set, uses the female row of `female_age_based_mating_rates`)
-- `fertility[age]`: Relative fertility weight for that age, from `female_age_based_relative_fertility` (defaults to all 1s)
-- `eggs_per_female`: Base number of eggs per female
+其中：
+- `N_f[age]`：平衡状态下该年龄的雌性个体数
+  - 来自 `expected_num_adult_females` 时：从 new_adult_age 开始按雌性存活率向前传播
+  - 来自平衡分布时：直接从分布中的雌性行读取
+- `P_reproducing[age]`：该年龄雌性参与繁殖的比例，来自 `female_age_based_reproduction_rates`（如未设置则使用 `female_age_based_mating_rates` 的雌性行）
+- `fertility[age]`：该年龄的相对生育力权重，来自 `female_age_based_relative_fertility`（默认为全 1）
+- `eggs_per_female`：每只雌性的基础产卵数
 
-**Meaning of external_expected_eggs**:
+**external_expected_eggs 的含义**：
 
-When `expected_num_adult_females` is provided (path 2), the system uses it to calculate an expected egg production that is independent of the equilibrium distribution, called **external_expected_eggs**. This value is only used for survival rate calculation:
+当提供了 `expected_num_adult_females`（即路径 2）时，系统会用它计算出独立于平衡分布的期望产卵量，称为 **external_expected_eggs**。这个值仅用于存活率计算：
 
 ```
-equilibrium_survival_rate = K / (external_expected_eggs × s_0_avg)
+平衡存活率 = K / (external_expected_eggs × s_0_avg)
 ```
 
-It does not affect competition intensity calculations (competition intensity always uses the egg production from the equilibrium distribution itself). This achieves independent control of capacity $K$ and expected egg production.
+而不影响竞争强度计算（竞争强度始终使用平衡分布自身的产卵量）。这实现了容量 $K$ 和期望产卵量的独立控制。
 
-**Regarding age=0 in the equilibrium distribution**:
+**关于平衡分布的 age=0**：
 
-When passing an explicit equilibrium distribution, the age=0 value in the distribution is **ignored**. The system always calculates `produced_age_0` (expected age=0 egg production) from the distribution of adult females (`age >= new_adult_age`), rather than reading the age=0 value from the distribution. This is because between ticks, the age-0 count in the state is always 0 (age-0 individuals are produced at the start of each tick and density-regulated in the same tick).
+在显式传入平衡分布时，分布中 age=0 的值**被忽略**。系统总是通过成年雌性（`age >= new_adult_age`）的分布来计算 `produced_age_0`（期望 age=0 产卵量），而不是读取分布中的 age=0 值。这是因为在 tick 之间，state 中的 age-0 数量始终为 0（age-0 个体在每个 tick 开始时被产生，并在同一个 tick 中被密度调控）。
 
-Similarly, when the system automatically constructs an equilibrium distribution (propagating forward from $K$), age=0 is always set to 0.
+同理，当系统自动构建平衡分布（从 $K$ 向前传播）时，age=0 也始终被设为 0。
 
-### `presets(...)` – Preset Configuration
+### `presets(...)` – 预设配置
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `*preset_list` | `Any` variadic arguments | List of preset configuration objects | Empty | Post-processing after `build` | Presets are applied first to establish baseline configuration; subsequent settings via `fitness`, `modifiers`, `hooks`, etc. can override preset values |
+| `*preset_list` | `Any` 变长参数 | 预设配置对象列表。 | 空 | `build` 后的后处理 | 预设会先被应用，建立基线配置；之后通过 `fitness`、`modifiers`、`hooks` 等设置可以覆盖预设值。 |
 
-### `fitness(...)` – Fitness Coefficients
+### `fitness(...)` – 适应度系数
 
-Fitness parameters take effect at different stages of the simulation. `sexual_selection` affects mating probabilities in `compute_mating_probability_matrix` during reproduction, `fecundity` affects egg production in `fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction`, `viability` combines with age-specific survival rates in `compute_viability_survival_rates` during the survival phase, and `zygote_viability` is applied to newborn individuals immediately after the reproduction phase.
+适应度参数在模拟的不同阶段生效。`sexual_selection` 在繁殖阶段的 `compute_mating_probability_matrix` 中影响交配概率，`fecundity` 在 `fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction` 中影响产卵数量，`viability` 在生存阶段的 `compute_viability_survival_rates` 中与年龄特定存活率结合，`zygote_viability` 在繁殖阶段结束后立即应用于新生个体。
 
-NATAL supports flexible fitness configuration schemes. In simulation, the following fitness types take effect at different stages:
+NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类型会在不同阶段生效：
 
-- `viability`: Survival fitness coefficient, affects individual survival probability.
-- `fecundity`: Fecundity fitness coefficient, affects individual reproductive capacity.
-- `sexual_selection`: Mating preference weight, affects individual mate choice.
-- `zygote_viability`: Zygote survival fitness coefficient, affects zygote survival probability.
+- `viability`：生存适应度系数，影响个体的生存概率。
+- `fecundity`：生育力适应度系数，影响个体的生育能力。
+- `sexual_selection`：配对偏好权重，影响个体的配对选择。
+- `zygote_viability`：合子存活适应度系数，影响合子的存活概率。
 
-> It is recommended to use `presets` to configure fitness coefficients for specific genotypes, rather than passing `fitness` directly.
+> 建议使用 `presets` 来对特定基因型配置适应度系数，而非直接传入 `fitness`。
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `viability` | `Optional[Dict]` | Survival fitness coefficient | `None` | survival | Supports multi-level nesting: by genotype, by sex, by age, by sex+age. Default `None` means no modification. |
-| `fecundity` | `Optional[Dict]` | Fecundity fitness coefficient | `None` | reproduction | Specified by genotype and/or sex. Default `None` means no modification. |
-| `sexual_selection` | `Optional[Dict]` | Mating preference weight | `None` | reproduction | Supports flat mapping `{male: value}` or nested mapping `{female: {male: value}}`. |
-| `zygote_viability` | `Optional[Dict]` | Zygote survival fitness coefficient | `None` | reproduction | Applied before the survival phase, represents the probability of a zygote surviving to become an individual. |
-| `mode` | `str` | Fitness value write mode | `"replace"` | Fitness write strategy | `"replace"` overwrites existing values, `"multiply"` scales by a factor. |
+| `viability` | `Optional[Dict]` | 生存适应度系数。 | `None` | survival | 支持多层嵌套：按基因型、按性别、按年龄、按性别+年龄。默认 `None` 表示不做修改。 |
+| `fecundity` | `Optional[Dict]` | 生殖力适应度系数。 | `None` | reproduction | 按基因型和/或性别指定。默认 `None` 表示不做修改。 |
+| `sexual_selection` | `Optional[Dict]` | 配对偏好权重。 | `None` | reproduction | 支持扁平映射 `{雄性: 值}` 或嵌套映射 `{雌性: {雄性: 值}}`。 |
+| `zygote_viability` | `Optional[Dict]` | 合子存活适应度系数。 | `None` | reproduction | 在 survival 阶段之前应用，表示合子存活成为个体的概率。 |
+| `mode` | `str` | 适应度值的写入模式。 | `"replace"` | fitness 写入策略 | `"replace"` 表示覆盖原有值，`"multiply"` 表示按倍数缩放。 |
 
-**Code examples**:
+**代码示例**：
 
 ```python
-# viability: genotype → float
+# viability: 基因型 → 浮点数
 .fitness(viability={"WT|WT": 1.0, "Drive|Drive": 0.6})
 
-# viability: genotype → {sex: float}
+# viability: 基因型 → {性别: 浮点数}
 .fitness(viability={"Drive::WT": {"female": 0.9, "male": 0.8}})
 
-# viability: genotype → {age: float}, shared between sexes
+# viability: 基因型 → {年龄: 浮点数}，雌雄共用
 .fitness(viability={"Drive::WT": {0: 0.95, 1: 0.85}})
 
-# viability: genotype → {sex: {age: float}}, can be sex+age specific
+# viability: 基因型 → {性别: {年龄: 浮点数}}，可细分到性别+年龄
 .fitness(viability={"Drive::WT": {"female": {1: 0.9}, "male": {2: 0.8}}})
 
-# fecundity: genotype → float or {sex: float}
+# fecundity: 基因型 → 浮点数 或 {性别: 浮点数}
 .fitness(fecundity={"Drive|Drive": 0.7})
 
-# sexual_selection flat format: {male_selector: value}, female defaults to '*'
+# sexual_selection 扁平格式: {雄性选择器: 值}，自动认为雌性为 '*'
 .fitness(sexual_selection={"Drive::WT": 1.2, "WT|WT": 1.0})
 
-# sexual_selection nested format: {female_selector: {male_selector: value}}
+# sexual_selection 嵌套格式: {雌性选择器: {雄性选择器: 值}}
 .fitness(sexual_selection={"WT|WT": {"Drive::WT": 0.8, "WT|WT": 1.0}})
 
-# zygote_viability fitness: genotype → float (both sexes)
+# zygote_viability fitness: 基因型 → 浮点数（两性通用）
 .fitness(zygote_viability={"A|A": 0.5, "a|a": 0.8})
 
-# zygote_viability fitness: genotype → {sex: float} (sex-specific)
+# zygote_viability fitness: 基因型 → {性别: 浮点数}（性别特异）
 .fitness(zygote_viability={"a|a": {"female": 0.3, "male": 0.4}})
 ```
 
-**About genotype keys**:
-- Can be `Genotype` objects
-- Can be exact genotype strings or pattern matching strings (see [Genotype Pattern Matching](2_genotype_patterns.md))
-- Can be a tuple containing the above types, e.g., `("Drive::WT", "Drive|Drive")`, representing the union of these genotypes
+**关于基因型键**：
+- 可以是 `Genotype` 对象
+- 可以是基因型精确字符串或模式匹配字符串（参见[基因型模式匹配](2_genotype_patterns.md)）
+- 可以是一个包含上述类型的元组，例如 `("Drive::WT", "Drive|Drive")`，表示这些基因型的并集
 
-**`viability` age key constraints** (consistent with code):
+**`viability` 中年龄键的约束**（与代码一致）：
 
-- Age keys must be integers in the range `[0, n_ages)`
-- If using `{sex: ...}` form, can further nest `{age: float}`
-- If directly using `{age: float}`, the same value is used for both sexes
-- When no age is explicitly specified, defaults to `new_adult_age - 1` (default age `0` in discrete generation models)
+- 年龄键必须是整数，且范围在 `[0, n_ages)` 内
+- 如果使用 `{性别: ...}` 形式，可以继续嵌套 `{年龄: 浮点数}`
+- 如果直接使用 `{年龄: 浮点数}`，表示雌雄使用相同的值
+- 未显式指定年龄时，默认写入 `new_adult_age - 1`（在离散世代模型中默认年龄为 `0`）
 
-### `modifiers(...)` – Modifiers (Gamete/Zygote Conversion)
+### `modifiers(...)` – 修饰器（配子/合子转换）
 
-**Algorithm timing**: Modifiers take effect during the configuration compilation phase, building the mapping from gametes to zygotes. `gamete_modifiers` process gamete conversion before `compute_offspring_probability_tensor`, and `zygote_modifiers` process genotype conversion after zygote formation. These conversion functions affect subsequent reproduction and inheritance calculations.
+**算法生效时机**：修饰器在配置编译阶段生效，用于构建配子到合子的映射关系。`gamete_modifiers` 在 `compute_offspring_probability_tensor` 之前处理配子转换，`zygote_modifiers` 在合子形成后处理基因型转换。这些转换函数影响后续的繁殖和遗传计算。
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `gamete_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | List of gamete-stage conversion functions | `None` | gamete → zygote mapping compilation | Each element is a `(priority, name, function)` tuple; applied in priority order |
-| `zygote_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | List of zygote-stage conversion functions | `None` | zygote mapping compilation | Each element is a `(priority, name, function)` tuple; applied in priority order |
+| `gamete_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | 配子阶段转换函数列表 | `None` | gamete → zygote 映射编译 | 每个元素为 `(优先级, 名称, 函数)` 的元组；按优先级排序后依次应用 |
+| `zygote_modifiers` | `Optional[List[Tuple[int, Optional[str], Callable]]]` | 合子阶段转换函数列表 | `None` | zygote 映射编译 | 每个元素为 `(优先级, 名称, 函数)` 的元组；按优先级排序后依次应用 |
 
-**Example**:
+**示例**：
 
 ```python
 .modifiers(
@@ -323,22 +334,22 @@ NATAL supports flexible fitness configuration schemes. In simulation, the follow
 )
 ```
 
-Notes:
+说明：
 
-- The tuple structure is fixed as `(priority or hook ID, optional name, callable)`
-- During configuration compilation, modifiers are sorted by the first field (priority) before being applied
+- 元组结构固定为 `(优先级或钩子 ID, 可选名称, 可调用对象)`
+- 在配置编译阶段，会按照元组的第一个字段（优先级）排序后再应用
 
-### `hooks(...)` – Hook Functions
+### `hooks(...)` – 钩子函数
 
-**Algorithm timing**: Hook functions take effect at specific event points in the simulation, such as `first`, `early`, `late`, `finish`, etc. These hooks can insert custom logic at different stages of the simulation, affecting population state or simulation behavior. Hook execution timing is determined by the event type and priority.
+**算法生效时机**：钩子函数在模拟的特定事件点生效，如 `first`、`early`、`late`、`finish` 等。这些钩子可以在模拟的不同阶段插入自定义逻辑，影响种群状态或模拟行为。钩子执行时机由事件类型和优先级决定。
 
-> For detailed documentation on `hooks`, see [Hook System](2_hooks.md).
+> 关于 `hooks` 的详细说明，参见 [Hook 系统](2_hooks.md)。
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `*hook_items` | `Callable` or `HookMap` | Hook functions or hook registration mappings | Empty | Event points (first / early / late / finish, etc.) | Pass functions directly (with `@hook` decorator). |
+| `*hook_items` | `Callable` 或 `HookMap` | 钩子函数或钩子注册映射。 | 空 | 事件点（first / early / late / finish 等） | 直接传入函数（带有 `@hook` 修饰器）。 |
 
-**Example**:
+**示例**：
 
 ```python
 @nt.hook(event="first", priority=0)
@@ -351,99 +362,94 @@ def release_drive_carriers():
 .hooks(release_drive_carriers)
 ```
 
-Common errors:
+常见错误：
 
-- Passing a regular function without `event` metadata → raises `ValueError`.
-- Passing a value that is neither callable nor a dictionary → raises `TypeError`.
+- 传入普通函数但没有 `event` 元数据 → 抛出 `ValueError`。
+- 传入既不是可调用对象也不是字典的值 → 抛出 `TypeError`。
 
-### `build()` – Compilation Build
+### `build()` – 编译构建
 
-The `build()` method takes no parameters but has strong constraints:
+`build()` 方法没有参数，但有强约束：
 
-- `initial_state(...)` must be called before it to set the initial state.
-- Execution order:
-  1. Build `PopulationConfig`
-  2. Create population object
-  3. Apply presets
-  4. Apply fitness / modifiers / hooks
+- 必须先调用 `initial_state(...)` 设置初始状态。
+- 执行顺序为：
+  1. 同步 equilibrium metrics（`apply()`）
+  2. 合并 hooks
+  3. 创建 `Population` 对象
 
-Therefore, it is recommended to place `build()` at the end of the chain.
+> 注意：presets / modifiers / fitness 在链式调用时立即生效，不在 `build()` 时延迟执行。
 
-## DiscreteGenerationPopulation Parameter Reference
+因此，建议把 `build()` 放在链式调用的最后。
 
-Key differences between the discrete generation model and the age-structured model:
+## DiscreteGenerationPopulation 参数手册
 
-- Defaults to `n_ages=2` and `new_adult_age=1`.
-- Does not require calling `age_structure(...)`.
+离散世代模型与年龄结构模型的关键差异：
+
+- 默认使用 `n_ages=2` 和 `new_adult_age=1`。
+- 不需要调用 `age_structure(...)`。
 
 ### `setup(...)`
 
-Parameters are consistent with the age-structured model: `name`, `stochastic`, `use_continuous_sampling`, `use_fixed_egg_count`, `species`. `species` is required to define the genetic structure of the population.
+参数与年龄结构模型一致：`name`、`stochastic`、`use_continuous_sampling`、`use_fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
 
 ### `initial_state(...)`
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `individual_count` | `dict` | Distribution of initial individual counts, format `{sex: {genotype: age_data}}` | Required | Initial state | Discrete generation model only supports age 0 and age 1; input format meanings are the same as the age-structured model |
+| `individual_count` | `dict` | 初始个体数量的分布，格式为 `{性别: {基因型: 年龄数据}}`。 | 必填 | 初始状态 | 离散世代模型只支持 age 0 和 age 1；各种输入格式的含义与年龄结构模型相同。 |
 
-**`age_data` resolution rules for discrete model** (from `_resolve_discrete_age_distribution`):
+**离散模型中 `age_data` 的解析规则**（来自 `_resolve_discrete_age_distribution`）：
 
 ```python
-# Scalar → (age0=0, age1=value)
+# 标量 → (age0=0, age1=value)
 {"female": {"WT|WT": 1000}}
 
-# Length-1 sequence → (0, value)
+# 长度 1 的序列 → (0, value)
 {"female": {"WT|WT": [1000]}}
 
-# Length-2 sequence → (age0, age1)
+# 长度 2 的序列 → (age0, age1)
 {"female": {"WT|WT": [200, 800]}}
 
-# Mapping → only keys 0 or 1 allowed
+# 映射 → 只允许键为 0 或 1
 {"female": {"WT|WT": {0: 200, 1: 800}}}
 ```
 
-Validation rules:
+校验规则：
 
-- List length must be `<= 2`.
-- Dictionary keys only allow `0` and `1`.
-- All counts must be non-negative.
+- 列表长度必须 `<= 2`。
+- 字典的键只允许 `0` 和 `1`。
+- 所有计数必须非负。
 
 ### `reproduction(...)`
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `eggs_per_female` | `float` | Number of eggs per female per generation | `50.0` | reproduction | Baseline for egg production; start with neutral value during tuning |
-| `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
-| `female_adult_mating_rate` | `float` | Adult female mating rate | `1.0` | reproduction | Proportion of females participating in mating; range `[0, 1]` |
-| `male_adult_mating_rate` | `float` | Adult male mating rate | `1.0` | reproduction | Proportion of males participating in mating; range `[0, 1]` |
+| `eggs_per_female` | `float` | 每只雌性每代产卵数。 | `50.0` | reproduction | 产卵的基准值；调参时可从中性值开始。 |
+| `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
+| `female_adult_mating_rate` | `float` | 成体雌性的交配率。 | `1.0` | reproduction | 表示雌性参与交配的比例；取值范围 `[0, 1]`。 |
+| `male_adult_mating_rate` | `float` | 成体雄性的交配率。 | `1.0` | reproduction | 表示雄性参与交配的比例；取值范围 `[0, 1]`。 |
 
 ### `survival(...)`
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `female_age0_survival` | `float` | Female juvenile (age 0) survival rate | `1.0` | survival | Range `[0, 1]`; `1.0` means all survive |
-| `male_age0_survival` | `float` | Male juvenile (age 0) survival rate | `1.0` | survival | Range `[0, 1]`; `1.0` means all survive |
-| `adult_survival` | `float` | Adult survival rate between generations | `0.0` | survival / aging boundary | Range `[0, 1]`; set to `0` for strict non-overlapping generations, higher values allow adults to survive across generations |
-
-Modeling advice:
-
-- All three probabilities should ideally be constrained to `[0, 1]`.
-- `adult_survival=0.0` is commonly used for strict discrete generation models.
+| `female_age0_survival` | `float` | 雌性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
+| `male_age0_survival` | `float` | 雄性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
 
 ### `competition(...)`
 
-| Parameter | Type | Description | Default | Affected Stage | Notes |
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Commonly `"logistic"`, also supports `"beverton_holt"` and other modes |
-| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `1.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
-| `carrying_capacity` | `Optional[int]` | Carrying capacity for juveniles | `None` | Density upper limit | If not set, the system will attempt automatic derivation; explicitly specified values take highest priority |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 常用 `"logistic"`，也可以使用 `"beverton_holt"` 等其他模式。 |
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `1.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
+| `carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 密度上限 | 如果未设置，系统会尝试自动推导；显式指定的值优先级最高。 |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`
 
-The semantics of these methods are fully consistent with the age-structured model, the only difference being that the discrete generation kernel uses a fixed age structure.
+这些方法的语义与年龄结构模型完全一致，区别仅在于离散世代的内核使用固定的年龄结构。
 
-## Recommended Configuration Order
-### Age-Structured Model
+## 推荐的配置顺序
+### 年龄结构模型
 
 1. `setup(...)`
 2. `age_structure(...)`
@@ -454,7 +460,7 @@ The semantics of these methods are fully consistent with the age-structured mode
 7. `presets(...)` → `fitness(...)` → `modifiers(...)` → `hooks(...)`
 8. `build()`
 
-### Discrete Generation Model
+### 离散世代模型
 
 1. `setup(...)`
 2. `initial_state(...)`
@@ -464,47 +470,39 @@ The semantics of these methods are fully consistent with the age-structured mode
 6. `presets(...)` → `fitness(...)` → `modifiers(...)` → `hooks(...)`
 7. `build()`
 
-## Common Errors and Troubleshooting
+## 常见错误与排查
 
-| Error Symptom | Possible Cause | Solution |
+| 错误现象 | 可能原因 | 解决方法 |
 |---|---|---|
-| `build()` raises an error | Forgot to set `initial_state(...)` | Call `initial_state(...)` before `build()` |
-| Error during initialization or compilation | Age vector length does not match `n_ages` | Ensure all age-related parameter lengths equal `n_ages` |
-| Abnormal results or runtime errors | `sex_ratio` or other probability parameters out of bounds | Check that parameters are within valid ranges (e.g., `[0, 1]`) |
-| Behavior does not match expectations | Same-named parameter set multiple times leading to overwrite | Note that `generation_time`, `equilibrium_distribution` etc. can be set in multiple methods; later calls override earlier ones |
+| `build()` 直接报错 | 忘记设置 `initial_state(...)` | 在 `build()` 之前调用 `initial_state(...)` |
+| 初始化或编译阶段报错 | 年龄向量长度与 `n_ages` 不一致 | 确保所有年龄相关参数的长度等于 `n_ages` |
+| 结果异常或运行时错误 | `sex_ratio` 或其他概率参数越界 | 检查参数是否在合法范围内（如 `[0, 1]`） |
+| 行为与预期不符 | 同名参数多次设置导致覆盖 | 注意 `generation_time`、`equilibrium_distribution` 等参数在多个方法中都可设置，后调用会覆盖先调用 |
 
-## Implementation Principles
+## 实现原理
 
-The underlying chainable API uses a Builder object to manage all configurations. The order in which configurations take effect is:
+链式 API 的底层通过 `Configurator` 对象管理配置。每个链式方法立即写入 `PopulationConfig` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
 
-1. **Basic configuration**: `setup()` and `age_structure()` set basic parameters
-2. **State configuration**: `initial_state()` sets the initial population state
-3. **Dynamics configuration**: `survival()`, `reproduction()`, `competition()` set population dynamics parameters
-4. **Advanced configuration**: `hooks()`, `fitness()`, `modifiers()` set advanced features
-5. **Final build**: `build()` compiles all configurations and creates the population object
+1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数和维度
+2. **状态配置**：`initial_state()` 解析字典为 3-D 数组写入 config
+3. **动力学配置**：`survival()`、`reproduction()`、`competition()` 写入 per-age 数组和 0-d 标量
+4. **高级配置**：`presets()`、`fitness()`、`modifiers()` 立即写入 config（非延迟）
+5. **最终构建**：`build()` 执行 equilibrium sync 并创建 `Population` 对象
 
-### Detailed Working Mechanism
+旧 `Builder` 类（`DiscreteGenerationPopulationBuilder` / `AgeStructuredPopulationBuilder`）仍可通过 `setup(legacy_path=True)` 使用。新代码推荐默认的 `Configurator` 路径。
 
-The chainable API's working mechanism is based on the following design principles:
+## 本章小结
 
-1. **Class method startup**: `setup()` is a class method called directly on the class name, returning a configuration object instance
-2. **Chainable calls**: Each configuration method returns the configuration object itself, supporting continuous calls
-3. **Configuration validation**: At `build()` time, all required parameters are uniformly validated to ensure configuration completeness
-4. **Configuration compilation**: The chain configuration is converted into underlying `PopulationConfig` and `PopulationState` objects
+种群初始化通过链式 API 提供了一种简洁、直观的配置方式，将种群的参数组织成可分类、可链式配置的流程，并在构建时注册到底层 `PopulationConfig` 中，以此实现高层易用性和底层高性能的统一。
 
-This design makes the configuration process both intuitive and flexible, while maintaining high performance at the underlying level.
 
-## Chapter Summary
+## 相关章节
 
-Population initialization provides a concise and intuitive configuration approach through a chainable API, organizing population parameters into a categorizable, chainable configuration workflow, and registering them into the underlying `PopulationConfig` at build time, thus achieving the unification of high-level usability and low-level high performance.
-
-## Related Chapters
-
-- [Hook System](2_hooks.md) - Detailed usage of hook functions
-- [Genotype Pattern Matching](2_genotype_patterns.md) - Detailed genotype matching rules
-- [PopulationState & PopulationConfig: Compilation and Configuration](4_population_state_config.md) - Detailed underlying configuration objects
-- [the Simulation Engine Deep Dive](4_simulator.md) - Simulation execution flow and algorithm implementation
+- [Hook 系统](2_hooks.md) - 钩子函数的详细使用方法
+- [基因型模式匹配](2_genotype_patterns.md) - 基因型匹配规则详解
+- [PopulationState & PopulationConfig：编译与配置](4_population_state_config.md) - 底层配置对象详解
+- [模拟内核深度解析](4_simulator.md) - 模拟执行流程和算法实现
 
 ***
 
-**Next Chapter**: [Hook System](2_hooks.md)
+**下一章**：[Hook 系统](2_hooks.md)

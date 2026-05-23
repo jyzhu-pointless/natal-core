@@ -161,9 +161,10 @@ launch(pop)
 > 本部分介绍 NATAL Core 的高级功能，包括空间模拟和更多自定义配置。
 
 9. [空间模拟指南](3_spatial_simulation.md)
-10. [设计你自己的预设](3_custom_presets.md)
-11. [Modifier 机制](3_modifiers.md)
-12. [高级 Hook 教程](3_advanced_hooks.md)
+10. [运行时参数修改](3_runtime_modification.md)
+11. [设计你自己的预设](3_custom_presets.md)
+12. [Modifier 机制](3_modifiers.md)
+13. [高级 Hook 教程](3_advanced_hooks.md)
 
 ### 第四部分：内部实现
 
@@ -171,11 +172,11 @@ launch(pop)
 
 <!--TODO: numba 相关内容可适当提前-->
 
-13. [IndexRegistry 索引机制](4_index_registry.md)
-14. [PopulationState 与 PopulationConfig](4_population_state_config.md)
-15. [模拟内核深度解析](4_simulator.md)
-16. [Numba 优化指南](4_numba_optimization.md)
-17. [Observation 历史记录实现解析](observation_impl.md)
+14. [IndexRegistry 索引机制](4_index_registry.md)
+15. [PopulationState 与 PopulationConfig](4_population_state_config.md)
+16. [模拟内核深度解析](4_simulator.md)
+17. [Numba 优化指南](4_numba_optimization.md)
+18. [Observation 历史记录实现解析](observation_impl.md)
 
 
 ## API 文档

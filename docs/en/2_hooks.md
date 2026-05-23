@@ -1,26 +1,26 @@
-# Hook System
+# Hook 系统
 
-Hooks are used to insert user logic at fixed points in the simulation workflow.
+Hook 用于在模拟流程的固定时间点插入用户逻辑。
 
-If you want to perform "additional operations" at certain stages of each tick -- such as periodic releases, conditional interventions, or threshold termination -- Hooks are the most direct way to do so.
+如果你希望在每个 tick 的某个阶段执行"额外操作"，例如周期投放、条件干预、阈值终止，Hook 是最直接的方式。
 
-## Hook Timing
+## Hook 的作用时机
 
-Hook timing includes:
+Hook 的作用时机包括：
 
-- `initialization`: After simulation initialization completes, before entering the first tick.
-- `first`: Early stage of each tick.
-- `early`: After the reproduction step, before the survival step.
-- `late`: After the survival step, before the aging step.
-- `finish`: When the simulation ends.
+- `initialization`：模拟初始化完成后、进入首个 tick 之前。
+- `first`：每个 tick 的早期阶段。
+- `early`：繁殖步骤（`reproduction`）后、生存步骤（`survival`）前。
+- `late`：生存步骤（`survival`）后、衰老步骤（`aging`）前。
+- `finish`：模拟结束时。
 
-Among these, `initialization` and `finish` are one-time events, while `first`, `early`, and `late` can be executed repeatedly across multiple ticks as needed.
+其中，`initialization` 和 `finish` 是一次性的事件，而 `first`、`early`、`late` 可以根据需要在多个 tick 中重复执行。
 
-When selecting an event, it is recommended to first clarify at which specific time point the intervention occurs, as this can significantly impact the interpretation of results.
+选择事件时，建议先明确干预发生在哪个具体的时机，这会显著影响结果解释。
 
-## Declarative Hooks
+## 声明式 Hook
 
-For most users, it is recommended to use `@nt.hook` with `nt.Op.*`, registering in a chain on the population object:
+对于大多数用户，推荐使用 `@nt.hook` 与 `nt.Op.*`，在种群对象上链式注册：
 
 ```python
 import natal as nt
@@ -35,11 +35,7 @@ def periodic_release():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(
-        name="MyPop",
-        stochastic=True,
-        use_continuous_sampling=False
-    )
+    .setup(species=sp, name="MyPop", stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000, "Drive|WT": 0},
@@ -61,47 +57,47 @@ pop = (
 pop.run(n_steps=200, record_every=10)
 ```
 
-This approach offers high readability, low maintenance costs, and makes it easier for teams to review model rules.
+这种方式可读性高、维护成本低，也更便于团队复核模型规则。
 
-## `Op` Operations
+## `Op` 操作
 
-Common operations include:
+常用操作包括：
 
-- `Op.add`: Add individuals.
-- `Op.subtract`: Remove individuals.
-- `Op.scale`: Scale by a factor.
-- `Op.set_count`: Set the target count.
-- `Op.kill`: Process by death probability.
-- `Op.sample`: Sample without replacement.
-- `Op.stop_if_*`: Stop running when conditions are met. Includes:
-  - `Op.stop_if_below`: Stop when the number of individuals of a specified genotype falls below a threshold.
-  - `Op.stop_if_above`: Stop when the number of individuals of a specified genotype exceeds a threshold.
-  - `Op.stop_if_zero`: Stop when the number of individuals of a specified genotype reaches zero.
-  - `Op.stop_if_extinction`: Stop when the population size reaches zero.
+- `Op.add`：增加个体数量。
+- `Op.subtract`：减少个体数量。
+- `Op.scale`：按比例缩放。
+- `Op.set_count`：设置目标数量。
+- `Op.kill`：按死亡概率处理。
+- `Op.sample`：无放回抽样。
+- `Op.stop_if_*`：满足条件时停止运行。包括：
+  - `Op.stop_if_below`：当指定基因型的个体数量低于阈值时停止运行。
+  - `Op.stop_if_above`：当指定基因型的个体数量高于阈值时停止运行。
+  - `Op.stop_if_zero`：当指定基因型的个体数量为零时停止运行。
+  - `Op.stop_if_extinction`：当种群个体数量为零时停止运行。
 
-Think of them as "declarative transformations on the state tensor."
+把它们理解为"对状态张量进行声明式变换"。
 
-## Stochasticity Handling
+## 随机性处理
 
-When individuals die as a result of Declarative Hook operations (the number of individuals becomes less than the original count), sampling may be performed based on the configuration to decide which individuals survive.
+当 Declarative Hook 操作后导致有个体死亡（个体数量少于原有数量）时，根据配置可能进行抽样，以决定哪些个体存活。
 
-The `Op` operations in Declarative Hooks automatically select the execution method based on the `stochastic` configuration in `setup` (in the chain API) when the population is created:
+Declarative Hook 中的 `Op` 操作会根据种群创建（链式 API 中）时 `setup` 中的 `stochastic` 配置自动选择执行方式：
 
-| Configuration | `Op.scale` / `Op.set_count` / `Op.subtract` | `Op.kill` |
-|--------------|---------------------------------------------|-----------|
-| `stochastic=True` | Uses binomial distribution random sampling | Uses binomial distribution to determine each individual's survival |
-| `stochastic=False` | Deterministic scaling (directly multiply by factor) | Deterministic scaling (multiply by survival probability) |
+| 配置 | `Op.scale` / `Op.set_count` / `Op.subtract` | `Op.kill` |
+|------|--------------------------------|---------|
+| `stochastic=True` | 使用二项分布随机采样 | 使用二项分布决定每个个体的存活 |
+| `stochastic=False` | 确定性缩放（直接乘以系数） | 确定性缩放（乘以存活概率） |
 
-When `stochastic=True`, the sampling method can also be chosen via the `use_continuous_sampling` configuration:
+当 `stochastic=True` 时，还可以通过 `use_continuous_sampling` 配置选择采样方式：
 
-- `use_continuous_sampling=True`: Uses continuous sampling (uses moment-matched Beta/Gamma distributions instead of Binomial/Poisson distributions)
-- `use_continuous_sampling=False`: Uses discrete sampling
+- `use_continuous_sampling=True`：使用连续采样（使用矩匹配的 Beta/Gamma 分布替代二项/柏松分布）
+- `use_continuous_sampling=False`：使用离散采样
 
-The advantage of Declarative Hooks is that you only need to write rules using the same Op syntax, and the system will automatically switch between deterministic and stochastic modes based on the configuration, without requiring Hook code modifications.
+声明式 Hook 的优势在于：你只需要用同样的 Op 语法编写规则，系统会根据配置自动在确定性和随机性之间切换，无需修改 Hook 代码。
 
-## Conditional Expressions (when)
+## 条件表达式（when）
 
-`when` is used to control when an operation takes effect. Common expressions:
+`when` 用于控制操作在何时生效，常见写法：
 
 - `tick == N`
 - `tick % N == 0`
@@ -110,18 +106,18 @@ The advantage of Declarative Hooks is that you only need to write rules using th
 - `tick <= N`
 - `tick < N`
 
-Also supports `and`, `or`, `not` and parentheses combinations.
+并支持 `and`、`or`、`not` 与括号组合。
 
-Examples:
+示例：
 
 ```python
 when="tick >= 10 and tick < 50"
 when="tick % 7 == 0 and not (tick == 14)"
 ```
 
-## Registering Multiple Hooks
+## 多个 Hook 的注册
 
-The `.hooks()` method in the chain API supports passing multiple Hook functions:
+链式 API 中的 `.hooks()` 方法支持传入多个 Hook 函数：
 
 ```python
 import natal as nt
@@ -140,7 +136,7 @@ def stop_hook():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -153,36 +149,36 @@ pop = (
 pop.run(n_steps=100, record_every=10)
 ```
 
-If multiple Hooks are present, it is recommended to use `priority` to explicitly specify the execution order, avoiding implicit ordering that could make results difficult to reproduce.
+如果存在多个 Hook，建议通过 `priority` 明确执行顺序，避免隐式顺序导致结果难以复现。
 
-## Execution Modes
+## 执行模式
 
-NATAL Core's Hook system supports two execution modes, controlled by the global `NUMBA_ENABLED` switch:
+NATAL Core 的 Hook 系统支持两种执行模式，受全局 `NUMBA_ENABLED` 开关控制：
 
-- **When `NUMBA_ENABLED=True` (default)**:
-  - Declarative Hooks are compiled into pure data structures (CSR format) and executed efficiently inside Numba-compiled engine
-  - Custom Hooks and Selector-based Hooks must follow Numba syntax
-  - Python-layer Hooks are rejected at registration time (except for `initialization` and `finish` events)
+- **当 `NUMBA_ENABLED=True` 时（默认）**：
+  - 声明式 Hook 会被编译为纯数据结构（CSR 格式），在 Numba 编译的内核中高效执行
+  - 自定义 Hook 和 Selector-based Hook 需要遵循 Numba 语法
+  - Python 层 Hook 会在注册阶段被拒绝（`initialization` 和 `finish` 事件除外）
 
-- **When `NUMBA_ENABLED=False`**:
-  - Any registered Hook type (declarative CSR, njit, Python) will go through a unified Python event dispatch path in `run(...)` / `run_tick()`
-  - In this path, the system executes all Hooks in order according to `priority`, without requiring manual triggering
+- **当 `NUMBA_ENABLED=False` 时**：
+  - 任意已注册 Hook 类型（declarative CSR、njit、Python）都会在 `run(...)` / `run_tick()` 中走统一的 Python 事件调度路径
+  - 在该路径下，系统会根据 `priority` 按顺序执行所有 Hook，无需手动触发
 
-When `NUMBA_ENABLED=True` globally, if declarative CSR, njit, and Python Hooks are mixed at the same event, the runtime will automatically switch to the unified Python event dispatch to ensure cross-type execution sorted by `priority`.
+当全局 `NUMBA_ENABLED=True` 时，如果同一事件混用了 declarative CSR、njit、Python 三类 Hook，运行时会自动切到统一 Python 事件调度，确保跨类型按 `priority` 排序执行。
 
-In `SpatialPopulation`, the `priority` of local Hooks only takes effect within a deme; no global order is defined between different demes.
+在 `SpatialPopulation` 中，local Hook 的 `priority` 只在 deme 内部生效；不同 deme 之间不定义全局顺序。
 
-## Relationship with `run` / `run_tick`
+## 与 `run` / `run_tick` 的关系
 
-Hooks are automatically executed in event order during `run(...)` and `run_tick()`.
+Hook 会在 `run(...)` 与 `run_tick()` 中按事件顺序自动执行。
 
-Therefore, users typically do not need to manually trigger Hooks; just:
+因此，用户通常不需要手动触发 Hook；只需：
 
-1. Define the Hook.
-2. Register it in the chain API using `.hooks()`.
-3. Run the simulation normally.
+1. 定义 Hook。
+2. 在链式 API 中用 `.hooks()` 注册。
+3. 正常运行模拟。
 
-## Minimal Example
+## 最简示例
 
 ```python
 import natal as nt
@@ -197,7 +193,7 @@ def stop_if_no_female():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -210,11 +206,35 @@ pop = (
 pop.run(n_steps=200, record_every=10)
 ```
 
-## Related Sections
+## Hook 内修改参数
 
-- [Advanced Hook Tutorial](3_advanced_hooks.md)
-- [Population Initialization](2_population_initialization.md)
-- [Modifier Mechanism](3_modifiers.md)
-- [the Simulation Engine Deep Dive](4_simulation_engine.md)
-- [Numba Optimization Guide](4_numba_optimization.md)
-- [Quick Start](1_quickstart.md)
+Hook 可以直接修改种群配置参数——`config` 作为参数传入，原地写入立即生效：
+
+```python
+import natal as nt
+from natal.discrete_population_config import DiscretePopulationConfig
+from natal.population_state import DiscretePopulationState
+
+@nt.hook(event="early", custom=True)
+def heatwave(state: DiscretePopulationState,
+             config: DiscretePopulationConfig,
+             deme_id: int) -> int:
+    if state.n_tick == 10:
+        # 直接写 0-d ndarray——最快路径
+        config.carrying_capacity[()] = 2000
+        # 读写自定义字段——hook 和外部共享数据
+        config.custom['temperature'][()] = 40.0
+    return 0
+```
+
+Hook 签名统一为 `(state, config, deme_id) → int`。`config` 允许原地修改，修改后的值对当前 tick 的后续 hook 和流程立即可见。
+
+自定义字段通过 `config.custom['name'][()]` 读写，构建时通过 `.custom(temperature=25.0)` 初始化，运行时可通过 `pop.update().custom(...)` 修改。
+
+## 相关章节
+
+- [高级 Hook 教程](3_advanced_hooks.md)
+- [种群初始化](2_population_initialization.md)
+- [Modifier 机制](3_modifiers.md)
+- [Configurator API 参考](../api/configurator.md)
+- [快速开始](1_quickstart.md)

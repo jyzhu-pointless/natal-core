@@ -1,16 +1,19 @@
-# Builder System Explained (Complete Parameter Reference + Simulation Flow Mapping)
+# Builder / Configurator System Explained
 
-This chapter aims to explain Builder thoroughly:
+> **Configurator is the primary API since vNEXT.**  ``pop.update()`` for runtime
+> changes, model-specific ``DiscreteConfigurator`` / ``AgeStructuredConfigurator``
+> with narrowed parameter signatures.  See [Configurator API](../api/configurator.md).
+>
+> This chapter documents the full parameter reference — applicable to **both**
+> Configurator and the legacy Builder.  The legacy ``PopulationBuilder`` classes
+> are still available via ``setup(legacy_path=True)``.
 
-1. What each public parameter is and its default value.
-2. Which stage of the simulation the parameter affects.
-3. How to configure following the “first make it run, then fine‑tune” principle.
+---
 
-If you read only one chapter about Builder, read this one.
+## 1. Role in the Simulation
 
-## 1. Where Builder Fits in the Simulation
-
-Builder’s responsibility is not to run the simulation directly, but to compile high‑level inputs into `PopulationConfig` and `PopulationState`, then hand them over to the simulation execution flow.
+The Builder / Configurator translates high-level inputs into `PopulationConfig`
+and `PopulationState`, which the simulation engine consumes at each tick.
 
 The flow can be simplified as:
 
@@ -169,15 +172,101 @@ Format and length requirements (source behaviour):
 
 **Carrying capacity resolution logic:**
 
-When neither `age_1_carrying_capacity` nor `old_juvenile_carrying_capacity` are specified, `expected_num_adult_females` is used to infer the carrying capacity through equilibrium distribution analysis:
+K 的优先级链：
+1. `age_1_carrying_capacity`（最高）
+2. `old_juvenile_carrying_capacity`（旧别名）
+3. `initial_state()` 中年龄 1 的个体总数
+4. 以上都没有 → 抛 `ValueError`
 
-1. If `age_1_carrying_capacity` or `old_juvenile_carrying_capacity` (legacy alias) is provided, that value is used (highest priority).
-2. If `expected_num_adult_females` is provided, the system distributes this count across age classes using age-based survival rates.
-3. Based on the equilibrium age distribution, it computes the expected age-0 egg production from adult females using mating rates and fertility weights.
-4. The inferred carrying capacity (K at age=1) is computed from the age-0 production and base survival rate from age-0 to age-1.
-5. If no carrying capacity source is available, the system attempts to infer from initial state (`initial_state()`) if provided.
+K 一旦确定，后续不再反推——它只是一个标量，存入 `config.carrying_capacity`。
 
-This approach ensures that the carrying capacity is consistent with the equilibrium population distribution, rather than using a naive scaling factor.
+**`equilibrium_distribution` 和 `expected_num_adult_females` 的作用：**
+
+它们**不改变 K**。它们改变的是仿真引擎中的两个控制参数：`expected_competition_strength`（预期竞争强度）和 `expected_survival_rate`（预期存活率）。这两个参数决定了密度制约的强度和方向。
+
+完整计算链如下（源码：`population_builder.py:364-433` → `population_config.py:608-621` → `age_structured.py:966-1086`）：
+
+---
+
+#### ① 构建均衡分布
+
+有 `equilibrium_distribution` 直接用。没有则从 K 和存活率自推算：
+
+```
+dist[0, 1] = K × sex_ratio           # 年龄 1 雌性
+dist[1, 1] = K × (1 - sex_ratio)     # 年龄 1 雄性
+for age in 2 .. n_ages-1:
+    dist[0, age] = dist[0, age-1] × survival[0, age-1]
+    dist[1, age] = dist[1, age-1] × survival[1, age-1]
+dist[:, 0] = 0  # 幼体不计入成体分布
+```
+
+#### ② 计算预期卵产量 `produced_age_0`
+
+从分布中的雌性成体推算均衡状态下每 tick 应产多少卵：
+
+```
+produced_age_0 = Σ over adult ages:
+    dist[0, age] × p_mating[age] × rel_fertility[age] × eggs_per_female
+```
+
+#### ③ 计算预期竞争强度
+
+加权个体数：幼体（卵代理）竞争权重高，成体低：
+
+```
+expected_competition_strength = produced_age_0 × rel_comp[0]
+    + Σ over adult ages: dist[:, age].sum() × rel_comp[age]
+```
+
+#### ④ 计算预期存活率
+
+要维持 K 个年龄 1 个体，每 tick 需要从卵中存活多少：
+
+```
+s_0_avg = sex_ratio × survival[0,0] + (1 - sex_ratio) × survival[1,0]
+survival_eggs = external_expected_eggs（来自 expected_num_adult_females 的独立计算）
+                或 produced_age_0（默认）
+expected_survival_rate = total_age_1 / (survival_eggs × s_0_avg)
+```
+
+#### ⑤ 仿真循环中的使用（每 tick）
+
+```python
+competition_ratio = actual_competition / expected_competition_strength
+# Logistic:
+actual_growth_rate = r - competition_ratio × (r - 1)
+# Beverton-Holt:
+actual_growth_rate = r / (competition_ratio × (r - 1) + 1)
+scaling_factor = actual_growth_rate × expected_survival_rate
+```
+
+`scaling_factor` 作用在卵 → 年龄 1 的招募步。当实际竞争 < 预期 → `scaling_factor` 升高 → 更多卵存活 → 种群增长。反之亦然。当恰好等于均衡时，种群稳定在 K。
+
+**`equilibrium_distribution` 的意义：**
+
+用户自己给分布时，可以模拟"分布和 K 不一致"的场景。比如 K=1000 但分布只有 50 只成体——这时 `expected_competition_strength` 由 50 只的卵产量决定（竞争压力小），但 `total_age_1` 仍然是分布中的实际值。这导致 `expected_survival_rate` 异常高或低，从而让仿真脱离 K 的锚定。ChamperModel 测试就用这个机制验证参数独立性。
+
+#### 具体数值示例
+
+条件：`n_ages=3, K=1000, sex_ratio=0.5, eggs_per_female=20, r=6.0`
+存活率 `[1.0, 0.9, 0.8]`，交配率 `[0, 1, 1]`，相对繁殖力 `[0, 1, 0.8]`，竞争权重 `[1.0, 0.1, 0.1]`
+
+```
+均衡分布:  female [0, 500, 450]   male [0, 500, 450]
+预期卵产量: 500×1×1×20 + 450×1×0.8×20 = 10000 + 7200 = 17200
+预期竞争强度: 17200×1.0 + (500+500)×0.1 + (450+450)×0.1
+             = 17200 + 100 + 90 = 17390
+预期存活率: 1000 / (17200 × 1.0) = 5.8%
+
+每 tick:
+  实际竞争 = 当前实际加权个体数
+  competition_ratio = 实际竞争 / 17390
+  scaling_factor = (6.0 - competition_ratio×5.0) × 0.058
+  实际竞争 = 17390 → scaling_factor = 0.058 → 稳定
+  实际竞争 < 17390 → scaling_factor > 0.058 → 增长
+  实际竞争 > 17390 → scaling_factor < 0.058 → 缩减
+```
 
 ### 3.7 `presets(...)`
 

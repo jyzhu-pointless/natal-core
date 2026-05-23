@@ -35,11 +35,7 @@ def periodic_release():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(
-        name="MyPop",
-        stochastic=True,
-        use_continuous_sampling=False
-    )
+    .setup(species=sp, name="MyPop", stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000, "Drive|WT": 0},
@@ -140,7 +136,7 @@ def stop_hook():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -197,7 +193,7 @@ def stop_if_no_female():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -210,11 +206,35 @@ pop = (
 pop.run(n_steps=200, record_every=10)
 ```
 
+## Hook 内修改参数
+
+Hook 可以直接修改种群配置参数——`config` 作为参数传入，原地写入立即生效：
+
+```python
+import natal as nt
+from natal.discrete_population_config import DiscretePopulationConfig
+from natal.population_state import DiscretePopulationState
+
+@nt.hook(event="early", custom=True)
+def heatwave(state: DiscretePopulationState,
+             config: DiscretePopulationConfig,
+             deme_id: int) -> int:
+    if state.n_tick == 10:
+        # 直接写 0-d ndarray——最快路径
+        config.carrying_capacity[()] = 2000
+        # 读写自定义字段——hook 和外部共享数据
+        config.custom['temperature'][()] = 40.0
+    return 0
+```
+
+Hook 签名统一为 `(state, config, deme_id) → int`。`config` 允许原地修改，修改后的值对当前 tick 的后续 hook 和流程立即可见。
+
+自定义字段通过 `config.custom['name'][()]` 读写，构建时通过 `.custom(temperature=25.0)` 初始化，运行时可通过 `pop.update().custom(...)` 修改。
+
 ## 相关章节
 
 - [高级 Hook 教程](3_advanced_hooks.md)
 - [种群初始化](2_population_initialization.md)
 - [Modifier 机制](3_modifiers.md)
-- [模拟内核深度解析](4_simulator.md)
-- [Numba 优化指南](4_numba_optimization.md)
+- [Configurator API 参考](../api/configurator.md)
 - [快速开始](1_quickstart.md)

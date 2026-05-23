@@ -7,7 +7,8 @@ This section provides module-level API references.
 - [base_population](base_population.md)
 - [age_structured_population](age_structured_population.md)
 - [discrete_generation_population](discrete_generation_population.md)
-- [population_builder](population_builder.md)
+- [configurator](configurator.md)
+- [population_builder](population_builder.md) *(legacy)*
 - [population_state](population_state.md)
 - [state_translation](state_translation.md)
 - [population_config](population_config.md)
