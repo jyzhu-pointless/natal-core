@@ -1,11 +1,18 @@
 # Runtime Parameter Modification
 
 All parameters can be changed during simulation without rebuilding the population.
-This chapter covers three modification approaches and the underlying mechanism.
+This chapter covers three scenarios:
 
-## 1. `pop.update()` — Fluent Chain API
+- **Between-tick**: Python-side via `pop.update()` or `set_param()`
+- **Inside hooks**: Numba nopython via `config.field[()] = v`
+- **Spatial**: per-deme modification + clone-on-write
 
-The simplest approach. Wraps the current config in a `Configurator` and writes immediately:
+---
+
+## 1. Between-Tick: `pop.update()`
+
+`pop.update()` wraps the current config in a `Configurator`. Chain methods are identical
+to build-time and changes take effect immediately:
 
 ```python
 import natal as nt
@@ -25,38 +32,48 @@ pop.update().competition(carrying_capacity=5000)
 # Chain multiple parameters
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
-# Custom fields
+# Custom fields (read/write in hooks)
 pop.update().custom(temperature=35.0)
 ```
 
-Each method calls `set_param(config, name, value)` which writes directly to
-0-d ndarrays — no `freeze()` or rebuild needed.
+Each call routes through `set_param(config, name, value)` → writes 0-d ndarray in-place.
 
-## 2. `set_param()` — Low-Level String Interface
+---
 
-The underlying implementation of `pop.update()`. Useful in scripts, notebooks,
-and objmode hooks:
+## 2. Between-Tick: `set_param()` — Low-Level API
+
+The underlying implementation of `pop.update()`. For scripts and notebooks:
 
 ```python
 from natal.configurator import set_param
 
 set_param(pop.config, "competition.carrying_capacity", 5000.0)
-set_param(pop.config, "carrying_capacity", 5000.0)       # short name
+
+# Full name, short name, or alias all work
+set_param(pop.config, "carrying_capacity", 5000.0)
 set_param(pop.config, "reproduction.eggs_per_female", 100.0)
+set_param(pop.config, "expected_eggs_per_female", 100.0)  # alias
 ```
 
-Resolution flow:
-1. Look up parameter name in `parameters.py` registry (full name → short → alias)
-2. Locate `PopulationConfig` field and index path
+Resolution (four steps):
+
+1. Lookup in `parameters.py` registry: full name → short → alias
+2. Locate config field and array index
 3. Write in-place: `config.carrying_capacity[()] = 5000.0`
-4. Equilibrium-sensitive params (K / eggs / sex_ratio) auto-trigger `sync_equilibrium_metrics`
+4. K / eggs / sex_ratio auto-trigger `sync_equilibrium_metrics`
 
-## 3. Direct Modification in Hooks
+---
 
-Fastest path — hook signature includes `config`, write directly in nopython:
+## 3. Modification Inside Hooks
+
+Hook signature is `(state, config, deme_id) → int`. `config` is writable in-place;
+changes are immediately visible to subsequent hooks and simulation steps.
+
+### 3.1 Direct Write: `config.field[()] = v`
+
+Fastest path. Numba nopython, pure C-level ndarray access:
 
 ```python
-import natal as nt
 from natal.discrete_population_config import DiscretePopulationConfig
 from natal.population_state import DiscretePopulationState
 
@@ -73,62 +90,88 @@ def environment_change(
     return 0
 ```
 
-### Performance Comparison
+> Direct writes do NOT auto-sync equilibrium. Age-structured models need a manual
+> `sync_equilibrium_metrics(config)` call.
 
-| Approach | Speed | Use Case |
-|---|---|---|
-| `config.field[()] = v` | Fastest (nopython) | You know the field name |
-| `set_config_param(config, ID, v)` | Fast (nopython, integer routing) | Dynamic param selection |
-| `hook_set_param(config, "name", v)` | Same as below (convenient single call) | Need string param names — cleaner syntax for single calls |
-| `with objmode(): ...` | Same objmode cost | General Python fallback, can batch multiple calls in one block |
+### 3.2 `hook_set_param(config, "name", v)` — Objmode Wrapped
 
-`hook_set_param` wraps `objmode` + `set_param` for convenient single-call usage. Performance is
-identical to bare `with objmode()` — both cross the same Numba→Python boundary.
+Wraps `objmode` + `set_param` for cleaner single-call syntax. Same performance as
+bare `with objmode()` (identical Numba→Python boundary):
 
 ```python
 from natal.configurator import hook_set_param
 
 @nt.hook(event="early", custom=True)
-def hook_with_names(state, config, deme_id):
-    hook_set_param(config, "carrying_capacity", 5000.0)
-    hook_set_param(config, "reproduction.eggs_per_female", 100.0)
+def recovery_hook(state, config, deme_id):
+    if state.n_tick == 10:
+        hook_set_param(config, "carrying_capacity", 5000.0)
+        hook_set_param(config, "eggs_per_female", 100.0)
     return 0
 ```
 
-Note: multiple `hook_set_param` calls cross the objmode boundary multiple times.
-For batch modification of many parameters, bare `with objmode()` is more efficient —
-a single boundary crossing for all calls.
+Each call crosses the objmode boundary once. For **batch modification** of multiple
+parameters, bare `with objmode()` is more efficient — one boundary for all calls.
 
-## 4. Custom Fields — `config.custom`
+### 3.3 Bare `with objmode()`
 
-`config.custom` is a 0-d structured numpy array supporting arbitrary named fields.
-Register at build time via `.custom()`, read/write via `[()]` at runtime:
+When you need logging, file I/O, or batch parameter changes inside a hook:
 
 ```python
-# Register at build time
+from numba import objmode
+from natal.configurator import set_param
+
+@nt.hook(event="early", custom=True)
+def batch_hook(state, config, deme_id):
+    if state.n_tick == 10:
+        with objmode():
+            print(f"[tick={state.n_tick}] emergency recovery")  # logging
+            set_param(config, "carrying_capacity", 5000.0)
+            set_param(config, "eggs_per_female", 100.0)
+            set_param(config, "sex_ratio", 0.5)
+    return 0
+```
+
+### Comparison
+
+| Method | Performance | When to use |
+|---|---|---|
+| `config.field[()] = v` | Fastest (nopython) | You know the field name |
+| `hook_set_param(config, "name", v)` | Objmode boundary (clean single call) | Need string parameter names |
+| `with objmode(): set_param(...)` | Objmode boundary (batch efficient) | Batch changes or Python ecosystem |
+
+---
+
+## 4. Custom Fields: `config.custom`
+
+0-d structured numpy array. Register at build time, read/write via `[()]` at runtime:
+
+```python
+# Build-time registration
 pop = (
     nt.DiscreteGenerationPopulation.setup(sp)
-    .custom(temperature=25.0, season_idx=0, debug=False)
+    .custom(temperature=25.0, season_idx=0)
     .build()
 )
 
-# Read/write in hooks
+# Inside hooks
 @nt.hook(event="early", custom=True)
 def seasonal_hook(state, config, _deme_id):
-    season = int(config.custom['season_idx'][()])
-    if season == 1:
+    temp = config.custom['temperature'][()]
+    if int(config.custom['season_idx'][()]) == 1:
         config.custom['temperature'][()] = 35.0
 
-# Modify via update()
+# Runtime modification
 pop.update().custom(temperature=35.0, season_idx=1)
 ```
 
-Supports three types: `bool`, `float`, `int`.
+Supported types: `bool`, `float`, `int`.
+
+---
 
 ## 5. Spatial Population — Per-Deme Modification
 
-`SpatialPopulation.update()` supports all-deme or single-deme modification,
-matching the build-time `batch_setting` API:
+`SpatialPopulation.update()` mirrors the panmictic interface, with additional
+per-deme and batch support:
 
 ```python
 from natal.spatial_builder import batch_setting
@@ -145,35 +188,35 @@ pop.update().competition(
 )
 ```
 
-### Clone-on-Write
+**Clone-on-write**: In homogeneous setups, multiple demes share the same 0-d ndarrays.
+Modifying a single deme first copies those arrays to a private buffer, isolating
+the change from other demes.
 
-When multiple demes share config 0-d arrays (homogeneous setup), modifying a
-single deme first copies those arrays to a private buffer, preventing other
-demes from being affected. Detection uses `config.carrying_capacity` array
-identity.
+---
 
-## 6. Under the Hood: 0-d ndarray + In-Place Write
+## 6. Under the Hood
 
-All modification approaches converge on the same mechanism: 9 ecological
-parameters are 0-d ndarrays; `field[()] = value` is atomic.
+All modification paths converge on the same mechanism:
 
 ```
-set_param(config, "carrying_capacity", 5000.0)
-  → _resolve_param("carrying_capacity")  # lookup in parameters.py
-  → config.carrying_capacity             # 0-d ndarray
-  → carrying_capacity[()] = 5000.0       # in-place write
-  → sync_equilibrium_metrics(config)     # auto-recompute
+set_param / pop.update() / hook direct write
+  → config.carrying_capacity           # 0-d ndarray
+  → carrying_capacity[()] = 5000.0     # in-place write (atomic)
+  → sync_equilibrium_metrics(config)   # K/eggs/sr auto-trigger
 ```
 
-This guarantees identical behavior whether you use `pop.update()`, `set_param()`,
-or direct hook modification.
+9 ecological parameters are 0-d ndarrays: K, eggs, sex_ratio, sperm_displacement_rate,
+low_density_growth_rate, juvenile_growth_mode, generation_time, expected_competition_strength,
+expected_survival_rate.
+
+---
 
 ## 7. Old vs New
 
 | | Old (Builder) | New (Configurator) |
 |---|---|---|
-| Post-build modification | No native API | `pop.update()` chain |
-| Hook-internal modification | Read-only (Op-based) | `config.field[()] = v` |
-| Custom fields | `ConfigMutator` (removed) | `config.custom` + `.custom()` |
+| Post-build modification | Not supported | `pop.update()` |
+| Hook modification | Declarative Op | `config.field[()] = v` |
+| Custom fields | ConfigMutator (removed) | `config.custom` |
 | Spatial per-deme | Not supported | `pop.update(deme=N)` + batch_setting |
 | Low-level API | None | `set_param(config, name, value)` |

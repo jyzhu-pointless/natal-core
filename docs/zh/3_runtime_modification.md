@@ -1,10 +1,16 @@
 # 运行时参数修改
 
-种群构建完成后，所有参数都可以在模拟运行时动态修改——无需重建种群对象。本章覆盖三种修改方式和底层机制。
+种群构建完成后，所有参数都可以在模拟运行时动态修改——无需重建。本章覆盖三种场景：
 
-## 1. 方式一：`pop.update()` 链式 API
+- **between-tick**：Python 侧通过 `pop.update()` 或 `set_param()` 修改
+- **hook 内**：Numba nopython 直接写 `config.field[()] = v`
+- **spatial**：per-deme 修改 + clone-on-write
 
-最简单的方式。拿当前 config 包一层 `Configurator`，链式方法即时写入：
+---
+
+## 1. between-tick 修改：`pop.update()`
+
+`pop.update()` 返回当前 config 的 `Configurator` 包装。链式方法和构建时完全一样，修改后立即生效：
 
 ```python
 import natal as nt
@@ -18,49 +24,53 @@ pop = (
     .build()
 )
 
-# 运行时修改单个参数
+# 单个参数
 pop.update().competition(carrying_capacity=5000)
 
-# 链式修改多个参数
+# 链式多个参数
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
-# 修改自定义字段
+# 自定义字段（Hook 可读写）
 pop.update().custom(temperature=35.0)
 ```
 
-每个方法调用 `set_param(config, name, value)` 直接写 0-d ndarray——立即生效，无需 `freeze()` 或重建。
+每次调用内部走 `set_param(config, name, value)` → 原地写 0-d ndarray。
 
-### 工作原理
+---
 
-`pop.update()` 返回一个 `Configurator` 或子类（根据 config 类型自动选择 `DiscreteConfigurator` / `AgeStructuredConfigurator`）。返回的 Configurator 包装的是 population 当前的 config，链式方法和构建时完全一样。修改后对当前和后续 tick 立即可见。
+## 2. between-tick 修改：`set_param()` 底层接口
 
-## 2. 方式二：`set_param()`——底层字符串接口
-
-`pop.update()` 的底层实现。适合脚本、notebook、objmode hook：
+`pop.update()` 的底层实现。适合脚本、notebook：
 
 ```python
 from natal.configurator import set_param
 
 set_param(pop.config, "competition.carrying_capacity", 5000.0)
 
-# 支持短名和别名
+# 全名、短名、别名均可
 set_param(pop.config, "carrying_capacity", 5000.0)
 set_param(pop.config, "reproduction.eggs_per_female", 100.0)
 set_param(pop.config, "expected_eggs_per_female", 100.0)  # 别名
 ```
 
-内部流程：
-1. 在 `parameters.py` 注册表中查找参数名（全名 → 短名 → 别名）
-2. 定位 `PopulationConfig` 字段和数组索引
+内部四步：
+
+1. 查 `parameters.py` 注册表：全名 → 短名 → 别名
+2. 定位 config 字段和数组索引
 3. 原地写入：`config.carrying_capacity[()] = 5000.0`
-4. Equilibrium-sensitive 参数（K / eggs / sex_ratio）自动调用 `sync_equilibrium_metrics`
+4. K / eggs / sex_ratio 修改后自动 `sync_equilibrium_metrics`
 
-## 3. 方式三：Hook 内直接修改
+---
 
-最快路径——Hook 签名包含 `config` 参数，Numba nopython 直接写：
+## 3. Hook 内修改
+
+Hook 签名统一为 `(state, config, deme_id) → int`。`config` 可原地修改，修改后对当前 tick 后续 hook 和流程立即可见。
+
+### 3.1 方式 A：直接写 `config.field[()] = v`
+
+最快路径。Numba nopython，纯 C 级 ndarray 操作：
 
 ```python
-import natal as nt
 from natal.discrete_population_config import DiscretePopulationConfig
 from natal.population_state import DiscretePopulationState
 
@@ -71,120 +81,131 @@ def environment_change(
     _deme_id: int,
 ) -> int:
     if state.n_tick == 10:
-        # 直接写 0-d ndarray（nopython，最快）
         config.carrying_capacity[()] *= 0.5
         config.expected_eggs_per_female[()] *= 0.7
-        # 读写自定义字段
         config.custom['temperature'][()] = 40.0
     return 0
 ```
 
-### 三种 Hook 内写法的性能对比
+> 直接写不会自动 sync equilibrium。Age-structured 模型需要手动调 `sync_equilibrium_metrics(config)`。
 
-| 写法 | 性能 | 适用场景 |
+### 3.2 方式 B：`hook_set_param(config, "name", v)`
+
+封装了 `objmode` + `set_param`。性能与裸 `with objmode()` 完全相同（同一个 Numba→Python 边界），但语法更简洁：
+
+```python
+from natal.configurator import hook_set_param
+
+@nt.hook(event="early", custom=True)
+def recovery_hook(state, config, deme_id):
+    if state.n_tick == 10:
+        hook_set_param(config, "carrying_capacity", 5000.0)
+        hook_set_param(config, "eggs_per_female", 100.0)
+    return 0
+```
+
+每次调用单独跨越一次 objmode 边界。**批量修改**多个参数时，裸 `with objmode()` 更高效——一次边界完成多次 `set_param`。
+
+### 3.3 方式 C：裸 `with objmode()`
+
+需要 Hook 内执行日志、文件 I/O 等任意 Python 操作，或者批量修改参数时：
+
+```python
+from numba import objmode
+from natal.configurator import set_param
+
+@nt.hook(event="early", custom=True)
+def batch_hook(state, config, deme_id):
+    if state.n_tick == 10:
+        with objmode():
+            print(f"[tick={state.n_tick}] emergency recovery")  # 日志
+            set_param(config, "carrying_capacity", 5000.0)
+            set_param(config, "eggs_per_female", 100.0)
+            set_param(config, "sex_ratio", 0.5)
+    return 0
+```
+
+### 对比
+
+| 方式 | 性能 | 推荐场景 |
 |---|---|---|
-| `config.carrying_capacity[()] = v` | 最快（nopython） | 你知道字段名 |
-| `set_config_param(config, PARAM_ID, v)` | 快（nopython，整数路由） | 需要动态参数选择 |
-| `hook_set_param(config, "name", v)` | 同下（单次调用便捷） | 需要字符串参数名——单次调用语法更简洁 |
-| `with objmode(): ...` | 同 objmode 边界开销 | 通用 Python 回退，可一次 objmode 内做多件事 |
+| `config.field[()] = v` | 最快（nopython） | 你知道字段名 |
+| `hook_set_param(config, "name", v)` | objmode 边界（单次便捷） | 需要字符串参数名 |
+| `with objmode(): set_param(...)` | objmode 边界（批量高效） | 批量修改或需要 Python 生态 |
 
-`hook_set_param` 将 `objmode` + `set_param` 封装为一个函数，导入后即可在 Hook 中调用。性能与裸 `with objmode()` 完全相同——两者跨越同一个 objmode 边界：
+---
 
-```python
-from natal.configurator import hook_set_param
+## 4. 自定义字段 `config.custom`
 
-@nt.hook(event="early", custom=True)
-def hook_with_string_names(state, config, deme_id):
-    if state.n_tick == 10:
-        hook_set_param(config, "carrying_capacity", 5000.0)
-        hook_set_param(config, "reproduction.eggs_per_female", 100.0)
-    return 0
-```
-
-注意：多次 `hook_set_param` 调用会多次跨越 objmode 边界。如果需要批量修改多个参数，裸 `with objmode()` 更高效——只需付一次边界开销。`hook_set_param` 的优势是单次调用时语法更简洁。
+0-d structured numpy array。构建时通过 `.custom()` 注册字段和初始值，Hook 内 `[()]` 读写，运行时 `pop.update().custom()` 修改：
 
 ```python
-from natal.configurator import hook_set_param
-
-@nt.hook(event="early", custom=True)
-def hook_with_string_names(state, config, deme_id):
-    if state.n_tick == 10:
-        hook_set_param(config, "carrying_capacity", 5000.0)
-        hook_set_param(config, "reproduction.eggs_per_female", 100.0)
-    return 0
-```
-
-如果需要 Hook 内执行日志、文件 I/O 等任意 Python 操作，仍然使用 `with objmode()` 包裹。
-
-## 4. 自定义字段——`config.custom`
-
-`config.custom` 是一个 0-d structured numpy array，支持任意命名的标量字段。构建时通过 `.custom()` 注册，运行时 `[()]` 读写：
-
-```python
-# 构建时注册
+# 构建
 pop = (
     nt.DiscreteGenerationPopulation.setup(sp)
-    .custom(temperature=25.0, season_idx=0, debug=False)
+    .custom(temperature=25.0, season_idx=0)
     .build()
 )
 
-# Hook 内读写
+# Hook 内
 @nt.hook(event="early", custom=True)
 def seasonal_hook(state, config, _deme_id):
-    season = int(config.custom['season_idx'][()])
     temp = config.custom['temperature'][()]
-    if season == 1:
+    if int(config.custom['season_idx'][()]) == 1:
         config.custom['temperature'][()] = 35.0
 
-# 运行时通过 update() 修改
+# 运行时
 pop.update().custom(temperature=35.0, season_idx=1)
 ```
 
-支持三种类型：`bool`、`float`、`int`。
+支持 `bool`、`float`、`int`。
 
-## 5. 空间种群——per-deme 修改
+---
 
-`SpatialPopulation.update()` 支持全部 deme 或单个 deme 的修改，与构建时的 `batch_setting` API 一致：
+## 5. 空间种群 per-deme 修改
+
+`SpatialPopulation.update()` 接口与 panmictic 一致，额外支持 per-deme 和批量修改：
 
 ```python
 from natal.spatial_builder import batch_setting
 
-# 修改所有 deme
+# 全部 deme
 pop.update().competition(carrying_capacity=5000)
 
-# 修改单个 deme（自动 clone-on-write）
+# 单个 deme（自动 clone-on-write）
 pop.update(deme=3).competition(carrying_capacity=8000)
 
-# 批量 per-deme（None 表示跳过该 deme）
+# 批量（None = 跳过该 deme）
 pop.update().competition(
     carrying_capacity=batch_setting([100, None, 300, None])
 )
 ```
 
-### Clone-on-write
+**Clone-on-write**：同构空间种群中多个 deme 共享相同的 0-d ndarray。修改单个 deme 时，先复制这些数组为私有副本，确保其他 deme 不受影响。
 
-当多个 deme 共享 config 的 0-d ndarray 时（同构空间种群），修改单个 deme 会先复制这些数组，创建该 deme 的私有副本，确保其他 deme 不受影响。检测通过 `config.carrying_capacity` 的数组 identity 完成。
+---
 
-## 6. 原理：0-d ndarray + 原地写入
+## 6. 底层机制
 
-所有修改方式最终都落在同一个机制上：9 个生态参数是 0-d ndarray，`field[()] = value` 是原子操作。
+所有修改方式最终落在同一个操作上：
 
 ```
-set_param(config, "carrying_capacity", 5000.0)
-  → _resolve_param("carrying_capacity")  # 查 parameters.py
-  → config.carrying_capacity             # 0-d ndarray
-  → carrying_capacity[()] = 5000.0       # 原地写
-  → sync_equilibrium_metrics(config)     # 自动重算竞争指标
+set_param / pop.update() / hook 内直接写
+  → config.carrying_capacity           # 0-d ndarray
+  → carrying_capacity[()] = 5000.0     # 原地写（原子操作）
+  → sync_equilibrium_metrics(config)   # K/eggs/sr 自动触发
 ```
 
-这保证了无论从 `pop.update()`、`set_param()` 还是 hook 内直接写，行为完全一致。
+9 个生态参数（K、eggs、sex_ratio、sperm_displacement_rate、low_density_growth_rate、juvenile_growth_mode、generation_time、expected_competition_strength、expected_survival_rate）均为 0-d ndarray。
 
-## 7. 对比：新旧路径
+---
+
+## 7. 新旧对比
 
 | | 旧（Builder） | 新（Configurator） |
 |---|---|---|
-| 构建后修改 | 不支持原生接口 | `pop.update()` 链式修改 |
-| Hook 内修改 | 只读（需声明式 Op） | 直接写 `config.field[()] = v` |
-| 自定义字段 | `ConfigMutator`（已删除） | `config.custom` + `.custom()` |
+| 构建后修改 | 不支持 | `pop.update()` |
+| Hook 内修改 | 声明式 Op | `config.field[()] = v` |
+| 自定义字段 | ConfigMutator（已删除） | `config.custom` |
 | 空间 per-deme | 不支持 | `pop.update(deme=N)` + batch_setting |
 | 底层接口 | 无 | `set_param(config, name, value)` |
