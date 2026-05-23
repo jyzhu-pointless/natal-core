@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 
 from natal.engine.simulation.age_structured import (
-    _fertilize_with_precomputed_offspring_probability,
     _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction,
     recruit_juveniles_sampling,
     recruit_juveniles_given_scaling_factor_sampling

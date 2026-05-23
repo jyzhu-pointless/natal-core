@@ -13,7 +13,6 @@ Covers:
 - apply_survival_rates_deterministic_with_sperm_storage (1D rates)
 - compute_age_based_survival_rates
 - compute_viability_survival_rates
-- _fertilize_with_precomputed_offspring_probability (deterministic, no combo)
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ import pytest
 # For functions with pre-existing Numba type-unstable paths (e.g. 2D survival
 # rates), we test only the input types that Numba can compile.
 from natal.engine.simulation.age_structured import (
-    _fertilize_with_precomputed_offspring_probability,
+    _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction,
     apply_survival_rates_deterministic,
     apply_survival_rates_deterministic_with_sperm_storage,
     compute_actual_competition_strength,
@@ -40,7 +39,6 @@ from natal.engine.simulation.age_structured import (
     compute_scaling_factor_fixed,
     compute_scaling_factor_logistic,
     compute_viability_survival_rates,
-    fertilize_with_precomputed_offspring_probability,
     recruit_juveniles_given_scaling_factor_sampling,
     recruit_juveniles_sampling,
     sample_mating,
@@ -636,163 +634,6 @@ class TestComputeOffspringProbabilityTensor:
 
 
 # ===========================================================================
-# _fertilize_with_precomputed_offspring_probability (deterministic)
-# ===========================================================================
-
-class TestFertilizeWithPrecomputedOffspringProb:
-    """Tests for _fertilize_with_precomputed_offspring_probability."""
-
-    def test_deterministic_basic(self) -> None:
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
-        sperm_store[1, 0, 0] = 10.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=False, sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f.shape == (n_genotypes,)
-        assert n_m.shape == (n_genotypes,)
-        assert n_f[0] == pytest.approx(50.0)
-        assert n_m[0] == pytest.approx(50.0)
-
-    def test_no_matings_returns_zeros(self) -> None:
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=False, sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert np.allclose(n_f, 0.0)
-        assert np.allclose(n_m, 0.0)
-
-    def test_with_fixed_eggs(self) -> None:
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
-        sperm_store[1, 0, 0] = 5.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            fixed_eggs=True, is_stochastic=False, sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f[0] == pytest.approx(25.0)
-        assert n_m[0] == pytest.approx(25.0)
-
-    def test_with_sex_chromosomes(self) -> None:
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
-        sperm_store[1, 0, 0] = 10.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        female_compat = np.array([1.0, 0.0], dtype=np.float64)
-        male_compat = np.array([0.0, 1.0], dtype=np.float64)
-        female_only = np.array([True, False], dtype=np.bool_)
-        male_only = np.array([False, True], dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=female_compat,
-            male_genotype_compatibility=male_compat,
-            female_only_by_sex_chrom=female_only,
-            male_only_by_sex_chrom=male_only,
-            has_sex_chromosomes=True,
-            is_stochastic=False, sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f[0] == pytest.approx(100.0)
-        assert n_m[0] == pytest.approx(0.0)
-
-    def test_offspring_partial_survival_deterministic(self) -> None:
-        """P_offspring row sum < 1 — deterministic path should scale correctly."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
-        sperm_store[1, 0, 0] = 10.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 0.8
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=False, sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        # deterministic: n_total = 10*10*1*1 = 100, n_offspring[0] = 100*0.8 = 80
-        # sex_ratio=0.5 -> 40 female, 40 male
-        assert n_f[0] == pytest.approx(40.0)
-        assert n_m[0] == pytest.approx(40.0)
-
-
-# ===========================================================================
-# apply_survival_rates_deterministic — 1D rates (Numba-compatible)
-# ===========================================================================
-
 class TestApplySurvivalRatesDeterministic:
     """Tests for apply_survival_rates_deterministic with 1D survival rates.
 
@@ -1042,242 +883,6 @@ class TestRecruitJuvenilesGivenScalingFactorContinuous:
 
 
 # ===========================================================================
-# _fertilize_with_precomputed_offspring_probability — stochastic path
-# ===========================================================================
-
-class TestFertilizeWithPrecomputedOffspringProbStochastic:
-    """Stochastic paths in _fertilize_with_precomputed_offspring_probability."""
-
-    def test_stochastic_deterministic_survival(self) -> None:
-        """is_stochastic=True, but simple path with p_surv == 1.0."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 5.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 1] = 1.0  # all offspring male genotype 1
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=True, use_continuous_sampling=False,
-            sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f.sum() + n_m.sum() > 0
-
-    def test_stochastic_with_fixed_eggs(self) -> None:
-        """is_stochastic=True, fixed_eggs=True."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 3.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=True, fixed_eggs=True,
-            sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f.sum() + n_m.sum() > 0
-
-    def test_stochastic_with_partial_survival(self) -> None:
-        """is_stochastic=True with p_surv < 1.0 for binomial offspring survival."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 10.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 0.5
-        offspring_prob[0, 0, 1] = 0.5
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=True,
-            sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f.sum() + n_m.sum() > 0
-
-
-# ===========================================================================
-# _fertilize_with_precomputed_offspring_probability — continuous sampling
-# ===========================================================================
-
-class TestFertilizeWithPrecomputedOffspringProbContinuous:
-    """Continuous-sampling paths in _fertilize_with_precomputed_offspring_probability."""
-
-    def test_continuous_sampling_path(self) -> None:
-        """use_continuous_sampling=True, is_stochastic=True."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 5.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=True, use_continuous_sampling=True,
-            sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f.sum() + n_m.sum() > 0
-
-    def test_continuous_with_fixed_eggs(self) -> None:
-        """use_continuous_sampling=True, is_stochastic=True, fixed_eggs=True."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 3.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=True, use_continuous_sampling=True,
-            fixed_eggs=True, sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f.sum() + n_m.sum() > 0
-
-    def test_continuous_partial_survival(self) -> None:
-        """use_continuous_sampling=True with p_surv < 1.0."""
-        n_genotypes = 2
-        n_ages = 2
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 10.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 0.5
-        offspring_prob[0, 0, 1] = 0.5
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = _fertilize_with_precomputed_offspring_probability(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            is_stochastic=True, use_continuous_sampling=True,
-            sex_ratio=0.5,
-        )
-        n_f, n_m = result
-        assert n_f.sum() + n_m.sum() > 0
-
-
-# ===========================================================================
-# fertilize_with_precomputed_offspring_probability — public wrapper
-# ===========================================================================
-
-class TestFertilizePublicWrapper:
-    """Test the public wrapper function (covers lines 1027-1031)."""
-
-    def test_wrapper_basic(self) -> None:
-        n_genotypes = 2
-        n_ages = 2
-        female_counts = np.zeros((2, 2), dtype=np.float64)
-        sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        sperm_store[1, 0, 0] = 5.0
-        fertility_f = np.ones(n_genotypes, dtype=np.float64)
-        fertility_m = np.ones(n_genotypes, dtype=np.float64)
-        offspring_prob = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
-        offspring_prob[0, 0, 0] = 1.0
-        compat = np.ones(n_genotypes, dtype=np.float64)
-        none_only = np.zeros(n_genotypes, dtype=np.bool_)
-
-        result = fertilize_with_precomputed_offspring_probability(
-            female_counts=female_counts,
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_genotypes=n_genotypes,
-            n_haplogenotypes=2,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            fixed_eggs=False,
-            sex_ratio=0.5,
-            has_sex_chromosomes=False,
-            is_stochastic=False,
-        )
-        n_f, n_m = result
-        assert n_f[0] > 0
-
-
-# ===========================================================================
-# sample_mating — continuous sampling path
-# ===========================================================================
-
 class TestSampleMatingContinuous:
     """Continuous-sampling path for sample_mating."""
 
@@ -1354,7 +959,7 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         female_only = np.array([False, False], dtype=np.bool_)
         male_only = np.array([False, True], dtype=np.bool_)
         compat = np.ones(n_genotypes, dtype=np.float64)
-        n_f, n_m = _fertilize_with_precomputed_offspring_probability(
+        n_f, n_m = _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
             sperm_storage_by_male_genotype=sperm_store,
             fertility_f=fertility_f, fertility_m=fertility_m,
             offspring_probability=offspring_prob,
@@ -1364,6 +969,7 @@ class TestSampleSurvivalWithSpermStorageContinuous:
             male_genotype_compatibility=compat,
             female_only_by_sex_chrom=female_only,
             male_only_by_sex_chrom=male_only,
+            n_glabs=1, age_based_reproduction_rates=None, female_age_based_relative_fertility=None,
             is_stochastic=False, has_sex_chromosomes=True,
             sex_ratio=0.5,
         )
@@ -1385,7 +991,7 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         f_compat = np.array([0.8, 0.5], dtype=np.float64)
         m_compat = np.array([0.2, 0.5], dtype=np.float64)
         none_only = np.zeros(n_genotypes, dtype=np.bool_)
-        n_f, n_m = _fertilize_with_precomputed_offspring_probability(
+        n_f, n_m = _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
             sperm_storage_by_male_genotype=sperm_store,
             fertility_f=fertility_f, fertility_m=fertility_m,
             offspring_probability=offspring_prob,
@@ -1415,7 +1021,7 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         offspring_prob[0, 0, 0] = 1.0
         compat = np.ones(n_genotypes, dtype=np.float64)
         none_only = np.zeros(n_genotypes, dtype=np.bool_)
-        n_f, n_m = _fertilize_with_precomputed_offspring_probability(
+        n_f, n_m = _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
             sperm_storage_by_male_genotype=sperm_store,
             fertility_f=fertility_f, fertility_m=fertility_m,
             offspring_probability=offspring_prob,

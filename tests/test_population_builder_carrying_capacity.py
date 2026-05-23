@@ -76,7 +76,7 @@ class TestCarryingCapacityResolution:
         assert dist[0, 0] == 0.0
         assert dist[1, 0] == 0.0
 
-    def test_compute_expected_eggs_from_females(self) -> None:
+    def testcompute_expected_eggs_from_females(self) -> None:
         """Test expected egg computation from adult female count."""
         n_ages = 4
         survival = np.array([
@@ -86,7 +86,7 @@ class TestCarryingCapacityResolution:
         reproduction = np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float64)
         fertility = np.array([0.0, 0.0, 1.0, 0.8], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder._compute_expected_eggs_from_females(
+        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=500.0,
             expected_eggs_per_female=100.0,
             age_based_survival_rates=survival,
@@ -268,7 +268,7 @@ class TestCarryingCapacityResolution:
         )
 
         # Compute expected eggs from expected_num_adult_females
-        external_eggs = PopulationConfigBuilder._compute_expected_eggs_from_females(
+        external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=expected_females,
             expected_eggs_per_female=eggs_per_female,
             age_based_survival_rates=survival,
@@ -543,7 +543,7 @@ class TestChamperModel:
 
     def test_expected_eggs_from_females_default_rates(self) -> None:
         """Verify eggs computation with default reproduction (all adults mate, fertility=1)."""
-        eggs = PopulationConfigBuilder._compute_expected_eggs_from_females(
+        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=self.expected_num_adult_females,
             expected_eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
@@ -561,7 +561,7 @@ class TestChamperModel:
         """Eggs computation with custom reproduction participation rates."""
         reproduction = np.array([0.0, 0.0, 0.5, 1.0, 1.0, 0.8, 0.5, 0.0], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder._compute_expected_eggs_from_females(
+        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=self.expected_num_adult_females,
             expected_eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
@@ -581,7 +581,7 @@ class TestChamperModel:
         reproduction = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
         fertility = np.array([0.0, 0.0, 0.8, 1.0, 1.0, 0.8, 0.5, 0.0], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder._compute_expected_eggs_from_females(
+        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=self.expected_num_adult_females,
             expected_eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
