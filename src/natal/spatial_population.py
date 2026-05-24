@@ -246,8 +246,14 @@ class _SpatialUpdate:
 
         if self._deme is not None:
             self._pop.update_deme(self._deme).presets(*presets)
-        else:
-            Configurator.for_config(self._pop.demes[0].config).presets(*presets)
+            return self
+        seen: set[int] = set()
+        for config in (d.config for d in self._pop.demes):
+            cid = id(config)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            Configurator.for_config(config).presets(*presets)
         return self
 
     def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:
@@ -255,8 +261,14 @@ class _SpatialUpdate:
 
         if self._deme is not None:
             self._pop.update_deme(self._deme).hooks(*hook_items)
-        else:
-            Configurator.for_config(self._pop.demes[0].config).hooks(*hook_items)
+            return self
+        seen: set[int] = set()
+        for config in (d.config for d in self._pop.demes):
+            cid = id(config)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            Configurator.for_config(config).hooks(*hook_items)
         return self
 
     def _apply_batch_or_scalar(self, method_name: str, kwargs: dict[str, object]) -> None:
@@ -294,11 +306,20 @@ class _SpatialUpdate:
     def _dispatch_scalar(self, method_name: str, kwargs: dict[str, object]) -> None:
         if self._deme is not None:
             cfg = self._pop.update_deme(self._deme)
-        else:
-            from natal.configurator import Configurator
+            getattr(cfg, method_name)(**kwargs)
+            return
 
-            cfg = Configurator.for_config(self._pop.demes[0].config)
-        getattr(cfg, method_name)(**kwargs)
+        # Apply to all unique configs — deduplicate by object identity so
+        # homogeneous populations (shared config) apply only once.
+        from natal.configurator import Configurator
+
+        seen: set[int] = set()
+        for config in (d.config for d in self._pop.demes):
+            cid = id(config)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            getattr(Configurator.for_config(config), method_name)(**kwargs)
 
 
 class SpatialPopulation:
