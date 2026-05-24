@@ -320,7 +320,7 @@ class _SpatialUpdate:
                 getattr(cfg, method_name)(**kwargs)
             else:
                 for key, val in kwargs.items():
-                    set_param(cfg.config, f"{method_name}.{key}", val)
+                    set_param(cfg.config, f"{method_name}.{key}", cast('float | int | bool', val))
             return
 
         # Apply to all unique configs — deduplicate by object identity.
@@ -337,7 +337,7 @@ class _SpatialUpdate:
                 getattr(cfg, method_name)(**kwargs)
             else:
                 for key, val in kwargs.items():
-                    set_param(cfg.config, f"{method_name}.{key}", val)
+                    set_param(cfg.config, f"{method_name}.{key}", cast('float | int | bool', val))
 
 
 class SpatialPopulation:
