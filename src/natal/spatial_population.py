@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from natal.configurator import Configurator
     from natal.genetic_presets import GeneticPreset
     from natal.observation import Observation
-    from natal.spatial_builder import SpatialBuilder
+    from natal.spatial_builder import BatchSetting, SpatialBuilder
 
 __all__ = ["SpatialPopulation"]
 
@@ -213,31 +213,45 @@ class _SpatialUpdate:
         self._pop = spatial_pop
         self._deme = deme
 
-    def competition(self, **kwargs: object) -> _SpatialUpdate:
+    def competition(
+        self, **kwargs: float | int | bool | BatchSetting,
+    ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("competition", kwargs)
         return self
 
-    def reproduction(self, **kwargs: object) -> _SpatialUpdate:
+    def reproduction(
+        self, **kwargs: float | int | bool | BatchSetting,
+    ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("reproduction", kwargs)
         return self
 
-    def survival(self, **kwargs: object) -> _SpatialUpdate:
+    def survival(
+        self, **kwargs: float | int | bool | BatchSetting,
+    ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("survival", kwargs)
         return self
 
-    def fitness(self, **kwargs: object) -> _SpatialUpdate:
+    def fitness(
+        self, **kwargs: float | int | bool | BatchSetting,
+    ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("fitness", kwargs)
         return self
 
-    def custom(self, **kwargs: object) -> _SpatialUpdate:
+    def custom(
+        self, **kwargs: float | int | bool | BatchSetting,
+    ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("custom", kwargs)
         return self
 
-    def setup(self, **kwargs: object) -> _SpatialUpdate:
+    def setup(
+        self, **kwargs: float | int | bool | BatchSetting,
+    ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("setup", kwargs)
         return self
 
-    def modifiers(self, **kwargs: object) -> _SpatialUpdate:
+    def modifiers(
+        self, **kwargs: float | int | bool | BatchSetting,
+    ) -> _SpatialUpdate:
         self._dispatch_scalar("modifiers", kwargs)
         return self
 
@@ -271,7 +285,9 @@ class _SpatialUpdate:
             Configurator.for_config(config).hooks(*hook_items)
         return self
 
-    def _apply_batch_or_scalar(self, method_name: str, kwargs: dict[str, object]) -> None:
+    def _apply_batch_or_scalar(
+        self, method_name: str, kwargs: dict[str, float | int | bool | BatchSetting],
+    ) -> None:
         """Dispatch kwargs: BatchSetting values → per-deme; scalars → all demes."""
         from natal.spatial_builder import BatchSetting
 
@@ -303,13 +319,16 @@ class _SpatialUpdate:
             cfg = self._pop.update_deme(i)
             getattr(cfg, method_name)(**per_deme_kwargs)
 
-    def _dispatch_scalar(self, method_name: str, kwargs: dict[str, object]) -> None:
+    def _dispatch_scalar(
+        self, method_name: str, kwargs: dict[str, float | int | bool | BatchSetting],
+    ) -> None:
         """Apply scalar kwargs to target deme(s).
 
         Uses ``set_param`` per-parameter (except ``custom``) to avoid
         triggering unintended side effects like K auto-resolution.
         """
         from natal.configurator import Configurator, set_param
+        from natal.spatial_builder import BatchSetting
 
         # custom() is not a parameters.py entry — use full chain method
         use_full_method = method_name == "custom"
@@ -320,7 +339,8 @@ class _SpatialUpdate:
                 getattr(cfg, method_name)(**kwargs)
             else:
                 for key, val in kwargs.items():
-                    set_param(cfg.config, f"{method_name}.{key}", cast('float | int | bool', val))
+                    if not isinstance(val, BatchSetting):
+                        set_param(cfg.config, f"{method_name}.{key}", val)
             return
 
         # Apply to all unique configs — deduplicate by object identity.
@@ -337,7 +357,8 @@ class _SpatialUpdate:
                 getattr(cfg, method_name)(**kwargs)
             else:
                 for key, val in kwargs.items():
-                    set_param(cfg.config, f"{method_name}.{key}", cast('float | int | bool', val))
+                    if not isinstance(val, BatchSetting):
+                        set_param(cfg.config, f"{method_name}.{key}", val)
 
 
 class SpatialPopulation:
