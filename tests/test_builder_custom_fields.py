@@ -2,6 +2,7 @@
 
 import numpy as np
 import natal as nt
+import pytest
 
 sp = nt.Species.from_dict(name="__custom_test__", structure={"auto": {"A": ["WT", "Var"]}})
 
@@ -70,7 +71,7 @@ class TestBuilderCustomFields:
 
     def test_unsupported_custom_type_raises(self):
         """Unsupported custom scalar type raises TypeError early."""
-        with np.testing.assert_raises(TypeError):
+        with pytest.raises(TypeError):
             _build({"label": "hot"})
 
     def test_custom_accessible_in_numba(self):

@@ -74,6 +74,16 @@ InitializeMapFn = Callable[..., NDArray[np.float64]]
 initialize_gamete_map = cast(InitializeMapFn, _population_config.initialize_gamete_map)
 initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygote_map)
 
+@overload
+def build_custom_array(
+    specs: Mapping[str, bool | int | float | np.floating[Any] | NDArray[np.float64]],
+) -> NDArray[np.void]: ...
+
+
+@overload
+def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]: ...
+
+
 def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
     """Build a 0-d structured numpy array from custom field specs.
 
@@ -116,7 +126,7 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
     # builders with the same specs produce byte-identical dtypes.
     fields: list[tuple[str, Any] | tuple[str, Any, tuple[int, ...]]] = []
     for name in sorted(specs):
-        val = specs[name]
+        val: object = specs[name]
 
         # ndarray → fixed-shape sub-array (must be 3-D: sex × age × genotype)
         if isinstance(val, np.ndarray):
@@ -155,7 +165,7 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
 
     # == Stage 3: write initial values ==
     for name in sorted(specs):
-        val = specs[name]
+        val: object = specs[name]
 
         # Sub-array field: copy the whole block
         if isinstance(val, np.ndarray):
@@ -163,11 +173,7 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
 
         # Scalar field: assign through [()] (0-d element access).
         # e.g. custom["temperature"][()] = 25.0
-        elif isinstance(val, bool):
-            custom[name][()] = val
-        elif isinstance(val, int):
-            custom[name][()] = val
-        elif isinstance(val, (float, np.floating)):
+        elif isinstance(val, (bool, int, float, np.floating)):
             custom[name][()] = val
         else:
             raise TypeError(
