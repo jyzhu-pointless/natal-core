@@ -43,47 +43,49 @@ pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
 ## DiscreteConfigurator
 
-`DiscreteGenerationPopulation` 的专属配置器。参数只展示离散模型相关字段。
+Configurator for `DiscreteGenerationPopulation`. Parameters are narrowed to the
+discrete (Wright-Fisher) model.
 
 ```python
-# 创建
+# Create
 cfg = nt.Configurator.for_discrete(species)
 
-# 或通过 setup()
+# Or via setup()
 cfg = nt.DiscreteGenerationPopulation.setup(species)
 
-# 链式配置
-cfg.age_structure(n_ages=2, new_adult_age=1)        # 固定 2 年龄
+# Chain configuration — only discrete-relevant parameters are shown
+cfg.age_structure(n_ages=2, new_adult_age=1)          # fixed 2 ages
 cfg.reproduction(
-    eggs_per_female=50,             # 每雌产卵数
-    sex_ratio=0.5,                  # 后代雌性比例
-    female_adult_mating_rate=1.0,   # 成年雌性交配概率
-    male_adult_mating_rate=1.0,     # 成年雄性交配概率
+    eggs_per_female=50,               # eggs per female per tick
+    sex_ratio=0.5,                    # fraction female offspring
+    female_adult_mating_rate=1.0,     # adult female mating probability
+    male_adult_mating_rate=1.0,       # adult male mating probability
 )
 cfg.survival(
-    female_age0_survival=0.9,       # 雌性幼体存活率
-    male_age0_survival=0.9,         # 雄性幼体存活率
+    female_age0_survival=0.9,         # female juvenile survival
+    male_age0_survival=0.9,           # male juvenile survival
 )
 cfg.competition(
-    carrying_capacity=10000,        # 均衡承载力 K
-    low_density_growth_rate=6.0,    # 低密度增长率 r
-    juvenile_growth_mode="concave", # 密度制约模式
+    carrying_capacity=10000,          # equilibrium carrying capacity K
+    low_density_growth_rate=6.0,      # low-density growth rate r
+    juvenile_growth_mode="concave",   # density-regulation function
 )
 ```
 
 ## AgeStructuredConfigurator
 
-`AgeStructuredPopulation` 的专属配置器。支持 per-age 数组参数和 Champer 均衡模型。
+Configurator for `AgeStructuredPopulation`. Supports per-age array parameters
+and the Champer equilibrium model.
 
 ```python
 cfg = nt.Configurator.for_age_structured(species)
 
 cfg.age_structure(n_ages=8, new_adult_age=2)
 
-# 所有 per-age 参数支持灵活输入:
-#   标量 — 填满所有年龄
-#   列表 — 逐年龄指定
-#   字典 — 稀疏映射 {age: value}
+# Per-age parameters accept flexible input:
+#   scalar — fills all ages
+#   list — per-age values
+#   dict — sparse map {age: value}
 #   callable — lambda age: ...
 cfg.reproduction(
     eggs_per_female=100,
@@ -100,20 +102,20 @@ cfg.competition(
     low_density_growth_rate=6.0,
     juvenile_growth_mode="logistic",
     competition_strength=5.0,
-    # Champer 模型 — 自定义均衡分布
+    # Champer model — custom equilibrium distribution
     equilibrium_distribution=custom_dist,
 )
 ```
 
 ## Shared Methods
 
-两种 Configurator 都有以下方法：
+Both Configurator subclasses expose these methods:
 
 ### `setup(**flags)`
 ```python
 cfg.setup(name="MyPop", stochastic=False)
 ```
-配置模拟标志和种群名称。
+Configure simulation flags and population name.
 
 ### `initial_state(individual_count, sperm_storage=None)`
 ```python
@@ -122,25 +124,27 @@ cfg.initial_state(individual_count={
     "male":   {"WT|WT": [0, 200, 150, 100]},
 })
 ```
-设置初始种群分布。*individual_count* 是必选参数，格式为 `{性别: {基因型: 年龄数据}}`。
+Set the initial population distribution. *individual_count* is required,
+format: `{sex: {genotype: age_data}}`.
 
 ### `custom(**fields)`
 ```python
 cfg.custom(temperature=25.0, debug=True)
 ```
-注册自定义字段，存入 `config.custom`。Hook 内通过 `config.custom['name'][()]` 读写。
+Register named fields stored in `config.custom`. Hooks read/write via
+`config.custom['name'][()]`.
 
 ### `presets(*presets)`
 ```python
 cfg.presets(homing_drive)
 ```
-应用基因驱动预设。立即写入 config——非延迟执行。
+Apply genetic presets immediately — writes directly to config arrays (not deferred).
 
 ### `modifiers(gamete_modifiers=None, zygote_modifiers=None)`
 ```python
 cfg.modifiers(gamete_modifiers=[my_mod])
 ```
-注册配子/合子修饰器，立即重建基因型/配子映射。
+Register gamete/zygote modifiers, immediately rebuilding genotype/gamete maps.
 
 ### `fitness(viability=None, fecundity=None, sexual_selection=None, zygote_viability=None, mode="replace")`
 ```python
@@ -150,43 +154,45 @@ cfg.fitness(
     mode="multiply",
 )
 ```
-写入适应度数组。支持平铺 dict（两性相同）和嵌套 dict（分雌雄）。`mode="replace"` 覆盖，`mode="multiply"` 乘法缩放。
+Write fitness values to config arrays. Flat dicts apply to both sexes;
+nested `{"female": {...}, "male": {...}}` for sex-specific values.
+`mode="replace"` overwrites, `mode="multiply"` scales existing values.
 
 ### `hooks(*hook_items)`
 ```python
 cfg.hooks(my_hook)
 ```
-注册事件 hooks，传给 `build()` 时的 Population 构造函数。
+Register event hooks, forwarded to the Population constructor at `build()` time.
 
 ### `build(name=None, hooks=None)`
 ```python
 pop = cfg.build(name="MyPop")
 ```
-执行 equilibrium sync 并创建 Population 对象。
+Sync equilibrium metrics and create the Population object.
 
 ### `apply()`
 ```python
 cfg.apply()
 ```
-单独执行 equilibrium sync（不创建 Population）。通常不需要显式调用——`build()` 内部自动调用。
+Run equilibrium sync without creating a Population. Normally unnecessary —
+`build()` calls `apply()` internally.
 
 ## Runtime Modification
 
 ### `pop.update()`
 ```python
-# 单参数
+# Single parameter
 pop.update().competition(carrying_capacity=5000)
 
-# 链式多参数
+# Chained multiple parameters
 pop.update().reproduction(eggs_per_female=100).competition(K=10000)
 
-# 自定义字段
+# Custom fields
 pop.update().custom(temperature=35.0)
 ```
+All changes write immediately to 0-d ndarrays — no `freeze()` or rebuild needed.
 
-所有修改立即写入 config 的 0-d ndarray——无需 `freeze()` 或重新构建。
-
-### Hook 内修改
+### Inside Hooks
 ```python
 @nt.hook(event="early", custom=True)
 def my_hook(state, config, deme_id):
@@ -196,28 +202,30 @@ def my_hook(state, config, deme_id):
 
 ### Spatial Population
 ```python
-# 修改所有 deme
+# All demes
 pop.update().competition(carrying_capacity=5000)
 
-# 修改单个 deme（clone-on-write）
+# Single deme (clone-on-write)
 pop.update(deme=3).competition(carrying_capacity=8000)
 
-# 批量 per-deme 修改
+# Batch per-deme
 from natal.spatial_builder import batch_setting
 pop.update().competition(
     carrying_capacity=batch_setting([100, 200, 300, 400])
 )
 ```
 
-## 底层接口
+## Low-Level API
 
 ### `set_param(config, name, value)`
 ```python
 from natal.configurator import set_param
 set_param(config, "competition.carrying_capacity", 5000.0)
-set_param(config, "carrying_capacity", 5000.0)  # 短名也支持
+set_param(config, "carrying_capacity", 5000.0)  # short name also works
 ```
-所有高层 API 的底层实现。从 `parameters.py` 注册表解析参数名，定位 config 字段和索引，原地写入。equilibrium-sensitive 参数（K/eggs/sr）自动触发 sync。
+The foundation of all higher-level APIs. Resolves parameter names through the
+`parameters.py` registry, locates the config field and index, and writes in-place.
+Equilibrium-sensitive parameters (K / eggs / sex_ratio) auto-trigger sync.
 
 ### `hook_set_param(config, name, value)`
 ```python
@@ -229,29 +237,32 @@ def my_hook(state, config, deme_id):
     hook_set_param(config, "reproduction.eggs_per_female", 100.0)
     return 0
 ```
-封装了 `objmode` + `set_param`，在 Hook 的 njit 环境中可直接调用。适合需要字符串参数名路由的场景。最快路径仍然是直接 `config.field[()] = v`。
+Wraps `objmode` + `set_param` for callable-from-njit convenience. Use when
+you need string-name routing inside hooks. The fastest path remains direct
+`config.field[()] = v`.
 
 ### `Configurator.for_config(config)`
 ```python
 cfg = nt.Configurator.for_config(pop.config)
 ```
-根据 config 类型返回 `DiscreteConfigurator` 或 `AgeStructuredConfigurator`。
+Returns `DiscreteConfigurator` or `AgeStructuredConfigurator` based on config type.
 
-## 类型层次
+## Type Hierarchy
 
 ```
-Configurator                  # 基类：setup, build, apply, preset, fitness, hooks...
-├── DiscreteConfigurator      # + competition(离散), reproduction(离散), survival(离散)
+Configurator                  # base: setup, build, apply, presets, fitness, hooks...
+├── DiscreteConfigurator      # + competition(discrete), reproduction(discrete), survival(discrete)
 └── AgeStructuredConfigurator # + competition(Champer), reproduction(per-age), survival(per-age)
 ```
 
-## 向后兼容
+## Backward Compatibility
 
-旧 `PopulationBuilder` 类仍可通过 `legacy_path=True` 使用：
+The legacy `PopulationBuilder` classes remain accessible via `legacy_path=True`:
 
 ```python
 pop = nt.DiscreteGenerationPopulation.setup(sp, legacy_path=True)
     .initial_state(...).build()
 ```
 
-Configurator 已完全覆盖 Builder 的功能——`legacy_path` 默认值为 `False`，新代码不需要显式指定。
+`Configurator` fully covers the Builder's functionality — `legacy_path` defaults to
+`False`, so new code does not need to specify it.
