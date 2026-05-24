@@ -76,7 +76,7 @@ class TestCarryingCapacityResolution:
         assert dist[0, 0] == 0.0
         assert dist[1, 0] == 0.0
 
-    def testcompute_expected_eggs_from_females(self) -> None:
+    def test_compute_expected_eggs_from_females(self) -> None:
         """Test expected egg computation from adult female count."""
         n_ages = 4
         survival = np.array([
