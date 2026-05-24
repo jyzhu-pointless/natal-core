@@ -76,18 +76,18 @@
 
 | 参数 | Config 字段 | 类型 | A | B | C | D | E | 注 |
 |---|---|---|---|---|---|---|---|---|
-| `viability` | `viability_fitness` | 3-D | — | ✅ | ❌ | ❌ | deferred | is_tensor |
-| `fecundity` | `fecundity_fitness` | 2-D | — | ✅ | ❌ | ❌ | deferred | is_tensor |
-| `sexual_selection` | `sexual_selection_fitness` | 2-D | — | ✅ | ❌ | ❌ | deferred | is_tensor |
-| `zygote_viability` | `zygote_viability_fitness` | 2-D | — | ✅ | ❌ | ❌ | deferred | is_tensor |
+| `viability` | `viability_fitness` | 3-D | — | ✅ | ❌ | ❌ | ✅（立即写入） | is_tensor |
+| `fecundity` | `fecundity_fitness` | 2-D | — | ✅ | ❌ | ❌ | ✅（立即写入） | is_tensor |
+| `sexual_selection` | `sexual_selection_fitness` | 2-D | — | ✅ | ❌ | ❌ | ✅（立即写入） | is_tensor |
+| `zygote_viability` | `zygote_viability_fitness` | 2-D | — | ✅ | ❌ | ❌ | ✅（立即写入） | is_tensor |
 
 ### `presets(*preset_list)`, `modifiers(gamete_modifiers, zygote_modifiers)`, `hooks(*hook_items)`, `custom(**kwargs)`
 
 | 方法 | 运行时修改 |
 |---|---|
-| `presets` | deferred（需 Population + baseline），通过 E + `build()` |
-| `modifiers` | deferred（需 Population），通过 E + `build()` |
-| `hooks` | 注册即生效。E 中 `hooks()` 存入 `_hook_items`，`build()` 时传入 |
+| `presets` | ✅ 立即写入。通过 `_ConfigContext` 适配器直接操作 config 数组 |
+| `modifiers` | ✅ 立即写入。注册 modifier 并立即重建基因型/配子映射 |
+| `hooks` | 注册即生效。E 中 `hooks()` 存入 `_hook_items`，`build()` 时传入 Population |
 | `custom(**kwargs)` | ✅ nopython:`config.custom['name'][()]=v`　❌ C/D 不适用（动态字段不在 parameters.py） |
 
 ---
@@ -139,4 +139,4 @@
 - **Python 标量**（`is_stochastic`、`n_ages` 等）：A/B 不适用，C/D 跳过——只能通过 E 的 `_replace`。
 - **is_tensor 参数**（fitness 数组、`initial_*`）：C/D 拒绝（`set_param` 检查 `is_tensor`），只能 A/B。
 - **Custom 字段**：不在 `parameters.py` 中，C/D 不适用。nopython 直接 `config.custom['name'][()] = v`。
-- **Deferred 方法**（`fitness`/`presets`/`modifiers`）：E 收集到 `_deferred`，需 `build()` 执行。
+- **`fitness`/`presets`/`modifiers`**：立即写入 config 数组，不再使用 deferred 机制。调用时即生效，无需 `build()`。
