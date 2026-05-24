@@ -180,8 +180,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     ) -> AgeStructuredPopulationBuilder | AgeStructuredConfigurator:
         """Fluent population construction entry point.
 
-        By default returns an ``AgeStructuredPopulationBuilder`` (legacy path).
-        Pass ``legacy_path=False`` for the new Configurator-based path.
+        By default returns an ``AgeStructuredConfigurator`` (the new path).
+        Chain domain methods and end with ``.build()`` to create a Population.
+
+        Pass ``legacy_path=True`` to use the classic Builder API.
         """
         if legacy_path:
             from natal.population_builder import AgeStructuredPopulationBuilder
