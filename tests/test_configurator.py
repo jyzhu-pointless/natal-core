@@ -202,6 +202,59 @@ class TestConfiguratorUpdate:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Custom fields
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestCustomFields:
+    def test_update_custom_scalar(self, species):
+        """pop.update().custom() writes to config.custom."""
+        pop = (
+            Configurator.from_species(species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
+        pop.update().custom(temperature=25.0)
+        assert float(pop.config.custom["temperature"][()]) == 25.0
+
+    def test_update_custom_multiple_fields(self, species):
+        """pop.update().custom() with multiple fields."""
+        pop = (
+            Configurator.from_species(species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
+        pop.update().custom(temperature=35.0, season=1, debug=True)
+        assert float(pop.config.custom["temperature"][()]) == 35.0
+        assert int(pop.config.custom["season"][()]) == 1
+        assert bool(pop.config.custom["debug"][()]) is True
+
+    def test_custom_mutable(self, species):
+        """Custom field can be mutated multiple times."""
+        pop = (
+            Configurator.from_species(species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
+        pop.update().custom(counter=0)
+        pop.update().custom(counter=1)
+        pop.update().custom(counter=2)
+        assert int(pop.config.custom["counter"][()]) == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Legacy Builder API still works
 # ══════════════════════════════════════════════════════════════════════════
 

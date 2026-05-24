@@ -636,6 +636,11 @@ class Configurator:
         self._config = self._config._replace(
             custom=build_custom_array(kwargs)
         )
+        # If wrapping a Population's config, sync the new config reference
+        # back so the Population sees the updated custom fields.
+        source = getattr(self, "_pop_ref", None)
+        if source is not None:
+            object.__setattr__(source, '_config', self._config)
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --

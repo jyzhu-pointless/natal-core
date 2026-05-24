@@ -486,7 +486,9 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         from natal.configurator import Configurator
 
-        return Configurator.for_config(self._require_config())
+        cfg = Configurator.for_config(self._require_config())
+        object.__setattr__(cfg, '_pop_ref', self)
+        return cfg
 
     def _require_state(self) -> T_State:
         """Return the initialized state or raise a clear initialization error."""

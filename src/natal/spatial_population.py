@@ -304,22 +304,40 @@ class _SpatialUpdate:
             getattr(cfg, method_name)(**per_deme_kwargs)
 
     def _dispatch_scalar(self, method_name: str, kwargs: dict[str, object]) -> None:
+        """Apply scalar kwargs to target deme(s).
+
+        Uses ``set_param`` per-parameter (except ``custom``) to avoid
+        triggering unintended side effects like K auto-resolution.
+        """
+        from natal.configurator import Configurator, set_param
+
+        # custom() is not a parameters.py entry — use full chain method
+        use_full_method = method_name == "custom"
+
         if self._deme is not None:
             cfg = self._pop.update_deme(self._deme)
-            getattr(cfg, method_name)(**kwargs)
+            if use_full_method:
+                getattr(cfg, method_name)(**kwargs)
+            else:
+                for key, val in kwargs.items():
+                    set_param(cfg.config, f"{method_name}.{key}", val)
             return
 
-        # Apply to all unique configs — deduplicate by object identity so
-        # homogeneous populations (shared config) apply only once.
-        from natal.configurator import Configurator
-
+        # Apply to all unique configs — deduplicate by object identity.
         seen: set[int] = set()
-        for config in (d.config for d in self._pop.demes):
+        for d in self._pop.demes:
+            config = d.config
             cid = id(config)
             if cid in seen:
                 continue
             seen.add(cid)
-            getattr(Configurator.for_config(config), method_name)(**kwargs)
+            cfg = Configurator.for_config(config)
+            object.__setattr__(cfg, '_pop_ref', d)
+            if use_full_method:
+                getattr(cfg, method_name)(**kwargs)
+            else:
+                for key, val in kwargs.items():
+                    set_param(cfg.config, f"{method_name}.{key}", val)
 
 
 class SpatialPopulation:
@@ -771,7 +789,9 @@ class SpatialPopulation:
             object.__setattr__(target, '_config', private)
             config = private
 
-        return Configurator(config)
+        cfg = Configurator.for_config(config)
+        object.__setattr__(cfg, '_pop_ref', target)
+        return cfg
 
     @property
     def tick(self) -> int:
