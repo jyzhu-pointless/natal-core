@@ -56,9 +56,23 @@ class TestBuilderCustomFields:
         assert bool(pop.config.custom["verbose"][()]) is False
         assert pop.config.custom["debug"][()].dtype == np.bool_
 
+    def test_numpy_bool_custom(self):
+        """np.bool_ values preserve type as np.bool_."""
+        pop = _build({"debug": np.bool_(True), "verbose": np.bool_(False)})
+        assert bool(pop.config.custom["debug"][()]) is True
+        assert bool(pop.config.custom["verbose"][()]) is False
+        assert pop.config.custom["debug"][()].dtype == np.bool_
+
     def test_int_custom(self):
         """int values preserve type as np.int64."""
         pop = _build({"mode": 3, "iterations": 100})
+        assert pop.config.custom["mode"][()] == 3
+        assert pop.config.custom["iterations"][()] == 100
+        assert pop.config.custom["mode"][()].dtype == np.int64
+
+    def test_numpy_integer_custom(self):
+        """np.integer values preserve type as np.int64."""
+        pop = _build({"mode": np.int64(3), "iterations": np.int32(100)})
         assert pop.config.custom["mode"][()] == 3
         assert pop.config.custom["iterations"][()] == 100
         assert pop.config.custom["mode"][()].dtype == np.int64

@@ -76,7 +76,10 @@ initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygo
 
 @overload
 def build_custom_array(
-    specs: Mapping[str, bool | int | float | np.floating[Any] | NDArray[np.float64]],
+    specs: Mapping[
+        str,
+        bool | np.bool_ | int | np.integer[Any] | float | np.floating[Any] | NDArray[np.float64],
+    ],
 ) -> NDArray[np.void]: ...
 
 
@@ -92,8 +95,8 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
 
     Each entry in *specs* becomes a named field in the output array:
 
-    - ``bool`` values produce a ``np.bool_`` field.
-    - ``int`` values produce a ``np.int64`` field.
+    - ``bool`` / ``np.bool_`` values produce a ``np.bool_`` field.
+    - ``int`` / ``np.integer`` values produce a ``np.int64`` field.
     - ``float`` / ``np.floating`` values produce a ``np.float64`` field.
     - 3-D ``np.ndarray`` values produce a fixed-shape sub-array field
       ``np.float64`` with the array's shape, accessed as
@@ -142,11 +145,11 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
                 )
 
         # bool checked before int – bool is a subclass of int in Python
-        elif isinstance(val, bool):
+        elif isinstance(val, (bool, np.bool_)):
             fields.append((name, np.bool_))
 
         # Python int → np.int64 (preserves integer semantics in Numba)
-        elif isinstance(val, int):
+        elif isinstance(val, (int, np.integer)):
             fields.append((name, np.int64))
 
         # float / np.floating → np.float64
@@ -156,7 +159,8 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
         else:
             raise TypeError(
                 f"custom field '{name}' has unsupported type {type(val).__name__!r}. "
-                f"Supported types: bool, int, float, 3-D np.ndarray."
+                "Supported types: bool/int/float (including NumPy scalar equivalents), "
+                "or 3-D np.ndarray."
             )
 
     # == Stage 2: build the structured dtype and allocate the 0-d array ==
@@ -173,12 +177,13 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
 
         # Scalar field: assign through [()] (0-d element access).
         # e.g. custom["temperature"][()] = 25.0
-        elif isinstance(val, (bool, int, float, np.floating)):
+        elif isinstance(val, (bool, np.bool_, int, np.integer, float, np.floating)):
             custom[name][()] = val
         else:
             raise TypeError(
                 f"custom field '{name}' has unsupported type {type(val).__name__!r}. "
-                f"Supported types: bool, int, float, 3-D np.ndarray."
+                "Supported types: bool/int/float (including NumPy scalar equivalents), "
+                "or 3-D np.ndarray."
             )
 
     return custom
