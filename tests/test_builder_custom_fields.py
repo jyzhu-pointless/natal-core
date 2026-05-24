@@ -62,6 +62,17 @@ class TestBuilderCustomFields:
         assert pop.config.custom["iterations"][()] == 100
         assert pop.config.custom["mode"][()].dtype == np.int64
 
+    def test_numpy_floating_custom(self):
+        """np.floating values are accepted as float custom fields."""
+        pop = _build({"temperature": np.float64(25.5)})
+        assert pop.config.custom["temperature"][()] == 25.5
+        assert pop.config.custom["temperature"][()].dtype == np.float64
+
+    def test_unsupported_custom_type_raises(self):
+        """Unsupported custom scalar type raises TypeError early."""
+        with np.testing.assert_raises(TypeError):
+            _build({"label": "hot"})
+
     def test_custom_accessible_in_numba(self):
         """Custom fields can be read and mutated from @njit functions."""
         from natal.numba_utils import njit_switch

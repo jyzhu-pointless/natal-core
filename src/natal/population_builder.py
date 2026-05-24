@@ -74,9 +74,7 @@ InitializeMapFn = Callable[..., NDArray[np.float64]]
 initialize_gamete_map = cast(InitializeMapFn, _population_config.initialize_gamete_map)
 initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygote_map)
 
-def build_custom_array(
-    specs: dict[str, bool | int | float | NDArray[np.float64]],
-) -> NDArray[np.void]:
+def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
     """Build a 0-d structured numpy array from custom field specs.
 
     Called during :meth:`PopulationConfigBuilder.build` when the builder's
@@ -86,7 +84,7 @@ def build_custom_array(
 
     - ``bool`` values produce a ``np.bool_`` field.
     - ``int`` values produce a ``np.int64`` field.
-    - ``float`` values produce a ``np.float64`` field.
+    - ``float`` / ``np.floating`` values produce a ``np.float64`` field.
     - 3-D ``np.ndarray`` values produce a fixed-shape sub-array field
       ``np.float64`` with the array's shape, accessed as
       ``config.custom['name'][sex, age, genotype]``.
@@ -122,11 +120,13 @@ def build_custom_array(
 
         # ndarray → fixed-shape sub-array (must be 3-D: sex × age × genotype)
         if isinstance(val, np.ndarray):
-            if val.ndim == 3:
-                fields.append((name, np.float64, val.shape))
+            array_val = cast(np.ndarray[Any, np.dtype[Any]], val)
+            shape = array_val.shape
+            if len(shape) == 3:
+                fields.append((name, np.float64, shape))
             else:
                 raise TypeError(
-                    f"custom field '{name}' is a {val.ndim}-D ndarray. "
+                    f"custom field '{name}' is a {len(shape)}-D ndarray. "
                     f"Only 3-D (sex, age, genotype) arrays are supported. "
                     f"Reshape your array to (1, n, m) if needed."
                 )
@@ -140,7 +140,7 @@ def build_custom_array(
             fields.append((name, np.int64))
 
         # float / np.floating → np.float64
-        elif isinstance(val, float):  # pyright: ignore[reportUnnecessaryIsInstance] — runtime safety gate before else:raise
+        elif isinstance(val, (float, np.floating)):
             fields.append((name, np.float64))
 
         else:
@@ -165,8 +165,15 @@ def build_custom_array(
         # e.g. custom["temperature"][()] = 25.0
         elif isinstance(val, bool):
             custom[name][()] = val
-        else:
+        elif isinstance(val, int):
             custom[name][()] = val
+        elif isinstance(val, (float, np.floating)):
+            custom[name][()] = val
+        else:
+            raise TypeError(
+                f"custom field '{name}' has unsupported type {type(val).__name__!r}. "
+                f"Supported types: bool, int, float, 3-D np.ndarray."
+            )
 
     return custom
 
