@@ -140,8 +140,14 @@ def build_custom_array(
             fields.append((name, np.int64))
 
         # float / np.floating → np.float64
-        else:
+        elif isinstance(val, float):  # pyright: ignore[reportUnnecessaryIsInstance] — runtime safety gate before else:raise
             fields.append((name, np.float64))
+
+        else:
+            raise TypeError(
+                f"custom field '{name}' has unsupported type {type(val).__name__!r}. "
+                f"Supported types: bool, int, float, 3-D np.ndarray."
+            )
 
     # == Stage 2: build the structured dtype and allocate the 0-d array ==
     dtype = np.dtype(fields)
