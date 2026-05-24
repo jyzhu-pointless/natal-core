@@ -129,7 +129,7 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
     # builders with the same specs produce byte-identical dtypes.
     fields: list[tuple[str, Any] | tuple[str, Any, tuple[int, ...]]] = []
     for name in sorted(specs):
-        val: object = specs[name]
+        val = specs[name]
 
         # ndarray → fixed-shape sub-array (must be 3-D: sex × age × genotype)
         if isinstance(val, np.ndarray):
@@ -169,7 +169,7 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
 
     # == Stage 3: write initial values ==
     for name in sorted(specs):
-        val: object = specs[name]
+        val = specs[name]
 
         # Sub-array field: copy the whole block
         if isinstance(val, np.ndarray):
