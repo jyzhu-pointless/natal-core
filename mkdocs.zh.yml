@@ -99,6 +99,7 @@ nav:
     - 2_hooks.md
     - 2_genotype_patterns.md
   - 进阶指南:
+    - 运行时参数修改: 3_runtime_modification.md
     - 3_custom_presets.md
     - 3_advanced_hooks.md
     - 3_modifiers.md
@@ -131,7 +132,8 @@ nav:
     - 基础种群: api/base_population.md
     - 离散代种群: api/discrete_generation_population.md
     - 年龄结构种群: api/age_structured_population.md
-    - 种群构建器: api/population_builder.md
+    - 配置器 (Configurator): api/configurator.md
+    - 种群构建器 (legacy): api/population_builder.md
     - 修饰器: api/modifiers.md
     - Hook DSL: api/hooks.md
     - 模拟内核: api/simulator.md

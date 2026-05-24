@@ -99,6 +99,7 @@ nav:
     - 2_hooks.md
     - 2_genotype_patterns.md
   - Advanced Guides:
+    - 3_runtime_modification.md
     - 3_custom_presets.md
     - 3_advanced_hooks.md
     - 3_modifiers.md
@@ -131,7 +132,8 @@ nav:
     - discrete_generation_population: api/discrete_generation_population.md
     - algorithms: api/algorithms.md
     - simulator: api/simulator.md
-    - population_builder: api/population_builder.md
+    - configurator: api/configurator.md
+    - population_builder (legacy): api/population_builder.md
     - genetic_patterns: api/genetic_patterns.md
     - modifiers: api/modifiers.md
     - hooks: api/hooks.md
