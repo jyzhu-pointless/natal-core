@@ -216,7 +216,7 @@ class PopulationConfigBuilder:
         initial_individual_count: Optional[NDArray[np.float64]] = None,
         initial_sperm_storage: Optional[NDArray[np.float64]] = None,
         # Custom fields
-        custom_specs: Optional[dict[str, float | int | NDArray[np.float64]]] = None,
+        custom_specs: Optional[dict[str, float | int | bool | NDArray[np.float64]]] = None,
     ) -> PopulationConfig:
         """Construct a complete PopulationConfig from builder parameters.
 
@@ -1051,7 +1051,7 @@ class PopulationBuilderBase:
         self._observation_groups: Optional[GroupsInput] = None
         self._observation_collapse_age: bool = False
         self._params: dict[str, object] = {}
-        self._custom_specs: dict[str, float | NDArray[np.float64]] = {}
+        self._custom_specs: dict[str, bool | int | float | NDArray[np.float64]] = {}
 
     def _param(self, key: str, default: object = None) -> object:
         return self._params.get(key, default)
