@@ -15,12 +15,14 @@ import numpy as np
 from numba import objmode  # pyright: ignore[reportMissingTypeStubs]
 from numpy.typing import NDArray
 
-from natal.discrete_population_config import DiscretePopulationConfig
 from natal.genetic_structures import Species
 from natal.index_registry import IndexRegistry
 from natal.numba_utils import njit_switch
 from natal.parameters import ALL_PARAMETERS, ParamDescriptor
-from natal.population_config import PopulationConfig
+from natal.population_config import (
+    DiscretePopulationConfig,
+    PopulationConfig,
+)
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
@@ -177,8 +179,6 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
 
     # DiscretePopulationConfig has pre-extracted slices (meiosis_f, meiosis_m,
     # viability_f, etc.) that must stay in sync with the source maps.
-    from natal.discrete_population_config import DiscretePopulationConfig
-
     overrides: dict[str, Any] = {
         "genotype_to_gametes_map": genotype_to_gametes_map,
         "gametes_to_zygote_map": gametes_to_zygote_map,
@@ -478,8 +478,10 @@ class Configurator:
         The underlying config is a ``DiscretePopulationConfig``, so ``.build()``
         returns ``DiscreteGenerationPopulation``.
         """
-        from natal.discrete_population_config import from_population_config
-        from natal.population_config import build_population_config
+        from natal.population_config import (
+            build_population_config,
+            from_population_config,
+        )
 
         bp = species.get_config_blueprint()
         config = build_population_config(
@@ -1037,8 +1039,6 @@ class Configurator:
             hooks = hook_map
 
         # Determine population class from config type.
-        from natal.discrete_population_config import DiscretePopulationConfig
-
         if self._species is None:
             raise RuntimeError(
                 "Cannot build Population: no Species set. "

@@ -6,7 +6,6 @@
 from .age_structured_population import AgeStructuredPopulation
 from .configurator import AgeStructuredConfigurator, Configurator, DiscreteConfigurator
 from .discrete_generation_population import DiscreteGenerationPopulation
-from .discrete_population_config import DiscretePopulationConfig, from_population_config
 from .gamete_allele_conversion import (
     GameteAlleleConversionRule,
     GameteConversionRuleSet,
@@ -100,6 +99,7 @@ from .population_builder import (
 from .population_config import (
     BEVERTON_HOLT,
     CONCAVE,
+    DiscretePopulationConfig,
     FIXED,
     LINEAR,
     LOGISTIC,
@@ -111,6 +111,7 @@ from .population_config import (
     extract_gamete_frequencies_by_glab,
     extract_zygote_frequencies,
     from_plain_population_config,
+    from_population_config,
     to_plain_population_config,
 )
 from .population_state import (

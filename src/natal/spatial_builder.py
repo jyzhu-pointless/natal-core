@@ -43,10 +43,9 @@ from natal.configurator import (
     DiscreteConfigurator,
 )
 from natal.discrete_generation_population import DiscreteGenerationPopulation
-from natal.discrete_population_config import DiscretePopulationConfig
 from natal.genetic_structures import Species
 from natal.observation import GroupsInput
-from natal.population_config import PopulationConfig
+from natal.population_config import DiscretePopulationConfig, PopulationConfig
 from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import GridTopology
 

@@ -16,7 +16,6 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from natal.discrete_population_config import DiscretePopulationConfig
 from natal.engine.discrete_generation_simulator import (
     run_discrete_aging,
     run_discrete_reproduction,
@@ -33,6 +32,7 @@ from natal.hooks.types import (
     HookProgram,
 )
 from natal.numba_utils import njit_switch
+from natal.population_config import DiscretePopulationConfig
 from natal.population_state import DiscretePopulationState
 
 

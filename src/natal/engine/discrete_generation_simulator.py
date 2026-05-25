@@ -9,13 +9,17 @@ from numpy.typing import NDArray
 
 import natal.engine.simulation.age_structured as alg
 from natal import numba_compat as nbc
-from natal.discrete_population_config import DiscretePopulationConfig
 from natal.engine.simulation.discrete_generation import (
     fertilize_discrete,
     mate_discrete,
 )
 from natal.numba_utils import njit_switch
-from natal.population_config import FIXED, LOGISTIC, NO_COMPETITION
+from natal.population_config import (
+    FIXED,
+    LOGISTIC,
+    NO_COMPETITION,
+    DiscretePopulationConfig,
+)
 
 __all__ = [
     "run_discrete_reproduction",

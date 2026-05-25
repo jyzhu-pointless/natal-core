@@ -26,10 +26,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
-from natal.discrete_population_config import (
-    DiscretePopulationConfig,
-    from_population_config,
-)
 from natal.engine.discrete_generation_simulator import (
     run_discrete_aging,
     run_discrete_reproduction,
@@ -38,7 +34,11 @@ from natal.engine.discrete_generation_simulator import (
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
 from natal.hooks.types import RESULT_CONTINUE
-from natal.population_config import PopulationConfig
+from natal.population_config import (
+    DiscretePopulationConfig,
+    PopulationConfig,
+    from_population_config,
+)
 from natal.population_state import (
     DiscretePopulationState,
     parse_flattened_discrete_state,
