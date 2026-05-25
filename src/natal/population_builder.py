@@ -1,9 +1,12 @@
-"""Builder for constructing population instances with fluent API.
+"""Legacy population builder classes.
 
-This module provides PopulationBuilder classes for streamlined, chainable
-population construction. It separates configuration management from object
-instantiation, preventing parameter bloat and enabling clear, readable code.
+.. deprecated::
+    Use ``Configurator`` (``src/natal/configurator.py``) instead.
+    The default ``setup()`` path now goes through ``DiscreteConfigurator`` /
+    ``AgeStructuredConfigurator``.  These Builder classes remain available
+    via ``setup(legacy_path=True)`` for backward compatibility only.
 """
+
 
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
@@ -46,7 +49,10 @@ if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
     from natal.discrete_generation_population import DiscreteGenerationPopulation
 
-__all__ = ["AgeStructuredPopulationBuilder", "DiscreteGenerationPopulationBuilder"]
+__all__ = [
+    "AgeStructuredPopulationBuilder",     # legacy — use AgeStructuredConfigurator
+    "DiscreteGenerationPopulationBuilder",  # legacy — use DiscreteConfigurator
+]
 
 GenotypeSelectorAtom = Union[Genotype, str]
 GenotypeSelector = Union[GenotypeSelectorAtom, Tuple[GenotypeSelectorAtom, ...]]
