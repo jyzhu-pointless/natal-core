@@ -257,8 +257,18 @@ def set_param(
         field[desc.config_path] = value
     elif isinstance(field, np.ndarray) and field.ndim == 0:
         field[()] = value
+    elif isinstance(field, np.ndarray):
+        raise ValueError(
+            f"Cannot set {name!r} via set_param: field is a {field.ndim}d array "
+            f"but config_path is empty. Use the corresponding Configurator method "
+            f"or write to the array directly."
+        )
     else:
-        field[()] = value  # fallback for 0-d fields
+        raise TypeError(
+            f"Cannot set {name!r} via set_param: field is a Python "
+            f"{type(field).__name__} on an immutable config. "
+            f"Use the corresponding Configurator method instead."
+        )
 
     # Auto-sync equilibrium when sensitive params change.
     key = f"{desc.domain.value}.{desc.name}"
@@ -368,11 +378,19 @@ def _write_fitness_field_flat(
                     arr[sex_idx, gidx] *= float(value)
             elif field_name == "sexual_selection":
                 arr = config.sexual_selection_fitness
-                # sexual_selection is indexed differently: [female_idx, male_idx]
+                # sexual_selection is indexed [female_idx, male_idx].
+                # sex_idx=0 → genotype is female → write row (arr[gidx, :])
+                # sex_idx=1 → genotype is male   → write col (arr[:, gidx])
                 if mode == "replace":
-                    arr[sex_idx, gidx] = float(value)
+                    if sex_idx == 0:
+                        arr[gidx, :] = float(value)
+                    else:
+                        arr[:, gidx] = float(value)
                 else:
-                    arr[sex_idx, gidx] *= float(value)
+                    if sex_idx == 0:
+                        arr[gidx, :] *= float(value)
+                    else:
+                        arr[:, gidx] *= float(value)
             elif field_name == "zygote_viability":
                 arr = config.zygote_viability_fitness
                 if mode == "replace":

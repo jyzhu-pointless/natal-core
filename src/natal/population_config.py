@@ -1150,7 +1150,7 @@ class DiscretePopulationConfig(NamedTuple):
     def set_population_scale(self, scale: float) -> DiscretePopulationConfig:
         return self._replace(
             population_scale=float(scale),
-            carrying_capacity=self.base_carrying_capacity * float(scale),
+            carrying_capacity=np.array(float(self.base_carrying_capacity) * float(scale)),
         )
 
 

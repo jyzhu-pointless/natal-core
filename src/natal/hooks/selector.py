@@ -143,9 +143,16 @@ def compile_selector_hook(
         )
         nt_param_name = extra_params[0].name if use_namedtuple else "sel"
 
+    # Determine state type for the generated wrapper's type annotation.
+    from natal.discrete_generation_population import DiscreteGenerationPopulation
+    if isinstance(pop, DiscreteGenerationPopulation):
+        state_type_name = "DiscretePopulationState"
+    else:
+        state_type_name = "PopulationState"
+
     if is_njit_fn or NUMBA_ENABLED:
         njit_fn = _compile_selector_njit_wrapper(
-            func, resolved, has_deme_id, use_namedtuple, nt_param_name,
+            func, resolved, has_deme_id, state_type_name, use_namedtuple, nt_param_name,
         )
         return CompiledHookDescriptor(
             name=func.__name__,
@@ -185,10 +192,15 @@ def _compile_selector_njit_wrapper(
     user_fn: Callable[..., Any],
     resolved_selectors: Dict[str, NDArray[np.int32]],
     has_deme_id: bool,
+    state_type_name: str,
     use_namedtuple: bool = False,
     nt_param_name: str = "sel",
 ) -> Callable[..., Any]:
     """Generate a Numba wrapper with selector constants baked in.
+
+    The wrapper accepts ``(state, config, deme_id)`` — the current hook
+    calling convention — extracts ``ind_count`` / ``tick`` from *state*,
+    and forwards them plus the baked-in selector values to *user_fn*.
 
     When ``use_namedtuple`` is True, packs all selectors into a single
     ``namedtuple`` argument::
@@ -200,8 +212,9 @@ def _compile_selector_njit_wrapper(
     """
     selector_keys = list(resolved_selectors.keys())
 
-    # Deterministic identity key for caching
-    selector_parts = ["selector", stable_callable_identity(user_fn)]
+    # Deterministic identity key for caching — must include state type
+    # because different state types produce different import lines.
+    selector_parts = ["selector", stable_callable_identity(user_fn), state_type_name]
     if use_namedtuple:
         selector_parts.append("namedtuple")
     for key in sorted(selector_keys):
@@ -213,7 +226,10 @@ def _compile_selector_njit_wrapper(
     module_stem = f"selector_wrapper_{key}"
 
     selector_placeholders = [f"_SEL_{name}" for name in selector_keys]
-    code_lines = ["from natal.numba_utils import njit_switch"]
+    code_lines = [
+        "from natal.numba_utils import njit_switch",
+        f"from natal.population_state import {state_type_name}",
+    ]
 
     if use_namedtuple:
         nt_fields = ", ".join(f"'{k}'" for k in selector_keys)
@@ -232,7 +248,9 @@ def _compile_selector_njit_wrapper(
         code_lines.extend([
             "",
             "@njit_switch(cache=True)",
-            f"def {fn_name}(ind_count, tick, deme_id=-1):",
+            f"def {fn_name}(state: {state_type_name}, config, deme_id=-1):",
+            "    ind_count = state.individual_count",
+            "    tick = state.n_tick",
             f"    {nt_param_name} = _Sel({nt_args})",
             f"    return _USER_FN({call_args}, {nt_param_name})",
             "",
@@ -242,7 +260,9 @@ def _compile_selector_njit_wrapper(
         code_lines.extend([
             "",
             "@njit_switch(cache=True)",
-            f"def {fn_name}(ind_count, tick, deme_id=-1):",
+            f"def {fn_name}(state: {state_type_name}, config, deme_id=-1):",
+            "    ind_count = state.individual_count",
+            "    tick = state.n_tick",
             f"    return _USER_FN({call_args}, {args_str})",
             "",
         ])

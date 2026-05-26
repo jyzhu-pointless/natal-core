@@ -98,30 +98,20 @@ def run_discrete_survival(
     elif mode == FIXED:
         scaling = alg.compute_scaling_factor_fixed(total_age_0, cfg.carrying_capacity[()])  # pyright: ignore[reportArgumentType]
     else:
-        # Compute equilibrium ref values inline from current config.
-        # This picks up runtime modifications to carrying_capacity / eggs / sex_ratio.
-        expected_comp, expected_surv = alg.compute_equilibrium_metrics(
-            carrying_capacity=cfg.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
-            expected_eggs_per_female=cfg.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
-            age_based_survival_rates=cfg.age_based_survival_rates,
-            age_based_mating_rates=cfg.age_based_mating_rates,
-            age_based_reproduction_rates=cfg.age_based_reproduction_rates,
-            female_age_based_relative_fertility=cfg.female_age_based_relative_fertility,
-            relative_competition_strength=cfg.age_based_relative_competition_strength,
-            sex_ratio=cfg.sex_ratio[()],  # pyright: ignore[reportArgumentType]
-            new_adult_age=cfg.new_adult_age,
-            n_ages=cfg.n_ages,
-        )
         if mode == LOGISTIC:
             scaling = alg.compute_scaling_factor_logistic(
-                total_age_0, expected_comp, expected_surv,
+                total_age_0,
+                cfg.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
+                cfg.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
                 cfg.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
-            )  # pyright: ignore[reportArgumentType]
+            )
         else:
             scaling = alg.compute_scaling_factor_beverton_holt(
-                total_age_0, expected_comp, expected_surv,
+                total_age_0,
+                cfg.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
+                cfg.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
                 cfg.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
-            )  # pyright: ignore[reportArgumentType]
+            )
 
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         (ind_count[0, 0, :], ind_count[1, 0, :]),

@@ -1232,3 +1232,82 @@ def compute_scaling_factor_beverton_holt(
     actual_growth_rate = r / denominator
 
     return actual_growth_rate * expected_survival_rate
+
+
+# ── Backward-compatibility wrappers ──────────────────────────────────────────
+
+
+def fertilize_with_precomputed_offspring_probability(
+    female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
+    sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
+    fertility_f: Annotated[NDArray[np.float64], "shape=(g,)"],
+    fertility_m: Annotated[NDArray[np.float64], "shape=(g,)"],
+    offspring_probability: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
+    average_eggs_per_wt_female: float,
+    adult_start_idx: int,
+    n_ages: int,
+    n_genotypes: int,
+    n_haplogenotypes: int,
+    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
+    male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
+    n_glabs: int = 1,
+    fixed_eggs: bool = False,
+    sex_ratio: float = 0.5,
+    has_sex_chromosomes: bool = False,
+    is_stochastic: bool = True,
+    use_continuous_sampling: bool = False,
+) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
+    """Deprecated: use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction."""
+    import warnings
+    warnings.warn(
+        "fertilize_with_precomputed_offspring_probability is deprecated. "
+        "Use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
+        sperm_storage_by_male_genotype=sperm_storage_by_male_genotype,
+        fertility_f=fertility_f,
+        fertility_m=fertility_m,
+        offspring_probability=offspring_probability,
+        average_eggs_per_wt_female=average_eggs_per_wt_female,
+        adult_start_idx=adult_start_idx,
+        n_ages=n_ages,
+        n_genotypes=n_genotypes,
+        female_genotype_compatibility=female_genotype_compatibility,
+        male_genotype_compatibility=male_genotype_compatibility,
+        female_only_by_sex_chrom=female_only_by_sex_chrom,
+        male_only_by_sex_chrom=male_only_by_sex_chrom,
+        n_glabs=n_glabs,
+        age_based_reproduction_rates=None,
+        female_age_based_relative_fertility=None,
+        fixed_eggs=fixed_eggs,
+        sex_ratio=sex_ratio,
+        has_sex_chromosomes=has_sex_chromosomes,
+        is_stochastic=is_stochastic,
+        use_continuous_sampling=use_continuous_sampling,
+    )
+
+
+def fertilize_with_mating_genotype(*args: Any, **kwargs: Any) -> Any:
+    """Deprecated: this function has been removed.
+
+    The mating-genotype fertilization path has been consolidated into
+    _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction.
+    Precompute offspring probabilities with :func:`compute_offspring_probability`
+    and pass them to the unified fertilization kernel.
+    """
+    import warnings
+    warnings.warn(
+        "fertilize_with_mating_genotype has been removed. "
+        "Use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction "
+        "with precomputed offspring probabilities.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    raise NotImplementedError(
+        "fertilize_with_mating_genotype has been removed. "
+        "Use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction."
+    )

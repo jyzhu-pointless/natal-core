@@ -83,10 +83,9 @@ noop_hook = _noop_hook
 def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
     """Ensure an njit hook matches (state, config, deme_id).
 
-    Wraps older signatures:
-      - 2-arg (ind_count, tick) — legacy
-      - 3-arg (ind_count, tick, deme_id) — legacy
-    to the current 3-arg (state, config, deme_id).
+    Wraps the legacy 2-arg ``(ind_count, tick)`` signature to the
+    current 3-arg ``(state, config, deme_id)``.  Hooks with 3+ args
+    are assumed to already use the current convention.
     """
     py_fn = getattr(fn, "py_func", fn)
     sig = inspect.signature(py_fn)
@@ -102,7 +101,7 @@ def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
 def _normalize_py_hook(fn: HookCallable) -> HookCallable:
     """Ensure a Python hook matches (state, config, deme_id).
 
-    Wraps older signatures to the current 3-arg signature.
+    Wraps the legacy 2-arg signature to the current 3-arg signature.
     """
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
