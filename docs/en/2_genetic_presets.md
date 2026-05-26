@@ -137,7 +137,7 @@ pop = (AgeStructuredPopulationBuilder(species)
        .build())
 
 # Run simulation
-pop.run(ticks=100)
+pop.run(n_steps=100)
 ```
 
 ### Combining Multiple Presets

@@ -170,11 +170,10 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 
 > This section introduces the underlying implementation mechanisms of NATAL Core that are not directly user-facing, helping you understand how NATAL Core works internally.
 
-<!--TODO: numba related content can be moved forward as appropriate-->
 
 14. [IndexRegistry Indexing Mechanism](4_index_registry.md)
 15. [PopulationState and PopulationConfig](4_population_state_config.md)
-16. [the Simulation Engine in Depth](4_simulator.md)
+16. [the Simulation Engine in Depth](4_simulation_engine.md)
 17. [Numba Optimization Guide](4_numba_optimization.md)
 18. [Observation History Recording Implementation](observation_impl.md)
 

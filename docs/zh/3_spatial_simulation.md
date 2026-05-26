@@ -7,8 +7,8 @@ SpatialPopulation 的实际用法：用 SpatialBuilder 快速构建多 deme 种�
 ```python
 spatial = (
     SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2))
-    .setup(name=”demo”, stochastic=False)
-    .initial_state(individual_count={“female”: {“A|A”: 100}, “male”: {“A|A”: 100}})
+    .setup(name="demo", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 100}, "male": {"A|A": 100}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=10000)
     .migration(kernel=my_kernel, migration_rate=0.15)
@@ -26,13 +26,13 @@ spatial = (
 from natal import Species, HexGrid, SpatialPopulation
 from natal.spatial_builder import batch_setting
 
-species = Species.from_dict(name=”demo”, structure={“chr1”: {“loc”: [“A”, “B”]}})
+species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
 # 同构：所有 deme 参数一致
 pop = (
     SpatialPopulation.builder(species, n_demes=100, topology=HexGrid(10, 10))
-    .setup(name=”homo_demo”, stochastic=False)
-    .initial_state(individual_count={“female”: {“A|A”: 5000}, “male”: {“A|A”: 5000}})
+    .setup(name="homo_demo", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 5000}, "male": {"A|A": 5000}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=10000)
     .migration(migration_rate=0.1)
@@ -42,8 +42,8 @@ pop = (
 # 异构：通过 batch_setting 为不同 deme 指定不同参数
 pop_het = (
     SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2))
-    .setup(name=”het_demo”, stochastic=False)
-    .initial_state(individual_count={“female”: {“A|A”: 5000}, “male”: {“A|A”: 5000}})
+    .setup(name="het_demo", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 5000}, "male": {"A|A": 5000}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=batch_setting([10000, 5000, 5000, 8000]))
     .migration(migration_rate=0.1)
@@ -100,21 +100,21 @@ spatial = SpatialPopulation(
 pop = (
     SpatialPopulation.builder(species, n_demes=9, topology=SquareGrid(3, 3))
     →                   # 入口：指定 deme 数量和拓扑
-    .setup(name=”demo”, stochastic=False, use_continuous_sampling=False)
+    .setup(name="demo", stochastic=False, use_continuous_sampling=False)
                         # 基本设定：名称、随机性、采样模式
     .age_structure(n_ages=8, new_adult_age=2)
                         # [仅 age_structured] 年龄分组数、成体起始年龄
-    .initial_state(individual_count={“female”: {“A|A”: 500}, “male”: {“A|A”: 500}})
+    .initial_state(individual_count={"female": {"A|A": 500}, "male": {"A|A": 500}})
                         # [B] 初始基因型分布
     .survival(female_age_based_survival_rates=[...], ...)
                         # 存活率（age_structured 为年龄向量，discrete 为标量）
     .reproduction(eggs_per_female=50.0, sex_ratio=0.5)
                         # [B] 繁殖参数
-    .competition(carrying_capacity=10000, juvenile_growth_mode=”logistic”)
+    .competition(carrying_capacity=10000, juvenile_growth_mode="logistic")
                         # [B] 密度制约
-    .presets(HomingDrive(name=”Drive”, ...))
+    .presets(HomingDrive(name="Drive", ...))
                         # [B] 基因驱动预设
-    .fitness(viability={“R2|R2”: 0.0}, mode=”replace”)
+    .fitness(viability={"R2|R2": 0.0}, mode="replace")
                         # [B] 适应性
     .hooks(my_hook)
                         # 生命周期钩子（不接受 batch_setting）
@@ -132,7 +132,7 @@ pop = (
 .migration(
     kernel=None,                     # [B] NDArray: 奇数维迁移核
     migration_rate=0.0,             # float | NDArray | Sequence: 迁移比例（标量广播到所有年龄）
-    strategy=”auto”,                # “auto” | “adjacency” | “kernel” | “hybrid”
+    strategy="auto",                # "auto" | "adjacency" | "kernel" | "hybrid"
     adjacency=None,                 # 显式邻接矩阵
     kernel_bank=None,               # 异构 kernel 集合
     deme_kernel_ids=None,           # per-deme kernel 索引
@@ -198,8 +198,8 @@ batch_setting(lambda r, c: 10000 if r == 0 else 5000)
 ```python
 pop = (
     SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2))
-    .setup(name=”het_K”, stochastic=False)
-    .initial_state(individual_count={“female”: {“A|A”: 5000}, “male”: {“A|A”: 5000}})
+    .setup(name="het_K", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 5000}, "male": {"A|A": 5000}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=batch_setting([10000, 5000, 5000, 8000]))
     .migration(migration_rate=0.1)
@@ -218,26 +218,26 @@ from natal.spatial_builder import batch_setting
 
 # 默认所有 deme 只有 WT
 n_demes = 100
-default_state = {“female”: {“WT|WT”: 500}, “male”: {“WT|WT”: 500}}
+default_state = {"female": {"WT|WT": 500}, "male": {"WT|WT": 500}}
 
 # 中心 deme 释放 drive 杂合子
-release_state = {“female”: {“WT|WT”: 450, “Dr|WT”: 50},
-                 “male”:   {“WT|WT”: 450, “Dr|WT”: 50}}
+release_state = {"female": {"WT|WT": 450, "Dr|WT": 50},
+                 "male":   {"WT|WT": 450, "Dr|WT": 50}}
 
 states = [default_state] * n_demes
 states[n_demes // 2] = release_state
 
 pop = (
     SpatialPopulation.builder(species, n_demes=n_demes, topology=HexGrid(10, 10))
-    .setup(name=”drive_release”, stochastic=True, use_continuous_sampling=True)
+    .setup(name="drive_release", stochastic=True, use_continuous_sampling=True)
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6,
-                 juvenile_growth_mode=”concave”)
-    .presets(HomingDrive(name=”Drive”, drive_allele=”Dr”, target_allele=”WT”,
-                         resistance_allele=”R2”, functional_resistance_allele=”R1”,
+                 juvenile_growth_mode="concave")
+    .presets(HomingDrive(name="Drive", drive_allele="Dr", target_allele="WT",
+                         resistance_allele="R2", functional_resistance_allele="R1",
                          drive_conversion_rate=0.95))
-    .fitness(fecundity={“R2::!Dr”: 1.0, “R2|R2”: {“female”: 0.0}})
+    .fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}})
     .migration(kernel=kernel, migration_rate=0.2)
     .build()
 )
@@ -250,8 +250,8 @@ pop = (
 ```python
 pop = (
     SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2))
-    .setup(name=”multi_het”, stochastic=False)
-    .initial_state(individual_count={“female”: {“A|A”: 500}, “male”: {“A|A”: 500}})
+    .setup(name="multi_het", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 500}, "male": {"A|A": 500}})
     .reproduction(eggs_per_female=batch_setting([50, 50, 30, 30]))
     .competition(
         carrying_capacity=batch_setting([10000, 5000, 10000, 5000]),
@@ -282,8 +282,8 @@ def capacity_gradient(r, c):
 
 pop = (
     SpatialPopulation.builder(species, n_demes=100, topology=HexGrid(10, 10))
-    .setup(name=”gradient”, stochastic=False)
-    .initial_state(individual_count={“female”: {“A|A”: 500}, “male”: {“A|A”: 500}})
+    .setup(name="gradient", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 500}, "male": {"A|A": 500}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=batch_setting(capacity_gradient))
     .migration(migration_rate=0.1)
@@ -350,12 +350,12 @@ pop = (
 import numpy as np
 from natal import Species, SpatialPopulation, HexGrid
 
-species = Species.from_dict(name=”hex_demo”, structure={“chr1”: {“loc”: [“A”, “B”]}})
+species = Species.from_dict(name="hex_demo", structure={"chr1": {"loc": ["A", "B"]}})
 
 spatial = (
     SpatialPopulation.builder(species, n_demes=10000, topology=HexGrid(100, 100))
-    .setup(name=”SpatialHexDemo”, stochastic=False)
-    .initial_state(individual_count={“female”: {“A|A”: 100}, “male”: {“A|A”: 100}})
+    .setup(name="SpatialHexDemo", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 100}, "male": {"A|A": 100}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=10000)
     .migration(

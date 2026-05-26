@@ -96,7 +96,7 @@ zygote_ruleset.add_convert(
     genotype_filter=lambda g: "D" in str(g)
 )
 
-pop.add_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
+pop.set_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
 pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 ```
 
@@ -413,10 +413,10 @@ class DrivePreset(GeneticPreset):
 
 ```python
 pop = (
-    AgeStructuredPopulationBuilder(species)
-    .setup(name="DriveExperiment", stochastic=True)
+    nt.AgeStructuredPopulation
+    .setup(species=species, name="DriveExperiment", stochastic=True)
     .age_structure(n_ages=8)
-    .initial_state({...})
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )

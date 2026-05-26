@@ -137,7 +137,7 @@ pop = (AgeStructuredPopulationBuilder(species)
        .build())
 
 # 运行模拟
-pop.run(ticks=100)
+pop.run(n_steps=100)
 ```
 
 ### 多个预设组合使用

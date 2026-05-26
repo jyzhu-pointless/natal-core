@@ -55,7 +55,7 @@ ruleset.add_convert(from_allele="W", to_allele="D", rate=0.5)
 ### 使用 ZygoteConversionRuleSet
 
 ```python
-from natal.gamete_allele_conversion import ZygoteConversionRuleSet
+from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 

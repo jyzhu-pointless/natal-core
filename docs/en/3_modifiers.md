@@ -208,5 +208,5 @@ Using both in coordination allows expressing most advanced genetic mechanisms.
 
 - [Genetic Preset System](2_genetic_presets.md)
 - [Hook System](2_hooks.md)
-- [the Simulation Engine Deep Dive](4_simulator.md)
+- [the Simulation Engine Deep Dive](4_simulation_engine.md)
 - [PopulationState and PopulationConfig](4_population_state_config.md)

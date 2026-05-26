@@ -170,7 +170,6 @@ launch(pop)
 
 > 本部分介绍 NATAL Core 中不直接面向用户的底层实现机制，帮助你深入理解 NATAL Core 的工作原理。
 
-<!--TODO: numba 相关内容可适当提前-->
 
 14. [IndexRegistry 索引机制](4_index_registry.md)
 15. [PopulationState 与 PopulationConfig](4_population_state_config.md)
