@@ -37,7 +37,6 @@ pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ```
 
 参见 [Configurator API 参考](../api/configurator.md)。
-```
 
 ## 配置流程
 
@@ -164,10 +163,11 @@ NATAL Core 提供两种主要的种群类型：
 | `female_age_based_mating_rates` | `Optional` | 雌性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
 | `male_age_based_mating_rates` | `Optional` | 雄性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
 | `female_age_based_relative_fertility` | `Optional` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度必须等于 `n_ages`；用于调节不同年龄雌性的产卵贡献。 |
+| `female_age_based_reproduction_rates` | `Optional` | 雌性按年龄的繁殖参与率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时默认全为 1.0。支持标量、序列、映射、函数。 |
 | `eggs_per_female` | `float` | 每只雌性的基础产卵数。 | `50.0` | reproduction | 作为种群产卵数的基准；调参时可从中性值开始。 |
 | `use_fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 表示固定产卵数，`False` 表示随机产卵。 |
 | `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
-| `use_sperm_storage` | `bool` | 是否启用精子存储机制。 | `True` | reproduction | `True` 启用，`False` 禁用（此时仅考虑当次交配）。 |
+| `use_sperm_storage` | `bool` | 精子存储始终启用（该参数为兼容性保留，无实际效果）。 | `True` | reproduction | 该参数仅用于兼容性，设置任何值均不改变行为。 |
 | `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 取值范围通常为 `(0, 1]`；值越大表示新精子替换速度越快。 |
 
 ### `competition(...)` – 竞争与密度调节
@@ -366,7 +366,7 @@ def release_drive_carriers():
 
 ### `build()` – 编译构建
 
-`build()` 方法没有参数，但有强约束：
+`build()` 接受可选的 `name`（种群名称）和 `hooks`（hook 注册表），有约束：
 
 - 必须先调用 `initial_state(...)` 设置初始状态。
 - 执行顺序为：

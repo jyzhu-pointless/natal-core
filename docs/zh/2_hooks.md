@@ -25,6 +25,8 @@ Hook 的作用时机包括：
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=10)
 def periodic_release():
     return [
@@ -183,13 +185,15 @@ Hook 会在 `run(...)` 与 `run_tick()` 中按事件顺序自动执行。
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=0)
 def release():
     return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
 
 @nt.hook(event="late", priority=5)
 def stop_if_no_female():
-    return [nt.Op.stop_if_zero(sex="female", threshold=10000)]
+    return [nt.Op.stop_if_zero(sex="female")]
 
 pop = (
     nt.AgeStructuredPopulation

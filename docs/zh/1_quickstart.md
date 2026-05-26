@@ -1,6 +1,6 @@
 # 快速开始：15 分钟上手 NATAL
 
-通过一个**离散世代种群**和一个**年龄结构种群**的示例，快速熟悉 NATAL 的核心建模流程与可视化分析工具。
+通过一个**离散世代种群**和一个**年龄结构种群**的示例，快速熟悉 NATAL 的核心建模流程与可视化分析工具。（每一代/时间步称为一个 **tick**）
 如您还没有安装 `natal-core`，请参考[首页](index.md)完成安装。
 
 ---
@@ -209,7 +209,7 @@ pop = (nt.DiscreteGenerationPopulation
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MyPop")
     .age_structure(n_ages=8)
-    .initial_state({...})
+    .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
     .fitness(viability={
         "Resistance|Resistance": {"female": 0.7},   # 抗性纯合子生存率降低
         "Drive|Drive": {"female": 0.0}              # 驱动纯合子不育
@@ -282,6 +282,7 @@ state_json = nt.population_to_readable_json(pop, indent=2)
 print(state_json[:240])
 
 # 3) 定义可复用 observation 规则（推荐通过 population API）
+# 注意：`Drive::*` 匹配所有带 Drive 等位基因的基因型（:: 表示"染色体.位点: 等位基因"的通配模式）
 observation = pop.create_observation(
     groups={
         "adult_drive_female": {

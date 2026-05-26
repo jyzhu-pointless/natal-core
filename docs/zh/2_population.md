@@ -192,8 +192,9 @@ results = pop.run(n_steps=100, record_every=5)
 current_state = pop.output_current_state()
 print("当前状态:", current_state)
 
-# 获取JSON格式（便于传输和存储）
-json_state = pop.output_current_state(output_path="state.json")
+# 包含零计数组的输出
+detailed_state = pop.output_current_state(include_zero_counts=True)
+print("详细状态:", detailed_state)
 ```
 
 ### 与观察规则集成

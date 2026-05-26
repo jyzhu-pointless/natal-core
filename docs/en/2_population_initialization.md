@@ -42,7 +42,7 @@ Population.setup() → chainable configuration method calls
   → reproduction → survival → aging (and hooks)
 ```
 
-After configuration, you can use the returned population object to call `run()` or `run_tick()` methods to start the simulation (see [the Simulation Engine Deep Dive](4_simulator.md)).
+After configuration, you can use the returned population object to call `run()` or `run_tick()` methods to start the simulation (see [the Simulation Engine Deep Dive](4_simulation_engine.md)).
 
 ## Two Types of Configuration Interfaces
 
@@ -155,10 +155,11 @@ Validation rules:
 | `female_age_based_mating_rates` | `Optional` | Female per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
 | `male_age_based_mating_rates` | `Optional` | Male per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
 | `female_age_based_relative_fertility` | `Optional` | Female per-age relative fertility weights | `None` | reproduction | Length must equal `n_ages`; used to modulate egg production contribution across ages |
+| `female_age_based_reproduction_rates` | `Optional` | Female per-age reproduction participation rates. | `None` | reproduction | Length must equal `n_ages`; defaults to all 1.0 when not set. Supports scalar, sequence, mapping, function. |
 | `eggs_per_female` | `float` | Base number of eggs per female | `50.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
 | `use_fixed_egg_count` | `bool` | Whether egg count is fixed | `False` | reproduction | `True` for fixed egg count, `False` for random egg production |
 | `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
-| `use_sperm_storage` | `bool` | Whether to enable sperm storage mechanism | `True` | reproduction | `True` enables, `False` disables (only current mating considered) |
+| `use_sperm_storage` | `bool` | Sperm storage is always enabled (this parameter is a no-op retained for compatibility). | `True` | reproduction | The parameter is accepted for compatibility but has no effect. |
 | `sperm_displacement_rate` | `float` | Rate at which new sperm replaces old sperm | `0.05` | reproduction | Typical range `(0, 1]`; larger values mean faster replacement |
 
 ### `competition(...)` – Competition and Density Regulation
@@ -357,7 +358,7 @@ Common errors:
 
 ### `build()` – Compilation Build
 
-The `build()` method takes no parameters but has strong constraints:
+The `build()` method accepts optional `name` (population name) and `hooks` (hook registrations), with constraints:
 
 - `initial_state(...)` must be called before it to set the initial state.
 - Execution order:
@@ -495,7 +496,7 @@ The `Configurator` chainable API writes parameters immediately to `PopulationCon
 - [Hook System](2_hooks.md) - Detailed usage of hook functions
 - [Genotype Pattern Matching](2_genotype_patterns.md) - Detailed genotype matching rules
 - [PopulationState & PopulationConfig: Compilation and Configuration](4_population_state_config.md) - Detailed underlying configuration objects
-- [the Simulation Engine Deep Dive](4_simulator.md) - Simulation execution flow and algorithm implementation
+- [the Simulation Engine Deep Dive](4_simulation_engine.md) - Simulation execution flow and algorithm implementation
 
 ***
 

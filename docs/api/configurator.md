@@ -12,7 +12,7 @@ Key features:
 
 - **Fluent chain API** — `.competition(carrying_capacity=10000).reproduction(eggs_per_female=50).build()`
 - **Immediate writes** — every chain method writes to NumPy arrays in-place
-- **Runtime modification** — `pop.update().competition(K=5000)` without rebuilding
+- **Runtime modification** — `pop.update().competition(carrying_capacity=5000)` without rebuilding
 - **Model-specific subclasses** — `DiscreteConfigurator` / `AgeStructuredConfigurator`
   with narrowed parameter signatures
 - **Preset/modifier/fitness** — applied directly to config arrays, no deferred execution

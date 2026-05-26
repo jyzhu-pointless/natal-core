@@ -1,6 +1,6 @@
 # Quick Start: Get Started with NATAL in 15 Minutes
 
-This chapter will walk you through the core modeling workflow and visualization tools of NATAL using a **discrete-generation population** and an **age-structured population** as examples.
+This chapter will walk you through the core modeling workflow and visualization tools of NATAL using a **discrete-generation population** and an **age-structured population** as examples (each generation/time step is called a **tick**).
 If you haven't installed `natal-core` yet, please refer to the [homepage](index.md) to complete the installation.
 
 ---

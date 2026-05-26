@@ -200,7 +200,7 @@ def release():
 
 @nt.hook(event="late", priority=5)
 def stop_if_no_female():
-    return [nt.Op.stop_if_zero(sex="female", threshold=10000)]
+    return [nt.Op.stop_if_zero(sex="female")]
 
 pop = (
     nt.AgeStructuredPopulation
