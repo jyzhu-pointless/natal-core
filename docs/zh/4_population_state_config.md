@@ -91,9 +91,17 @@ class DiscretePopulationState(NamedTuple):
 
 ### 使用时应关注什么
 
-`PopulationConfig` 是一个**静态对象**，包含模型的所有固定参数与遗传映射矩阵。**它不能也不应在模拟中被修改。**
+`PopulationConfig` 是一个 `NamedTuple`，其拓扑结构（包含哪些字段、字段的 shape）在构建后**不可变**。但其中生态参数（如 `carrying_capacity`、`eggs_per_female` 等 9 个标量）以 0-d ndarray 形式存储，**可以在 Hook 中原地修改**：
 
-可以打印输出 `PopulationConfig` 的字段值，以确认模型参数是否符合预期：
+```python
+@nt.hook(event="early", custom=True)
+def heatwave(state, config, deme_id):
+    if state.n_tick == 10:
+        config.carrying_capacity[()] = 2000  # 原地修改，立即生效
+    return 0
+```
+
+大数组字段（如 `viability_fitness`、`genotype_to_gametes_map`）不建议在运行中修改，但技术上也可通过数组索引进行原地赋值。可以打印输出 `PopulationConfig` 的字段值，以确认模型参数是否符合预期：
 
 ```python
 cfg = pop.config

@@ -53,18 +53,19 @@ class IndexRegistry:
 
 **重要提示**：`IndexRegistry` 是底层数据表，用户通常无需直接调用其方法。用户访问基因型、单倍基因型或配子标签时，应使用以下高层接口：
 
-### 使用字符串直接访问
+### 使用索引访问
 ```python
-# 使用字符串直接操作，无需关心底层索引
-pop.state.individual_count[Sex.FEMALE, 3, "A1|A2"]
+# 通过 IndexRegistry 获取基因型索引后访问
+idx = pop.index_registry.genotype_to_index["A1|A2"]
+pop.state.individual_count[0, 3, idx]
 ```
 
-### 使用 Pattern 模式匹配
+### 使用 GenotypeSelector 模式匹配
 ```python
-# 使用 Pattern 进行模式匹配操作
-from natal.pattern import Pattern
-pattern = Pattern("A1|*")
-# 匹配所有包含 A1 的基因型
+# 使用 GenotypeSelector 进行模式匹配操作
+from natal.genetic_patterns import GenotypeSelector
+selector = GenotypeSelector("A1|*", pop.index_registry)
+indices = selector.select()  # 返回匹配的整数索引数组
 ```
 
 ## 框架内部使用

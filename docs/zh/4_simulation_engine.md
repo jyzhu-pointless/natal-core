@@ -121,7 +121,8 @@ pop.run_tick()
 
 ## 4. `simulator` 模块的职责
 
-`src/natal/engine/simulator.py` 主要提供“阶段级内核函数”，包括：
+`src/natal/engine/age_structured_simulator.py` 主要提供年龄结构模型的”阶段级内核函数”。
+`src/natal/engine/discrete_generation_simulator.py` 提供离散世代模型的对应函数。包括：
 
 - 年龄结构模型：`run_reproduction`、`run_survival`、`run_aging`
 - 离散世代模型：`run_discrete_reproduction`、`run_discrete_survival`、`run_discrete_aging`

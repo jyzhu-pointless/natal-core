@@ -91,9 +91,17 @@ Key differences from `PopulationState`:
 
 ### What to Pay Attention to When Using
 
-`PopulationConfig` is a **static object** containing all fixed parameters and genetic mapping matrices for the model. **It cannot and should not be modified during simulation.**
+`PopulationConfig` is a `NamedTuple` whose topology (which fields exist and their shapes) is **immutable** after construction. However, the 9 ecological parameters (e.g., `carrying_capacity`, `eggs_per_female`) are stored as 0-d ndarrays and **can be mutated in-place inside hooks**:
 
-You can print the field values of `PopulationConfig` to confirm that the model parameters match expectations:
+```python
+@nt.hook(event="early", custom=True)
+def heatwave(state, config, deme_id):
+    if state.n_tick == 10:
+        config.carrying_capacity[()] = 2000  # In-place mutation, takes effect immediately
+    return 0
+```
+
+Large array fields (`viability_fitness`, `genotype_to_gametes_map`, etc.) are not recommended for runtime modification but can technically be mutated in-place via array indexing. You can print the field values of `PopulationConfig` to confirm that the model parameters match expectations:
 
 ```python
 cfg = pop.config

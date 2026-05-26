@@ -66,7 +66,7 @@ pop = (
     .setup(name="MyPop")
     .age_structure(n_ages=8)
     .initial_state({...})
-    .modifiers(gamete_modifiers=[(None, "drive", my_gamete_modifier)])
+    .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
     .build()
 )
 ```
@@ -150,10 +150,10 @@ def ci_modifier(pop):
 ### 6.1 配置标签
 
 ```python
-pop = AgeStructuredPopulation(
-    ...,
-    gamete_labels=["default", "Cas9_deposited"],
-)
+# 配子标签通过在 Species 上设置 gamete_labels 来定义
+species.gamete_labels = ["default", "Cas9_deposited"]
+# 然后正常构建（标签自动生效）
+pop = nt.AgeStructuredPopulation.setup(species).build()
 ```
 
 ## 7. 注册方式与优先级
@@ -161,8 +161,8 @@ pop = AgeStructuredPopulation(
 ### 7.1 动态注册
 
 ```python
-pop.set_gamete_modifier(my_gamete_modifier, hook_name="drive")
-pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
+pop.set_gamete_modifier(my_gamete_modifier, modifier_name="drive")
+pop.set_zygote_modifier(embryo_rescue_modifier, modifier_name="rescue")
 ```
 
 ### 7.2 优先级
@@ -170,8 +170,8 @@ pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
 当多个 Modifier 同时作用时，会按优先级顺序执行。
 
 ```python
-pop.set_gamete_modifier(base_mod, priority=1, hook_name="base")
-pop.set_gamete_modifier(drive_mod, priority=2, hook_name="drive")
+pop.set_gamete_modifier(base_mod, modifier_id=1, modifier_name="base")
+pop.set_gamete_modifier(drive_mod, modifier_id=2, modifier_name="drive")
 ```
 
 实践上，建议把“基础规则”放在较低优先级，把“覆盖/修正规则”放在较高优先级。

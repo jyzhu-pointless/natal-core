@@ -66,7 +66,7 @@ pop = (
     .setup(name="MyPop")
     .age_structure(n_ages=8)
     .initial_state({...})
-    .modifiers(gamete_modifiers=[(None, "drive", my_gamete_modifier)])
+    .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
     .build()
 )
 ```
@@ -150,10 +150,10 @@ Both have the same allele but different labels, potentially triggering different
 ### 6.1 Configuring Labels
 
 ```python
-pop = AgeStructuredPopulation(
-    ...,
-    gamete_labels=["default", "Cas9_deposited"],
-)
+# Gamete labels are defined by setting gamete_labels on the Species
+species.gamete_labels = ["default", "Cas9_deposited"]
+# Then build normally using the builder (labels take effect automatically)
+pop = AgeStructuredPopulationBuilder(species).setup(...).build()
 ```
 
 ## 7. Registration Methods and Priority
@@ -161,8 +161,8 @@ pop = AgeStructuredPopulation(
 ### 7.1 Dynamic Registration
 
 ```python
-pop.set_gamete_modifier(my_gamete_modifier, hook_name="drive")
-pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
+pop.set_gamete_modifier(my_gamete_modifier, modifier_name="drive")
+pop.set_zygote_modifier(embryo_rescue_modifier, modifier_name="rescue")
 ```
 
 ### 7.2 Priority
@@ -170,8 +170,8 @@ pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
 When multiple Modifiers act simultaneously, they execute in order of priority.
 
 ```python
-pop.set_gamete_modifier(base_mod, priority=1, hook_name="base")
-pop.set_gamete_modifier(drive_mod, priority=2, hook_name="drive")
+pop.set_gamete_modifier(base_mod, modifier_id=1, modifier_name="base")
+pop.set_gamete_modifier(drive_mod, modifier_id=2, modifier_name="drive")
 ```
 
 In practice, it is recommended to put "base rules" at a lower priority and "override/correction rules" at a higher priority.
