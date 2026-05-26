@@ -1143,8 +1143,10 @@ class SpatialDashboard:
             ui.label(
                 f"Source deme: {selected.name} (index {self.selected_deme_idx})"
             ).classes("text-base font-semibold text-slate-700")
+            rate = self.pop.migration_rate
+            rate_str = ", ".join(f"age{i}={v:.3f}" for i, v in enumerate(rate.flat))
             ui.label(
-                f"Migration mode: {self.pop.migration_mode}, rate={self.pop.migration_rate:.3f}"  # TODO: 现在 migration_rate 是有年龄维度的，请检查
+                f"Migration mode: {self.pop.migration_mode}, rate=[{rate_str}]"
             ).classes("text-sm text-slate-500")
 
             if self.pop.migration_kernel is not None:
