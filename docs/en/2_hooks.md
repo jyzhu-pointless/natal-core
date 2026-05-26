@@ -219,41 +219,7 @@ pop.run(n_steps=200, record_every=10)
 
 ## Modifying Parameters in Hooks
 
-Hooks can modify population parameters directly — `config` is passed as an argument
-and writes are in-place and immediate:
-
-```python
-import natal as nt
-from natal.population_config import DiscretePopulationConfig
-from natal.population_state import DiscretePopulationState
-
-@nt.hook(event="early", custom=True)
-def heatwave(state: DiscretePopulationState,
-             config: DiscretePopulationConfig,
-             deme_id: int) -> int:
-    if state.n_tick == 10:
-        # Direct write to 0-d ndarray — fastest path
-        config.carrying_capacity[()] = 2000
-        # Read/write custom fields — shared state between hooks and external code
-        config.custom['temperature'][()] = 40.0
-    return 0
-```
-
-The hook signature is unified as `(state, config, deme_id) → int`. Changes to `config`
-are immediately visible to subsequent hooks and simulation steps within the same tick.
-
-For string-name parameter routing, use `hook_set_param` — it wraps `objmode` + `set_param`:
-
-```python
-from natal.configurator import hook_set_param
-
-@nt.hook(event="early", custom=True)
-def recovery_hook(state, config, deme_id):
-    if state.n_tick == 10:
-        hook_set_param(config, "carrying_capacity", 5000.0)
-        hook_set_param(config, "eggs_per_female", 100.0)
-    return 0
-```
+See the [Advanced Hook Tutorial](3_advanced_hooks.md) section on "Runtime Parameter Modification".
 
 ## Related Sections
 

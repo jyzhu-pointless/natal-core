@@ -208,41 +208,7 @@ pop.run(n_steps=200, record_every=10)
 
 ## Hook 内修改参数
 
-Hook 可以直接修改种群配置参数——`config` 作为参数传入，原地写入立即生效：
-
-```python
-import natal as nt
-from natal.population_config import DiscretePopulationConfig
-from natal.population_state import DiscretePopulationState
-
-@nt.hook(event="early", custom=True)
-def heatwave(state: DiscretePopulationState,
-             config: DiscretePopulationConfig,
-             deme_id: int) -> int:
-    if state.n_tick == 10:
-        # 直接写 0-d ndarray——最快路径
-        config.carrying_capacity[()] = 2000
-        # 读写自定义字段——hook 和外部共享数据
-        config.custom['temperature'][()] = 40.0
-    return 0
-```
-
-Hook 签名统一为 `(state, config, deme_id) → int`。`config` 允许原地修改，修改后的值对当前 tick 的后续 hook 和流程立即可见。
-
-如果需要字符串参数名路由，可以用 `hook_set_param`——它封装了 `objmode` + `set_param`：
-
-```python
-from natal.configurator import hook_set_param
-
-@nt.hook(event="early", custom=True)
-def recovery_hook(state, config, deme_id):
-    if state.n_tick == 10:
-        hook_set_param(config, "carrying_capacity", 5000.0)
-        hook_set_param(config, "eggs_per_female", 100.0)
-    return 0
-```
-
-性能介于直接写（nopython）和裸 `with objmode()` 之间。自定义字段通过 `config.custom['name'][()]` 读写，构建时通过 `.custom(temperature=25.0)` 初始化，运行时可通过 `pop.update().custom(...)` 修改。
+参见 [高级 Hook 教程](3_advanced_hooks.md) 中的"运行时修改参数"一节。
 
 ## 相关章节
 
