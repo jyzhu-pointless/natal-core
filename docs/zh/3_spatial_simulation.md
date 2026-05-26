@@ -1,6 +1,6 @@
 # Spatial 模拟指南
 
-本章介绍 SpatialPopulation 的实际用法：用 SpatialBuilder 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
+SpatialPopulation 的实际用法：用 SpatialBuilder 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
 
 阅读完成后，可以写出下面这类代码：
 
@@ -767,7 +767,7 @@ launch(spatial, port=8080, title="Spatial Debug Dashboard")
 
 异构 kernel（`kernel_bank` + `deme_kernel_ids`）走 kernel 路径，要求 `topology` 必须存在。如果只传了 `kernel_bank` 但没有 `topology`，构造时会报错。
 
-## 本章小结
+## 小结
 
 SpatialPopulation 的实际使用顺序可以记成四步：
 
@@ -783,5 +783,5 @@ SpatialPopulation 的实际使用顺序可以记成四步：
 - [SpatialBuilder：批量构造](spatial_builder.md)
 - [空间生命周期包装器](spatial_lifecycle_wrapper.md)
 - [Migration Kernel 底层实现](migration_kernel_impl.md)
-- [模拟内核深度解析](4_simulator.md)
+- [模拟内核深度解析](4_simulation_engine.md)
 - [Hook 系统](2_hooks.md)

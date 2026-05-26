@@ -192,6 +192,6 @@ class BidirectionalMutation(GeneticPreset):
         return ruleset.to_gamete_modifier(population)
 ```
 
-## 本章小结
+## 小结
 
 你已经完成 Preset 设计的第一步：定义等位基因转换规则。下一步将学习如何控制规则的作用范围。

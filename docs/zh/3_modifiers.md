@@ -193,7 +193,7 @@ pop.set_gamete_modifier(drive_mod, priority=2, hook_name="drive")
 # 5) 最后扩展到完整参数扫描
 ```
 
-## 10. 本章小结
+## 10. 小结
 
 Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
 
@@ -208,5 +208,5 @@ Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
 
 - [遗传预设系统](2_genetic_presets.md)
 - [Hook 系统](2_hooks.md)
-- [模拟内核深度解析](4_simulator.md)
+- [模拟内核深度解析](4_simulation_engine.md)
 - [PopulationState 与 PopulationConfig](4_population_state_config.md)

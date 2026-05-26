@@ -148,10 +148,6 @@ full_history = pop.output_history()
 print("Number of history records:", len(full_history["snapshots"]))
 print("Last step data:", full_history["snapshots"][-1])
 
-# Get history at a specific tick
-history_at_tick_100 = pop.output_history(tick=100)
-print("State at tick 100:", history_at_tick_100)
-
 # Get list of recorded time steps
 ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
 print("Recorded ticks:", ticks)
@@ -176,13 +172,9 @@ results = pop.run(n_steps=100, record_every=5)
 current_state = pop.output_current_state()
 print("Current state:", current_state)
 
-# Get readable dictionary format
-readable_state = pop.output_current_state(as_dict=True)
-print("Readable state:", readable_state)
-
-# Get JSON format (for transport and storage)
-json_state = pop.output_current_state(as_json=True)
-print("JSON state:", json_state[:200])  # Show first 200 characters
+# Include zero-count groups in output
+detailed_state = pop.output_current_state(include_zero_counts=True)
+print("Detailed state:", detailed_state)
 ```
 
 ### Integration with Observation Rules

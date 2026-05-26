@@ -1,6 +1,6 @@
 # 运行时参数修改
 
-种群构建完成后，所有参数都可以在模拟运行时动态修改——无需重建。本章覆盖三种场景：
+种群构建完成后，所有参数都可以在模拟运行时动态修改——无需重建。覆盖三种场景：
 
 - **between-tick**：Python 侧通过 `pop.update()` 或 `set_param()` 修改
 - **hook 内**：Numba nopython 直接写 `config.field[()] = v`
@@ -71,7 +71,7 @@ Hook 签名统一为 `(state, config, deme_id) → int`。`config` 可原地修�
 最快路径。Numba nopython，纯 C 级 ndarray 操作：
 
 ```python
-from natal.discrete_population_config import DiscretePopulationConfig
+from natal.population_config import DiscretePopulationConfig
 from natal.population_state import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)

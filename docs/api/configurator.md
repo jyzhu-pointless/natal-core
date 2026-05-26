@@ -10,7 +10,7 @@ identically at build time and runtime.
 
 Key features:
 
-- **Fluent chain API** — `.competition(K=10000).reproduction(eggs=50).build()`
+- **Fluent chain API** — `.competition(carrying_capacity=10000).reproduction(eggs_per_female=50).build()`
 - **Immediate writes** — every chain method writes to NumPy arrays in-place
 - **Runtime modification** — `pop.update().competition(K=5000)` without rebuilding
 - **Model-specific subclasses** — `DiscreteConfigurator` / `AgeStructuredConfigurator`
@@ -93,6 +93,8 @@ cfg.reproduction(
     female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.5, 0.3, 0.0],
     use_sperm_storage=True,
 )
+```
+> Note: `use_sperm_storage=True` is accepted for compatibility but has **no effect** — sperm storage is always enabled in the age-structured model.
 cfg.survival(
     female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
     male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
@@ -134,11 +136,30 @@ cfg.custom(temperature=25.0, debug=True)
 Register named fields stored in `config.custom`. Hooks read/write via
 `config.custom['name'][()]`.
 
+### `with_observation(groups, *, collapse_age=False)`
+```python
+cfg.with_observation({
+    "adult_female": {"genotype": ["WT|WT"], "sex": "female", "age": [1]},
+})
+```
+Register observation groups, applied at `build()` time. `groups` can be a dict
+of name-to-spec, a list of specs, or `None` for one-group-per-genotype.
+`collapse_age` controls whether the age axis is collapsed in exports.
+
 ### `presets(*presets)`
 ```python
 cfg.presets(homing_drive)
 ```
 Apply genetic presets immediately — writes directly to config arrays (not deferred).
+
+### `reconfigure_preset(preset, **changes)`
+```python
+cfg.reconfigure_preset(homing_drive, homing_rate=0.95)
+```
+Modify a registered preset parameter and re-apply from baselines. Restores
+baseline fitness/gamete arrays, applies the updated preset parameters, and
+syncs equilibrium. Requires that the preset was first registered via
+`presets()`.
 
 ### `modifiers(gamete_modifiers=None, zygote_modifiers=None)`
 ```python
@@ -185,7 +206,7 @@ Run equilibrium sync without creating a Population. Normally unnecessary —
 pop.update().competition(carrying_capacity=5000)
 
 # Chained multiple parameters
-pop.update().reproduction(eggs_per_female=100).competition(K=10000)
+pop.update().reproduction(eggs_per_female=100).competition(carrying_capacity=10000)
 
 # Custom fields
 pop.update().custom(temperature=35.0)

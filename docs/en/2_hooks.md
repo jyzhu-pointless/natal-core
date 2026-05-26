@@ -25,6 +25,8 @@ For most users, it is recommended to use `@nt.hook` with `nt.Op.*`, registering 
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=10)
 def periodic_release():
     return [
@@ -36,6 +38,7 @@ def periodic_release():
 pop = (
     nt.AgeStructuredPopulation
     .setup(
+        species=sp,
         name="MyPop",
         stochastic=True,
         use_continuous_sampling=False
@@ -126,6 +129,8 @@ The `.hooks()` method in the chain API supports passing multiple Hook functions:
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=10)
 def release_hook():
     return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
@@ -140,7 +145,7 @@ def stop_hook():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -187,6 +192,8 @@ Therefore, users typically do not need to manually trigger Hooks; just:
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=0)
 def release():
     return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
@@ -197,7 +204,7 @@ def stop_if_no_female():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -217,7 +224,7 @@ and writes are in-place and immediate:
 
 ```python
 import natal as nt
-from natal.discrete_population_config import DiscretePopulationConfig
+from natal.population_config import DiscretePopulationConfig
 from natal.population_state import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)

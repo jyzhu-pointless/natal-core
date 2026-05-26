@@ -51,7 +51,7 @@ Population.setup() → 链式配置方法调用
   → reproduction → survival → aging（以及 hooks）
 ```
 
-配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulator.md)）。
+配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulation_engine.md)）。
 
 ## 两类配置接口
 
@@ -82,8 +82,7 @@ NATAL Core 提供两种主要的种群类型：
 |---|---|---|---|---|---|
 | `n_ages` | `int` | 年龄阶段总数 | `8` | 全流程（数组维度） | 约束初始状态、存活率向量等数组长度；必须与所有年龄相关参数长度一致 |
 | `new_adult_age` | `int` | 个体进入成年阶段的年龄索引 | `2` | reproduction / survival | 建议与目标物种的生命史阶段对齐；低于此年龄的个体视为幼体 |
-| `generation_time` | `Optional[int]` | 代时标记 | `None` | 编译参数 | 仅用于建模解释；与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的 |
-| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `survival`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节） |
+| `generation_time` | `float | None` | 代时标记 | `None` | 编译参数 | 仅用于建模解释；与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的 |
 
 ### `initial_state(...)` – 初始状态
 
@@ -135,8 +134,6 @@ NATAL Core 提供两种主要的种群类型：
 |---|---|---|---|---|---|
 | `female_age_based_survival_rates` | `Optional` | 雌性按年龄的存活率。 | `None` | survival | 支持标量、序列、映射、函数等；`None` 表示使用默认曲线；取值 `[0, 1]`。 |
 | `male_age_based_survival_rates` | `Optional` | 雄性按年龄的存活率。 | `None` | survival | 同上。 |
-| `generation_time` | `Optional[int]` | 代时标记。 | `None` | 编译参数 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的。 |
-| `equilibrium_distribution` | `Optional` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `age_structure`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节）。 |
 
 **代码示例**（来自 `resolve_age_param`）：
 
@@ -435,6 +432,7 @@ def release_drive_carriers():
 |---|---|---|---|---|---|
 | `female_age0_survival` | `float` | 雌性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
 | `male_age0_survival` | `float` | 雄性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
+| `adult_survival` | `float` | 成体在世代间的存活率。 | `0.0` | survival / aging 边界 | 取值范围 `[0, 1]`；设为 `0` 表示严格的非重叠世代，较高的值允许成体跨世代存活。 |
 
 ### `competition(...)`
 
@@ -501,7 +499,7 @@ def release_drive_carriers():
 - [Hook 系统](2_hooks.md) - 钩子函数的详细使用方法
 - [基因型模式匹配](2_genotype_patterns.md) - 基因型匹配规则详解
 - [PopulationState & PopulationConfig：编译与配置](4_population_state_config.md) - 底层配置对象详解
-- [模拟内核深度解析](4_simulator.md) - 模拟执行流程和算法实现
+- [模拟内核深度解析](4_simulation_engine.md) - 模拟执行流程和算法实现
 
 ***
 

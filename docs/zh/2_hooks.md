@@ -212,7 +212,7 @@ Hook 可以直接修改种群配置参数——`config` 作为参数传入，原
 
 ```python
 import natal as nt
-from natal.discrete_population_config import DiscretePopulationConfig
+from natal.population_config import DiscretePopulationConfig
 from natal.population_state import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)

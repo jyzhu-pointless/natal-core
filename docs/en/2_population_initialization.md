@@ -11,10 +11,12 @@ NATAL Core provides a concise chainable API for configuring populations, which i
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 # Chainable API configuration (recommended)
 pop = (
     nt.AgeStructuredPopulation
-    .setup(species=my_species)
+    .setup(species=sp)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 100},
@@ -71,8 +73,7 @@ Configure the population's age structure, including the total number of age stag
 |---|---|---|---|---|---|
 | `n_ages` | `int` | Total number of age stages | `8` | Entire workflow (array dimensions) | Constrains array lengths for initial state, survival rates, etc.; must match lengths of all age-related parameters |
 | `new_adult_age` | `int` | Age index at which individuals enter the adult stage | `2` | reproduction / survival | Recommended to align with the life history stage of the target species; individuals below this age are considered juveniles |
-| `generation_time` | `Optional[int]` | Generation time marker | `None` | Compilation parameter | Used only for modeling interpretation; mutually exclusive with the same-named parameter in `age_structure`, the later one takes precedence |
-| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Mutually exclusive with the same-named parameter in `survival` and `competition`; later one takes precedence; age=0 value is ignored (see competition section) |
+| `generation_time` | `float | None` | Generation time marker | `None` | Compilation parameter | Used only for modeling interpretation; mutually exclusive with the same-named parameter in `age_structure`, the later one takes precedence |
 
 ### `initial_state(...)` – Initial State
 
@@ -124,8 +125,6 @@ Validation rules:
 |---|---|---|---|---|---|
 | `female_age_based_survival_rates` | `Optional` | Female per-age survival rates | `None` | survival | Supports scalar, sequence, mapping, function, etc.; `None` uses default curve; range `[0, 1]` |
 | `male_age_based_survival_rates` | `Optional` | Male per-age survival rates | `None` | survival | Same as above |
-| `generation_time` | `Optional[int]` | Generation time marker | `None` | Compilation parameter | Mutually exclusive with the same-named parameter in `age_structure`; later one takes precedence |
-| `equilibrium_distribution` | `Optional` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Mutually exclusive with the same-named parameter in `age_structure` and `competition`; later one takes precedence; age=0 value is ignored (see competition section) |
 
 **Code examples** (from `_resolve_survival_param`):
 
@@ -362,10 +361,9 @@ The `build()` method takes no parameters but has strong constraints:
 
 - `initial_state(...)` must be called before it to set the initial state.
 - Execution order:
-  1. Build `PopulationConfig`
-  2. Create population object
-  3. Apply presets
-  4. Apply fitness / modifiers / hooks
+  1. Sync equilibrium metrics
+  2. Merge stored + passed hooks
+  3. Create Population object
 
 Therefore, it is recommended to place `build()` at the end of the chain.
 

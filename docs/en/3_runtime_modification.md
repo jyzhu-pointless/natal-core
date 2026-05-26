@@ -74,7 +74,7 @@ changes are immediately visible to subsequent hooks and simulation steps.
 Fastest path. Numba nopython, pure C-level ndarray access:
 
 ```python
-from natal.discrete_population_config import DiscretePopulationConfig
+from natal.population_config import DiscretePopulationConfig
 from natal.population_state import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)

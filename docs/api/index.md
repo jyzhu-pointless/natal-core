@@ -12,7 +12,7 @@ This section provides module-level API references.
 - [population_state](population_state.md)
 - [state_translation](state_translation.md)
 - [population_config](population_config.md)
-- [simulator](simulator.md)
+- [simulation_kernels](simulation_kernels.md)
 - [algorithms](algorithms.md)
 
 ## Genetics
@@ -25,4 +25,4 @@ This section provides module-level API references.
 ## Extension System
 
 - [modifiers](modifiers.md)
-- [hooksoohooks
+- [hooks](hook_dsl.md)

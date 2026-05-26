@@ -88,7 +88,6 @@ class DiscretePopulationState(NamedTuple):
 5. **初始分布与缩放参数**
   - `initial_individual_count`
   - `initial_sperm_storage`
-  - `population_scale`, `base_carrying_capacity` 等
 
 ### 使用时应关注什么
 
@@ -202,7 +201,7 @@ data = population_state_to_dict(
 ## 相关章节
 
 - [种群初始化](2_population_initialization.md)
-- [模拟内核深度解析](4_simulator.md)
+- [模拟内核深度解析](4_simulation_engine.md)
 - [Modifier 机制](3_modifiers.md)
 - [Hook 系统](2_hooks.md)
 - [种群观测规则](2_data_output.md)

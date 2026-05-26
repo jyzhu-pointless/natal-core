@@ -2,7 +2,7 @@
 
 <!--TODO: 改为数学模型介绍，需要大量公式-->
 
-本章面向使用者说明 NATAL 的模拟执行链路：
+NATAL 的模拟执行链路：
 
 - 你在用户层调用什么；
 - 框架内部如何完成一次 tick；
@@ -223,7 +223,7 @@ state_flat, hist = pop.export_state()
 pop.import_state(state_flat, history=hist)
 ```
 
-## 11. 本章小结
+## 11. 小结
 
 可以把 NATAL 的执行机制理解为三层分工：
 

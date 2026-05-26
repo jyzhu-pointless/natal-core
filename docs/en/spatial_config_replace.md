@@ -39,13 +39,8 @@ Builder parameters that require dict → numpy array conversion, defined in `_AR
 
 ### 2. Multi-Field Mapping (Explicit)
 
-One builder kwarg mapping to multiple config fields (requiring special scaling), defined in `_KWARG_MULTI_FIELD`:
+One builder kwarg mapping to multiple config fields (requiring special scaling), defined in `_KWARG_MULTI_FIELD`. No residual entries from deleted fields remain.
 
-| Builder kwarg | Config Fields |
-|---|---|
-| `carrying_capacity` | `base_carrying_capacity` (raw) + `carrying_capacity` (× population_scale) |
-| `age_1_carrying_capacity` | Same as above |
-| `old_juvenile_carrying_capacity` | Same as above |
 
 ### 3. Renames (Explicit)
 
@@ -54,7 +49,6 @@ Builder kwarg names that differ from config field names, defined in `_KWARG_RENA
 | Builder kwarg | Config Field |
 |---|---|
 | `eggs_per_female` | `expected_eggs_per_female` |
-| `expected_num_adult_females` | `base_expected_num_adult_females` |
 
 ### 4. Dynamic Discovery (Implicit)
 
@@ -79,7 +73,7 @@ The values for `individual_count` and `sperm_storage` are user-provided dicts (e
 - Age-structured: `resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - Discrete generation: `resolve_discrete_initial_individual_count(species, distribution)`
 
-The result is multiplied by `population_scale` to match builder behavior.
+The result matches builder behavior.
 
 ## State Overwrite After Cloning
 

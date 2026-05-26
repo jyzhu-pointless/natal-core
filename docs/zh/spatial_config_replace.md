@@ -39,13 +39,8 @@
 
 ### 2. 多字段映射（显式）
 
-一个 builder kwarg 对应多个 config 字段（需要特殊缩放处理），定义在 `_KWARG_MULTI_FIELD`：
+一个 builder kwarg 对应多个 config 字段（需要特殊缩放处理），定义在 `_KWARG_MULTI_FIELD`。当前无已删除字段的残留条目。
 
-| Builder kwarg | Config 字段 |
-|---|---|
-| `carrying_capacity` | `base_carrying_capacity`（原值）+ `carrying_capacity`（× population_scale） |
-| `age_1_carrying_capacity` | 同上 |
-| `old_juvenile_carrying_capacity` | 同上 |
 
 ### 3. 重命名（显式）
 
@@ -54,7 +49,6 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 | Builder kwarg | Config 字段 |
 |---|---|
 | `eggs_per_female` | `expected_eggs_per_female` |
-| `expected_num_adult_females` | `base_expected_num_adult_females` |
 
 ### 4. 动态发现（隐式）
 
@@ -79,7 +73,7 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 - 年龄结构：`resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - 离散世代：`resolve_discrete_initial_individual_count(species, distribution)`
 
-结果乘以 `population_scale` 以匹配 builder 行为。
+结果匹配 builder 行为。
 
 ## Clone 后的状态覆写
 

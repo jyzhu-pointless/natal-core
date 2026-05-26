@@ -88,7 +88,6 @@ Key differences from `PopulationState`:
 5. **Initial Distribution and Scaling Parameters**
   - `initial_individual_count`
   - `initial_sperm_storage`
-  - `population_scale`, `base_carrying_capacity`, etc.
 
 ### What to Pay Attention to When Using
 
