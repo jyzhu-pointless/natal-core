@@ -154,7 +154,8 @@ class TestCarryingCapacityResolution:
         assert pop is not None
         cfg = pop.export_config()
         assert cfg.carrying_capacity > 0
-        assert cfg.base_expected_num_adult_females == 300.0
+        # expected_num_adult_females is used internally for equilibrium;
+        # no longer stored as a separate config field.
 
     def test_builder_prefers_explicit_carrying_capacity(self) -> None:
         """Test that explicit K takes precedence."""

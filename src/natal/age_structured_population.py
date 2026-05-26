@@ -112,10 +112,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         )
 
         # Initialize from builder-injected config arrays if available.
-        cfg_init_ind = population_config.get_scaled_initial_individual_count()
+        cfg_init_ind = population_config.initial_individual_count
         if cfg_init_ind.shape == self._state_nn.individual_count.shape:
             self._state_nn.individual_count[:] = cfg_init_ind
-        cfg_init_sperm = population_config.get_scaled_initial_sperm_storage()
+        cfg_init_sperm = population_config.initial_sperm_storage
         if cfg_init_sperm.shape == self._state_nn.sperm_storage.shape:
             self._state_nn.sperm_storage[:] = cfg_init_sperm
 
@@ -186,6 +186,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Pass ``legacy_path=True`` to use the classic Builder API.
         """
         if legacy_path:
+            import warnings
+            warnings.warn(
+                "legacy_path=True is deprecated. Use the new Configurator API "
+                "(default path) instead. See docs/ for migration guide.",
+                FutureWarning, stacklevel=2,
+            )
             from natal.population_builder import AgeStructuredPopulationBuilder
 
             builder = AgeStructuredPopulationBuilder(species)
@@ -200,6 +206,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         from natal.configurator import Configurator
 
         return Configurator.for_age_structured(species).setup(
+            name=name,
             stochastic=stochastic,
             use_continuous_sampling=use_continuous_sampling,
             use_fixed_egg_count=use_fixed_egg_count,

@@ -109,7 +109,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             individual_count=np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64),
         )
 
-        cfg_init_ind = self._config_nn.get_scaled_initial_individual_count()
+        cfg_init_ind = self._config_nn.initial_individual_count
         if cfg_init_ind.shape == self._state_nn.individual_count.shape:
             self._state_nn.individual_count[:] = cfg_init_ind
 
@@ -232,6 +232,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Pass ``legacy_path=True`` to use the classic Builder API.
         """
         if legacy_path:
+            import warnings
+            warnings.warn(
+                "legacy_path=True is deprecated. Use the new Configurator API "
+                "(default path) instead. See docs/ for migration guide.",
+                FutureWarning, stacklevel=2,
+            )
             from natal.population_builder import DiscreteGenerationPopulationBuilder
 
             return DiscreteGenerationPopulationBuilder(species).setup(
@@ -244,6 +250,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         from natal.configurator import Configurator
 
         return Configurator.for_discrete(species).setup(
+            name=name,
             stochastic=stochastic,
             use_continuous_sampling=use_continuous_sampling,
             use_fixed_egg_count=use_fixed_egg_count,

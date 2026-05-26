@@ -79,7 +79,7 @@ class PopulationConfig(NamedTuple):
         expected_eggs_per_female: Expected number of eggs per female per tick.
         use_fixed_egg_count: If True, use the deterministic expected egg count;
             otherwise sample from a Poisson distribution.
-        carrying_capacity: Current carrying capacity (scaled by population_scale).
+        carrying_capacity: Current carrying capacity (0-d ndarray, mutable).
         sex_ratio: Proportion of newborns that are female.
         low_density_growth_rate: Intrinsic growth rate at low density.
         juvenile_growth_mode: Growth mode for juveniles (see constants).
@@ -110,11 +110,6 @@ class PopulationConfig(NamedTuple):
             population distribution.
         initial_sperm_storage: Shape (n_ages, n_genotypes, n_hg * n_glabs) – initial
             stored sperm counts.
-        population_scale: Scaling factor applied to carrying capacity and expected
-            adult females.
-        base_carrying_capacity: Unscaled carrying capacity.
-        base_expected_num_adult_females: Unscaled expected number of adult
-            females.
     """
 
     # Scalars are immutable; rebuild this NamedTuple for scalar updates.
@@ -158,9 +153,6 @@ class PopulationConfig(NamedTuple):
     offspring_tensor: NDArray[np.float64]    # (g, g, g) — precomputed from meiosis × zygote maps
     initial_individual_count: NDArray[np.float64]
     initial_sperm_storage: NDArray[np.float64]
-    population_scale: float
-    base_carrying_capacity: float
-    base_expected_num_adult_females: float
 
     # -- custom fields (structured numpy scalar, set via Configurator.custom()) --
     custom: NDArray[Any]  # typed structured array when custom fields registered; float64 placeholder otherwise
@@ -211,55 +203,6 @@ class PopulationConfig(NamedTuple):
             value: Fitness value (0.0 to 1.0).
         """
         self.zygote_viability_fitness[sex, genotype_idx] = value
-
-    def set_population_scale(self, scale: float) -> PopulationConfig:
-        """Return a new config with the population scale factor updated.
-
-        The carrying capacity is automatically scaled accordingly.
-
-        Args:
-            scale: New population scale factor.
-
-        Returns:
-            A new PopulationConfig instance with updated scale and carrying capacity.
-        """
-        scale_f = float(scale)
-        return self._replace(
-            population_scale=scale_f,
-            carrying_capacity=np.array(float(self.base_carrying_capacity) * scale_f),
-        )
-
-    def get_effective_carrying_capacity(self) -> float:
-        """Return the carrying capacity after applying population_scale.
-
-        Returns:
-            Scaled carrying capacity.
-        """
-        return float(self.base_carrying_capacity) * float(self.population_scale)
-
-    def get_effective_expected_adult_females(self) -> float:
-        """Return the expected number of adult females after applying population_scale.
-
-        Returns:
-            Scaled expected adult female count.
-        """
-        return float(self.base_expected_num_adult_females) * float(self.population_scale)
-
-    def get_scaled_initial_individual_count(self) -> NDArray[np.float64]:
-        """Return the initial individual counts scaled by population_scale.
-
-        Returns:
-            Array of shape (n_sexes, n_ages, n_genotypes) with scaled counts.
-        """
-        return self.initial_individual_count * float(self.population_scale)
-
-    def get_scaled_initial_sperm_storage(self) -> NDArray[np.float64]:
-        """Return the initial sperm storage counts scaled by population_scale.
-
-        Returns:
-            Array of shape (n_ages, n_genotypes, n_genotypes) with scaled counts.
-        """
-        return self.initial_sperm_storage * float(self.population_scale)
 
     def compute_generation_time(self) -> float:
         """Compute the mean generation time from the current configuration.
@@ -353,9 +296,6 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         offspring_tensor=_maybe_copy_array(config.offspring_tensor, copy),
         initial_individual_count=_maybe_copy_array(config.initial_individual_count, copy),
         initial_sperm_storage=_maybe_copy_array(config.initial_sperm_storage, copy),
-        population_scale=float(config.population_scale),
-        base_carrying_capacity=float(config.base_carrying_capacity),
-        base_expected_num_adult_females=float(config.base_expected_num_adult_females),
         custom=config.custom.copy() if copy else config.custom,
     )
 
@@ -404,7 +344,6 @@ def build_population_config(
     gametes_to_zygote_map: Optional[NDArray[np.float64]] = None,
     initial_individual_count: Optional[NDArray[np.float64]] = None,
     initial_sperm_storage: Optional[NDArray[np.float64]] = None,
-    population_scale: float = 1.0,
     age_1_carrying_capacity: Optional[float] = None,
     old_juvenile_carrying_capacity: Optional[float] = None,
     expected_num_adult_females: Optional[float] = None,
@@ -457,8 +396,6 @@ def build_population_config(
             n_genotypes). If None, filled with zeros.
         initial_sperm_storage: Initial sperm storage counts (n_ages, n_genotypes,
             n_genotypes). If None, filled with zeros.
-        population_scale: Scaling factor for carrying capacity and expected
-            adult females.
         age_1_carrying_capacity: Population carrying capacity at age=1.
         old_juvenile_carrying_capacity: Alias for age_1_carrying_capacity (deprecated, use age_1_carrying_capacity).
         expected_num_adult_females: Expected number of adult females (unscaled).
@@ -502,30 +439,19 @@ def build_population_config(
     else:
         init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_hg_glabs), dtype=np.float64)
 
-    # Support both age_1_carrying_capacity and old_juvenile_carrying_capacity (alias)
-    resolved_age_1_carrying_capacity = age_1_carrying_capacity or old_juvenile_carrying_capacity
-    if resolved_age_1_carrying_capacity is not None:
-        base_carrying_capacity = float(resolved_age_1_carrying_capacity)
+    # Resolve carrying_capacity directly (no base/scale separation).
+    resolved_age_1 = age_1_carrying_capacity or old_juvenile_carrying_capacity
+    if resolved_age_1 is not None:
+        carrying_capacity_f = np.array(float(resolved_age_1))
     elif carrying_capacity is not None:
-        base_carrying_capacity = float(carrying_capacity)
+        carrying_capacity_f = np.array(float(carrying_capacity))
     elif infer_capacity_from_initial_state and initial_individual_count is not None:
-        base_carrying_capacity = float(initial_individual_count[:, 1, :].sum())
-        if base_carrying_capacity <= 0:
-            base_carrying_capacity = 1000.0
+        k_val = float(initial_individual_count[:, 1, :].sum())
+        if k_val <= 0:
+            k_val = 1000.0
+        carrying_capacity_f = np.array(k_val)
     else:
-        base_carrying_capacity = 1000.0
-
-    if expected_num_adult_females is not None:
-        base_expected_num_adult_females = float(expected_num_adult_females)
-    elif infer_capacity_from_initial_state and initial_individual_count is not None:
-        base_expected_num_adult_females = float(initial_individual_count[0, new_adult_age_i:, :].sum())
-        if base_expected_num_adult_females <= 0:
-            base_expected_num_adult_females = 500.0
-    else:
-        base_expected_num_adult_females = 500.0
-
-    population_scale_f = float(population_scale)
-    carrying_capacity_f = np.array(float(base_carrying_capacity) * population_scale_f)
+        carrying_capacity_f = np.array(1000.0)
 
     def _validate_or_default_array(
         arr: Optional[NDArray[np.float64]],
@@ -671,9 +597,6 @@ def build_population_config(
             offspring_tensor=offspring_tensor,
             initial_individual_count=init_ind,
             initial_sperm_storage=init_sperm,
-            population_scale=population_scale_f,
-            base_carrying_capacity=float(base_carrying_capacity),
-            base_expected_num_adult_females=float(base_expected_num_adult_females),
             custom=np.zeros(0, dtype=np.float64),
         )
         generation_time_f = np.array(float(temp_cfg.compute_generation_time()))
@@ -720,9 +643,6 @@ def build_population_config(
         offspring_tensor=offspring_tensor,
         initial_individual_count=init_ind,
         initial_sperm_storage=init_sperm,
-        population_scale=population_scale_f,
-        base_carrying_capacity=float(base_carrying_capacity),
-        base_expected_num_adult_females=float(base_expected_num_adult_females),
         custom=np.zeros(0, dtype=np.float64),
     )
 
@@ -1093,8 +1013,6 @@ class DiscretePopulationConfig(NamedTuple):
     # -- Competition scalars --
     juvenile_growth_mode: NDArray[np.int64]                # 0-d, mutable
     carrying_capacity: NDArray[np.float64]                 # 0-d, mutable
-    base_carrying_capacity: float
-    base_expected_num_adult_females: float
     expected_competition_strength: NDArray[np.float64]     # 0-d, mutable
     expected_survival_rate: NDArray[np.float64]            # 0-d, mutable
     low_density_growth_rate: NDArray[np.float64]           # 0-d, mutable
@@ -1107,17 +1025,10 @@ class DiscretePopulationConfig(NamedTuple):
     # -- Init --
     initial_individual_count: NDArray[np.float64]         # (2, 2, g)
     initial_sperm_storage: NDArray[np.float64]            # (2, g, g) — empty for discrete
-    population_scale: float
     hook_slot: int
 
     # -- custom fields --
     custom: NDArray[np.void]
-
-    def get_scaled_initial_individual_count(self) -> NDArray[np.float64]:
-        return self.initial_individual_count * float(self.population_scale)
-
-    def get_scaled_initial_sperm_storage(self) -> NDArray[np.float64]:
-        return self.initial_sperm_storage * float(self.population_scale)
 
     def set_viability_fitness(
         self, sex: int, genotype_idx: int, value: float, age: int = -1
@@ -1141,17 +1052,6 @@ class DiscretePopulationConfig(NamedTuple):
     ) -> None:
         self.zygote_viability_fitness[sex, genotype_idx] = value
 
-    def get_effective_carrying_capacity(self) -> float:
-        return float(self.carrying_capacity) * float(self.population_scale)
-
-    def get_effective_expected_adult_females(self) -> float:
-        return self.base_expected_num_adult_females * float(self.population_scale)
-
-    def set_population_scale(self, scale: float) -> DiscretePopulationConfig:
-        return self._replace(
-            population_scale=float(scale),
-            carrying_capacity=np.array(float(self.base_carrying_capacity) * float(scale)),
-        )
 
 
 def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
@@ -1198,8 +1098,6 @@ def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
         male_only_by_sex_chrom=cfg.male_only_by_sex_chrom,
         juvenile_growth_mode=cfg.juvenile_growth_mode,
         carrying_capacity=cfg.carrying_capacity,
-        base_carrying_capacity=cfg.base_carrying_capacity,
-        base_expected_num_adult_females=cfg.base_expected_num_adult_females,
         expected_competition_strength=cfg.expected_competition_strength,
         expected_survival_rate=cfg.expected_survival_rate,
         low_density_growth_rate=cfg.low_density_growth_rate,
@@ -1208,7 +1106,6 @@ def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
         adult_ages=cfg.adult_ages.copy(),
         initial_individual_count=cfg.initial_individual_count,
         initial_sperm_storage=cfg.initial_sperm_storage,
-        population_scale=cfg.population_scale,
         hook_slot=int(cfg.hook_slot),
         custom=cfg.custom,
     )

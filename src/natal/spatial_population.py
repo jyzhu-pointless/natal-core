@@ -214,43 +214,43 @@ class _SpatialUpdate:
         self._deme = deme
 
     def competition(
-        self, **kwargs: float | int | bool | BatchSetting,
+        self, **kwargs: object,
     ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("competition", kwargs)
         return self
 
     def reproduction(
-        self, **kwargs: float | int | bool | BatchSetting,
+        self, **kwargs: object,
     ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("reproduction", kwargs)
         return self
 
     def survival(
-        self, **kwargs: float | int | bool | BatchSetting,
+        self, **kwargs: object,
     ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("survival", kwargs)
         return self
 
     def fitness(
-        self, **kwargs: float | int | bool | BatchSetting,
+        self, **kwargs: object,
     ) -> _SpatialUpdate:
-        self._apply_batch_or_scalar("fitness", kwargs)
+        self._dispatch_scalar("fitness", kwargs)
         return self
 
     def custom(
-        self, **kwargs: float | int | bool | BatchSetting,
+        self, **kwargs: object,
     ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("custom", kwargs)
         return self
 
     def setup(
-        self, **kwargs: float | int | bool | BatchSetting,
+        self, **kwargs: object,
     ) -> _SpatialUpdate:
         self._apply_batch_or_scalar("setup", kwargs)
         return self
 
     def modifiers(
-        self, **kwargs: float | int | bool | BatchSetting,
+        self, **kwargs: object,
     ) -> _SpatialUpdate:
         self._dispatch_scalar("modifiers", kwargs)
         return self
@@ -286,7 +286,7 @@ class _SpatialUpdate:
         return self
 
     def _apply_batch_or_scalar(
-        self, method_name: str, kwargs: dict[str, float | int | bool | BatchSetting],
+        self, method_name: str, kwargs: dict[str, object],
     ) -> None:
         """Dispatch kwargs: BatchSetting values → per-deme; scalars → all demes."""
         from natal.spatial_builder import BatchSetting
@@ -320,18 +320,19 @@ class _SpatialUpdate:
             getattr(cfg, method_name)(**per_deme_kwargs)
 
     def _dispatch_scalar(
-        self, method_name: str, kwargs: dict[str, float | int | bool | BatchSetting],
+        self, method_name: str, kwargs: dict[str, object],
     ) -> None:
         """Apply scalar kwargs to target deme(s).
 
-        Uses ``set_param`` per-parameter (except ``custom``) to avoid
-        triggering unintended side effects like K auto-resolution.
+        Uses ``set_param`` per-parameter (except ``custom`` / ``fitness`` /
+        ``modifiers``) to avoid triggering unintended side effects like K
+        auto-resolution.
         """
         from natal.configurator import Configurator, set_param
-        from natal.spatial_builder import BatchSetting
 
-        # custom() is not a parameters.py entry — use full chain method
-        use_full_method = method_name == "custom"
+        # Methods whose params are complex types (Mapping, list, etc.)
+        # rather than simple float/int/bool scalars — use full method call.
+        use_full_method = method_name in ("custom", "fitness", "modifiers")
 
         if self._deme is not None:
             cfg = self._pop.update_deme(self._deme)
@@ -339,7 +340,7 @@ class _SpatialUpdate:
                 getattr(cfg, method_name)(**kwargs)
             else:
                 for key, val in kwargs.items():
-                    if not isinstance(val, BatchSetting):
+                    if isinstance(val, (float, int, bool)):
                         set_param(cfg.config, f"{method_name}.{key}", val)
             return
 
@@ -357,7 +358,7 @@ class _SpatialUpdate:
                 getattr(cfg, method_name)(**kwargs)
             else:
                 for key, val in kwargs.items():
-                    if not isinstance(val, BatchSetting):
+                    if isinstance(val, (float, int, bool)):
                         set_param(cfg.config, f"{method_name}.{key}", val)
 
 
@@ -806,6 +807,7 @@ class SpatialPopulation:
                 juvenile_growth_mode=config.juvenile_growth_mode.copy(),
                 expected_competition_strength=config.expected_competition_strength.copy(),
                 expected_survival_rate=config.expected_survival_rate.copy(),
+                generation_time=config.generation_time.copy(),
             )
             object.__setattr__(target, '_config', private)
             config = private

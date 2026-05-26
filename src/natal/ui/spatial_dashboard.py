@@ -1144,7 +1144,7 @@ class SpatialDashboard:
                 f"Source deme: {selected.name} (index {self.selected_deme_idx})"
             ).classes("text-base font-semibold text-slate-700")
             ui.label(
-                f"Migration mode: {self.pop.migration_mode}, rate={self.pop.migration_rate:.3f}"
+                f"Migration mode: {self.pop.migration_mode}, rate={self.pop.migration_rate:.3f}"  # TODO: 现在 migration_rate 是有年龄维度的，请检查
             ).classes("text-sm text-slate-500")
 
             if self.pop.migration_kernel is not None:
@@ -1291,7 +1291,6 @@ class SpatialDashboard:
                                 ("Stochastic", bool(config.is_stochastic)),
                                 ("Sex Ratio", float(config.sex_ratio)),
                                 ("Low Density Growth", float(config.low_density_growth_rate)),
-                                ("Population Scale", float(config.population_scale)),
                                 ("New Adult Age", int(config.new_adult_age)),
                                 ("Sperm Displacement", float(config.sperm_displacement_rate)),
                                 ("N Sexes", int(config.n_sexes)),

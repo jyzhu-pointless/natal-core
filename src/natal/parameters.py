@@ -147,12 +147,6 @@ _register(
 )
 
 _register(
-    domain=D.SETUP, name="population_scale",
-    config_field="population_scale", config_path=(),
-    dtype=float, bounds=(0.01, 1e6)
-)
-
-_register(
     domain=D.SETUP, name="has_sex_chromosomes",
     config_field="has_sex_chromosomes", config_path=(),
     dtype=bool, bounds=(0, 1)
@@ -409,18 +403,6 @@ _register(
 )
 
 _register(
-    domain=D.COMPETITION, name="base_carrying_capacity",
-    config_field="base_carrying_capacity", config_path=(),
-    dtype=float, bounds=(0, 1e12)
-)
-
-_register(
-    domain=D.COMPETITION, name="base_expected_num_adult_females",
-    config_field="base_expected_num_adult_females", config_path=(),
-    dtype=float, bounds=(0, 1e12)
-)
-
-_register(
     domain=D.COMPETITION, name="expected_competition_strength",
     config_field="expected_competition_strength", config_path=(),
     dtype=float, bounds=(0, 1e6),
@@ -524,55 +506,6 @@ PARAMETERS_BY_DOMAIN: dict[ParameterDomain, dict[str, ParamDescriptor]] = {}
 for d in _PARAMS:
     PARAMETERS_BY_DOMAIN.setdefault(d.domain, {})[d.name] = d
 
-# ── Numba param IDs (compile-time lookup for set_config_param) ─────────────────
-
-_PARAM_IDS: dict[str, int] = {}
-for _i, _d in enumerate(_PARAMS):
-    key = f"{_d.domain.value}.{_d.name}"
-    _PARAM_IDS[key] = _i
-
-
-def generate_numba_setter() -> str:
-    """Generate source code for a ``set_config_param`` Numba function.
-
-    Each writable parameter becomes an ``if param_id == N`` branch that
-    writes the value to the correct config field and index path.
-
-    Returns:
-        Python source code suitable for ``exec()`` or ``@njit_switch``.
-    """
-    lines = [
-        "from __future__ import annotations",
-        "",
-        "from natal.numba_utils import njit_switch",
-        "from natal.population_config import PopulationConfig",
-        "",
-        "@njit_switch(cache=True)",
-        "def set_config_param(config: PopulationConfig, param_id: int, value: float) -> None:",
-    ]
-    for d in _PARAMS:
-        if d.config_field is None or d.is_tensor or d.is_array:
-            continue
-        # Only generate branches for 0-d ndarray fields and array-indexed fields.
-        # Python scalar fields (is_0d=False with path==()) are not writable via [()].
-        if not d.config_path and not d.is_0d:
-            continue
-        key = f"{d.domain.value}.{d.name}"
-        pid = _PARAM_IDS[key]
-        field = d.config_field
-        if d.config_path:
-            index_str = "".join(f"[{idx}]" for idx in d.config_path)
-            write = f"config.{field}{index_str} = value"
-        else:
-            write = f"config.{field}[()] = value"
-        lines.extend([
-            f"    if param_id == {pid}:",
-            f"        {write}",
-            "        return",
-        ])
-    lines.append("    pass  # unknown param_id or tensor — no-op")
-    return "\n".join(lines)
-
-
-# Export param IDs for users writing hooks.
-PARAM_IDS: dict[str, int] = _PARAM_IDS
+PARAM_IDS: dict[str, int] = {
+    f"{d.domain.value}.{d.name}": i for i, d in enumerate(_PARAMS)
+}

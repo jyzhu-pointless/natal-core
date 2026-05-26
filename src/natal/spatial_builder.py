@@ -352,20 +352,10 @@ def _clone_deme(
 # The output array replaces the named config field.
 _ARRAY_KWARGS: frozenset[str] = frozenset({"individual_count", "sperm_storage"})
 
-# Builder kwargs that map to *multiple* config fields (handled specially).
-# Each value is (base_field, scaled_field) — both are written with
-# population_scale applied to scaled_field.
-_KWARG_MULTI_FIELD: dict[str, tuple[str, str]] = {
-    "carrying_capacity": ("base_carrying_capacity", "carrying_capacity"),
-    "age_1_carrying_capacity": ("base_carrying_capacity", "carrying_capacity"),
-    "old_juvenile_carrying_capacity": ("base_carrying_capacity", "carrying_capacity"),
-}
-
 # Builder kwarg → config field renames.
 # Kwargs not listed here are tried directly with ``hasattr(base_config, name)``.
 _KWARG_RENAMES: dict[str, str] = {
     "eggs_per_female": "expected_eggs_per_female",
-    "expected_num_adult_females": "base_expected_num_adult_females",
 }
 
 # Builder kwargs that affect equilibrium metrics.
@@ -1247,8 +1237,6 @@ class SpatialBuilder:
         for name in sig_map:
             if name in _ARRAY_KWARGS:
                 continue
-            if name in _KWARG_MULTI_FIELD:
-                continue
             if name in _KWARG_RENAMES:
                 continue
             # Dynamic: try direct field name match on the config object
@@ -1324,7 +1312,6 @@ class SpatialBuilder:
                         species=species,
                         distribution=val,
                     )
-                array *= float(base_config.population_scale)
                 replace_kwargs["initial_individual_count"] = array
                 continue
 
@@ -1336,21 +1323,10 @@ class SpatialBuilder:
                         n_ages=int(base_config.n_ages),
                         new_adult_age=int(base_config.new_adult_age),
                     )
-                    array *= float(base_config.population_scale)
                     replace_kwargs["initial_sperm_storage"] = array
                 continue
 
-            # --- 2. multi-field: carrying_capacity variants ---
-            multi = _KWARG_MULTI_FIELD.get(kwarg)
-            if multi is not None:
-                base_field, scaled_field = multi
-                replace_kwargs[base_field] = float(val)
-                replace_kwargs[scaled_field] = np.array(float(val) * float(base_config.population_scale))
-                if kwarg in _EQUILIBRIUM_SENSITIVE_KWARGS:
-                    needs_equilibrium = True
-                continue
-
-            # --- 3. rename ---
+            # --- 2. rename ---
             config_field = _KWARG_RENAMES.get(kwarg, kwarg)
             # Wrap scalar values for 0-d ndarray config fields.
             if _is_0d_field(base_config, config_field) and not isinstance(val, np.ndarray):

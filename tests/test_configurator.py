@@ -261,6 +261,7 @@ class TestCustomFields:
 
 class TestLegacyBuilder:
     def test_discrete_builder_unchanged(self, species):
+        import warnings
         from natal.population_builder import DiscreteGenerationPopulationBuilder
 
         pop = (
@@ -290,3 +291,270 @@ class TestLegacyBuilder:
         # Old builder can still use new update()
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# set_param error paths
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestSetParamErrors:
+    def test_tensor_param_raises_valueerror(self, minimal_config):
+        with pytest.raises(ValueError, match="tensor"):
+            set_param(minimal_config, "viability", 1.0)
+
+    def test_array_param_raises_valueerror(self, minimal_config):
+        with pytest.raises(ValueError, match="tensor or array"):
+            set_param(minimal_config, "survival.female_survival_rates", 1.0)
+
+    def test_python_scalar_field_raises_typeerror(self, minimal_config):
+        with pytest.raises(TypeError, match="immutable config"):
+            set_param(minimal_config, "n_genotypes", 2)
+
+    def test_unknown_param_raises_keyerror(self, minimal_config):
+        with pytest.raises(KeyError, match="Unknown parameter"):
+            set_param(minimal_config, "not_a_real_param", 1.0)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Configurator: factory methods
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestFactoryMethods:
+    def test_for_config_returns_correct_subclass(self, minimal_config):
+        cfg = Configurator.for_config(minimal_config)
+        from natal.configurator import AgeStructuredConfigurator
+        assert isinstance(cfg, AgeStructuredConfigurator)
+
+    def test_for_discrete(self, species):
+        cfg = Configurator.for_discrete(species)
+        from natal.configurator import DiscreteConfigurator
+        assert isinstance(cfg, DiscreteConfigurator)
+        assert cfg._species is species
+
+    def test_for_age_structured(self, species):
+        cfg = Configurator.for_age_structured(species)
+        from natal.configurator import AgeStructuredConfigurator
+        assert isinstance(cfg, AgeStructuredConfigurator)
+        assert cfg._species is species
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Configurator: hooks / apply / presets
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestHooks:
+    def test_hooks_registers_items(self, species):
+        @nt.hook(event="early", custom=True)
+        def my_hook(state, config, _deme_id):
+            return 0
+        cfg = Configurator.from_species(species).hooks(my_hook)
+        assert getattr(cfg, "_hook_items", None) is not None
+
+    def test_apply_syncs_equilibrium(self, species):
+        cfg = Configurator.from_species(species).competition(carrying_capacity=5000)
+        old_comp = cfg._config.expected_competition_strength[()]
+        cfg._config.carrying_capacity[()] = 10000.0
+        cfg.apply()
+        assert cfg._config.expected_competition_strength[()] != old_comp
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# _merge_hooks warning
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestMergeHooks:
+    def test_unsupported_type_warns(self):
+        import warnings
+        from natal.configurator import _merge_hooks
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _merge_hooks(["not_a_hook"])  # type: ignore[arg-type]
+        assert len(w) == 1
+        assert "unsupported hook item" in str(w[0].message).lower()
+        assert "str" in str(w[0].message)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# legacy_path=True deprecation warning
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestLegacyPathDeprecation:
+    def test_discrete_legacy_path_warns(self, species):
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            nt.DiscreteGenerationPopulation.setup(species, legacy_path=True)
+        future = [x for x in w if issubclass(x.category, FutureWarning)]
+        assert len(future) >= 1
+        assert "deprecated" in str(future[0].message).lower()
+
+    def test_age_structured_legacy_path_warns(self, species):
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            nt.AgeStructuredPopulation.setup(species, legacy_path=True)
+        future = [x for x in w if issubclass(x.category, FutureWarning)]
+        assert len(future) >= 1
+        assert "deprecated" in str(future[0].message).lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Fitness field writing — all formats across all 4 field types
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def fitness_species() -> nt.Species:
+    return nt.Species.from_dict(
+        name="__test_fitness__",
+        structure={"auto": {"A": ["WT", "Var"]}},
+    )
+
+
+def _make_cfg(species: nt.Species) -> Configurator:
+    return Configurator.from_species(species)
+
+
+class TestFitnessFormats:
+    """Verify all 4 fitness field types accept all documented input formats."""
+
+    # With {"auto": {"A": ["WT", "Var"]}}: 4 genotypes
+    #   [0] WT|WT, [1] WT|Var, [2] Var|WT, [3] Var|Var
+
+    # ── sexual_selection: nested female→male pair format ────────────────
+
+    def test_sexual_selection_nested_female_male_replace(self, fitness_species):
+        """{female_selector: {male_selector: value}} writes to specific cell."""
+        cfg = _make_cfg(fitness_species)
+        cfg.fitness(sexual_selection={"WT|WT": {"Var|WT": 0.5}})
+        arr = cfg._config.sexual_selection_fitness  # (4, 4)
+        assert arr[0, 2] == 0.5  # f=WT|WT(0) × m=Var|WT(2)
+
+    def test_sexual_selection_nested_multiply(self, fitness_species):
+        """Nested format with mode='multiply' scales existing values."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.sexual_selection_fitness
+        original = arr[0, 2].copy()
+        cfg.fitness(sexual_selection={"WT|WT": {"Var|WT": 2.0}}, mode="multiply")
+        assert arr[0, 2] == original * 2.0
+
+    def test_sexual_selection_nested_mixed_raises(self, fitness_species):
+        """Mixing scalar and nested in same sexual_selection call raises."""
+        cfg = _make_cfg(fitness_species)
+        with pytest.raises(TypeError, match="Mixed"):
+            cfg.fitness(sexual_selection={
+                "WT|WT": {"Var|WT": 0.5},
+                "WT|Var": 1.0,  # scalar in nested context
+            })
+
+    # ── sexual_selection: flat format ────────────────────────────────────
+
+    def test_sexual_selection_flat_applies_to_all_females(self, fitness_species):
+        """{male_selector: value} writes entire column (all females)."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.sexual_selection_fitness
+        cfg.fitness(sexual_selection={"Var|WT": 0.3})
+        # Column for Var|WT (m_idx=2): all females get 0.3
+        assert arr[0, 2] == 0.3
+        assert arr[1, 2] == 0.3
+        assert arr[3, 2] == 0.3
+
+    # ── sexual_selection: top-level sex-keyed ────────────────────────────
+
+    def test_sexual_selection_top_level_sex_keyed(self, fitness_species):
+        """{"female": {genotype: val}} writes rows for specified females."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.sexual_selection_fitness
+        cfg.fitness(sexual_selection={
+            "female": {"WT|WT": 0.7},
+        })
+        # Row for WT|WT (f_idx=0) → all males = 0.7
+        assert arr[0, 0] == 0.7
+        assert arr[0, 2] == 0.7
+        # Row for other females unchanged (default 1.0)
+        assert arr[1, 0] == 1.0
+
+    # ── viability: per-selector sex-keyed ────────────────────────────────
+
+    def test_viability_per_selector_sex_keyed(self, fitness_species):
+        """{genotype: {"female": val}} sets viability for one sex only."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.viability_fitness  # (2, n_ages, 4)
+        cfg.fitness(viability={"Var|WT": {"female": 0.2}})
+        assert arr[0, 0, 2] == 0.2  # female, age0, Var|WT (idx=2)
+        assert arr[0, 1, 2] == 0.2  # female, age1, Var|WT
+        assert arr[1, 0, 2] == 1.0  # male unchanged
+
+    # ── fecundity: per-selector sex-keyed ────────────────────────────────
+
+    def test_fecundity_per_selector_sex_keyed_replace(self, fitness_species):
+        """{genotype: {"female": val}} sets fecundity for one sex."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.fecundity_fitness  # (2, 4)
+        cfg.fitness(fecundity={"Var|Var": {"female": 0.0, "male": 0.8}})
+        assert arr[0, 3] == 0.0  # female Var|Var (idx=3)
+        assert arr[1, 3] == 0.8  # male Var|Var
+
+    def test_fecundity_mixed_scalar_and_sex_keyed(self, fitness_species):
+        """Mixed: some genotypes have scalar values, some have sex-keyed."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.fecundity_fitness
+        cfg.fitness(fecundity={
+            "WT|WT": 2.0,                  # scalar → both sexes
+            "Var|Var": {"female": 0.0},    # female only
+        })
+        assert arr[0, 0] == 2.0  # female WT|WT
+        assert arr[1, 0] == 2.0  # male WT|WT
+        assert arr[0, 3] == 0.0  # female Var|Var
+        assert arr[1, 3] == 1.0  # male Var|Var unchanged
+
+    # ── zygote_viability: per-selector sex-keyed ─────────────────────────
+
+    def test_zygote_viability_per_selector_sex_keyed(self, fitness_species):
+        """{genotype: {"female": val}} sets zygote viability for one sex."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.zygote_viability_fitness  # (2, 4)
+        cfg.fitness(zygote_viability={"WT|Var": {"male": 0.5}})
+        assert arr[1, 1] == 0.5   # male WT|Var (idx=1)
+        assert arr[0, 1] == 1.0   # female WT|Var unchanged
+
+    # ── All fields: top-level sex-keyed format ───────────────────────────
+
+    def test_fecundity_top_level_sex_keyed(self, fitness_species):
+        """{"female": {genotype: val}, "male": {genotype: val}} works."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.fecundity_fitness
+        cfg.fitness(fecundity={
+            "female": {"WT|WT": 0.5},
+            "male": {"WT|Var": 0.3},
+        })
+        assert arr[0, 0] == 0.5  # female WT|WT
+        assert arr[1, 1] == 0.3  # male WT|Var
+
+    def test_viability_top_level_sex_keyed(self, fitness_species):
+        """Top-level sex-keyed viability: {"female": {g: v}, "male": {g: v}}."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.viability_fitness
+        cfg.fitness(viability={
+            "female": {"Var|Var": 0.1},
+            "male": {"Var|Var": 0.9},
+        })
+        assert arr[0, 0, 3] == 0.1  # female age0 Var|Var (idx=3)
+        assert arr[1, 0, 3] == 0.9  # male age0 Var|Var
+
+    def test_zygote_viability_top_level_sex_keyed(self, fitness_species):
+        """Top-level sex-keyed zygote viability."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.zygote_viability_fitness
+        cfg.fitness(zygote_viability={
+            "female": {"Var|WT": 0.2},
+            "male": {"Var|WT": 0.8},
+        })
+        assert arr[0, 2] == 0.2  # female Var|WT (idx=2)
+        assert arr[1, 2] == 0.8  # male Var|WT
