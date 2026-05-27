@@ -44,7 +44,7 @@ Typical uses:
 - Cytoplasmic incompatibility
 - Non-Mendelian offspring redistribution
 
-## 3. Recommended Integration Method (Builder)
+## 3. Recommended Integration Method
 
 In practice, it is recommended to register Modifiers uniformly at the Builder stage:
 
@@ -152,8 +152,8 @@ Both have the same allele but different labels, potentially triggering different
 ```python
 # Gamete labels are defined by setting gamete_labels on the Species
 species.gamete_labels = ["default", "Cas9_deposited"]
-# Then build normally using the builder (labels take effect automatically)
-pop = AgeStructuredPopulationBuilder(species).setup(...).build()
+# Then build normally using Configurator (labels take effect automatically)
+pop = nt.AgeStructuredPopulation.setup(species).build()
 ```
 
 ## 7. Registration Methods and Priority
@@ -193,7 +193,7 @@ In practice, it is recommended to put "base rules" at a lower priority and "over
 # 5) Finally expand to full parameter scanning
 ```
 
-## 10. Chapter Summary
+## 10. Summary
 
 Modifiers are the core mechanism in NATAL for expressing "genetic rule rewriting."
 

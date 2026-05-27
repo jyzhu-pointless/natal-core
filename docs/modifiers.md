@@ -49,7 +49,6 @@ Typical use cases:
 In practice, it is recommended to register modifiers at the Builder stage:
 
 ```python
-from natal.population_builder import AgeStructuredPopulationBuilder
 
 
 def my_gamete_modifier(pop):
@@ -62,7 +61,7 @@ def my_gamete_modifier(pop):
 
 
 pop = (
-    AgeStructuredPopulationBuilder(species)
+    nt.AgeStructuredPopulation.setup(species=species)
     .setup(name="MyPop")
     .age_structure(n_ages=8)
     .initial_state({...})
