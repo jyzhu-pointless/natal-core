@@ -489,7 +489,7 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 **A**: 初始化时要生成两个映射矩阵，复杂度与基因型数量的 3-4 次方有关，根据 numba 缓存情况可能还需要不同程度的编译。对于相对简单（仅有几十种基因型）的遗传学设定，预计需要数秒至数十秒时间。这只发生一次。之后的每个 tick 速度很快。
 
 ### Q: 什么时候使用离散世代种群？
-**A**: 当你的模型不需要年龄结构时，使用`DiscreteGenerationPopulationBuilder`更简单，适用于：
+**A**: 当你的模型不需要年龄结构时，使用`DiscreteGenerationPopulation`更简单，适用于：
 - 果蝇等实验室模型
 - 理论模型研究
 - 不需要年龄相关效应的模拟

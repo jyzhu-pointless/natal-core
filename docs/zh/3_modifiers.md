@@ -49,7 +49,7 @@ Modifier 的作用就是对这两类映射进行有控制的改写。
 在用户实践中，推荐在 Builder 阶段统一注册 Modifier：
 
 ```python
-from natal.population_builder import AgeStructuredPopulationBuilder
+import natal as nt
 
 
 def my_gamete_modifier(pop):
@@ -62,10 +62,10 @@ def my_gamete_modifier(pop):
 
 
 pop = (
-    AgeStructuredPopulationBuilder(species)
-    .setup(name="MyPop")
+    nt.AgeStructuredPopulation
+    .setup(species=species)
     .age_structure(n_ages=8)
-    .initial_state({...})
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
     .build()
 )

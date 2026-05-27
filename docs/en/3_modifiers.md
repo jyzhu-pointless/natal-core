@@ -49,7 +49,7 @@ Typical uses:
 In practice, it is recommended to register Modifiers uniformly at the Builder stage:
 
 ```python
-from natal.population_builder import AgeStructuredPopulationBuilder
+import natal as nt
 
 
 def my_gamete_modifier(pop):
@@ -62,10 +62,10 @@ def my_gamete_modifier(pop):
 
 
 pop = (
-    AgeStructuredPopulationBuilder(species)
-    .setup(name="MyPop")
+    nt.AgeStructuredPopulation
+    .setup(species=species)
     .age_structure(n_ages=8)
-    .initial_state({...})
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
     .build()
 )

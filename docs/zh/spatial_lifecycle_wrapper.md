@@ -262,13 +262,13 @@ _spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry,
 
 ```python
 @hook(event="early", custom=True)
-def my_hook(ind_count, tick, deme_id=-1):
+def my_hook(state, config, deme_id=-1):
     """Numba 启用时自动 njit 编译，禁用时用 Python 回退。"""
     if deme_id % 2 == 0:
-        ind_count[0, 0, 0] *= 0.5
+        state.individual_count[0, 0, 0] *= 0.5
 ```
 
-配合 `PopulationBuilder` 使用：
+配合 Configurator 使用：
 
 ```python
 pop = (
