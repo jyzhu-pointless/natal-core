@@ -10,11 +10,12 @@
 - Altering zygote development processes (e.g., embryonic resistance formation)
 - Adjusting fitness parameters (e.g., cost of the drive allele)
 
-## Applying Presets in the Builder
+## Applying Presets
 
 ```python
-pop = (DiscreteGenerationPopulationBuilder(species)
-       .setup(name="TestPop")
+import natal as nt
+
+pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
        .presets(preset1, preset2)  # Multiple presets can be applied
        .build())
 ```
@@ -113,8 +114,8 @@ ta_drive_with_mating_cost = ToxinAntidoteDrive(
 ### Simple Point Mutation
 
 ```python
+import natal as nt
 from natal.genetic_presets import HomingDrive
-from natal.population_builder import AgeStructuredPopulationBuilder
 
 # Create gene drive
 drive = HomingDrive(
@@ -125,12 +126,11 @@ drive = HomingDrive(
 )
 
 # Build population and apply preset
-species = Species.from_dict("TestSpecies", {
+species = nt.Species.from_dict("TestSpecies", {
     "chr1": {"GeneA": ["WT", "Drive"]}
 })
 
-pop = (AgeStructuredPopulationBuilder(species)
-       .setup(name="DriveTest", stochastic=False)
+pop = (nt.AgeStructuredPopulation.setup(species, name="DriveTest", stochastic=False)
        .age_structure(n_ages=5)
        .initial_state({"female": {"WT|WT": [0, 0, 100, 0, 0]}})
        .presets(drive)
@@ -143,6 +143,7 @@ pop.run(n_steps=100)
 ### Combining Multiple Presets
 
 ```python
+import natal as nt
 from natal.genetic_presets import HomingDrive, ToxinAntidoteDrive
 
 # Create multiple presets
@@ -150,8 +151,7 @@ drive1 = HomingDrive("Drive1", "Drive", "WT", conversion_rate=0.95)
 drive2 = ToxinAntidoteDrive("Drive2", "Toxin", "Target", conversion_rate=0.90)
 
 # Apply multiple presets simultaneously
-pop = (DiscreteGenerationPopulationBuilder(species)
-       .setup(name="MultiDriveTest")
+pop = (nt.DiscreteGenerationPopulation.setup(species, name="MultiDriveTest")
        .presets(drive1, drive2)  # Apply multiple presets
        .build())
 ```

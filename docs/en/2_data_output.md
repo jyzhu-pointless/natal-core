@@ -274,8 +274,8 @@ print("Last step data:", history_data["snapshots"][-1])
 # Get full history
 full_history = pop.output_history()
 
-# Get history at a specific time step
-history_at_tick_100 = pop.output_history(tick=100)
+# output_history returns all recorded snapshots
+history = pop.output_history()
 
 # Get list of time steps in history
 ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
@@ -313,33 +313,33 @@ plt.show()
 current_state = pop.output_current_state()
 print("Current state:", current_state)
 
-# Get readable dictionary format
-readable_state = pop.output_current_state(as_dict=True)
-print("Readable state:", readable_state)
+# Include zero-count genotype entries
+readable_state = pop.output_current_state(include_zero_counts=True)
+print("State with zero-counts:", readable_state)
 
-# Get JSON format (suitable for transmission and storage)
-json_state = pop.output_current_state(as_json=True)
-print("JSON state:", json_state[:200])  # Show first 200 characters
+# Save to JSON file (suitable for transmission and storage)
+pop.output_current_state(output_path="state.json")
+print("State saved to state.json")
 ```
 
 ### Data Export
 
 ```python
-# Export as dictionary format
-data_dict = pop.output_current_state(as_dict=True)
+# Export as dictionary format (include zero-count genotypes)
+data_dict = pop.output_current_state(include_zero_counts=True)
 
-# Export as JSON format
-json_data = pop.output_current_state(as_json=True, indent=2)
+# Save to JSON file
+pop.output_current_state(output_path="state.json", indent=2)
 
 # Save to file
 import json
 with open("population_state.json", "w") as f:
     json.dump(data_dict, f, indent=2)
 
-# Export observation data
+# Export observation data (include zero-count genotypes)
 observation_data = pop.output_current_state(
     observation=observation,
-    as_dict=True
+    include_zero_counts=True
 )
 ```
 

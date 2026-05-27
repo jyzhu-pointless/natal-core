@@ -274,8 +274,8 @@ print("最后一步数据:", history_data["snapshots"][-1])
 # 获取完整历史记录
 full_history = pop.output_history()
 
-# 获取特定时间步的历史
-history_at_tick_100 = pop.output_history(tick=100)
+# output_history 返回所有已记录的快照
+history = pop.output_history()
 
 # 获取历史记录的时间步列表
 ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
@@ -313,33 +313,33 @@ plt.show()
 current_state = pop.output_current_state()
 print("当前状态:", current_state)
 
-# 获取可读的字典格式
-readable_state = pop.output_current_state(as_dict=True)
-print("可读状态:", readable_state)
+# 包含零计数的基因型组
+readable_state = pop.output_current_state(include_zero_counts=True)
+print("状态（含零计数）:", readable_state)
 
-# 获取JSON格式（便于传输和存储）
-json_state = pop.output_current_state(as_json=True)
-print("JSON状态:", json_state[:200])  # 显示前200个字符
+# 保存到JSON文件（便于传输和存储）
+pop.output_current_state(output_path="state.json")
+print("状态已保存到 state.json")
 ```
 
 ### 数据导出
 
 ```python
-# 导出为字典格式
-data_dict = pop.output_current_state(as_dict=True)
+# 导出为字典格式（包含零计数基因型）
+data_dict = pop.output_current_state(include_zero_counts=True)
 
-# 导出为JSON格式
-json_data = pop.output_current_state(as_json=True, indent=2)
+# 保存到JSON文件
+pop.output_current_state(output_path="state.json", indent=2)
 
 # 保存到文件
 import json
 with open("population_state.json", "w") as f:
     json.dump(data_dict, f, indent=2)
 
-# 导出观察数据
+# 导出观察数据（包含零计数基因型）
 observation_data = pop.output_current_state(
     observation=observation,
-    as_dict=True
+    include_zero_counts=True
 )
 ```
 
