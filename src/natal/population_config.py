@@ -32,6 +32,7 @@ __all__ = [
     'extract_gamete_frequencies_by_glab',
     'extract_zygote_frequencies',
     'DiscretePopulationConfig', 'from_population_config',
+    'build_discrete_population_config',
 ]
 
 # Growth mode constants (keep in sync with algorithms.py)
@@ -1109,3 +1110,40 @@ def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
         hook_slot=int(cfg.hook_slot),
         custom=cfg.custom,
     )
+
+
+def build_discrete_population_config(
+    *,
+    n_genotypes: int,
+    n_haploid_genotypes: int,
+    n_glabs: int,
+    genotype_to_gametes_map: NDArray[np.float64],
+    gametes_to_zygote_map: NDArray[np.float64],
+    n_ages: int = 2,
+    carrying_capacity: float | None = None,
+    has_sex_chromosomes: bool = False,
+    **kwargs: Any,
+) -> DiscretePopulationConfig:
+    """Build a ``DiscretePopulationConfig`` directly, without intermediate ``PopulationConfig``.
+
+    This is a thin wrapper around :func:`build_population_config` that sets
+    discrete-specific defaults (juvenile survival=1.0, adult survival=0.0)
+    and returns a ``DiscretePopulationConfig`` via :func:`from_population_config`.
+    """
+    cfg = build_population_config(
+        n_genotypes=n_genotypes,
+        n_haploid_genotypes=n_haploid_genotypes,
+        n_glabs=n_glabs,
+        genotype_to_gametes_map=genotype_to_gametes_map,
+        gametes_to_zygote_map=gametes_to_zygote_map,
+        n_ages=n_ages,
+        new_adult_age=1,
+        carrying_capacity=carrying_capacity or 1000.0,
+        has_sex_chromosomes=has_sex_chromosomes,
+        **kwargs,
+    )
+    # Discrete-generation model: juveniles (age 0) survive to become
+    # adults (age 1), but adults are replaced every tick.
+    cfg.age_based_survival_rates[:, 0] = 1.0
+    cfg.age_based_survival_rates[:, 1] = 0.0
+    return from_population_config(cfg)

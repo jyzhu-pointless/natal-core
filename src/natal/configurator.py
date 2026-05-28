@@ -732,9 +732,13 @@ class Configurator:
     def for_discrete(cls, species: Species) -> DiscreteConfigurator:
         """Create a ``DiscreteConfigurator`` for building a discrete-generation population.
 
-        The underlying config is a ``DiscretePopulationConfig`` with juvenile
-        survival set to 1.0 and adult survival set to 0.0 (non-overlapping
-        generations).  :meth:`.build` returns ``DiscreteGenerationPopulation``.
+        Builds a ``DiscretePopulationConfig`` directly via
+        :func:`~natal.population_config.build_discrete_population_config`
+        — no intermediate ``PopulationConfig`` step is needed.
+
+        Juvenile survival defaults to 1.0 and adult survival to 0.0
+        (non-overlapping generations).  :meth:`.build` returns
+        ``DiscreteGenerationPopulation``.
 
         Args:
             species: The genetic architecture for the population.
@@ -742,28 +746,18 @@ class Configurator:
         Returns:
             A ``DiscreteConfigurator`` ready for further chaining.
         """
-        from natal.population_config import (
-            build_population_config,
-            from_population_config,
-        )
+        from natal.population_config import build_discrete_population_config
 
         bp = species.get_config_blueprint()
-        config = build_population_config(
+        config = build_discrete_population_config(
             n_genotypes=bp["n_genotypes"],
             n_haploid_genotypes=bp["n_haploid_genotypes"],
-            n_ages=2,
             n_glabs=bp["n_glabs"],
             genotype_to_gametes_map=bp["genotype_to_gametes_map"],
             gametes_to_zygote_map=bp["gametes_to_zygote_map"],
-            new_adult_age=1,
-            carrying_capacity=1000.0,
             has_sex_chromosomes=getattr(species, "has_sex_chromosomes", False),
         )
-        # Discrete model: juveniles (age0) survive to become adults (age1),
-        # but adults are replaced every tick so adult survival must be 0.0.
-        config.age_based_survival_rates[:, 0] = 1.0
-        config.age_based_survival_rates[:, 1] = 0.0
-        cfg = DiscreteConfigurator(from_population_config(config), species=species)
+        cfg = DiscreteConfigurator(config, species=species)
         object.__setattr__(cfg, "_name", "DiscreteGenerationPop")
         return cfg
 
