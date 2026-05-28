@@ -654,7 +654,7 @@ def initialize_zygote_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    zygote_modifiers: Optional[List[Callable[..., Any]]] = None
+    zygote_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None
 ) -> NDArray[np.float64]:
     """Initialize the ``gametes_to_zygote_map`` tensor.
 
@@ -717,7 +717,7 @@ def initialize_gamete_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    gamete_modifiers: Optional[List[Callable[..., Any]]] = None
+    gamete_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None
 ) -> NDArray[np.float64]:
     """Create and return a ``genotype_to_gametes_map`` tensor.
 
