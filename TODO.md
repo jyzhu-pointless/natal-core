@@ -41,25 +41,36 @@
 - 未必是定值，可与亲本中 Cas9 copies（或表达时间）有关
 - 可支持 heterozygotes / homozygotes 不同配置
 
-### 7. Spatial API 其他优化
+### 7. Preset 系统声明式重构——增量重算
+
+- 当前：每个 preset 通过回调函数 `fn(tensor) → tensor` 修改张量。改任何 preset 参数都触发全量重建（清除 modifier → 重新应用所有 preset → 重算 offspring_tensor）。
+- 目标：声明式规则 + 行级所有权追踪，只重算受影响的 genotype 行和 offspring tensor 切片。
+  - 修饰器改为声明式规则（homing_rate、deposition_rate 等）而非黑盒回调
+  - 每个 preset 注册时记录 `affected_rows: set[int]`
+  - `reconfigure_preset(A)` 只清 A 的行，从 Mendelian baseline 恢复，重新应用 A 的规则
+  - 冲突检测：两个 preset 声明同一行时注册期可见，当场决定策略（覆盖/报错/合并）
+  - 增量 offspring_tensor：只重算母亲/父亲属于 affected_rows 的 pair
+  - 若所有 preset 只改互不重叠的行+默认 multiplicative fitness → 天然满足交换律
+
+### 8. Spatial API 其他优化
 
 - 优化初始化 deme builder 方式（`batch_setting(…)`）
 - 批量设置 local hooks（使用 `deme_selector`）
 - 优化 migration kernel，处理边界效应（总迁移率不应不变，而应正比于邻居数量；或可不用总迁移率设置，尝试全部设为 1；需要一个优雅的方法）
 
-### 8. Spatial UI 问题
+### 9. Spatial UI 问题
 
 - 目前 square 易卡死 → 格点数太多时与 hex 一样渲染成热图
 - 支持选 deme 时，显示和 panmictic 一样的 config 信息
 - 支持显示所有 local hooks
 - 支持 landscape 显示 genotype freq per deme 等指标
 
-### 9. General UI 问题
+### 10. General UI 问题
 
 - 需与 `Observation` 集成
 - 支持 UI 导出集成后的 history 观测数据
 
-### 10. Spatial History
+### 11. Spatial History
 
 - 保存每个 deme 的 History 数据，提供快捷解析和导出方法
 - 支持 UI 导出
