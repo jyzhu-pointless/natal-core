@@ -73,9 +73,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    state = PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store)
-    result = _FIRST_HOOK(state, config, deme_id)
-    ind_count, sperm_store = state.individual_count, state.sperm_storage
+    result = _FIRST_HOOK(
+        PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -88,9 +89,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    state = PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store)
-    result = _EARLY_HOOK(state, config, deme_id)
-    ind_count, sperm_store = state.individual_count, state.sperm_storage
+    result = _EARLY_HOOK(
+        PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -103,9 +105,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    state = PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store)
-    result = _LATE_HOOK(state, config, deme_id)
-    ind_count, sperm_store = state.individual_count, state.sperm_storage
+    result = _LATE_HOOK(
+        PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -174,10 +177,10 @@ def RUN_FN_NAME(
         history_count += 1
 
     for _ in range(n_ticks):
-        temp_state = PopulationState(
-            n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store,
+        current_state, result = TICK_FN_NAME(
+            PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+            config, registry,
         )
-        current_state, result = TICK_FN_NAME(temp_state, config, registry)
         ind_count, sperm_store, tick = current_state
 
         if record_interval > 0 and (tick % record_interval == 0):

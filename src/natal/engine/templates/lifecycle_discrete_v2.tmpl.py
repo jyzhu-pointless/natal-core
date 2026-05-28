@@ -67,9 +67,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
-    state = DiscretePopulationState(n_tick=tick, individual_count=ind_count)
-    result = _FIRST_HOOK(state, config, deme_id)
-    ind_count = state.individual_count
+    result = _FIRST_HOOK(
+        DiscretePopulationState(n_tick=tick, individual_count=ind_count),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, tick), RESULT_STOP
 
@@ -82,9 +83,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
-    state = DiscretePopulationState(n_tick=tick, individual_count=ind_count)
-    result = _EARLY_HOOK(state, config, deme_id)
-    ind_count = state.individual_count
+    result = _EARLY_HOOK(
+        DiscretePopulationState(n_tick=tick, individual_count=ind_count),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, tick), RESULT_STOP
 
@@ -97,9 +99,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, tick), RESULT_STOP
-    state = DiscretePopulationState(n_tick=tick, individual_count=ind_count)
-    result = _LATE_HOOK(state, config, deme_id)
-    ind_count = state.individual_count
+    result = _LATE_HOOK(
+        DiscretePopulationState(n_tick=tick, individual_count=ind_count),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, tick), RESULT_STOP
 
@@ -148,10 +151,10 @@ def RUN_FN_NAME(
         history_count += 1
 
     for _ in range(n_ticks):
-        temp_state = DiscretePopulationState(
-            n_tick=tick, individual_count=ind_count,
+        current_state, result = TICK_FN_NAME(
+            DiscretePopulationState(n_tick=tick, individual_count=ind_count),
+            config, registry,
         )
-        current_state, result = TICK_FN_NAME(temp_state, config, registry)
         ind_count, tick = current_state
 
         if record_interval > 0 and (tick % record_interval == 0):
