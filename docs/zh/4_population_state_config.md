@@ -95,7 +95,7 @@ class DiscretePopulationState(NamedTuple):
 
 ```python
 @nt.hook(event="early", custom=True)
-def heatwave(state, config, deme_id):
+def heatwave(state, config):
     if state.n_tick == 10:
         config.carrying_capacity[()] = 2000  # 原地修改，立即生效
     return 0

@@ -64,7 +64,7 @@ set_param(pop.config, "expected_eggs_per_female", 100.0)  # 别名
 
 ## 3. Hook 内修改
 
-Hook 签名统一为 `(state, config, deme_id) → int`。`config` 可原地修改，修改后对当前 tick 后续 hook 和流程立即可见。
+Hook 签名统一为 ``(state, config) → int``。``config`` 可原地修改，修改后对当前 tick 后续 hook 和流程立即可见。Spatial 模型如需在函数体内按 deme 分支，可加可选的 ``deme_id`` 参数，但绝大多数场景不需要。
 
 ### 3.1 方式 A：直接写 `config.field[()] = v`
 
@@ -78,7 +78,6 @@ from natal.population_state import DiscretePopulationState
 def environment_change(
     state: DiscretePopulationState,
     config: DiscretePopulationConfig,
-    _deme_id: int,
 ) -> int:
     if state.n_tick == 10:
         config.carrying_capacity[()] *= 0.5
@@ -97,7 +96,7 @@ def environment_change(
 from natal.configurator import hook_set_param
 
 @nt.hook(event="early", custom=True)
-def recovery_hook(state, config, deme_id):
+def recovery_hook(state, config):
     if state.n_tick == 10:
         hook_set_param(config, "carrying_capacity", 5000.0)
         hook_set_param(config, "eggs_per_female", 100.0)
@@ -115,7 +114,7 @@ from numba import objmode
 from natal.configurator import set_param
 
 @nt.hook(event="early", custom=True)
-def batch_hook(state, config, deme_id):
+def batch_hook(state, config):
     if state.n_tick == 10:
         with objmode():
             print(f"[tick={state.n_tick}] emergency recovery")  # 日志
@@ -149,7 +148,7 @@ pop = (
 
 # Hook 内
 @nt.hook(event="early", custom=True)
-def seasonal_hook(state, config, _deme_id):
+def seasonal_hook(state, config):
     temp = config.custom['temperature'][()]
     if int(config.custom['season_idx'][()]) == 1:
         config.custom['temperature'][()] = 35.0

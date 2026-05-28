@@ -66,8 +66,10 @@ Resolution (four steps):
 
 ## 3. Modification Inside Hooks
 
-Hook signature is `(state, config, deme_id) → int`. `config` is writable in-place;
+Hook signature is ``(state, config) → int``. ``config`` is writable in-place;
 changes are immediately visible to subsequent hooks and simulation steps.
+For spatial models that need per-deme branching, an optional ``deme_id`` parameter
+can be added, but most hooks do not need it.
 
 ### 3.1 Direct Write: `config.field[()] = v`
 
@@ -81,7 +83,6 @@ from natal.population_state import DiscretePopulationState
 def environment_change(
     state: DiscretePopulationState,
     config: DiscretePopulationConfig,
-    _deme_id: int,
 ) -> int:
     if state.n_tick == 10:
         config.carrying_capacity[()] *= 0.5
@@ -102,7 +103,7 @@ bare `with objmode()` (identical Numba→Python boundary):
 from natal.configurator import hook_set_param
 
 @nt.hook(event="early", custom=True)
-def recovery_hook(state, config, deme_id):
+def recovery_hook(state, config):
     if state.n_tick == 10:
         hook_set_param(config, "carrying_capacity", 5000.0)
         hook_set_param(config, "eggs_per_female", 100.0)
@@ -121,7 +122,7 @@ from numba import objmode
 from natal.configurator import set_param
 
 @nt.hook(event="early", custom=True)
-def batch_hook(state, config, deme_id):
+def batch_hook(state, config):
     if state.n_tick == 10:
         with objmode():
             print(f"[tick={state.n_tick}] emergency recovery")  # logging
@@ -155,7 +156,7 @@ pop = (
 
 # Inside hooks
 @nt.hook(event="early", custom=True)
-def seasonal_hook(state, config, _deme_id):
+def seasonal_hook(state, config):
     temp = config.custom['temperature'][()]
     if int(config.custom['season_idx'][()]) == 1:
         config.custom['temperature'][()] = 35.0

@@ -95,7 +95,7 @@ Key differences from `PopulationState`:
 
 ```python
 @nt.hook(event="early", custom=True)
-def heatwave(state, config, deme_id):
+def heatwave(state, config):
     if state.n_tick == 10:
         config.carrying_capacity[()] = 2000  # In-place mutation, takes effect immediately
     return 0
