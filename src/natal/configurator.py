@@ -1,9 +1,24 @@
-"""Mutable wrapper for PopulationConfig and DiscretePopulationConfig.
+"""Mutable wrapper for PopulationConfig, with a chainable API.
 
-Provides a chainable API for reading/writing config fields, registering
-custom named parameters (stored as a structured numpy array), and
-freezing changes back to an immutable NamedTuple via ``_replace``
-(cheap — all ndarray fields are shared by reference).
+Functionality:
+  - Read/write config fields through a chainable API.
+  - Register custom named parameters (stored as a structured numpy array).
+  - Freeze changes back to an immutable NamedTuple via ``_replace``
+    (cheap — all ndarray fields are shared by reference).
+
+Why this module exists:
+  ``PopulationConfig`` / ``DiscretePopulationConfig`` are immutable
+  NamedTuples — fields cannot be modified once created.  However,
+  during simulation setup (and inside hooks at runtime), parameters
+  need real-time adjustment.  The ``Configurator`` provides a mutable
+  layer on top: all modifications write into the config arrays
+  in-place, and the final immutable config is materialised via
+  ``build()``.
+
+  The adapter class ``_ConfigContext`` lets genetic presets and
+  modifiers operate on config arrays without needing a live Population
+  object.  The standalone :func:`set_param` function is also usable
+  from within Numba-compiled hooks via ``objmode``.
 """
 
 from __future__ import annotations
