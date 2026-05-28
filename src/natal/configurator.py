@@ -559,15 +559,24 @@ def _write_fitness_field_flat(
 
     The target array shape depends on *field_name*:
 
-    - ``"viability"`` → ``(n_sexes, n_ages, n_genotypes)`` — writes ``[sex_idx, :, gidx]``
-    - ``"fecundity"`` → same shape — writes ``[sex_idx, :, gidx]``
-    - ``"sexual_selection"`` → ``(n_sexes, n_sexes, n_genotypes)`` — writes ``[f_idx, m_idx, gidx]``
-    - ``"zygote_viability"`` → same as viability — writes ``[sex_idx, :, gidx]``
+    - ``"viability"`` → ``(n_sexes, n_ages, n_genotypes)`` — writes ``[sex_idx, default_age, gidx]``
+    - ``"fecundity"`` → ``(n_sexes, n_genotypes)`` — no age axis
+    - ``"sexual_selection"`` → ``(n_genotypes, n_genotypes)`` — no age axis
+    - ``"zygote_viability"`` → ``(n_sexes, n_genotypes)`` — no age axis
 
-    When *age_idx* is given (int), only that age slice is written
-    instead of ``:`` (all ages).  ``fecundity`` has no age axis
-    so *age_idx* is ignored for it.
+    When *age_idx* is ``None`` (the default), the write targets the
+    last juvenile age (``new_adult_age - 1``) — viability fitness
+    normally represents larval / juvenile survival, not adult fitness.
+    ``fecundity`` and ``zygote_viability`` have no age axis so
+    *age_idx* is ignored for them.
     """
+    # Default to last juvenile age: viability typically affects
+    # larvae/juveniles, not adults.  DiscretePopulationConfig has
+    # no ``new_adult_age`` field (always 2 ages, adult at age 1).
+    resolved_age: int = age_idx if age_idx is not None else (
+        getattr(config, "new_adult_age", 1) - 1
+    )
+
     for selector, value in patch.items():
         matched = species.resolve_genotype_selectors(
             selector=selector,
@@ -576,7 +585,7 @@ def _write_fitness_field_flat(
         )
         for genotype in matched:
             gidx = registry.genotype_to_index[genotype]
-            age_slice = slice(age_idx, age_idx + 1) if age_idx is not None else slice(None)
+            age_slice = slice(resolved_age, resolved_age + 1)
 
             if field_name == "viability":
                 arr = config.viability_fitness

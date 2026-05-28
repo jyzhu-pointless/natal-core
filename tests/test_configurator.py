@@ -483,12 +483,17 @@ class TestFitnessFormats:
     # ── viability: per-selector sex-keyed ────────────────────────────────
 
     def test_viability_per_selector_sex_keyed(self, fitness_species):
-        """{genotype: {"female": val}} sets viability for one sex only."""
+        """{genotype: {"female": val}} sets viability for one sex only.
+
+        Without an explicit age, viability defaults to the last juvenile
+        age (new_adult_age - 1).  For from_species configs n_ages=2,
+        new_adult_age=1 → default age 0.
+        """
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.viability_fitness  # (2, n_ages, 4)
         cfg.fitness(viability={"Var|WT": {"female": 0.2}})
-        assert arr[0, 0, 2] == 0.2  # female, age0, Var|WT (idx=2)
-        assert arr[0, 1, 2] == 0.2  # female, age1, Var|WT
+        assert arr[0, 0, 2] == 0.2  # female, age0 (default juvenile age), Var|WT
+        assert arr[0, 1, 2] == 1.0  # female, age1 — not written (age1 is adult)
         assert arr[1, 0, 2] == 1.0  # male unchanged
 
     # ── fecundity: per-selector sex-keyed ────────────────────────────────
