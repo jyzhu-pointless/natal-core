@@ -172,12 +172,16 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
     )
     from natal.modifiers import build_modifier_wrappers
 
+    # ---- resolve genotype/haplotype lists from the registry ----
     haploid_genotypes = ctx.registry.index_to_haplo
     diploid_genotypes = ctx.registry.index_to_genotype
     if not haploid_genotypes or not diploid_genotypes:
-        return
+        return  # species has no haploid genotypes (no sex chromosomes)
 
     n_glabs = int(ctx.config.n_glabs)
+    # ---- compile modifier callables from the accumulated modifier lists ----
+    # build_modifier_wrappers converts user-supplied GameteModifier /
+    # ZygoteModifier objects into tensor → tensor callables.
     gamete_funcs, zygote_funcs = build_modifier_wrappers(
         gamete_modifiers=ctx.gamete_modifiers,
         zygote_modifiers=ctx.zygote_modifiers,
@@ -188,18 +192,26 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         n_glabs=n_glabs,
     )
 
-    # Copy the Mendelian baseline from the species cache — no need to
-    # recompute it from scratch.
+    # ---- fetch the Mendelian baseline from the species cache ----
+    # Because get_config_blueprint() is cached per-species, repeatedly
+    # calling it is cheap.  We copy the arrays so that modifier callables
+    # can mutate them without corrupting the cached originals.
     bp = ctx.species.get_config_blueprint()
     genotype_to_gametes_map = bp["genotype_to_gametes_map"].copy()
     gametes_to_zygote_map = bp["gametes_to_zygote_map"].copy()
 
-    # Apply modifier callables on top of the baseline.
+    # ---- chain modifier callables on top of the baseline ----
+    # Each callable accepts and returns a tensor of the same shape,
+    # allowing modifiers to be composed in registration order.
     for fn in gamete_funcs:
         genotype_to_gametes_map = fn(genotype_to_gametes_map)
     for fn in zygote_funcs:
         gametes_to_zygote_map = fn(gametes_to_zygote_map)
 
+    # ---- recompute offspring probability tensor from the updated maps ----
+    # This tensor pre-computes P(offspring_genotype | mother, father) for
+    # all genotype pairs.  It depends on meiosis maps and zygote maps,
+    # both of which may have been altered by modifiers above.
     offspring_tensor = compute_offspring_probability_tensor(
         meiosis_f=genotype_to_gametes_map[0],
         meiosis_m=genotype_to_gametes_map[1],
@@ -209,14 +221,18 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         n_glabs=n_glabs,
     )
 
-    # DiscretePopulationConfig has pre-extracted slices (meiosis_f, meiosis_m,
-    # viability_f, etc.) that must stay in sync with the source maps.
+    # ---- write everything back into the config via _replace ----
+    # The three maps replace their config counterparts.  For
+    # DiscretePopulationConfig we must additionally update the
+    # pre-extracted per-sex slices (meiosis_f, viability_f, etc.),
+    # because those are what the discrete engine reads at runtime.
     overrides: dict[str, Any] = {
         "genotype_to_gametes_map": genotype_to_gametes_map,
         "gametes_to_zygote_map": gametes_to_zygote_map,
         "offspring_tensor": offspring_tensor,
     }
     if isinstance(ctx.config, DiscretePopulationConfig):
+        # Keep the pre-extracted slices in sync with the source maps.
         overrides["meiosis_f"] = genotype_to_gametes_map[0]
         overrides["meiosis_m"] = genotype_to_gametes_map[1]
         overrides["fecundity_f"] = ctx.config.fecundity_fitness[0]
@@ -673,13 +689,27 @@ class Configurator:
         config: PopulationConfig | DiscretePopulationConfig,
         species: Species | None = None,
     ) -> None:
+        """Wrap a config for chainable modification.
+
+        Args:
+            config: An existing PopulationConfig or DiscretePopulationConfig.
+            species: Required for methods that need genotype resolution
+                (initial_state, presets, modifiers, fitness).  Can be
+                omitted when the Configurator is only used for scalar
+                parameter updates via set_param.
+        """
         self._config = config
         self._species = species  # needed for initial_state / preset resolution
+        # _registry is lazily built on first _make_ctx() call, avoiding the
+        # cost of genotype enumeration for simple scalar-param updates.
         self._registry: IndexRegistry | None = None
         # Modifier lists — accumulated across presets() / modifiers() calls,
         # then applied when maps are rebuilt.
         self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
+        # Accumulated kwargs for custom structured-array fields.  Each
+        # .custom() call adds to this dict; build_custom_array() is called
+        # only at the end.
         self._custom_kwargs: dict[str, object] = {}
 
     @property
@@ -1271,6 +1301,12 @@ class Configurator:
                 )
         elif juvenile_growth_mode is not None:
             mode_value = juvenile_growth_mode
+        # ---- carrying capacity (K) fallback chain, in priority order ----
+        # 1. Explicit carrying_capacity argument.
+        # 2. Legacy alias age_1_carrying_capacity.
+        # 3. Legacy alias old_juvenile_carrying_capacity.
+        # 4. Auto-detect from initial_individual_count (age-1 sum → total).
+        # 5. Leave as None — set_param will skip the write.
         k_value = carrying_capacity
         if k_value is None and age_1_carrying_capacity is not None:
             k_value = age_1_carrying_capacity
@@ -1278,6 +1314,7 @@ class Configurator:
             k_value = old_juvenile_carrying_capacity
         if k_value is None:
             init_ind = self._config.initial_individual_count
+            # shape[1] >= 2 guards against discrete configs (n_ages=2 → has age-1).
             if init_ind.size > 0 and init_ind.ndim >= 2 and init_ind.shape[1] >= 2:
                 age_1_count = float(init_ind[:, 1, :].sum())
                 if age_1_count >= 0.5:
@@ -1286,6 +1323,7 @@ class Configurator:
                     total = float(init_ind.sum())
                     if total >= 0.5:
                         k_value = total
+        # ---- write all scalar params via set_param (None values are skipped) ----
         for name, value in [
             ("carrying_capacity", k_value),
             ("low_density_growth_rate", low_density_growth_rate),
@@ -1335,6 +1373,9 @@ class Configurator:
         """
         from natal.population_builder import PopulationConfigBuilder
 
+        # use_sperm_storage was added to the public API before the underlying
+        # mechanism was implemented.  It was never wired up — sperm storage
+        # is always active.  Emit a warning rather than silently ignoring.
         if use_sperm_storage is not None:
             import warnings
             warnings.warn(
@@ -1344,7 +1385,12 @@ class Configurator:
                 FutureWarning, stacklevel=2,
             )
         n_ages = self._config.n_ages
+        # resolve_age_param converts scalars / lists / dicts / callables
+        # into per-age float arrays.  e.g. resolve(0.5, 3, default) → [0.5, 0.5, 0.5].
         resolve = PopulationConfigBuilder.resolve_age_param
+        # ---- scalar reproduction parameters ----
+        # _sync_equilibrium=False avoids redundant recomputation —
+        # we do a single sync below for all equilibrium-sensitive params.
         for name, value in [
             ("eggs_per_female", eggs_per_female),
             ("sex_ratio", sex_ratio),
@@ -1353,10 +1399,12 @@ class Configurator:
             if value is not None:
                 set_param(self._config, f"reproduction.{name}", value,
                           _sync_equilibrium=False)
-        # Sync once after all equilibrium-sensitive params are set.
+        # Batch equilibrium sync for eggs and sex_ratio (both affect K→eggs mapping).
         if eggs_per_female is not None or sex_ratio is not None:
             from natal.engine.simulation.age_structured import sync_equilibrium_metrics
             sync_equilibrium_metrics(self._config)
+        # ---- per-age array parameters ----
+        # Each accepts scalar/list/dict/callable via resolve_age_param.
         if female_age_based_mating_rates is not None:
             self._config.age_based_mating_rates[0, :] = resolve(
                 female_age_based_mating_rates, n_ages, np.zeros(n_ages)
@@ -1373,10 +1421,12 @@ class Configurator:
             self._config.female_age_based_relative_fertility[:] = resolve(
                 female_age_based_relative_fertility, n_ages, np.ones(n_ages)
             )
+        # ---- scalar shortcuts for age-structured adult mating ----
         if female_adult_mating_rate is not None:
             self._config.age_based_mating_rates[0, 1] = float(female_adult_mating_rate)
         if male_adult_mating_rate is not None:
             self._config.age_based_mating_rates[1, 1] = float(male_adult_mating_rate)
+        # ---- build-time boolean flag — must use _replace (not a 0-d ndarray) ----
         if use_fixed_egg_count is not None:
             self._config = self._config._replace(use_fixed_egg_count=use_fixed_egg_count)
 
@@ -1408,6 +1458,9 @@ class Configurator:
         from natal.population_builder import PopulationConfigBuilder
 
         n_ages = self._config.n_ages
+        # ---- per-age survival via resolve_age_param ----
+        # "female" and "male" accept flexible forms: scalar (applied to all
+        # ages), list, {age: val} dict, or callable(age)→float.
         if female is not None:
             arr = PopulationConfigBuilder.resolve_age_param(
                 female, n_ages, np.ones(n_ages)
@@ -1418,6 +1471,7 @@ class Configurator:
                 male, n_ages, np.ones(n_ages)
             )
             self._config.age_based_survival_rates[1, :] = arr
+        # ---- legacy aliases — last write wins if both modern + legacy given ----
         if female_age_based_survival_rates is not None:
             arr = PopulationConfigBuilder.resolve_age_param(
                 female_age_based_survival_rates, n_ages, np.ones(n_ages)
@@ -1428,12 +1482,14 @@ class Configurator:
                 male_age_based_survival_rates, n_ages, np.ones(n_ages)
             )
             self._config.age_based_survival_rates[1, :] = arr
+        # ---- discrete-generation shortcuts (only age-0 matters) ----
         for name, value in [
             ("female_age0_survival", female_age0_survival),
             ("male_age0_survival", male_age0_survival),
         ]:
             if value is not None:
                 set_param(self._config, f"survival.{name}", value)
+        # ---- convenience: apply one value to all adult ages ----
         if adult_survival is not None:
             new_adult_age = self._config.new_adult_age
             self._config.age_based_survival_rates[:, new_adult_age:] = float(adult_survival)
@@ -1544,6 +1600,13 @@ class Configurator:
 
 
 # ── Model-specific Configurators ────────────────────────────────────────────
+# Each subclass overrides every chain method for two reasons:
+#   1. Narrow the return type (so .competition() → DiscreteConfigurator,
+#      not Configurator).
+#   2. Filter the parameter list to only those relevant to the model
+#      (e.g. discrete doesn't expose competition_strength).
+# The actual logic lives in the three Configurator._*_impl methods;
+# subclass methods are thin wrappers: filter args → call _impl → return self.
 
 
 class DiscreteConfigurator(Configurator):
