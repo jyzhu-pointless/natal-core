@@ -366,9 +366,11 @@ def _write_fitness_field(
 
     Supported formats::
 
-        {"female": {genotype: val}, "male": {genotype: val}}  # top-level sex-keyed
-        {genotype: val}                                        # scalar → both sexes
+        {genotype: val}                                        # scalar → both sexes, all ages
         {genotype: {"female": val, "male": val}}               # per-selector sex-keyed
+        {genotype: {0: val, 1: val}}                           # per-selector age-keyed
+        {genotype: {"female": {0: val}}}                       # per-selector sex+age keyed
+        {"female": {genotype: val}, "male": {...}}             # top-level sex-keyed
         {female_g: {male_g: val}}                              # sexual_selection pair format
     """
     # ══════════════════════════════════════════════════════════════════════
@@ -471,27 +473,66 @@ def _write_fitness_field(
 
     # ══════════════════════════════════════════════════════════════════════
     # BRANCH 4: per-selector resolution (viability / fecundity / zygote)
-    #   {genotype: val}  or  {genotype: {"female": val, "male": val}}
+    #   {genotype: val}
+    #   {genotype: {"female": val, "male": val}}           — sex-keyed
+    #   {genotype: {0: val, 1: val}}                       — age-keyed
+    #   {genotype: {"female": {0: val}}}                   — sex+age keyed
     #
     # Detection: everything not caught by branches 1-3.
     # Each selector value may be:
-    #   - scalar → apply to BOTH sexes (loop sex_idx ∈ {0, 1})
-    #   - Mapping → apply per-sex (already split into {"female": v, "male": v})
+    #   - scalar → apply to both sexes, all ages
+    #   - Mapping → inspect the first key to decide the format
     # ══════════════════════════════════════════════════════════════════════
     for selector, value in patch.items():
         if isinstance(value, Mapping):
-            # ---- sub-dict format: {genotype: {"female": val, "male": val}} ----
-            for sex_key, sex_val in value.items():
-                sex_idx = 0 if sex_key == "female" else 1
-                _write_fitness_field_flat(
-                    config, field_name,
-                    {selector: float(sex_val)}, mode,
-                    sex_idx=sex_idx,
-                    species=species, registry=registry,
-                    all_genotypes=all_genotypes,
+            # Inspect the first key to determine the nesting structure.
+            first_key = next(iter(value.keys()))
+            if isinstance(first_key, int) and not isinstance(first_key, bool):  # type: ignore[unnecessary-isinstance] — bool ⊂ int in Python
+                # ---- age-keyed: {genotype: {0: val, 1: val}} ----
+                for age_key, age_val in value.items():          # type: ignore[var-unknown]
+                    if age_val is None:                         # type: ignore[unnecessary-comparison]
+                        continue
+                    age = int(age_key)
+                    for sex_idx in (0, 1):
+                        _write_fitness_field_flat(
+                            config, field_name,
+                            {selector: float(age_val)}, mode,
+                            sex_idx=sex_idx, age_idx=age,
+                            species=species, registry=registry,
+                            all_genotypes=all_genotypes,
+                        )
+            elif first_key in ("female", "male"):
+                # ---- sex-keyed: {genotype: {"female": val, "male": val}} ----
+                for sex_key, sex_val in value.items():
+                    sex_idx = 0 if sex_key == "female" else 1
+                    if isinstance(sex_val, Mapping):
+                        # ---- sex+age keyed: {genotype: {"female": {0: val}}} ----
+                        for age_key, age_val in sex_val.items():          # type: ignore[var-unknown]
+                            if age_val is None:
+                                continue
+                            _write_fitness_field_flat(
+                                config, field_name,
+                                {selector: float(age_val)}, mode,         # type: ignore[arg-type]
+                                sex_idx=sex_idx, age_idx=int(age_key),   # type: ignore[arg-type]
+                                species=species, registry=registry,
+                                all_genotypes=all_genotypes,
+                            )
+                    else:
+                        # ---- simple sex-keyed (existing behavior) ----
+                        _write_fitness_field_flat(
+                            config, field_name,
+                            {selector: float(sex_val)}, mode,
+                            sex_idx=sex_idx,
+                            species=species, registry=registry,
+                            all_genotypes=all_genotypes,
+                        )
+            else:
+                raise TypeError(
+                    f"Unrecognised key in fitness value dict: {first_key!r}. "
+                    f"Expected 'female'/'male' (sex-keyed) or int (age-keyed)."
                 )
         else:
-            # ---- scalar format: {genotype: val} → apply to both sexes ----
+            # ---- scalar format: {genotype: val} → apply to both sexes, all ages ----
             for sex_idx in (0, 1):
                 _write_fitness_field_flat(
                     config, field_name,
@@ -512,6 +553,7 @@ def _write_fitness_field_flat(
     species: Species,
     registry: IndexRegistry,
     all_genotypes: list[Any],
+    age_idx: int | None = None,
 ) -> None:
     """Write a flat (per-genotype) fitness patch into the correct config array.
 
@@ -521,6 +563,10 @@ def _write_fitness_field_flat(
     - ``"fecundity"`` → same shape — writes ``[sex_idx, :, gidx]``
     - ``"sexual_selection"`` → ``(n_sexes, n_sexes, n_genotypes)`` — writes ``[f_idx, m_idx, gidx]``
     - ``"zygote_viability"`` → same as viability — writes ``[sex_idx, :, gidx]``
+
+    When *age_idx* is given (int), only that age slice is written
+    instead of ``:`` (all ages).  ``fecundity`` has no age axis
+    so *age_idx* is ignored for it.
     """
     for selector, value in patch.items():
         matched = species.resolve_genotype_selectors(
@@ -530,15 +576,16 @@ def _write_fitness_field_flat(
         )
         for genotype in matched:
             gidx = registry.genotype_to_index[genotype]
+            age_slice = slice(age_idx, age_idx + 1) if age_idx is not None else slice(None)
 
             if field_name == "viability":
                 arr = config.viability_fitness
                 if mode == "replace":
-                    arr[sex_idx, :, gidx] = float(value)
+                    arr[sex_idx, age_slice, gidx] = float(value)
                 else:
-                    arr[sex_idx, :, gidx] *= float(value)
+                    arr[sex_idx, age_slice, gidx] *= float(value)
             elif field_name == "fecundity":
-                arr = config.fecundity_fitness
+                arr = config.fecundity_fitness          # no age axis — age_idx ignored
                 if mode == "replace":
                     arr[sex_idx, gidx] = float(value)
                 else:
@@ -559,7 +606,7 @@ def _write_fitness_field_flat(
                     else:
                         arr[:, gidx] *= float(value)
             elif field_name == "zygote_viability":
-                arr = config.zygote_viability_fitness
+                arr = config.zygote_viability_fitness  # no age axis — age_idx ignored
                 if mode == "replace":
                     arr[sex_idx, gidx] = float(value)
                 else:
