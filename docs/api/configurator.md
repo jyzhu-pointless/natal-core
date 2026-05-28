@@ -44,7 +44,7 @@ pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ## DiscreteConfigurator
 
 Configurator for `DiscreteGenerationPopulation`. Parameters are narrowed to the
-discrete (Wright-Fisher) model.
+discrete-generation model.
 
 ```python
 # Create

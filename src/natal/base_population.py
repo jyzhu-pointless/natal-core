@@ -75,8 +75,8 @@ class BasePopulation(ABC, Generic[T_State]):
     """Abstract base class for population models.
 
     The base class unifies common behavior for different population model
-    implementations (for example, Wright-Fisher and age-structured
-    non-Wright-Fisher models). It manages the species/genetic architecture,
+    implementations (for example, discrete-generation and age-structured
+    models). It manages the species/genetic architecture,
     indexing, hook registration, and modifier pipelines.
 
     Attributes:

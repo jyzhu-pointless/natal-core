@@ -1538,7 +1538,7 @@ class Configurator:
 
 
 class DiscreteConfigurator(Configurator):
-    """Configurator for ``DiscreteGenerationPopulation`` (Wright-Fisher).
+    """Configurator for ``DiscreteGenerationPopulation`` (discrete-generation model).
 
     Two age classes (age-0 juveniles, age-1 adults).  Non-overlapping
     generations — adults are replaced each tick.
