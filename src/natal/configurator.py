@@ -48,7 +48,13 @@ _HookItem = Callable[..., Any] | _HookMap
 
 
 def _build_registry(species: Species) -> IndexRegistry:
-    """Build an IndexRegistry pre-populated with all genotypes/haplotypes from a Species."""
+    """Build an IndexRegistry pre-populated with all genotypes/haplotypes from a Species.
+
+    Note:
+        When *species* does not define ``gamete_labels`` (or they are empty),
+        a single ``"default"`` label is registered so that modifier code
+        always has at least one gamete-label slot to index into.
+    """
     registry = IndexRegistry()
     for genotype in species.get_all_genotypes():
         registry.register_genotype(genotype)
@@ -321,6 +327,9 @@ def _merge_hooks(hook_items: list[_HookItem]) -> _HookMap:
             for event, registrations in hook_dict.items():
                 result.setdefault(event, []).extend(registrations)
         elif callable(item):
+            # @hook-decorated functions store metadata in a .meta dict,
+            # but some older decorators set attributes directly.  Check
+            # both for backward compatibility.
             meta = getattr(item, "meta", {})
             event = meta.get("event") or getattr(item, "event", None)
             priority = meta.get("priority", getattr(item, "priority", 0))
@@ -1027,6 +1036,8 @@ class Configurator:
         Returns:
             Self for chaining.
         """
+        # Lazy allocation: most chain methods never touch hooks, so
+        # we avoid creating the list until the first .hooks() call.
         if not hasattr(self, "_hook_items"):
             self._hook_items: list[_HookItem] = []
         self._hook_items.extend(hook_items)
@@ -1119,7 +1130,15 @@ class Configurator:
         return self
 
     def _sync_equilibrium(self) -> None:
-        """Recompute equilibrium metrics, respecting stored Champer distribution."""
+        """Recompute ``expected_competition_strength`` and ``expected_survival_rate``.
+
+        Called by :meth:`apply` and after equilibrium-sensitive parameter
+        changes.  If a custom ``equilibrium_distribution`` was stored (via
+        ``competition(equilibrium_distribution=...)``), it is used as the
+        target age structure for the Champer model.  If the user explicitly
+        set ``expected_num_adult_females``, external egg counts are computed
+        from that value instead of the distribution.
+        """
         from natal.engine.simulation.age_structured import (
             compute_equilibrium_metrics,
         )
@@ -1526,7 +1545,12 @@ class DiscreteConfigurator(Configurator):
         self, n_ages: int = 2, new_adult_age: int = 1,
         generation_time: float | None = None,
     ) -> DiscreteConfigurator:
-        """Lock dimensions.  Discrete uses 2 ages, adult at age 1."""
+        """Lock dimensions.
+
+        The discrete-generation (non-overlapping) model always uses exactly
+        2 age classes — juvenile (age 0) and adult (age 1).  This override
+        exists for API consistency with ``AgeStructuredConfigurator``.
+        """
         super().age_structure(n_ages=n_ages, new_adult_age=new_adult_age,
                               generation_time=generation_time)
         return self
@@ -1587,6 +1611,9 @@ class DiscreteConfigurator(Configurator):
             female_adult_mating_rate: Adult female mating probability.
             male_adult_mating_rate: Adult male mating probability.
             use_fixed_egg_count: Disable Poisson noise.
+
+        Returns:
+            Self for chaining.
         """
         self._reproduction_impl(
             eggs_per_female=eggs_per_female,
@@ -1606,6 +1633,9 @@ class DiscreteConfigurator(Configurator):
 
         Uses the discrete resolution (flat JSON-style dict) rather than the
         age-structured resolution.
+
+        Returns:
+            Self for chaining.
         """
         if not self._species:
             raise RuntimeError(
@@ -1645,6 +1675,9 @@ class DiscreteConfigurator(Configurator):
             female_age0_survival: Female juvenile survival probability.
             male_age0_survival: Male juvenile survival probability.
             adult_survival: Accepted for compat, no-op in discrete model.
+
+        Returns:
+            Self for chaining.
         """
         self._survival_impl(
             female_age0_survival=female_age0_survival,
@@ -1686,6 +1719,9 @@ class AgeStructuredConfigurator(Configurator):
             n_ages: Total number of age classes.
             new_adult_age: First adult age.
             generation_time: Optional marker for model interpretation.
+
+        Returns:
+            Self for chaining.
         """
         super().age_structure(
             n_ages=n_ages, new_adult_age=new_adult_age,
@@ -1717,6 +1753,9 @@ class AgeStructuredConfigurator(Configurator):
                 Champer equilibrium computation.
             age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
             old_juvenile_carrying_capacity: Legacy alias.
+
+        Returns:
+            Self for chaining.
         """
         self._competition_impl(
             carrying_capacity=carrying_capacity,
@@ -1755,6 +1794,9 @@ class AgeStructuredConfigurator(Configurator):
             female_age_based_relative_fertility: Per-age fertility weight.
             use_fixed_egg_count: Disable Poisson noise.
             use_sperm_storage: Enable sperm storage.
+
+        Returns:
+            Self for chaining.
         """
         self._reproduction_impl(
             eggs_per_female=eggs_per_female,
@@ -1790,6 +1832,9 @@ class AgeStructuredConfigurator(Configurator):
             adult_survival: Shorthand — sets all adult ages uniformly.
             female_age0_survival: Discrete-model shortcut for age-0 female.
             male_age0_survival: Discrete-model shortcut for age-0 male.
+
+        Returns:
+            Self for chaining.
         """
         self._survival_impl(
             female=female, male=male,
@@ -1838,13 +1883,21 @@ def hook_set_param(config: object, name: str, value: float) -> None:
 
 
 def _resolve_param(name: str) -> ParamDescriptor | None:
-    """Look up a parameter name in ALL_PARAMETERS, checking aliases.
+    """Look up a parameter name in ``ALL_PARAMETERS`` with three fallback tiers.
 
-    Returns the ParamDescriptor or None.
+    Tier 1: exact match — ``"competition.carrying_capacity"``.
+    Tier 2: short-name match — ``"carrying_capacity"`` matches via
+            ``key.endswith(".carrying_capacity")``.
+    Tier 3: alias match — user-friendly names defined in each
+            ``ParamDescriptor.aliases``.
+
+    Returns the ``ParamDescriptor`` or ``None``.
     """
+    # Tier 1: O(1) exact key lookup.
     if name in ALL_PARAMETERS:
         return ALL_PARAMETERS[name]
 
+    # Tier 2-3: linear scan for short-name / alias match.
     for key, desc in ALL_PARAMETERS.items():
         if key.endswith(f".{name}"):
             return desc
