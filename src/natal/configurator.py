@@ -995,7 +995,6 @@ class Configurator:
             # (species, config, index_registry, add_*_modifier, refresh_modifier_maps)
             apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType] — adapter implements protocol
         self._sync_from_ctx(ctx)
-        self._save_baselines()
         return self
 
     def modifiers(
@@ -1113,47 +1112,25 @@ class Configurator:
     # -- preset reconfiguration -------------------------------------------------
 
     def reconfigure_preset(self, preset: GeneticPreset, **changes: object) -> Self:
-        """Modify a registered preset parameter and re-apply from scratch.
+        """Modify a registered preset parameter and re-apply.
 
-        Because presets write modifiers and fitness patches *cumulatively*
-        onto the current config, you cannot simply change a preset attribute
-        and call :meth:`presets` again — the old values are already baked
-        into the arrays.  This method works around that:
-
-        1. Restores fitness / gamete arrays from the pre-preset baseline
-           (saved by :meth:`_save_baselines` on the first :meth:`presets` call).
-        2. Updates *preset* attributes via ``**changes``.
-        3. Clears modifier lists and re-applies the preset.
-        4. Syncs equilibrium metrics.
+        Because ``presets()`` appends modifiers cumulatively, calling it
+        again after changing a preset attribute would double-apply.  This
+        method clears the modifier lists first, then re-applies the preset
+        so it writes onto a clean slate.
 
         Args:
             preset: A preset previously registered via :meth:`presets`.
             **changes: Attribute name / value pairs to update on *preset*.
-
-        Raises:
-            RuntimeError: If :meth:`presets` has not been called yet (no
-                baseline saved).
         """
-        baseline = getattr(self, "_baseline", None)
-        if baseline is None:
-            raise RuntimeError(
-                "No baselines saved.  Call .presets() first to register the preset."
-            )
-
         for attr, value in changes.items():
             setattr(preset, attr, value)
 
-        # Restore pre-preset arrays so the updated preset writes onto
-        # a clean slate rather than double-applying modifiers.
-        self._config.viability_fitness[...] = baseline["viability"]
-        self._config.fecundity_fitness[...] = baseline["fecundity"]
-        self._config.sexual_selection_fitness[...] = baseline["sexual_selection"]
-        self._config.zygote_viability_fitness[...] = baseline["zygote_viability"]
-        self._config.genotype_to_gametes_map[...] = baseline["gamete_map"]
-        self._config.gametes_to_zygote_map[...] = baseline["zygote_map"]
-
+        # Clear accumulated modifiers so the preset starts from a clean slate.
         self.gamete_modifiers.clear()
         self.zygote_modifiers.clear()
+        # Re-apply: rebuilds modifier maps from species Mendelian baseline
+        # (inside _rebuild_config_maps) and writes fitness patches fresh.
         self.presets(preset)
         from natal.engine.simulation.age_structured import sync_equilibrium_metrics
 
@@ -1230,23 +1207,6 @@ class Configurator:
         )
         config.expected_competition_strength[()] = expected_comp
         config.expected_survival_rate[()] = expected_surv
-
-    def _save_baselines(self) -> None:
-        """Snapshot fitness/gamete arrays before presets are applied.
-
-        Called automatically after :meth:`presets`.  The saved arrays are
-        restored by :meth:`reconfigure_preset` before re-applying a preset
-        with modified parameters — this avoids double-applying modifiers on
-        top of already-patched arrays.
-        """
-        self._baseline = {
-            "viability": self._config.viability_fitness.copy(),
-            "fecundity": self._config.fecundity_fitness.copy(),
-            "sexual_selection": self._config.sexual_selection_fitness.copy(),
-            "zygote_viability": self._config.zygote_viability_fitness.copy(),
-            "gamete_map": self._config.genotype_to_gametes_map.copy(),
-            "zygote_map": self._config.gametes_to_zygote_map.copy(),
-        }
 
     # -- Internal implementations (called by subclass chain methods) ----------
 
