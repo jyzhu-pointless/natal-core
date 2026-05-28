@@ -697,87 +697,68 @@ class Configurator:
     # -- factory ---------------------------------------------------------------
 
     @classmethod
-    def from_species(cls, species: Species) -> AgeStructuredConfigurator:
-        """Create an ``AgeStructuredConfigurator`` with a minimal config.
+    def from_species(
+        cls,
+        species: Species,
+        *,
+        discrete: bool = False,
+    ) -> DiscreteConfigurator | AgeStructuredConfigurator:
+        """Create a Configurator from a Species with a minimal config.
 
-        The returned config contains species-derived arrays (genotype maps,
-        offspring tensor, compatibility) and a default ``n_ages=2``,
-        ``new_adult_age=1``.  All other fields are unset placeholders.
-
-        Call ``.age_structure()`` before methods that depend on per-age arrays.
+        This is the primary factory.  Pass ``discrete=True`` for
+        non-overlapping generations; otherwise an age-structured config
+        with overlapping generations is returned.
 
         Args:
             species: The genetic architecture for the population.
+            discrete: If ``True``, return a ``DiscreteConfigurator``
+                (Wright-Fisher, non-overlapping generations).  Default
+                ``False`` → ``AgeStructuredConfigurator``.
 
         Returns:
-            An ``AgeStructuredConfigurator`` ready for further chaining.
+            A ``DiscreteConfigurator`` or ``AgeStructuredConfigurator``
+            ready for further chaining.
         """
-        from natal.population_config import build_population_config
-
         bp = species.get_config_blueprint()
-        config = build_population_config(
-            n_genotypes=bp["n_genotypes"],
-            n_haploid_genotypes=bp["n_haploid_genotypes"],
-            n_ages=2,
-            n_glabs=bp["n_glabs"],
-            genotype_to_gametes_map=bp["genotype_to_gametes_map"],
-            gametes_to_zygote_map=bp["gametes_to_zygote_map"],
-            new_adult_age=1,
-            carrying_capacity=1000.0,
-            has_sex_chromosomes=getattr(species, "has_sex_chromosomes", False),
-        )
-        return AgeStructuredConfigurator(config, species=species)
+        n_g = bp["n_genotypes"]
+        n_hg = bp["n_haploid_genotypes"]
+        n_gl = bp["n_glabs"]
+        g2g = bp["genotype_to_gametes_map"]
+        g2z = bp["gametes_to_zygote_map"]
+        has_sc = getattr(species, "has_sex_chromosomes", False)
+
+        if discrete:
+            from natal.population_config import build_discrete_population_config
+
+            config = build_discrete_population_config(
+                n_genotypes=n_g, n_haploid_genotypes=n_hg, n_glabs=n_gl,
+                genotype_to_gametes_map=g2g, gametes_to_zygote_map=g2z,
+                has_sex_chromosomes=has_sc,
+            )
+            result = DiscreteConfigurator(config, species=species)
+            object.__setattr__(result, "_name", "DiscreteGenerationPop")
+        else:
+            from natal.population_config import build_population_config
+
+            config = build_population_config(
+                n_genotypes=n_g, n_haploid_genotypes=n_hg, n_glabs=n_gl,
+                genotype_to_gametes_map=g2g, gametes_to_zygote_map=g2z,
+                n_ages=2, new_adult_age=1, carrying_capacity=1000.0,
+                has_sex_chromosomes=has_sc,
+            )
+            result = AgeStructuredConfigurator(config, species=species)
+            object.__setattr__(result, "_name", "AgeStructuredPop")
+        return result
 
     @classmethod
     def for_discrete(cls, species: Species) -> DiscreteConfigurator:
-        """Create a ``DiscreteConfigurator`` for building a discrete-generation population.
-
-        Builds a ``DiscretePopulationConfig`` directly via
-        :func:`~natal.population_config.build_discrete_population_config`
-        — no intermediate ``PopulationConfig`` step is needed.
-
-        Juvenile survival defaults to 1.0 and adult survival to 0.0
-        (non-overlapping generations).  :meth:`.build` returns
-        ``DiscreteGenerationPopulation``.
-
-        Args:
-            species: The genetic architecture for the population.
-
-        Returns:
-            A ``DiscreteConfigurator`` ready for further chaining.
-        """
-        from natal.population_config import build_discrete_population_config
-
-        bp = species.get_config_blueprint()
-        config = build_discrete_population_config(
-            n_genotypes=bp["n_genotypes"],
-            n_haploid_genotypes=bp["n_haploid_genotypes"],
-            n_glabs=bp["n_glabs"],
-            genotype_to_gametes_map=bp["genotype_to_gametes_map"],
-            gametes_to_zygote_map=bp["gametes_to_zygote_map"],
-            has_sex_chromosomes=getattr(species, "has_sex_chromosomes", False),
-        )
-        cfg = DiscreteConfigurator(config, species=species)
-        object.__setattr__(cfg, "_name", "DiscreteGenerationPop")
-        return cfg
+        """Shorthand for ``from_species(species, discrete=True)``."""
+        return cast(DiscreteConfigurator, cls.from_species(species, discrete=True))
 
     @classmethod
     def for_age_structured(cls, species: Species) -> AgeStructuredConfigurator:
-        """Create an ``AgeStructuredConfigurator`` for building an age-structured population.
-
-        The underlying config is a ``PopulationConfig``, so :meth:`.build`
-        returns ``AgeStructuredPopulation``.
-
-        Args:
-            species: The genetic architecture for the population.
-
-        Returns:
-            An ``AgeStructuredConfigurator`` ready for further chaining.
-        """
-        cfg = cls.from_species(species)
-        result = AgeStructuredConfigurator(cfg._config, species=cfg._species)
-        object.__setattr__(result, "_name", "AgeStructuredPop")
-        return result
+        """Shorthand for ``from_species(species)``."""
+        return cast(AgeStructuredConfigurator, cls.from_species(species))
 
     @staticmethod
     def for_config(
@@ -1432,7 +1413,7 @@ class Configurator:
 
         This is the terminal method of the build chain::
 
-            Configurator.for_age_structured(species)
+            Configurator.from_species()
                 .age_structure(5, 2)
                 .competition(K=5000)
                 .reproduction(eggs=100)
@@ -1691,7 +1672,7 @@ class AgeStructuredConfigurator(Configurator):
 
     Per-age parameters accept flexible input: scalar, list, dict, callable.
 
-    Create via ``Configurator.for_age_structured(species)`` or
+    Create via ``Configurator.from_species()`` or
     ``AgeStructuredPopulation.setup(species, legacy_path=False)``.
     """
 
