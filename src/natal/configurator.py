@@ -35,6 +35,8 @@ __all__ = ["Configurator", "DiscreteConfigurator", "AgeStructuredConfigurator"]
 # ── Type aliases for hook registrations ──────────────────────────────────────
 
 # A single hook registration: (func, name?, priority?)
+# ``Any`` return is required for compatibility with ``HookRegistration`` in
+# base_population.py (tuple invariance — ``Callable[..., int]`` would fail).
 _HookReg = tuple[Callable[..., Any], str | None, int | None]
 # Hook registration map keyed by event name.
 _HookMap = dict[str, list[_HookReg]]
@@ -65,12 +67,20 @@ def _build_registry(species: Species) -> IndexRegistry:
 
 
 class _ConfigContext:
-    """Lightweight adapter exposing Species + IndexRegistry + PopConfig.
+    """Adapter that lets presets/modifiers/fitness write into config arrays
+    without needing a live Population object.
 
-    Provides the minimal interface that :func:`apply_preset_to_population`,
-    ``build_modifier_wrappers``, and ``_apply_preset_fitness_patch`` expect.
-    This decouples preset/modifier/fitness application from the Population
-    object lifecycle — they write directly into config arrays.
+    ``apply_preset_to_population``, ``build_modifier_wrappers``, and
+    ``_apply_preset_fitness_patch`` are all designed to work against
+    ``BasePopulation``.  But during ``Configurator`` builds there *is* no
+    Population yet.  This class exposes the four things those functions
+    actually need — *species*, *config*, *index_registry*, and the two
+    modifier lists — with the same attribute names and mutation patterns
+    as ``BasePopulation``.
+
+    After the preset/modifier/fitness call returns, :meth:`Configurator.
+    _sync_from_ctx` pulls the mutated *config* and modifier lists back
+    into the Configurator.
     """
 
     def __init__(
@@ -83,8 +93,9 @@ class _ConfigContext:
         self.config = config
         self.registry = registry
         self.index_registry = registry
-        self.gamete_modifiers: list[tuple[int, str | None, Any]] = []
-        self.zygote_modifiers: list[tuple[int, str | None, Any]] = []
+        # Mirror names matching BasePopulation for drop-in compatibility.
+        self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
+        self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
     # -- modifier registration (mimics BasePopulation) ----------------------
 
@@ -194,7 +205,9 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
     ctx.config = ctx.config._replace(**overrides)
 
 
-# Full parameter-name keys that need equilibrium sync.
+# These parameters affect the steady-state equilibrium.  When any of them
+# change, ``expected_competition_strength`` and ``expected_survival_rate``
+# must be recomputed via ``sync_equilibrium_metrics``.
 _EQUILIBRIUM_SENSITIVE_KEYS: frozenset[str] = frozenset({
     "competition.carrying_capacity",
     "reproduction.eggs_per_female",
@@ -214,9 +227,22 @@ def set_param(
 ) -> None:
     """Set a simulation parameter by its user-facing name.
 
-    Resolves *name* through ``ALL_PARAMETERS`` (the parameters.py registry)
-    to the correct config field and index path, writes the value in-place,
-    and automatically syncs equilibrium metrics when needed.
+    Looks up *name* in ``ALL_PARAMETERS`` (the declarative registry in
+    :mod:`natal.parameters`) to find the correct config field + index path,
+    then writes *value* in-place into the 0-d ndarray at that position.
+
+    The registry maps each parameter name to a :class:`~natal.parameters.
+    ParamDescriptor` with these fields used here:
+
+    - ``config_field`` — name of the attribute on the config object
+    - ``config_path`` — index tuple into the ndarray (empty for 0-d)
+    - ``is_tensor`` / ``is_array`` — guards to reject non-scalar writes
+    - ``domain`` — ``ParameterDomain`` enum grouping related parameters
+      (e.g. ``"competition"``, ``"reproduction"``)
+
+    After writing, ``sync_equilibrium_metrics`` is called automatically
+    for equilibrium-sensitive keys (carrying capacity, eggs per female,
+    sex ratio) unless ``_sync_equilibrium=False`` is passed.
 
     Usable from pure Python, ``with objmode():`` inside njit hooks, and
     Configurator chain methods.
@@ -335,6 +361,9 @@ def _write_fitness_field(
     dict mapping genotype selectors to fitness values, with optional
     sex-keyed or genotype-keyed nesting.
 
+    The function detects the format of *patch* and dispatches to one of
+    four branches.  See inline comments for the detection rules.
+
     Supported formats::
 
         {"female": {genotype: val}, "male": {genotype: val}}  # top-level sex-keyed
@@ -342,9 +371,21 @@ def _write_fitness_field(
         {genotype: {"female": val, "male": val}}               # per-selector sex-keyed
         {female_g: {male_g: val}}                              # sexual_selection pair format
     """
-    # Top-level sex-keyed dict: {"female": {genotype: val}, "male": {...}}
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH 1: top-level sex-keyed
+    #   {"female": {genotype: val}, "male": {genotype: val}}
+    #
+    # Detection: ALL top-level keys are "female" or "male".
+    # Action: iterate sex→genotype_dict, delegate each to _write_fitness_field_flat.
+    # ══════════════════════════════════════════════════════════════════════
     if patch and all(k in ("female", "male") for k in patch):
+        # ---- guard: every value must itself be a dict {genotype: val} ----
+        if not all(isinstance(v, Mapping) for v in patch.values()):
+            raise TypeError(
+                "sex-keyed fitness dict values must be genotype→value mappings"
+            )
         sex_patch = cast(Mapping[str, Mapping[str, float]], patch)
+        # ---- write female slice, then male slice ----
         for sex_key, geno_dict in sex_patch.items():
             sex_idx = 0 if sex_key == "female" else 1
             _write_fitness_field_flat(
@@ -355,22 +396,27 @@ def _write_fitness_field(
             )
         return
 
-    # Sexual selection nested format: {female_selector: {male_selector: val}}
-    # Each pair writes to a specific arr[f_idx, m_idx] cell.
-    from collections.abc import Mapping as AbcMapping
-
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH 2: sexual_selection — nested female→male pair format
+    #   {female_g: {male_g: val}}
+    #
+    # Detection: field is "sexual_selection" AND any value is a Mapping.
+    # Action: resolve female & male selectors independently,
+    #         then write into each [f_idx, m_idx] cell.
+    # ══════════════════════════════════════════════════════════════════════
     if field_name == "sexual_selection":
-        arr = config.sexual_selection_fitness
-        has_nested = any(isinstance(v, AbcMapping) for v in patch.values())
+        arr = config.sexual_selection_fitness          # shape: (g, g) — [female_idx, male_idx]
+        has_nested = any(isinstance(v, Mapping) for v in patch.values())
         if has_nested:
-            for female_selector, male_map in patch.items():
-                if not isinstance(male_map, AbcMapping):
+            for female_selector, male_map in patch.items():           # outer: female genotype key
+                if not isinstance(male_map, Mapping):                 # guard: must be {male_g: val}
                     raise TypeError(
                         "Mixed scalar/nested format in sexual_selection. "
                         "When using nested female→male pairs, all values "
                         "must be dicts mapping male selectors to values."
                     )
-                for male_selector, value in male_map.items():
+                for male_selector, value in male_map.items():         # inner: male genotype key → float
+                    # ---- resolve both selectors to genotype indices ----
                     matched_f = species.resolve_genotype_selectors(
                         selector=female_selector,
                         all_genotypes=all_genotypes,
@@ -381,6 +427,7 @@ def _write_fitness_field(
                         all_genotypes=all_genotypes,
                         context="sexual_selection (male)",
                     )
+                    # ---- write every female×male combination ----
                     for f_geno in matched_f:
                         f_idx = registry.genotype_to_index[f_geno]
                         for m_geno in matched_m:
@@ -392,15 +439,22 @@ def _write_fitness_field(
                                 arr[f_idx, m_idx] *= val
             return
 
-        # Flat sexual_selection: {male_selector: value} → apply to all females.
-        # Treated as: the value applies to all [any_female, male_genotype] pairs.
+        # ═══════════════════════════════════════════════════════════════
+        # BRANCH 3: sexual_selection — flat male-keyed format
+        #   {male_g: val}
+        #
+        # Detection: field is "sexual_selection" AND no nested values.
+        # Action: resolve male selector, write value to ALL female rows
+        #         of the matched male column (arr[:, m_idx]).
+        # ═══════════════════════════════════════════════════════════════
         for male_selector, value in patch.items():
-            if isinstance(value, AbcMapping):
+            if isinstance(value, Mapping):                            # guard: mixed scalar/nested
                 raise TypeError(
                     "Mixed scalar/nested format in sexual_selection. "
                     "When using nested female→male pairs, all values "
                     "must be dicts."
                 )
+            # ---- resolve the male genotype to an index ----
             matched_m = species.resolve_genotype_selectors(
                 selector=male_selector,
                 all_genotypes=all_genotypes,
@@ -410,16 +464,23 @@ def _write_fitness_field(
                 m_idx = registry.genotype_to_index[m_geno]
                 val = float(value)
                 if mode == "replace":
-                    arr[:, m_idx] = val
+                    arr[:, m_idx] = val        # broadcast: all females × this male
                 else:
                     arr[:, m_idx] *= val
         return
 
-    # Per-selector resolution: each value may be a scalar (both sexes)
-    # or a sub-dict {"female": v, "male": v} for sex-specific values.
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH 4: per-selector resolution (viability / fecundity / zygote)
+    #   {genotype: val}  or  {genotype: {"female": val, "male": val}}
+    #
+    # Detection: everything not caught by branches 1-3.
+    # Each selector value may be:
+    #   - scalar → apply to BOTH sexes (loop sex_idx ∈ {0, 1})
+    #   - Mapping → apply per-sex (already split into {"female": v, "male": v})
+    # ══════════════════════════════════════════════════════════════════════
     for selector, value in patch.items():
-        if isinstance(value, AbcMapping):
-            # Per-selector sex-keyed: {genotype: {"female": val, "male": val}}
+        if isinstance(value, Mapping):
+            # ---- sub-dict format: {genotype: {"female": val, "male": val}} ----
             for sex_key, sex_val in value.items():
                 sex_idx = 0 if sex_key == "female" else 1
                 _write_fitness_field_flat(
@@ -430,6 +491,7 @@ def _write_fitness_field(
                     all_genotypes=all_genotypes,
                 )
         else:
+            # ---- scalar format: {genotype: val} → apply to both sexes ----
             for sex_idx in (0, 1):
                 _write_fitness_field_flat(
                     config, field_name,
@@ -451,7 +513,15 @@ def _write_fitness_field_flat(
     registry: IndexRegistry,
     all_genotypes: list[Any],
 ) -> None:
-    """Write a flat genotype→value dict into one sex's fitness slice."""
+    """Write a flat (per-genotype) fitness patch into the correct config array.
+
+    The target array shape depends on *field_name*:
+
+    - ``"viability"`` → ``(n_sexes, n_ages, n_genotypes)`` — writes ``[sex_idx, :, gidx]``
+    - ``"fecundity"`` → same shape — writes ``[sex_idx, :, gidx]``
+    - ``"sexual_selection"`` → ``(n_sexes, n_sexes, n_genotypes)`` — writes ``[f_idx, m_idx, gidx]``
+    - ``"zygote_viability"`` → same as viability — writes ``[sex_idx, :, gidx]``
+    """
     for selector, value in patch.items():
         matched = species.resolve_genotype_selectors(
             selector=selector,
@@ -528,8 +598,8 @@ class Configurator:
         self._registry: IndexRegistry | None = None
         # Modifier lists — accumulated across presets() / modifiers() calls,
         # then applied when maps are rebuilt.
-        self.gamete_modifiers: list[tuple[int, str | None, Any]] = []
-        self.zygote_modifiers: list[tuple[int, str | None, Any]] = []
+        self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
+        self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
         self._custom_kwargs: dict[str, object] = {}
 
     @property
@@ -540,7 +610,12 @@ class Configurator:
     # -- adapter factory ------------------------------------------------------
 
     def _make_ctx(self) -> _ConfigContext:
-        """Build a :class:`_ConfigContext` for the current config + species + registry."""
+        """Build a :class:`_ConfigContext` seeded from the current state.
+
+        The context receives a shallow copy of the modifier lists so that
+        preset / modifier calls can append without mutating the originals
+        until :meth:`_sync_from_ctx` explicitly commits them back.
+        """
         if self._species is None:
             raise RuntimeError(
                 "presets() / modifiers() / fitness() require a Species. "
@@ -554,7 +629,11 @@ class Configurator:
         return ctx
 
     def _sync_from_ctx(self, ctx: _ConfigContext) -> None:
-        """Sync config and modifier lists back from an adapter after mutations."""
+        """Commit adapter-side mutations back into the Configurator.
+
+        Called after ``apply_preset_to_population`` or ``_rebuild_config_maps``
+        has finished writing into *ctx.config* and the modifier lists.
+        """
         self._config = ctx.config
         self.gamete_modifiers = ctx.gamete_modifiers
         self.zygote_modifiers = ctx.zygote_modifiers
@@ -570,6 +649,12 @@ class Configurator:
         ``new_adult_age=1``.  All other fields are unset placeholders.
 
         Call ``.age_structure()`` before methods that depend on per-age arrays.
+
+        Args:
+            species: The genetic architecture for the population.
+
+        Returns:
+            An ``AgeStructuredConfigurator`` ready for further chaining.
         """
         from natal.population_config import build_population_config
 
@@ -591,8 +676,15 @@ class Configurator:
     def for_discrete(cls, species: Species) -> DiscreteConfigurator:
         """Create a ``DiscreteConfigurator`` for building a discrete-generation population.
 
-        The underlying config is a ``DiscretePopulationConfig``, so ``.build()``
-        returns ``DiscreteGenerationPopulation``.
+        The underlying config is a ``DiscretePopulationConfig`` with juvenile
+        survival set to 1.0 and adult survival set to 0.0 (non-overlapping
+        generations).  :meth:`.build` returns ``DiscreteGenerationPopulation``.
+
+        Args:
+            species: The genetic architecture for the population.
+
+        Returns:
+            A ``DiscreteConfigurator`` ready for further chaining.
         """
         from natal.population_config import (
             build_population_config,
@@ -623,8 +715,14 @@ class Configurator:
     def for_age_structured(cls, species: Species) -> AgeStructuredConfigurator:
         """Create an ``AgeStructuredConfigurator`` for building an age-structured population.
 
-        The underlying config is a ``PopulationConfig``, so ``.build()``
+        The underlying config is a ``PopulationConfig``, so :meth:`.build`
         returns ``AgeStructuredPopulation``.
+
+        Args:
+            species: The genetic architecture for the population.
+
+        Returns:
+            An ``AgeStructuredConfigurator`` ready for further chaining.
         """
         cfg = cls.from_species(species)
         result = AgeStructuredConfigurator(cfg._config, species=cfg._species)
@@ -656,6 +754,9 @@ class Configurator:
 
         Apply dimension-dependent parameters (survival, reproduction,
         initial_state) AFTER this call.
+
+        Returns:
+            Self for chaining.
         """
         if n_ages <= 1:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")
@@ -698,6 +799,9 @@ class Configurator:
         """Configure simulation flags and optional population name.
 
         *name* is stored and used by ``build()`` when no explicit name is given.
+
+        Returns:
+            Self for chaining.
         """
         if name is not None:
             self._name = name
@@ -726,6 +830,9 @@ class Configurator:
         ``{"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}}``.
         Genotype selectors accept both strings and ``Genotype`` objects.
         Resolved to a 3-D array using the same logic as the Builder.
+
+        Returns:
+            Self for chaining.
         """
         from natal.population_builder import PopulationConfigBuilder
 
@@ -763,6 +870,14 @@ class Configurator:
         """Register custom named fields on ``config.custom``.
 
         Multiple calls accumulate — ``.custom(a=1).custom(b=2)`` stores both.
+
+        Unlike most domain methods which modify 0-d ndarrays in-place
+        (sharing the same ``PopulationConfig`` reference with the Population),
+        ``custom()`` must call ``_replace`` to create a new config object
+        with a rebuilt ``custom`` structured array.  When called via
+        ``pop.update().custom(...)``, the ``_pop_ref`` back-reference
+        (set by ``BasePopulation._create_configurator()``) is used to write
+        the new config back into the Population.
         """
         from natal.population_builder import build_custom_array
 
@@ -770,8 +885,6 @@ class Configurator:
         self._config = self._config._replace(
             custom=build_custom_array(self._custom_kwargs)
         )
-        # If wrapping a Population's config, sync the new config reference
-        # back so the Population sees the updated custom fields.
         source = getattr(self, "_pop_ref", None)
         if source is not None:
             object.__setattr__(source, '_config', self._config)
@@ -785,6 +898,9 @@ class Configurator:
         Each preset's gamete/zygote modifiers and fitness patch are
         resolved against the current Species + IndexRegistry and
         written into the config immediately.  No deferred execution.
+
+        Returns:
+            Self for chaining.
         """
         from natal.genetic_presets import apply_preset_to_population
 
@@ -802,7 +918,11 @@ class Configurator:
         gamete_modifiers: list[GameteModifier] | None = None,
         zygote_modifiers: list[ZygoteModifier] | None = None,
     ) -> Self:
-        """Register gamete / zygote modifiers and rebuild maps immediately."""
+        """Register gamete / zygote modifiers and rebuild maps immediately.
+
+        Returns:
+            Self for chaining.
+        """
         ctx = self._make_ctx()
         next_gid = _ConfigContext.next_modifier_id(ctx.gamete_modifiers)
         if gamete_modifiers:
@@ -835,6 +955,9 @@ class Configurator:
 
         Sex-specific fitness can be specified with nested dicts:
         ``{"female": {"WT|WT": 0.9}, "male": {"WT|WT": 1.0}}``.
+
+        Returns:
+            Self for chaining.
         """
         if self._species is None:
             raise RuntimeError(
@@ -869,6 +992,9 @@ class Configurator:
 
         Hooks are passed through to the Population constructor at
         ``build()`` time — they are *not* config writes.
+
+        Returns:
+            Self for chaining.
         """
         if not hasattr(self, "_hook_items"):
             self._hook_items: list[_HookItem] = []
@@ -889,6 +1015,9 @@ class Configurator:
             groups: Observation groups (dict of name→spec, list of specs,
                 or None for one-group-per-genotype).
             collapse_age: Whether to collapse the age axis in exports.
+
+        Returns:
+            Self for chaining.
         """
         self._observation_groups = groups
         self._observation_collapse_age = collapse_age
@@ -897,10 +1026,26 @@ class Configurator:
     # -- preset reconfiguration -------------------------------------------------
 
     def reconfigure_preset(self, preset: GeneticPreset, **changes: object) -> Self:
-        """Modify a registered preset parameter and re-apply from baselines.
+        """Modify a registered preset parameter and re-apply from scratch.
 
-        Restores baseline fitness / gamete arrays, applies the updated
-        preset parameters, and syncs equilibrium.
+        Because presets write modifiers and fitness patches *cumulatively*
+        onto the current config, you cannot simply change a preset attribute
+        and call :meth:`presets` again — the old values are already baked
+        into the arrays.  This method works around that:
+
+        1. Restores fitness / gamete arrays from the pre-preset baseline
+           (saved by :meth:`_save_baselines` on the first :meth:`presets` call).
+        2. Updates *preset* attributes via ``**changes``.
+        3. Clears modifier lists and re-applies the preset.
+        4. Syncs equilibrium metrics.
+
+        Args:
+            preset: A preset previously registered via :meth:`presets`.
+            **changes: Attribute name / value pairs to update on *preset*.
+
+        Raises:
+            RuntimeError: If :meth:`presets` has not been called yet (no
+                baseline saved).
         """
         baseline = getattr(self, "_baseline", None)
         if baseline is None:
@@ -911,7 +1056,8 @@ class Configurator:
         for attr, value in changes.items():
             setattr(preset, attr, value)
 
-        # Restore baselines
+        # Restore pre-preset arrays so the updated preset writes onto
+        # a clean slate rather than double-applying modifiers.
         self._config.viability_fitness[...] = baseline["viability"]
         self._config.fecundity_fitness[...] = baseline["fecundity"]
         self._config.sexual_selection_fitness[...] = baseline["sexual_selection"]
@@ -919,7 +1065,6 @@ class Configurator:
         self._config.genotype_to_gametes_map[...] = baseline["gamete_map"]
         self._config.gametes_to_zygote_map[...] = baseline["zygote_map"]
 
-        # Clear modifier lists and re-apply
         self.gamete_modifiers.clear()
         self.zygote_modifiers.clear()
         self.presets(preset)
@@ -935,6 +1080,9 @@ class Configurator:
 
         All parameters are now applied immediately, so this is only
         needed when you modify config arrays directly (outside Configurator).
+
+        Returns:
+            Self for chaining.
         """
         self._sync_equilibrium()
         return self
@@ -989,7 +1137,13 @@ class Configurator:
         config.expected_survival_rate[()] = expected_surv
 
     def _save_baselines(self) -> None:
-        """Save pre-preset config arrays for later preset reconfiguration."""
+        """Snapshot fitness/gamete arrays before presets are applied.
+
+        Called automatically after :meth:`presets`.  The saved arrays are
+        restored by :meth:`reconfigure_preset` before re-applying a preset
+        with modified parameters — this avoids double-applying modifiers on
+        top of already-patched arrays.
+        """
         self._baseline = {
             "viability": self._config.viability_fitness.copy(),
             "fecundity": self._config.fecundity_fitness.copy(),
@@ -1013,6 +1167,22 @@ class Configurator:
         age_1_carrying_capacity: float | None = None,
         old_juvenile_carrying_capacity: float | None = None,
     ) -> None:
+        """Shared competition logic for both Configurator subclasses.
+
+        Writes scalar parameters via :func:`set_param` and stores
+        *expected_num_adult_females* / *equilibrium_distribution* for
+        later equilibrium sync in :meth:`apply`.
+
+        Args:
+            carrying_capacity: Equilibrium adults at age 1 (K).
+            low_density_growth_rate: Per-capita growth at low density (r).
+            juvenile_growth_mode: Regulation function (string or int code).
+            competition_strength: Larval competition weight (age-structured only).
+            expected_num_adult_females: Target adult females for Champer model.
+            equilibrium_distribution: Custom ``(n_sexes, n_ages)`` equilibrium.
+            age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
+            old_juvenile_carrying_capacity: Legacy alias for *carrying_capacity*.
+        """
         mode_value: int | None = None
         if isinstance(juvenile_growth_mode, str):
             from natal.population_config import (
@@ -1071,15 +1241,33 @@ class Configurator:
         eggs_per_female: float | None = None,
         sex_ratio: float | None = None,
         sperm_displacement_rate: float | None = None,
-        female_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
-        male_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
-        female_age_based_reproduction_rates: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
-        female_age_based_relative_fertility: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
+        female_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        male_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_reproduction_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_relative_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
         female_adult_mating_rate: float | None = None,
         male_adult_mating_rate: float | None = None,
         use_fixed_egg_count: bool | None = None,
         use_sperm_storage: bool | None = None,
     ) -> None:
+        """Shared reproduction logic for both Configurator subclasses.
+
+        Writes scalar parameters via :func:`set_param` and resolves
+        per-age callables/sequences into the config arrays.
+
+        Args:
+            eggs_per_female: Base eggs per reproducing female per tick.
+            sex_ratio: Female fraction of offspring (0–1).
+            sperm_displacement_rate: Fraction of stored sperm displaced (age-structured).
+            female_age_based_mating_rates: Per-age female mating probability.
+            male_age_based_mating_rates: Per-age male mating probability.
+            female_age_based_reproduction_rates: Per-age reproduction participation.
+            female_age_based_relative_fertility: Per-age fertility weight.
+            female_adult_mating_rate: Scalar shortcut for age-structured adult female mating.
+            male_adult_mating_rate: Scalar shortcut for age-structured adult male mating.
+            use_fixed_egg_count: Disable Poisson noise (discrete only).
+            use_sperm_storage: Accepted for compatibility but has no effect.
+        """
         from natal.population_builder import PopulationConfigBuilder
 
         if use_sperm_storage is not None:
@@ -1138,6 +1326,20 @@ class Configurator:
         male_age0_survival: float | None = None,
         adult_survival: float | None = None,
     ) -> None:
+        """Shared survival logic for both Configurator subclasses.
+
+        Resolves per-age survival parameters from scalars, sequences,
+        dicts, or callables and writes them into ``age_based_survival_rates``.
+
+        Args:
+            female: Per-age female survival (scalar, list, dict, or callable).
+            male: Per-age male survival (scalar, list, dict, or callable).
+            female_age_based_survival_rates: Explicit per-age female rates.
+            male_age_based_survival_rates: Explicit per-age male rates.
+            female_age0_survival: Age-0 juvenile female survival shortcut.
+            male_age0_survival: Age-0 juvenile male survival shortcut.
+            adult_survival: Adult survival shortcut (applied to all ages ≥ 1).
+        """
         from natal.population_builder import PopulationConfigBuilder
 
         n_ages = self._config.n_ages
@@ -1176,16 +1378,32 @@ class Configurator:
         name: str | None = None,
         hooks: _HookMap | None = None,
     ) -> DiscreteGenerationPopulation | AgeStructuredPopulation:
-        """Create a Population from the current config.
+        """Finalise the config and create a Population.
+
+        This is the terminal method of the build chain::
+
+            Configurator.for_age_structured(species)
+                .age_structure(5, 2)
+                .competition(K=5000)
+                .reproduction(eggs=100)
+                .build(name="pop")
+
+        Internally it: (1) syncs equilibrium metrics via :meth:`apply`,
+        (2) merges hooks registered via :meth:`hooks` with the *hooks*
+        argument, and (3) passes ``self._config`` to the Population
+        constructor.  After this point the Configurator no longer owns
+        the config — the Population does.
 
         Args:
-            name: Human-readable population name (defaults to ``self._name``
-                  if set via ``.setup(name=...)``, otherwise ``"Population"``).
-            hooks: Optional hook registrations.
+            name: Population name (falls back to ``.setup(name=...)``
+                or ``"Population"``).
+            hooks: Additional hook registrations merged with any stored
+                via :meth:`hooks`.
 
         Returns:
-            An ``AgeStructuredPopulation`` or ``DiscreteGenerationPopulation``
-            depending on the config type.
+            ``AgeStructuredPopulation`` or ``DiscreteGenerationPopulation``,
+            depending on whether *self._config* is a ``PopulationConfig``
+            or ``DiscretePopulationConfig``.
         """
         # Sync equilibrium metrics.
         self.apply()
@@ -1293,10 +1511,19 @@ class DiscreteConfigurator(Configurator):
         """Configure density-dependent competition.
 
         Args:
-            carrying_capacity (K): Equilibrium total adults at age 1.
-            low_density_growth_rate (r): Per-capita growth at low density.
+            carrying_capacity: Equilibrium total adults at age 1 (K).
+            low_density_growth_rate: Per-capita growth at low density (r).
             juvenile_growth_mode: ``"concave"``, ``"logistic"``, … or int.
             age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
+
+        Returns:
+            Self for chaining.
+
+        Note:
+            When *carrying_capacity* (K) is set and the user has not
+            explicitly called ``expected_num_adult_females=``,
+            ``expected_num_adult_females`` is auto-computed as
+            ``K * sex_ratio`` for the discrete model.
         """
         self._competition_impl(
             carrying_capacity=carrying_capacity,
@@ -1450,8 +1677,8 @@ class AgeStructuredConfigurator(Configurator):
         """Configure density-dependent competition.
 
         Args:
-            carrying_capacity (K): Equilibrium population at age 1.
-            low_density_growth_rate (r): Per-capita growth at low density.
+            carrying_capacity: Equilibrium population at age 1 (K).
+            low_density_growth_rate: Per-capita growth at low density (r).
             juvenile_growth_mode: Regulation function (string or int).
             competition_strength: Larval competition weight.
             expected_num_adult_females: Target adult females (Champer model).
@@ -1478,10 +1705,10 @@ class AgeStructuredConfigurator(Configurator):
         eggs_per_female: float | None = None,
         sex_ratio: float | None = None,
         sperm_displacement_rate: float | None = None,
-        female_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
-        male_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
-        female_age_based_reproduction_rates: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
-        female_age_based_relative_fertility: float | list[float] | dict[int, float] | Callable[..., float] | None = None,
+        female_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        male_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_reproduction_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_relative_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
         use_fixed_egg_count: bool | None = None,
         use_sperm_storage: bool | None = None,
     ) -> AgeStructuredConfigurator:
