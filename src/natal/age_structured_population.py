@@ -146,7 +146,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
         use_continuous_sampling: bool = False,
-        gamete_labels: Optional[List[str]] = None,
         use_fixed_egg_count: bool = False,
         *,
         legacy_path: Literal[True],
@@ -160,7 +159,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
         use_continuous_sampling: bool = False,
-        gamete_labels: Optional[List[str]] = None,
         use_fixed_egg_count: bool = False,
         *,
         legacy_path: Literal[False] = False,
@@ -173,7 +171,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
         use_continuous_sampling: bool = False,
-        gamete_labels: Optional[List[str]] = None,
         use_fixed_egg_count: bool = False,
         *,
         legacy_path: bool = False,
@@ -916,10 +913,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def update(self) -> AgeStructuredConfigurator:
         """Return an ``AgeStructuredConfigurator`` for modifying this population's config."""
-        from typing import cast
-
-        result = super().update()
-        return cast('AgeStructuredConfigurator', result)
+        return cast('AgeStructuredConfigurator', self._create_configurator())
 
     def __repr__(self) -> str:
         """Return a compact string representation of the population."""

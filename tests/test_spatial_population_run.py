@@ -88,6 +88,9 @@ class _RunDemePopulation(BasePopulation):
             self.finish_events += 1
         return 0
 
+    def update(self) -> Any:  # type: ignore[no-untyped-def]
+        raise NotImplementedError
+
 
 class _RunDiscreteDemePopulation(BasePopulation):
     def __init__(self, species: Species, name: str, config):
@@ -137,6 +140,9 @@ class _RunDiscreteDemePopulation(BasePopulation):
         if event_name == "finish":
             self.finish_events += 1
         return 0
+
+    def update(self) -> Any:  # type: ignore[no-untyped-def]
+        raise NotImplementedError
 
 
 def _make_species(prefix: str = "SpatialRunSpecies") -> Species:

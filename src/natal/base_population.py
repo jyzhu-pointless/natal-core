@@ -470,6 +470,19 @@ class BasePopulation(ABC, Generic[T_State]):
             raise AttributeError("Population config has not been initialized.")
         return self._config
 
+    def _create_configurator(self) -> Configurator:
+        """Create a ``Configurator`` wired back to this population.
+
+        Subclass ``update()`` methods call this helper so concrete return types
+        do not need ``cast()``.
+        """
+        from natal.configurator import Configurator
+
+        cfg = Configurator.for_config(self._require_config())
+        object.__setattr__(cfg, '_pop_ref', self)
+        return cfg
+
+    @abstractmethod
     def update(self) -> Configurator:
         """Return a ``Configurator`` for modifying this population's config.
 
@@ -484,11 +497,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         .. versionadded:: NEXT
         """
-        from natal.configurator import Configurator
-
-        cfg = Configurator.for_config(self._require_config())
-        object.__setattr__(cfg, '_pop_ref', self)
-        return cfg
+        ...
 
     def _require_state(self) -> T_State:
         """Return the initialized state or raise a clear initialization error."""

@@ -19,6 +19,7 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    cast,
     overload,
 )
 
@@ -518,10 +519,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def update(self) -> DiscreteConfigurator:
         """Return a ``DiscreteConfigurator`` for modifying this population's config."""
-        from typing import cast
-
-        result = super().update()
-        return cast('DiscreteConfigurator', result)
+        return cast('DiscreteConfigurator', self._create_configurator())
 
     def __repr__(self) -> str:
         status = "Finished" if self._finished else "Active"
