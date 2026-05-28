@@ -81,34 +81,37 @@ def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:
 noop_hook = _noop_hook
 
 def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
-    """Ensure an njit hook matches (state, config, deme_id).
+    """Ensure an njit hook matches ``(state, config, deme_id)``.
 
-    Wraps the legacy 2-arg ``(ind_count, tick)`` signature to the
-    current 3-arg ``(state, config, deme_id)``.  Hooks with 3+ args
-    are assumed to already use the current convention.
+    Hooks with 3+ args are passed through unchanged.
+    Hooks with exactly 2 args are assumed to omit ``deme_id`` and are
+    wrapped to ``(state, config)`` automatically — useful for panmictic
+    models where ``deme_id`` is always ``-1``.
     """
     py_fn = getattr(fn, "py_func", fn)
     sig = inspect.signature(py_fn)
     params = list(sig.parameters.values())
     if len(params) >= 3:
         return fn
-    # Wrap legacy 2-arg: (ind_count, tick) -> (state, config, deme_id)
+    # Wrap 2-arg (state, config) — omit deme_id for panmictic.
     @njit_switch(cache=True)
-    def wrapped2(state: Any, config: Any = None, deme_id: int = 0) -> object:
-        return fn(state.individual_count, state.n_tick)
+    def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
+        return fn(state, config)
     return wrapped2
 
 def _normalize_py_hook(fn: HookCallable) -> HookCallable:
-    """Ensure a Python hook matches (state, config, deme_id).
+    """Ensure a Python hook matches ``(state, config, deme_id)``.
 
-    Wraps the legacy 2-arg signature to the current 3-arg signature.
+    Hooks with 3+ args are passed through unchanged.
+    Hooks with exactly 2 args are assumed to omit ``deme_id`` and are
+    wrapped to ``(state, config)`` automatically.
     """
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
     if len(params) >= 3:
         return fn
-    def wrapped2(state: Any, config: Any = None, deme_id: int = 0) -> object:
-        return fn(state.individual_count, state.n_tick)
+    def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
+        return fn(state, config)
     return wrapped2
 
 def compile_combined_hook(
