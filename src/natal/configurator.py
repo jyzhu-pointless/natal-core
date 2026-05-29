@@ -964,7 +964,7 @@ class Configurator:
         (set by ``BasePopulation._create_configurator()``) is used to write
         the new config back into the Population.
         """
-        from natal.population_builder import build_custom_array
+        from natal.population_config import build_custom_array
 
         self._custom_kwargs.update(kwargs)
         self._config = self._config._replace(

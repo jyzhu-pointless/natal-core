@@ -11,7 +11,8 @@ while NumPy arrays can be mutated in place.
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, NamedTuple, Optional
+from collections.abc import Mapping
+from typing import Any, Callable, List, NamedTuple, Optional, cast, overload
 
 import numpy as np
 from numpy.typing import NDArray
@@ -33,6 +34,7 @@ __all__ = [
     'extract_zygote_frequencies',
     'DiscretePopulationConfig', 'from_population_config',
     'build_discrete_population_config',
+    'build_custom_array',
 ]
 
 # Growth mode constants (keep in sync with algorithms.py)
@@ -1147,3 +1149,103 @@ def build_discrete_population_config(
     cfg.age_based_survival_rates[:, 0] = 1.0
     cfg.age_based_survival_rates[:, 1] = 0.0
     return from_population_config(cfg)
+
+
+@overload
+def build_custom_array(
+    specs: Mapping[
+        str,
+        bool | np.bool_ | int | np.integer[Any] | float | np.floating[Any] | NDArray[np.float64],
+    ],
+) -> NDArray[np.void]: ...
+
+
+@overload
+def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]: ...
+
+
+def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
+    """Build a 0-d structured numpy array from custom field specs.
+
+    Called by :meth:`Configurator.custom` and the legacy
+    ``PopulationBuilderBase.custom``.
+
+    Each entry in *specs* becomes a named field in the output array:
+
+    - ``bool`` / ``np.bool_`` values produce a ``np.bool_`` field.
+    - ``int`` / ``np.integer`` values produce a ``np.int64`` field.
+    - ``float`` / ``np.floating`` values produce a ``np.float64`` field.
+    - 3-D ``np.ndarray`` values produce a fixed-shape sub-array field
+      ``np.float64`` with the array's shape, accessed as
+      ``config.custom['name'][sex, age, genotype]``.
+
+    All scalar fields are accessed via ``config.custom['name'][()]``.
+    Fields are sorted alphabetically to produce a stable dtype.  The
+    returned array is 0-d (scalar structured array), compatible with
+    Numba's ``njit`` functions via bracket or attribute access.
+
+    Args:
+        specs: ``{name: value}`` mapping of custom field names to values.
+
+    Returns:
+        A 0-d structured ``np.ndarray`` for ``PopulationConfig.custom``.
+
+    Raises:
+        TypeError: If a value has an unsupported type.
+    """
+    # Empty specs → 0-d array with empty structured dtype.
+    if not specs:
+        return np.zeros((), dtype=np.dtype([]))
+
+    # Stage 1: determine dtype fields from each value's Python type.
+    # Fields are sorted alphabetically for deterministic byte-identical dtypes.
+    fields: list[tuple[str, Any] | tuple[str, Any, tuple[int, ...]]] = []
+    for name in sorted(specs):
+        val = specs[name]
+
+        if isinstance(val, np.ndarray):
+            array_val = cast(np.ndarray[Any, np.dtype[Any]], val)
+            shape = array_val.shape
+            if len(shape) == 3:
+                fields.append((name, np.float64, shape))
+            else:
+                raise TypeError(
+                    f"custom field '{name}' is a {len(shape)}-D ndarray. "
+                    f"Only 3-D (sex, age, genotype) arrays are supported."
+                )
+
+        # bool checked before int — bool is a subclass of int in Python
+        elif isinstance(val, (bool, np.bool_)):
+            fields.append((name, np.bool_))
+
+        elif isinstance(val, (int, np.integer)):
+            fields.append((name, np.int64))
+
+        elif isinstance(val, (float, np.floating)):
+            fields.append((name, np.float64))
+
+        else:
+            raise TypeError(
+                f"custom field '{name}' has unsupported type {type(val).__name__!r}. "
+                f"Supported types: bool, int, float (including NumPy scalars), "
+                f"or 3-D np.ndarray."
+            )
+
+    # Stage 2: build the structured dtype and allocate the 0-d array.
+    dtype = np.dtype(fields)
+    custom = np.zeros((), dtype=dtype)
+
+    # Stage 3: write initial values.
+    for name in sorted(specs):
+        val = specs[name]
+
+        if isinstance(val, np.ndarray):
+            custom[name][...] = val         # sub-array field: copy block
+        elif isinstance(val, (bool, np.bool_, int, np.integer, float, np.floating)):
+            custom[name][()] = val          # scalar field: 0-d element access
+        else:
+            raise TypeError(
+                f"custom field '{name}' has unsupported type {type(val).__name__!r}."
+            )
+
+    return custom
