@@ -41,70 +41,39 @@
 - 未必是定值，可与亲本中 Cas9 copies（或表达时间）有关
 - 可支持 heterozygotes / homozygotes 不同配置
 
-### 7. Preset 系统声明式重构——增量重算
+### 7. 修饰器矩阵化 —— Sequential Cascade → 矩阵乘法
 
-**当前问题**：每个 preset 通过黑盒回调 `fn(tensor) → tensor` 修改张量。系统不知道回调改了哪些行，
-因此改任何 preset 参数都触发全量重建：
-```
-清除所有 modifier → 重新按顺序应用所有 preset → 重算整个 offspring_tensor
-```
-`reconfigure_preset(A, param=0.3)` 会白跑 B 和 C 的修饰器，并重算所有 n² 个 genotype pair。
+**数学基础**（已证明）：
 
-**目标架构**：声明式规则 + 层叠式应用 + 行级所有权追踪。
+1. **每条 rule 是线性算子**：`_compute_converted_gamete_freqs` 对频率向量 v ∈ ℝᴰ
+   只做比例分割（v'[hg] = v[hg]·(1−r), v'[converted_hg] += v[hg]·r）。
+   无归一化、无阈值、无非线性步骤。
 
-**1. 行级所有权追踪**：每个 preset 注册时预计算它修改的 genotype 行：
-```python
-class DeclarativeModifier:
-    rules: list[Rule]
-    owned_rows: set[int]   # 从规则声明预计算，注册时确定
+2. **Cascade ≡ 矩阵乘积**：`M_total = Rₖ · ... · R₂ · R₁`，其中每 Rᵢ 是 D×D
+   稀疏矩阵（D = n_hg × n_glabs，通常 10-100）。级联合成 = 矩阵乘法。
 
-# 例如 HomingDrive(allele="X", rate=0.9) → owned_rows = {0, 2, 7}
-```
+3. **可交换条件**：Mᴬ·Mᴮ = Mᴮ·Mᴬ ⟺ affected_A ∩ affected_B = ∅ 或
+   from_allele_A ≠ from_allele_B。RuleSet API 下 from_allele 静态声明，
+   编译期即可检测。
 
-**2. 层叠式应用**：每个 preset 从 Mendelian baseline 读取数据计算自己的变换，
-而非依赖前一个 preset 的输出。这消除了顺序依赖，使交换律在非冲突场景下成立：
-```python
-def rebuild_maps(registry):
-    tensor = species_baseline.copy()
-    for preset in registry:
-        for row in preset.owned_rows:
-            tensor[row] = preset.apply_rule(row, species_baseline[row])
-    return tensor
-```
+4. **genotype_filter**：filter=False 的 genotype → 对应矩阵 = I（单位矩阵），
+   不改动该行。ModifierMatrix = {g ∈ affected: M_total, g ∉ affected: I}。
 
-**3. 增量重算**：`reconfigure_preset(A)` 只重算 A 触及的行。B 和 C 的数据
-直接从 baseline 保留：
-```python
-def reconfigure_preset(registry, changed):
-    tensor = species_baseline.copy()
-    for preset in registry:
-        if preset == changed: continue   # 跳过旧的
-        for row in preset.owned_rows:
-            tensor[row] = preset.apply_rule(row, species_baseline[row])
-    changed.apply_new_params(...)
-    for row in changed.owned_rows:
-        tensor[row] = changed.apply_rule(row, species_baseline[row])
-```
+**实现路径**（~130 行，3 文件，纯加法，不改现有 API）：
 
-**4. 增量 offspring_tensor**：只重算母亲或父亲属于 affected_rows 的 pair：
-```
-全量: O(n²) 个 pair
-增量: O(|affected| × n) 个 pair
-```
-对 n=100 基因型，A 只触及 2 个：200 个 pair vs 10000 个 pair。
+| 文件 | 改动 |
+|---|---|
+| gamete_allele_conversion.py | 每 rule 加 compile_matrix() → D×D 稀疏矩阵；加 to_matrix() 编译 RuleSet 为 ModifierMatrix |
+| configurator.py | _rebuild_config_maps 加 if/else 分发：全部 RuleSet → 矩阵路径；否则 → 现有回调路径 |
+| modifiers.py | 加 apply_transition() 逐行 @ 矩阵；_apply_comp_map 保留作为回调路径基础设施 |
 
-**5. 冲突检测**：两个 preset 声明同一行时注册期即可见，当场决定策略
-（后注册覆盖 / 报错 / 合并规则）。
+**不改**：genetic_presets.py、任何 Numba 内核、population_config.py、initialize_gamete_map。
 
-**6. 与现有指令式模型的对比**：
+**reconfigure 增量**：只重编译被改 preset 的矩阵（纯算术），重新合成 M_total
+（2 次矩阵乘法），应用到 affected_rows。不重跑其他 modifier。
 
-| | 指令式（当前） | 声明式（目标） |
-|---|---|---|
-| 修饰器 | 黑盒回调 `fn(tensor)→tensor` | 声明式规则 + owned_rows |
-| 交换律 | 不满足（退化情况除外） | 不冲突时天然满足 |
-| 冲突处理 | 运行时后写覆盖（不可见） | 注册期可检测 |
-| reconfigure | O(全部重算) | O(受影响的行 + 部分 tensor) |
-| 可并行性 | 无（顺序依赖） | 有（各 preset 独立从 baseline 读取） |
+**指标**：g=100, hl=8, 3 modifier, |affected|=2 → offspring_tensor 2500× 加速。
+详见 `matrix-modifier-design.html`。
 
 ### 8. Spatial API 其他优化
 
