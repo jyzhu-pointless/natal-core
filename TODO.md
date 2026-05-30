@@ -43,14 +43,68 @@
 
 ### 7. Preset 系统声明式重构——增量重算
 
-- 当前：每个 preset 通过回调函数 `fn(tensor) → tensor` 修改张量。改任何 preset 参数都触发全量重建（清除 modifier → 重新应用所有 preset → 重算 offspring_tensor）。
-- 目标：声明式规则 + 行级所有权追踪，只重算受影响的 genotype 行和 offspring tensor 切片。
-  - 修饰器改为声明式规则（homing_rate、deposition_rate 等）而非黑盒回调
-  - 每个 preset 注册时记录 `affected_rows: set[int]`
-  - `reconfigure_preset(A)` 只清 A 的行，从 Mendelian baseline 恢复，重新应用 A 的规则
-  - 冲突检测：两个 preset 声明同一行时注册期可见，当场决定策略（覆盖/报错/合并）
-  - 增量 offspring_tensor：只重算母亲/父亲属于 affected_rows 的 pair
-  - 若所有 preset 只改互不重叠的行+默认 multiplicative fitness → 天然满足交换律
+**当前问题**：每个 preset 通过黑盒回调 `fn(tensor) → tensor` 修改张量。系统不知道回调改了哪些行，
+因此改任何 preset 参数都触发全量重建：
+```
+清除所有 modifier → 重新按顺序应用所有 preset → 重算整个 offspring_tensor
+```
+`reconfigure_preset(A, param=0.3)` 会白跑 B 和 C 的修饰器，并重算所有 n² 个 genotype pair。
+
+**目标架构**：声明式规则 + 层叠式应用 + 行级所有权追踪。
+
+**1. 行级所有权追踪**：每个 preset 注册时预计算它修改的 genotype 行：
+```python
+class DeclarativeModifier:
+    rules: list[Rule]
+    owned_rows: set[int]   # 从规则声明预计算，注册时确定
+
+# 例如 HomingDrive(allele="X", rate=0.9) → owned_rows = {0, 2, 7}
+```
+
+**2. 层叠式应用**：每个 preset 从 Mendelian baseline 读取数据计算自己的变换，
+而非依赖前一个 preset 的输出。这消除了顺序依赖，使交换律在非冲突场景下成立：
+```python
+def rebuild_maps(registry):
+    tensor = species_baseline.copy()
+    for preset in registry:
+        for row in preset.owned_rows:
+            tensor[row] = preset.apply_rule(row, species_baseline[row])
+    return tensor
+```
+
+**3. 增量重算**：`reconfigure_preset(A)` 只重算 A 触及的行。B 和 C 的数据
+直接从 baseline 保留：
+```python
+def reconfigure_preset(registry, changed):
+    tensor = species_baseline.copy()
+    for preset in registry:
+        if preset == changed: continue   # 跳过旧的
+        for row in preset.owned_rows:
+            tensor[row] = preset.apply_rule(row, species_baseline[row])
+    changed.apply_new_params(...)
+    for row in changed.owned_rows:
+        tensor[row] = changed.apply_rule(row, species_baseline[row])
+```
+
+**4. 增量 offspring_tensor**：只重算母亲或父亲属于 affected_rows 的 pair：
+```
+全量: O(n²) 个 pair
+增量: O(|affected| × n) 个 pair
+```
+对 n=100 基因型，A 只触及 2 个：200 个 pair vs 10000 个 pair。
+
+**5. 冲突检测**：两个 preset 声明同一行时注册期即可见，当场决定策略
+（后注册覆盖 / 报错 / 合并规则）。
+
+**6. 与现有指令式模型的对比**：
+
+| | 指令式（当前） | 声明式（目标） |
+|---|---|---|
+| 修饰器 | 黑盒回调 `fn(tensor)→tensor` | 声明式规则 + owned_rows |
+| 交换律 | 不满足（退化情况除外） | 不冲突时天然满足 |
+| 冲突处理 | 运行时后写覆盖（不可见） | 注册期可检测 |
+| reconfigure | O(全部重算) | O(受影响的行 + 部分 tensor) |
+| 可并行性 | 无（顺序依赖） | 有（各 preset 独立从 baseline 读取） |
 
 ### 8. Spatial API 其他优化
 
