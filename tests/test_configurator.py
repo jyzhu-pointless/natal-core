@@ -261,7 +261,6 @@ class TestCustomFields:
 
 class TestLegacyBuilder:
     def test_discrete_builder_unchanged(self, species):
-        import warnings
         from natal.population_builder import DiscreteGenerationPopulationBuilder
 
         pop = (
@@ -369,6 +368,7 @@ class TestHooks:
 class TestMergeHooks:
     def test_unsupported_type_warns(self):
         import warnings
+
         from natal.configurator import _merge_hooks
 
         with warnings.catch_warnings(record=True) as w:
@@ -563,3 +563,138 @@ class TestFitnessFormats:
         })
         assert arr[0, 2] == 0.2  # female Var|WT (idx=2)
         assert arr[1, 2] == 0.8  # male Var|WT
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# from_species(discrete=True)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestFromSpeciesDiscrete:
+    def test_returns_discrete_configurator(self, species):
+        from natal.configurator import DiscreteConfigurator
+        from natal.population_config import DiscretePopulationConfig
+
+        cfg = Configurator.from_species(species, discrete=True)
+        assert isinstance(cfg, DiscreteConfigurator)
+        assert isinstance(cfg._config, DiscretePopulationConfig)
+
+    def test_discrete_defaults(self, species):
+        cfg = Configurator.from_species(species, discrete=True)
+        # age-0 juvenile survival = 1.0, age-1 adult survival = 0.0
+        assert cfg._config.age_based_survival_rates[0, 0] == 1.0
+        assert cfg._config.age_based_survival_rates[0, 1] == 0.0
+        assert cfg._config.n_ages == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# fitness: per-age viability and multiply mode
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestFitnessAdvanced:
+    def test_viability_per_age(self, fitness_species):
+        cfg = _make_cfg(fitness_species).age_structure(n_ages=3, new_adult_age=2)
+        arr = cfg._config.viability_fitness
+        cfg.fitness(viability={"WT|WT": {0: 0.5, 1: 0.8}})
+        # age 0 → 0.5, age 1 → 0.8, age 2 unchanged
+        assert arr[0, 0, 0] == 0.5
+        assert arr[0, 1, 0] == 0.8
+        assert arr[0, 2, 0] == 1.0
+
+    def test_fitness_multiply_mode(self, fitness_species):
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.fecundity_fitness
+        # set baseline
+        cfg.fitness(fecundity={"WT|WT": 0.5})
+        assert arr[0, 0] == 0.5
+        # multiply scales the existing value
+        cfg.fitness(fecundity={"WT|WT": 0.6}, mode="multiply")
+        assert arr[0, 0] == pytest.approx(0.3)  # 0.5 * 0.6
+
+    def test_fitness_multiply_on_default(self, fitness_species):
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.viability_fitness
+        # default is all 1.0
+        cfg.fitness(viability={"WT|Var": 0.3}, mode="multiply")
+        assert arr[0, 0, 1] == pytest.approx(0.3)  # 1.0 * 0.3
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# custom: accumulated fields
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestCustomAccumulate:
+    def test_custom_accumulates_fields(self, species):
+        cfg = Configurator.from_species(species)
+        cfg.custom(temperature=25.0).custom(humidity=0.6)
+        assert cfg._config.custom["temperature"][()] == 25.0
+        assert cfg._config.custom["humidity"][()] == 0.6
+
+    def test_custom_overwrites_on_same_key(self, species):
+        cfg = Configurator.from_species(species)
+        cfg.custom(temperature=25.0).custom(temperature=30.0)
+        assert cfg._config.custom["temperature"][()] == 30.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# with_observation
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestWithObservation:
+    def test_sets_observation_groups(self, species):
+        cfg = Configurator.from_species(species)
+        cfg.with_observation({"total": "*"}, collapse_age=True)
+        assert hasattr(cfg, "_observation_groups")
+        assert cfg._observation_groups == {"total": "*"}
+        assert cfg._observation_collapse_age is True
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# modifiers: gamete + zygote simultaneously
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestModifiersCombined:
+    def test_gamete_and_zygote_modifier_together(self, species):
+        cfg = Configurator.from_species(species).age_structure(n_ages=2, new_adult_age=1)
+
+        # Two no-op modifiers that return empty mappings (no effect on tensor).
+        def gamete_mod() -> dict:
+            return {}
+
+        def zygote_mod() -> dict:
+            return {}
+
+        cfg.modifiers(gamete_modifiers=[gamete_mod], zygote_modifiers=[zygote_mod])
+        assert len(cfg.gamete_modifiers) == 1
+        assert len(cfg.zygote_modifiers) == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# reconfigure_preset
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestReconfigurePreset:
+    def test_reconfigure_updates_viability(self, fitness_species):
+        from natal.genetic_presets import HomingDrive
+
+        cfg = _make_cfg(fitness_species).age_structure(n_ages=2, new_adult_age=1)
+        drive = HomingDrive(
+            name="__test_reconfigure__", drive_allele="Var", target_allele="WT",
+            drive_conversion_rate=0.8,
+        )
+        cfg.presets(drive)
+        arr = cfg._config.viability_fitness
+        # After preset, Var/WT genotypes should have viability < 1.0
+        # (multiplicative scaling with default value)
+        orig_val = arr[0, 0, 2]  # female age0 Var|WT
+
+        # Reconfigure with different viability scaling
+        cfg.reconfigure_preset(drive, viability_scaling=0.1)
+        new_val = arr[0, 0, 2]
+        # After reconfigure, the value should change
+        assert new_val != orig_val
