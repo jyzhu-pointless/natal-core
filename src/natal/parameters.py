@@ -30,39 +30,33 @@ __all__ = [
     "PARAMETERS_BY_DOMAIN",
 ]
 
-# ── domain string literal — replaces the old ParameterDomain enum ──────────
+# ── domain ─────────────────────────────────────────────────────────────────
 
 DomainStr = Literal[
     "setup", "age_structure", "initial_state", "survival",
     "reproduction", "competition", "fitness", "hook", "migration",
 ]
 
-# ── ParamDescriptor — single estimable parameter ───────────────────────────
+# ── descriptor ─────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class ParamDescriptor:
-    """Describes one parameter of the population model.
+    """A single estimable parameter mapping a user-facing name to a config field.
 
     Attributes:
-        domain: Builder method that sets this parameter.
+        domain: Category this parameter belongs to (e.g. ``"competition"``).
         name: User-facing name (e.g. ``"carrying_capacity"``).
-        config_field: ``PopulationConfig`` field name, or ``None`` if the
-            parameter lives outside PopulationConfig (e.g. spatial-only).
-        config_path: Index path into the config array.  Scalars use ``()``.
+        config_field: ``PopulationConfig`` field name; ``None`` for spatial-only params.
+        config_path: Index tuple into the config array. Scalars use ``()``.
         dtype: Python type (``float``, ``int``, or ``bool``).
-        bounds: Plausible range ``(lo, hi)`` for prior construction.
+        bounds: Plausible range ``(lo, hi)``.
         doc: One-line description.
-        aliases: Historical names that map to this parameter.
-        is_tensor: If True, the config field is a multi-dimensional array
-            (e.g. fitness tensors) rather than a scalar or 1-D array element.
-        is_0d: If True, the config field is a 0-d ndarray (writable via
-            ``field[()] = v``).  Python scalars should leave this as False.
-        is_array: If True, the parameter writes to a 1-D or 2-D array slice
-            (e.g. ``field[0, :] = values``).  Not handled by ``set_param``
-            or ``set_config_param`` — Configurator writes directly.
-        target: Where the parameter lives — ``"config"`` (PopulationConfig),
-            ``"spatial"`` (SpatialPopulation), or ``"hook"`` (hook runtime).
+        aliases: Historical names mapped to this parameter.
+        is_tensor: Multi-dimensional array (e.g. fitness tensors).
+        is_0d: 0-d ndarray, writable via ``field[()] = v``.
+        is_array: 1-D or 2-D slice, written by Configurator directly.
+        target: ``"config"``, ``"spatial"``, or ``"hook"``.
     """
 
     domain: str
@@ -78,93 +72,66 @@ class ParamDescriptor:
     is_array: bool = False
     target: str = "config"
 
-# ── registry ───────────────────────────────────────────────────────────────
 
-_PARAMS: list[ParamDescriptor] = []
-
-
-def _register(
-    domain: str, name: str, config_field: str | None,
-    config_path: tuple[int, ...], dtype: type,
-    bounds: tuple[float, float], doc: str = "", *,
-    aliases: tuple[str, ...] = (),
-    is_tensor: bool = False, is_0d: bool = False,
-    is_array: bool = False, target: str = "config",
-) -> ParamDescriptor:
-    d = ParamDescriptor(
-        domain, name, config_field, config_path, dtype, bounds,
-        doc=doc, aliases=aliases, is_tensor=is_tensor, is_0d=is_0d,
-        is_array=is_array, target=target,
-    )
-    _PARAMS.append(d)
-    return d
+# ── build registry from JSONC ──────────────────────────────────────────────
 
 
-# ── load entries from JSONC ────────────────────────────────────────────────
-
-
-class _ParamEntry(TypedDict, total=False):
-    """Schema for a single entry in ``parameters.jsonc``."""
-
-    domain: str
-    name: str
-    dtype: str
-    bounds: list[float]
-    config_field: str | None
-    config_path: list[int]
-    doc: str
-    aliases: list[str]
-    is_tensor: bool
-    is_0d: bool
-    is_array: bool
-    target: str
-
-
-def _load_jsonc_entries(filename: str) -> list[_ParamEntry]:
-    """Load parameter entries from a JSONC file, stripping ``//`` comments."""
+def _build_registry() -> dict[str, ParamDescriptor]:
     import json
     import os
 
-    path = os.path.join(os.path.dirname(__file__), filename)
-    raw_lines: list[str] = []
+    class _Entry(TypedDict, total=False):
+        domain: str
+        name: str
+        dtype: str
+        bounds: list[float]
+        config_field: str | None
+        config_path: list[int]
+        doc: str
+        aliases: list[str]
+        is_tensor: bool
+        is_0d: bool
+        is_array: bool
+        target: str
+
+    path = os.path.join(os.path.dirname(__file__), "parameters.jsonc")
+    stripped: list[str] = []
     for raw in open(path):
-        stripped = raw.split("//", 1)[0].rstrip()
-        if stripped:
-            raw_lines.append(stripped)
-    return cast(list[_ParamEntry], json.loads("".join(raw_lines)))
+        s = raw.split("//", 1)[0].rstrip()
+        if s:
+            stripped.append(s)
+
+    entries = cast("list[_Entry]", json.loads("".join(stripped)))
+    dtype_map: dict[str, type] = {"float": float, "int": int, "bool": bool}
+    result: dict[str, ParamDescriptor] = {}
+
+    for e in entries:
+        b = e.get("bounds", [0.0, 1.0])
+        cfg = e.get("config_field")
+        desc = ParamDescriptor(
+            domain=e.get("domain", ""),
+            name=e.get("name", ""),
+            config_field=cfg if isinstance(cfg, str) else None,
+            config_path=tuple(e.get("config_path", [])),
+            dtype=dtype_map.get(e.get("dtype", "float"), float),
+            bounds=(float(b[0]), float(b[1])),
+            doc=e.get("doc", ""),
+            aliases=tuple(e.get("aliases", [])),
+            is_tensor=e.get("is_tensor", False),
+            is_0d=e.get("is_0d", False),
+            is_array=e.get("is_array", False),
+            target=e.get("target", "config"),
+        )
+        result[f"{desc.domain}.{desc.name}"] = desc
+    return result
 
 
-_DTYPE_MAP: dict[str, type] = {"float": float, "int": int, "bool": bool}
-
-_params_json = _load_jsonc_entries("parameters.jsonc")
-
-for entry in _params_json:
-    bounds = entry.get("bounds", [0, 1])
-    _register(
-        domain=entry.get("domain", ""),
-        name=entry.get("name", ""),
-        config_field=entry.get("config_field"),
-        config_path=tuple(entry.get("config_path", [])),
-        dtype=_DTYPE_MAP.get(entry.get("dtype", "float"), float),
-        bounds=(float(bounds[0]), float(bounds[1])),
-        doc=entry.get("doc", ""),
-        aliases=tuple(entry.get("aliases", [])),
-        is_tensor=entry.get("is_tensor", False),
-        is_0d=entry.get("is_0d", False),
-        is_array=entry.get("is_array", False),
-        target=entry.get("target", "config"),
-    )
-
-# ── build the query dicts ──────────────────────────────────────────────────
-
-ALL_PARAMETERS: dict[str, ParamDescriptor] = {
-    f"{d.domain}.{d.name}": d for d in _PARAMS
-}
+ALL_PARAMETERS = _build_registry()
 
 PARAMETERS_BY_DOMAIN: dict[str, dict[str, ParamDescriptor]] = {}
-for d in _PARAMS:
+for d in ALL_PARAMETERS.values():
     PARAMETERS_BY_DOMAIN.setdefault(d.domain, {})[d.name] = d
 
 PARAM_IDS: dict[str, int] = {
-    f"{d.domain}.{d.name}": i for i, d in enumerate(_PARAMS)
+    key: i for i, key in enumerate(ALL_PARAMETERS)
 }
