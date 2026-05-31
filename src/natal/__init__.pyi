@@ -90,7 +90,7 @@ from .parameters import (
     ALL_PARAMETERS,
     PARAMETERS_BY_DOMAIN,
     ParamDescriptor,
-    ParameterDomain,
+    DomainStr,
 )
 from .population_builder import (
     AgeStructuredPopulationBuilder,
@@ -307,7 +307,7 @@ __all__ = [
     "OpType",
     "PARAMETERS_BY_DOMAIN",
     "ParamDescriptor",
-    "ParameterDomain",
+    "DomainStr",
     "PlainDiscretePopulationState",
     "PlainPopulationConfig",
     "PlainPopulationState",

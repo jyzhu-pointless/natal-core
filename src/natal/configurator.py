@@ -281,7 +281,7 @@ def set_param(
     - ``config_field`` — name of the attribute on the config object
     - ``config_path`` — index tuple into the ndarray (empty for 0-d)
     - ``is_tensor`` / ``is_array`` — guards to reject non-scalar writes
-    - ``domain`` — ``ParameterDomain`` enum grouping related parameters
+    - ``domain`` — domain string grouping related parameters
       (e.g. ``"competition"``, ``"reproduction"``)
 
     After writing, ``sync_equilibrium_metrics`` is called automatically
@@ -343,7 +343,7 @@ def set_param(
         )
 
     # Auto-sync equilibrium when sensitive params change.
-    key = f"{desc.domain.value}.{desc.name}"
+    key = f"{desc.domain}.{desc.name}"
     if _sync_equilibrium and key in _EQUILIBRIUM_SENSITIVE_KEYS:
         from natal.engine.simulation.age_structured import sync_equilibrium_metrics
 
@@ -829,60 +829,6 @@ class Configurator:
         if isinstance(config, DiscretePopulationConfig):
             return DiscreteConfigurator(config)
         return AgeStructuredConfigurator(config)
-
-    # -- dimension lock --------------------------------------------------------
-
-    def age_structure(
-        self,
-        n_ages: int,
-        new_adult_age: int,
-        generation_time: float | None = None,
-    ) -> Self:
-        """Lock the population dimensions.  Must be called first.
-
-        Rebuilds the config with the given *n_ages* and *new_adult_age*,
-        preserving species-derived arrays (genotype maps, offspring tensor)
-        from the old config so they are not recomputed.
-
-        Apply dimension-dependent parameters (survival, reproduction,
-        initial_state) AFTER this call.
-
-        Returns:
-            Self for chaining.
-        """
-        if getattr(self, "_has_domain_params", False):
-            raise RuntimeError(
-                "age_structure() must be called before competition(), "
-                "reproduction(), survival(), or any other domain method. "
-                "All parameter values set before this call have been discarded."
-            )
-        if n_ages <= 1:
-            raise ValueError(f"n_ages must be at least 2, got {n_ages}")
-        if new_adult_age < 0 or new_adult_age >= n_ages:
-            raise ValueError(
-                f"new_adult_age must be in [0, {n_ages}), got {new_adult_age}"
-            )
-        from natal.population_config import build_population_config
-
-        old = self._config
-        self._config = build_population_config(
-            n_genotypes=old.n_genotypes,
-            n_haploid_genotypes=old.n_haploid_genotypes,
-            n_ages=n_ages,
-            n_glabs=old.n_glabs,
-            genotype_to_gametes_map=old.genotype_to_gametes_map,
-            gametes_to_zygote_map=old.gametes_to_zygote_map,
-            new_adult_age=new_adult_age,
-            generation_time=generation_time,
-            is_stochastic=bool(old.is_stochastic),
-            use_continuous_sampling=bool(old.use_continuous_sampling),
-            use_fixed_egg_count=bool(old.use_fixed_egg_count),
-            has_sex_chromosomes=old.has_sex_chromosomes,
-        )
-        # Rebuild registry for the new n_ages (affects genotype lookup dims).
-        if self._species is not None:
-            self._registry = _build_registry(self._species)
-        return self
 
     # -- setup flags -----------------------------------------------------------
 
@@ -1601,20 +1547,6 @@ class DiscreteConfigurator(Configurator):
     ``DiscreteGenerationPopulation.setup(species)``.
     """
 
-    def age_structure(
-        self, n_ages: int = 2, new_adult_age: int = 1,
-        generation_time: float | None = None,
-    ) -> DiscreteConfigurator:
-        """Lock dimensions.
-
-        The discrete-generation (non-overlapping) model always uses exactly
-        2 age classes — juvenile (age 0) and adult (age 1).  This override
-        exists for API consistency with ``AgeStructuredConfigurator``.
-        """
-        super().age_structure(n_ages=n_ages, new_adult_age=new_adult_age,
-                              generation_time=generation_time)
-        return self
-
     def competition(
         self,
         *,
@@ -1782,11 +1714,44 @@ class AgeStructuredConfigurator(Configurator):
 
         Returns:
             Self for chaining.
+
+        Note:
+            Must be called before any domain method (competition,
+            reproduction, survival, etc.).  Calling it after domain
+            methods will raise ``RuntimeError``.
         """
-        super().age_structure(
-            n_ages=n_ages, new_adult_age=new_adult_age,
+        if getattr(self, "_has_domain_params", False):
+            raise RuntimeError(
+                "age_structure() must be called before competition(), "
+                "reproduction(), survival(), or any other domain method. "
+                "All parameter values set before this call have been discarded."
+            )
+        if n_ages <= 1:
+            raise ValueError(f"n_ages must be at least 2, got {n_ages}")
+        if new_adult_age < 0 or new_adult_age >= n_ages:
+            raise ValueError(
+                f"new_adult_age must be in [0, {n_ages}), got {new_adult_age}"
+            )
+        from natal.population_config import build_population_config
+
+        old = self._config
+        self._config = build_population_config(
+            n_genotypes=old.n_genotypes,
+            n_haploid_genotypes=old.n_haploid_genotypes,
+            n_ages=n_ages,
+            n_glabs=old.n_glabs,
+            genotype_to_gametes_map=old.genotype_to_gametes_map,
+            gametes_to_zygote_map=old.gametes_to_zygote_map,
+            new_adult_age=new_adult_age,
             generation_time=generation_time,
+            is_stochastic=bool(old.is_stochastic),
+            use_continuous_sampling=bool(old.use_continuous_sampling),
+            use_fixed_egg_count=bool(old.use_fixed_egg_count),
+            has_sex_chromosomes=old.has_sex_chromosomes,
         )
+        # Rebuild registry for the new n_ages (affects genotype lookup dims).
+        if self._species is not None:
+            self._registry = _build_registry(self._species)
         return self
 
     def competition(

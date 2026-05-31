@@ -13,43 +13,31 @@ Usage::
     assert desc.config_field == "carrying_capacity"
     assert desc.config_path == ()
     assert desc.dtype is float
+
+Parameter entries are defined declaratively in ``parameters.jsonc``
+(JSON with ``//`` comments) and loaded at import time.
 """
 
 from __future__ import annotations
 
-import enum
 from dataclasses import dataclass
+from typing import Literal, TypedDict, cast
 
 __all__ = [
-    "ParameterDomain",
+    "DomainStr",
     "ParamDescriptor",
     "ALL_PARAMETERS",
     "PARAMETERS_BY_DOMAIN",
 ]
 
+# ── domain string literal — replaces the old ParameterDomain enum ──────────
 
-# ---------------------------------------------------------------------------
-# ParameterDomain — mirrors the Builder method chain
-# ---------------------------------------------------------------------------
+DomainStr = Literal[
+    "setup", "age_structure", "initial_state", "survival",
+    "reproduction", "competition", "fitness", "hook", "migration",
+]
 
-
-class ParameterDomain(enum.Enum):
-    """Builder method that owns the parameter."""
-
-    SETUP = "setup"
-    AGE_STRUCTURE = "age_structure"
-    INITIAL_STATE = "initial_state"
-    SURVIVAL = "survival"
-    REPRODUCTION = "reproduction"
-    COMPETITION = "competition"
-    FITNESS = "fitness"
-    HOOK = "hook"
-    MIGRATION = "migration"
-
-
-# ---------------------------------------------------------------------------
-# ParamDescriptor — single estimable parameter
-# ---------------------------------------------------------------------------
+# ── ParamDescriptor — single estimable parameter ───────────────────────────
 
 
 @dataclass(frozen=True)
@@ -77,7 +65,7 @@ class ParamDescriptor:
             ``"spatial"`` (SpatialPopulation), or ``"hook"`` (hook runtime).
     """
 
-    domain: ParameterDomain
+    domain: str
     name: str
     config_field: str | None
     config_path: tuple[int, ...]
@@ -90,28 +78,18 @@ class ParamDescriptor:
     is_array: bool = False
     target: str = "config"
 
-
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
+# ── registry ───────────────────────────────────────────────────────────────
 
 _PARAMS: list[ParamDescriptor] = []
 
 
 def _register(
-    domain: ParameterDomain,
-    name: str,
-    config_field: str | None,
-    config_path: tuple[int, ...],
-    dtype: type,
-    bounds: tuple[float, float],
-    doc: str = "",
-    *,
+    domain: str, name: str, config_field: str | None,
+    config_path: tuple[int, ...], dtype: type,
+    bounds: tuple[float, float], doc: str = "", *,
     aliases: tuple[str, ...] = (),
-    is_tensor: bool = False,
-    is_0d: bool = False,
-    is_array: bool = False,
-    target: str = "config",
+    is_tensor: bool = False, is_0d: bool = False,
+    is_array: bool = False, target: str = "config",
 ) -> ParamDescriptor:
     d = ParamDescriptor(
         domain, name, config_field, config_path, dtype, bounds,
@@ -122,390 +100,71 @@ def _register(
     return d
 
 
-D = ParameterDomain
+# ── load entries from JSONC ────────────────────────────────────────────────
 
-# =============================================================================
-# SETUP
-# =============================================================================
 
-_register(
-    domain=D.SETUP, name="stochastic",
-    config_field="is_stochastic", config_path=(),
-    dtype=bool, bounds=(0, 1)
-)
+class _ParamEntry(TypedDict, total=False):
+    """Schema for a single entry in ``parameters.jsonc``."""
 
-_register(
-    domain=D.SETUP, name="continuous_sampling",
-    config_field="use_continuous_sampling", config_path=(),
-    dtype=bool, bounds=(0, 1)
-)
+    domain: str
+    name: str
+    dtype: str
+    bounds: list[float]
+    config_field: str | None
+    config_path: list[int]
+    doc: str
+    aliases: list[str]
+    is_tensor: bool
+    is_0d: bool
+    is_array: bool
+    target: str
 
-_register(
-    domain=D.SETUP, name="fixed_egg_count",
-    config_field="use_fixed_egg_count", config_path=(),
-    dtype=bool, bounds=(0, 1)
-)
 
-_register(
-    domain=D.SETUP, name="has_sex_chromosomes",
-    config_field="has_sex_chromosomes", config_path=(),
-    dtype=bool, bounds=(0, 1)
-)
+def _load_jsonc_entries(filename: str) -> list[_ParamEntry]:
+    """Load parameter entries from a JSONC file, stripping ``//`` comments."""
+    import json
+    import os
 
-# =============================================================================
-# AGE_STRUCTURE
-# =============================================================================
+    path = os.path.join(os.path.dirname(__file__), filename)
+    raw_lines: list[str] = []
+    for raw in open(path):
+        stripped = raw.split("//", 1)[0].rstrip()
+        if stripped:
+            raw_lines.append(stripped)
+    return cast(list[_ParamEntry], json.loads("".join(raw_lines)))
 
-_register(
-    domain=D.AGE_STRUCTURE, name="n_ages",
-    config_field="n_ages", config_path=(),
-    dtype=int, bounds=(1, 200)
-)
 
-_register(
-    domain=D.AGE_STRUCTURE, name="n_sexes",
-    config_field="n_sexes", config_path=(),
-    dtype=int, bounds=(1, 10)
-)
+_DTYPE_MAP: dict[str, type] = {"float": float, "int": int, "bool": bool}
 
-_register(
-    domain=D.AGE_STRUCTURE, name="n_genotypes",
-    config_field="n_genotypes", config_path=(),
-    dtype=int, bounds=(1, 100_000)
-)
+_params_json = _load_jsonc_entries("parameters.jsonc")
 
-_register(
-    domain=D.AGE_STRUCTURE, name="n_haploid_genotypes",
-    config_field="n_haploid_genotypes", config_path=(),
-    dtype=int, bounds=(1, 100_000)
-)
+for entry in _params_json:
+    bounds = entry.get("bounds", [0, 1])
+    _register(
+        domain=entry.get("domain", ""),
+        name=entry.get("name", ""),
+        config_field=entry.get("config_field"),
+        config_path=tuple(entry.get("config_path", [])),
+        dtype=_DTYPE_MAP.get(entry.get("dtype", "float"), float),
+        bounds=(float(bounds[0]), float(bounds[1])),
+        doc=entry.get("doc", ""),
+        aliases=tuple(entry.get("aliases", [])),
+        is_tensor=entry.get("is_tensor", False),
+        is_0d=entry.get("is_0d", False),
+        is_array=entry.get("is_array", False),
+        target=entry.get("target", "config"),
+    )
 
-_register(
-    domain=D.AGE_STRUCTURE, name="n_glabs",
-    config_field="n_glabs", config_path=(),
-    dtype=int, bounds=(1, 100)
-)
-
-_register(
-    domain=D.AGE_STRUCTURE, name="new_adult_age",
-    config_field="new_adult_age", config_path=(),
-    dtype=int, bounds=(1, 100)
-)
-
-_register(
-    domain=D.AGE_STRUCTURE, name="generation_time",
-    config_field="generation_time", config_path=(),
-    dtype=float, bounds=(0.01, 100),
-    is_0d=True,
-)
-
-# =============================================================================
-# INITIAL_STATE
-# =============================================================================
-
-_register(
-    domain=D.INITIAL_STATE, name="initial_individual_count",
-    config_field="initial_individual_count", config_path=(),
-    dtype=float, bounds=(0, 1e12),
-    is_tensor=True,
-    doc="(n_sexes, n_ages, n_genotypes) initial population distribution"
-)
-
-_register(
-    domain=D.INITIAL_STATE, name="initial_sperm_storage",
-    config_field="initial_sperm_storage", config_path=(),
-    dtype=float, bounds=(0, 1e12),
-    is_tensor=True,
-    doc="(n_ages, n_genotypes, n_genotypes) initial sperm storage"
-)
-
-# =============================================================================
-# SURVIVAL
-# =============================================================================
-
-_register(
-    domain=D.SURVIVAL, name="female_survival",
-    config_field="age_based_survival_rates", config_path=(0,),
-    dtype=float, bounds=(0, 1),
-    doc="(n_ages,) female survival rates — use per-age sub-params for scalar estimation"
-)
-
-_register(
-    domain=D.SURVIVAL, name="male_survival",
-    config_field="age_based_survival_rates", config_path=(1,),
-    dtype=float, bounds=(0, 1),
-    doc="(n_ages,) male survival rates"
-)
-
-_register(
-    domain=D.SURVIVAL, name="female_age0_survival",
-    config_field="age_based_survival_rates", config_path=(0, 0),
-    dtype=float, bounds=(0, 1)
-)
-
-_register(
-    domain=D.SURVIVAL, name="male_age0_survival",
-    config_field="age_based_survival_rates", config_path=(1, 0),
-    dtype=float, bounds=(0, 1)
-)
-
-_register(
-    domain=D.SURVIVAL, name="female_survival_rates",
-    config_field="age_based_survival_rates", config_path=(0,),
-    dtype=float, bounds=(0, 1),
-    is_array=True,
-    doc="(n_ages,) per-age female survival — array write via resolve_age_param"
-)
-
-_register(
-    domain=D.SURVIVAL, name="male_survival_rates",
-    config_field="age_based_survival_rates", config_path=(1,),
-    dtype=float, bounds=(0, 1),
-    is_array=True,
-    doc="(n_ages,) per-age male survival — array write via resolve_age_param"
-)
-
-_register(
-    domain=D.SURVIVAL, name="adult_survival",
-    config_field="age_based_survival_rates", config_path=(),
-    dtype=float, bounds=(0, 1),
-    doc="scalar applied to all adult ages (≥ new_adult_age)"
-)
-
-# =============================================================================
-# REPRODUCTION
-# =============================================================================
-
-_register(
-    domain=D.REPRODUCTION, name="eggs_per_female",
-    config_field="expected_eggs_per_female", config_path=(),
-    dtype=float, bounds=(0, 1e6),
-    aliases=("expected_eggs_per_female",),
-    is_0d=True,
-)
-
-_register(
-    domain=D.REPRODUCTION, name="sex_ratio",
-    config_field="sex_ratio", config_path=(),
-    dtype=float, bounds=(0, 1),
-    is_0d=True,
-)
-
-_register(
-    domain=D.REPRODUCTION, name="female_mating_rate",
-    config_field="age_based_mating_rates", config_path=(0,),
-    dtype=float, bounds=(0, 1),
-    doc="(n_ages,) female mating rates — use per-age sub-params for scalar estimation"
-)
-
-_register(
-    domain=D.REPRODUCTION, name="male_mating_rate",
-    config_field="age_based_mating_rates", config_path=(1,),
-    dtype=float, bounds=(0, 1),
-    doc="(n_ages,) male mating rates"
-)
-
-_register(
-    domain=D.REPRODUCTION, name="female_adult_mating_rate",
-    config_field="age_based_mating_rates", config_path=(0, 1),
-    dtype=float, bounds=(0, 1)
-)
-
-_register(
-    domain=D.REPRODUCTION, name="male_adult_mating_rate",
-    config_field="age_based_mating_rates", config_path=(1, 1),
-    dtype=float, bounds=(0, 1)
-)
-
-_register(
-    domain=D.REPRODUCTION, name="reproduction_rate",
-    config_field="age_based_reproduction_rates", config_path=(1,),
-    dtype=float, bounds=(0, 1)
-)
-
-_register(
-    domain=D.REPRODUCTION, name="sperm_displacement_rate",
-    config_field="sperm_displacement_rate", config_path=(),
-    dtype=float, bounds=(0, 1),
-    is_0d=True,
-)
-
-_register(
-    domain=D.REPRODUCTION, name="female_fertility",
-    config_field="female_age_based_relative_fertility", config_path=(0,),
-    dtype=float, bounds=(0, 1),
-    doc="(n_ages,) female relative fertility"
-)
-
-_register(
-    domain=D.REPRODUCTION, name="female_mating_rates",
-    config_field="age_based_mating_rates", config_path=(0,),
-    dtype=float, bounds=(0, 1),
-    is_array=True,
-    doc="(n_ages,) per-age female mating rates — array write via resolve_age_param"
-)
-
-_register(
-    domain=D.REPRODUCTION, name="male_mating_rates",
-    config_field="age_based_mating_rates", config_path=(1,),
-    dtype=float, bounds=(0, 1),
-    is_array=True,
-    doc="(n_ages,) per-age male mating rates — array write via resolve_age_param"
-)
-
-_register(
-    domain=D.REPRODUCTION, name="reproduction_rates",
-    config_field="age_based_reproduction_rates", config_path=(),
-    dtype=float, bounds=(0, 1),
-    is_array=True,
-    doc="(n_ages,) per-age female reproduction participation"
-)
-
-_register(
-    domain=D.REPRODUCTION, name="female_fertility_rates",
-    config_field="female_age_based_relative_fertility", config_path=(),
-    dtype=float, bounds=(0, 1),
-    is_array=True,
-    doc="(n_ages,) per-age female relative fertility — array write via resolve_age_param"
-)
-
-# =============================================================================
-# COMPETITION
-# =============================================================================
-
-_register(
-    domain=D.COMPETITION, name="competition_strength",
-    config_field="age_based_relative_competition_strength", config_path=(1,),
-    dtype=float, bounds=(0, 1e6),
-    aliases=("relative_competition_factor",)
-)
-
-_register(
-    domain=D.COMPETITION, name="juvenile_growth_mode",
-    config_field="juvenile_growth_mode", config_path=(),
-    dtype=int, bounds=(0, 3),
-    is_0d=True,
-)
-
-_register(
-    domain=D.COMPETITION, name="low_density_growth_rate",
-    config_field="low_density_growth_rate", config_path=(),
-    dtype=float, bounds=(0, 1e6),
-    is_0d=True,
-)
-
-_register(
-    domain=D.COMPETITION, name="carrying_capacity",
-    config_field="carrying_capacity", config_path=(),
-    dtype=float, bounds=(0, 1e12),
-    aliases=("age_1_carrying_capacity", "old_juvenile_carrying_capacity"),
-    is_0d=True,
-)
-
-_register(
-    domain=D.COMPETITION, name="expected_competition_strength",
-    config_field="expected_competition_strength", config_path=(),
-    dtype=float, bounds=(0, 1e6),
-    is_0d=True,
-)
-
-_register(
-    domain=D.COMPETITION, name="expected_survival_rate",
-    config_field="expected_survival_rate", config_path=(),
-    dtype=float, bounds=(0, 1),
-    is_0d=True,
-)
-
-# =============================================================================
-# FITNESS
-# =============================================================================
-
-_register(
-    domain=D.FITNESS, name="viability",
-    config_field="viability_fitness", config_path=(),
-    dtype=float, bounds=(0, 100),
-    is_tensor=True,
-    doc="(n_sexes, n_ages, n_genotypes) viability fitness tensor"
-)
-
-_register(
-    domain=D.FITNESS, name="fecundity",
-    config_field="fecundity_fitness", config_path=(),
-    dtype=float, bounds=(0, 100),
-    is_tensor=True,
-    doc="(n_sexes, n_genotypes) fecundity fitness"
-)
-
-_register(
-    domain=D.FITNESS, name="sexual_selection",
-    config_field="sexual_selection_fitness", config_path=(),
-    dtype=float, bounds=(0, 100),
-    is_tensor=True,
-    doc="(n_genotypes, n_genotypes) sexual selection matrix"
-)
-
-_register(
-    domain=D.FITNESS, name="zygote_viability",
-    config_field="zygote_viability_fitness", config_path=(),
-    dtype=float, bounds=(0, 100),
-    is_tensor=True,
-    doc="(n_sexes, n_genotypes) zygote viability fitness"
-)
-
-# =============================================================================
-# HOOK
-# =============================================================================
-
-_register(
-    domain=D.HOOK, name="hook_slot",
-    config_field="hook_slot", config_path=(),
-    dtype=int, bounds=(0, 100)
-)
-
-# =============================================================================
-# MIGRATION (spatial only)
-# =============================================================================
-
-_register(
-    domain=D.MIGRATION, name="migration_rate",
-    config_field=None, config_path=(),
-    dtype=float, bounds=(0, 1),
-    target="spatial",
-    doc="Migration rate stored on SpatialPopulation, not PopulationConfig"
-)
-
-# =============================================================================
-# Sex-chromosome arrays (tensors, for introspection)
-# =============================================================================
-
-_register(
-    domain=D.FITNESS, name="female_genotype_compatibility",
-    config_field="female_genotype_compatibility", config_path=(),
-    dtype=float, bounds=(0, 1),
-    is_tensor=True,
-    doc="(n_genotypes,) female-side compatibility weights"
-)
-
-_register(
-    domain=D.FITNESS, name="male_genotype_compatibility",
-    config_field="male_genotype_compatibility", config_path=(),
-    dtype=float, bounds=(0, 1),
-    is_tensor=True,
-    doc="(n_genotypes,) male-side compatibility weights"
-)
-
-# =============================================================================
-# Build the registry dicts
-# =============================================================================
+# ── build the query dicts ──────────────────────────────────────────────────
 
 ALL_PARAMETERS: dict[str, ParamDescriptor] = {
-    f"{d.domain.value}.{d.name}": d for d in _PARAMS
+    f"{d.domain}.{d.name}": d for d in _PARAMS
 }
 
-PARAMETERS_BY_DOMAIN: dict[ParameterDomain, dict[str, ParamDescriptor]] = {}
+PARAMETERS_BY_DOMAIN: dict[str, dict[str, ParamDescriptor]] = {}
 for d in _PARAMS:
     PARAMETERS_BY_DOMAIN.setdefault(d.domain, {})[d.name] = d
 
 PARAM_IDS: dict[str, int] = {
-    f"{d.domain.value}.{d.name}": i for i, d in enumerate(_PARAMS)
+    f"{d.domain}.{d.name}": i for i, d in enumerate(_PARAMS)
 }

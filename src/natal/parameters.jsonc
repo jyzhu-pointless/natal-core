@@ -1,0 +1,59 @@
+[
+  // SETUP
+  {"domain": "setup", "name": "stochastic", "config_field": "is_stochastic", "config_path": [], "dtype": "bool", "bounds": [0, 1]},
+  {"domain": "setup", "name": "continuous_sampling", "config_field": "use_continuous_sampling", "config_path": [], "dtype": "bool", "bounds": [0, 1]},
+  {"domain": "setup", "name": "fixed_egg_count", "config_field": "use_fixed_egg_count", "config_path": [], "dtype": "bool", "bounds": [0, 1]},
+  {"domain": "setup", "name": "has_sex_chromosomes", "config_field": "has_sex_chromosomes", "config_path": [], "dtype": "bool", "bounds": [0, 1]},
+  // AGE_STRUCTURE
+  {"domain": "age_structure", "name": "n_ages", "config_field": "n_ages", "config_path": [], "dtype": "int", "bounds": [1, 200]},
+  {"domain": "age_structure", "name": "n_sexes", "config_field": "n_sexes", "config_path": [], "dtype": "int", "bounds": [1, 10]},
+  {"domain": "age_structure", "name": "n_genotypes", "config_field": "n_genotypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
+  {"domain": "age_structure", "name": "n_haploid_genotypes", "config_field": "n_haploid_genotypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
+  {"domain": "age_structure", "name": "n_glabs", "config_field": "n_glabs", "config_path": [], "dtype": "int", "bounds": [1, 100]},
+  {"domain": "age_structure", "name": "new_adult_age", "config_field": "new_adult_age", "config_path": [], "dtype": "int", "bounds": [1, 100]},
+  {"domain": "age_structure", "name": "generation_time", "config_field": "generation_time", "config_path": [], "dtype": "float", "bounds": [0.01, 100], "is_0d": true},
+  // INITIAL_STATE
+  {"domain": "initial_state", "name": "initial_individual_count", "config_field": "initial_individual_count", "config_path": [], "dtype": "float", "bounds": [0, 1000000000000.0], "doc": "(n_sexes, n_ages, n_genotypes) initial population distribution", "is_tensor": true},
+  {"domain": "initial_state", "name": "initial_sperm_storage", "config_field": "initial_sperm_storage", "config_path": [], "dtype": "float", "bounds": [0, 1000000000000.0], "doc": "(n_ages, n_genotypes, n_genotypes) initial sperm storage", "is_tensor": true},
+  // SURVIVAL
+  {"domain": "survival", "name": "female_survival", "config_field": "age_based_survival_rates", "config_path": [0], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) female survival rates \u2014 use per-age sub-params for scalar estimation"},
+  {"domain": "survival", "name": "male_survival", "config_field": "age_based_survival_rates", "config_path": [1], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) male survival rates"},
+  {"domain": "survival", "name": "female_age0_survival", "config_field": "age_based_survival_rates", "config_path": [0, 0], "dtype": "float", "bounds": [0, 1]},
+  {"domain": "survival", "name": "male_age0_survival", "config_field": "age_based_survival_rates", "config_path": [1, 0], "dtype": "float", "bounds": [0, 1]},
+  {"domain": "survival", "name": "female_survival_rates", "config_field": "age_based_survival_rates", "config_path": [0], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) per-age female survival \u2014 array write via resolve_age_param", "is_array": true},
+  {"domain": "survival", "name": "male_survival_rates", "config_field": "age_based_survival_rates", "config_path": [1], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) per-age male survival \u2014 array write via resolve_age_param", "is_array": true},
+  {"domain": "survival", "name": "adult_survival", "config_field": "age_based_survival_rates", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "scalar applied to all adult ages (\u2265 new_adult_age)"},
+  // REPRODUCTION
+  {"domain": "reproduction", "name": "eggs_per_female", "config_field": "expected_eggs_per_female", "config_path": [], "dtype": "float", "bounds": [0, 1000000.0], "aliases": ["expected_eggs_per_female"], "is_0d": true},
+  {"domain": "reproduction", "name": "sex_ratio", "config_field": "sex_ratio", "config_path": [], "dtype": "float", "bounds": [0, 1], "is_0d": true},
+  {"domain": "reproduction", "name": "female_mating_rate", "config_field": "age_based_mating_rates", "config_path": [0], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) female mating rates \u2014 use per-age sub-params for scalar estimation"},
+  {"domain": "reproduction", "name": "male_mating_rate", "config_field": "age_based_mating_rates", "config_path": [1], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) male mating rates"},
+  {"domain": "reproduction", "name": "female_adult_mating_rate", "config_field": "age_based_mating_rates", "config_path": [0, 1], "dtype": "float", "bounds": [0, 1]},
+  {"domain": "reproduction", "name": "male_adult_mating_rate", "config_field": "age_based_mating_rates", "config_path": [1, 1], "dtype": "float", "bounds": [0, 1]},
+  {"domain": "reproduction", "name": "reproduction_rate", "config_field": "age_based_reproduction_rates", "config_path": [1], "dtype": "float", "bounds": [0, 1]},
+  {"domain": "reproduction", "name": "sperm_displacement_rate", "config_field": "sperm_displacement_rate", "config_path": [], "dtype": "float", "bounds": [0, 1], "is_0d": true},
+  {"domain": "reproduction", "name": "female_fertility", "config_field": "female_age_based_relative_fertility", "config_path": [0], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) female relative fertility"},
+  {"domain": "reproduction", "name": "female_mating_rates", "config_field": "age_based_mating_rates", "config_path": [0], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) per-age female mating rates \u2014 array write via resolve_age_param", "is_array": true},
+  {"domain": "reproduction", "name": "male_mating_rates", "config_field": "age_based_mating_rates", "config_path": [1], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) per-age male mating rates \u2014 array write via resolve_age_param", "is_array": true},
+  {"domain": "reproduction", "name": "reproduction_rates", "config_field": "age_based_reproduction_rates", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) per-age female reproduction participation", "is_array": true},
+  {"domain": "reproduction", "name": "female_fertility_rates", "config_field": "female_age_based_relative_fertility", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) per-age female relative fertility \u2014 array write via resolve_age_param", "is_array": true},
+  // COMPETITION
+  {"domain": "competition", "name": "competition_strength", "config_field": "age_based_relative_competition_strength", "config_path": [1], "dtype": "float", "bounds": [0, 1000000.0], "aliases": ["relative_competition_factor"]},
+  {"domain": "competition", "name": "juvenile_growth_mode", "config_field": "juvenile_growth_mode", "config_path": [], "dtype": "int", "bounds": [0, 3], "is_0d": true},
+  {"domain": "competition", "name": "low_density_growth_rate", "config_field": "low_density_growth_rate", "config_path": [], "dtype": "float", "bounds": [0, 1000000.0], "is_0d": true},
+  {"domain": "competition", "name": "carrying_capacity", "config_field": "carrying_capacity", "config_path": [], "dtype": "float", "bounds": [0, 1000000000000.0], "aliases": ["age_1_carrying_capacity", "old_juvenile_carrying_capacity"], "is_0d": true},
+  {"domain": "competition", "name": "expected_competition_strength", "config_field": "expected_competition_strength", "config_path": [], "dtype": "float", "bounds": [0, 1000000.0], "is_0d": true},
+  {"domain": "competition", "name": "expected_survival_rate", "config_field": "expected_survival_rate", "config_path": [], "dtype": "float", "bounds": [0, 1], "is_0d": true},
+  // FITNESS
+  {"domain": "fitness", "name": "viability", "config_field": "viability_fitness", "config_path": [], "dtype": "float", "bounds": [0, 100], "doc": "(n_sexes, n_ages, n_genotypes) viability fitness tensor", "is_tensor": true},
+  {"domain": "fitness", "name": "fecundity", "config_field": "fecundity_fitness", "config_path": [], "dtype": "float", "bounds": [0, 100], "doc": "(n_sexes, n_genotypes) fecundity fitness", "is_tensor": true},
+  {"domain": "fitness", "name": "sexual_selection", "config_field": "sexual_selection_fitness", "config_path": [], "dtype": "float", "bounds": [0, 100], "doc": "(n_genotypes, n_genotypes) sexual selection matrix", "is_tensor": true},
+  {"domain": "fitness", "name": "zygote_viability", "config_field": "zygote_viability_fitness", "config_path": [], "dtype": "float", "bounds": [0, 100], "doc": "(n_sexes, n_genotypes) zygote viability fitness", "is_tensor": true},
+  // HOOK
+  {"domain": "hook", "name": "hook_slot", "config_field": "hook_slot", "config_path": [], "dtype": "int", "bounds": [0, 100]},
+  // MIGRATION
+  {"domain": "migration", "name": "migration_rate", "config_field": null, "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "Migration rate stored on SpatialPopulation, not PopulationConfig", "target": "spatial"},
+  // FITNESS
+  {"domain": "fitness", "name": "female_genotype_compatibility", "config_field": "female_genotype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_genotypes,) female-side compatibility weights", "is_tensor": true},
+  {"domain": "fitness", "name": "male_genotype_compatibility", "config_field": "male_genotype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_genotypes,) male-side compatibility weights", "is_tensor": true}
+]
