@@ -110,6 +110,13 @@ class _ConfigContext:
         config: PopulationConfig | DiscretePopulationConfig,
         registry: IndexRegistry,
     ) -> None:
+        """Initialise the adapter with species, config, and registry.
+
+        Args:
+            species: The genetic architecture for the population.
+            config: The PopulationConfig or DiscretePopulationConfig to wrap.
+            registry: An IndexRegistry pre-populated with genotypes/haplotypes.
+        """
         self.species = species
         self.config = config
         self.registry = registry
@@ -128,6 +135,14 @@ class _ConfigContext:
         modifier_id: int | None = None,
         refresh: bool = True,
     ) -> None:
+        """Register a gamete modifier on the adapter.
+
+        Args:
+            modifier: The GameteModifier callable.
+            name: Optional name string for identification.
+            modifier_id: Explicit modifier ID (auto-assigned if ``None``).
+            refresh: If ``True`` (default), rebuild modifier maps immediately.
+        """
         resolved_id = _ConfigContext.next_modifier_id(self.gamete_modifiers) if modifier_id is None else modifier_id
         self.gamete_modifiers.append((resolved_id, name, modifier))
         self.gamete_modifiers.sort(key=lambda x: x[0])
@@ -142,6 +157,14 @@ class _ConfigContext:
         modifier_id: int | None = None,
         refresh: bool = True,
     ) -> None:
+        """Register a zygote modifier on the adapter.
+
+        Args:
+            modifier: The ZygoteModifier callable.
+            name: Optional name string for identification.
+            modifier_id: Explicit modifier ID (auto-assigned if ``None``).
+            refresh: If ``True`` (default), rebuild modifier maps immediately.
+        """
         resolved_id = _ConfigContext.next_modifier_id(self.zygote_modifiers) if modifier_id is None else modifier_id
         self.zygote_modifiers.append((resolved_id, name, modifier))
         self.zygote_modifiers.sort(key=lambda x: x[0])
@@ -149,10 +172,27 @@ class _ConfigContext:
             self.refresh_modifier_maps()
 
     def refresh_modifier_maps(self) -> None:
+        """Rebuild config maps from the current modifier lists.
+
+        Delegates to :func:`_rebuild_config_maps`, which recomputes the
+        offspring probability tensor from the accumulated gamete and
+        zygote modifier callables.
+        """
         _rebuild_config_maps(self)
 
     @staticmethod
     def next_modifier_id(modifiers: list[tuple[int, str | None, Any]]) -> int:
+        """Return the next available modifier ID.
+
+        Scans the existing modifier IDs and returns ``max + 1``
+        (or ``0`` if the list is empty).
+
+        Args:
+            modifiers: List of ``(id, name, modifier)`` tuples.
+
+        Returns:
+            The next available integer ID.
+        """
         ids = [mid for mid, _, _ in modifiers]
         return (max(ids) + 1) if ids else 0
 
@@ -166,6 +206,11 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
     Starts from the species-level Mendelian baseline (cached via
     :meth:`Species.get_config_blueprint`) and applies modifier callables
     in-place, avoiding redundant O(n²) baseline recomputation.
+
+    Returns:
+        ``None`` — the mutated config is written back through
+        ``ctx.config``, which the caller is expected to sync via
+        :meth:`Configurator._sync_from_ctx`.
     """
     from natal.engine.simulation.age_structured import (
         compute_offspring_probability_tensor,
@@ -616,6 +661,18 @@ def _write_fitness_field_flat(
     normally represents larval / juvenile survival, not adult fitness.
     ``fecundity`` and ``zygote_viability`` have no age axis so
     *age_idx* is ignored for them.
+
+    Args:
+        config: The PopulationConfig or DiscretePopulationConfig to modify.
+        field_name: One of ``"viability"``, ``"fecundity"``,
+            ``"sexual_selection"``, or ``"zygote_viability"``.
+        patch: A flat ``{genotype_selector: value}`` mapping.
+        mode: ``"replace"`` (overwrite) or ``"multiply"`` (scale existing).
+        sex_idx: Index for the sex axis (0 = female, 1 = male).
+        species: The Species for genotype-selector resolution.
+        registry: The IndexRegistry mapping genotypes to indices.
+        all_genotypes: List of all genotype objects for selector matching.
+        age_idx: Age index for the write (defaults to ``new_adult_age - 1``).
     """
     # Default to last juvenile age: viability typically affects
     # larvae/juveniles, not adults.  DiscretePopulationConfig has
@@ -732,6 +789,11 @@ class Configurator:
         The context receives a shallow copy of the modifier lists so that
         preset / modifier calls can append without mutating the originals
         until :meth:`_sync_from_ctx` explicitly commits them back.
+
+        Raises:
+            RuntimeError: If ``_species`` is ``None`` — the Configurator
+                must be created via :meth:`from_species` when using
+                presets, modifiers, or fitness.
         """
         if self._species is None:
             raise RuntimeError(
@@ -825,7 +887,16 @@ class Configurator:
     def for_config(
         config: PopulationConfig | DiscretePopulationConfig,
     ) -> DiscreteConfigurator | AgeStructuredConfigurator:
-        """Return the right Configurator subclass for the given config type."""
+        """Return the right Configurator subclass for the given config type.
+
+        Args:
+            config: The config to wrap.
+
+        Returns:
+            ``DiscreteConfigurator`` if *config* is a
+            ``DiscretePopulationConfig``, otherwise
+            ``AgeStructuredConfigurator``.
+        """
         if isinstance(config, DiscretePopulationConfig):
             return DiscreteConfigurator(config)
         return AgeStructuredConfigurator(config)
@@ -843,6 +914,13 @@ class Configurator:
         """Configure simulation flags and optional population name.
 
         *name* is stored and used by ``build()`` when no explicit name is given.
+
+        Args:
+            name: Population name (falls back to ``"Population"`` at build time).
+            stochastic: If ``False``, use deterministic (median) outcomes.
+            use_continuous_sampling: If ``True``, sample from continuous
+                distributions instead of discrete counts.
+            use_fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
 
         Returns:
             Self for chaining.
@@ -874,6 +952,12 @@ class Configurator:
         ``{"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}}``.
         Genotype selectors accept both strings and ``Genotype`` objects.
         Resolved to a 3-D array using the same logic as the Builder.
+
+        Args:
+            individual_count: Per-sex, per-genotype initial counts.
+                Nested as ``{sex: {genotype_selector: count}}``.
+            sperm_storage: Per-sex, per-genotype initial stored sperm,
+                same nesting structure as *individual_count*.
 
         Returns:
             Self for chaining.
@@ -919,6 +1003,13 @@ class Configurator:
         ``pop.update().custom(...)``, the ``_pop_ref`` back-reference
         (set by ``BasePopulation._create_configurator()``) is used to write
         the new config back into the Population.
+
+        Args:
+            **kwargs: Name-value pairs for custom fields.  Values must be
+                ``bool``, ``int``, ``float``, or ``NDArray[np.float64]``.
+
+        Returns:
+            Self for chaining.
         """
         from natal.population_config import build_custom_array
 
@@ -940,6 +1031,10 @@ class Configurator:
         resolved against the current Species + IndexRegistry and
         written into the config immediately.  No deferred execution.
 
+        Args:
+            *presets: One or more :class:`~natal.genetic_presets.GeneticPreset`
+                instances to apply (e.g. ``HomingDrive``, ``ToxinAntidoteDrive``).
+
         Returns:
             Self for chaining.
         """
@@ -959,6 +1054,12 @@ class Configurator:
         zygote_modifiers: list[ZygoteModifier] | None = None,
     ) -> Self:
         """Register gamete / zygote modifiers and rebuild maps immediately.
+
+        Args:
+            gamete_modifiers: List of :class:`~natal.modifiers.GameteModifier`
+                instances affecting meiosis (genotype → gamete mapping).
+            zygote_modifiers: List of :class:`~natal.modifiers.ZygoteModifier`
+                instances affecting fertilisation (gamete → zygote mapping).
 
         Returns:
             Self for chaining.
@@ -996,8 +1097,19 @@ class Configurator:
         Sex-specific fitness can be specified with nested dicts:
         ``{"female": {"WT|WT": 0.9}, "male": {"WT|WT": 1.0}}``.
 
+        Args:
+            viability: Per-genotype viability (juvenile survival) fitness.
+            fecundity: Per-genotype fecundity (egg production) fitness.
+            sexual_selection: Per-genotype mating success fitness (pair format).
+            zygote_viability: Per-genotype zygote-stage survival fitness.
+            mode: ``"replace"`` (overwrite) or ``"multiply"`` (scale existing).
+
         Returns:
             Self for chaining.
+
+        Raises:
+            RuntimeError: If ``_species`` is ``None`` — fitness resolution
+                requires genotype information from the Species.
         """
         if self._species is None:
             raise RuntimeError(
@@ -1032,6 +1144,11 @@ class Configurator:
 
         Hooks are passed through to the Population constructor at
         ``build()`` time — they are *not* config writes.
+
+        Args:
+            *hook_items: Hook registrations. Each item can be a raw
+                ``{event: [(func, name, priority), ...]}`` dict or a
+                callable decorated with ``@hook(event='...')``.
 
         Returns:
             Self for chaining.
@@ -1078,6 +1195,9 @@ class Configurator:
         Args:
             preset: A preset previously registered via :meth:`presets`.
             **changes: Attribute name / value pairs to update on *preset*.
+
+        Returns:
+            Self for chaining.
         """
         for attr, value in changes.items():
             setattr(preset, attr, value)
@@ -1200,6 +1320,9 @@ class Configurator:
             equilibrium_distribution: Custom ``(n_sexes, n_ages)`` equilibrium.
             age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
             old_juvenile_carrying_capacity: Legacy alias for *carrying_capacity*.
+
+        Returns:
+            ``None`` — writes config fields in-place.
         """
         self._has_domain_params = True
         mode_value: int | None = None
@@ -1283,8 +1406,6 @@ class Configurator:
         per-age callables/sequences into the config arrays.
 
         Args:
-
-        Args:
             eggs_per_female: Base eggs per reproducing female per tick.
             sex_ratio: Female fraction of offspring (0–1).
             sperm_displacement_rate: Fraction of stored sperm displaced (age-structured).
@@ -1296,6 +1417,9 @@ class Configurator:
             male_adult_mating_rate: Scalar shortcut for age-structured adult male mating.
             use_fixed_egg_count: Disable Poisson noise (discrete only).
             use_sperm_storage: Accepted for compatibility but has no effect.
+
+        Returns:
+            ``None`` — writes config fields in-place.
         """
         self._has_domain_params = True
         from natal.population_builder import PopulationConfigBuilder
@@ -1381,6 +1505,9 @@ class Configurator:
             female_age0_survival: Age-0 juvenile female survival shortcut.
             male_age0_survival: Age-0 juvenile male survival shortcut.
             adult_survival: Adult survival shortcut (applied to all ages ≥ 1).
+
+        Returns:
+            ``None`` — writes config fields in-place.
         """
         self._has_domain_params = True
         from natal.population_builder import PopulationConfigBuilder
@@ -1625,6 +1752,12 @@ class DiscreteConfigurator(Configurator):
 
         Uses the discrete resolution (flat JSON-style dict) rather than the
         age-structured resolution.
+
+        Args:
+            individual_count: Per-sex, per-genotype initial counts.
+                Nested as ``{sex: {genotype_selector: count}}``.
+            sperm_storage: Ignored for discrete-generation models
+                (sperm storage is not applicable).
 
         Returns:
             Self for chaining.
