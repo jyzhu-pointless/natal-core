@@ -239,6 +239,13 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         overrides["fecundity_m"] = ctx.config.fecundity_fitness[1]
         overrides["viability_f"] = ctx.config.viability_fitness[0, 0, :]
         overrides["viability_m"] = ctx.config.viability_fitness[1, 0, :]
+        # Pre-extracted scalars must also stay in sync.
+        cfg = ctx.config
+        overrides["female_mating_rate"] = cfg.age_based_mating_rates[0, 1]
+        overrides["male_mating_rate"] = cfg.age_based_mating_rates[1, 1]
+        overrides["reproduction_rate"] = cfg.age_based_reproduction_rates[1]
+        overrides["base_survival_f"] = cfg.age_based_survival_rates[0, 0]
+        overrides["base_survival_m"] = cfg.age_based_survival_rates[1, 0]
     ctx.config = ctx.config._replace(**overrides)
 
 
@@ -843,6 +850,12 @@ class Configurator:
         Returns:
             Self for chaining.
         """
+        if getattr(self, "_has_domain_params", False):
+            raise RuntimeError(
+                "age_structure() must be called before competition(), "
+                "reproduction(), survival(), or any other domain method. "
+                "All parameter values set before this call have been discarded."
+            )
         if n_ages <= 1:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")
         if new_adult_age < 0 or new_adult_age >= n_ages:
@@ -934,19 +947,16 @@ class Configurator:
             n_ages=n_ages,
             new_adult_age=new_adult_age,
         )
-        self._config = self._config._replace(
-            initial_individual_count=array,
-        )
+        overrides: dict[str, object] = {"initial_individual_count": array}
         if sperm_storage is not None:
-            ss_arr = PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
-                species=self._species,
-                sperm_storage=sperm_storage,
-                n_ages=n_ages,
-                new_adult_age=new_adult_age,
-            )
-            self._config = self._config._replace(
-                initial_sperm_storage=ss_arr,
-            )
+            overrides["initial_sperm_storage"] = \
+                PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
+                    species=self._species,
+                    sperm_storage=sperm_storage,
+                    n_ages=n_ages,
+                    new_adult_age=new_adult_age,
+                )
+        self._config = self._config._replace(**overrides)
         return self
 
     # -- custom fields ---------------------------------------------------------
@@ -1126,9 +1136,16 @@ class Configurator:
         for attr, value in changes.items():
             setattr(preset, attr, value)
 
-        # Clear accumulated modifiers so the preset starts from a clean slate.
-        self.gamete_modifiers.clear()
-        self.zygote_modifiers.clear()
+        # Remove only THIS preset's modifiers so non-preset modifiers
+        # (added via .modifiers()) are not lost.  Preset modifiers are
+        # named "PresetName/gamete" and "PresetName/zygote".
+        prefix = f"{preset.name}/"
+        self.gamete_modifiers = [
+            m for m in self.gamete_modifiers if m[1] is None or not m[1].startswith(prefix)
+        ]
+        self.zygote_modifiers = [
+            m for m in self.zygote_modifiers if m[1] is None or not m[1].startswith(prefix)
+        ]
         # Re-apply: rebuilds modifier maps from species Mendelian baseline
         # (inside _rebuild_config_maps) and writes fitness patches fresh.
         self.presets(preset)
@@ -1170,7 +1187,7 @@ class Configurator:
         )
         # Reshape flat equilibrium_distribution to (n_sexes, n_ages) if needed.
         config = self._config
-        if eq_dist is not None and eq_dist.ndim == 1:
+        if isinstance(eq_dist, np.ndarray) and eq_dist.ndim == 1:
             n_ages = int(config.n_ages)
             eq_dist = eq_dist.reshape(2, n_ages)
 
@@ -1238,6 +1255,7 @@ class Configurator:
             age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
             old_juvenile_carrying_capacity: Legacy alias for *carrying_capacity*.
         """
+        self._has_domain_params = True
         mode_value: int | None = None
         if isinstance(juvenile_growth_mode, str):
             from natal.population_config import (
@@ -1319,6 +1337,8 @@ class Configurator:
         per-age callables/sequences into the config arrays.
 
         Args:
+
+        Args:
             eggs_per_female: Base eggs per reproducing female per tick.
             sex_ratio: Female fraction of offspring (0–1).
             sperm_displacement_rate: Fraction of stored sperm displaced (age-structured).
@@ -1331,6 +1351,7 @@ class Configurator:
             use_fixed_egg_count: Disable Poisson noise (discrete only).
             use_sperm_storage: Accepted for compatibility but has no effect.
         """
+        self._has_domain_params = True
         from natal.population_builder import PopulationConfigBuilder
 
         # use_sperm_storage was added to the public API before the underlying
@@ -1415,6 +1436,7 @@ class Configurator:
             male_age0_survival: Age-0 juvenile male survival shortcut.
             adult_survival: Adult survival shortcut (applied to all ages ≥ 1).
         """
+        self._has_domain_params = True
         from natal.population_builder import PopulationConfigBuilder
 
         n_ages = self._config.n_ages
