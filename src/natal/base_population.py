@@ -37,7 +37,6 @@ import natal.population_config as _population_config
 from natal.engine.simulation.age_structured import compute_offspring_probability_tensor
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.genetic_structures import Species
-from natal.helpers import resolve_sex_label
 from natal.hooks import CompiledEventHooks
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
@@ -751,63 +750,6 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         raise NotImplementedError(f"{cls.__name__} must implement builder()")
 
-    def initialize_config(self) -> None:
-        """Initialize static lookup tensors used by the population model.
-
-        This prepares precomputed maps such as ``gametes_to_zygote_map`` and
-        ``genotype_to_gametes_map`` and wraps high-level modifiers so they can
-        be applied at tensor-level during simulation steps.
-
-        Note:
-            Ensures registry is initialized before proceeding.
-        """
-        # ✅ Ensure registry is initialized
-        if self._index_registry is None:
-            self._initialize_registry()
-
-        # Retrieve all possible haploid and diploid genotypes.
-        haploid_genotypes: List[HaploidGenotype] = self.species.get_all_haploid_genotypes()
-        diploid_genotypes: List[Genotype] = self.species.get_all_genotypes()
-
-        n_hg = len(haploid_genotypes)
-        n_genotypes = len(diploid_genotypes)
-        n_glabs = 1  # TODO: configure based on use case.
-
-        # Create static configuration container.
-        self._config = build_population_config(
-            n_genotypes=n_genotypes,
-            n_haploid_genotypes=n_hg,
-            n_sexes=2, # TODO
-            n_glabs=n_glabs
-        )
-
-        # Convert high-level modifiers into tensor-level wrappers.
-        gamete_modifier_funcs, zygote_modifier_funcs = self._build_modifier_wrappers(
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs
-        )
-
-        # Initialize gametes_to_zygote_map and genotype_to_gametes_map.
-        gametes_to_zygote_map = initialize_zygote_map(
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
-            zygote_modifiers=zygote_modifier_funcs,
-        )
-
-        genotype_to_gametes_map = initialize_gamete_map(
-            diploid_genotypes=diploid_genotypes,
-            haploid_genotypes=haploid_genotypes,
-            n_glabs=n_glabs,
-            gamete_modifiers=gamete_modifier_funcs,
-        )
-
-        self._config = self._config._replace(
-            gametes_to_zygote_map=gametes_to_zygote_map,
-            genotype_to_gametes_map=genotype_to_gametes_map,
-        )
-
     def register_gamete_labels(self, labels: Optional[Sequence[str]]) -> None:
         """
         Register gamete labels in the IndexRegistry.
@@ -836,107 +778,6 @@ class BasePopulation(ABC, Generic[T_State]):
         for lab in seq:
             if lab not in self._index_registry.glab_to_index:
                 self._index_registry.register_gamete_label(lab)
-
-    # ------------------------------------------------------------------
-    # Helper routines to simplify modifier key/value parsing. These were
-    # extracted from the inline closures in _build_modifier_wrappers to
-    # reduce cognitive complexity and improve testability.
-    # ------------------------------------------------------------------
-    def _resolve_hg_glab(
-        self,
-        haploid_genotypes: List[HaploidGenotype],
-        part: Any,
-        n_glabs: int
-    ) -> Tuple[int, int]:
-        """Resolve a flexible haploid/genotype+glab part into numeric indices.
-
-        Args:
-            haploid_genotypes: list of HaploidGenotype objects.
-            part: flexible selector (HaploidGenotype, int, str, or tuple).
-            n_glabs: number of gamete labels.
-
-        Returns:
-            (hg_idx, glab_idx)
-        """
-        return self.index_registry.resolve_hg_glab_part(haploid_genotypes, part, n_glabs)
-
-    def _parse_zygote_key(self, key: Any, haploid_genotypes: List[HaploidGenotype], n_glabs: int) -> Tuple[int, int]:
-        """Parse modifier key for zygote wrappers into compressed coords (c1,c2).
-
-        Delegates to the shared implementation in modifiers module.
-        """
-        from natal.modifiers import parse_zygote_key
-
-        return parse_zygote_key(key, self._index_registry, haploid_genotypes, n_glabs)
-
-    def _normalize_zygote_val(self, val: Any, diploid_genotypes: List[Genotype]) -> Dict[int, float]:
-        """Normalize zygote replacement `val` into a mapping idx->prob.
-
-        Delegates to the shared implementation in modifiers module.
-        """
-        from natal.modifiers import normalize_zygote_val
-
-        return normalize_zygote_val(val, self._index_registry, diploid_genotypes)
-
-    def _write_zygote_mapping(self, modified: np.ndarray, c1: int, c2: int, mapping: Dict[int, float]) -> None:
-        """Apply mapping (idx->prob) to the compressed zygote slice.
-
-        Delegates to the shared implementation in modifiers module.
-        """
-        from natal.modifiers import write_zygote_mapping
-
-        write_zygote_mapping(modified, c1, c2, mapping)
-
-    def _resolve_sex_name(self, key: str) -> Optional[int]:
-        """Normalize string sex names to sex index (0=female,1=male).
-
-        Returns None for unknown keys.
-        """
-        try:
-            return resolve_sex_label(key)
-        except ValueError:
-            return None
-
-    def _apply_comp_map(self, modified: np.ndarray, sex_idx: int, gidx: int, comp_map: Any, haploid_genotypes: List[HaploidGenotype], n_glabs: int, n_hg_glabs: int) -> None:
-        """Apply a comp_map (comp_key->freq) into the provided modified tensor slice.
-
-        Delegates to the shared implementation in modifiers module.
-        """
-        from natal.modifiers import apply_comp_map
-
-        apply_comp_map(
-            modified,
-            sex_idx,
-            gidx,
-            comp_map,
-            self._index_registry,
-            haploid_genotypes,
-            n_glabs,
-            n_hg_glabs,
-        )
-
-    def _build_modifier_wrappers(
-        self,
-        haploid_genotypes: List[HaploidGenotype],
-        diploid_genotypes: List[Genotype],
-        n_glabs: int = 1
-    ) -> Tuple[List[HookCallback], List[HookCallback]]:
-        """Wrap high-level gamete/zygote modifiers into tensor-level callables.
-
-        Delegates to the shared ``build_modifier_wrappers`` in the modifiers module.
-
-        Returns:
-            Tuple containing two lists: ``(gamete_modifier_funcs, zygote_modifier_funcs)``.
-        """
-        return build_modifier_wrappers(
-            gamete_modifiers=self._gamete_modifiers,
-            zygote_modifiers=self._zygote_modifiers,
-            population=self,
-            index_registry=self._index_registry,
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
-        )
 
     # ========================================================================
     # Core methods

@@ -86,12 +86,7 @@ from .observation_record import (
     build_observation_row_panmictic,
     build_observation_row_spatial,
 )
-from .parameters import (
-    ALL_PARAMETERS,
-    PARAMETERS_BY_DOMAIN,
-    ParamDescriptor,
-    DomainStr,
-)
+from .parameters import ALL_PARAMETERS, DomainStr, PARAMETERS_BY_DOMAIN, ParamDescriptor
 from .population_builder import (
     AgeStructuredPopulationBuilder,
     DiscreteGenerationPopulationBuilder,
@@ -106,6 +101,8 @@ from .population_config import (
     NO_COMPETITION,
     PlainPopulationConfig,
     PopulationConfig,
+    build_custom_array,
+    build_discrete_population_config,
     build_population_config,
     extract_gamete_frequencies,
     extract_gamete_frequencies_by_glab,
@@ -257,6 +254,7 @@ __all__ = [
     "DiscreteGenerationPopulationBuilder",
     "DiscretePopulationConfig",
     "DiscretePopulationState",
+    "DomainStr",
     "EPS",
     "EVENT_EARLY",
     "EVENT_FINISH",
@@ -307,7 +305,6 @@ __all__ = [
     "OpType",
     "PARAMETERS_BY_DOMAIN",
     "ParamDescriptor",
-    "DomainStr",
     "PlainDiscretePopulationState",
     "PlainPopulationConfig",
     "PlainPopulationState",
@@ -337,6 +334,8 @@ __all__ = [
     "binomial_2d",
     "build_adjacency_matrix",
     "build_compact_metadata",
+    "build_custom_array",
+    "build_discrete_population_config",
     "build_gaussian_kernel",
     "build_hook_program",
     "build_observation_row_panmictic",

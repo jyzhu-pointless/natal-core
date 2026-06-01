@@ -368,7 +368,7 @@ class ChildStructureRegistry(RegistryBase[S]):
         """Unregister by name."""
         self._storage.pop(key, None)
 
-    def add(self, name: str, **kwargs: Any) -> S:
+    def add(self, name: str, **kwargs: Any) -> S:  # forwarded to expected_type child constructor
         """
         Create a new child structure and register it.
         This is a convenience method: create + register.
@@ -897,7 +897,7 @@ class Locus(GeneticStructure['Gene']):
         position: Optional[Union[int, float]] = None,
         chromosome: Optional[Chromosome] = None,
         parent: Optional[Chromosome] = None,
-        **kwargs: Any
+        **kwargs: Any  # extra parameters stored as custom locus attributes
     ):
         # Check if already initialized (cached instance)
         if hasattr(self, '_initialized') and self._initialized:

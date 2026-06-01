@@ -17,7 +17,6 @@ from typing import Any, Callable, List, NamedTuple, Optional, cast, overload
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.engine.simulation.age_structured as alg
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.index_registry import compress_hg_glab, decompress_hg_glab
 from natal.type_def import Sex
@@ -422,6 +421,8 @@ def build_population_config(
 
     assert n_genotypes > 0 and n_haploid_genotypes > 0 and n_glabs > 0, "invalid dimensions for PopulationConfig"
     assert n_ages > 0, "n_ages must be positive"
+
+    import natal.engine.simulation.age_structured as alg  # lazy import to avoid pulling engine at module level
 
     n_hg_glabs = n_haploid_genotypes * n_glabs
     n_sexes_i = int(n_sexes)
@@ -1124,7 +1125,7 @@ def build_discrete_population_config(
     n_ages: int = 2,
     carrying_capacity: float | None = None,
     has_sex_chromosomes: bool = False,
-    **kwargs: Any,
+    **kwargs: Any,  # forwarded to build_population_config()
 ) -> DiscretePopulationConfig:
     """Build a ``DiscretePopulationConfig`` directly, without intermediate ``PopulationConfig``.
 

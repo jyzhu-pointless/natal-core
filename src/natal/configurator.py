@@ -42,6 +42,7 @@ from natal.population_config import (
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
     from natal.discrete_generation_population import DiscreteGenerationPopulation
+    from natal.genetic_entities import Genotype
     from natal.genetic_presets import GeneticPreset
     from natal.modifiers import GameteModifier, ZygoteModifier
 
@@ -180,6 +181,9 @@ class _ConfigContext:
         """
         _rebuild_config_maps(self)
 
+    # ``Any`` for the 3rd tuple element is justified: the function only
+    # reads ``id`` and ``name`` (1st/2nd elements); the modifier object
+    # itself is never accessed, so its type is irrelevant.
     @staticmethod
     def next_modifier_id(modifiers: list[tuple[int, str | None, Any]]) -> int:
         """Return the next available modifier ID.
@@ -357,7 +361,11 @@ def set_param(
     if desc is None:
         raise KeyError(f"Unknown parameter: {name!r}")
     if desc.config_field is None:
-        return  # spatial-only parameter, nothing to write
+        raise ValueError(
+            f"{name!r} is a spatial-only parameter and cannot be set "
+            f"on a non-spatial config. Use pop.update(...) on a "
+            f"SpatialPopulation instead."
+        )
     if desc.is_tensor or desc.is_array:
         raise ValueError(
             f"set_param does not support tensor or array parameters "
@@ -444,7 +452,7 @@ def _write_fitness_field(
     *,
     species: Species,
     registry: IndexRegistry,
-    all_genotypes: list[Any],
+    all_genotypes: list[Genotype],
 ) -> None:
     """Resolve genotype-pattern strings and write into a fitness tensor.
 
@@ -581,8 +589,8 @@ def _write_fitness_field(
             first_key = next(iter(value.keys()))
             if isinstance(first_key, int) and not isinstance(first_key, bool):  # type: ignore[unnecessary-isinstance] — bool ⊂ int in Python
                 # ---- age-keyed: {genotype: {0: val, 1: val}} ----
-                for age_key, age_val in value.items():          # type: ignore[var-unknown]
-                    if age_val is None:                         # type: ignore[unnecessary-comparison]
+                for age_key, age_val in value.items():          # type: ignore[var-unknown]  # Mapping values are Any without explicit type params
+                    if age_val is None:                         # type: ignore[unnecessary-comparison]  # user may pass {age: None} to skip
                         continue
                     age = int(age_key)
                     for sex_idx in (0, 1):
@@ -599,13 +607,13 @@ def _write_fitness_field(
                     sex_idx = 0 if sex_key == "female" else 1
                     if isinstance(sex_val, Mapping):
                         # ---- sex+age keyed: {genotype: {"female": {0: val}}} ----
-                        for age_key, age_val in sex_val.items():          # type: ignore[var-unknown]
+                        for age_key, age_val in sex_val.items():          # type: ignore[var-unknown]  # Mapping values are Any without explicit type params
                             if age_val is None:
                                 continue
                             _write_fitness_field_flat(
                                 config, field_name,
-                                {selector: float(age_val)}, mode,         # type: ignore[arg-type]
-                                sex_idx=sex_idx, age_idx=int(age_key),   # type: ignore[arg-type]
+                                {selector: float(age_val)}, mode,  # type: ignore[arg-type]  # age_val is Unknown from unparameterized Mapping
+                                sex_idx=sex_idx, age_idx=int(age_key),  # type: ignore[arg-type]  # age_key is Unknown from unparameterized Mapping
                                 species=species, registry=registry,
                                 all_genotypes=all_genotypes,
                             )
@@ -644,7 +652,7 @@ def _write_fitness_field_flat(
     sex_idx: int,
     species: Species,
     registry: IndexRegistry,
-    all_genotypes: list[Any],
+    all_genotypes: list[Genotype],
     age_idx: int | None = None,
 ) -> None:
     """Write a flat (per-genotype) fitness patch into the correct config array.
@@ -1855,9 +1863,9 @@ class AgeStructuredConfigurator(Configurator):
         """
         if getattr(self, "_has_domain_params", False):
             raise RuntimeError(
-                "age_structure() must be called before competition(), "
-                "reproduction(), survival(), or any other domain method. "
-                "All parameter values set before this call have been discarded."
+                "age_structure() must be called before any domain method "
+                "(competition(), reproduction(), survival(), etc.). "
+                "Domain methods have already been called on this configurator."
             )
         if n_ages <= 1:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")

@@ -48,7 +48,10 @@ class TestSetParam:
     def test_auto_sync_equilibrium(self, minimal_config):
         old_comp = minimal_config.expected_competition_strength[()]
         set_param(minimal_config, "carrying_capacity", 8000.0)
-        assert minimal_config.expected_competition_strength[()] != old_comp
+        new_comp = minimal_config.expected_competition_strength[()]
+        # Equilibrium metric must change with carrying capacity
+        assert new_comp != old_comp
+        assert new_comp > 0, f"competition strength should be positive, got {new_comp}"
 
     def test_unknown_param_raises(self, minimal_config):
         with pytest.raises(KeyError):
@@ -183,7 +186,9 @@ class TestConfiguratorUpdate:
         )
         old = pop.config.expected_competition_strength[()]
         pop.update().competition(carrying_capacity=5000)
-        assert pop.config.expected_competition_strength[()] != old
+        new = pop.config.expected_competition_strength[()]
+        assert new != old
+        assert new > 0, f"competition strength should be positive, got {new}"
 
     def test_update_does_not_require_build(self, species):
         """update() writes immediately, no apply() needed."""
@@ -696,5 +701,7 @@ class TestReconfigurePreset:
         # Reconfigure with different viability scaling
         cfg.reconfigure_preset(drive, viability_scaling=0.1)
         new_val = arr[0, 0, 2]
-        # After reconfigure, the value should change
+        # After reconfigure with scaling=0.1, viability should change
+        # (multiplicative mode: default 1.0 * 0.1 = 0.1 for affected genotypes)
         assert new_val != orig_val
+        assert 0.0 < new_val < orig_val, f"reconfigure should lower viability, got {new_val}"
