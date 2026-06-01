@@ -173,7 +173,7 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 
 13. [IndexRegistry Indexing Mechanism](4_index_registry.md)
 14. [PopulationState and PopulationConfig](4_population_state_config.md)
-15. [the Simulation Engine in Depth](4_simulator.md)
+15. [the Simulation Engine in Depth](simulation_kernels.md)
 16. [Numba Optimization Guide](4_numba_optimization.md)
 17. [Observation History Recording Implementation](observation_impl.md)
 

@@ -13,7 +13,7 @@ This document describes how to use and create genetic presets, including gene dr
 ## Applying Presets in the Builder
 
 ```python
-pop = (DiscreteGenerationPopulationBuilder(species)
+pop = (nt.DiscreteGenerationPopulation.setup(species)
        .setup(name="TestPop")
        .presets(preset1, preset2)  # multiple presets can be applied
        .build())
@@ -189,7 +189,6 @@ class MyCustomPreset(GeneticPreset):
 ```python
 from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
 from natal.gamete_allele_conversion import GameteConversionRuleSet
-from natal.population_builder import AgeStructuredPopulationBuilder
 
 class PointMutation(GeneticPreset):
     """Simple point mutation: WT mutates to Mutant at a certain frequency"""
@@ -215,7 +214,7 @@ species = Species.from_dict("TestSpecies", {
 
 mutation = PointMutation(mutation_rate=1e-5)
 
-pop = (AgeStructuredPopulationBuilder(species)
+pop = (nt.AgeStructuredPopulation.setup(species)
        .setup(name="MutationTest", stochastic=False)
        .age_structure(n_ages=5)
        .initial_state({"female": {"WT|WT": [0, 100, 100, 100, 100]}})
@@ -280,7 +279,6 @@ class ConditionalMutation(GeneticPreset):
 from natal.genetic_presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 from natal.zygote_allele_conversion import ZygoteConversionRuleSet
-from natal.population_builder import AgeStructuredPopulationBuilder
 
 class ComplexDrive(GeneticPreset):
     """Complex gene drive with multiple stages of conversion"""
@@ -336,7 +334,7 @@ species = Species.from_dict("DriveSpecies", {
 
 complex_drive = ComplexDrive()
 
-pop = (AgeStructuredPopulationBuilder(species)
+pop = (nt.AgeStructuredPopulation.setup(species)
        .setup(name="ComplexDrivePop", stochastic=False)
        .age_structure(n_ages=8)
        .initial_state({
@@ -445,7 +443,7 @@ selection = SelectionPreset(target_allele="Deleterious", cost=0.1)
 population.apply_preset(mutation, drive, selection)
 
 # Or in the builder
-pop = (DiscreteGenerationPopulationBuilder(species)
+pop = (nt.DiscreteGenerationPopulation.setup(species)
        .setup(name="ComplexModel")
        .presets(mutation, drive, selection)
        .build())

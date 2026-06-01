@@ -161,21 +161,21 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 > This section introduces advanced features of NATAL Core, including spatial simulation and more custom configuration.
 
 9. [Spatial Simulation Guide](3_spatial_simulation.md)
-10. [Designing Your Own Presets](3_custom_presets.md)
-11. [Modifier Mechanism](3_modifiers.md)
-12. [Advanced Hook Tutorial](3_advanced_hooks.md)
+10. [Runtime Parameter Modification](3_runtime_modification.md)
+11. [Designing Your Own Presets](3_custom_presets.md)
+12. [Modifier Mechanism](3_modifiers.md)
+13. [Advanced Hook Tutorial](3_advanced_hooks.md)
 
 ### Part 4: Internal Implementation
 
 > This section introduces the underlying implementation mechanisms of NATAL Core that are not directly user-facing, helping you understand how NATAL Core works internally.
 
-<!--TODO: numba related content can be moved forward as appropriate-->
 
-13. [IndexRegistry Indexing Mechanism](4_index_registry.md)
-14. [PopulationState and PopulationConfig](4_population_state_config.md)
-15. [the Simulation Engine in Depth](4_simulator.md)
-16. [Numba Optimization Guide](4_numba_optimization.md)
-17. [Observation History Recording Implementation](observation_impl.md)
+14. [IndexRegistry Indexing Mechanism](4_index_registry.md)
+15. [PopulationState and PopulationConfig](4_population_state_config.md)
+16. [the Simulation Engine in Depth](4_simulation_engine.md)
+17. [Numba Optimization Guide](4_numba_optimization.md)
+18. [Observation History Recording Implementation](observation_impl.md)
 
 ## API Documentation
 

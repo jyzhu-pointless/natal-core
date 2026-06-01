@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any, Sequence, cast
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT_DIR / "src" / "natal"
@@ -33,6 +34,7 @@ def extract_module_exports(module_file: Path) -> list[str]:
 
         try:
             exports = ast.literal_eval(value_node)
+            exports = cast(Sequence[Any], exports)
         except Exception:
             return []
 
@@ -44,28 +46,38 @@ def extract_module_exports(module_file: Path) -> list[str]:
 
 
 def iter_public_modules(package_dir: Path) -> list[tuple[str, list[str]]]:
-    """Collect public exports for each top-level package module."""
+    """Collect public exports for each top-level module and subpackage."""
     module_exports: list[tuple[str, list[str]]] = []
 
     for module_file in sorted(package_dir.glob("*.py")):
         if module_file.name.startswith("_") or module_file.name == "__init__.py":
             continue
-
         exports = extract_module_exports(module_file)
         if exports:
             module_exports.append((module_file.stem, exports))
+
+    # Scan subpackages: read their __init__.py __all__
+    for init_file in sorted(package_dir.glob("*/__init__.py")):
+        subpkg = init_file.parent.name
+        if subpkg.startswith("_"):
+            continue
+        exports = extract_module_exports(init_file)
+        if exports:
+            module_exports.append((subpkg, exports))
 
     return module_exports
 
 
 def format_import(module_name: str, exported_names: list[str]) -> list[str]:
     """Render a stub import statement for one module."""
-    single_line = f"from .{module_name} import {', '.join(exported_names)}"
+    names = sorted(exported_names)
+    single_line = f"from .{module_name} import {', '.join(names)}"
     if len(single_line) <= 88:
         return [single_line]
 
     lines = [f"from .{module_name} import ("]
-    lines.extend(f"    {name}," for name in exported_names)
+    for name in names:
+        lines.append(f"    {name},")
     lines.append(")")
     return lines
 
@@ -82,9 +94,7 @@ def render_stub(module_exports: list[tuple[str, list[str]]]) -> str:
         "",
     ]
 
-    for index, (module_name, exported_names) in enumerate(module_exports):
-        if index:
-            lines.append("")
+    for module_name, exported_names in module_exports:
         lines.extend(format_import(module_name, exported_names))
 
     lines.extend([
@@ -104,6 +114,15 @@ def main() -> int:
     OUTPUT_FILE.write_text(content, encoding="utf-8")
     export_count = sum(len(names) for _, names in module_exports)
     print(f"Wrote {OUTPUT_FILE.relative_to(ROOT_DIR)} with {export_count} exports from {len(module_exports)} modules.")
+
+    # Auto-fix ruff formatting on the generated stub.
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [sys.executable, "-m", "ruff", "check", "--fix", str(OUTPUT_FILE)],
+        capture_output=True,
+    )
     return 0
 
 

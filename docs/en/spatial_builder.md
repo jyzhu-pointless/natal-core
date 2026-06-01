@@ -195,8 +195,8 @@ batch_setting([10000, 5000, 5000, 8000])        # kind="scalar"
 # NumPy array
 batch_setting(np.array([10000, 5000, ...]))      # kind="array"
 
-# Spatial function: (topology, deme_idx) -> float
-batch_setting(lambda topo, i: 10000 if i < 50 else 5000)  # kind="spatial"
+# Spatial function: (flat_index) -> float or (row, col) -> float
+batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 ```
 
 All three kinds are uniformly expanded into Python lists via `expand(n_demes, topology)` at `build()` time.

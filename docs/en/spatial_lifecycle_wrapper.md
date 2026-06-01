@@ -262,10 +262,11 @@ No need to manually add `@njit` — the decorator handles it automatically:
 
 ```python
 @hook(event="early", custom=True)
-def my_hook(ind_count, tick, deme_id=-1):
-    """Automatically njit-compiled when Numba is enabled, Python fallback when disabled."""
+def my_hook(state, config, deme_id=-1):
+    """For per-deme branching in spatial models, add an optional deme_id.
+    Most hooks only need (state, config)."""
     if deme_id % 2 == 0:
-        ind_count[0, 0, 0] *= 0.5
+        state.individual_count[0, 0, 0] *= 0.5
 ```
 
 Used with `PopulationBuilder`:

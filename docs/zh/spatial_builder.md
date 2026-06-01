@@ -195,8 +195,8 @@ batch_setting([10000, 5000, 5000, 8000])        # kind="scalar"
 # NumPy 数组
 batch_setting(np.array([10000, 5000, ...]))      # kind="array"
 
-# 空间函数：(topology, deme_idx) -> float
-batch_setting(lambda topo, i: 10000 if i < 50 else 5000)  # kind="spatial"
+# 空间函数：(flat_index) -> float 或 (row, col) -> float
+batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 ```
 
 三种 kind 在 `build()` 时通过 `expand(n_demes, topology)` 统一展开为 Python 列表。

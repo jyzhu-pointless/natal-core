@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from collections.abc import Sequence
 
 import numpy as np
@@ -41,6 +42,9 @@ class _DummyDemePopulation(BasePopulation):
 
     def reset(self) -> None:
         self._tick = 0
+
+    def update(self) -> Any:  # type: ignore[no-untyped-def]
+        raise NotImplementedError
 
     @property
     def species(self) -> Species:

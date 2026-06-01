@@ -30,16 +30,16 @@ class TestPopulationBuilderInitialInjection(unittest.TestCase):
         self.species = _make_species()
 
     def test_survival_parser_supports_legacy_formats(self) -> None:
-        seq_none = PopulationConfigBuilder._resolve_survival_param([1.0, 0.5, None], 5, [0.0])
+        seq_none = PopulationConfigBuilder.resolve_age_param([1.0, 0.5, None], 5, [0.0])
         self.assertTrue(np.allclose(seq_none, np.array([1.0, 0.5, 0.5, 0.5, 0.5], dtype=np.float64)))
 
-        from_dict = PopulationConfigBuilder._resolve_survival_param({1: 0.7, 3: 0.2}, 4, [0.0])
+        from_dict = PopulationConfigBuilder.resolve_age_param({1: 0.7, 3: 0.2}, 4, [0.0])
         self.assertTrue(np.allclose(from_dict, np.array([1.0, 0.7, 1.0, 0.2], dtype=np.float64)))
 
-        from_callable = PopulationConfigBuilder._resolve_survival_param(lambda age: 1.0 - 0.1 * age, 3, [0.0])
+        from_callable = PopulationConfigBuilder.resolve_age_param(lambda age: 1.0 - 0.1 * age, 3, [0.0])
         self.assertTrue(np.allclose(from_callable, np.array([1.0, 0.9, 0.8], dtype=np.float64)))
 
-        from_scalar = PopulationConfigBuilder._resolve_survival_param(0.3, 4, [0.0])
+        from_scalar = PopulationConfigBuilder.resolve_age_param(0.3, 4, [0.0])
         self.assertTrue(np.allclose(from_scalar, np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float64)))
 
     def test_age_builder_injects_initial_count_into_config(self) -> None:

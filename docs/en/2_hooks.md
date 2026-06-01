@@ -25,6 +25,8 @@ For most users, it is recommended to use `@nt.hook` with `nt.Op.*`, registering 
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=10)
 def periodic_release():
     return [
@@ -36,6 +38,7 @@ def periodic_release():
 pop = (
     nt.AgeStructuredPopulation
     .setup(
+        species=sp,
         name="MyPop",
         stochastic=True,
         use_continuous_sampling=False
@@ -126,6 +129,8 @@ The `.hooks()` method in the chain API supports passing multiple Hook functions:
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=10)
 def release_hook():
     return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
@@ -140,7 +145,7 @@ def stop_hook():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -187,17 +192,19 @@ Therefore, users typically do not need to manually trigger Hooks; just:
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=0)
 def release():
     return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
 
 @nt.hook(event="late", priority=5)
 def stop_if_no_female():
-    return [nt.Op.stop_if_zero(sex="female", threshold=10000)]
+    return [nt.Op.stop_if_zero(sex="female")]
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -210,11 +217,15 @@ pop = (
 pop.run(n_steps=200, record_every=10)
 ```
 
+## Modifying Parameters in Hooks
+
+See the [Advanced Hook Tutorial](3_advanced_hooks.md) section on "Runtime Parameter Modification".
+
 ## Related Sections
 
+- [Runtime Parameter Modification](3_runtime_modification.md)
 - [Advanced Hook Tutorial](3_advanced_hooks.md)
+- [Configurator API Reference](../api/configurator.md)
 - [Population Initialization](2_population_initialization.md)
 - [Modifier Mechanism](3_modifiers.md)
-- [the Simulation Engine Deep Dive](4_simulation_engine.md)
-- [Numba Optimization Guide](4_numba_optimization.md)
 - [Quick Start](1_quickstart.md)

@@ -153,7 +153,7 @@ JIT 编译会带来首次运行开销，这是正常现象。
 2. 参数定稿后：恢复默认 Numba 配置，执行长程模拟。
 3. 产出报告时：同时记录“运行耗时”和“关键生物学指标”，避免只看速度。
 
-## 10. 本章小结
+## 10. 小结
 
 Numba 在 NATAL 中是“默认可用的性能加速器”，而不是用户必须手工维护的复杂组件。
 
@@ -167,7 +167,7 @@ Numba 在 NATAL 中是“默认可用的性能加速器”，而不是用户必�
 
 ## 相关章节
 
-- [模拟内核深度解析](4_simulator.md)
+- [模拟内核深度解析](4_simulation_engine.md)
 - [PopulationState 与 PopulationConfig](4_population_state_config.md)
 - [Hook 系统](2_hooks.md)
 - [快速开始](1_quickstart.md)

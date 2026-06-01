@@ -1,10 +1,10 @@
-# hookse
+# Hook DSL
 
 Domain-Specific Language for simulation hooks.
 
 ## Overview
 
-The `hooksle provides the core components for the declarative hook system.
+The hook DSL provides the core components for the declarative hook system.
 
 ## Complete Module Reference
 

@@ -2,7 +2,7 @@
 
 <!--TODO: 改为数学模型介绍，需要大量公式-->
 
-本章面向使用者说明 NATAL 的模拟执行链路：
+NATAL 的模拟执行链路：
 
 - 你在用户层调用什么；
 - 框架内部如何完成一次 tick；
@@ -121,7 +121,8 @@ pop.run_tick()
 
 ## 4. `simulator` 模块的职责
 
-`src/natal/engine/simulator.py` 主要提供“阶段级内核函数”，包括：
+`src/natal/engine/age_structured_simulator.py` 主要提供年龄结构模型的”阶段级内核函数”。
+`src/natal/engine/discrete_generation_simulator.py` 提供离散世代模型的对应函数。包括：
 
 - 年龄结构模型：`run_reproduction`、`run_survival`、`run_aging`
 - 离散世代模型：`run_discrete_reproduction`、`run_discrete_survival`、`run_discrete_aging`
@@ -223,7 +224,7 @@ state_flat, hist = pop.export_state()
 pop.import_state(state_flat, history=hist)
 ```
 
-## 11. 本章小结
+## 11. 小结
 
 可以把 NATAL 的执行机制理解为三层分工：
 

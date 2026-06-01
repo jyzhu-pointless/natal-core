@@ -1,5 +1,7 @@
 # population_builder Module
 
+> **Deprecated**: Use `Configurator` instead. See [configurator](configurator.md).
+
 High-level population construction utilities.
 
 ## Overview

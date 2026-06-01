@@ -2,7 +2,7 @@
 
 The `Population` class is the core component of NATAL Core, responsible for managing the genetic state and simulation process of the population.
 
-> **Note**: This chapter and [Population Initialization](2_population_initialization.md) cover the **panmictic (single deme, well-mixed)** population model. For building multi-deme spatial populations, configuring migration topology, or heterogeneous deme parameters, please refer to Part 3 -- [Spatial Simulation Guide](3_spatial_simulation.md).
+> **Note**: `DiscreteGenerationPopulation` and `AgeStructuredPopulation` are **panmictic (single-deme, well-mixed)** models. For multi-deme spatial populations with migration topology and heterogeneous parameters, see [Spatial Simulation Guide](3_spatial_simulation.md).
 
 ## Population Types
 
@@ -18,28 +18,51 @@ NATAL Core provides two main population types:
 
 ## Creating a Population
 
-It is recommended to create populations through the chainable API. See [Population Initialization](2_population_initialization.md) for details.
+Use the fluent chain API. The default `Configurator` path writes parameters immediately.
+See [Population Initialization](2_population_initialization.md) for details.
 
 ```python
 import natal as nt
 
-# Create an age-structured population
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
+# Discrete-generation
 pop = (
-    nt.AgeStructuredPopulation.setup(species)
-    .name("MyExperiment")
-    .age_structure(n_ages=8)
-    .initial_state({"WT|WT": 1000})
+    nt.DiscreteGenerationPopulation.setup(sp)
+    .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+    .reproduction(eggs_per_female=50, sex_ratio=0.5)
+    .competition(carrying_capacity=10000, low_density_growth_rate=6.0)
     .build()
 )
 
-# Create a discrete generation population
+# Age-structured
 pop = (
-    nt.DiscreteGenerationPopulation.setup(species)
-    .name("DiscreteExp")
-    .initial_state({"WT|WT": 500})
+    nt.AgeStructuredPopulation.setup(sp, legacy_path=False)
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({
+        "female": {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
+        "male":   {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
+    })
+    .survival(female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
+              male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0])
+    .reproduction(eggs_per_female=100,
+                  female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0])
+    .competition(carrying_capacity=5000, low_density_growth_rate=6.0,
+                 juvenile_growth_mode="logistic")
     .build()
 )
 ```
+
+### Runtime Parameter Modification
+
+All parameters can be changed during simulation without rebuilding:
+
+```python
+pop.update().competition(carrying_capacity=5000)
+pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+```
+
+See [Runtime Parameter Modification](3_runtime_modification.md) for details.
 
 ## Running Simulations
 
@@ -125,10 +148,6 @@ full_history = pop.output_history()
 print("Number of history records:", len(full_history["snapshots"]))
 print("Last step data:", full_history["snapshots"][-1])
 
-# Get history at a specific tick
-history_at_tick_100 = pop.output_history(tick=100)
-print("State at tick 100:", history_at_tick_100)
-
 # Get list of recorded time steps
 ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
 print("Recorded ticks:", ticks)
@@ -153,13 +172,9 @@ results = pop.run(n_steps=100, record_every=5)
 current_state = pop.output_current_state()
 print("Current state:", current_state)
 
-# Get readable dictionary format
-readable_state = pop.output_current_state(as_dict=True)
-print("Readable state:", readable_state)
-
-# Get JSON format (for transport and storage)
-json_state = pop.output_current_state(as_json=True)
-print("JSON state:", json_state[:200])  # Show first 200 characters
+# Include zero-count groups in output
+detailed_state = pop.output_current_state(include_zero_counts=True)
+print("Detailed state:", detailed_state)
 ```
 
 ### Integration with Observation Rules

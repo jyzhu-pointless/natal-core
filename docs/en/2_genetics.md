@@ -472,7 +472,7 @@ print(f"Genotype: {gt_back}")
 
 # Use in numpy arrays
 individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_genotypes)
-female_count_of_gt = individual_count[1, :, gt_idx]  # Female count across all ages for a genotype
+female_count_of_gt = individual_count[0, :, gt_idx]  # Female count across all ages for a genotype
 ```
 
 > For more details on IndexRegistry, see [IndexRegistry Indexing Mechanism](4_index_registry.md)

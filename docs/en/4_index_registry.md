@@ -53,18 +53,19 @@ class IndexRegistry:
 
 **Important**: `IndexRegistry` is a low-level data table; users typically do not need to call its methods directly. When accessing genotypes, haploid genotypes, or gamete labels, users should use the following high-level interfaces:
 
-### Direct String Access
+### Access via Index
 ```python
-# Operate directly with strings without worrying about underlying indices
-pop.state.individual_count[Sex.FEMALE, 3, "A1|A2"]
+# Look up the genotype index via IndexRegistry, then access
+idx = pop.index_registry.genotype_to_index["A1|A2"]
+pop.state.individual_count[0, 3, idx]
 ```
 
-### Pattern Matching with Pattern
+### Pattern Matching with GenotypeSelector
 ```python
-# Use Pattern for pattern-based operations
-from natal.pattern import Pattern
-pattern = Pattern("A1|*")
-# Match all genotypes containing A1
+# Use GenotypeSelector for pattern-based operations
+from natal.genetic_patterns import GenotypeSelector
+selector = GenotypeSelector("A1|*", pop.index_registry)
+indices = selector.select()  # Returns matching integer index array
 ```
 
 ## Internal Framework Usage

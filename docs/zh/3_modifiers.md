@@ -49,7 +49,7 @@ Modifier 的作用就是对这两类映射进行有控制的改写。
 在用户实践中，推荐在 Builder 阶段统一注册 Modifier：
 
 ```python
-from natal.population_builder import AgeStructuredPopulationBuilder
+import natal as nt
 
 
 def my_gamete_modifier(pop):
@@ -62,11 +62,11 @@ def my_gamete_modifier(pop):
 
 
 pop = (
-    AgeStructuredPopulationBuilder(species)
-    .setup(name="MyPop")
+    nt.AgeStructuredPopulation
+    .setup(species=species)
     .age_structure(n_ages=8)
-    .initial_state({...})
-    .modifiers(gamete_modifiers=[(None, "drive", my_gamete_modifier)])
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
     .build()
 )
 ```
@@ -150,10 +150,10 @@ def ci_modifier(pop):
 ### 6.1 配置标签
 
 ```python
-pop = AgeStructuredPopulation(
-    ...,
-    gamete_labels=["default", "Cas9_deposited"],
-)
+# 配子标签通过在 Species 上设置 gamete_labels 来定义
+species.gamete_labels = ["default", "Cas9_deposited"]
+# 然后正常构建（标签自动生效）
+pop = nt.AgeStructuredPopulation.setup(species).build()
 ```
 
 ## 7. 注册方式与优先级
@@ -161,8 +161,8 @@ pop = AgeStructuredPopulation(
 ### 7.1 动态注册
 
 ```python
-pop.set_gamete_modifier(my_gamete_modifier, hook_name="drive")
-pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
+pop.set_gamete_modifier(my_gamete_modifier, modifier_name="drive")
+pop.set_zygote_modifier(embryo_rescue_modifier, modifier_name="rescue")
 ```
 
 ### 7.2 优先级
@@ -170,8 +170,8 @@ pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
 当多个 Modifier 同时作用时，会按优先级顺序执行。
 
 ```python
-pop.set_gamete_modifier(base_mod, priority=1, hook_name="base")
-pop.set_gamete_modifier(drive_mod, priority=2, hook_name="drive")
+pop.set_gamete_modifier(base_mod, modifier_id=1, modifier_name="base")
+pop.set_gamete_modifier(drive_mod, modifier_id=2, modifier_name="drive")
 ```
 
 实践上，建议把“基础规则”放在较低优先级，把“覆盖/修正规则”放在较高优先级。
@@ -193,7 +193,7 @@ pop.set_gamete_modifier(drive_mod, priority=2, hook_name="drive")
 # 5) 最后扩展到完整参数扫描
 ```
 
-## 10. 本章小结
+## 10. 小结
 
 Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
 
@@ -208,5 +208,5 @@ Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
 
 - [遗传预设系统](2_genetic_presets.md)
 - [Hook 系统](2_hooks.md)
-- [模拟内核深度解析](4_simulator.md)
+- [模拟内核深度解析](4_simulation_engine.md)
 - [PopulationState 与 PopulationConfig](4_population_state_config.md)

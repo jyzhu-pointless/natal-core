@@ -159,6 +159,6 @@ class ConditionalMutation(GeneticPreset):
 3. 验证基因型字符串表示
 4. 对比预期和实际的基因型集合
 
-## 本章小结
+## 小结
 
 通过 `genotype_filter`，你可以精确控制转换规则的作用范围。下一章将学习如何将这些规则封装为可复用的 Preset。

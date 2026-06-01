@@ -1,11 +1,11 @@
 # 设计自己的 Preset（3）：封装、验证与发布前检查
 
-本章是"设计自己的 Preset"主线的最后一章。在前两章中，你已经完成了：
+在前两章中，你已经完成了：
 
 1. 规则定义（Gamete 与 Zygote 转换）
 2. 规则生效范围的精细化控制
 
-本章将学习如何把这些内容封装为**可复用 Preset**，进行充分验证，最后发布使用。
+下面将这些内容封装为**可复用 Preset**，进行充分验证，最后发布使用。
 
 ## 封装成 Preset 的价值
 
@@ -59,10 +59,10 @@ class DrivePreset(GeneticPreset):
 
 ```python
 pop = (
-    AgeStructuredPopulationBuilder(species)
-    .setup(name="DriveExperiment", stochastic=True)
+    nt.AgeStructuredPopulation
+    .setup(species=species, name="DriveExperiment", stochastic=True)
     .age_structure(n_ages=8)
-    .initial_state({...})
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -182,7 +182,7 @@ class DebugPreset(GeneticPreset):
 - [ ] 与现有系统兼容性测试
 - [ ] 性能基准测试
 
-## 本章小结
+## 小结
 
 🎉 恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 

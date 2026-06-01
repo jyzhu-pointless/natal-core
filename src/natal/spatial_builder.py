@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -36,17 +37,20 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.age_structured_population import AgeStructuredPopulation
+from natal.configurator import (
+    AgeStructuredConfigurator,
+    Configurator,
+    DiscreteConfigurator,
+)
 from natal.discrete_generation_population import DiscreteGenerationPopulation
-from natal.discrete_population_config import DiscretePopulationConfig
 from natal.genetic_structures import Species
 from natal.observation import GroupsInput
-from natal.population_builder import (
-    AgeStructuredPopulationBuilder,
-    DiscreteGenerationPopulationBuilder,
-)
-from natal.population_config import PopulationConfig
+from natal.population_config import DiscretePopulationConfig, PopulationConfig
 from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import GridTopology
+
+if TYPE_CHECKING:
+    from natal.genetic_presets import GeneticPreset
 
 __all__ = [
     "BatchSetting",
@@ -56,7 +60,6 @@ __all__ = [
 
 # Type aliases for population and builder types used throughout.
 _PopulationInstance = Union[AgeStructuredPopulation, DiscreteGenerationPopulation]
-_TemplateBuilder = Union[AgeStructuredPopulationBuilder, DiscreteGenerationPopulationBuilder]
 _HookItem = Union[
     Callable[..., object],
     Dict[str, List[Tuple[Callable[..., object], Optional[str], Optional[int]]]],
@@ -349,20 +352,10 @@ def _clone_deme(
 # The output array replaces the named config field.
 _ARRAY_KWARGS: frozenset[str] = frozenset({"individual_count", "sperm_storage"})
 
-# Builder kwargs that map to *multiple* config fields (handled specially).
-# Each value is (base_field, scaled_field) — both are written with
-# population_scale applied to scaled_field.
-_KWARG_MULTI_FIELD: dict[str, tuple[str, str]] = {
-    "carrying_capacity": ("base_carrying_capacity", "carrying_capacity"),
-    "age_1_carrying_capacity": ("base_carrying_capacity", "carrying_capacity"),
-    "old_juvenile_carrying_capacity": ("base_carrying_capacity", "carrying_capacity"),
-}
-
 # Builder kwarg → config field renames.
 # Kwargs not listed here are tried directly with ``hasattr(base_config, name)``.
 _KWARG_RENAMES: dict[str, str] = {
     "eggs_per_female": "expected_eggs_per_female",
-    "expected_num_adult_females": "base_expected_num_adult_females",
 }
 
 # Builder kwargs that affect equilibrium metrics.
@@ -374,6 +367,12 @@ _EQUILIBRIUM_SENSITIVE_KWARGS: frozenset[str] = frozenset({
 })
 
 
+def _is_0d_field(config: PopulationConfig | DiscretePopulationConfig, name: str) -> bool:
+    """Return True if the config field *name* is a 0-d ndarray."""
+    val = getattr(config, name, None)
+    return isinstance(val, np.ndarray) and val.ndim == 0
+
+
 # ---------------------------------------------------------------------------
 # SpatialBuilder
 # ---------------------------------------------------------------------------
@@ -381,9 +380,8 @@ _EQUILIBRIUM_SENSITIVE_KWARGS: frozenset[str] = frozenset({
 class SpatialBuilder:
     """Fluent builder for ``SpatialPopulation``.
 
-    Wraps a single-deme population builder (``AgeStructuredPopulationBuilder``
-    or ``DiscreteGenerationPopulationBuilder``) as a template. All chainable
-    configuration methods delegate to the template builder and return ``self``.
+    Wraps a single-deme ``Configurator`` as a template. All chainable
+    configuration methods delegate to the template and return ``self``.
 
     Spatial-specific parameters (topology, migration, adjacency) are stored
     directly and forwarded to ``SpatialPopulation`` at build time.
@@ -409,11 +407,13 @@ class SpatialBuilder:
         self._observation_groups: Optional[GroupsInput] = None
         self._observation_collapse_age: bool = False
 
-        # Create the template single-deme builder.
+        # Create the template configurator (new path).
         if pop_type == "age_structured":
-            self._template: _TemplateBuilder = AgeStructuredPopulationBuilder(species)
+            self._template: DiscreteConfigurator | AgeStructuredConfigurator = \
+                Configurator.for_age_structured(species)
         else:
-            self._template: _TemplateBuilder = DiscreteGenerationPopulationBuilder(species)
+            self._template: DiscreteConfigurator | AgeStructuredConfigurator = \
+                Configurator.for_discrete(species)
 
         # Accumulated batch settings: param_name -> BatchSetting.
         self._batch_settings: Dict[str, BatchSetting] = {}
@@ -569,7 +569,7 @@ class SpatialBuilder:
         self,
         n_ages: int = 8,
         new_adult_age: int = 2,
-        generation_time: Optional[int] = None,
+        generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
     ) -> SpatialBuilder:
         """Configure age structure (age-structured models only).
@@ -619,7 +619,7 @@ class SpatialBuilder:
         # Age-structured params
         female_age_based_survival_rates: Optional[Any] = None,
         male_age_based_survival_rates: Optional[Any] = None,
-        generation_time: Optional[int] = None,
+        generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Any] = None,
         # Discrete-generation params
         female_age0_survival: Optional[float] = None,
@@ -780,7 +780,7 @@ class SpatialBuilder:
                 },
             )
 
-    def presets(self, *preset_list: object) -> SpatialBuilder:
+    def presets(self, *preset_list: GeneticPreset) -> SpatialBuilder:
         """Add gene-drive presets (applied during build).
 
         Each positional argument may be a ``BatchSetting`` of preset objects,
@@ -805,7 +805,9 @@ class SpatialBuilder:
                 concrete_args.append(item)
 
         self._replay_log.append(("presets", {"preset_list": preset_list}))
-        self._template.presets(*concrete_args)
+        # concrete_args contains GeneticPreset instances resolved from potential
+        # BatchSetting wrappers; cast needed because first_value() returns object.
+        self._template.presets(*cast('list[GeneticPreset]', concrete_args))
         return self
 
     def fitness(
@@ -967,26 +969,31 @@ class SpatialBuilder:
     def get_params(self) -> dict[str, object]:
         """Return all registered parameter values.
 
-        Merges the template builder's values with spatial-specific params.
+        Merges spatial-specific params with values read from the template config.
         """
-        params = dict(self._template.get_params())
-        params.update(self._param_values)
+        from natal.parameters import ALL_PARAMETERS
+
+        params = dict(self._param_values)
+        # Read scalar config values through ParamDescriptor registry
+        for key, desc in ALL_PARAMETERS.items():
+            if desc.config_field is None or desc.is_tensor:
+                continue
+            field: object = getattr(self._template.config, desc.config_field, None)
+            if field is None:
+                continue
+            val: object
+            if desc.config_path and isinstance(field, np.ndarray):
+                val = cast(object, field[desc.config_path])
+            elif isinstance(field, np.ndarray) and field.ndim == 0:
+                val = cast(object, field[()])
+            else:
+                val = field  # pyright: ignore[reportUnknownVariableType] — getattr returns unknowable types
+            params[key] = val
         return params
 
     def get_param(self, domain: str, name: str) -> object | None:
-        """Look up a single registered parameter value.
-
-        Args:
-            domain: Parameter domain (e.g. ``"migration"``).
-            name: Parameter name (e.g. ``"migration_rate"``).
-
-        Returns:
-            The stored value, or ``None`` if not registered.
-        """
-        key = f"{domain}.{name}"
-        if key in self._param_values:
-            return self._param_values[key]
-        return self._template.get_params().get(key)
+        """Look up a single registered parameter value."""
+        return self.get_params().get(f"{domain}.{name}")
 
     # ------------------------------------------------------------------
     # Build
@@ -1033,7 +1040,7 @@ class SpatialBuilder:
 
     def _build_homogeneous(self) -> SpatialPopulation:
         """Phase 1a: Build one template deme, clone N-1 times."""
-        template = self._template.build()
+        template = self._template.build(name=self._spatial_name)
         tpl_config = template.export_config()
 
         demes: List[_PopulationInstance] = [template]
@@ -1230,8 +1237,6 @@ class SpatialBuilder:
         for name in sig_map:
             if name in _ARRAY_KWARGS:
                 continue
-            if name in _KWARG_MULTI_FIELD:
-                continue
             if name in _KWARG_RENAMES:
                 continue
             # Dynamic: try direct field name match on the config object
@@ -1307,7 +1312,6 @@ class SpatialBuilder:
                         species=species,
                         distribution=val,
                     )
-                array *= float(base_config.population_scale)
                 replace_kwargs["initial_individual_count"] = array
                 continue
 
@@ -1319,23 +1323,16 @@ class SpatialBuilder:
                         n_ages=int(base_config.n_ages),
                         new_adult_age=int(base_config.new_adult_age),
                     )
-                    array *= float(base_config.population_scale)
                     replace_kwargs["initial_sperm_storage"] = array
                 continue
 
-            # --- 2. multi-field: carrying_capacity variants ---
-            multi = _KWARG_MULTI_FIELD.get(kwarg)
-            if multi is not None:
-                base_field, scaled_field = multi
-                replace_kwargs[base_field] = float(val)
-                replace_kwargs[scaled_field] = float(val) * float(base_config.population_scale)
-                if kwarg in _EQUILIBRIUM_SENSITIVE_KWARGS:
-                    needs_equilibrium = True
-                continue
-
-            # --- 3. rename ---
+            # --- 2. rename ---
             config_field = _KWARG_RENAMES.get(kwarg, kwarg)
-            replace_kwargs[config_field] = val
+            # Wrap scalar values for 0-d ndarray config fields.
+            if _is_0d_field(base_config, config_field) and not isinstance(val, np.ndarray):
+                replace_kwargs[config_field] = np.array(float(val))
+            else:
+                replace_kwargs[config_field] = val
 
             if kwarg in _EQUILIBRIUM_SENSITIVE_KWARGS:
                 needs_equilibrium = True
@@ -1344,20 +1341,20 @@ class SpatialBuilder:
 
         if needs_equilibrium:
             new_comp, new_surv = compute_equilibrium_metrics(
-                carrying_capacity=float(variant.carrying_capacity),
-                expected_eggs_per_female=float(variant.expected_eggs_per_female),
+                carrying_capacity=variant.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
+                expected_eggs_per_female=variant.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
                 age_based_survival_rates=variant.age_based_survival_rates,
                 age_based_mating_rates=variant.age_based_mating_rates,
                 female_age_based_relative_fertility=variant.female_age_based_relative_fertility,
                 relative_competition_strength=variant.age_based_relative_competition_strength,
-                sex_ratio=float(variant.sex_ratio),
+                sex_ratio=variant.sex_ratio[()],  # pyright: ignore[reportArgumentType]
                 new_adult_age=int(variant.new_adult_age),
                 n_ages=int(variant.n_ages),
                 age_based_reproduction_rates=variant.age_based_reproduction_rates,
             )
             variant = variant._replace(
-                expected_competition_strength=float(new_comp),
-                expected_survival_rate=float(new_surv),
+                expected_competition_strength=np.array(float(new_comp)),
+                expected_survival_rate=np.array(float(new_surv)),
             )
 
         return variant
@@ -1385,14 +1382,13 @@ class SpatialBuilder:
         Returns:
             A fully-built population instance for this group.
         """
-        builder: _TemplateBuilder
         if self._pop_type == "age_structured":
-            builder = AgeStructuredPopulationBuilder(self._species)
+            template_cfg = Configurator.for_age_structured(self._species)
         else:
-            builder = DiscreteGenerationPopulationBuilder(self._species)
+            template_cfg = Configurator.for_discrete(self._species)
 
         for method_name, kwargs in self._replay_log:
-            method = getattr(builder, method_name, None)
+            method = getattr(template_cfg, method_name, None)
             if method is None:
                 continue
 
@@ -1412,8 +1408,6 @@ class SpatialBuilder:
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":
-                # Cast: dict.pop with default=() types as tuple[()], which
-                # makes enumerate yield Never elements.
                 raw_preset_list = cast(Any, resolved.pop("preset_list", ()))
                 expanded_presets: list[object] = []
                 for i, item in enumerate(raw_preset_list):
@@ -1437,4 +1431,4 @@ class SpatialBuilder:
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(**filtered)
 
-        return builder.build()
+        return template_cfg.build(name=f"{self._spatial_name}_group")

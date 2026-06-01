@@ -55,7 +55,7 @@ ruleset.add_convert(from_allele="W", to_allele="D", rate=0.5)
 ### 使用 ZygoteConversionRuleSet
 
 ```python
-from natal.gamete_allele_conversion import ZygoteConversionRuleSet
+from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -192,6 +192,6 @@ class BidirectionalMutation(GeneticPreset):
         return ruleset.to_gamete_modifier(population)
 ```
 
-## 本章小结
+## 小结
 
 你已经完成 Preset 设计的第一步：定义等位基因转换规则。下一步将学习如何控制规则的作用范围。

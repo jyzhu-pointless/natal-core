@@ -1,20 +1,19 @@
 # 种群初始化（Panmictic）
 
-种群初始化是 NATAL Core 模拟的第一步，通过链式 API 配置和构建种群。
+种群初始化是 NATAL Core 模拟的第一步，通过链式 API（`Configurator`）配置和构建种群。
 
-> **说明**：本章介绍的是 **panmictic（单 deme、均匀混合）** 种群的链式配置。如需构建多 deme 空间种群（含拓扑、迁移、`batch_setting` 异构配置），请参见 [Spatial 模拟指南](3_spatial_simulation.md)。空间种群的链式语法与本章基本一致，额外增加了 `.migration()` 方法和 `batch_setting` 支持。
+> **说明**：此文档覆盖 **panmictic（单 deme、均匀混合）** 种群的链式配置。空间种群（含拓扑、迁移、`batch_setting` 异构配置）见 [Spatial 模拟指南](3_spatial_simulation.md)。两者的链式语法一致，空间种群额外增加了 `.migration()` 方法和 `batch_setting` 支持。
 
 ## 快速开始：链式 API 配置
-
-NATAL Core 提供了简洁的链式 API 来配置种群，这是推荐的使用方式：
 
 ```python
 import natal as nt
 
-# 链式 API 配置（推荐）
+sp = nt.Species.from_dict(...)
+
+# 年龄结构化种群
 pop = (
-    nt.AgeStructuredPopulation
-    .setup(species=my_species)
+    nt.AgeStructuredPopulation.setup(sp)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 100},
@@ -28,6 +27,17 @@ pop = (
 )
 ```
 
+### 运行时修改
+
+构建完成后，参数仍可通过 `pop.update()` 随时修改——无需重建种群：
+
+```python
+pop.update().competition(carrying_capacity=5000)
+pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+```
+
+参见 [Configurator API 参考](../api/configurator.md)。
+
 ## 配置流程
 
 完整配置流程如下：
@@ -40,7 +50,7 @@ Population.setup() → 链式配置方法调用
   → reproduction → survival → aging（以及 hooks）
 ```
 
-配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulator.md)）。
+配置完成后，可以使用返回的种群对象调用 `run()` 或 `run_tick()` 方法开始模拟（参见[模拟内核深度解析](4_simulation_engine.md)）。
 
 ## 两类配置接口
 
@@ -71,8 +81,7 @@ NATAL Core 提供两种主要的种群类型：
 |---|---|---|---|---|---|
 | `n_ages` | `int` | 年龄阶段总数 | `8` | 全流程（数组维度） | 约束初始状态、存活率向量等数组长度；必须与所有年龄相关参数长度一致 |
 | `new_adult_age` | `int` | 个体进入成年阶段的年龄索引 | `2` | reproduction / survival | 建议与目标物种的生命史阶段对齐；低于此年龄的个体视为幼体 |
-| `generation_time` | `Optional[int]` | 代时标记 | `None` | 编译参数 | 仅用于建模解释；与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的 |
-| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `survival`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节） |
+| `generation_time` | `float | None` | 代时标记 | `None` | 编译参数 | 仅用于建模解释；与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的 |
 
 ### `initial_state(...)` – 初始状态
 
@@ -124,10 +133,8 @@ NATAL Core 提供两种主要的种群类型：
 |---|---|---|---|---|---|
 | `female_age_based_survival_rates` | `Optional` | 雌性按年龄的存活率。 | `None` | survival | 支持标量、序列、映射、函数等；`None` 表示使用默认曲线；取值 `[0, 1]`。 |
 | `male_age_based_survival_rates` | `Optional` | 雄性按年龄的存活率。 | `None` | survival | 同上。 |
-| `generation_time` | `Optional[int]` | 代时标记。 | `None` | 编译参数 | 与 `age_structure` 中的同名参数互斥，后设置的会覆盖先设置的。 |
-| `equilibrium_distribution` | `Optional` | 显式指定平衡分布（2, n_ages）数组。 | `None` | 竞争指标推导 | 与 `age_structure`、`competition` 中的同名参数互斥，后设置的会覆盖先设置的；age=0 值被忽略（详见 competition 章节）。 |
 
-**代码示例**（来自 `_resolve_survival_param`）：
+**代码示例**（来自 `resolve_age_param`）：
 
 ```python
 # A) None → 使用默认曲线
@@ -156,10 +163,11 @@ NATAL Core 提供两种主要的种群类型：
 | `female_age_based_mating_rates` | `Optional` | 雌性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
 | `male_age_based_mating_rates` | `Optional` | 雄性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
 | `female_age_based_relative_fertility` | `Optional` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度必须等于 `n_ages`；用于调节不同年龄雌性的产卵贡献。 |
+| `female_age_based_reproduction_rates` | `Optional` | 雌性按年龄的繁殖参与率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时默认全为 1.0。支持标量、序列、映射、函数。 |
 | `eggs_per_female` | `float` | 每只雌性的基础产卵数。 | `50.0` | reproduction | 作为种群产卵数的基准；调参时可从中性值开始。 |
 | `use_fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 表示固定产卵数，`False` 表示随机产卵。 |
 | `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
-| `use_sperm_storage` | `bool` | 是否启用精子存储机制。 | `True` | reproduction | `True` 启用，`False` 禁用（此时仅考虑当次交配）。 |
+| `use_sperm_storage` | `bool` | 精子存储始终启用（该参数为兼容性保留，无实际效果）。 | `True` | reproduction | 该参数仅用于兼容性，设置任何值均不改变行为。 |
 | `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 取值范围通常为 `(0, 1]`；值越大表示新精子替换速度越快。 |
 
 ### `competition(...)` – 竞争与密度调节
@@ -358,14 +366,15 @@ def release_drive_carriers():
 
 ### `build()` – 编译构建
 
-`build()` 方法没有参数，但有强约束：
+`build()` 接受可选的 `name`（种群名称）和 `hooks`（hook 注册表），有约束：
 
 - 必须先调用 `initial_state(...)` 设置初始状态。
 - 执行顺序为：
-  1. 构建 `PopulationConfig`
-  2. 创建种群对象
-  3. 应用 presets
-  4. 应用 fitness / modifiers / hooks
+  1. 同步 equilibrium metrics（`apply()`）
+  2. 合并 hooks
+  3. 创建 `Population` 对象
+
+> 注意：presets / modifiers / fitness 在链式调用时立即生效，不在 `build()` 时延迟执行。
 
 因此，建议把 `build()` 放在链式调用的最后。
 
@@ -423,12 +432,7 @@ def release_drive_carriers():
 |---|---|---|---|---|---|
 | `female_age0_survival` | `float` | 雌性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
 | `male_age0_survival` | `float` | 雄性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
-| `adult_survival` | `float` | 成体在代际之间的存活率。 | `0.0` | survival / aging 边界 | 取值范围 `[0, 1]`；设为 `0` 可以近似严格的非重叠世代，较高的值允许成体跨代存活。 |
-
-建模建议：
-
-- 这三个概率最好都限制在 `[0, 1]` 之间。
-- `adult_survival=0.0` 常用于严格离散世代的模型。
+| `adult_survival` | `float` | 成体在世代间的存活率。 | `0.0` | survival / aging 边界 | 取值范围 `[0, 1]`；设为 `0` 表示严格的非重叠世代，较高的值允许成体跨世代存活。 |
 
 ### `competition(...)`
 
@@ -475,28 +479,19 @@ def release_drive_carriers():
 
 ## 实现原理
 
-链式 API 的底层通过一个 Builder 对象来管理所有配置。配置的生效顺序是：
+链式 API 的底层通过 `Configurator` 对象管理配置。每个链式方法立即写入 `PopulationConfig` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
 
-1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数
-2. **状态配置**：`initial_state()` 设置初始种群状态
-3. **动力学配置**：`survival()`、`reproduction()`、`competition()` 设置种群动力学参数
-4. **高级配置**：`hooks()`、`fitness()`、`modifiers()` 设置高级功能
-5. **最终构建**：`build()` 编译所有配置并创建种群对象
+1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数和维度
+2. **状态配置**：`initial_state()` 解析字典为 3-D 数组写入 config
+3. **动力学配置**：`survival()`、`reproduction()`、`competition()` 写入 per-age 数组和 0-d 标量
+4. **高级配置**：`presets()`、`fitness()`、`modifiers()` 立即写入 config（非延迟）
+5. **最终构建**：`build()` 执行 equilibrium sync 并创建 `Population` 对象
 
-### 工作机制详解
+旧 `Builder` 类（`DiscreteGenerationPopulationBuilder` / `AgeStructuredPopulationBuilder`）仍可通过 `setup(legacy_path=True)` 使用。新代码推荐默认的 `Configurator` 路径。
 
-链式 API 的工作机制基于以下设计原则：
+## 小结
 
-1. **类方法启动**：`setup()` 是一个类方法，通过类名直接调用，返回一个配置对象实例
-2. **链式调用**：每个配置方法都返回配置对象本身，支持连续调用
-3. **配置验证**：在 `build()` 时统一验证所有必要参数，确保配置完整性
-4. **配置编译**：将链式配置转换为底层的 `PopulationConfig` 和 `PopulationState` 对象
-
-这种设计使得配置过程既直观又灵活，同时保持了底层的高性能。
-
-## 本章小结
-
-种群初始化通过链式 API 提供了一种简洁、直观的配置方式，将种群的参数组织成可分类、可链式配置的流程，并在构建时注册到底层 `PopulationConfig` 中，以此实现高层易用性和底层高性能的统一。
+链式 API（`Configurator`）将种群参数组织为可链式配置的流程。每个方法立即写入 `PopulationConfig`，`build()` 执行 sync 并创建 `Population` 对象。同一 API 同时服务于构建时和运行时（`pop.update()`）。
 
 
 ## 相关章节
@@ -504,7 +499,7 @@ def release_drive_carriers():
 - [Hook 系统](2_hooks.md) - 钩子函数的详细使用方法
 - [基因型模式匹配](2_genotype_patterns.md) - 基因型匹配规则详解
 - [PopulationState & PopulationConfig：编译与配置](4_population_state_config.md) - 底层配置对象详解
-- [模拟内核深度解析](4_simulator.md) - 模拟执行流程和算法实现
+- [模拟内核深度解析](4_simulation_engine.md) - 模拟执行流程和算法实现
 
 ***
 

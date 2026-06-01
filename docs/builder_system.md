@@ -1,16 +1,19 @@
-# Builder System Explained (Complete Parameter Reference + Simulation Flow Mapping)
+# Builder / Configurator System Explained
 
-This chapter aims to explain Builder thoroughly:
+> **Configurator is the primary API since vNEXT.**  ``pop.update()`` for runtime
+> changes, model-specific ``DiscreteConfigurator`` / ``AgeStructuredConfigurator``
+> with narrowed parameter signatures.  See [Configurator API](../api/configurator.md).
+>
+> This chapter documents the full parameter reference — applicable to **both**
+> Configurator and the legacy Builder.  The legacy ``PopulationBuilder`` classes
+> are still available via ``setup(legacy_path=True)``.
 
-1. What each public parameter is and its default value.
-2. Which stage of the simulation the parameter affects.
-3. How to configure following the “first make it run, then fine‑tune” principle.
+---
 
-If you read only one chapter about Builder, read this one.
+## 1. Role in the Simulation
 
-## 1. Where Builder Fits in the Simulation
-
-Builder’s responsibility is not to run the simulation directly, but to compile high‑level inputs into `PopulationConfig` and `PopulationState`, then hand them over to the simulation execution flow.
+The Builder / Configurator translates high-level inputs into `PopulationConfig`
+and `PopulationState`, which the simulation engine consumes at each tick.
 
 The flow can be simplified as:
 
@@ -25,7 +28,7 @@ Builder chained configuration
 Related chapters:
 
 - [PopulationState & PopulationConfig: Compilation and Configuration](population_state_config.md)
-- [Deep Dive into the Simulation Engine](simulator.md)
+- [Deep Dive into the Simulation Engine](simulation_kernels.md)
 
 ## 2. Two Types of Builder
 
@@ -169,15 +172,117 @@ Format and length requirements (source behaviour):
 
 **Carrying capacity resolution logic:**
 
-When neither `age_1_carrying_capacity` nor `old_juvenile_carrying_capacity` are specified, `expected_num_adult_females` is used to infer the carrying capacity through equilibrium distribution analysis:
+K resolution priority:
+1. `age_1_carrying_capacity` (highest)
+2. `old_juvenile_carrying_capacity` (legacy alias)
+3. Total individuals at age 1 in `initial_state()`
+4. None of the above → raises `ValueError`
 
-1. If `age_1_carrying_capacity` or `old_juvenile_carrying_capacity` (legacy alias) is provided, that value is used (highest priority).
-2. If `expected_num_adult_females` is provided, the system distributes this count across age classes using age-based survival rates.
-3. Based on the equilibrium age distribution, it computes the expected age-0 egg production from adult females using mating rates and fertility weights.
-4. The inferred carrying capacity (K at age=1) is computed from the age-0 production and base survival rate from age-0 to age-1.
-5. If no carrying capacity source is available, the system attempts to infer from initial state (`initial_state()`) if provided.
+Once K is resolved, it is stored as a scalar in `config.carrying_capacity` and
+never back-computed.
 
-This approach ensures that the carrying capacity is consistent with the equilibrium population distribution, rather than using a naive scaling factor.
+**How `equilibrium_distribution` and `expected_num_adult_females` work:**
+
+They do **not change K**. They change two control parameters in the simulation
+engine: `expected_competition_strength` and `expected_survival_rate`. These
+determine the strength and direction of density-dependent regulation.
+
+The full computation chain (source: `population_builder.py:364-433`
+→ `population_config.py:608-621` → `age_structured.py:966-1086`):
+
+---
+
+#### ① Build equilibrium distribution
+
+Use `equilibrium_distribution` if provided. Otherwise auto-build from K and
+survival rates:
+
+```
+dist[0, 1] = K × sex_ratio           # age-1 females
+dist[1, 1] = K × (1 - sex_ratio)     # age-1 males
+for age in 2 .. n_ages-1:
+    dist[0, age] = dist[0, age-1] × survival[0, age-1]
+    dist[1, age] = dist[1, age-1] × survival[1, age-1]
+dist[:, 0] = 0  # juveniles excluded from adult distribution
+```
+
+#### ② Compute expected egg production `produced_age_0`
+
+From adult females in the distribution:
+
+```
+produced_age_0 = Σ over adult ages:
+    dist[0, age] × p_mating[age] × rel_fertility[age] × eggs_per_female
+```
+
+#### ③ Compute expected competition strength
+
+Weighted individual count: juveniles (egg proxy) have high competition weight,
+adults have low weight:
+
+```
+expected_competition_strength = produced_age_0 × rel_comp[0]
+    + Σ over adult ages: dist[:, age].sum() × rel_comp[age]
+```
+
+#### ④ Compute expected survival rate
+
+How many eggs must survive to maintain K age-1 individuals each tick:
+
+```
+s_0_avg = sex_ratio × survival[0,0] + (1 - sex_ratio) × survival[1,0]
+survival_eggs = external_expected_eggs (from expected_num_adult_females)
+                or produced_age_0 (default)
+expected_survival_rate = total_age_1 / (survival_eggs × s_0_avg)
+```
+
+#### ⑤ Use in the simulation loop (per tick)
+
+```python
+competition_ratio = actual_competition / expected_competition_strength
+# Logistic:
+actual_growth_rate = r - competition_ratio × (r - 1)
+# Beverton-Holt:
+actual_growth_rate = r / (competition_ratio × (r - 1) + 1)
+scaling_factor = actual_growth_rate × expected_survival_rate
+```
+
+`scaling_factor` is applied to the egg → age-1 recruitment step. Actual competition
+< expected → `scaling_factor` rises → more eggs survive → population grows.
+Actual competition > expected → the opposite. At equilibrium, population
+stabilizes at K.
+
+**Why `equilibrium_distribution` matters:**
+
+A user-provided distribution can model scenarios where "distribution and K
+disagree." For example, K=1000 but distribution has only 50 adults — then
+`expected_competition_strength` is computed from 50 adults' egg production (low
+competition pressure), but `total_age_1` still comes from the distribution.
+This produces unusually high or low `expected_survival_rate`, decoupling the
+simulation from K's anchoring. The ChamperModel tests validate parameter
+independence using this mechanism.
+
+#### Numerical Example
+
+Parameters: `n_ages=3, K=1000, sex_ratio=0.5, eggs_per_female=20, r=6.0`
+Survival `[1.0, 0.9, 0.8]`, mating `[0, 1, 1]`, rel fertility `[0, 1, 0.8]`,
+competition weights `[1.0, 0.1, 0.1]`
+
+```
+Equilibrium dist:  female [0, 500, 450]   male [0, 500, 450]
+Expected eggs:     500×1×1×20 + 450×1×0.8×20 = 10000 + 7200 = 17200
+Expected comp:     17200×1.0 + (500+500)×0.1 + (450+450)×0.1
+                   = 17200 + 100 + 90 = 17390
+Expected survival: 1000 / (17200 × 1.0) = 5.8%
+
+Per tick:
+  actual_competition = current weighted individual count
+  competition_ratio = actual / 17390
+  scaling_factor = (6.0 - competition_ratio×5.0) × 0.058
+  actual = 17390 → scaling_factor = 0.058 → stable
+  actual < 17390 → scaling_factor > 0.058 → growth
+  actual > 17390 → scaling_factor < 0.058 → decline
+```
 
 ### 3.7 `presets(...)`
 

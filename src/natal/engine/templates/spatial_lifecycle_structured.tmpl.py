@@ -85,8 +85,10 @@ def TICK_FN_NAME(
         ind = ind_count_all[d].copy()
         sperm = sperm_store_all[d].copy()
 
-        state = PopulationState(n_tick=tick, individual_count=ind, sperm_storage=sperm)
-        (ind, sperm, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
+        (ind, sperm, _next_tick), result = _run_deme_tick(
+            PopulationState(n_tick=tick, individual_count=ind, sperm_storage=sperm),
+            cfg, registry, d,
+        )
 
         if result != RESULT_CONTINUE:
             stopped[d] = True

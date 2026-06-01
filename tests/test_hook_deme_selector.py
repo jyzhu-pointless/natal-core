@@ -30,6 +30,10 @@ class _DummyPop:
         self.state = _DummyState()
         self._config = type("Cfg", (), {"is_stochastic": False, "use_continuous_sampling": False})()
 
+    @property
+    def config(self):
+        return self._config
+
 
 def _empty_program() -> HookProgram:
     return HookProgram(

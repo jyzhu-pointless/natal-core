@@ -121,7 +121,8 @@ Additionally, the reproduction stage is affected by `use_fixed_egg_count`:
 
 ## 4. Responsibilities of the `simulation_engine` Module
 
-`src/natal/engine/simulation_engine.py` primarily provides "stage-level kernel functions," including:
+`src/natal/engine/age_structured_simulator.py` primarily provides "stage-level kernel functions" for the age-structured model.
+`src/natal/engine/discrete_generation_simulator.py` provides the corresponding functions for the discrete-generation model. These include:
 
 - Age-structured model: `run_reproduction`, `run_survival`, `run_aging`
 - Discrete-generation model: `run_discrete_reproduction`, `run_discrete_survival`, `run_discrete_aging`
@@ -222,7 +223,7 @@ pop.import_state(state_flat, history=hist)
 
 ## 11. Chapter Summary
 
-The execution mechanism of NATAL can be understood as a three-layer分工:
+The execution mechanism of NATAL can be understood as a three-layer division of labor:
 
 - Population layer: Provides a stable user API and lifecycle management.
 - Runner/Hook layer: Organizes stage flows and event logic into a unified execution chain.

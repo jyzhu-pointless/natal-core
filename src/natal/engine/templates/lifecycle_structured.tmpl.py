@@ -29,14 +29,13 @@ from natal.population_state import PopulationState
 
 
 def _default_hook(
-    _ind_count: np.ndarray, _tick: int, _deme_id: int = -1,
+    _state: object, _config: object = None, _deme_id: int = -1,
 ) -> int:
     return 0
 
-# Same setattr injection mechanism as lifecycle_discrete.tmpl.py.
-_FIRST_HOOK: Callable[[np.ndarray, int, int], int] = _default_hook
-_EARLY_HOOK: Callable[[np.ndarray, int, int], int] = _default_hook
-_LATE_HOOK: Callable[[np.ndarray, int, int], int] = _default_hook
+_FIRST_HOOK: Callable[[object, object, int], int] = _default_hook
+_EARLY_HOOK: Callable[[object, object, int], int] = _default_hook
+_LATE_HOOK: Callable[[object, object, int], int] = _default_hook
 
 
 @njit_switch(cache=True)
@@ -74,7 +73,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _FIRST_HOOK(ind_count, tick, deme_id)
+    result = _FIRST_HOOK(
+        PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -87,7 +89,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _EARLY_HOOK(ind_count, tick, deme_id)
+    result = _EARLY_HOOK(
+        PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -100,7 +105,10 @@ def TICK_FN_NAME(
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
-    result = _LATE_HOOK(ind_count, tick, deme_id)
+    result = _LATE_HOOK(
+        PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+        config, deme_id,
+    )
     if result != 0:
         return (ind_count, sperm_store, tick), RESULT_STOP
 
@@ -169,10 +177,10 @@ def RUN_FN_NAME(
         history_count += 1
 
     for _ in range(n_ticks):
-        temp_state = PopulationState(
-            n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store,
+        current_state, result = TICK_FN_NAME(
+            PopulationState(n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store),
+            config, registry,
         )
-        current_state, result = TICK_FN_NAME(temp_state, config, registry)
         ind_count, sperm_store, tick = current_state
 
         if record_interval > 0 and (tick % record_interval == 0):

@@ -2,7 +2,7 @@
 
 Population initialization is the first step of NATAL Core simulation, which configures and constructs a population through a chainable API.
 
-> **Note**: This chapter covers the chainable configuration of **panmictic (single deme, well-mixed)** populations. For building multi-deme spatial populations (with topology, migration, and `batch_setting` heterogeneous configuration), please refer to the [Spatial Simulation Guide](3_spatial_simulation.md). The chainable syntax for spatial populations is essentially the same as this chapter, with the addition of a `.migration()` method and `batch_setting` support.
+> **Note**: This covers **panmictic (single-deme, well-mixed)** population configuration. For spatial populations with topology, migration, and `batch_setting`, see [Spatial Simulation Guide](3_spatial_simulation.md). Both use the same chainable syntax; spatial adds `.migration()` and `batch_setting` support.
 
 ## Quick Start: Chainable API Configuration
 
@@ -11,10 +11,12 @@ NATAL Core provides a concise chainable API for configuring populations, which i
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 # Chainable API configuration (recommended)
 pop = (
     nt.AgeStructuredPopulation
-    .setup(species=my_species)
+    .setup(species=sp)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 100},
@@ -40,7 +42,7 @@ Population.setup() → chainable configuration method calls
   → reproduction → survival → aging (and hooks)
 ```
 
-After configuration, you can use the returned population object to call `run()` or `run_tick()` methods to start the simulation (see [the Simulation Engine Deep Dive](4_simulator.md)).
+After configuration, you can use the returned population object to call `run()` or `run_tick()` methods to start the simulation (see [the Simulation Engine Deep Dive](4_simulation_engine.md)).
 
 ## Two Types of Configuration Interfaces
 
@@ -71,8 +73,7 @@ Configure the population's age structure, including the total number of age stag
 |---|---|---|---|---|---|
 | `n_ages` | `int` | Total number of age stages | `8` | Entire workflow (array dimensions) | Constrains array lengths for initial state, survival rates, etc.; must match lengths of all age-related parameters |
 | `new_adult_age` | `int` | Age index at which individuals enter the adult stage | `2` | reproduction / survival | Recommended to align with the life history stage of the target species; individuals below this age are considered juveniles |
-| `generation_time` | `Optional[int]` | Generation time marker | `None` | Compilation parameter | Used only for modeling interpretation; mutually exclusive with the same-named parameter in `age_structure`, the later one takes precedence |
-| `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Mutually exclusive with the same-named parameter in `survival` and `competition`; later one takes precedence; age=0 value is ignored (see competition section) |
+| `generation_time` | `float | None` | Generation time marker | `None` | Compilation parameter | Used only for modeling interpretation; mutually exclusive with the same-named parameter in `age_structure`, the later one takes precedence |
 
 ### `initial_state(...)` – Initial State
 
@@ -124,8 +125,6 @@ Validation rules:
 |---|---|---|---|---|---|
 | `female_age_based_survival_rates` | `Optional` | Female per-age survival rates | `None` | survival | Supports scalar, sequence, mapping, function, etc.; `None` uses default curve; range `[0, 1]` |
 | `male_age_based_survival_rates` | `Optional` | Male per-age survival rates | `None` | survival | Same as above |
-| `generation_time` | `Optional[int]` | Generation time marker | `None` | Compilation parameter | Mutually exclusive with the same-named parameter in `age_structure`; later one takes precedence |
-| `equilibrium_distribution` | `Optional` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Mutually exclusive with the same-named parameter in `age_structure` and `competition`; later one takes precedence; age=0 value is ignored (see competition section) |
 
 **Code examples** (from `_resolve_survival_param`):
 
@@ -156,10 +155,11 @@ Validation rules:
 | `female_age_based_mating_rates` | `Optional` | Female per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
 | `male_age_based_mating_rates` | `Optional` | Male per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
 | `female_age_based_relative_fertility` | `Optional` | Female per-age relative fertility weights | `None` | reproduction | Length must equal `n_ages`; used to modulate egg production contribution across ages |
+| `female_age_based_reproduction_rates` | `Optional` | Female per-age reproduction participation rates. | `None` | reproduction | Length must equal `n_ages`; defaults to all 1.0 when not set. Supports scalar, sequence, mapping, function. |
 | `eggs_per_female` | `float` | Base number of eggs per female | `50.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
 | `use_fixed_egg_count` | `bool` | Whether egg count is fixed | `False` | reproduction | `True` for fixed egg count, `False` for random egg production |
 | `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
-| `use_sperm_storage` | `bool` | Whether to enable sperm storage mechanism | `True` | reproduction | `True` enables, `False` disables (only current mating considered) |
+| `use_sperm_storage` | `bool` | Sperm storage is always enabled (this parameter is a no-op retained for compatibility). | `True` | reproduction | The parameter is accepted for compatibility but has no effect. |
 | `sperm_displacement_rate` | `float` | Rate at which new sperm replaces old sperm | `0.05` | reproduction | Typical range `(0, 1]`; larger values mean faster replacement |
 
 ### `competition(...)` – Competition and Density Regulation
@@ -358,14 +358,13 @@ Common errors:
 
 ### `build()` – Compilation Build
 
-The `build()` method takes no parameters but has strong constraints:
+The `build()` method accepts optional `name` (population name) and `hooks` (hook registrations), with constraints:
 
 - `initial_state(...)` must be called before it to set the initial state.
 - Execution order:
-  1. Build `PopulationConfig`
-  2. Create population object
-  3. Apply presets
-  4. Apply fitness / modifiers / hooks
+  1. Sync equilibrium metrics
+  2. Merge stored + passed hooks
+  3. Create Population object
 
 Therefore, it is recommended to place `build()` at the end of the chain.
 
@@ -475,35 +474,29 @@ The semantics of these methods are fully consistent with the age-structured mode
 
 ## Implementation Principles
 
-The underlying chainable API uses a Builder object to manage all configurations. The order in which configurations take effect is:
+The chainable API is powered by a `Configurator` object. Each chain method writes immediately to
+`PopulationConfig` NumPy arrays — no deferred execution, no intermediate accumulation.
 
-1. **Basic configuration**: `setup()` and `age_structure()` set basic parameters
-2. **State configuration**: `initial_state()` sets the initial population state
-3. **Dynamics configuration**: `survival()`, `reproduction()`, `competition()` set population dynamics parameters
-4. **Advanced configuration**: `hooks()`, `fitness()`, `modifiers()` set advanced features
-5. **Final build**: `build()` compiles all configurations and creates the population object
+1. **Basic config**: `setup()` and `age_structure()` set flags and dimensions
+2. **State config**: `initial_state()` resolves dicts to 3-D arrays and writes to config
+3. **Dynamics config**: `survival()`, `reproduction()`, `competition()` write per-age arrays and 0-d scalars
+4. **Advanced config**: `presets()`, `fitness()`, `modifiers()` write immediately (not deferred)
+5. **Final build**: `build()` syncs equilibrium metrics and creates the Population object
 
-### Detailed Working Mechanism
+The legacy `Builder` classes (`DiscreteGenerationPopulationBuilder` /
+`AgeStructuredPopulationBuilder`) are still available via `setup(legacy_path=True)`.
+New code should use the default `Configurator` path.
 
-The chainable API's working mechanism is based on the following design principles:
+## Summary
 
-1. **Class method startup**: `setup()` is a class method called directly on the class name, returning a configuration object instance
-2. **Chainable calls**: Each configuration method returns the configuration object itself, supporting continuous calls
-3. **Configuration validation**: At `build()` time, all required parameters are uniformly validated to ensure configuration completeness
-4. **Configuration compilation**: The chain configuration is converted into underlying `PopulationConfig` and `PopulationState` objects
-
-This design makes the configuration process both intuitive and flexible, while maintaining high performance at the underlying level.
-
-## Chapter Summary
-
-Population initialization provides a concise and intuitive configuration approach through a chainable API, organizing population parameters into a categorizable, chainable configuration workflow, and registering them into the underlying `PopulationConfig` at build time, thus achieving the unification of high-level usability and low-level high performance.
+The `Configurator` chainable API writes parameters immediately to `PopulationConfig` arrays. `build()` creates the `Population` object. The same API serves both build-time and runtime (`pop.update()`) modification.
 
 ## Related Chapters
 
 - [Hook System](2_hooks.md) - Detailed usage of hook functions
 - [Genotype Pattern Matching](2_genotype_patterns.md) - Detailed genotype matching rules
 - [PopulationState & PopulationConfig: Compilation and Configuration](4_population_state_config.md) - Detailed underlying configuration objects
-- [the Simulation Engine Deep Dive](4_simulator.md) - Simulation execution flow and algorithm implementation
+- [the Simulation Engine Deep Dive](4_simulation_engine.md) - Simulation execution flow and algorithm implementation
 
 ***
 

@@ -59,7 +59,7 @@ class DrivePreset(GeneticPreset):
 
 ```python
 pop = (
-    AgeStructuredPopulationBuilder(species)
+    nt.AgeStructuredPopulation.setup(species=species)
     .setup(name="DriveExperiment", stochastic=True)
     .age_structure(n_ages=8)
     .initial_state({...})

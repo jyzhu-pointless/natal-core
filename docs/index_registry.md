@@ -199,19 +199,20 @@ Numba Hooks must work with indices, not objects:
 from numba import njit
 
 @njit
-def my_hook(ind_count, tick):
+def my_hook(state, config):
     """
-    Numba‑compatible Hook – must use integer indices
+    Numba‑compatible Hook – must use integer indices.
+    Access individual_count via ``state.individual_count``, n_tick via ``state.n_tick``.
 
     Note: Hooks cannot access IndexRegistry at compile time,
     so you need to determine indices at the Python level and hard‑code them.
     """
-    if tick == 10:
+    if state.n_tick == 10:
         # Suppose we already know that the index of genotype A1|A2 is 5
         gt_idx = 5
 
         # Kill all females of that genotype at ages 2‑4
-        ind_count[1, 2:5, gt_idx] = 0
+        state.individual_count[0, 2:5, gt_idx] = 0  # sex=0 is female
 
     return 0  # continue
 

@@ -119,7 +119,6 @@ state = DiscretePopulationState.create(
 5. Initial distributions and scaling parameters
   - `initial_individual_count`
   - `initial_sperm_storage`
-  - `population_scale`, `base_carrying_capacity`, etc.
 
 ### 4.2 What to Pay Attention to When Using
 

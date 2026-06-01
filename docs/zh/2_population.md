@@ -2,14 +2,14 @@
 
 `Population` 类是 NATAL Core 的核心组件，负责管理种群的遗传状态和模拟过程。
 
-> **说明**：本章及 [种群初始化](2_population_initialization.md) 介绍的是 **panmictic（单 deme、均匀混合）** 种群模型。如需构建多 deme 空间种群、配置迁移拓扑或异构 deme 参数，请参见第三部分 —— [Spatial 模拟指南](3_spatial_simulation.md)。
+> **说明**：`DiscreteGenerationPopulation` 和 `AgeStructuredPopulation` 是 **panmictic（单 deme、均匀混合）** 种群模型。如需构建多 deme 空间种群、配置迁移拓扑或异构 deme 参数，参见 [Spatial 模拟指南](3_spatial_simulation.md)。
 
 ## 种群类型
 
 NATAL Core 提供两种主要的种群类型：
 
 ### 离散世代种群
-`DiscreteGenerationPopulation` 适用于世代不重叠的物种，每代完全替换，模拟过程简单高效。
+`DiscreteGenerationPopulation` 适用于世代不重叠的物种，每代完全替换，模拟过程简单高效。固定 2 个年龄：age-0（幼体）和 age-1（成体）。
 
 ### 年龄结构化种群
 `AgeStructuredPopulation` 适用于世代重叠的物种，支持年龄依赖的生存和繁殖力，可配置精子储存机制。
@@ -18,27 +18,70 @@ NATAL Core 提供两种主要的种群类型：
 
 ## 创建种群
 
-推荐通过链式 API 创建种群，具体方法参见 [种群初始化](2_population_initialization.md)。
+通过链式 API 创建种群。默认使用 `Configurator` 路径（即时写入参数），旧 `Builder` 类通过 `legacy_path=True` 访问。
 
 ```python
 import natal as nt
 
-# 创建年龄结构化种群
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
+# 离散世代种群
 pop = (
-    nt.AgeStructuredPopulation.setup(species)
-    .name("MyExperiment")
-    .age_structure(n_ages=8)
-    .initial_state({"WT|WT": 1000})
+    nt.DiscreteGenerationPopulation.setup(sp)
+    .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+    .reproduction(eggs_per_female=50, sex_ratio=0.5)
+    .competition(carrying_capacity=10000, low_density_growth_rate=6.0)
     .build()
 )
 
-# 创建离散世代种群
+# 年龄结构化种群
 pop = (
-    nt.DiscreteGenerationPopulation.setup(species)
-    .name("DiscreteExp")
-    .initial_state({"WT|WT": 500})
+    nt.AgeStructuredPopulation.setup(sp, legacy_path=False)
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({
+        "female": {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
+        "male":   {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
+    })
+    .survival(
+        female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
+        male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
+    )
+    .reproduction(
+        eggs_per_female=100,
+        female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0],
+    )
+    .competition(carrying_capacity=5000, low_density_growth_rate=6.0,
+                 juvenile_growth_mode="logistic")
     .build()
 )
+```
+
+### 运行时修改参数
+
+所有参数可在模拟运行时修改，无需重建种群：
+
+```python
+# 修改承载力
+pop.update().competition(carrying_capacity=5000)
+
+# 链式修改多个参数
+pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+
+# 自定义字段——Hook 内可通过 config.custom['name'][()] 读写
+pop.update().custom(temperature=35.0)
+```
+
+修改通过 `set_param(config, name, value)` 原地写入 0-d ndarray，立即生效。
+
+### 底层 set_param
+
+```python
+from natal.configurator import set_param
+
+# 支持全名、短名、别名
+set_param(config, "competition.carrying_capacity", 5000.0)
+set_param(config, "carrying_capacity", 5000.0)      # 短名
+set_param(config, "expected_eggs_per_female", 100.0) # 别名
 ```
 
 ## 启动模拟
@@ -125,10 +168,6 @@ full_history = pop.output_history()
 print("历史记录数量:", len(full_history["snapshots"]))
 print("最后一步数据:", full_history["snapshots"][-1])
 
-# 获取特定时间步的历史
-history_at_tick_100 = pop.output_history(tick=100)
-print("第100步的状态:", history_at_tick_100)
-
 # 获取历史记录的时间步列表
 ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
 print("记录的时间步:", ticks)
@@ -153,13 +192,9 @@ results = pop.run(n_steps=100, record_every=5)
 current_state = pop.output_current_state()
 print("当前状态:", current_state)
 
-# 获取可读的字典格式
-readable_state = pop.output_current_state(as_dict=True)
-print("可读状态:", readable_state)
-
-# 获取JSON格式（便于传输和存储）
-json_state = pop.output_current_state(as_json=True)
-print("JSON状态:", json_state[:200])  # 显示前200个字符
+# 包含零计数组的输出
+detailed_state = pop.output_current_state(include_zero_counts=True)
+print("详细状态:", detailed_state)
 ```
 
 ### 与观察规则集成

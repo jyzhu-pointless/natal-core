@@ -7,7 +7,7 @@ offspring distributions, and other population genetics operations. All
 functions are written to be shape-defensive and to integrate with the
 `PopulationState` data structures.
 """
-from typing import Annotated, Optional, Tuple
+from typing import Annotated, Any, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -263,202 +263,6 @@ def compute_offspring_probability_tensor(
     gamete_pairs = (f_exp * m_exp).reshape(n_genotypes * n_genotypes, hl * hl)
     offspring_flat = np.dot(gamete_pairs, zygote_flat)
     return offspring_flat.reshape(n_genotypes, n_genotypes, n_genotypes)
-
-
-@njit_switch(cache=True)
-def _fertilize_with_precomputed_offspring_probability(
-    sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
-    fertility_f: Annotated[NDArray[np.float64], "shape=(g,)"],
-    fertility_m: Annotated[NDArray[np.float64], "shape=(g,)"],
-    offspring_probability: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
-    average_eggs_per_wt_female: float,
-    adult_start_idx: int,
-    n_ages: int,
-    n_genotypes: int,
-    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
-    male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
-    fixed_eggs: bool = False,
-    sex_ratio: float = 0.5,
-    has_sex_chromosomes: bool = False,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
-) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
-    """Generate offspring counts using precomputed offspring probabilities.
-
-    This is the core Numba-optimized fertilization kernel. It processes all
-    mating pairs (gf, gm) across all adult ages, computes egg production,
-    samples offspring genotypes, and assigns sex based on genotype compatibility.
-
-    The function implements a complex egg-production and zygote-formation pipeline:
-    1. For each (age, gf, gm) mating pair, compute expected eggs via Poisson sampling
-    2. Apply viability filtering if zygote fitness is incomplete
-    3. Sample offspring genotypes from the precomputed probability tensor
-    4. Assign offspring sex based on genotype-sex compatibility or global sex_ratio
-
-    Sex assignment strategy:
-    - If any offspring genotype has asymmetric sex-compatibility (one sex OK, other
-      not), treat the system as sex-chromosome-constrained. For each genotype:
-      - If only one sex is compatible, allocate all offspring to that sex
-      - If both are compatible, use weighted ratio (f_w / (f_w + m_w))
-    - Otherwise (no sex-chromosomes), use global sex_ratio parameter for all genotypes
-
-    Args:
-        sperm_storage_by_male_genotype: Sperm storage reservoir indexed by
-            (age, female_genotype, male_genotype) with shape (A, g, g).
-        fertility_f: Female fertility rates (relative to wild-type) with shape (g,).
-        fertility_m: Male fertility rates (relative to wild-type) with shape (g,).
-        offspring_probability: Precomputed (gf, gm, g_off) probability tensor,
-            where entry [gf, gm, g_off] = P(g_off | gf, gm).
-        average_eggs_per_wt_female: Expected egg count per reproducing wild-type female.
-        adult_start_idx: First age class that reproduces (typically 1).
-        n_ages: Total number of age classes.
-        n_genotypes: Number of diploid genotypes.
-        female_genotype_compatibility: Sex-compatibility weight for each genotype
-            in females (row sums of genotype_to_gametes_map[0]).
-        male_genotype_compatibility: Sex-compatibility weight for each genotype
-            in males (row sums of genotype_to_gametes_map[1]).
-        female_only_by_sex_chrom: Precomputed boolean mask where True means
-            genotype is female-only under sex-chromosome constraints.
-        male_only_by_sex_chrom: Precomputed boolean mask where True means
-            genotype is male-only under sex-chromosome constraints.
-
-        fixed_eggs: If False (default), sample egg counts from Poisson; if True,
-            use deterministic expected values.
-        sex_ratio: Offspring female fraction (0 to 1). Used only when
-            has_sex_chromosomes is False. Otherwise ignored.
-        has_sex_chromosomes: If True, offspring sex is determined by genotype-specific
-            compatibility weights (f_w, m_w). If False, all offspring sex allocation
-            uses the global sex_ratio parameter. This flag is independent of
-            gamete modifier effects or temporary lethality (default False).
-        is_stochastic: If False, use deterministic expectations without sampling.
-        use_continuous_sampling: If True (with is_stochastic=True), use continuous
-            distributions (Beta, Dirichlet) instead of discrete (Binomial, Multinomial).
-
-    Returns:
-        Tuple (n_offspring_female, n_offspring_male):
-        - n_offspring_female: Female offspring counts per genotype with shape (g,)
-        - n_offspring_male: Male offspring counts per genotype with shape (g,)
-    """
-    sperm = np.asarray(sperm_storage_by_male_genotype, dtype=np.float64)
-    fert_f_arr = np.asarray(fertility_f, dtype=np.float64)
-    fert_m_arr = np.asarray(fertility_m, dtype=np.float64)
-    offspring_prob = np.asarray(offspring_probability, dtype=np.float64)
-
-    offspring_acc = np.zeros(n_genotypes, dtype=np.float64)
-    prob_norm = np.zeros(n_genotypes, dtype=np.float64)
-    tmp = np.zeros(n_genotypes, dtype=np.float64)
-
-    has_any = False
-    for age in range(adult_start_idx, n_ages):
-        for gf in range(n_genotypes):
-            ff = fert_f_arr[gf]
-            for gm in range(n_genotypes):
-                n_pairs = float(sperm[age, gf, gm])
-                if n_pairs <= 0.0:
-                    continue
-                has_any = True
-
-                eggs_per_pair = average_eggs_per_wt_female * ff * fert_m_arr[gm]
-
-                if is_stochastic:
-                    n_pairs_eff = n_pairs if use_continuous_sampling else np.round(n_pairs)
-                    if n_pairs_eff <= 0.0:
-                        continue
-                    total_lambda = float(n_pairs_eff * eggs_per_pair)
-                    if fixed_eggs:
-                        n_total = float(total_lambda) if use_continuous_sampling else float(np.round(total_lambda))
-                    else:
-                        n_total = (
-                            nbc.continuous_poisson(total_lambda)
-                            if use_continuous_sampling
-                            else float(np.random.poisson(total_lambda))
-                        )
-                else:
-                    n_total = float(n_pairs * eggs_per_pair)
-
-                if n_total <= EPS:
-                    continue
-
-                p_surv = 0.0
-                for go in range(n_genotypes):
-                    p_surv += offspring_prob[gf, gm, go]
-
-                if is_stochastic:
-                    if p_surv <= EPS:
-                        continue
-                    n_viable = (
-                        n_total
-                        if p_surv >= 1.0 - EPS
-                        else (
-                            nbc.continuous_binomial(n_total, p_surv)
-                            if use_continuous_sampling
-                            else float(nbc.binomial(int(round(n_total)), p_surv))
-                        )
-                    )
-                    if n_viable <= EPS:
-                        continue
-
-                    inv = 1.0 / p_surv
-                    for go in range(n_genotypes):
-                        prob_norm[go] = offspring_prob[gf, gm, go] * inv
-
-                    if use_continuous_sampling:
-                        nbc.continuous_multinomial(n_viable, prob_norm, tmp)
-                        for go in range(n_genotypes):
-                            offspring_acc[go] += tmp[go]
-                    else:
-                        draws = nbc.multinomial(int(round(n_viable)), prob_norm)
-                        for go in range(n_genotypes):
-                            offspring_acc[go] += float(draws[go])
-                else:
-                    for go in range(n_genotypes):
-                        offspring_acc[go] += n_total * offspring_prob[gf, gm, go]
-
-    if not has_any:
-        return np.zeros(n_genotypes), np.zeros(n_genotypes)
-
-    total = offspring_acc.sum()
-    if total <= EPS:
-        return np.zeros(n_genotypes), np.zeros(n_genotypes)
-
-    sr = nbc.clamp01(float(sex_ratio))
-    n_f = np.zeros(n_genotypes, dtype=np.float64)
-    n_m = np.zeros(n_genotypes, dtype=np.float64)
-
-    for go in range(n_genotypes):
-        n_g = offspring_acc[go]
-        if n_g <= EPS:
-            continue
-
-        f_w = female_genotype_compatibility[go]
-        m_w = male_genotype_compatibility[go]
-
-        if has_sex_chromosomes and female_only_by_sex_chrom[go]:
-            n_f[go] = n_g
-        elif has_sex_chromosomes and male_only_by_sex_chrom[go]:
-            n_m[go] = n_g
-        else:
-            if has_sex_chromosomes:
-                denom = f_w + m_w
-                p_f = nbc.clamp01(f_w / denom) if denom > EPS else 0.5
-            else:
-                p_f = sr
-
-            if is_stochastic:
-                n_fem = (
-                    nbc.continuous_binomial(n_g, p_f)
-                    if use_continuous_sampling
-                    else float(nbc.binomial(int(round(n_g)), p_f))
-                )
-            else:
-                n_fem = n_g * p_f
-            n_f[go] = n_fem
-            n_m[go] = n_g - n_fem
-
-    return n_f, n_m
-
 
 # Forward declaration for the internal function
 @njit_switch(cache=True)
@@ -731,197 +535,6 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
         male_only_by_sex_chrom=male_only_by_sex_chrom,
         age_based_reproduction_rates=age_based_reproduction_rates,
         female_age_based_relative_fertility=female_age_based_relative_fertility,
-        fixed_eggs=fixed_eggs,
-        sex_ratio=sex_ratio,
-        has_sex_chromosomes=has_sex_chromosomes,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling,
-    )
-
-
-@njit_switch(cache=True)
-def fertilize_with_mating_genotype(
-    female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
-    sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
-    fertility_f: Annotated[NDArray[np.float64], "shape=(g,)"],
-    fertility_m: Annotated[NDArray[np.float64], "shape=(g,)"],
-    meiosis_f: Annotated[NDArray[np.float64], "shape=(g,hl)"],
-    meiosis_m: Annotated[NDArray[np.float64], "shape=(g,hl)"],
-    haplo_to_genotype_map: Annotated[NDArray[np.float64], "shape=(hl,hl,g)"],
-    average_eggs_per_wt_female: float,
-    adult_start_idx: int,
-    n_ages: int,
-    n_genotypes: int,
-    n_haplogenotypes: int,
-    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
-    male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
-    n_glabs: int = 1,
-    age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,  # (age,)
-    female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,  # (age,)
-    fixed_eggs: bool = False,
-    sex_ratio: float = 0.5,
-    has_sex_chromosomes: bool = False,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
-) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
-    """Fertilization using meiosis matrices (on-the-fly probability computation).
-
-    Vectorized offspring generation with batch multinomial sampling. This variant
-    computes offspring probabilities on-the-fly from meiosis matrices, then
-    delegates to the core _fertilize_with_precomputed_offspring_probability kernel.
-
-    Achieves ~60.9x speedup through vectorization:
-    - Pre-compute expected egg counts per mating pair
-    - Batch Poisson sampling to avoid individual per-pair sampling
-    - Single multinomial draw per viable egg count
-    - Vectorized accumulation of genotype counts
-
-    Sex-chromosome compatibility is inferred from meiosis row sums: genotypes
-    that cannot produce gametes of one sex are marked as sex-incompatible.
-
-    Args:
-        female_counts: Female genotype counts, shape (A, g) (unused, for API compatibility).
-        sperm_storage_by_male_genotype: Sperm storage reservoir, shape (A, g, g).
-        fertility_f: Female fertility rates relative to wild-type, shape (g,).
-        fertility_m: Male fertility rates relative to wild-type, shape (g,).
-        meiosis_f: Female meiosis probabilities (genotype → haplotype), shape (g, hl).
-            Row sums indicate whether a genotype can produce female gametes.
-        meiosis_m: Male meiosis probabilities (genotype → haplotype), shape (g, hl).
-            Row sums indicate whether a genotype can produce male gametes.
-        haplo_to_genotype_map: Haplotype pair → genotype membership, shape (hl, hl, g).
-        average_eggs_per_wt_female: Expected eggs per reproducing wild-type female.
-        adult_start_idx: First reproductive age class.
-        n_ages: Total age classes.
-        n_genotypes: Number of diploid genotypes.
-        n_haplogenotypes: Number of haploid genotypes.
-        female_genotype_compatibility: Female compatibility weight per genotype.
-        male_genotype_compatibility: Male compatibility weight per genotype.
-        female_only_by_sex_chrom: Precomputed female-only genotype mask.
-        male_only_by_sex_chrom: Precomputed male-only genotype mask.
-        n_glabs: Gamete-label variants per haplotype (default 1).
-        age_based_reproduction_rates: Age-specific reproduction rates, shape (age,).
-        female_age_based_relative_fertility: Age-specific relative fertility rates, shape (age,).
-
-        fixed_eggs: Use deterministic eggs if True, Poisson if False.
-        sex_ratio: Offspring female fraction (used if no sex-chromosomes).
-        has_sex_chromosomes: Whether offspring sex is genotype-constrained.
-        is_stochastic: Use sampling if True, deterministic if False.
-        use_continuous_sampling: Use Beta/Dirichlet if True, Binomial/Multinomial if False.
-
-    Returns:
-        Tuple (n_offspring_female, n_offspring_male) with shape (g,) each.
-    """
-
-    # F = np.asarray(female_counts, dtype=np.float64)
-    P_offspring = compute_offspring_probability_tensor(
-        meiosis_f=meiosis_f,
-        meiosis_m=meiosis_m,
-        haplo_to_genotype_map=haplo_to_genotype_map,
-        n_genotypes=n_genotypes,
-        n_haplogenotypes=n_haplogenotypes,
-        n_glabs=n_glabs,
-    )
-
-    return _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
-        sperm_storage_by_male_genotype=sperm_storage_by_male_genotype,
-        fertility_f=fertility_f,
-        fertility_m=fertility_m,
-        offspring_probability=P_offspring,
-        average_eggs_per_wt_female=average_eggs_per_wt_female,
-        adult_start_idx=adult_start_idx,
-        n_ages=n_ages,
-        n_genotypes=n_genotypes,
-        female_genotype_compatibility=female_genotype_compatibility,
-        male_genotype_compatibility=male_genotype_compatibility,
-        female_only_by_sex_chrom=female_only_by_sex_chrom,
-        male_only_by_sex_chrom=male_only_by_sex_chrom,
-        n_glabs=n_glabs,
-        age_based_reproduction_rates=age_based_reproduction_rates,
-        female_age_based_relative_fertility=female_age_based_relative_fertility,
-        fixed_eggs=fixed_eggs,
-        sex_ratio=sex_ratio,
-        has_sex_chromosomes=has_sex_chromosomes,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling,
-    )
-
-
-@njit_switch(cache=True)
-def fertilize_with_precomputed_offspring_probability(
-    female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
-    sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
-    fertility_f: Annotated[NDArray[np.float64], "shape=(g,)"],
-    fertility_m: Annotated[NDArray[np.float64], "shape=(g,)"],
-    offspring_probability: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
-    average_eggs_per_wt_female: float,
-    adult_start_idx: int,
-    n_ages: int,
-    n_genotypes: int,
-    n_haplogenotypes: int,
-    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
-    male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
-    n_glabs: int = 1,
-    fixed_eggs: bool = False,
-    sex_ratio: float = 0.5,
-    has_sex_chromosomes: bool = False,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
-) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
-    """Fertilization wrapper using externally precomputed offspring probabilities.
-
-    Args:
-        female_counts: Female counts array with shape (A, g). Reserved for API
-            compatibility with the non-precomputed variant.
-        sperm_storage_by_male_genotype: Sperm storage array with shape (A, g, g).
-        fertility_f: Female fertility rates with shape (g,).
-        fertility_m: Male fertility rates with shape (g,).
-        offspring_probability: Precomputed offspring tensor (g, g, g).
-        average_eggs_per_wt_female: Average eggs produced per wild-type female.
-        adult_start_idx: Starting age index for adults.
-        n_ages: Total number of age classes.
-        n_genotypes: Number of genotypes.
-        n_haplogenotypes: Unused here; kept for signature parity.
-        female_genotype_compatibility: Female-compatible weight per genotype.
-            If sex-chromosome constraints are present, this overrides global
-            ``sex_ratio`` for offspring sex assignment.
-        male_genotype_compatibility: Male-compatible weight per genotype.
-            If sex-chromosome constraints are present, this overrides global
-            ``sex_ratio`` for offspring sex assignment.
-        female_only_by_sex_chrom: Precomputed female-only genotype mask.
-        male_only_by_sex_chrom: Precomputed male-only genotype mask.
-        n_glabs: Unused here; kept for signature parity.
-
-        fixed_eggs: Whether to use fixed egg counts.
-        sex_ratio: Offspring female ratio. Used only when has_sex_chromosomes is False.
-        has_sex_chromosomes: Whether offspring sex is genotype-constrained.
-        is_stochastic: Whether to sample stochastically.
-        use_continuous_sampling: Whether to use continuous sampling.
-
-    Returns:
-        Tuple containing female and male offspring counts with shape (g,).
-    """
-    _ = female_counts
-    _ = n_haplogenotypes
-    _ = n_glabs
-
-    return _fertilize_with_precomputed_offspring_probability(
-        sperm_storage_by_male_genotype=sperm_storage_by_male_genotype,
-        fertility_f=fertility_f,
-        fertility_m=fertility_m,
-        offspring_probability=offspring_probability,
-        average_eggs_per_wt_female=average_eggs_per_wt_female,
-        adult_start_idx=adult_start_idx,
-        n_ages=n_ages,
-        n_genotypes=n_genotypes,
-        female_genotype_compatibility=female_genotype_compatibility,
-        male_genotype_compatibility=male_genotype_compatibility,
-        female_only_by_sex_chrom=female_only_by_sex_chrom,
-        male_only_by_sex_chrom=male_only_by_sex_chrom,
-
         fixed_eggs=fixed_eggs,
         sex_ratio=sex_ratio,
         has_sex_chromosomes=has_sex_chromosomes,
@@ -1473,6 +1086,38 @@ def compute_equilibrium_metrics(
     return expected_competition_strength, expected_survival_rate
 
 
+@njit_switch(cache=True)
+def sync_equilibrium_metrics(config: Any) -> None:
+    """Recompute and write expected_competition_strength + expected_survival_rate.
+
+    Call this after modifying *carrying_capacity*, *expected_eggs_per_female*,
+    or *sex_ratio* at runtime (e.g. from a hook or Configurator).  The
+    function reads the current values of all relevant config fields, computes
+    fresh equilibrium metrics, and writes them back to *config* in-place.
+
+    Compatible with both Numba (njit hooks) and pure-Python callers
+    (Configurator, between-tick scripts).
+
+    Args:
+        config: ``PopulationConfig`` or ``DiscretePopulationConfig`` whose
+            equilibrium fields will be updated in-place.
+    """
+    comp, surv = compute_equilibrium_metrics(
+        carrying_capacity=config.carrying_capacity[()],
+        expected_eggs_per_female=config.expected_eggs_per_female[()],
+        sex_ratio=config.sex_ratio[()],
+        age_based_survival_rates=config.age_based_survival_rates,
+        age_based_mating_rates=config.age_based_mating_rates,
+        age_based_reproduction_rates=config.age_based_reproduction_rates,
+        female_age_based_relative_fertility=config.female_age_based_relative_fertility,
+        relative_competition_strength=config.age_based_relative_competition_strength,
+        new_adult_age=config.new_adult_age,
+        n_ages=config.n_ages,
+    )
+    config.expected_competition_strength[()] = comp
+    config.expected_survival_rate[()] = surv
+
+
 # ============================================================================
 # Scaling factor calculation functions (for larval recruitment)
 # ============================================================================
@@ -1587,3 +1232,82 @@ def compute_scaling_factor_beverton_holt(
     actual_growth_rate = r / denominator
 
     return actual_growth_rate * expected_survival_rate
+
+
+# ── Backward-compatibility wrappers ──────────────────────────────────────────
+
+
+def fertilize_with_precomputed_offspring_probability(
+    female_counts: Annotated[NDArray[np.float64], "shape=(A,g)"],
+    sperm_storage_by_male_genotype: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
+    fertility_f: Annotated[NDArray[np.float64], "shape=(g,)"],
+    fertility_m: Annotated[NDArray[np.float64], "shape=(g,)"],
+    offspring_probability: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
+    average_eggs_per_wt_female: float,
+    adult_start_idx: int,
+    n_ages: int,
+    n_genotypes: int,
+    n_haplogenotypes: int,
+    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
+    male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
+    n_glabs: int = 1,
+    fixed_eggs: bool = False,
+    sex_ratio: float = 0.5,
+    has_sex_chromosomes: bool = False,
+    is_stochastic: bool = True,
+    use_continuous_sampling: bool = False,
+) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
+    """Deprecated: use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction."""
+    import warnings
+    warnings.warn(
+        "fertilize_with_precomputed_offspring_probability is deprecated. "
+        "Use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
+        sperm_storage_by_male_genotype=sperm_storage_by_male_genotype,
+        fertility_f=fertility_f,
+        fertility_m=fertility_m,
+        offspring_probability=offspring_probability,
+        average_eggs_per_wt_female=average_eggs_per_wt_female,
+        adult_start_idx=adult_start_idx,
+        n_ages=n_ages,
+        n_genotypes=n_genotypes,
+        female_genotype_compatibility=female_genotype_compatibility,
+        male_genotype_compatibility=male_genotype_compatibility,
+        female_only_by_sex_chrom=female_only_by_sex_chrom,
+        male_only_by_sex_chrom=male_only_by_sex_chrom,
+        n_glabs=n_glabs,
+        age_based_reproduction_rates=None,
+        female_age_based_relative_fertility=None,
+        fixed_eggs=fixed_eggs,
+        sex_ratio=sex_ratio,
+        has_sex_chromosomes=has_sex_chromosomes,
+        is_stochastic=is_stochastic,
+        use_continuous_sampling=use_continuous_sampling,
+    )
+
+
+def fertilize_with_mating_genotype(*args: Any, **kwargs: Any) -> Any:
+    """Deprecated: this function has been removed.
+
+    The mating-genotype fertilization path has been consolidated into
+    _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction.
+    Precompute offspring probabilities with :func:`compute_offspring_probability`
+    and pass them to the unified fertilization kernel.
+    """
+    import warnings
+    warnings.warn(
+        "fertilize_with_mating_genotype has been removed. "
+        "Use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction "
+        "with precomputed offspring probabilities.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    raise NotImplementedError(
+        "fertilize_with_mating_genotype has been removed. "
+        "Use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction."
+    )

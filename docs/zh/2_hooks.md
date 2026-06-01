@@ -25,6 +25,8 @@ Hook 的作用时机包括：
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=10)
 def periodic_release():
     return [
@@ -35,11 +37,7 @@ def periodic_release():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(
-        name="MyPop",
-        stochastic=True,
-        use_continuous_sampling=False
-    )
+    .setup(species=sp, name="MyPop", stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000, "Drive|WT": 0},
@@ -140,7 +138,7 @@ def stop_hook():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -187,17 +185,19 @@ Hook 会在 `run(...)` 与 `run_tick()` 中按事件顺序自动执行。
 ```python
 import natal as nt
 
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
+
 @nt.hook(event="first", priority=0)
 def release():
     return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
 
 @nt.hook(event="late", priority=5)
 def stop_if_no_female():
-    return [nt.Op.stop_if_zero(sex="female", threshold=10000)]
+    return [nt.Op.stop_if_zero(sex="female")]
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(stochastic=True)
+    .setup(species=sp, stochastic=True)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000},
@@ -210,11 +210,14 @@ pop = (
 pop.run(n_steps=200, record_every=10)
 ```
 
+## Hook 内修改参数
+
+参见 [高级 Hook 教程](3_advanced_hooks.md) 中的"运行时修改参数"一节。
+
 ## 相关章节
 
 - [高级 Hook 教程](3_advanced_hooks.md)
 - [种群初始化](2_population_initialization.md)
 - [Modifier 机制](3_modifiers.md)
-- [模拟内核深度解析](4_simulator.md)
-- [Numba 优化指南](4_numba_optimization.md)
+- [Configurator API 参考](../api/configurator.md)
 - [快速开始](1_quickstart.md)

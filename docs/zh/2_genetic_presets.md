@@ -10,11 +10,12 @@
 - 改变合子发育过程（如胚胎抗性形成）
 - 调整适应度参数（如驱动等位基因的成本）
 
-## 在构建器中应用预设
+## 应用预设
 
 ```python
-pop = (DiscreteGenerationPopulationBuilder(species)
-       .setup(name="TestPop")
+import natal as nt
+
+pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
        .presets(preset1, preset2)  # 可以应用多个预设
        .build())
 ```
@@ -113,8 +114,8 @@ ta_drive_with_mating_cost = ToxinAntidoteDrive(
 ### 简单点突变
 
 ```python
+import natal as nt
 from natal.genetic_presets import HomingDrive
-from natal.population_builder import AgeStructuredPopulationBuilder
 
 # 创建基因驱动
 drive = HomingDrive(
@@ -125,24 +126,24 @@ drive = HomingDrive(
 )
 
 # 构建种群并应用预设
-species = Species.from_dict("TestSpecies", {
+species = nt.Species.from_dict("TestSpecies", {
     "chr1": {"GeneA": ["WT", "Drive"]}
 })
 
-pop = (AgeStructuredPopulationBuilder(species)
-       .setup(name="DriveTest", stochastic=False)
+pop = (nt.AgeStructuredPopulation.setup(species, name="DriveTest", stochastic=False)
        .age_structure(n_ages=5)
        .initial_state({"female": {"WT|WT": [0, 0, 100, 0, 0]}})
        .presets(drive)
        .build())
 
 # 运行模拟
-pop.run(ticks=100)
+pop.run(n_steps=100)
 ```
 
 ### 多个预设组合使用
 
 ```python
+import natal as nt
 from natal.genetic_presets import HomingDrive, ToxinAntidoteDrive
 
 # 创建多个预设
@@ -150,8 +151,7 @@ drive1 = HomingDrive("Drive1", "Drive", "WT", conversion_rate=0.95)
 drive2 = ToxinAntidoteDrive("Drive2", "Toxin", "Target", conversion_rate=0.90)
 
 # 同时应用多个预设
-pop = (DiscreteGenerationPopulationBuilder(species)
-       .setup(name="MultiDriveTest")
+pop = (nt.DiscreteGenerationPopulation.setup(species, name="MultiDriveTest")
        .presets(drive1, drive2)  # 应用多个预设
        .build())
 ```

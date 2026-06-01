@@ -44,12 +44,12 @@ Typical uses:
 - Cytoplasmic incompatibility
 - Non-Mendelian offspring redistribution
 
-## 3. Recommended Integration Method (Builder)
+## 3. Recommended Integration Method
 
 In practice, it is recommended to register Modifiers uniformly at the Builder stage:
 
 ```python
-from natal.population_builder import AgeStructuredPopulationBuilder
+import natal as nt
 
 
 def my_gamete_modifier(pop):
@@ -62,11 +62,11 @@ def my_gamete_modifier(pop):
 
 
 pop = (
-    AgeStructuredPopulationBuilder(species)
-    .setup(name="MyPop")
+    nt.AgeStructuredPopulation
+    .setup(species=species)
     .age_structure(n_ages=8)
-    .initial_state({...})
-    .modifiers(gamete_modifiers=[(None, "drive", my_gamete_modifier)])
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
     .build()
 )
 ```
@@ -150,10 +150,10 @@ Both have the same allele but different labels, potentially triggering different
 ### 6.1 Configuring Labels
 
 ```python
-pop = AgeStructuredPopulation(
-    ...,
-    gamete_labels=["default", "Cas9_deposited"],
-)
+# Gamete labels are defined by setting gamete_labels on the Species
+species.gamete_labels = ["default", "Cas9_deposited"]
+# Then build normally using Configurator (labels take effect automatically)
+pop = nt.AgeStructuredPopulation.setup(species).build()
 ```
 
 ## 7. Registration Methods and Priority
@@ -161,8 +161,8 @@ pop = AgeStructuredPopulation(
 ### 7.1 Dynamic Registration
 
 ```python
-pop.set_gamete_modifier(my_gamete_modifier, hook_name="drive")
-pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
+pop.set_gamete_modifier(my_gamete_modifier, modifier_name="drive")
+pop.set_zygote_modifier(embryo_rescue_modifier, modifier_name="rescue")
 ```
 
 ### 7.2 Priority
@@ -170,8 +170,8 @@ pop.set_zygote_modifier(embryo_rescue_modifier, hook_name="rescue")
 When multiple Modifiers act simultaneously, they execute in order of priority.
 
 ```python
-pop.set_gamete_modifier(base_mod, priority=1, hook_name="base")
-pop.set_gamete_modifier(drive_mod, priority=2, hook_name="drive")
+pop.set_gamete_modifier(base_mod, modifier_id=1, modifier_name="base")
+pop.set_gamete_modifier(drive_mod, modifier_id=2, modifier_name="drive")
 ```
 
 In practice, it is recommended to put "base rules" at a lower priority and "override/correction rules" at a higher priority.
@@ -193,7 +193,7 @@ In practice, it is recommended to put "base rules" at a lower priority and "over
 # 5) Finally expand to full parameter scanning
 ```
 
-## 10. Chapter Summary
+## 10. Summary
 
 Modifiers are the core mechanism in NATAL for expressing "genetic rule rewriting."
 
@@ -208,5 +208,5 @@ Using both in coordination allows expressing most advanced genetic mechanisms.
 
 - [Genetic Preset System](2_genetic_presets.md)
 - [Hook System](2_hooks.md)
-- [the Simulation Engine Deep Dive](4_simulator.md)
+- [the Simulation Engine Deep Dive](4_simulation_engine.md)
 - [PopulationState and PopulationConfig](4_population_state_config.md)

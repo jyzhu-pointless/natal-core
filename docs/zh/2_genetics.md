@@ -1,6 +1,6 @@
 # 遗传学架构与对象
 
-本章详细介绍 NATAL 中的遗传学对象系统，涵盖**结构层**（`Species` / `Chromosome` / `Locus`）和**实体层**（`Gene` / `Haplotype` / `HaploidGenotype` / `Genotype`），以及关键的字符串化和全局缓存机制。通过理解这些核心概念，您可以更好地构建和操作遗传模拟模型。
+NATAL 中的遗传学对象系统涵盖**结构层**（`Species` / `Chromosome` / `Locus`）和**实体层**（`Gene` / `Haplotype` / `HaploidGenotype` / `Genotype`），以及关键的字符串化和全局缓存机制。通过理解这些核心概念，可以更好地构建和操作遗传模拟模型。
 
 ## 遗传学对象的层次结构
 

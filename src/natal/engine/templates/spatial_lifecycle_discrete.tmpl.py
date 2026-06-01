@@ -83,8 +83,10 @@ def TICK_FN_NAME(
         cfg = config_bank[int(deme_config_ids[d])]
         ind = ind_count_all[d].copy()
 
-        state = DiscretePopulationState(n_tick=tick, individual_count=ind)
-        (ind, _next_tick), result = _run_deme_tick(state, cfg, registry, d)
+        (ind, _next_tick), result = _run_deme_tick(
+            DiscretePopulationState(n_tick=tick, individual_count=ind),
+            cfg, registry, d,
+        )
 
         if result != RESULT_CONTINUE:
             stopped[d] = True

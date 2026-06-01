@@ -14,44 +14,44 @@
 from natal.hooks import hook
 
 
-@hook(event="late", priority=10)
-def custom_release_hook(ind_count, tick, deme_id=-1):
-    # ind_count 是个体数量的 NumPy 数组
+@hook(event="late", custom=True, priority=10)
+def custom_release_hook(state, config, deme_id=-1):
+    # state.individual_count 是个体数量的 NumPy 数组
     # 形状为 (sex, age, genotype)
     # sex=0 对应雌性，sex=1 对应雄性
 
     # 每 10 个 tick 释放 100 个个体
-    if tick % 10 == 0:
+    if state.n_tick % 10 == 0:
         # 假设 Drive|WT 的基因型索引是 1
-        ind_count[:, :, 1] += 100
+        state.individual_count[:, :, 1] += 100
 
     return 0  # 0 表示继续模拟
 ```
 
 ### 函数签名
 
-自定义 Hook 支持两种函数签名：
+自定义 Hook 当前约定的签名为 `(state, config, deme_id=-1)`：
 
-- `(ind_count, tick)` — 不接收 deme 信息（简化签名）
-- `(ind_count, tick, deme_id=-1)` — 接收 deme 索引，空间种群中跨 deme 运行时传入实际索引
+- `state` — `DiscretePopulationState` 或 `PopulationState`，提供 `individual_count` 数组和 `n_tick`
+- `config` — `PopulationConfig` 或 `DiscretePopulationConfig`，可直接原地修改参数
+- `deme_id` — deme 索引（空间种群），默认 -1
 
-`deme_id` 的默认值为 `-1`。当在 `SpatialPopulation` 中注册时，系统会自动传入当前 deme 的索引；
-在非空间种群中注册时，可以不传该参数。
+也接受简化两参数形式 `(state, config)`（省略 deme_id）。
 
 ### 数组索引注意事项
 
-`ind_count` 的维度顺序为 `(sex, age, genotype)`：
+`state.individual_count` 的维度顺序为 `(sex, age, genotype)`：
 
 - `sex=0` 对应雌性（FEMALE），`sex=1` 对应雄性（MALE）
 - 在 Numba 模式下，不能使用 `Sex.MALE` 等枚举类型直接索引，必须使用整数值或 `.value`
 
 ```python
 # 正确做法
-male_count = ind_count[1, :, :].sum()
-female_count = ind_count[0, :, :].sum()
+male_count = state.individual_count[1, :, :].sum()
+female_count = state.individual_count[0, :, :].sum()
 
 # 或者使用 .value
-male_count = ind_count[Sex.MALE.value, :, :].sum()
+male_count = state.individual_count[Sex.MALE.value, :, :].sum()
 ```
 
 ### 完整示例
@@ -60,14 +60,14 @@ male_count = ind_count[Sex.MALE.value, :, :].sum()
 from natal.hooks import hook
 
 
-@hook(event="early", priority=5)
-def custom_culling_hook(ind_count, tick, deme_id=-1):
+@hook(event="early", custom=True, priority=5)
+def custom_culling_hook(state, config, deme_id=-1):
     # 对特定基因型进行选择性剔除
-    if tick > 50:
+    if state.n_tick > 50:
         # WT|WT 的基因型索引是 0
-        wt_wt_count = ind_count[:, :, 0].sum()
+        wt_wt_count = state.individual_count[:, :, 0].sum()
         if wt_wt_count > 10000:
-            ind_count[:, :, 0] = ind_count[:, :, 0] * 0.9
+            state.individual_count[:, :, 0] = state.individual_count[:, :, 0] * 0.9
 
     return 0
 ```
@@ -83,11 +83,11 @@ Selector-based Hook 是自定义 Hook 的一种形式，允许你通过符号名
 from natal.hooks import hook
 
 
-@hook(event="late", selectors={"target_gt": "Drive|WT"}, priority=10)
-def cap_target(ind_count, tick, target_gt):
+@hook(event="late", custom=True, selectors={"target_gt": "Drive|WT"}, priority=10)
+def cap_target(state, config, target_gt):
     # target_gt 是通过选择器解析得到的基因型索引（整数）
-    if tick % 10 == 0:
-        ind_count[:, :, target_gt] *= 0.95
+    if state.n_tick % 10 == 0:
+        state.individual_count[:, :, target_gt] *= 0.95
 ```
 
 ### 选择器解析规则
@@ -114,22 +114,22 @@ Selector Hook 提供三种参数传递模式，通过 `mode` 参数指定：
 | mode | 行为 | 函数签名示例 |
 |------|------|------------|
 | `"auto"`（默认） | 自动检测：参数名不在 selector key 中则打包 | 见下方 |
-| `"expand"` | 每个 selector 作为独立关键字参数 | `fn(ind_count, tick, a, b)` |
-| `"aggregate"` | 所有 selector 打包为一个 namedtuple | `fn(ind_count, tick, ctx)` |
+| `"expand"` | 每个 selector 作为独立关键字参数 | `fn(state, config, a, b)` |
+| `"aggregate"` | 所有 selector 打包为一个 namedtuple | `fn(state, config, ctx)` |
 
 #### mode="expand"（展开模式）
 
 每个 selector key 成为函数的一个独立参数：
 
 ```python
-@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="expand")
-def balance_population(ind_count, tick, drive, wt):
+@hook(event="early", custom=True, selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="expand")
+def balance_population(state, config, drive, wt):
     # drive 和 wt 都是 int（基因型索引）
-    drive_count = ind_count[:, :, drive].sum()
-    wt_count = ind_count[:, :, wt].sum()
+    drive_count = state.individual_count[:, :, drive].sum()
+    wt_count = state.individual_count[:, :, wt].sum()
 
     if drive_count > wt_count * 2:
-        ind_count[:, :, drive] *= 0.8
+        state.individual_count[:, :, drive] *= 0.8
 
     return 0
 ```
@@ -139,15 +139,15 @@ def balance_population(ind_count, tick, drive, wt):
 所有 selector 打包为一个 namedtuple，通过属性访问：
 
 ```python
-@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="aggregate")
-def balance_population(ind_count, tick, sel):
+@hook(event="early", custom=True, selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="aggregate")
+def balance_population(state, config, sel):
     # sel.drive 和 sel.wt 都是 int（基因型索引）
     # namedtuple 的属性访问在 Numba 中完全支持
-    drive_count = ind_count[:, :, sel.drive].sum()
-    wt_count = ind_count[:, :, sel.wt].sum()
+    drive_count = state.individual_count[:, :, sel.drive].sum()
+    wt_count = state.individual_count[:, :, sel.wt].sum()
 
     if drive_count > wt_count * 2:
-        ind_count[:, :, sel.drive] *= 0.8
+        state.individual_count[:, :, sel.drive] *= 0.8
 
     return 0
 ```
@@ -159,18 +159,18 @@ def balance_population(ind_count, tick, sel):
 
 当不指定 `mode` 时，框架根据函数签名自动选择模式：
 
-- 额外位置参数（`ind_count`, `tick` 之后）的名字**不在** selector key 中 → 聚合模式
+- 额外位置参数（`state`, `config` 之后）的名字**不在** selector key 中 → 聚合模式
 - 额外位置参数的名字**在** selector key 中 → 展开模式
 
 ```python
 # 参数名 "ctx" 不在 selectors key 中 → 自动聚合
-@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"})
-def hook_agg(ind_count, tick, ctx):
+@hook(event="early", custom=True, selectors={"drive": "Dr|WT", "wt": "WT|WT"})
+def hook_agg(state, config, ctx):
     ctx.drive, ctx.wt  # namedtuple 属性
 
 # 参数名 "wt" 匹配 selector key "wt" → 自动展开（向后兼容）
-@hook(event="early", selectors={"wt": "WT|WT"})
-def hook_exp(ind_count, tick, wt):
+@hook(event="early", custom=True, selectors={"wt": "WT|WT"})
+def hook_exp(state, config, wt):
     # wt 是单独的 int 参数
 ```
 
@@ -180,16 +180,16 @@ def hook_exp(ind_count, tick, wt):
 
 ```python
 # 展开模式 + deme_id
-@hook(event="early", selectors={"target": "Dr|Dr"}, mode="expand")
-def hook1(ind_count, tick, deme_id, target):
+@hook(event="early", custom=True, selectors={"target": "Dr|Dr"}, mode="expand")
+def hook1(state, config, deme_id, target):
     if deme_id == 0:
-        ind_count[:, :, target] = 0
+        state.individual_count[:, :, target] = 0
 
 # 聚合模式 + deme_id
-@hook(event="early", selectors={"target": "Dr|Dr"}, mode="aggregate")
-def hook2(ind_count, tick, deme_id, sel):
+@hook(event="early", custom=True, selectors={"target": "Dr|Dr"}, mode="aggregate")
+def hook2(state, config, deme_id, sel):
     if deme_id == 0:
-        ind_count[:, :, sel.target] = 0
+        state.individual_count[:, :, sel.target] = 0
 ```
 
 ### 特点
@@ -214,16 +214,16 @@ from natal.numba_compat import (
 from natal.hooks import hook
 
 
-@hook(event="late", priority=10)
-def stochastic_culling_hook(ind_count, tick, deme_id=-1):
-    if tick > 50:
+@hook(event="late", custom=True, priority=10)
+def stochastic_culling_hook(state, config, deme_id=-1):
+    if state.n_tick > 50:
         # 使用二项分布随机剔除
         # 假设对基因型 0 进行 10% 的剔除概率
-        n_current = ind_count[:, :, 0]
+        n_current = state.individual_count[:, :, 0]
         survival_prob = 0.9
 
         # continuous_binomial 对大数量更高效
-        ind_count[:, :, 0] = continuous_binomial(n_current, survival_prob)
+        state.individual_count[:, :, 0] = continuous_binomial(n_current, survival_prob)
 
     return 0
 ```
@@ -247,22 +247,22 @@ def stochastic_culling_hook(ind_count, tick, deme_id=-1):
 - **批量采样操作**：使用 `binomial_2d` 对整个数组进行批量采样
 
 ```python
-@hook(event="late", priority=10)
-def age_specific_mortality(ind_count, tick, deme_id=-1):
-    if tick % 10 == 0:
+@hook(event="late", custom=True, priority=10)
+def age_specific_mortality(state, config, deme_id=-1):
+    if state.n_tick % 10 == 0:
         # 对每个年龄组应用不同的存活概率
         survival_rates = np.array([0.8, 0.9, 0.95, 0.98, 0.99])
 
         # 使用 binomial_2d 进行批量采样
-        n_ages = ind_count.shape[1]
+        n_ages = state.individual_count.shape[1]
         for age in range(n_ages):
             n_survivors = binomial_2d(
-                ind_count[:, age, :],
+                state.individual_count[:, age, :],
                 np.array([survival_rates[age]]),
                 2,  # sex
-                ind_count.shape[2]  # n_genotypes
+                state.individual_count.shape[2]  # n_genotypes
             )
-            ind_count[:, age, :] = n_survivors
+            state.individual_count[:, age, :] = n_survivors
 
     return 0
 ```
@@ -293,11 +293,12 @@ NATAL Core 的 Hook 系统根据全局 `NUMBA_ENABLED` 开关自动选择执行�
 - 无需修改 Hook 定义代码，即可切换执行路径
 
 ```python
+from natal.configurator import Configurator
 from natal.numba_utils import numba_disabled
 
 with numba_disabled():
     # 在这个上下文中，NUMBA_ENABLED 为 False
-    pop = builder.hooks(my_custom_hook).build()
+    pop = Configurator.for_discrete(species).hooks(my_custom_hook).build()
     pop.run(n_steps=100)
 ```
 
@@ -306,6 +307,7 @@ with numba_disabled():
 NATAL Core 允许在同一事件中混合使用不同类型的 Hook：
 
 ```python
+from natal.configurator import Configurator
 from natal.hooks import hook, Op
 
 
@@ -316,9 +318,9 @@ def release_hook():
 
 
 # Selector-based Hook（聚合模式）：基于选择器的操作
-@hook(event="first", priority=7, selectors={"drive": "Drive|WT"}, mode="aggregate")
-def check_drive_threshold(ind_count, tick, sel):
-    drive_count = ind_count[:, :, sel.drive].sum()
+@hook(event="first", custom=True, priority=7, selectors={"drive": "Drive|WT"}, mode="aggregate")
+def check_drive_threshold(state, config, sel):
+    drive_count = state.individual_count[:, :, sel.drive].sum()
     if drive_count > 10000:
         # 可以在这里添加日志或状态记录
         pass
@@ -326,15 +328,15 @@ def check_drive_threshold(ind_count, tick, sel):
 
 
 # 自定义 Hook：高效计算和修改状态（deme_id=-1 表示 non-spatial 默认值）
-@hook(event="first", priority=5)
-def custom_process_hook(ind_count, tick, deme_id=-1):
+@hook(event="first", custom=True, priority=5)
+def custom_process_hook(state, config, deme_id=-1):
     # 执行密集计算
-    for age in range(ind_count.shape[1]):
-        ind_count[:, age, :] *= 0.99  # 轻微死亡率
+    for age in range(state.individual_count.shape[1]):
+        state.individual_count[:, age, :] *= 0.99  # 轻微死亡率
     return 0
 
 
-pop = builder.hooks(release_hook, check_drive_threshold, custom_process_hook).build()
+pop = Configurator.for_age_structured(species).hooks(release_hook, check_drive_threshold, custom_process_hook).build()
 ```
 
 ### 执行顺序
@@ -353,9 +355,47 @@ pop = builder.hooks(release_hook, check_drive_threshold, custom_process_hook).bu
 | Selector-based Hook | 高 | 高 | 中 | 需要基于特定目标执行逻辑的场景 |
 | 自定义 Hook | 最高 | 高 | 中 | 计算密集型操作 |
 
+## 运行时修改参数
+
+Hook 可以直接修改种群配置参数——`config` 作为参数传入，原地写入立即生效：
+
+```python
+import natal as nt
+from natal.population_config import DiscretePopulationConfig
+from natal.population_state import DiscretePopulationState
+
+@nt.hook(event="early", custom=True)
+def heatwave(state: DiscretePopulationState,
+             config: DiscretePopulationConfig,
+             deme_id: int) -> int:
+    if state.n_tick == 10:
+        # 直接写 0-d ndarray——最快路径
+        config.carrying_capacity[()] = 2000
+        # 读写自定义字段——hook 和外部共享数据
+        config.custom['temperature'][()] = 40.0
+    return 0
+```
+
+Hook 签名统一为 `(state, config, deme_id) → int`。`config` 允许原地修改，修改后的值对当前 tick 的后续 hook 和流程立即可见。
+
+如果需要字符串参数名路由，可以用 `hook_set_param`——它封装了 `objmode` + `set_param`：
+
+```python
+from natal.configurator import hook_set_param
+
+@nt.hook(event="early", custom=True)
+def recovery_hook(state, config, deme_id):
+    if state.n_tick == 10:
+        hook_set_param(config, "carrying_capacity", 5000.0)
+        hook_set_param(config, "eggs_per_female", 100.0)
+    return 0
+```
+
+性能介于直接写（nopython）和裸 `with objmode()` 之间。自定义字段通过 `config.custom['name'][()]` 读写，构建时通过 `.custom(temperature=25.0)` 初始化，运行时可通过 `pop.update().custom(...)` 修改。
+
 ## 相关章节
 
 - [Hook 系统](2_hooks.md) - 基础 Hook 概念和声明式 Hook 使用
 - [Modifier 机制](3_modifiers.md) - 遗传修饰器机制
-- [模拟内核深度解析](4_simulator.md) - 模拟内核的工作原理
+- [模拟内核深度解析](4_simulation_engine.md) - 模拟内核的工作原理
 - [Numba 优化指南](4_numba_optimization.md) - Numba 优化技巧

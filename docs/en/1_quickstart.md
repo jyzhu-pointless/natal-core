@@ -1,6 +1,6 @@
 # Quick Start: Get Started with NATAL in 15 Minutes
 
-This chapter will walk you through the core modeling workflow and visualization tools of NATAL using a **discrete-generation population** and an **age-structured population** as examples.
+This chapter will walk you through the core modeling workflow and visualization tools of NATAL using a **discrete-generation population** and an **age-structured population** as examples (each generation/time step is called a **tick**).
 If you haven't installed `natal-core` yet, please refer to the [homepage](index.md) to complete the installation.
 
 ---
@@ -490,7 +490,7 @@ Now that you have mastered the basics! Next, you can:
 **A**: During initialization, two mapping matrices need to be generated, with complexity related to the 3rd-4th power of the number of genotypes. Depending on the Numba cache status, varying degrees of compilation may also be required. For relatively simple genetic setups (only a few dozen genotypes), this is expected to take from a few seconds to tens of seconds. This only happens once. Each subsequent tick is very fast.
 
 ### Q: When should I use a discrete-generation population?
-**A**: When your model does not require age structure, using `DiscreteGenerationPopulationBuilder` is simpler. It is suitable for:
+**A**: When your model does not require age structure, using `DiscreteGenerationPopulation` is simpler. It is suitable for:
 - Laboratory models such as fruit flies
 - Theoretical model studies
 - Simulations that do not require age-related effects

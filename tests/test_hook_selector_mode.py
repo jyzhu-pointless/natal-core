@@ -217,8 +217,11 @@ def test_full_execution_aggregate_mode():
         .build()
     )
 
+    from natal.population_state import DiscretePopulationState
+
     ind = pop.state.individual_count.copy()
     ind[0, 0, 2] = 30  # D|W at index 2
+    state = DiscretePopulationState(n_tick=0, individual_count=ind)
 
     @njit
     def kill_fn(ind_count, tick, nt_sel):
@@ -230,7 +233,7 @@ def test_full_execution_aggregate_mode():
         selectors_spec={"target": "D|D", "drive": "D|W"},
         mode="aggregate",
     )
-    desc.njit_fn(ind, 0, 0)
+    desc.njit_fn(state, pop.config, 0)
 
     assert ind[0, 0, 3] == 0,   f"D|D should be 0, got {ind[0, 0, 3]}"
     assert ind[0, 0, 2] == 15,  f"D|W should be 15, got {ind[0, 0, 2]}"
@@ -254,9 +257,12 @@ def test_full_execution_expand_mode():
         .build()
     )
 
+    from natal.population_state import DiscretePopulationState
+
     ind = pop.state.individual_count.copy()
     ind[0, 0, 3] = 50  # D|D
     ind[0, 0, 0] = 100  # W|W
+    state = DiscretePopulationState(n_tick=0, individual_count=ind)
 
     @njit
     def kill_fn(ind_count, tick, target, drive):
@@ -268,7 +274,7 @@ def test_full_execution_expand_mode():
         selectors_spec={"target": "D|D", "drive": "W|W"},
         mode="expand",
     )
-    desc.njit_fn(ind, 0, 0)
+    desc.njit_fn(state, pop.config, 0)
 
     assert ind[0, 0, 3] == 0,   f"D|D should be 0, got {ind[0, 0, 3]}"
     assert ind[0, 0, 0] == 50,  f"W|W should be 50, got {ind[0, 0, 0]}"
@@ -291,13 +297,16 @@ def test_backward_compat_old_style():
         .build()
     )
 
+    from natal.population_state import DiscretePopulationState
+
     ind = pop.state.individual_count.copy()
+    state = DiscretePopulationState(n_tick=0, individual_count=ind)
 
     @njit
     def fn(ind_count, tick, target):
         ind_count[:, :, target] = 0
 
     desc = compile_selector_hook(fn, pop, "early", selectors_spec={"target": "W|W"})
-    desc.njit_fn(ind, 0, 0)
+    desc.njit_fn(state, pop.config, 0)
 
     assert ind[0, 0, 0] == 0

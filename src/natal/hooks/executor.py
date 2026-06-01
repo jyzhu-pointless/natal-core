@@ -608,7 +608,7 @@ class HookExecutor:
 
             if desc.njit_fn is not None:
                 try:
-                    result = desc.njit_fn(ind_count, tick, deme_id)
+                    result = desc.njit_fn(population.state, population.config, deme_id)
                     if result == RESULT_STOP:
                         return RESULT_STOP
                 except Exception as e:
@@ -620,16 +620,15 @@ class HookExecutor:
                         f"Python py_wrapper hook '{desc.name}' is not allowed when Numba is enabled."
                     )
                 try:
-                    # Check if it expects (population) or (ind_count, tick, deme_id)
                     import inspect
                     sig = inspect.signature(desc.py_wrapper)
                     params = list(sig.parameters.values())
                     if len(params) == 1:
-                        # Single param - population
+                        # Single param - population-level hook
                         desc.py_wrapper(population)
                     else:
-                        # Custom hook - ind_count, tick, deme_id
-                        desc.py_wrapper(ind_count, tick, deme_id)
+                        # Custom hook - (state, config, deme_id)
+                        desc.py_wrapper(population.state, population.config, deme_id)
                 except Exception as e:
                     raise RuntimeError(f"Error in py_wrapper hook '{desc.name}': {e}") from e
 

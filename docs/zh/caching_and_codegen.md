@@ -69,9 +69,9 @@ Numba 编译 `_lifecycle_tick_527c055` 时，`_FIRST_HOOK` 是模块级全局变
 ```python
 lines = ["from natal.hooks import njit_switch"]
 lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
-lines.append(f"def {fn_name}(ind_count, tick, deme_id=-1):")
+lines.append(f"def {fn_name}(state, config, deme_id=-1):")
 for placeholder in placeholder_names:
-    lines.append(f"    _result = {placeholder}(ind_count, tick, deme_id)")
+    lines.append(f"    _result = {placeholder}(state, config, deme_id)")
     lines.append("    if _result != 0:")
     lines.append("        return _result")
 lines.append("    return 0")
@@ -85,9 +85,9 @@ _FN_1 = None
 
 @njit_switch(cache=True)
 def _combined_hook_19a81f6c(...):
-    _result = _FN_0(ind_count, tick, deme_id)
+    _result = _FN_0(state, config, deme_id)
     if _result != 0: return _result
-    _result = _FN_1(ind_count, tick, deme_id)
+    _result = _FN_1(state, config, deme_id)
     if _result != 0: return _result
     return 0
 ```
@@ -113,6 +113,7 @@ from natal.engine.simulator import (
 )
 from natal.hooks.executor import execute_csr_event_program_with_state
 from natal.hooks.types import EVENT_FIRST, EVENT_EARLY, EVENT_LATE, ...
+from natal.population_state import DiscretePopulationState
 
 _FIRST_HOOK = None
 _EARLY_HOOK = None
@@ -124,7 +125,10 @@ def _lifecycle_tick_527c055(state, config, registry):
     tick = state.n_tick
     # 执行 FIRST 事件（CSR + hook）
     result = execute_csr_event_program_with_state(registry, EVENT_FIRST, ...)
-    result = _FIRST_HOOK(ind_count, tick)
+    result = _FIRST_HOOK(
+        DiscretePopulationState(n_tick=tick, individual_count=ind_count),
+        config, deme_id,
+    )
     # reproduction
     ind_count = run_discrete_reproduction(ind_count, config)
     # 执行 EARLY 事件
@@ -208,7 +212,7 @@ tick_fn = getattr(module, fn_name)
 
 ```python
 @njit_switch(cache=True)
-def _noop_hook(ind_count: np.ndarray, tick: int, deme_id: int = 0) -> int:
+def _noop_hook(state, config, deme_id: int = -1) -> int:
     return 0
 ```
 

@@ -55,7 +55,7 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 ### Using ZygoteConversionRuleSet
 
 ```python
-from natal.gamete_allele_conversion import ZygoteConversionRuleSet
+from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 

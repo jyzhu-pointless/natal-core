@@ -33,6 +33,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypedDict,
     TypeGuard,
     TypeVar,
     Union,
@@ -367,7 +368,7 @@ class ChildStructureRegistry(RegistryBase[S]):
         """Unregister by name."""
         self._storage.pop(key, None)
 
-    def add(self, name: str, **kwargs: Any) -> S:
+    def add(self, name: str, **kwargs: Any) -> S:  # forwarded to expected_type child constructor
         """
         Create a new child structure and register it.
         This is a convenience method: create + register.
@@ -896,7 +897,7 @@ class Locus(GeneticStructure['Gene']):
         position: Optional[Union[int, float]] = None,
         chromosome: Optional[Chromosome] = None,
         parent: Optional[Chromosome] = None,
-        **kwargs: Any
+        **kwargs: Any  # extra parameters stored as custom locus attributes
     ):
         # Check if already initialized (cached instance)
         if hasattr(self, '_initialized') and self._initialized:
@@ -1563,13 +1564,13 @@ class Chromosome(GeneticStructure['Haplotype']):
         def __getitem__(self, key: Tuple[_KeyType, _KeyType]) -> float: ...
 
         @overload
-        def __getitem__(self, key: Union[slice, NDArray[np.integer[Any]], List[int]]) -> NDArray[np.float64]: ...
+        def __getitem__(self, key: Union[slice, NDArray[np.integer], List[int]]) -> NDArray[np.float64]: ...
 
         def __getitem__(
             self, key: Union[
                 _KeyType,
                 Tuple[_KeyType, _KeyType],
-                Union[slice, NDArray[np.integer[Any]], List[int]]
+                Union[slice, NDArray[np.integer], List[int]]
             ]
         ) -> Union[float, NDArray[np.float64]]:
             """Retrieve recombination rate(s) from the map.
@@ -1629,7 +1630,7 @@ class Chromosome(GeneticStructure['Haplotype']):
                 Tuple[_KeyType, _KeyType],
                 slice,
                 List[int],
-                NDArray[np.integer[Any]]
+                NDArray[np.integer]
             ],
             value: Union[float, np.ndarray]
         ) -> None:
@@ -1792,6 +1793,23 @@ class Chromosome(GeneticStructure['Haplotype']):
 
     def __len__(self):
         return len(self.loci)
+
+class SpeciesConfigBlueprint(TypedDict):
+    """Cached species-level arrays shared across population constructions.
+
+    Built once per species by :meth:`Species.get_config_blueprint` and
+    consumed by ``Configurator`` / ``PopulationBuilder``.
+    """
+
+    n_genotypes: int
+    n_haploid_genotypes: int
+    n_glabs: int
+    genotype_to_gametes_map: NDArray[np.float64]
+    gametes_to_zygote_map: NDArray[np.float64]
+    offspring_tensor: NDArray[np.float64]
+    female_genotype_compatibility: NDArray[np.float64]
+    male_genotype_compatibility: NDArray[np.float64]
+
 
 # Species (structure-level) -> HaploidGenome (entity-level)
 class Species(GeneticStructure['HaploidGenome']):
@@ -3335,6 +3353,109 @@ class Species(GeneticStructure['HaploidGenome']):
             List of all Genotype instances.
         """
         return list(self.iter_genotypes())
+
+    # -- gamete / zygote map builders ---------------------------------------------
+
+    def build_gamete_map(
+        self,
+        gamete_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+    ) -> NDArray[np.float64]:
+        """Build the genotype → gamete map for this species.
+
+        When *gamete_modifiers* is None, returns the Mendelian baseline.
+        """
+        from natal.population_config import initialize_gamete_map as _impl
+
+        return _impl(
+            diploid_genotypes=self.get_all_genotypes(),
+            haploid_genotypes=self.get_all_haploid_genotypes(),
+            n_glabs=len(self.gamete_labels or ["default"]),
+            gamete_modifiers=gamete_modifiers,
+        )
+
+    def build_zygote_map(
+        self,
+        zygote_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+    ) -> NDArray[np.float64]:
+        """Build the gamete pair → diploid genotype map for this species.
+
+        When *zygote_modifiers* is None, returns the Mendelian baseline.
+        """
+        from natal.population_config import initialize_zygote_map as _impl
+
+        return _impl(
+            haploid_genotypes=self.get_all_haploid_genotypes(),
+            diploid_genotypes=self.get_all_genotypes(),
+            n_glabs=len(self.gamete_labels or ["default"]),
+            zygote_modifiers=zygote_modifiers,
+        )
+
+    # -- lazy-loaded config blueprint ---------------------------------------------
+
+    _config_blueprint: Optional[SpeciesConfigBlueprint] = None
+
+    def get_config_blueprint(self) -> SpeciesConfigBlueprint:
+        """Return species-derived arrays cached for population construction.
+
+        Built once per species and cached — genotype / gamete maps, the
+        offspring probability tensor, and genotype compatibility arrays.
+        These never change at runtime.
+
+        Configurator and PopulationBuilder call this during build to avoid
+        recomputing species-level arrays on every construction.
+
+        Returns:
+            Dict with keys ``n_genotypes`` (int), ``n_haploid_genotypes``
+            (int), ``n_glabs`` (int), ``genotype_to_gametes_map``
+            (ndarray), ``gametes_to_zygote_map`` (ndarray),
+            ``offspring_tensor`` (ndarray), and compatibility arrays
+            (ndarray).
+        """
+        if self._config_blueprint is not None:
+            return self._config_blueprint
+
+        from natal.engine.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        genotypes = self.get_all_genotypes()
+        haplotypes = self.get_all_haploid_genotypes()
+        n_glabs = len(self.gamete_labels or ["default"])
+        n_g = len(genotypes)
+        n_hg = len(haplotypes)
+
+        g2g = self.build_gamete_map()
+        g2z = self.build_zygote_map()
+
+        meiosis_f = cast(NDArray[np.float64], g2g[0])
+        meiosis_m = cast(NDArray[np.float64], g2g[1])
+
+        offspring = compute_offspring_probability_tensor(
+            meiosis_f=meiosis_f,
+            meiosis_m=meiosis_m,
+            haplo_to_genotype_map=g2z,
+            n_genotypes=n_g,
+            n_haplogenotypes=n_hg,
+            n_glabs=n_glabs,
+        )
+
+        # Genotype compatibility: sum of gamete production per sex per genotype.
+        # Female genotype compatibility = self-produced gametes (maternal).
+        # Male genotype compatibility   = cross-produced gametes (paternal).
+        f_compat = meiosis_f.sum(axis=1)  # female side
+        m_compat = meiosis_m.sum(axis=1)  # male side
+
+        self._config_blueprint = {
+            "n_genotypes": n_g,
+            "n_haploid_genotypes": n_hg,
+            "n_glabs": n_glabs,
+            "genotype_to_gametes_map": g2g,
+            "gametes_to_zygote_map": g2z,
+            "offspring_tensor": offspring,
+            "female_genotype_compatibility": f_compat,
+            "male_genotype_compatibility": m_compat,
+        }
+        return self._config_blueprint
 
 
 # Aliases for backward compatibility
