@@ -41,7 +41,7 @@ from natal.hooks import CompiledEventHooks
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.numba_utils import is_numba_enabled
-from natal.population_config import PopulationConfig
+from natal.population_config import DiscretePopulationConfig, PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
 from natal.state_translation import (
     output_current_state as _output_current_state,
@@ -150,7 +150,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self._hook_executor: Optional[Any] = None  # HookExecutor
 
         # Static data container.
-        self._config: Optional[PopulationConfig] = None
+        self._config: Optional[PopulationConfig | DiscretePopulationConfig] = None
 
         # PopulationState container.
         self._state: Optional[T_State] = None
@@ -251,15 +251,15 @@ class BasePopulation(ABC, Generic[T_State]):
                 object.__setattr__(clone, _attr, _val)
 
         # --- fresh state: copy data from template ---
-        state_cls = type(self._require_state())
+        state_cls = type(self.state)
         new_state = state_cls.create(
             n_genotypes=resolved_config.n_genotypes,
             n_sexes=resolved_config.n_sexes,
             n_ages=resolved_config.n_ages,
         )
         object.__setattr__(clone, '_state', new_state)
-        clone_state_nn = clone._require_state()
-        self_state_nn = self._require_state()
+        clone_state_nn = clone.state
+        self_state_nn = self.state
         clone_state_nn.individual_count[:] = self_state_nn.individual_count
         # sperm_storage only exists on PopulationState (age-structured), not
         # on DiscretePopulationState — use getattr for type-safe access.
@@ -335,7 +335,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _build_observation_mask(self, obs: Observation) -> np.ndarray:
         """Build the 4-D binary mask from an Observation and current state dims."""
-        state = self._require_state()
+        state = self.state
         ind = state.individual_count
         return obs.build_mask(
             n_sexes=ind.shape[0],
@@ -451,23 +451,14 @@ class BasePopulation(ABC, Generic[T_State]):
         return self._index_registry
 
     @property
-    def config(self) -> PopulationConfig:
+    def config(self) -> PopulationConfig | DiscretePopulationConfig:
         """Public accessor for compiled population configuration."""
         if self._config is None:
             raise AttributeError("Population config has not been initialized.")
         return self._config
 
-    def _require_registry(self) -> IndexRegistry:
-        """Return the initialized registry or raise a clear initialization error."""
-        if self._registry is None:
-            raise AttributeError("Index registry has not been initialized.")
-        return self._registry
-
-    def _require_config(self) -> PopulationConfig:
-        """Return the initialized config or raise a clear initialization error."""
-        if self._config is None:
-            raise AttributeError("Population config has not been initialized.")
-        return self._config
+    def set_config(self, config: PopulationConfig | DiscretePopulationConfig) -> None:
+        self._config = config
 
     def _create_configurator(self) -> Configurator:
         """Create a ``Configurator`` wired back to this population.
@@ -477,9 +468,7 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         from natal.configurator import Configurator
 
-        cfg = Configurator.for_config(self._require_config())
-        object.__setattr__(cfg, '_pop_ref', self)
-        return cfg
+        return Configurator.for_population(self)
 
     @abstractmethod
     def update(self) -> Configurator:
@@ -497,12 +486,6 @@ class BasePopulation(ABC, Generic[T_State]):
         .. versionadded:: NEXT
         """
         ...
-
-    def _require_state(self) -> T_State:
-        """Return the initialized state or raise a clear initialization error."""
-        if self._state is None:
-            raise AttributeError("Population state has not been initialized.")
-        return self._state
 
     @property
     def state(self) -> T_State:

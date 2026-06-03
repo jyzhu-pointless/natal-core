@@ -1164,7 +1164,7 @@ class SpatialBuilder:
                 )
                 # _clone_deme copies state arrays from base_template;
                 # overwrite them with the variant group's own values.
-                state = group_template._require_state()  # pyright: ignore[reportPrivateUsage]
+                state = group_template.state  # pyright: ignore[reportPrivateUsage]
                 if "individual_count" in sig_map:
                     state.individual_count[:] = variant_config.initial_individual_count
                 if "sperm_storage" in sig_map:

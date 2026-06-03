@@ -124,9 +124,9 @@ class TestStateAndConfigInterop:
 
         custom_counts = np.full_like(pop._state.individual_count, 7.0)
         custom_state = DiscretePopulationState.create(
-            n_sexes=pop._config_nn.n_sexes,
-            n_ages=pop._config_nn.n_ages,
-            n_genotypes=pop._config_nn.n_genotypes,
+            n_sexes=pop.config.n_sexes,
+            n_ages=pop.config.n_ages,
+            n_genotypes=pop.config.n_genotypes,
             n_tick=11,
             individual_count=custom_counts,
         )

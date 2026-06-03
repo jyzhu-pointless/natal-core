@@ -270,6 +270,11 @@ class _SpatialUpdate:
             Configurator.for_config(config).presets(*presets)
         return self
 
+    # TODO(human): add reconfigure_preset() to _SpatialUpdate.
+    # Currently raises AttributeError.  Follow the same pattern
+    # as presets() above — single-deme delegates to update_deme(),
+    # all-deme iterates unique configs with dedup by id().
+
     def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:
         from natal.configurator import Configurator
 
@@ -336,6 +341,11 @@ class _SpatialUpdate:
 
         if self._deme is not None:
             cfg = self._pop.update_deme(self._deme)
+            # TODO(human): same refactor as lines 357-369 — replace
+            # per-parameter set_param dispatch with a single full method call:
+            #
+            #   getattr(cfg, method_name)(**kwargs)
+            #
             if use_full_method:
                 getattr(cfg, method_name)(**kwargs)
             else:
@@ -352,8 +362,19 @@ class _SpatialUpdate:
             if cid in seen:
                 continue
             seen.add(cid)
-            cfg = Configurator.for_config(config)
-            object.__setattr__(cfg, '_pop_ref', d)
+            cfg = Configurator.for_population(d)
+            #
+            # TODO(human): refactor _dispatch_scalar to use the full
+            # Configurator method instead of per-parameter set_param().
+            # set_param() cannot handle:
+            #   - Python bool fields (setup.stochastic → TypeError)
+            #   - empty config_path on 2D arrays (survival.adult_survival → ValueError)
+            #   - list/dict/callable values (silently skipped)
+            # Replace the if/else below with a single line:
+            #
+            #   getattr(cfg, method_name)(**kwargs)
+            #
+            # Then delete the `use_full_method` variable (line 335) — no longer needed.
             if use_full_method:
                 getattr(cfg, method_name)(**kwargs)
             else:
@@ -812,9 +833,7 @@ class SpatialPopulation:
             object.__setattr__(target, '_config', private)
             config = private
 
-        cfg = Configurator.for_config(config)
-        object.__setattr__(cfg, '_pop_ref', target)
-        return cfg
+        return Configurator.for_population(target)
 
     @property
     def tick(self) -> int:

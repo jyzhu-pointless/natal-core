@@ -41,6 +41,7 @@ from natal.population_config import (
 
 if TYPE_CHECKING:
     from natal.age_structured_population import AgeStructuredPopulation
+    from natal.base_population import BasePopulation
     from natal.discrete_generation_population import DiscreteGenerationPopulation
     from natal.genetic_entities import Genotype
     from natal.genetic_presets import GeneticPreset
@@ -772,17 +773,23 @@ class Configurator:
         """
         self._config = config
         self._species = species  # needed for initial_state / preset resolution
+
         # _registry is lazily built on first _make_ctx() call, avoiding the
         # cost of genotype enumeration for simple scalar-param updates.
         self._registry: IndexRegistry | None = None
+
         # Modifier lists — accumulated across presets() / modifiers() calls,
         # then applied when maps are rebuilt.
         self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
+
         # Accumulated kwargs for custom structured-array fields.  Each
         # .custom() call adds to this dict; build_custom_array() is called
         # only at the end.
         self._custom_kwargs: dict[str, object] = {}
+
+        # optional backref for writing config updates back to a Population when created via for_population()
+        self._pop_ref: BasePopulation[Any] | None = None
 
     @property
     def config(self) -> PopulationConfig | DiscretePopulationConfig:
@@ -803,6 +810,10 @@ class Configurator:
                 must be created via :meth:`from_species` when using
                 presets, modifiers, or fitness.
         """
+        # _species and _registry are set either:
+        #   - by from_species() (build path) — _species directly, registry lazy
+        #   - by for_population() (update path) — both from the Population
+        # so the existing guards below work for both paths without changes.
         if self._species is None:
             raise RuntimeError(
                 "presets() / modifiers() / fitness() require a Species. "
@@ -824,6 +835,11 @@ class Configurator:
         self._config = ctx.config
         self.gamete_modifiers = ctx.gamete_modifiers
         self.zygote_modifiers = ctx.zygote_modifiers
+
+    # TODO(human): step 2 — implement _sync_to_pop()
+    #   def _sync_to_pop(self):
+    #       if self._pop_ref is not None:
+    #           self._pop_ref.replace_config(self._config)
 
     # -- factory ---------------------------------------------------------------
 
@@ -908,6 +924,33 @@ class Configurator:
         if isinstance(config, DiscretePopulationConfig):
             return DiscreteConfigurator(config)
         return AgeStructuredConfigurator(config)
+
+    @staticmethod
+    def for_population(pop: BasePopulation[Any]) -> DiscreteConfigurator | AgeStructuredConfigurator:
+        """Create a Configurator wired to *pop* for runtime updates.
+
+        Binds ``_pop_ref`` (for write-back via ``_sync_to_pop()``), ``_species``,
+        and ``_registry`` from the Population so that all chain methods work without
+        further setup. This is the single entry point for ``pop.update()`` paths.
+
+        Args:
+            pop: The population to wire to.
+
+        Returns:
+            A ``DiscreteConfigurator`` or ``AgeStructuredConfigurator``
+            ready for further chaining.
+        """
+        cfg = Configurator.for_config(pop.config)
+
+        # Record the Population reference for write-back
+        cfg._pop_ref = pop
+
+        # Bind species and registry from the Population so
+        # _make_ctx() and fitness() work correctly.
+        cfg._species = pop.species
+        cfg._registry = pop.index_registry
+
+        return cfg
 
     # -- setup flags -----------------------------------------------------------
 
@@ -1025,6 +1068,7 @@ class Configurator:
         self._config = self._config._replace(
             custom=build_custom_array(self._custom_kwargs)
         )
+        # TODO(human): step 5 — migrate to _sync_to_pop()
         source = getattr(self, "_pop_ref", None)
         if source is not None:
             object.__setattr__(source, '_config', self._config)
@@ -1054,6 +1098,8 @@ class Configurator:
             # (species, config, index_registry, add_*_modifier, refresh_modifier_maps)
             apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType] — adapter implements protocol
         self._sync_from_ctx(ctx)
+        # TODO(human): step 3 — write back to Population
+        #   self._sync_to_pop()
         return self
 
     def modifiers(
@@ -1086,6 +1132,8 @@ class Configurator:
         if gamete_modifiers or zygote_modifiers:
             _rebuild_config_maps(ctx)
         self._sync_from_ctx(ctx)
+        # TODO(human): step 4 — write back to Population
+        #   self._sync_to_pop()
         return self
 
     def fitness(
@@ -1119,6 +1167,7 @@ class Configurator:
             RuntimeError: If ``_species`` is ``None`` — fitness resolution
                 requires genotype information from the Species.
         """
+        # Species guard — works for both from_species and for_population paths.
         if self._species is None:
             raise RuntimeError(
                 "fitness() requires a Species. "
@@ -1554,6 +1603,11 @@ class Configurator:
                 set_param(self._config, f"survival.{name}", value)
         # ---- convenience: apply one value to all adult ages ----
         if adult_survival is not None:
+            # TODO(human): skip adult_survival for discrete models.
+            # The docstring claims it's a no-op for discrete, but
+            # currently writes adult survival = 0.5 over the 0.0
+            # invariant (adults replaced each tick).  xfail: TestAdultSurvivalDiscrete.
+            #
             new_adult_age = self._config.new_adult_age
             self._config.age_based_survival_rates[:, new_adult_age:] = float(adult_survival)
 
@@ -1624,6 +1678,12 @@ class Configurator:
                 fecundity_m=self._config.fecundity_fitness[1],
                 viability_f=self._config.viability_fitness[0, 0, :],
                 viability_m=self._config.viability_fitness[1, 0, :],
+                # TODO(human): sync the 5 pre-extracted SCALAR fields too
+                # (female_mating_rate, male_mating_rate, reproduction_rate,
+                # base_survival_f, base_survival_m).  Currently only the 6
+                # array views above are synced — these 5 go stale (xfail tests:
+                # TestDiscreteScalarSync).  Read from the same array sources
+                # as the views already synced above.
             )
             from natal.discrete_generation_population import (
                 DiscreteGenerationPopulation,

@@ -441,9 +441,17 @@ def build_population_config(
     if initial_sperm_storage is not None:
         init_sperm = initial_sperm_storage.copy()
     else:
+        # TODO(human): third dimension should be n_genotypes_i, not n_hg_glabs.
+        # PopulationState.create() and engine functions expect n_genotypes.
+        # When they differ, the shape guard in __init__ silently discards
+        # the data (xfail: TestSpermStorageShape).  Also update the
+        # PopulationConfig docstring that documents this shape.
         init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_hg_glabs), dtype=np.float64)
 
     # Resolve carrying_capacity directly (no base/scale separation).
+    # TODO(human): `0 or x` evaluates to `x` in Python, so explicitly
+    # passing age_1_carrying_capacity=0 silently falls through.  Use an
+    # explicit `is not None` check instead of `or`.
     resolved_age_1 = age_1_carrying_capacity or old_juvenile_carrying_capacity
     if resolved_age_1 is not None:
         carrying_capacity_f = np.array(float(resolved_age_1))
