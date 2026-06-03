@@ -458,6 +458,7 @@ class BasePopulation(ABC, Generic[T_State]):
         return self._config
 
     def set_config(self, config: PopulationConfig | DiscretePopulationConfig) -> None:
+        """Replace this population's configuration."""
         self._config = config
 
     def _create_configurator(self) -> Configurator:
