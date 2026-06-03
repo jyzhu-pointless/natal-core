@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>natal-core 代码质量审查报告 — refactor/config-architecture</title>
+<style>
+  :root {
+    --bg: #f8f9fb;
+    --card: #fff;
+    --text: #2c3e50;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --critical: #dc2626; --critical-bg: #fef2f2; --critical-border: #fecaca;
+    --high: #ea580c;     --high-bg: #fff7ed;     --high-border: #fed7aa;
+    --medium: #ca8a04;   --medium-bg: #fefce8;   --medium-border: #fde68a;
+    --low: #2563eb;      --low-bg: #eff6ff;      --low-border: #bfdbfe;
+    --accent: #7c3aed;
+    --ok: #16a34a;       --ok-bg: #f0fdf4;
+    --info: #0891b2;
+    --code-bg: #1e1b4b;
+  }
+  * { margin:0; padding:0; box-sizing:border-box }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); line-height:1.6 }
+  .container { max-width:1120px; margin:0 auto; padding:24px 20px }
+
+  /* Hero */
+  .hero { background: linear-gradient(135deg, #0f0d2e 0%, #1e1b4b 40%, #4c1d95 100%); color:#fff; padding:56px 20px 48px; text-align:center }
+  .hero h1 { font-size:2.3rem; font-weight:800; letter-spacing:-0.03em; margin-bottom:8px }
+  .hero .sub { font-size:.95rem; opacity:.78; max-width:680px; margin:0 auto; line-height:1.7 }
+  .hero .meta { margin-top:18px; font-size:.82rem; opacity:.5 }
+  .hero .branch-badge { display:inline-block; padding:3px 12px; border-radius:99px; border:1px solid rgba(255,255,255,.2); font-size:.78rem; margin-top:12px; font-family:monospace }
+
+  /* Tab navigation */
+  .tab-nav { display:flex; gap:4px; flex-wrap:wrap; margin-top:28px; justify-content:center }
+  .tab-btn { padding:10px 22px; border-radius:10px 10px 0 0; border:none; background:#e5e7eb; font-size:.88rem; cursor:pointer; font-weight:550; transition:all .15s; font-family:inherit; color:var(--muted) }
+  .tab-btn:hover { background:#d1d5db; color:var(--text) }
+  .tab-btn.active { background:var(--card); color:var(--accent); font-weight:700; box-shadow:0 -2px 8px rgba(0,0,0,.04) }
+  .tab-panel { display:none; background:var(--card); border-radius:0 12px 12px 12px; padding:28px 24px; border:1px solid var(--border); box-shadow:0 2px 12px rgba(0,0,0,.03) }
+  .tab-panel.active { display:block }
+
+  /* Stat row */
+  .stats-wrap { display:flex; gap:14px; flex-wrap:wrap; justify-content:center }
+  .stat-card { background:var(--bg); border-radius:14px; padding:22px 20px; min-width:105px; text-align:center; box-shadow:0 2px 16px rgba(0,0,0,.04); border:1px solid var(--border); transition:transform .2s }
+  .stat-card:hover { transform:translateY(-2px) }
+  .stat-card .num { font-size:2.4rem; font-weight:800; letter-spacing:-0.04em; line-height:1.1 }
+  .stat-card .lbl { font-size:.76rem; color:var(--muted); margin-top:3px; text-transform:uppercase; letter-spacing:.06em; font-weight:600 }
+  .stat-card.critical { border-top:3px solid var(--critical) }
+  .stat-card.high { border-top:3px solid var(--high) }
+  .stat-card.medium { border-top:3px solid var(--medium) }
+  .stat-card.low { border-top:3px solid var(--low) }
+  .stat-card.total { border-top:3px solid var(--accent) }
+  .stat-card.critical .num { color:var(--critical) }
+  .stat-card.high .num { color:var(--high) }
+  .stat-card.medium .num { color:var(--medium) }
+  .stat-card.low .num { color:var(--low) }
+  .stat-card.total .num { color:var(--accent) }
+
+  /* Section */
+  .section { margin-top:28px }
+  .section h2 { font-size:1.2rem; font-weight:700; margin-bottom:12px; display:flex; align-items:center; gap:8px }
+  .section h3 { font-size:1.05rem; font-weight:700; margin:16px 0 8px }
+
+  /* Quality gates */
+  .gates { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px }
+  .gate { background:var(--ok-bg); border:1px solid #bbf7d0; border-radius:10px; padding:14px 20px; display:flex; align-items:center; gap:10px; font-weight:650; font-size:.92rem; color:var(--ok) }
+
+  /* Bar chart */
+  .bar-wrap { max-width:500px; margin-bottom:8px }
+  .bar-chart { display:flex; gap:6px; height:10px; border-radius:99px; overflow:hidden }
+  .bar-chart div { border-radius:99px }
+  .bar-chart .c { background:var(--critical); width:4.17% }
+  .bar-chart .h { background:var(--high); width:25% }
+  .bar-chart .m { background:var(--medium); width:34.72% }
+  .bar-chart .l { background:var(--low); width:36.11% }
+  .bar-legend { display:flex; gap:18px; font-size:.76rem; color:var(--muted); margin-top:6px; font-weight:500 }
+
+  /* Stats-inline */
+  .stats-inline { display:flex; gap:20px; flex-wrap:wrap; margin:12px 0 }
+  .stats-inline .si { text-align:center }
+  .stats-inline .si-val { font-size:1.3rem; font-weight:700 }
+  .stats-inline .si-lbl { font-size:.7rem; color:var(--muted); text-transform:uppercase }
+
+  /* Filters */
+  .search-box { width:100%; padding:11px 18px; border:1px solid var(--border); border-radius:12px; font-size:.9rem; margin-bottom:12px; outline:none; background:var(--bg); font-family:inherit }
+  .search-box:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(124,58,237,.07) }
+  .util-bar { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap }
+  .util-bar button { font-size:.8rem; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:5px 14px; cursor:pointer; color:var(--muted); font-weight:500; transition:all .15s }
+  .util-bar button:hover { color:var(--accent); border-color:var(--accent) }
+  .filter-bar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:18px }
+  .filter-btn { padding:5px 14px; border-radius:99px; border:1px solid var(--border); background:var(--card); font-size:.8rem; cursor:pointer; font-weight:500; transition:all .15s; font-family:inherit }
+  .filter-btn:hover { border-color:#a5b4fc; color:var(--accent) }
+  .filter-btn.active { background:var(--accent); color:#fff; border-color:var(--accent) }
+  .filter-btn .cnt { font-size:.68rem; opacity:.6; margin-left:1px }
+
+  /* Finding card */
+  .finding { background:var(--bg); border-radius:12px; margin-bottom:10px; border:1px solid var(--border); overflow:hidden; transition:box-shadow .15s }
+  .finding:hover { box-shadow:0 4px 20px rgba(0,0,0,.05) }
+  .finding-header { display:flex; align-items:flex-start; gap:12px; padding:15px 18px; cursor:pointer; user-select:none }
+  .finding-header .sev-dot { width:11px; height:11px; border-radius:50%; margin-top:5px; flex-shrink:0 }
+  .finding-header .sev-dot.critical { background:var(--critical); box-shadow:0 0 0 5px var(--critical-bg) }
+  .finding-header .sev-dot.high { background:var(--high); box-shadow:0 0 0 5px var(--high-bg) }
+  .finding-header .sev-dot.medium { background:var(--medium); box-shadow:0 0 0 5px var(--medium-bg) }
+  .finding-header .sev-dot.low { background:var(--low); box-shadow:0 0 0 5px var(--low-bg) }
+  .finding-header .content { flex:1; min-width:0 }
+  .finding-header .title { font-weight:650; font-size:.94rem; line-height:1.35 }
+  .finding-header .meta-line { font-size:.76rem; color:var(--muted); margin-top:4px; display:flex; gap:10px; flex-wrap:wrap; align-items:center }
+  .tag { display:inline-block; font-size:.68rem; font-weight:700; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:.05em }
+  .tag.critical { background:var(--critical-bg); color:var(--critical); border:1px solid var(--critical-border) }
+  .tag.high { background:var(--high-bg); color:var(--high); border:1px solid var(--high-border) }
+  .tag.medium { background:var(--medium-bg); color:var(--medium); border:1px solid var(--medium-border) }
+  .tag.low { background:var(--low-bg); color:var(--low); border:1px solid var(--low-border) }
+  .cat-tag { font-size:.7rem; padding:2px 8px; border-radius:4px; background:#f3f4f6; border:1px solid #e5e7eb; white-space:nowrap }
+  .finding-body { display:none; padding:0 18px 16px 41px; font-size:.86rem; color:#374151; border-top:1px solid var(--border); background:#fafafa }
+  .finding-body p { margin-bottom:6px; line-height:1.65 }
+  .finding-body .note { margin-top:8px }
+  .finding-body .fix-block { background:var(--ok-bg); border:1px solid #bbf7d0; border-radius:9px; padding:11px 15px; margin-top:10px; font-size:.84rem }
+  .finding-body .fix-block .fix-label { color:var(--ok); font-weight:700; font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px }
+  .finding.open .finding-body { display:block }
+  .finding.open .finding-header { background:#f9fafb }
+
+  /* Crash matrix */
+  .crash-matrix { width:100%; border-collapse:collapse; font-size:.84rem; margin:12px 0; border-radius:10px; overflow:hidden }
+  .crash-matrix th { background:var(--code-bg); color:#fff; padding:10px 14px; text-align:left; font-weight:600; font-size:.78rem; letter-spacing:.03em }
+  .crash-matrix td { padding:9px 14px; border-bottom:1px solid var(--border); background:var(--bg) }
+  .crash-matrix .ok { color:var(--ok); font-weight:600 }
+  .crash-matrix .fail { color:var(--critical); font-weight:600 }
+  .crash-matrix .divider td { background:#f3f4f6; font-weight:700; font-size:.76rem; color:var(--muted); padding:6px 14px }
+  .crash-matrix .api { font-family:monospace; font-size:.8rem }
+  .crash-matrix .err { font-size:.74rem; color:var(--muted); max-width:280px }
+
+  /* Summary card */
+  .summary-card { background:var(--bg); border-radius:12px; border:1px solid var(--border); padding:20px 24px; margin:12px 0 }
+  .summary-card h3 { font-size:1rem; margin-bottom:8px }
+  .summary-card ul { margin-left:18px; font-size:.88rem; color:#374151 }
+  .summary-card ul li { margin-bottom:4px; line-height:1.6 }
+
+  /* Fix plan */
+  .fix-plan { margin:16px 0 }
+  .fix-card { background:var(--bg); border-radius:12px; border:1px solid var(--border); padding:18px 22px; margin-bottom:12px; border-left:4px solid var(--accent) }
+  .fix-card.round-2 { border-left-color:var(--high) }
+  .fix-card.round-3 { border-left-color:var(--medium) }
+  .fix-card .fix-num { font-size:.75rem; font-weight:700; color:var(--accent); text-transform:uppercase; letter-spacing:.03em; margin-bottom:4px }
+  .fix-card h4 { font-size:.98rem; margin-bottom:4px }
+  .fix-card .fix-loc { font-size:.78rem; color:var(--muted); margin-bottom:8px }
+  .fix-card .fix-loc code { background:#e5e7eb; padding:1px 6px; border-radius:3px; font-size:.8rem }
+  .fix-card pre { background:var(--code-bg); color:#d4d4d8; padding:14px 18px; border-radius:8px; font-size:.8rem; line-height:1.6; overflow-x:auto; margin:8px 0 }
+  .fix-card .fix-impact { font-size:.82rem; margin-top:6px }
+  .fix-card .fix-impact strong { color:var(--ok) }
+
+  /* Dep graph */
+  .dep-graph { display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:.82rem; margin:16px 0; padding:16px; background:var(--bg); border-radius:10px; border:1px solid var(--border) }
+  .dep-node { padding:6px 14px; border-radius:8px; font-weight:600; white-space:nowrap }
+  .dep-node.r1 { background:var(--accent); color:#fff }
+  .dep-node.r2 { background:var(--high); color:#fff }
+  .dep-node.r3 { background:var(--medium); color:#fff }
+  .dep-arrow { color:var(--muted); font-size:1.1rem }
+
+  /* Footer */
+  .footer { text-align:center; padding:48px 20px 32px; color:var(--muted); font-size:.78rem; line-height:1.8 }
+  .footer a { color:var(--accent); text-decoration:none }
+
+  @media (max-width:640px) {
+    .hero h1 { font-size:1.5rem }
+    .stats-wrap { gap:6px }
+    .stat-card { min-width:60px; padding:14px 8px }
+    .stat-card .num { font-size:1.5rem }
+    .tab-btn { padding:8px 14px; font-size:.8rem }
+    .fix-card pre { font-size:.72rem; padding:10px 12px }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════ HERO ═══════ -->
+<div class="hero">
+  <h1>📋 natal-core 代码质量审查报告</h1>
+  <p class="sub">
+    <strong>refactor/config-architecture</strong> 合并到 main 分支<br>
+    105 个文件变更 · 6,905+ 行新增 · 2,400- 行删除
+  </p>
+  <div class="branch-badge">main @ a2a1148</div>
+  <p class="meta">
+    审查日期：2026-06-02 · 审查方法：6 维度并行审查 + 对抗性验证 · 42 个 AI 审查代理 · 2.4M tokens
+  </p>
+</div>
+
+<!-- ═══════ BODY ═══════ -->
+<div class="container">
+
+  <!-- TAB NAVIGATION -->
+  <div class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('findings',this)">📋 审查发现 <span style="font-size:.7rem;opacity:.6">72 条</span></button>
+    <button class="tab-btn" onclick="switchTab('crash',this)">💥 运行时崩溃矩阵</button>
+    <button class="tab-btn" onclick="switchTab('fix',this)">🔧 修复计划</button>
+  </div>
+
+  <!-- ═══════ TAB 1: FINDINGS ═══════ -->
+  <div class="tab-panel active" id="tab-findings">
+
+    <!-- STATS -->
+    <div class="stats-wrap">
+      <div class="stat-card total"><div class="num">72</div><div class="lbl">总计发现</div></div>
+      <div class="stat-card critical"><div class="num">3</div><div class="lbl">Critical</div></div>
+      <div class="stat-card high"><div class="num">18</div><div class="lbl">High</div></div>
+      <div class="stat-card medium"><div class="num">25</div><div class="lbl">Medium</div></div>
+      <div class="stat-card low"><div class="num">26</div><div class="lbl">Low</div></div>
+    </div>
+    <div style="text-align:center;margin-top:10px;font-size:.8rem;color:var(--muted)">
+      经过对抗性验证：<strong>17</strong> 个确认的 critical/high 问题 · <strong>4</strong> 个误报已排除
+    </div>
+
+    <!-- QUALITY GATES -->
+    <div class="section">
+      <h2>🚦 质量门禁状态</h2>
+      <div class="gates">
+        <div class="gate"><span style="font-size:1.3rem">✅</span> pytest — 570 passed · 17 skipped · 0 failures</div>
+        <div class="gate"><span style="font-size:1.3rem">✅</span> pyright — 0 errors · 0 warnings</div>
+        <div class="gate"><span style="font-size:1.3rem">✅</span> ruff — All checks passed</div>
+      </div>
+    </div>
+
+    <!-- SEVERITY BAR -->
+    <div class="section">
+      <h2>📊 严重性分布</h2>
+      <div class="bar-wrap">
+        <div class="bar-chart"><div class="c"></div><div class="h"></div><div class="m"></div><div class="l"></div></div>
+      </div>
+      <div class="bar-legend">
+        <span>🔴 Critical — 3 (4.2%)</span>
+        <span>🟠 High — 18 (25%)</span>
+        <span>🟡 Medium — 25 (34.7%)</span>
+        <span>🟢 Low — 26 (36.1%)</span>
+      </div>
+    </div>
+
+    <!-- CATEGORIES -->
+    <div class="section">
+      <h2>📂 按类别</h2>
+      <div class="stats-inline">
+        <div class="si"><div class="si-val" style="color:var(--critical)">11</div><div class="si-lbl">🐛 Bug</div></div>
+        <div class="si"><div class="si-val" style="color:var(--accent)">19</div><div class="si-lbl">🏗 架构</div></div>
+        <div class="si"><div class="si-val" style="color:var(--high)">15</div><div class="si-lbl">🧪 测试缺口</div></div>
+        <div class="si"><div class="si-val" style="color:var(--medium)">7</div><div class="si-lbl">📝 文档</div></div>
+        <div class="si"><div class="si-val" style="color:var(--low)">7</div><div class="si-lbl">⚡ 性能</div></div>
+      </div>
+    </div>
+
+    <!-- FINDINGS WITH FILTERS -->
+    <div class="section">
+      <h2>🔍 审查发现</h2>
+      <input class="search-box" id="search" placeholder="搜索关键词...（文件路径、标题、描述）" oninput="doFilter()">
+      <div class="util-bar">
+        <button onclick="expandAll()">📖 展开全部</button>
+        <button onclick="collapseAll()">📕 收起全部</button>
+        <span style="font-size:.78rem;color:var(--muted);margin-left:auto" id="count-label">显示 49 条</span>
+      </div>
+      <div class="filter-bar">
+        <button class="filter-btn active" data-sev="all" onclick="setFilter('all',this)">全部 <span class="cnt">49</span></button>
+        <button class="filter-btn" data-sev="critical" onclick="setFilter('critical',this)">🔴 Critical <span class="cnt">3</span></button>
+        <button class="filter-btn" data-sev="high" onclick="setFilter('high',this)">🟠 High <span class="cnt">18</span></button>
+        <button class="filter-btn" data-sev="medium" onclick="setFilter('medium',this)">🟡 Medium <span class="cnt">22</span></button>
+        <button class="filter-btn" data-sev="low" onclick="setFilter('low',this)">🟢 Low <span class="cnt">6</span></button>
+        <button class="filter-btn" data-sev="bug" onclick="setFilter('bug',this)">🐛 正确性 Bug</button>
+        <button class="filter-btn" data-sev="test" onclick="setFilter('test',this)">🧪 测试缺口</button>
+        <button class="filter-btn" data-sev="arch" onclick="setFilter('arch',this)">🏗 架构/设计</button>
+        <button class="filter-btn" data-sev="doc" onclick="setFilter('doc',this)">📝 文档</button>
+      </div>
+      <div id="findings"></div>
+    </div>
+
+  </div><!-- /tab-findings -->
+
+  <!-- ═══════ TAB 2: CRASH MATRIX ═══════ -->
+  <div class="tab-panel" id="tab-crash">
+
+    <div class="section" style="margin-top:0">
+      <h2>💥 运行时更新崩溃矩阵</h2>
+      <p style="font-size:.86rem;color:var(--muted);margin-bottom:16px">
+        根因：<code>_create_configurator()</code> 和 <code>_SpatialUpdate</code> 都使用 <code>Configurator.for_config()</code>，它只包装 config 对象，不设置 <code>_species</code>。
+        之后 <code>fitness()</code>、<code>presets()</code>、<code>modifiers()</code>、<code>reconfigure_preset()</code> 都通过 <code>_make_ctx()</code> 触发守卫。
+        空间路径额外有 <code>_dispatch_scalar</code> → <code>set_param</code> 路由问题。
+      </p>
+    </div>
+
+    <table class="crash-matrix">
+      <thead><tr><th style="width:210px">方法</th><th style="width:120px">API 性质</th><th style="width:100px">Panmictic</th><th style="width:100px">Spatial</th><th>错误详情</th></tr></thead>
+      <tbody>
+        <tr><td class="api">competition(K=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="ok">✅ 正常</td><td class="err">—</td></tr>
+        <tr><td class="api">competition(r=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="ok">✅ 正常</td><td class="err">—</td></tr>
+        <tr><td class="api">reproduction(eggs=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="ok">✅ 正常</td><td class="err">—</td></tr>
+        <tr><td class="api">reproduction(sex_ratio=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="ok">✅ 正常</td><td class="err">—</td></tr>
+        <tr><td class="api">survival(female_age0=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="ok">✅ 正常</td><td class="err">—</td></tr>
+        <tr><td class="api">custom(temp=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="ok">✅ 正常</td><td class="err">—</td></tr>
+        <tr><td class="api">apply()</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="ok">—</td><td class="err">Spatial 无此方法</td></tr>
+        <tr class="divider"><td colspan="5">空间路径额外崩溃 — _dispatch_scalar → set_param 路由问题</td></tr>
+        <tr><td class="api">survival(adult_survival=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="fail">❌ ValueError</td><td class="err">field is a 2d array but config_path is empty</td></tr>
+        <tr><td class="api">setup(stochastic=…)</td><td>运行时 ✅</td><td class="ok">✅ 正常</td><td class="fail">❌ TypeError</td><td class="err">Python bool on immutable config</td></tr>
+        <tr class="divider"><td colspan="5">全局崩溃 — _species=None 导致</td></tr>
+        <tr><td class="api">fitness(viability=…)</td><td>运行时 ✅</td><td class="fail">❌ RuntimeError</td><td class="fail">❌ RuntimeError</td><td class="err">fitness() requires a Species</td></tr>
+        <tr><td class="api">reconfigure_preset(drive,…)</td><td>运行时 ✅</td><td class="fail">❌ RuntimeError</td><td class="fail">❌ AttributeError</td><td class="err">Spatial: '_SpatialUpdate' has no attribute 'reconfigure_preset'</td></tr>
+        <tr><td class="api">presets(drive)</td><td>构建时 ⚠️</td><td class="fail">❌ RuntimeError</td><td class="fail">❌ RuntimeError</td><td class="err">presets()/modifiers()/fitness() require a Species</td></tr>
+        <tr><td class="api">modifiers(gamete=…)</td><td>构建时 ⚠️</td><td class="fail">❌ RuntimeError</td><td class="fail">❌ RuntimeError</td><td class="err">presets()/modifiers()/fitness() require a Species</td></tr>
+      </tbody>
+    </table>
+
+    <div class="summary-card" style="margin-top:14px">
+      <h3>🔑 关键结论</h3>
+      <ul>
+        <li><strong>运行时真正需要的</strong> <code>reconfigure_preset()</code> 和 <code>fitness()</code> — 在任何群体类型上都崩溃</li>
+        <li><code>presets()</code> 和 <code>modifiers()</code> 理论上是构建时 API（不应走 <code>update()</code>），但错误消息暗示设计预期能从 <code>update()</code> 调用</li>
+        <li>空间路径额外有 2 个崩溃 — <code>setup(bool)</code> 和 <code>survival(adult_survival)</code> — 根因是 <code>_dispatch_scalar</code> 把一切路由给 <code>set_param</code></li>
+        <li>修复入口：<code>base_population.py:480</code> — <code>_create_configurator()</code> 中补设 <code>_species</code></li>
+      </ul>
+    </div>
+
+  </div><!-- /tab-crash -->
+
+  <!-- ═══════ TAB 3: FIX PLAN ═══════ -->
+  <div class="tab-panel" id="tab-fix">
+
+    <div class="section" style="margin-top:0">
+      <h2>🔧 修复计划</h2>
+      <p style="font-size:.86rem;color:var(--muted);margin-bottom:16px">
+        这些 bug 有一个共同模式：都是<strong>重构过程中"协议不一致"的产物</strong>。Configurator 有三条构造路径（<code>from_species</code>、<code>for_config</code>、子类直接构造），每条路径初始化的属性不同。<code>update()</code> 走了 <code>for_config</code> 路径，但 <code>presets()</code>/<code>fitness()</code> 等方法是按 <code>from_species</code> 路径的假设写的。
+      </p>
+    </div>
+
+    <!-- Dependency graph -->
+    <h3>🔗 修复依赖关系</h3>
+    <div class="dep-graph">
+      <span class="dep-node r1">Fix 1+2<br>_species</span>
+      <span class="dep-arrow">→</span>
+      <span class="dep-node r1">Fix 3<br>_write_back</span>
+      <span class="dep-arrow">→</span>
+      <span style="font-size:.82rem;padding:6px 12px;background:#f0fdf4;border-radius:8px;font-weight:600;color:var(--ok)">运行时<br>preset/fitness 可用</span>
+    </div>
+    <div class="dep-graph" style="margin-top:8px">
+      <span class="dep-node r1">Fix 4<br>dispatch 重构</span>
+      <span class="dep-arrow">→</span>
+      <span style="font-size:.82rem;padding:6px 12px;background:#f0fdf4;border-radius:8px;font-weight:600;color:var(--ok)">空间 setup/survival<br>不再崩溃</span>
+    </div>
+    <div class="dep-graph" style="margin-top:8px">
+      <span class="dep-node r2">Fix 5<br>标量同步</span>
+      <span class="dep-node r2" style="margin-left:8px">Fix 6<br>sperm 形状</span>
+      <span class="dep-node r2" style="margin-left:8px">Fix 7<br>adult 守卫</span>
+      <span style="margin-left:8px;font-size:.8rem;color:var(--muted)">各自独立</span>
+    </div>
+
+    <!-- Round 1 -->
+    <h3>🥇 第一轮：解锁运行时 API</h3>
+
+    <div class="fix-plan">
+      <div class="fix-card">
+        <div class="fix-num">Fix 1+2</div>
+        <h4>补设 <code>_species</code> — 解除 4 个方法的崩溃</h4>
+        <div class="fix-loc">修改 <code>base_population.py:480</code> · <code>spatial_population.py:815,355</code> — 共 3 个位置</div>
+        <pre># base_population.py:480 — panmictic 路径
+def _create_configurator(self) -> Configurator:
+    cfg = Configurator.for_config(self._require_config())
+    object.__setattr__(cfg, '_pop_ref', self)
+    object.__setattr__(cfg, '_species', self.species)   # ← 新增
+    return cfg
+
+# spatial_population.py:815 — 单 deme 路径
+def update_deme(self, demi: int) -> Configurator:
+    ...
+    object.__setattr__(cfg, '_pop_ref', target)
+    object.__setattr__(cfg, '_species', target.species)  # ← 新增
+
+# spatial_population.py:355 — 全 deme 路径
+object.__setattr__(cfg, '_pop_ref', d)
+object.__setattr__(cfg, '_species', d.species)           # ← 新增</pre>
+        <div class="fix-impact"><strong>解锁：</strong>fitness(), presets(), modifiers(), reconfigure_preset() 不再因 _species=None 崩溃</div>
+      </div>
+
+      <div class="fix-card">
+        <div class="fix-num">Fix 3</div>
+        <h4><code>_write_back</code> — 让运行时 preset/fitness 变更持久化</h4>
+        <div class="fix-loc">修改 <code>configurator.py</code> — presets() / modifiers() 末尾 + 新增 _write_back()</div>
+        <pre># configurator.py — 新增私有方法
+def _write_back(self) -> None:
+    """如果通过 pop.update() 创建，将配置写回 Population."""
+    source = getattr(self, '_pop_ref', None)
+    if source is not None:
+        object.__setattr__(source, '_config', self._config)
+
+# presets() 末尾添加：
+def presets(self, *presets):
+    ...
+    self._sync_from_ctx(ctx)
+    self._write_back()       # ← 新增
+    return self
+
+# modifiers() 末尾同样添加 self._write_back()</pre>
+        <div class="fix-impact"><strong>解锁：</strong>preset/fitness 对配置数组的修改（通过 _replace 创建的新 NamedTuple）写回 Population。reconfigure_preset() 因调用了 self.presets() 自动受益。</div>
+      </div>
+
+      <div class="fix-card">
+        <div class="fix-num">Fix 4</div>
+        <h4>重构 <code>_dispatch_scalar</code> — 消灭空间路径的路由 bug</h4>
+        <div class="fix-loc">修改 <code>spatial_population.py:_dispatch_scalar</code></div>
+        <pre># 当前：逐参数调 set_param —— 无法处理 bool、2D 数组、list/dict
+use_full_method = method_name in ("custom", "fitness", "modifiers")
+if use_full_method:
+    getattr(cfg, method_name)(**kwargs)
+else:
+    for key, val in kwargs.items():
+        if isinstance(val, (float, int, bool)):
+            set_param(cfg.config, f"{method_name}.{key}", val)
+
+# 修复：统一走完整 Configurator 方法
+getattr(cfg, method_name)(**kwargs)</pre>
+        <div class="fix-impact"><strong>解锁：</strong>setup(stochastic=True)、survival(adult_survival=…)、survival(female=[...]) 在空间路径上不再崩溃/静默跳过。所有参数解析逻辑由 Configurator 自己的 _impl 方法统一处理。</div>
+      </div>
+    </div>
+
+    <!-- Round 2 -->
+    <h3>🥈 第二轮：修复静默数据损坏</h3>
+
+    <div class="fix-plan">
+      <div class="fix-card round-2">
+        <div class="fix-num">Fix 5</div>
+        <h4><code>build()</code> 同步 5 个缺失的标量</h4>
+        <div class="fix-loc">修改 <code>configurator.py:1620</code> — _replace() 调用</div>
+        <pre>self._config = self._config._replace(
+    meiosis_f=..., meiosis_m=...,
+    fecundity_f=..., fecundity_m=...,
+    viability_f=..., viability_m=...,
+    # ← 新增 5 行：
+    female_mating_rate=float(self._config.age_based_mating_rates[0, 1]),
+    male_mating_rate=float(self._config.age_based_mating_rates[1, 1]),
+    reproduction_rate=float(self._config.age_based_reproduction_rates[1]),
+    base_survival_f=float(self._config.age_based_survival_rates[0, 0]),
+    base_survival_m=float(self._config.age_based_survival_rates[1, 0]),
+)</pre>
+        <div class="fix-impact"><strong>解锁：</strong>离散引擎不再读取过期标量值。xfail 测试 test_mating_rate_scalar_synced_after_build 和 test_survival_scalar_synced_after_build 变为 pass。</div>
+      </div>
+
+      <div class="fix-card round-2">
+        <div class="fix-num">Fix 6</div>
+        <h4>修复 <code>initial_sperm_storage</code> 形状不匹配</h4>
+        <div class="fix-loc">修改 <code>population_config.py:444</code> — 一行</div>
+        <pre>- init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_hg_glabs), dtype=np.float64)
++ init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_genotypes_i), dtype=np.float64)</pre>
+        <div class="fix-impact"><strong>解锁：</strong>默认精子库能正确加载到 PopulationState。xfail 测试 test_sperm_storage_shape_* 变为 pass。同时更新 PopulationConfig NamedTuple docstring 中的形状描述。</div>
+      </div>
+
+      <div class="fix-card round-2">
+        <div class="fix-num">Fix 7</div>
+        <h4><code>adult_survival</code> 在离散模型中真正成为 no-op</h4>
+        <div class="fix-loc">修改 <code>configurator.py:_survival_impl</code></div>
+        <pre>if adult_survival is not None:
+    if isinstance(self._config, DiscretePopulationConfig):
+        return  # docstring 说这是 no-op，让其真正成为 no-op
+    self._config.age_based_survival_rates[:, new_adult_age:] = float(adult_survival)</pre>
+        <div class="fix-impact"><strong>解锁：</strong>离散模型不变式（成体每代替换）不再被 adult_survival 破坏。xfail 测试变为 pass。</div>
+      </div>
+    </div>
+
+    <!-- Round 3 -->
+    <h3>🥉 第三轮：代码卫生</h3>
+
+    <div class="fix-plan">
+      <div class="fix-card round-3">
+        <div class="fix-num">Fix 8</div>
+        <h4>假值 <code>or</code> bug — <code>population_config.py:447</code></h4>
+        <div class="fix-loc">修改 <code>population_config.py:447</code></div>
+        <pre>- resolved_age_1 = age_1_carrying_capacity or old_juvenile_carrying_capacity
++ resolved_age_1 = (
++     age_1_carrying_capacity if age_1_carrying_capacity is not None
++     else old_juvenile_carrying_capacity
++ )</pre>
+        <div class="fix-impact">显式传入 age_1_carrying_capacity=0 不再被 Python 假值语义静默替换。</div>
+      </div>
+    </div>
+
+    <!-- Execution order -->
+    <h3>📋 建议执行顺序</h3>
+    <table class="crash-matrix">
+      <thead><tr><th style="width:60px">轮次</th><th>Fix</th><th>文件数</th><th>效果</th><th>验证</th></tr></thead>
+      <tbody>
+        <tr>
+          <td style="font-weight:800;color:var(--accent)">🥇</td>
+          <td>1+2 · 3 · 4</td>
+          <td>3</td>
+          <td>解锁全部运行时 API，空间路径不再崩溃</td>
+          <td style="font-size:.8rem">新增的 update→run 端到端测试 + 崩溃矩阵中 ❌→✅</td>
+        </tr>
+        <tr>
+          <td style="font-weight:800;color:var(--high)">🥈</td>
+          <td>5 · 6 · 7</td>
+          <td>3</td>
+          <td>消灭 3 个静默数据损坏 bug</td>
+          <td style="font-size:.8rem">5 个 xfail 测试 → pass</td>
+        </tr>
+        <tr>
+          <td style="font-weight:800;color:var(--medium)">🥉</td>
+          <td>8</td>
+          <td>1</td>
+          <td>代码卫生</td>
+          <td style="font-size:.8rem">边界值测试</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size:.78rem;color:var(--muted);margin-top:8px">每轮结束后运行 <code>pytest + pyright + ruff</code>。之前补充的 xfail 测试在修复后应自动变为 pass。</p>
+
+  </div><!-- /tab-fix -->
+
+  <!-- FOOTER -->
+  <div class="footer">
+    Generated by Claude Code (claude-opus-4-8) · natal-core project<br>
+    Methodology: 6-dimension parallel review + adversarial verification · 42 AI agents · ~2.4M tokens<br>
+    <a href="https://github.com/jyzhu-pointless/natal-core">github.com/jyzhu-pointless/natal-core</a>
+  </div>
+
+</div><!-- .container -->
+
+<script>
+// ═══════════════ TAB SWITCHING ═══════════════
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ═══════════════ FINDINGS DATA ═══════════════
+const FINDINGS = [
+  {s:"critical",c:"correctness",f:"src/natal/base_population.py:480 · spatial_population.py:258",t:"pop.update() 上 4 个方法因 _species=None 崩溃 — 影响 panmictic + spatial",d:"`_create_configurator()` 和 `_SpatialUpdate` 都使用 `Configurator.for_config()`，它只包装 config 对象，不设置 `_species`。之后调用 `fitness()`、`presets()`、`modifiers()`、`reconfigure_preset()` 都会触发 `_make_ctx()` 中的守卫。其中 `reconfigure_preset()` 和 `fitness()` 是文档化的运行时 API — 它们在任何群体类型上都不可用。详见崩溃矩阵选项卡。",i:"运行时的 reconfigure_preset() 和 fitness() 在任何群体类型上都崩溃。空间路径额外有 setup(bool) 和 adult_survival(2D数组) 的崩溃。",x:"① _create_configurator() 补设 _species；② 空间路径同理；③ _write_back() 写回；④ _dispatch_scalar 重构。"},
+  {s:"critical",c:"correctness",f:"src/natal/configurator.py:1620",t:"DiscretePopulationConfig 预提取标量字段过期 — 静默数据损坏",d:"`DiscretePopulationConfig` 存储 5 个预提取标量字段为 Python float。链式方法修改底层数组后，这些标量不会被更新。`build():1620` 只同步 6 个数组视图，漏掉了所有 5 个标量。离散引擎直接读取这些过期值。",i:"静默数据损坏 — 用户设 female_adult_mating_rate=0.8 但引擎用默认值 1.0。",x:"build():1620 的 _replace() 中添加 5 个标量同步。"},
+  {s:"critical",c:"correctness",f:"src/natal/population_config.py:441-444",t:"initial_sperm_storage 形状不匹配 — 第三维 n_hg*n_glabs ≠ n_genotypes",d:"`build_population_config()` 创建默认 sperm_storage 用 `n_hg_glabs`。但 `PopulationState.create()` 和所有引擎函数期望第三维为 `n_genotypes`。形状检查在 __init__() 中静默丢弃。",i:"默认初始精子库永远无法加载到状态中。",x:"将 population_config.py:444 改为 np.zeros((n_ages_i, n_genotypes_i, n_genotypes_i))。"},
+  {s:"high",c:"correctness",f:"src/natal/configurator.py:381",t:"set_param() 对 adult_survival 失败 — 空 config_path 无法定位 2D 数组",d:"`adult_survival` 的 `config_path: []`但 `config_field` 是 2D 数组。`_SpatialUpdate._dispatch_scalar()` 调 `set_param()` 导致空间路径崩溃。",i:"空间群体 pop.update().survival(adult_survival=...) 崩溃。",x:"adult_survival 不应走 set_param — 需要切片写入 [:, new_adult_age:] 专用路径（Fix 4 解决）。"},
+  {s:"high",c:"correctness",f:"src/natal/spatial_population.py:342",t:"_dispatch_scalar 静默丢弃非标量参数（list/dict/NDArray）",d:"只处理 float|int|bool，其他类型静默跳过。pop.update().survival(female=[0.5,0.6]) 不报错也不生效。",i:"静默失败 — 难以调试。",x:"Fix 4：统一走完整 Configurator 方法调用而非逐参数 set_param。"},
+  {s:"high",c:"correctness",f:"src/natal/configurator.py:1556",t:"adult_survival 在离散模型中不是文档声称的 no-op",d:"`_survival_impl()` 将 [:, new_adult_age:] 设为 adult_survival。离散模型中被覆盖。docstring 说它是 no-op。",i:"破坏离散模型不变式 — 成体跨代存活。",x:"_survival_impl() 中检测 DiscretePopulationConfig，跳过写入（Fix 7）。"},
+  {s:"high",c:"correctness",f:"src/natal/configurator.py:1716",t:"DiscreteConfigurator.competition() 从可能过期的 sex_ratio 计算 expected_females",d:"自动计算 K × sex_ratio 用当前值。若 .competition() 在 .reproduction(sex_ratio=0.6) 之前调用，用默认 0.5。且从未设 _has_user_expected_females=True（死存储）。",i:"Ordering 依赖 — 平衡计算用错性别比。",x:"推迟自动计算到 apply()/build() 或 sex_ratio 变更时重新计算。"},
+  {s:"high",c:"correctness",f:"src/natal/population_config.py:447",t:"假值 Bug — age_1_carrying_capacity or old_juvenile_carrying_capacity",d:"Python 中 0 or x 返回 x。显式传 0 被静默替换。",i:"显式传入 age_1_carrying_capacity=0 被静默替换。",x:"用 None 检查（Fix 8）。"},
+  {s:"high",c:"architecture",f:"src/natal/configurator.py → population_builder.py",t:"Configurator 依赖已废弃的 population_builder 模块",d:"`initial_state()` 用 `resolve_age_structured_initial_individual_count()`；`_reproduction_impl()/_survival_impl()` 用 `resolve_age_param()`。现代 API 依赖废弃模块。",i:"阻塞 population_builder.py 移除。",x:"提取共享工具函数到 natal/_config_helpers.py。"},
+  {s:"high",c:"architecture",f:"src/natal/configurator.py:1055",t:"_ConfigContext 依赖隐式鸭子类型而非形式化 Protocol",d:"`_ConfigContext` 伪装 BasePopulation 以支持预设。无 PEP 544 Protocol。pyright 错误通过 ignore 抑制。",i:"BasePopulation API 扩展若被预设路径使用，产生运行时崩溃。",x:"定义 PresetHost Protocol。"},
+  {s:"high",c:"test",f:"tests/test_configurator.py",t:"Configurator 8 个守卫路径全部无测试覆盖",d:"5 个 RuntimeError + 3 个 ValueError 守卫全无覆盖。",i:"守卫被削弱时静默损坏配置。",x:"✅ 已补充 TestRuntimeErrorGuards + TestAgeStructureValidation。"},
+  {s:"high",c:"test",f:"tests/",t:"hook_set_param Numba 兼容包装器零测试覆盖",d:"全测试套件无任何测试调用此函数。",i:"签名或 objmode 边界的变更导致运行时 Numba 编译失败。",x:"✅ 已补充 TestHookSetParam。"},
+  {s:"high",c:"test",f:"tests/",t:"fitness sex+age 组合格式和 None-age-skip 无测试",d:"组合格式 {genotype: {female: {0: val}}} 和 None 跳过格式无覆盖。",i:"静默产生错误 fitness 值。",x:"✅ 已补充 TestFitnessEdgeCases。"},
+  {s:"high",c:"test",f:"tests/",t:"性选择 multiply 模式和 male-selector 路径无测试",d:"_write_fitness_field_flat 中性选择的 multiply 和 male selector 分支无覆盖。",i:"用户用 male selector 或 multiply 模式静默产生错误结果。",x:"✅ 已补充 3 个性选择测试。"},
+  {s:"high",c:"test",f:"tests/",t:"5 个已修复 bug 中 2 个缺少回归测试",d:"commit ddb6ab0 修复的 bug #1 和 #4 无回归测试。",i:"重构时已修复 bug 静默重现。",x:"✅ 已补充覆盖。"},
+  {s:"high",c:"test",f:"tests/test_spatial_update.py",t:"空间 update 测试只用 discrete_generation；age_structured 零覆盖",d:"全部 11 测试用 pop_type='discrete_generation'。",i:"年龄结构空间更新 bug 只在使用时才暴露。",x:"添加 pop_type='age_structured' 并行测试。"},
+  {s:"high",c:"test",f:"tests/",t:"无 configurator build → update → run 端到端测试",d:"无测试执行完整流程。",i:"运行时修改特性可能在引擎层面静默失效。",x:"✅ 已补充 TestSpatialUpdateRunCycle。"},
+  {s:"high",c:"perf",f:"src/natal/engine/templates/spatial_lifecycle_*.tmpl.py",t:"config_bank Python list 在 Numba prange 内访问 + 迁移硬编码 config_bank[0]",d:"每个 deme 每 tick 在 prange 内通过 reflected list 访问配置。迁移参数总是读 config_bank[0]。",i:"大规模空间模拟性能瓶颈。异构 demes 不能有独立迁移参数。",x:"存储为 Numba typed array；迁移参数从 deme 自身配置读取。"},
+  {s:"high",c:"docs",f:"docs/parameter_reference.md:5",t:"文档引用不存在的函数 set_config_param",d:"'D' 方法列为 set_config_param(config, id, v) — 此函数在源代码中不存在。",i:"用户调用不存在的函数立即 AttributeError。",x:"移除 'D' 列及其引用。"},
+  {s:"high",c:"docs",f:"docs/api/configurator.md:57",t:"DiscreteConfigurator 示例调用不存在的 age_structure()",d:"代码示例显示 cfg.age_structure() — DiscreteConfigurator 无此方法。",i:"文档示例代码不可运行。",x:"移除该行；添加注释。"},
+  {s:"medium",c:"correctness",f:"src/natal/configurator.py:1370",t:"K 自动检测在调用时读 initial_individual_count 而非构建时",d:"无显式 K 时从 age-1 计数自动检测。若 .competition() 在 .initial_state() 前调用，数组全零 → 回退 1000。",i:"K 与实际初始状态不一致。",x:"推迟 K 自动检测到 build()。"},
+  {s:"medium",c:"architecture",f:"src/natal/parameters.py:99",t:"JSONC 注释剥离器在 '//' 出现在字符串中时断裂",d:"逐行在 // 处切分。JSON 字符串含 // 时被破坏。",i:"添加含 // 的文档字符串破坏导入。",x:"用正则或 json5 库。"},
+  {s:"medium",c:"architecture",f:"src/natal/population_config.py:422",t:"build_population_config() 用 assert 做输入验证",d:"assert 在 python -O 下被剥离。",i:"生产环境收到无效输入获神秘下游错误。",x:"替换为 if not ...: raise ValueError(...)。"},
+  {s:"medium",c:"architecture",f:"src/natal/population_config.py:240",t:"PlainPopulationConfig 是冗余别名",d:"PlainPopulationConfig = PopulationConfig 只是别名。to_plain 接收/返回相同类型。",i:"误导性 API 表面。",x:"移除别名或重命名为 clone_population_config。"},
+  {s:"medium",c:"architecture",f:"src/natal/configurator.py",t:"fitness 写入逻辑在 Configurator 和 legacy Builder 间重复（~500 行）",d:"Configurator _write_fitness_field（~280 行）和 legacy Builder（~250 行×2）重复。",i:"bug 修复可能遗漏 legacy Builder。",x:"提取到 natal/fitness_writer.py。"},
+  {s:"medium",c:"architecture",f:"src/natal/configurator.py",t:"setup() 与 from_species() 职责重叠",d:"两种设置初始参数的方式。",i:"API 歧义。",x:"将 setup() 参数融合到 from_species() 或文档化。"},
+  {s:"medium",c:"architecture",f:"src/natal/configurator.py",t:"子类类型特化产生大量样板代码",d:"每个领域方法在子类中覆盖仅为了缩小返回类型。添加参数需通过三层注册。",i:"维护负担。",x:"考虑单一 Configurator + 构建时验证。"},
+  {s:"medium",c:"perf",f:"src/natal/configurator.py:207",t:"_rebuild_config_maps 每次修饰器变更触发 O(g³) 张量计算",d:"支配成本 compute_offspring_probability_tensor 为 O(n_genotypes³)。链式调用触发多次冗余重算。",i:"多基因型物种构建时间显著增加。",x:"批量修饰器注册或脏标志 + 延迟重算。"},
+  {s:"medium",c:"perf",f:"src/natal/hooks/compiler.py:252",t:"模板内容未含在代码生成哈希键中",d:"哈希仅含模式字符串和 hook 标识。同进程内模板修改后不生效。",i:"同进程内模板热更新不生效。",x:"在哈希键中包含模板文件内容哈希。"},
+  {s:"medium",c:"architecture",f:"src/natal/configurator.py",t:"\"不可变性\" 文档有误导性 — 数组默认可变",d:"文档说不可变但 85% 字段是可变 NumPy 数组。",i:"用户误以为构建后配置完全不可变。",x:"更新文档为'标量不可变，数组可变'。"},
+  {s:"medium",c:"test",f:"tests/",t:"Legacy K 回退链和 growth_mode ValueError 无测试",d:"_competition_impl 两条未测试路径。",i:"回退优先级或映射变更不被捕获。",x:"添加 legacy 参数和无效字符串测试。"},
+  {s:"medium",c:"test",f:"tests/",t:"per-age reproduction/survival 参数通过 Configurator API 测试浅",d:"dict/callable 输入格式通过新 Configurator 路径无测试。",i:"dict/callable 参数解析 bug 不被捕获。",x:"添加 per-age dict/callable 格式测试。"},
+  {s:"medium",c:"test",f:"tests/",t:"_merge_hooks dict 合并和后向兼容 callable 无测试",d:"原始 dict 注册路径和旧式装饰器路径无测试。",i:"hooks 静默丢失。",x:"✅ 已补充 TestMergeHooksAdvanced。"},
+  {s:"medium",c:"test",f:"tests/",t:"build() 存储 hooks + 传入 hooks 合并无测试",d:".hooks() + build(hooks=...) 组合无测试。",i:"合并逻辑若有 bug，hooks 静默丢失。",x:"添加组合使用测试。"},
+  {s:"medium",c:"docs",f:"docs/api/configurator.md:218",t:"Hook 示例缺少必需的 return 0",d:"my_hook() 无 return 0。协议要求 → int。Numba 模式下编译失败。",i:"用户复制的 hook 不工作。",x:"添加 return 0。"},
+  {s:"medium",c:"docs",f:"docs/api/configurator.md:283",t:"后向兼容示例有 Python 语法错误",d:"多行表达式无括号包裹。",i:"复制代码立即 SyntaxError。",x:"包裹在括号中。"},
+  {s:"medium",c:"docs",f:"docs/parameter_reference.md:35",t:"Survival() 签名与 Configurator API 不匹配",d:"文档列 generation_time、equilibrium_distribution 为参数 — Configurator 不接受。",i:"用户用文档参数遇到意外错误。",x:"更新为 Configurator 参数名或标注 legacy-only。"},
+  {s:"low",c:"correctness",f:"src/natal/population_config.py:1084",t:"from_population_config 硬编码 adult index=1",d:"male_mating_rate=age_based_mating_rates[1,1] 等硬编码。n_ages≠2 时错误。",i:"非标准年龄结构下预提取标量不正确。",x:"用 int(cfg.new_adult_age) 动态索引。"},
+  {s:"low",c:"correctness",f:"src/natal/population_config.py:1125",t:"build_discrete_population_config 接受 n_ages≠2 但引擎硬编码",d:"接受 n_ages 参数但引擎只处理 2 个年龄。",i:"n_ages=3 静默产生错误结果。",x:"添加 if n_ages != 2: raise ValueError(...)。"},
+  {s:"low",c:"architecture",f:"src/natal/configurator.py",t:"异常类型不一致 — RuntimeError vs KeyError vs ValueError",d:"不同条件下异常类型不一致。",i:"增加消费者错误处理复杂度。",x:"定义 NatalConfigError 等上下文异常类。"},
+  {s:"low",c:"architecture",f:"src/natal/configurator.py:447",t:"_write_fitness_field 和 _flat 命名不清晰",d:"_flat 应表明忽略嵌套但实际上 sex_idx 仍是参数。",i:"代码可读性降低。",x:"重命名。"},
+  {s:"low",c:"docs",f:"src/natal/configurator.py:846",t:"文档字符串用 'Wright-Fisher' 而非 'discrete-generation'",d:"CLAUDE.md 指定用 'discrete-generation'。",i:"术语不一致。",x:"替换。"},
+  {s:"low",c:"docs",f:"docs/parameter_reference.md",t:"use_sperm_storage 未标注 FutureWarning",d:"标记为 'not passed to Config' 但实际发出 FutureWarning。",i:"用户困惑。",x:"添加注释。"},
+];
+
+// ═══════════════ FILTER + RENDER ═══════════════
+let curFilter = 'all';
+function doFilter() {
+  const s = (document.getElementById('search').value || '').toLowerCase();
+  let list = FINDINGS;
+  if (curFilter === 'bug') list = FINDINGS.filter(f => f.c === 'correctness');
+  else if (curFilter === 'test') list = FINDINGS.filter(f => f.c === 'test');
+  else if (curFilter === 'arch') list = FINDINGS.filter(f => f.c === 'architecture');
+  else if (curFilter === 'doc') list = FINDINGS.filter(f => f.c === 'docs');
+  else if (curFilter === 'perf') list = FINDINGS.filter(f => f.c === 'perf');
+  else if (curFilter !== 'all') list = FINDINGS.filter(f => f.s === curFilter);
+  if (s) list = list.filter(f => f.t.toLowerCase().includes(s) || f.d.toLowerCase().includes(s) || f.f.toLowerCase().includes(s));
+  document.getElementById('count-label').textContent = `显示 ${list.length} 条`;
+  const catEmoji = {correctness:'🐛 正确性 Bug',test:'🧪 测试缺口',architecture:'🏗 架构/设计',perf:'⚡ 性能',docs:'📝 文档'};
+  document.getElementById('findings').innerHTML = list.map(f => `
+    <div class="finding" data-sev="${f.s}">
+      <div class="finding-header" onclick="this.parentElement.classList.toggle('open')">
+        <div class="sev-dot ${f.s}"></div>
+        <div class="content">
+          <div class="title">${f.t}</div>
+          <div class="meta-line">
+            <span class="tag ${f.s}">${f.s.toUpperCase()}</span>
+            <span class="cat-tag">${catEmoji[f.c]||f.c}</span>
+            <span>📁 ${f.f}</span>
+          </div>
+        </div>
+      </div>
+      <div class="finding-body">
+        <p>${f.d}</p>
+        ${f.i?`<p class="note"><strong>🔍 影响：</strong>${f.i}</p>`:''}
+        ${f.x?`<div class="fix-block"><div class="fix-label">🔧 修复方向</div>${f.x}</div>`:''}
+      </div>
+    </div>`).join('');
+}
+function setFilter(sev, btn) {
+  curFilter = sev;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('search').value = '';
+  doFilter();
+}
+function expandAll() { document.querySelectorAll('.finding').forEach(f => f.classList.add('open')); }
+function collapseAll() { document.querySelectorAll('.finding').forEach(f => f.classList.remove('open')); }
+doFilter();
+</script>
+</body>
+</html>
