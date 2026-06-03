@@ -55,7 +55,12 @@ T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationStat
 if TYPE_CHECKING:
     from natal.configurator import Configurator
     from natal.genetic_presets import GeneticPreset
-    from natal.hooks import CompiledHookDescriptor, DemeSelector, HookProgram
+    from natal.hooks import (
+        CompiledHookDescriptor,
+        DemeSelector,
+        HookExecutor,
+        HookProgram,
+    )
     from natal.observation import GroupsInput, Observation
 
 HookCallback = Callable[..., object]
@@ -137,17 +142,24 @@ class BasePopulation(ABC, Generic[T_State]):
             event: [] for event in self.ALLOWED_EVENTS
         }
 
-        # Unified gamete modifier list.
-        self._gamete_modifiers: List[Tuple[int, Optional[str], GameteModifier]] = []
+        # Presets with priority IDs.  Writes go to _presets; derived
+        # modifier lists are rebuilt from _presets + _manual_* on demand.
+        self._presets: list[tuple[int, GeneticPreset]] = []
+        self._next_preset_id: int = 0
 
-        # Unified zygote modifier list.
-        self._zygote_modifiers: List[Tuple[int, Optional[str], ZygoteModifier]] = []
+        # Directly-added modifiers (manual, not from presets).
+        self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
+        self._manual_zygote: list[tuple[int, str | None, ZygoteModifier]] = []
+
+        # Derived modifier lists — rebuilt by _rebuild_modifiers().
+        self._gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
+        self._zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
         # Compiled hook descriptors (for Numba-accelerated execution).
-        self._compiled_hooks: List[Any] = []  # List[CompiledHookDescriptor]
+        self._compiled_hooks: List[CompiledHookDescriptor] = []
 
         # Hook executor (Python-side coordinator for all hook types).
-        self._hook_executor: Optional[Any] = None  # HookExecutor
+        self._hook_executor: Optional[HookExecutor] = None
 
         # Static data container.
         self._config: Optional[PopulationConfig | DiscretePopulationConfig] = None
@@ -234,9 +246,12 @@ class BasePopulation(ABC, Generic[T_State]):
         clone._index_registry = self._index_registry
         clone._registry = self._registry
 
-        # --- shared modifiers (shallow-copy the list) ---
-        clone._gamete_modifiers = list(self._gamete_modifiers)
-        clone._zygote_modifiers = list(self._zygote_modifiers)
+        # --- shared presets & modifiers ---
+        clone._presets = list(self._presets)
+        clone._next_preset_id = self._next_preset_id
+        clone._manual_gamete = list(self._manual_gamete)
+        clone._manual_zygote = list(self._manual_zygote)
+        # Derived lists rebuilt on first use via _rebuild_modifiers().
 
         # --- config (shared reference for homogeneous, group-specific for heterogeneous) ---
         resolved_config = config if config is not None else self._config
@@ -479,10 +494,10 @@ class BasePopulation(ABC, Generic[T_State]):
         write changes immediately — no ``.apply()`` or ``.freeze()`` needed
         for simple parameter updates.
 
-        Usage::
+        Examples:
 
-            pop.update().competition(carrying_capacity=5000)
-            pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+            >>> pop.update().competition(carrying_capacity=5000)
+            >>> pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
         .. versionadded:: NEXT
         """
@@ -555,6 +570,30 @@ class BasePopulation(ABC, Generic[T_State]):
             return int(modifier_id)
         return self._next_modifier_id(modifiers)
 
+    def _rebuild_modifiers(self) -> None:
+        """Rebuild _gamete_modifiers and _zygote_modifiers from sources.
+
+        Presets are applied first (sorted by priority), then manual
+        modifiers are appended.  Derived lists are then compiled into
+        config maps via _refresh_modifier_maps().
+        """
+        self._gamete_modifiers.clear()
+        self._zygote_modifiers.clear()
+        for _, preset in sorted(self._presets):
+            if gm := preset.gamete_modifier(self):
+                self._gamete_modifiers.append((
+                    self._next_modifier_id(self._gamete_modifiers),
+                    f"{preset.name}/gamete", gm,
+                ))
+            if zm := preset.zygote_modifier(self):
+                self._zygote_modifiers.append((
+                    self._next_modifier_id(self._zygote_modifiers),
+                    f"{preset.name}/zygote", zm,
+                ))
+        self._gamete_modifiers.extend(self._manual_gamete)
+        self._zygote_modifiers.extend(self._manual_zygote)
+        self._refresh_modifier_maps()
+
     def _refresh_modifier_maps(self) -> None:
         if self._config is None or self._registry is None:
             return
@@ -621,11 +660,11 @@ class BasePopulation(ABC, Generic[T_State]):
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
-        self._gamete_modifiers.append((resolved_id, name, modifier))
-        self._gamete_modifiers.sort(key=lambda x: x[0])
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
+        self._manual_gamete.append((resolved_id, name, modifier))
+        self._manual_gamete.sort(key=lambda x: x[0])
         if refresh:
-            self._refresh_modifier_maps()
+            self._rebuild_modifiers()
 
     def add_zygote_modifier(
         self,
@@ -641,9 +680,9 @@ class BasePopulation(ABC, Generic[T_State]):
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
-        self._zygote_modifiers.append((resolved_id, name, modifier))
-        self._zygote_modifiers.sort(key=lambda x: x[0])
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
+        self._manual_zygote.append((resolved_id, name, modifier))
+        self._manual_zygote.sort(key=lambda x: x[0])
         if refresh:
             self._refresh_modifier_maps()
 
