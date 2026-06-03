@@ -836,11 +836,6 @@ class Configurator:
         self.gamete_modifiers = ctx.gamete_modifiers
         self.zygote_modifiers = ctx.zygote_modifiers
 
-    # TODO(human): step 2 — implement _sync_to_pop()
-    #   def _sync_to_pop(self):
-    #       if self._pop_ref is not None:
-    #           self._pop_ref.replace_config(self._config)
-
     # -- factory ---------------------------------------------------------------
 
     @classmethod
@@ -929,7 +924,7 @@ class Configurator:
     def for_population(pop: BasePopulation[Any]) -> DiscreteConfigurator | AgeStructuredConfigurator:
         """Create a Configurator wired to *pop* for runtime updates.
 
-        Binds ``_pop_ref`` (for write-back via ``_sync_to_pop()``), ``_species``,
+        Binds ``_pop_ref``, ``_species``, and ``_registry``
         and ``_registry`` from the Population so that all chain methods work without
         further setup. This is the single entry point for ``pop.update()`` paths.
 
@@ -1068,10 +1063,8 @@ class Configurator:
         self._config = self._config._replace(
             custom=build_custom_array(self._custom_kwargs)
         )
-        # TODO(human): step 5 — migrate to _sync_to_pop()
-        source = getattr(self, "_pop_ref", None)
-        if source is not None:
-            object.__setattr__(source, '_config', self._config)
+        if self._pop_ref is not None:
+            self._pop_ref.set_config(self._config)
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
@@ -1079,27 +1072,22 @@ class Configurator:
     def presets(self, *presets: GeneticPreset) -> Self:
         """Apply genetic presets directly to config arrays.
 
-        Each preset's gamete/zygote modifiers and fitness patch are
-        resolved against the current Species + IndexRegistry and
-        written into the config immediately.  No deferred execution.
-
-        Args:
-            *presets: One or more :class:`~natal.genetic_presets.GeneticPreset`
-                instances to apply (e.g. ``HomingDrive``, ``ToxinAntidoteDrive``).
-
-        Returns:
-            Self for chaining.
+        When wired to a Population (via ``for_population()``), presets are
+        applied directly to the Population — no adapter, no write-back needed.
+        Otherwise the ``_ConfigContext`` adapter path is used for build-time.
         """
+        if self._pop_ref is not None:
+            for preset in presets:
+                self._pop_ref.apply_preset(preset)
+            self._config = self._pop_ref.config  # sync back the updated NamedTuple
+            return self
+
         from natal.genetic_presets import apply_preset_to_population
 
         ctx = self._make_ctx()
         for preset in presets:
-            # _ConfigContext provides the same interface as BasePopulation
-            # (species, config, index_registry, add_*_modifier, refresh_modifier_maps)
-            apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType] — adapter implements protocol
+            apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType]
         self._sync_from_ctx(ctx)
-        # TODO(human): step 3 — write back to Population
-        #   self._sync_to_pop()
         return self
 
     def modifiers(
@@ -1118,6 +1106,18 @@ class Configurator:
         Returns:
             Self for chaining.
         """
+        if self._pop_ref is not None:
+            if gamete_modifiers:
+                for mod in gamete_modifiers:
+                    self._pop_ref.add_gamete_modifier(mod)
+            if zygote_modifiers:
+                for mod in zygote_modifiers:
+                    self._pop_ref.add_zygote_modifier(mod)
+            if gamete_modifiers or zygote_modifiers:
+                self._pop_ref.refresh_modifier_maps()
+            self._config = self._pop_ref.config
+            return self
+
         ctx = self._make_ctx()
         next_gid = _ConfigContext.next_modifier_id(ctx.gamete_modifiers)
         if gamete_modifiers:
@@ -1132,8 +1132,6 @@ class Configurator:
         if gamete_modifiers or zygote_modifiers:
             _rebuild_config_maps(ctx)
         self._sync_from_ctx(ctx)
-        # TODO(human): step 4 — write back to Population
-        #   self._sync_to_pop()
         return self
 
     def fitness(
@@ -1259,21 +1257,25 @@ class Configurator:
         for attr, value in changes.items():
             setattr(preset, attr, value)
 
-        # Remove only THIS preset's modifiers so non-preset modifiers
-        # (added via .modifiers()) are not lost.  Preset modifiers are
-        # named "PresetName/gamete" and "PresetName/zygote".
         prefix = f"{preset.name}/"
-        self.gamete_modifiers = [
-            m for m in self.gamete_modifiers if m[1] is None or not m[1].startswith(prefix)
-        ]
-        self.zygote_modifiers = [
-            m for m in self.zygote_modifiers if m[1] is None or not m[1].startswith(prefix)
-        ]
-        # Re-apply: rebuilds modifier maps from species Mendelian baseline
-        # (inside _rebuild_config_maps) and writes fitness patches fresh.
-        self.presets(preset)
-        from natal.engine.simulation.age_structured import sync_equilibrium_metrics
+        if self._pop_ref is not None:
+            # Clear by name, re-apply directly on Population.
+            # Access to private modifiers acceptable until Phase 2 (_presets).
+            pop = self._pop_ref
+            pop._gamete_modifiers = [m for m in pop._gamete_modifiers if m[1] is None or not m[1].startswith(prefix)]  # pyright: ignore[reportPrivateUsage]
+            pop._zygote_modifiers = [m for m in pop._zygote_modifiers if m[1] is None or not m[1].startswith(prefix)]  # pyright: ignore[reportPrivateUsage]
+            pop.apply_preset(preset)
+            self._config = pop.config
+        else:
+            self.gamete_modifiers = [
+                m for m in self.gamete_modifiers if m[1] is None or not m[1].startswith(prefix)
+            ]
+            self.zygote_modifiers = [
+                m for m in self.zygote_modifiers if m[1] is None or not m[1].startswith(prefix)
+            ]
+            self.presets(preset)
 
+        from natal.engine.simulation.age_structured import sync_equilibrium_metrics
         sync_equilibrium_metrics(self._config)
         return self
 
