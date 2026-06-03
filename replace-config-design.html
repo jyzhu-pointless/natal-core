@@ -3,293 +3,140 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>replace_config 设计 — Configurator → Population 写回方案</title>
+<title>Configurator → Population 写回设计 — 当前状态</title>
 <style>
   :root {
     --bg: #f8f9fb; --card: #fff; --text: #2c3e50; --muted: #6b7280;
     --border: #e5e7eb; --accent: #7c3aed; --code-bg: #1e1b4b;
-    --ok: #16a34a; --ok-bg: #f0fdf4;
-    --warn: #ea580c; --warn-bg: #fff7ed;
-    --del: #dc2626; --del-bg: #fef2f2;
-    --add: #16a34a; --add-bg: #f0fdf4;
-    --info: #0891b2; --info-bg: #ecfeff;
+    --ok: #16a34a; --ok-bg: #f0fdf4; --warn: #ea580c; --warn-bg: #fff7ed;
+    --del-bg: #fef2f2; --add-bg: #f0fdf4; --info-bg: #ecfeff;
   }
   * { margin:0; padding:0; box-sizing:border-box }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); line-height:1.7 }
-  .container { max-width:900px; margin:0 auto; padding:24px 20px }
+  .container { max-width:860px; margin:0 auto; padding:24px 20px }
 
   .hero { background: linear-gradient(135deg, #0f0d2e 0%, #1e1b4b 40%, #4c1d95 100%); color:#fff; padding:44px 20px; text-align:center }
   .hero h1 { font-size:1.9rem; font-weight:800; letter-spacing:-0.03em; margin-bottom:6px }
-  .hero .sub { font-size:.88rem; opacity:.7 }
+  .hero .sub { font-size:.85rem; opacity:.7 }
 
-  h2 { font-size:1.2rem; font-weight:700; margin:40px 0 12px; display:flex; align-items:center; gap:8px }
-  h3 { font-size:1rem; font-weight:650; margin:20px 0 8px }
+  h2 { font-size:1.15rem; font-weight:700; margin:36px 0 10px }
+  h3 { font-size:1rem; font-weight:650; margin:20px 0 6px }
 
-  .card { background: var(--card); border-radius:12px; border:1px solid var(--border); padding:20px 24px; margin:12px 0; font-size:.9rem }
+  .card { background: var(--card); border-radius:10px; border:1px solid var(--border); padding:18px 22px; margin:10px 0; font-size:.88rem }
+  .box { border-radius:10px; padding:14px 18px; margin:10px 0; font-size:.86rem }
+  .box.done { background: var(--ok-bg); border:1px solid #bbf7d0 }
+  .box.pending { background: var(--warn-bg); border:1px solid #fed7aa }
+  .box.info { background: var(--info-bg); border:1px solid #a5f3fc }
 
-  /* Sections */
-  .problem-block { background:var(--del-bg); border:1px solid var(--del-border); border-radius:12px; padding:18px 22px; margin:12px 0 }
-  .solution-block { background:var(--add-bg); border:1px solid #bbf7d0; border-radius:12px; padding:18px 22px; margin:12px 0 }
-
-  /* Diagram / flow */
-  .flow { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:.84rem; padding:12px 0; overflow-x:auto }
-  .flow .node { padding:7px 14px; border-radius:8px; font-weight:600; white-space:nowrap }
-  .flow .src { background:#e0e7ff; color:#3730a3 }
-  .flow .fn  { background:var(--code-bg); color:#d4d4d8 }
-  .flow .dst { background:var(--accent); color:#fff }
-  .flow .lost { background:var(--del-bg); color:var(--del); border:1px dashed var(--del) }
-  .flow .arr { color:var(--muted); font-weight:700; font-size:.9rem }
-  .flow .pipe { color:var(--muted); font-size:.9rem }
-
-  .flow-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:.83rem; margin:4px 0 }
-  .flow-row.indent { padding-left:24px }
-
-  /* Code */
-  pre { background:var(--code-bg); color:#d4d4d8; padding:14px 18px; border-radius:8px; font-size:.8rem; line-height:1.65; overflow-x:auto; margin:8px 0 }
-  .hl-add { background:rgba(22,163,74,.2) }
-  .hl-ctx { background:rgba(124,58,237,.15) }
-
-  /* Step */
-  .step { display:flex; gap:12px; align-items:flex-start; margin:14px 0; font-size:.9rem }
-  .step .num { background:var(--accent); color:#fff; min-width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:.82rem; flex-shrink:0; margin-top:1px }
-  .step .num.future { background:var(--muted) }
-
-  .phase-label { font-size:.72rem; font-weight:700; padding:3px 10px; border-radius:99px; text-transform:uppercase; letter-spacing:.04em }
-  .phase-label.now { background:var(--ok); color:#fff }
-  .phase-label.future { background:var(--muted); color:#fff }
-
-  /* Table */
-  table { width:100%; border-collapse:collapse; font-size:.84rem; margin:10px 0 }
-  table th { background:var(--code-bg); color:#fff; padding:8px 14px; text-align:left; font-weight:600; font-size:.75rem; letter-spacing:.03em }
+  table { width:100%; border-collapse:collapse; font-size:.84rem; margin:8px 0 }
+  table th { background:var(--code-bg); color:#fff; padding:8px 14px; text-align:left; font-weight:600; font-size:.74rem }
   table td { padding:7px 14px; border-bottom:1px solid var(--border) }
 
-  .note { background:var(--info-bg); border:1px solid #a5f3fc; border-radius:8px; padding:12px 16px; font-size:.85rem; margin:10px 0 }
-  .note.warn { background:var(--warn-bg); border-color:var(--warn) }
-  .note-ok { background:var(--ok-bg); border:1px solid #bbf7d0; border-radius:8px; padding:12px 16px; font-size:.84rem; margin:10px 0 }
+  pre { background:var(--code-bg); color:#d4d4d8; padding:12px 16px; border-radius:8px; font-size:.78rem; line-height:1.6; overflow-x:auto; margin:8px 0 }
+  .hl-add { background:rgba(22,163,74,.2) }
 
-  .callout { font-size:.84rem; padding:8px 14px; border-radius:8px; margin:8px 0 }
-  .callout.info { background:var(--info-bg); border:1px solid #a5f3fc }
-  .callout.warn { background:var(--warn-bg); border:1px solid var(--warn) }
+  .tag { display:inline-block; font-size:.68rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:4px }
+  .tag.done { background:var(--ok); color:#fff }
+  .tag.pending { background:var(--warn); color:#fff }
 
-  /* Tag */
-  .tag { display:inline-block; font-size:.7rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:6px }
-  .tag.now { background:var(--ok); color:#fff }
-  .tag.next { background:var(--warn); color:#fff }
-  .tag.future { background:var(--muted); color:#fff }
-
-  .footer { text-align:center; padding:40px 20px 24px; color:var(--muted); font-size:.78rem }
-
-  @media (max-width:640px) {
-    .hero h1 { font-size:1.4rem }
-  }
+  .footer { text-align:center; padding:40px 20px 24px; color:var(--muted); font-size:.76rem }
 </style>
 </head>
 <body>
 
 <div class="hero">
-  <h1>&#x1F527; Configurator → Population 写回方案</h1>
-  <p class="sub">replace_config &middot; _sync_to_pop &middot; _presets (future)</p>
+  <h1>Configurator → Population 写回设计</h1>
+  <p class="sub">fix/runtime-crash-and-data-corruption 分支 · 当前状态</p>
 </div>
 
 <div class="container">
 
-<!-- ═══════ 1. WHY ═══════ -->
-<h2>&#x1F6E0; 要解决什么问题</h2>
-
-<div class="problem-block">
-<p><code>pop.update().presets(drive)</code> 和 <code>pop.update().modifiers(...)</code> 当前<strong>不可用</strong>：</p>
-<ul style="margin:6px 0 0 18px;font-size:.88rem">
-  <li style="margin-bottom:4px"><strong>崩溃</strong>：<code>_species</code> 缺失 → 已在 <code>for_population()</code> 中修复（设置 <code>_species</code>、<code>_registry</code>、<code>_pop_ref</code>）</li>
-  <li><strong>静默数据丢失</strong>：不崩溃后，<code>presets()</code> / <code>modifiers()</code> 内部通过 <code>_replace()</code> 创建了新 NamedTuple——但只存在临时 Configurator 上，<strong>从未写回 Population</strong></li>
-</ul>
-</div>
+<!-- ═══════ PROBLEM ═══════ -->
+<h2>&#x1F6E0; 原始问题</h2>
 
 <div class="card">
-<h3>数据丢失的根因</h3>
-
-<p style="margin-bottom:8px"><code>presets()</code> 内部调用链：</p>
-<div class="flow">
-  <span class="node src">_make_ctx()</span><span class="arr">→</span>
-  <span class="node fn">apply_preset_to_population(ctx, drive)</span><span class="arr">→</span>
-  <span class="node fn">_rebuild_config_maps(ctx)</span>
-</div>
-<div class="flow-row" style="margin-bottom:8px">
-  <span style="color:var(--muted)">↓</span> <span style="font-size:.82rem;color:var(--muted)">内部调用 ctx.config._replace() 创建新 NamedTuple</span>
-</div>
-<div class="flow" style="margin-bottom:8px">
-  <span class="node fn">_sync_from_ctx(ctx)</span><span class="arr">→</span>
-  <span class="node dst">self._config = ctx.config</span>
-  <span style="font-size:.82rem;color:var(--muted);margin-left:8px">Configurator 拿到了新 config</span>
-</div>
-<div class="flow">
-  <span class="node lost">Population._config</span>
-  <span style="font-size:.82rem;color:var(--del);margin-left:8px">← 仍然是旧的！Configurator 被丢弃后，新 config 就丢了</span>
-</div>
+  <p><code>pop.update().presets(drive)</code> 和 <code>pop.update().modifiers(...)</code> 不可用：</p>
+  <ol style="margin:6px 0 0 18px">
+    <li><strong>崩溃</strong>：<code>_species</code> 缺失 → RuntimeError</li>
+    <li><strong>静默数据丢失</strong>：不崩溃后，preset 通过 <code>_replace()</code> 创建的新 NamedTuple 只存在临时 Configurator 上</li>
+  </ol>
 </div>
 
-<!-- ═══════ 2. SOLUTION ═══════ -->
-<h2>&#x2705; 解决方案：跳过 adapter，直接写 Population</h2>
+<!-- ═══════ WHAT WAS DONE ═══════ -->
+<h2>&#x2705; 已实施</h2>
 
-<div class="solution-block">
-<p style="margin-bottom:8px">核心洞察：当 Configurator 通过 <code>for_population()</code> 绑定到 Population 时，<strong>不需要 _ConfigContext adapter</strong>。Presets / modifiers 可以直接在 Population 上操作——Population 已经有完整的方法（<code>apply_preset()</code>, <code>add_gamete_modifier()</code>, <code>refresh_modifier_maps()</code>）。</p>
-
-<div style="font-size:.88rem;margin-top:12px">
-  <strong>有 _pop_ref（更新路径）：</strong>直接调 <code>pop.apply_preset(drive)</code> → Population 的 config 和 modifier lists 原地更新。Configurator 同步读回 <code>self._config = pop.config</code>。
-</div>
-<div style="font-size:.88rem;margin-top:8px">
-  <strong>无 _pop_ref（构建路径）：</strong>走 _ConfigContext adapter → _sync_from_ctx，和以前一样。
-</div>
+<h3>1. for_population() — 统一的运行时构造入口</h3>
+<div class="box done">
+<p>消除 3 个调用点的 <code>object.__setattr__</code> 猴子补丁，集中在 Configurator 的一个工厂方法里。</p>
+<pre>Configurator.for_population(pop)
+# 内部：包装 config + 设 _pop_ref + _species + _registry</pre>
 </div>
 
-<div class="card">
-  <h3>改动的方法</h3>
-  <table>
-    <thead><tr><th style="width:140px">方法</th><th>当前</th><th>改后</th></tr></thead>
-    <tbody>
-      <tr><td><code>presets()</code></td><td>总是 adapter → _sync_from_ctx → 丢失</td><td>有 _pop_ref → <code>pop.apply_preset()</code>；无 → adapter</td></tr>
-      <tr><td><code>modifiers()</code></td><td>总是 adapter → _sync_from_ctx → 丢失</td><td>有 _pop_ref → <code>pop.add_*_modifier()</code>；无 → adapter</td></tr>
-      <tr><td><code>reconfigure_preset()</code></td><td>清 Configurator 列表 → presets()</td><td>有 _pop_ref → 清 Population 列表 → <code>pop.apply_preset()</code>；无 → 旧逻辑</td></tr>
-      <tr><td><code>custom()</code></td><td><code>object.__setattr__</code></td><td><code>pop.set_config(self._config)</code></td></tr>
-    </tbody>
-  </table>
+<h3>2. 跳过 _ConfigContext，直接写 Population</h3>
+<div class="box done">
+<p>当 <code>_pop_ref</code> 存在时，<code>presets()</code> / <code>modifiers()</code> / <code>reconfigure_preset()</code> 直接操作 Population 的现有方法——不需要 adapter、不需要 sync、不需要 write-back。</p>
+
+<table>
+  <thead><tr><th>方法</th><th>有 _pop_ref（更新路径）</th><th>无 _pop_ref（构建路径）</th></tr></thead>
+  <tbody>
+    <tr><td><code>presets(drive)</code></td><td><code>pop.apply_preset(drive)</code></td><td>_ConfigContext adapter</td></tr>
+    <tr><td><code>modifiers(g=,z=)</code></td><td><code>pop.add_gamete_modifier()</code> + <code>pop.refresh_modifier_maps()</code></td><td>_ConfigContext adapter</td></tr>
+    <tr><td><code>reconfigure_preset()</code></td><td>清 Population 列表 → <code>pop.apply_preset()</code></td><td>清 Configurator 列表 → adapter</td></tr>
+    <tr><td><code>custom()</code></td><td><code>pop.set_config(self._config)</code></td><td>只改 Configurator 的 config</td></tr>
+  </tbody>
+</table>
 </div>
 
-<!-- ═══════ 3. WHAT WAS REMOVED ═══════ -->
-<h2>&#x1F5D1; 删除了什么</h2>
-
-<div class="card">
-  <ul style="font-size:.88rem">
-    <li><strong>_sync_to_pop()</strong> — 不再需要。presets/modifiers 直接写 Population，custom() 用 set_config()</li>
-    <li><strong>_write_back / replace_config</strong> — 全部取消。没有"Configurator→Population 同步"这回事了</li>
-    <li><strong>set_config() 保留</strong> — 仅给 custom() 用（custom() 在 Configurator 上 _replace 后需要写回）</li>
-  </ul>
+<h3>3. 清理冗余访问器</h3>
+<div class="box done">
+  <strong>删除：</strong><code>_state_nn / _config_nn / _registry_nn</code>（6 个 property）· <code>_require_state / _require_config / _require_registry</code>（3 个方法）· <code>_sync_to_pop()</code>（不再需要）
 </div>
 
-<!-- ═══════ PHASE 1 STATUS ═══════ -->
-<h2>&#x2705; Phase 1 完成</h2>
-<div class="note-ok">
-  presets()、modifiers()、reconfigure_preset()、custom() 在有 <code>_pop_ref</code> 时直接操作 Population，不再需要 _sync_to_pop / _write_back。无 _pop_ref 时（构建路径）保持 _ConfigContext adapter。<br>
-  <strong>验证：</strong>pyright 0 errors · pytest 107 passed, 10 xfailed · <code>pop.update().presets(drive)</code> 不再崩溃，config 变更持久化。
+<h3>4. 修饰器存储拆分</h3>
+<div class="box done">
+<p>修饰器现在有两个独立来源，<code>_rebuild_modifiers()</code> 按优先级合并（presets 先，手动后）：</p>
+
+<table>
+  <thead><tr><th>属性</th><th>类型</th><th>写入者</th></tr></thead>
+  <tbody>
+    <tr><td><code>_presets</code></td><td><code>list[(priority_id, GeneticPreset)]</code></td><td><code>presets()</code></td></tr>
+    <tr><td><code>_manual_gamete</code></td><td><code>list[(id, name, GameteModifier)]</code></td><td><code>modifiers()</code></td></tr>
+    <tr><td><code>_manual_zygote</code></td><td><code>list[(id, name, ZygoteModifier)]</code></td><td><code>modifiers()</code></td></tr>
+    <tr style="color:var(--muted)"><td><code>_gamete_modifiers</code></td><td>派生（_rebuild_modifiers 重建）</td><td>引擎只读</td></tr>
+    <tr style="color:var(--muted)"><td><code>_zygote_modifiers</code></td><td>派生（_rebuild_modifiers 重建）</td><td>引擎只读</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ═══════ REMAINING ═══════ -->
+<h2>&#x1F3AF; 剩余 TODO</h2>
+
+<div class="box pending">
+<p style="margin-bottom:8px">以下独立于上述写回架构，各自可单独修复：</p>
+
+<table>
+  <thead><tr><th>文件</th><th>描述</th><th>xfail 测试</th></tr></thead>
+  <tbody>
+    <tr><td><code>configurator.py:1608</code></td><td><code>adult_survival</code> 离散守卫 — docstring 声称 no-op，实际写入</td><td>TestAdultSurvivalDiscrete</td></tr>
+    <tr><td><code>configurator.py:1683</code></td><td>build() 同步 5 个预提取标量</td><td>TestDiscreteScalarSync</td></tr>
+    <tr><td><code>spatial_population.py:273</code></td><td><code>_SpatialUpdate</code> 加 <code>reconfigure_preset()</code></td><td>—</td></tr>
+    <tr><td><code>spatial_population.py:344</code></td><td><code>_dispatch_scalar</code> 单 deme 路径：逐参数 set_param → 完整方法调用</td><td>—</td></tr>
+    <tr><td><code>spatial_population.py:367</code></td><td><code>_dispatch_scalar</code> 全 deme 路径：同上</td><td>—</td></tr>
+    <tr><td><code>population_config.py:444</code></td><td>sperm_storage 第三维 <code>n_hg_glabs → n_genotypes_i</code></td><td>TestSpermStorageShape</td></tr>
+    <tr><td><code>population_config.py:452</code></td><td>假值 <code>or</code> → <code>is not None</code> 检查</td><td>—</td></tr>
+  </tbody>
+</table>
 </div>
 
 <!-- ═══════ PHASE 2 ═══════ -->
-<h2>&#x1F4CB; Phase 2：Population 维护 presets <span class="phase-label future">FUTURE</span></h2>
+<h2>&#x1F4CB; 后续：presets 列表完善</h2>
 
-<div class="callout warn">Phase 1 打通了写回，但有一个结构性问题：<code>reconfigure_preset()</code>（configurator.py:1249）靠<strong>名字前缀</strong>（<code>"DriveName/"</code>）在修饰器列表中查找旧条目。名字拼错、同名冲突都会出问题。如果 Population 自己维护 <code>_presets</code> 列表，就可以按<strong>对象 identity</strong>（<code>is</code>）查找。</div>
-
-<!-- Step 2-1 -->
-<h3>Step 2-1：Population 加 _presets 列表</h3>
 <div class="card">
-  <p style="margin-bottom:8px"><strong>做什么：</strong>BasePopulation 新增 <code>_presets: list[GeneticPreset]</code>，跟 <code>_gamete_modifiers</code> / <code>_zygote_modifiers</code> 同一层。presets() 改为 append 到这个列表，而不再直接操作修饰器。</p>
-
-  <pre># base_population.py __init__ — 新增：
-self._presets: list[GeneticPreset] = []
-
-# base_population.py _clone() — 新增（和 modifier lists 一样的模式）：
-clone._presets = list(self._presets)  # 浅拷贝列表，preset 对象共享引用</pre>
-
-  <p style="font-size:.84rem;color:var(--muted)"><strong>presets() 的行为变化：</strong>当前 <code>presets(drive)</code> 通过 <code>_make_ctx()</code> → <code>apply_preset_to_population</code> 直接把修饰器加到 <code>_ConfigContext</code> 的 <code>gamete_modifiers</code> 列表。改为先把 <code>drive</code> append 到 <code>_presets</code>，然后 <code>_rebuild_modifiers()</code> 从 preset 列表统一产出修饰器。</p>
+  <p>当前 <code>_presets</code> 列表已存在但只被 <code>_rebuild_modifiers()</code> 消费。<code>presets()</code> 走 <code>pop.apply_preset()</code> 仍然通过 <code>add_gamete_modifier → _manual_gamete</code> 写入——没有用到 <code>_presets</code>。</p>
+  <p style="margin-top:8px">下一步：让 <code>presets()</code> 写 <code>_presets</code>（非 <code>_manual_*</code>），<code>reconfigure_preset()</code> 在 <code>_presets</code> 中按 identity 查找。配合 TODO #4 矩阵化重构后 priority ID 用于矩阵合并。</p>
 </div>
 
-<!-- Step 2-2 -->
-<h3>Step 2-2：拆分修饰器存储</h3>
-<div class="card">
-  <p style="margin-bottom:8px"><strong>做什么：</strong>preset 产物和手动修饰器分开存储，避免混在一起分不清来源。</p>
-
-  <table>
-    <thead><tr><th>属性</th><th>存什么</th><th>谁来写</th></tr></thead>
-    <tbody>
-      <tr><td><code>_presets</code></td><td><code>list[GeneticPreset]</code> — preset 对象</td><td><code>presets()</code> append</td></tr>
-      <tr><td><code>_manual_gamete_modifiers</code></td><td><code>list[(id,name,fn)]</code> — 直接加的配子修饰器</td><td><code>modifiers(gamete_modifiers=[...])</code> extend</td></tr>
-      <tr><td><code>_manual_zygote_modifiers</code></td><td><code>list[(id,name,fn)]</code> — 直接加的合子修饰器</td><td><code>modifiers(zygote_modifiers=[...])</code> extend</td></tr>
-      <tr style="color:var(--muted)"><td><code>_gamete_modifiers</code></td><td>派生——<code>_rebuild_modifiers()</code> 每次重建</td><td>只读（引擎使用）</td></tr>
-      <tr style="color:var(--muted)"><td><code>_zygote_modifiers</code></td><td>派生——<code>_rebuild_modifiers()</code> 每次重建</td><td>只读（引擎使用）</td></tr>
-    </tbody>
-  </table>
-
-  <div class="callout info" style="margin-top:8px">
-    <strong>为什么这样分：</strong><code>reconfigure_preset</code> 需要找到某个 preset 的产物，但当前它们和手动修饰器混在一个列表里。分开后，<code>reconfigure_preset</code> 直接在 <code>_presets</code> 里按 identity 找，不需要碰手动列表。
-  </div>
-</div>
-
-<!-- Step 2-3 -->
-<h3>Step 2-3：_rebuild_modifiers() 合并逻辑</h3>
-<div class="card">
-  <p style="margin-bottom:8px"><strong>做什么：</strong>从两个来源重建实际生效的修饰器列表。preset 产物先生效，手动修饰器后追加。</p>
-
-  <pre>def _rebuild_modifiers(self):
-    """Rebuild _gamete_modifiers and _zygote_modifiers from sources."""
-    self._gamete_modifiers.clear()
-    self._zygote_modifiers.clear()
-
-    # 1. 从 _presets 生成修饰器
-    for preset in self._presets:
-        # preset.gamete_modifier() / preset.zygote_modifier()
-        # 产生 (id, name, fn) tuples
-        gm_name = f"{preset.name}/gamete"
-        zm_name = f"{preset.name}/zygote"
-        self._gamete_modifiers.append(
-            (self._next_modifier_id(), gm_name, preset.gamete_modifier(self))
-        )
-        self._zygote_modifiers.append(
-            (self._next_modifier_id(), zm_name, preset.zygote_modifier(self))
-        )
-
-    # 2. 追加手动修饰器
-    self._gamete_modifiers.extend(self._manual_gamete_modifiers)
-    self._zygote_modifiers.extend(self._manual_zygote_modifiers)
-
-    # 3. 重建 config maps
-    _rebuild_config_maps_from_scratch(self)</pre>
-
-  <p style="font-size:.84rem;color:var(--muted);margin-top:8px"><strong>调用时机：</strong><code>presets()</code>、<code>modifiers()</code>、<code>reconfigure_preset()</code> 末尾都调用 <code>_rebuild_modifiers()</code>。每次都是全量重建——来源清晰，不担心增量更新的一致性问题。</p>
-</div>
-
-<!-- Step 2-4 -->
-<h3>Step 2-4：重写 reconfigure_preset()</h3>
-<div class="card">
-  <p style="margin-bottom:8px"><strong>做什么：</strong>不再按名字前缀（<code>"DriveName/"</code>）在修饰器列表中匹配，而是直接在 <code>_presets</code> 中按 <code>is</code> 找到 preset 对象，修改属性后全量重建。</p>
-  <p style="font-size:.84rem;color:var(--muted);margin-bottom:8px"><strong>位置：</strong><code>src/natal/configurator.py</code>，<code>reconfigure_preset()</code>（line ~1249）。</p>
-
-  <pre># reconfigure_preset() 当前核心逻辑：
-prefix = f"{preset.name}/"
-self.gamete_modifiers = [m for m in self.gamete_modifiers
-    if m[1] is None or not m[1].startswith(prefix)]
-self.zygote_modifiers = [m for m in self.zygote_modifiers
-    if m[1] is None or not m[1].startswith(prefix)]
-self.presets(preset)
-
-# Phase 2 重写后：
-for attr, value in changes.items():
-    setattr(preset, attr, value)
-# 不需要清除修饰器——_rebuild_modifiers 全量重建
-self._rebuild_modifiers()
-sync_equilibrium_metrics(self._config)</pre>
-
-  <div class="callout info">
-    <strong>前提：</strong>这个重写假设 <code>reconfigure_preset</code> 直接操作 Population 的属性（<code>_presets</code>、<code>_manual_*_modifiers</code>），而不是走 <code>_make_ctx()</code> → <code>_ConfigContext</code> 的适配器路径。这需要 <code>reconfigure_preset</code> 被移到 Population 上，或者 Configurator 能直接访问 Population 的这些列表。
-  </div>
-</div>
-
-<h3>Phase 2 影响总结</h3>
-<table>
-  <thead><tr><th>方面</th><th>当前</th><th>Phase 2 后</th></tr></thead>
-  <tbody>
-    <tr><td>presets()</td><td>直接 append 到 modifier lists</td><td>append 到 <code>_presets</code>，<code>_rebuild_modifiers()</code></td></tr>
-    <tr><td>modifiers()</td><td>直接 extend modifier lists</td><td>extend <code>_manual_*</code>，<code>_rebuild_modifiers()</code></td></tr>
-    <tr><td>reconfigure_preset()</td><td>按名字前缀清除 → 重 apply</td><td>按 identity 查找 → 改属性 → 重建</td></tr>
-    <tr><td>replace_config()</td><td>只写 config</td><td>不变——仍然只写 config</td></tr>
-    <tr><td>_sync_to_pop()</td><td>调 replace_config(config)</td><td>不变</td></tr>
-  </tbody>
-</table>
-
-<div class="callout warn" style="margin-top:12px">
-  <strong>注意：</strong>Phase 2 需要把 <code>reconfigure_preset()</code>、<code>_rebuild_modifiers()</code> 的逻辑移到 Population 上（当前在 Configurator 上）。这是一次更大的重构，所以作为独立 Phase 而不是混在 Phase 1 里。
-</div>
-
-<div class="footer">
-  natal-core &middot; replace_config design &middot; 2026-06-03
-</div>
+<div class="footer">natal-core · fix/runtime-crash-and-data-corruption · 2026-06-03</div>
 
 </div>
 </body>

@@ -571,11 +571,13 @@ class BasePopulation(ABC, Generic[T_State]):
         return self._next_modifier_id(modifiers)
 
     def _rebuild_modifiers(self) -> None:
-        """Rebuild _gamete_modifiers and _zygote_modifiers from sources.
+        """Rebuild derived modifier lists from _presets + _manual_*.
 
-        Presets are applied first (sorted by priority), then manual
-        modifiers are appended.  Derived lists are then compiled into
-        config maps via _refresh_modifier_maps().
+        Presets are applied first (sorted by priority).  Only modifier
+        registration is done here — fitness patches are NOT re-applied
+        (they were already applied when the preset was first registered,
+        and reconfigure_preset handles them separately).  Manual
+        modifiers are appended last.
         """
         self._gamete_modifiers.clear()
         self._zygote_modifiers.clear()
@@ -660,11 +662,11 @@ class BasePopulation(ABC, Generic[T_State]):
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
-        self._manual_gamete.append((resolved_id, name, modifier))
-        self._manual_gamete.sort(key=lambda x: x[0])
+        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
+        self._gamete_modifiers.append((resolved_id, name, modifier))
+        self._gamete_modifiers.sort(key=lambda x: x[0])
         if refresh:
-            self._rebuild_modifiers()
+            self._refresh_modifier_maps()
 
     def add_zygote_modifier(
         self,
@@ -680,9 +682,9 @@ class BasePopulation(ABC, Generic[T_State]):
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
-        self._manual_zygote.append((resolved_id, name, modifier))
-        self._manual_zygote.sort(key=lambda x: x[0])
+        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
+        self._zygote_modifiers.append((resolved_id, name, modifier))
+        self._zygote_modifiers.sort(key=lambda x: x[0])
         if refresh:
             self._refresh_modifier_maps()
 
