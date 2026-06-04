@@ -1156,6 +1156,7 @@ class HomingDrive(GeneticPreset):
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
 
+        # TODO(human): pass priority through to super().__init__
         super().__init__(name=name, species=species)
 
     def fitness_patch(self) -> PresetFitnessPatch:
@@ -1467,6 +1468,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
 
+        # TODO(human): pass priority through to super().__init__
         super().__init__(name=name, species=species)
 
     def fitness_patch(self) -> PresetFitnessPatch:
