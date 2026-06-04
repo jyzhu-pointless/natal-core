@@ -1060,11 +1060,20 @@ class Configurator:
         from natal.population_config import build_custom_array
 
         self._custom_kwargs.update(kwargs)
-        self._config = self._config._replace(
-            custom=build_custom_array(self._custom_kwargs)
-        )
-        if self._pop_ref is not None:
-            self._pop_ref.set_config(self._config)
+        names = self._config.custom.dtype.names or ()
+
+        if any(k not in names for k in kwargs):
+            self._config = self._config._replace(
+                custom=build_custom_array(self._custom_kwargs)
+            )
+            if self._pop_ref is not None:
+                self._pop_ref.set_config(self._config)
+        else:
+            # All fields already exist — write incrementally in-place.
+            # self._config shares array references with pop.config, so
+            # no write-back is needed for existing fields.
+            for key, value in kwargs.items():
+                self._config.custom[key][()] = value
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
@@ -1079,7 +1088,14 @@ class Configurator:
         if self._pop_ref is not None:
             for preset in presets:
                 self._pop_ref.apply_preset(preset)
-            self._config = self._pop_ref.config  # sync back the updated NamedTuple
+                # TODO(human): append (priority, preset) to pop._presets.
+                # Needed for:
+                #   - reconfigure_preset(drive) to find by identity
+                #   - _rebuild_modifiers() to sort presets by priority
+                #   - future remove_preset(preset) to delete from _presets
+                # presets() should accept priority: int = 0 parameter.
+                # Currently no remove_preset() API exists.
+            self._config = self._pop_ref.config
             return self
 
         from natal.genetic_presets import apply_preset_to_population
@@ -1257,10 +1273,15 @@ class Configurator:
         for attr, value in changes.items():
             setattr(preset, attr, value)
 
+        # TODO(human): replace string-prefix matching with identity
+        # lookup in pop._presets.  Depends on presets() writing to
+        # _presets first (see TODO above).
+        #   1. Find in pop._presets by `is` → 2. setattr → 3. _rebuild_modifiers()
+        #   4. re-apply fitness patch → 5. sync_equilibrium
+        #
+        # Current (fragile) code:
         prefix = f"{preset.name}/"
         if self._pop_ref is not None:
-            # Clear by name, re-apply directly on Population.
-            # Access to private modifiers acceptable until Phase 2 (_presets).
             pop = self._pop_ref
             pop._gamete_modifiers = [m for m in pop._gamete_modifiers if m[1] is None or not m[1].startswith(prefix)]  # pyright: ignore[reportPrivateUsage]
             pop._zygote_modifiers = [m for m in pop._zygote_modifiers if m[1] is None or not m[1].startswith(prefix)]  # pyright: ignore[reportPrivateUsage]

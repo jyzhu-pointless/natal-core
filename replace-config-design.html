@@ -3,20 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Configurator → Population 写回设计 — 当前状态</title>
+<title>fix/runtime-crash-and-data-corruption — 当前状态</title>
 <style>
   :root {
     --bg: #f8f9fb; --card: #fff; --text: #2c3e50; --muted: #6b7280;
     --border: #e5e7eb; --accent: #7c3aed; --code-bg: #1e1b4b;
     --ok: #16a34a; --ok-bg: #f0fdf4; --warn: #ea580c; --warn-bg: #fff7ed;
-    --del-bg: #fef2f2; --add-bg: #f0fdf4; --info-bg: #ecfeff;
+    --info-bg: #ecfeff;
   }
   * { margin:0; padding:0; box-sizing:border-box }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); line-height:1.7 }
   .container { max-width:860px; margin:0 auto; padding:24px 20px }
 
   .hero { background: linear-gradient(135deg, #0f0d2e 0%, #1e1b4b 40%, #4c1d95 100%); color:#fff; padding:44px 20px; text-align:center }
-  .hero h1 { font-size:1.9rem; font-weight:800; letter-spacing:-0.03em; margin-bottom:6px }
+  .hero h1 { font-size:1.8rem; font-weight:800; letter-spacing:-0.03em; margin-bottom:6px }
   .hero .sub { font-size:.85rem; opacity:.7 }
 
   h2 { font-size:1.15rem; font-weight:700; margin:36px 0 10px }
@@ -25,19 +25,19 @@
   .card { background: var(--card); border-radius:10px; border:1px solid var(--border); padding:18px 22px; margin:10px 0; font-size:.88rem }
   .box { border-radius:10px; padding:14px 18px; margin:10px 0; font-size:.86rem }
   .box.done { background: var(--ok-bg); border:1px solid #bbf7d0 }
-  .box.pending { background: var(--warn-bg); border:1px solid #fed7aa }
+  .box.next { background: var(--warn-bg); border:1px solid #fed7aa }
   .box.info { background: var(--info-bg); border:1px solid #a5f3fc }
 
   table { width:100%; border-collapse:collapse; font-size:.84rem; margin:8px 0 }
   table th { background:var(--code-bg); color:#fff; padding:8px 14px; text-align:left; font-weight:600; font-size:.74rem }
   table td { padding:7px 14px; border-bottom:1px solid var(--border) }
+  table .step-num { width:40px; text-align:center; font-weight:700; color:var(--accent) }
 
   pre { background:var(--code-bg); color:#d4d4d8; padding:12px 16px; border-radius:8px; font-size:.78rem; line-height:1.6; overflow-x:auto; margin:8px 0 }
   .hl-add { background:rgba(22,163,74,.2) }
 
-  .tag { display:inline-block; font-size:.68rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:4px }
-  .tag.done { background:var(--ok); color:#fff }
-  .tag.pending { background:var(--warn); color:#fff }
+  .step { display:flex; gap:12px; align-items:flex-start; margin:12px 0 }
+  .step .num { background:var(--accent); color:#fff; min-width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:.82rem; flex-shrink:0; margin-top:1px }
 
   .footer { text-align:center; padding:40px 20px 24px; color:var(--muted); font-size:.76rem }
 </style>
@@ -45,95 +45,100 @@
 <body>
 
 <div class="hero">
-  <h1>Configurator → Population 写回设计</h1>
-  <p class="sub">fix/runtime-crash-and-data-corruption 分支 · 当前状态</p>
+  <h1>fix/runtime-crash-and-data-corruption</h1>
+  <p class="sub">当前状态 · 下一步计划</p>
 </div>
 
 <div class="container">
 
-<!-- ═══════ PROBLEM ═══════ -->
-<h2>&#x1F6E0; 原始问题</h2>
+<!-- ═══════ DONE ═══════ -->
+<h2>&#x2705; 已完成</h2>
+
+<div class="box done">
+  <table>
+    <thead><tr><th>改动</th><th>效果</th></tr></thead>
+    <tbody>
+      <tr><td><code>for_population(pop)</code></td><td>统一运行时构造入口，消除 3 处 <code>object.__setattr__</code></td></tr>
+      <tr><td>presets/modifiers/reconfigure/custom 双路径</td><td>有 <code>_pop_ref</code> 直接写 Population，无则走 adapter</td></tr>
+      <tr><td>删 _nn / _require_* / _sync_to_pop</td><td>统一用 <code>self.state/config/registry</code></td></tr>
+      <tr><td><code>_presets</code> + <code>_manual_*</code> + <code>_rebuild_modifiers()</code></td><td>修饰器来源拆分（空壳，待接线）</td></tr>
+      <tr><td><code>set_config()</code></td><td>给 <code>custom()</code> 用的正式写入口</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══════ NEXT: PRESETS ═══════ -->
+<h2>&#x1F4CB; 下一步：激活 _presets</h2>
 
 <div class="card">
-  <p><code>pop.update().presets(drive)</code> 和 <code>pop.update().modifiers(...)</code> 不可用：</p>
-  <ol style="margin:6px 0 0 18px">
-    <li><strong>崩溃</strong>：<code>_species</code> 缺失 → RuntimeError</li>
-    <li><strong>静默数据丢失</strong>：不崩溃后，preset 通过 <code>_replace()</code> 创建的新 NamedTuple 只存在临时 Configurator 上</li>
-  </ol>
+  <p style="margin-bottom:8px"><strong>动机：</strong><code>reconfigure_preset()</code> 当前用 <code>f"{preset.name}/"</code> 前缀匹配——脆弱。Population 已有 <code>_presets</code>，但 <code>presets()</code> 没往里写。</p>
+  <p style="margin-bottom:8px"><strong>场景：</strong>运行时新增 preset（如激活新 drive）→ 需要写入 <code>_presets</code>，以便后续 <code>reconfigure_preset</code> 按 identity 查找。</p>
 </div>
 
-<!-- ═══════ WHAT WAS DONE ═══════ -->
-<h2>&#x2705; 已实施</h2>
-
-<h3>1. for_population() — 统一的运行时构造入口</h3>
-<div class="box done">
-<p>消除 3 个调用点的 <code>object.__setattr__</code> 猴子补丁，集中在 Configurator 的一个工厂方法里。</p>
-<pre>Configurator.for_population(pop)
-# 内部：包装 config + 设 _pop_ref + _species + _registry</pre>
+<h3>Step A：presets() 写 _presets <span style="font-size:.78rem;color:var(--muted)">configurator.py:1080</span></h3>
+<div class="box info">
+  <p><code>pop.apply_preset(preset)</code> 后额外 <code>pop._presets.append((priority, preset))</code>。<br>
+  <strong>需同时：</strong>presets() 接受 <code>priority: int = 0</code> 参数。<br>
+  <strong>未来：</strong>加 <code>remove_preset(preset)</code>——从 <code>_presets</code> 删除 → <code>_rebuild_modifiers()</code> 自动清除其修饰器。</p>
 </div>
 
-<h3>2. 跳过 _ConfigContext，直接写 Population</h3>
-<div class="box done">
-<p>当 <code>_pop_ref</code> 存在时，<code>presets()</code> / <code>modifiers()</code> / <code>reconfigure_preset()</code> 直接操作 Population 的现有方法——不需要 adapter、不需要 sync、不需要 write-back。</p>
+<h3>Step B：reconfigure_preset() 用 _presets <span style="font-size:.78rem;color:var(--muted)">configurator.py:1264</span></h3>
+<div class="box info">
+  <div class="step"><span class="num">1</span><div>在 <code>pop._presets</code> 中按 <code>is</code> 找 preset</div></div>
+  <div class="step"><span class="num">2</span><div>改属性（setattr — 已完成）</div></div>
+  <div class="step"><span class="num">3</span><div><code>pop._rebuild_modifiers()</code></div></div>
+  <div class="step"><span class="num">4</span><div>重新 apply fitness patch（rebuild 不管 fitness）</div></div>
+  <div class="step"><span class="num">5</span><div><code>sync_equilibrium</code> + <code>self._config = pop.config</code></div></div>
+</div>
+
+<!-- ═══════ STORAGE MODEL ═══════ -->
+<h2>&#x1F4E6; 存储模型</h2>
 
 <table>
-  <thead><tr><th>方法</th><th>有 _pop_ref（更新路径）</th><th>无 _pop_ref（构建路径）</th></tr></thead>
+  <thead><tr><th>属性</th><th>存储什么</th><th>写入者</th><th>状态</th></tr></thead>
   <tbody>
-    <tr><td><code>presets(drive)</code></td><td><code>pop.apply_preset(drive)</code></td><td>_ConfigContext adapter</td></tr>
-    <tr><td><code>modifiers(g=,z=)</code></td><td><code>pop.add_gamete_modifier()</code> + <code>pop.refresh_modifier_maps()</code></td><td>_ConfigContext adapter</td></tr>
-    <tr><td><code>reconfigure_preset()</code></td><td>清 Population 列表 → <code>pop.apply_preset()</code></td><td>清 Configurator 列表 → adapter</td></tr>
-    <tr><td><code>custom()</code></td><td><code>pop.set_config(self._config)</code></td><td>只改 Configurator 的 config</td></tr>
+    <tr><td><code>_presets</code></td><td><code>list[(priority, GeneticPreset)]</code></td><td><code>presets()</code></td><td>🟡 待接线 (Step A)</td></tr>
+    <tr><td><code>_manual_gamete</code></td><td><code>list[(id, name, GameteModifier)]</code></td><td><code>modifiers()</code></td><td>⚪ 空壳</td></tr>
+    <tr><td><code>_manual_zygote</code></td><td><code>list[(id, name, ZygoteModifier)]</code></td><td><code>modifiers()</code></td><td>⚪ 空壳</td></tr>
+    <tr style="color:var(--muted)"><td><code>_gamete_modifiers</code></td><td>派生</td><td><code>_rebuild_modifiers()</code></td><td>🟢 活跃</td></tr>
+    <tr style="color:var(--muted)"><td><code>_zygote_modifiers</code></td><td>派生</td><td><code>_rebuild_modifiers()</code></td><td>🟢 活跃</td></tr>
   </tbody>
 </table>
-</div>
 
-<h3>3. 清理冗余访问器</h3>
-<div class="box done">
-  <strong>删除：</strong><code>_state_nn / _config_nn / _registry_nn</code>（6 个 property）· <code>_require_state / _require_config / _require_registry</code>（3 个方法）· <code>_sync_to_pop()</code>（不再需要）
-</div>
-
-<h3>4. 修饰器存储拆分</h3>
-<div class="box done">
-<p>修饰器现在有两个独立来源，<code>_rebuild_modifiers()</code> 按优先级合并（presets 先，手动后）：</p>
+<!-- ═══════ REMAINING TODOs ═══════ -->
+<h2>&#x1F4CB; 全部剩余 TODO</h2>
 
 <table>
-  <thead><tr><th>属性</th><th>类型</th><th>写入者</th></tr></thead>
+  <thead><tr><th class="step-num">#</th><th style="width:140px">文件:行</th><th>做什么</th><th>依赖</th></tr></thead>
   <tbody>
-    <tr><td><code>_presets</code></td><td><code>list[(priority_id, GeneticPreset)]</code></td><td><code>presets()</code></td></tr>
-    <tr><td><code>_manual_gamete</code></td><td><code>list[(id, name, GameteModifier)]</code></td><td><code>modifiers()</code></td></tr>
-    <tr><td><code>_manual_zygote</code></td><td><code>list[(id, name, ZygoteModifier)]</code></td><td><code>modifiers()</code></td></tr>
-    <tr style="color:var(--muted)"><td><code>_gamete_modifiers</code></td><td>派生（_rebuild_modifiers 重建）</td><td>引擎只读</td></tr>
-    <tr style="color:var(--muted)"><td><code>_zygote_modifiers</code></td><td>派生（_rebuild_modifiers 重建）</td><td>引擎只读</td></tr>
+    <tr><td class="step-num">A</td><td><code>configurator.py:1080</code></td><td>presets() 写 _presets（含 priority 参数）</td><td>—</td></tr>
+    <tr><td class="step-num">B</td><td><code>configurator.py:1264</code></td><td>reconfigure_preset() 用 _presets identity 查找 + _rebuild_modifiers</td><td>A</td></tr>
+    <tr style="color:var(--muted)"><td class="step-num">—</td><td colspan="3">以下独立，任意顺序</td></tr>
+    <tr><td class="step-num">1</td><td><code>configurator.py:1608</code></td><td>adult_survival 离散守卫（xfail: 1）</td><td>—</td></tr>
+    <tr><td class="step-num">2</td><td><code>configurator.py:1683</code></td><td>build() 同步 5 个预提取标量（xfail: 2）</td><td>—</td></tr>
+    <tr><td class="step-num">3</td><td><code>spatial_population.py:273</code></td><td>_SpatialUpdate 加 reconfigure_preset()</td><td>—</td></tr>
+    <tr><td class="step-num">4</td><td><code>spatial_population.py:344</code></td><td>单 deme _dispatch_scalar → 完整方法调用</td><td>—</td></tr>
+    <tr><td class="step-num">5</td><td><code>spatial_population.py:367</code></td><td>全 deme _dispatch_scalar → 完整方法调用（xfail: 5）</td><td>—</td></tr>
+    <tr><td class="step-num">6</td><td><code>population_config.py:444</code></td><td>sperm_storage 形状 n_hg_glabs → n_genotypes_i（xfail: 2）</td><td>—</td></tr>
+    <tr><td class="step-num">7</td><td><code>population_config.py:452</code></td><td>假值 or → is not None</td><td>—</td></tr>
   </tbody>
 </table>
+
+<div class="box next" style="margin-top:20px">
+<strong>&#x26A1; 验证：</strong>每完成一步后 <code>pytest tests/test_configurator.py tests/test_spatial_update.py -q</code>（107 passed, 10 xfailed）。xfail 变 pass 表示修复到位。
 </div>
 
-<!-- ═══════ REMAINING ═══════ -->
-<h2>&#x1F3AF; 剩余 TODO</h2>
+<!-- ═══════ RECENT ═══════ -->
+<h2>&#x1F4DD; 最近改动</h2>
 
-<div class="box pending">
-<p style="margin-bottom:8px">以下独立于上述写回架构，各自可单独修复：</p>
-
-<table>
-  <thead><tr><th>文件</th><th>描述</th><th>xfail 测试</th></tr></thead>
-  <tbody>
-    <tr><td><code>configurator.py:1608</code></td><td><code>adult_survival</code> 离散守卫 — docstring 声称 no-op，实际写入</td><td>TestAdultSurvivalDiscrete</td></tr>
-    <tr><td><code>configurator.py:1683</code></td><td>build() 同步 5 个预提取标量</td><td>TestDiscreteScalarSync</td></tr>
-    <tr><td><code>spatial_population.py:273</code></td><td><code>_SpatialUpdate</code> 加 <code>reconfigure_preset()</code></td><td>—</td></tr>
-    <tr><td><code>spatial_population.py:344</code></td><td><code>_dispatch_scalar</code> 单 deme 路径：逐参数 set_param → 完整方法调用</td><td>—</td></tr>
-    <tr><td><code>spatial_population.py:367</code></td><td><code>_dispatch_scalar</code> 全 deme 路径：同上</td><td>—</td></tr>
-    <tr><td><code>population_config.py:444</code></td><td>sperm_storage 第三维 <code>n_hg_glabs → n_genotypes_i</code></td><td>TestSpermStorageShape</td></tr>
-    <tr><td><code>population_config.py:452</code></td><td>假值 <code>or</code> → <code>is not None</code> 检查</td><td>—</td></tr>
-  </tbody>
-</table>
-</div>
-
-<!-- ═══════ PHASE 2 ═══════ -->
-<h2>&#x1F4CB; 后续：presets 列表完善</h2>
-
-<div class="card">
-  <p>当前 <code>_presets</code> 列表已存在但只被 <code>_rebuild_modifiers()</code> 消费。<code>presets()</code> 走 <code>pop.apply_preset()</code> 仍然通过 <code>add_gamete_modifier → _manual_gamete</code> 写入——没有用到 <code>_presets</code>。</p>
-  <p style="margin-top:8px">下一步：让 <code>presets()</code> 写 <code>_presets</code>（非 <code>_manual_*</code>），<code>reconfigure_preset()</code> 在 <code>_presets</code> 中按 identity 查找。配合 TODO #4 矩阵化重构后 priority ID 用于矩阵合并。</p>
+<div class="box done">
+  <table>
+    <thead><tr><th>改动</th><th>效果</th></tr></thead>
+    <tbody>
+      <tr><td><code>custom()</code> 增量写入</td><td>已有字段 <code>custom["f"][()] = v</code> 原地写；新字段才 <code>_replace()</code> + <code>set_config()</code></td></tr>
+      <tr><td><code>_rebuild_modifiers</code> 不 apply fitness</td><td>修饰器重建和 fitness 分离——避免双倍累积</td></tr>
+    </tbody>
+  </table>
 </div>
 
 <div class="footer">natal-core · fix/runtime-crash-and-data-corruption · 2026-06-03</div>
