@@ -191,6 +191,74 @@
 - 添加测试验证优先级链：`carrying_capacity` > `age_1_carrying_capacity` > `initial_individual_count`
 - 覆盖 Configurator 和 `pop.update()` 两个入口
 
+### #14 🎨 PointMutation 预设 —— 多点突变 + 概率自动校正
+
+**来源**：2026-06-05 设计讨论。用户需求：同时声明 source → [target₁, target₂, …] 的多条点突变，且各 target 的突变率互不干扰（"同时竞争"语义，而非 "先到先得"的级联语义）。
+
+**优先级理由**：🟢 新功能。最简形式（单 source → 单 target）实现量小（~80行），可直接参考 `ToxinAntidoteDrive` 的模式。多 target + 概率校正约 30 行增量。不影响现有 preset。
+
+**设计方案**：
+
+1. **单 target 基础形式**（对标 `ToxinAntidoteDrive` 的简洁度）：
+
+   ```python
+   PointMutation("A2B", source_allele="A", target_allele="B", mutation_rate=1e-5)
+   ```
+
+   - `gamete_modifier`：`add_allele_convert(A→B, rate, sex_filter=sex)`，**不传 `genotype_filter`**（点突变是自发的，不依赖父本基因型）
+   - `zygote_modifier`：默认返回 `None`。可选 `zygotic_mutation_rate` 参数支持胚胎期突变
+   - `fitness_patch`：对 `target_allele` 调用 `_make_fitness_patch_given_allele_scaling()`
+
+2. **多 target 扩展形式**：
+
+   ```python
+   PointMutation("MultiMut",
+       source_allele="A",
+       target_alleles=["B", "C", "D"],
+       mutation_rates=[1e-7, 5e-6, 1e-5],
+   )
+   ```
+
+3. **概率自动校正**（核心设计决策）：
+
+   **问题**：`GameteConversionRuleSet` 内部规则是顺序级联的——Rule2 只作用于 Rule1 处理后的"剩余 source"。如果直接传用户声明的 rate，B 先抢走一部分 source，C 只能从剩余中分，有效速率会偏离用户期望。
+
+   **为什么校正放在 PointMutation 层而非 RuleSet 层**：RuleSet 的级联语义是有意设计的——HomingDrive 的 "homing → resistance" 级联是生物学过程的忠实建模（resistance 只作用于 homing 失败的 target）。这不是 bug，不能"修正"。但点突变的多个产物是同一生物学过程的互斥结果，应该"同时竞争"——校正逻辑属于 PointMutation 的业务语义。
+
+   **校正公式**：`r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`
+
+   其中 `r'ₖ` 是传给 RuleSet 的调整后速率，`rₖ` 是用户声明的期望有效速率。校正后，无论规则以什么顺序插入，每个 target 拿到的有效份额恰好等于 `rₖ`。
+
+   **数值示例**（`r = [0.3, 0.5, 0.1]`）：
+
+   | k | 期望 rₖ | 调整后 r'ₖ | 有效份额 | 
+   |---|---------|-----------|---------|
+   |1| 0.3 | 0.3 | 0.3 × 1.0 = 0.3 ✓ |
+   |2| 0.5 | 0.714 | 0.714 × 0.7 = 0.5 ✓ |
+   |3| 0.1 | 0.5 | 0.5 × 0.2 = 0.1 ✓ |
+
+   最终 source 剩余 = `1 - 0.3 - 0.5 - 0.1 = 0.1` ✓
+
+4. **Σr > 1 的处理**：默认 `raise ValueError`（mutation rate 通常很小，几乎不会触发）。可选 `rate_mode="proportional"` 自动等比缩放到和为 1，方便用户用比例而非概率表达。
+
+5. **性别维度**：校正按性别分别进行——`mutation_rates` 列表中每个元素本身可以是 `_SexSpecificRates`（`float | tuple | dict`），先 `_resolve_rates()` 展开为 `(female_rate, male_rate)`，再对每个性别独立校正。
+
+6. **与手动叠加两个 PointMutation 的对比**：
+
+   | 方式 | 语义 | 问题 |
+   |------|------|------|
+   | 两个独立 preset | 顺序级联（先到先得） | rate 大时有效份额偏离期望；顺序依赖 |
+   | 多 target 单 preset + 校正 | 同时竞争（互斥） | 无 |
+
+**实现路径**（纯加法，不改现有 API）：
+
+| 文件 | 改动 |
+|------|------|
+| `genetic_presets.py` | 新增 `PointMutation` 类（~110 行），`__all__` 添加导出 |
+| `test_genetic_presets.py` | 添加单 target / 多 target / 校正公式 / Σr>1 边界测试 |
+
+**不改**：`GameteConversionRuleSet`、`GameteAlleleConversionRule`、`modifiers.py`、任何 Numba 内核。
+
 ---
 
 ## v0.3.0 及远期更新

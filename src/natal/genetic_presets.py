@@ -839,16 +839,18 @@ class GeneticPreset(ABC):
         self,
         name: str = "",
         species: Optional[Species] = None,
+        priority: int = 0,
     ):
         """Initialize the preset.
 
         Args:
             name: Optional human-readable name for the preset.
-            species: Optional species bound at construction time. If provided,
-                applying this preset to a population with a different species
-                will raise an error.
+            species: Optional species bound at construction time.
+            priority: Execution order — higher values apply first.
+                Same priority uses registration order (stable sort).
         """
         self.name = name or self.__class__.__name__
+        self.priority = priority
         self.hook_id: Optional[int] = None
         self._bound_species: Optional[Species] = species
 

@@ -581,7 +581,7 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         self._gamete_modifiers.clear()
         self._zygote_modifiers.clear()
-        for _, preset in sorted(self._presets):
+        for _, preset in sorted(self._presets, key=lambda x: x[0]):
             if gm := preset.gamete_modifier(self):
                 self._gamete_modifiers.append((
                     self._next_modifier_id(self._gamete_modifiers),

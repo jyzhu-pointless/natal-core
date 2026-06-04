@@ -1088,13 +1088,10 @@ class Configurator:
         if self._pop_ref is not None:
             for preset in presets:
                 self._pop_ref.apply_preset(preset)
-                # TODO(human): append (priority, preset) to pop._presets.
-                # Needed for:
-                #   - reconfigure_preset(drive) to find by identity
-                #   - _rebuild_modifiers() to sort presets by priority
-                #   - future remove_preset(preset) to delete from _presets
-                # presets() should accept priority: int = 0 parameter.
-                # Currently no remove_preset() API exists.
+                # TODO(human): append (preset.priority, preset) to pop._presets.
+                # Priority already on preset.priority (default 0).
+                # Enables reconfigure_preset to find by identity;
+                # _rebuild_modifiers sorts by priority in derived lists.
             self._config = self._pop_ref.config
             return self
 
