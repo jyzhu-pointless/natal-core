@@ -1069,6 +1069,7 @@ class HomingDrive(GeneticPreset):
         zygote_viability_mode: _AlleleScalingMode = "multiplicative",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
+        priority: int = 0,
         use_paternal_deposition: bool = False,
     ):
         """Initialize a homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
@@ -1156,8 +1157,7 @@ class HomingDrive(GeneticPreset):
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
 
-        # TODO(human): pass priority through to super().__init__
-        super().__init__(name=name, species=species)
+        super().__init__(name=name, species=species, priority=priority)
 
     def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for homing drive scaling configs."""
@@ -1421,6 +1421,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         zygote_viability_mode: _AlleleScalingMode = "recessive",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
+        priority: int = 0,
         use_paternal_deposition: bool = False,
     ):
         """Initialize a toxin-antidote gene drive.
@@ -1468,8 +1469,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
 
-        # TODO(human): pass priority through to super().__init__
-        super().__init__(name=name, species=species)
+        super().__init__(name=name, species=species, priority=priority)
 
     def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for the disrupted allele."""
