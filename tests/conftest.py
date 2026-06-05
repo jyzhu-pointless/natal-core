@@ -7,6 +7,12 @@ import pytest  # type: ignore
 import natal as nt
 
 
+# If Numba-compiled tests fail with "NRT_adapt_ndarray_to_python descr NULL",
+# the JIT cache is stale.  Clear it:
+#   rm -rf .numba_cache/hook_codegen
+#   rm -rf __pycache__
+# This can happen after structural changes to @njit_switch-decorated modules.
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register markers; conditionally disable Numba via env var.
 
