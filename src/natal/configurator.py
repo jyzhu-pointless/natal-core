@@ -1088,10 +1088,9 @@ class Configurator:
         if self._pop_ref is not None:
             for preset in presets:
                 self._pop_ref.apply_preset(preset)
-                # TODO(human): append (preset.priority, preset) to pop._presets.
-                # Priority already on preset.priority (default 0).
-                # Enables reconfigure_preset to find by identity;
-                # _rebuild_modifiers sorts by priority in derived lists.
+                # TODO(human): append preset to pop._presets.
+                # Enables reconfigure_preset to find by identity.
+                # _rebuild_modifiers sorts by preset.priority.
             self._config = self._pop_ref.config
             return self
 

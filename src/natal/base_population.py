@@ -144,7 +144,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # Presets with priority IDs.  Writes go to _presets; derived
         # modifier lists are rebuilt from _presets + _manual_* on demand.
-        self._presets: list[tuple[int, GeneticPreset]] = []
+        self._presets: list[GeneticPreset] = []
         self._next_preset_id: int = 0
 
         # Directly-added modifiers (manual, not from presets).
@@ -581,7 +581,7 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         self._gamete_modifiers.clear()
         self._zygote_modifiers.clear()
-        for _, preset in sorted(self._presets, key=lambda x: x[0]):
+        for preset in sorted(self._presets, key=lambda p: p.priority):
             if gm := preset.gamete_modifier(self):
                 self._gamete_modifiers.append((
                     self._next_modifier_id(self._gamete_modifiers),
