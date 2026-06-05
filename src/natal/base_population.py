@@ -145,7 +145,6 @@ class BasePopulation(ABC, Generic[T_State]):
         # Presets with priority IDs.  Writes go to _presets; derived
         # modifier lists are rebuilt from _presets + _manual_* on demand.
         self._presets: list[GeneticPreset] = []
-        self._next_preset_id: int = 0
 
         # Directly-added modifiers (manual, not from presets).
         self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
@@ -248,7 +247,6 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # --- shared presets & modifiers ---
         clone._presets = list(self._presets)
-        clone._next_preset_id = self._next_preset_id
         clone._manual_gamete = list(self._manual_gamete)
         clone._manual_zygote = list(self._manual_zygote)
         # Derived lists rebuilt on first use via _rebuild_modifiers().
