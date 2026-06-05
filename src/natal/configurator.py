@@ -1086,11 +1086,10 @@ class Configurator:
         Otherwise the ``_ConfigContext`` adapter path is used for build-time.
         """
         if self._pop_ref is not None:
+            # Collect presets, then apply in priority order.
             for preset in presets:
-                self._pop_ref.apply_preset(preset)
-                # TODO(human): append preset to pop._presets.
-                # Enables reconfigure_preset to find by identity.
-                # _rebuild_modifiers sorts by preset.priority.
+                self._pop_ref.add_preset(preset)
+            self._pop_ref._rebuild_modifiers()  # pyright: ignore[reportPrivateUsage]
             self._config = self._pop_ref.config
             return self
 
@@ -1270,8 +1269,8 @@ class Configurator:
             setattr(preset, attr, value)
 
         # TODO(human): replace string-prefix matching with identity
-        # lookup in pop._presets.  Depends on presets() writing to
-        # _presets first (see TODO above).
+        # lookup in pop._presets.  _presets is now populated by
+        # presets() → add_preset().
         #   1. Find in pop._presets by `is` → 2. setattr → 3. _rebuild_modifiers()
         #   4. re-apply fitness patch → 5. sync_equilibrium
         #

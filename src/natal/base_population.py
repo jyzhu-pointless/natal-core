@@ -569,17 +569,27 @@ class BasePopulation(ABC, Generic[T_State]):
         return self._next_modifier_id(modifiers)
 
     def _rebuild_modifiers(self) -> None:
-        """Rebuild derived modifier lists from _presets + _manual_*.
+        """Rebuild modifiers AND fitness from _presets + _manual_*.
 
-        Presets are applied first (sorted by priority).  Only modifier
-        registration is done here — fitness patches are NOT re-applied
-        (they were already applied when the preset was first registered,
-        and reconfigure_preset handles them separately).  Manual
-        modifiers are appended last.
+        Presets are applied in priority order.  Fitness tensors are
+        reset to 1.0 first, then re-applied from presets — same full
+        rebuild strategy as modifiers.
         """
+        from natal.genetic_presets import apply_preset_fitness_patch
+
+        # -- reset fitness tensors to neutral (1.0) --
+        if self._config is not None:
+            self._config.viability_fitness.fill(1.0)
+            self._config.fecundity_fitness.fill(1.0)
+            self._config.sexual_selection_fitness.fill(1.0)
+            self._config.zygote_viability_fitness.fill(1.0)
+
+        # -- collect modifiers and fitness from presets --
         self._gamete_modifiers.clear()
         self._zygote_modifiers.clear()
+        fitness_patches: list[dict[str, object]] = []
         for preset in sorted(self._presets, key=lambda p: p.priority):
+            preset.bind_species(self._species)
             if gm := preset.gamete_modifier(self):
                 self._gamete_modifiers.append((
                     self._next_modifier_id(self._gamete_modifiers),
@@ -590,9 +600,17 @@ class BasePopulation(ABC, Generic[T_State]):
                     self._next_modifier_id(self._zygote_modifiers),
                     f"{preset.name}/zygote", zm,
                 ))
+            if patch := preset.fitness_patch():
+                fitness_patches.append(patch)
+
+        # -- manual modifiers appended last --
         self._gamete_modifiers.extend(self._manual_gamete)
         self._zygote_modifiers.extend(self._manual_zygote)
         self._refresh_modifier_maps()
+
+        # -- apply fitness patches (same priority order as modifiers) --
+        for patch in fitness_patches:
+            apply_preset_fitness_patch(self, patch)
 
     def _refresh_modifier_maps(self) -> None:
         if self._config is None or self._registry is None:
@@ -686,6 +704,14 @@ class BasePopulation(ABC, Generic[T_State]):
         if refresh:
             self._rebuild_modifiers()
 
+    def add_preset(self, preset: GeneticPreset) -> None:
+        """Add a preset to this population.
+
+        Args:
+            preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
+        """
+        self._presets.append(preset)
+
     def apply_preset(self, preset: GeneticPreset) -> None:
         """Apply a genetic preset to this population.
 
@@ -710,8 +736,8 @@ class BasePopulation(ABC, Generic[T_State]):
             :class:`natal.genetic_presets.GeneticPreset` - Base class for creating custom presets
             :class:`natal.genetic_presets.HomingDrive` - Built-in gene drive preset
         """
-        from natal.genetic_presets import apply_preset_to_population
-        apply_preset_to_population(self, preset)
+        self.add_preset(preset)
+        self._rebuild_modifiers()
 
     @classmethod
     def builder(cls, species: Species) -> Any:

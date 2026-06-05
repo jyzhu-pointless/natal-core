@@ -568,7 +568,7 @@ def _apply_zygote_viability_allele_scaling(
                 f"Invalid zygote allele config for '{allele_name}': {type(config).__name__}"
             )
 
-def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetFitnessPatch) -> None:
+def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
     Patch schema (all keys optional):
@@ -807,7 +807,7 @@ def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'Genet
     # Preferred path: declarative fitness patch
     patch = preset.fitness_patch()
     if patch:
-        _apply_preset_fitness_patch(population, patch)
+        apply_preset_fitness_patch(population, patch)
         return
 
 class GeneticPreset(ABC):
