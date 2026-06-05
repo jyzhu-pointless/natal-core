@@ -688,44 +688,6 @@ class BasePopulation(ABC, Generic[T_State]):
         if refresh:
             self._rebuild_modifiers()
 
-    # Keep set_zygote_modifier aligned with the ZygoteModifier contract.
-    def set_zygote_modifier(
-        self,
-        modifier: ZygoteModifier,
-        modifier_id: Optional[int] = None,
-        modifier_name: Optional[str] = None
-    ) -> None:
-        """Register a zygote modifier with an optional priority.
-
-        Args:
-            modifier: A ``ZygoteModifier`` instance or callable.
-            modifier_id: Numeric priority (lower values execute earlier). If omitted
-                an id will be auto-assigned.
-            modifier_name: Optional name for debugging.
-        """
-        if not callable(modifier):
-            raise TypeError("Zygote modifier must be callable")
-
-        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
-
-        self._manual_zygote.append((resolved_id, modifier_name, modifier))
-        self._manual_zygote.sort(key=lambda x: x[0])
-
-    def set_gamete_modifier(
-        self,
-        modifier: GameteModifier,
-        modifier_id: Optional[int] = None,
-        modifier_name: Optional[str] = None
-    ) -> None:
-        """Register a gamete modifier with optional priority and name."""
-        if not callable(modifier):
-            raise TypeError("Gamete modifier must be callable")
-
-        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
-
-        self._manual_gamete.append((resolved_id, modifier_name, modifier))
-        self._manual_gamete.sort(key=lambda x: x[0])
-
     def apply_preset(self, preset: GeneticPreset) -> None:
         """Apply a genetic preset to this population.
 
