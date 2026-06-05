@@ -662,11 +662,11 @@ class BasePopulation(ABC, Generic[T_State]):
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
-        self._gamete_modifiers.append((resolved_id, name, modifier))
-        self._gamete_modifiers.sort(key=lambda x: x[0])
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
+        self._manual_gamete.append((resolved_id, name, modifier))
+        self._manual_gamete.sort(key=lambda x: x[0])
         if refresh:
-            self._refresh_modifier_maps()
+            self._rebuild_modifiers()
 
     def add_zygote_modifier(
         self,
@@ -682,11 +682,11 @@ class BasePopulation(ABC, Generic[T_State]):
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
-        self._zygote_modifiers.append((resolved_id, name, modifier))
-        self._zygote_modifiers.sort(key=lambda x: x[0])
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
+        self._manual_zygote.append((resolved_id, name, modifier))
+        self._manual_zygote.sort(key=lambda x: x[0])
         if refresh:
-            self._refresh_modifier_maps()
+            self._rebuild_modifiers()
 
     # Keep set_zygote_modifier aligned with the ZygoteModifier contract.
     def set_zygote_modifier(
@@ -706,11 +706,10 @@ class BasePopulation(ABC, Generic[T_State]):
         if not callable(modifier):
             raise TypeError("Zygote modifier must be callable")
 
-        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
 
-        # Add and sort by priority id.
-        self._zygote_modifiers.append((resolved_id, modifier_name, modifier))
-        self._zygote_modifiers.sort(key=lambda x: x[0])
+        self._manual_zygote.append((resolved_id, modifier_name, modifier))
+        self._manual_zygote.sort(key=lambda x: x[0])
 
     def set_gamete_modifier(
         self,
@@ -722,11 +721,10 @@ class BasePopulation(ABC, Generic[T_State]):
         if not callable(modifier):
             raise TypeError("Gamete modifier must be callable")
 
-        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
 
-        # Add and sort by priority id.
-        self._gamete_modifiers.append((resolved_id, modifier_name, modifier))
-        self._gamete_modifiers.sort(key=lambda x: x[0])
+        self._manual_gamete.append((resolved_id, modifier_name, modifier))
+        self._manual_gamete.sort(key=lambda x: x[0])
 
     def apply_preset(self, preset: GeneticPreset) -> None:
         """Apply a genetic preset to this population.
