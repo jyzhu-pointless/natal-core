@@ -61,7 +61,8 @@
       <tr><td><code>for_population(pop)</code></td><td>统一运行时构造入口，消除 3 处 <code>object.__setattr__</code></td></tr>
       <tr><td>presets/modifiers/reconfigure/custom 双路径</td><td>有 <code>_pop_ref</code> 直接写 Population，无则走 adapter</td></tr>
       <tr><td>删 _nn / _require_* / _sync_to_pop</td><td>统一用 <code>self.state/config/registry</code></td></tr>
-      <tr><td><code>_presets</code> + <code>_manual_*</code> + <code>_rebuild_modifiers()</code></td><td>修饰器来源拆分（空壳，待接线）</td></tr>
+      <tr><td><code>_presets</code> + <code>_manual_*</code> + <code>_rebuild_modifiers()</code></td><td>修饰器来源拆分，_rebuild_modifiers 按 priority 排序</td></tr>
+      <tr><td><code>GeneticPreset.priority</code></td><td>每个 preset 自带 priority（默认 0），子类（HomingDrive / ToxinAntidoteDrive）透传</td></tr>
       <tr><td><code>set_config()</code></td><td>给 <code>custom()</code> 用的正式写入口</td></tr>
     </tbody>
   </table>
