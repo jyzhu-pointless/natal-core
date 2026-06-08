@@ -1370,265 +1370,6 @@ class Configurator:
         config.expected_competition_strength[()] = expected_comp
         config.expected_survival_rate[()] = expected_surv
 
-    # -- Internal implementations (called by subclass chain methods) ----------
-
-    def _competition_impl(
-        self,
-        *,
-        carrying_capacity: float | None = None,
-        low_density_growth_rate: float | None = None,
-        juvenile_growth_mode: int | str | None = None,
-        competition_strength: float | None = None,
-        expected_num_adult_females: float | None = None,
-        equilibrium_distribution: NDArray[np.float64] | None = None,
-        age_1_carrying_capacity: float | None = None,
-        old_juvenile_carrying_capacity: float | None = None,
-    ) -> None:
-        """Shared competition logic for both Configurator subclasses.
-
-        Writes scalar parameters via :func:`set_param` and stores
-        *expected_num_adult_females* / *equilibrium_distribution* for
-        later equilibrium sync in :meth:`apply`.
-
-        Args:
-            carrying_capacity: Equilibrium adults at age 1 (K).
-            low_density_growth_rate: Per-capita growth at low density (r).
-            juvenile_growth_mode: Regulation function (string or int code).
-            competition_strength: Larval competition weight (age-structured only).
-            expected_num_adult_females: Target adult females for Champer model.
-            equilibrium_distribution: Custom ``(n_sexes, n_ages)`` equilibrium.
-            age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
-            old_juvenile_carrying_capacity: Legacy alias for *carrying_capacity*.
-
-        Returns:
-            ``None`` — writes config fields in-place.
-        """
-        self._has_domain_params = True
-        mode_value: int | None = None
-        if isinstance(juvenile_growth_mode, str):
-            from natal.population_config import (
-                BEVERTON_HOLT,
-                CONCAVE,
-                FIXED,
-                LINEAR,
-                LOGISTIC,
-                NO_COMPETITION,
-            )
-            _MODE_MAP: dict[str, int] = {
-                "concave": CONCAVE, "linear": LINEAR, "logistic": LOGISTIC,
-                "beverton_holt": BEVERTON_HOLT, "fixed": FIXED,
-                "no_competition": NO_COMPETITION,
-            }
-            mode_value = _MODE_MAP.get(juvenile_growth_mode.lower())
-            if mode_value is None:
-                raise ValueError(
-                    f"Unknown growth mode string: {juvenile_growth_mode!r}. "
-                    f"Expected one of: {', '.join(sorted(_MODE_MAP))}."
-                )
-        elif juvenile_growth_mode is not None:
-            mode_value = juvenile_growth_mode
-        # ---- carrying capacity (K) fallback chain, in priority order ----
-        # 1. Explicit carrying_capacity argument.
-        # 2. Legacy alias age_1_carrying_capacity.
-        # 3. Legacy alias old_juvenile_carrying_capacity.
-        # 4. Auto-detect from initial_individual_count (age-1 sum).
-        # 5. Leave as None — set_param will skip the write.
-        k_value = carrying_capacity
-        if k_value is None and age_1_carrying_capacity is not None:
-            k_value = age_1_carrying_capacity
-        if k_value is None and old_juvenile_carrying_capacity is not None:
-            k_value = old_juvenile_carrying_capacity
-        # Only auto-detect K during initial build (no live Population).
-        # During runtime updates, K is already set and must not be overridden.
-        if k_value is None and self._pop_ref is None:
-            init_ind = self._config.initial_individual_count
-            if init_ind.size > 0 and init_ind.ndim >= 2 and init_ind.shape[1] >= 2:
-                age_1_count = float(init_ind[:, 1, :].sum())
-                if age_1_count >= 0.5:
-                    k_value = age_1_count
-                else:
-                    total = float(init_ind.sum())
-                    if total >= 0.5:
-                        k_value = total
-        # ---- write all scalar params via set_param (None values are skipped) ----
-        for name, value in [
-            ("carrying_capacity", k_value),
-            ("low_density_growth_rate", low_density_growth_rate),
-            ("juvenile_growth_mode", mode_value),
-            ("competition_strength", competition_strength),
-        ]:
-            if value is not None:
-                set_param(self._config, f"competition.{name}", value)
-        if expected_num_adult_females is not None:
-            self._user_expected_adult_females = float(expected_num_adult_females)
-            self._has_user_expected_females = True
-        if equilibrium_distribution is not None:
-            self._equilibrium_distribution = equilibrium_distribution
-
-    def _reproduction_impl(
-        self,
-        *,
-        eggs_per_female: float | None = None,
-        sex_ratio: float | None = None,
-        sperm_displacement_rate: float | None = None,
-        female_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        male_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_age_based_reproduction_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_age_based_relative_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_adult_mating_rate: float | None = None,
-        male_adult_mating_rate: float | None = None,
-        use_fixed_egg_count: bool | None = None,
-        use_sperm_storage: bool | None = None,
-    ) -> None:
-        """Shared reproduction logic for both Configurator subclasses.
-
-        Writes scalar parameters via :func:`set_param` and resolves
-        per-age callables/sequences into the config arrays.
-
-        Args:
-            eggs_per_female: Base eggs per reproducing female per tick.
-            sex_ratio: Female fraction of offspring (0–1).
-            sperm_displacement_rate: Fraction of stored sperm displaced (age-structured).
-            female_age_based_mating_rates: Per-age female mating probability.
-            male_age_based_mating_rates: Per-age male mating probability.
-            female_age_based_reproduction_rates: Per-age reproduction participation.
-            female_age_based_relative_fertility: Per-age fertility weight.
-            female_adult_mating_rate: Scalar shortcut for age-structured adult female mating.
-            male_adult_mating_rate: Scalar shortcut for age-structured adult male mating.
-            use_fixed_egg_count: Disable Poisson noise (discrete only).
-            use_sperm_storage: Accepted for compatibility but has no effect.
-
-        Returns:
-            ``None`` — writes config fields in-place.
-        """
-        self._has_domain_params = True
-        from natal.population_builder import PopulationConfigBuilder
-
-        # use_sperm_storage was added to the public API before the underlying
-        # mechanism was implemented.  It was never wired up — sperm storage
-        # is always active.  Emit a warning rather than silently ignoring.
-        if use_sperm_storage is not None:
-            import warnings
-            warnings.warn(
-                "use_sperm_storage parameter has never been functional — "
-                "sperm storage is always enabled regardless of this setting. "
-                "The parameter is accepted for compatibility but has no effect.",
-                FutureWarning, stacklevel=2,
-            )
-        n_ages = self._config.n_ages
-        # resolve_age_param converts scalars / lists / dicts / callables
-        # into per-age float arrays.  e.g. resolve(0.5, 3, default) → [0.5, 0.5, 0.5].
-        resolve = PopulationConfigBuilder.resolve_age_param
-        # ---- scalar reproduction parameters ----
-        # _sync_equilibrium=False avoids redundant recomputation —
-        # we do a single sync below for all equilibrium-sensitive params.
-        for name, value in [
-            ("eggs_per_female", eggs_per_female),
-            ("sex_ratio", sex_ratio),
-            ("sperm_displacement_rate", sperm_displacement_rate),
-        ]:
-            if value is not None:
-                set_param(self._config, f"reproduction.{name}", value,
-                          _sync_equilibrium=False)
-        # Batch equilibrium sync for eggs and sex_ratio (both affect K→eggs mapping).
-        if eggs_per_female is not None or sex_ratio is not None:
-            from natal.engine.simulation.age_structured import sync_equilibrium_metrics
-            sync_equilibrium_metrics(self._config)
-        # ---- per-age array parameters ----
-        # Each accepts scalar/list/dict/callable via resolve_age_param.
-        if female_age_based_mating_rates is not None:
-            self._config.age_based_mating_rates[0, :] = resolve(
-                female_age_based_mating_rates, n_ages, np.zeros(n_ages)
-            )
-        if male_age_based_mating_rates is not None:
-            self._config.age_based_mating_rates[1, :] = resolve(
-                male_age_based_mating_rates, n_ages, np.zeros(n_ages)
-            )
-        if female_age_based_reproduction_rates is not None:
-            self._config.age_based_reproduction_rates[:] = resolve(
-                female_age_based_reproduction_rates, n_ages, np.ones(n_ages)
-            )
-        if female_age_based_relative_fertility is not None:
-            self._config.female_age_based_relative_fertility[:] = resolve(
-                female_age_based_relative_fertility, n_ages, np.ones(n_ages)
-            )
-        # ---- scalar shortcuts for age-structured adult mating ----
-        if female_adult_mating_rate is not None:
-            self._config.age_based_mating_rates[0, 1] = float(female_adult_mating_rate)
-        if male_adult_mating_rate is not None:
-            self._config.age_based_mating_rates[1, 1] = float(male_adult_mating_rate)
-        # ---- build-time boolean flag — must use _replace (not a 0-d ndarray) ----
-        if use_fixed_egg_count is not None:
-            self._config = self._config._replace(use_fixed_egg_count=use_fixed_egg_count)
-
-    def _survival_impl(
-        self,
-        *,
-        female: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        male: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_age_based_survival_rates: list[float] | None = None,
-        male_age_based_survival_rates: list[float] | None = None,
-        female_age0_survival: float | None = None,
-        male_age0_survival: float | None = None,
-        adult_survival: float | None = None,
-    ) -> None:
-        """Shared survival logic for both Configurator subclasses.
-
-        Resolves per-age survival parameters from scalars, sequences,
-        dicts, or callables and writes them into ``age_based_survival_rates``.
-
-        Args:
-            female: Per-age female survival (scalar, list, dict, or callable).
-            male: Per-age male survival (scalar, list, dict, or callable).
-            female_age_based_survival_rates: Explicit per-age female rates.
-            male_age_based_survival_rates: Explicit per-age male rates.
-            female_age0_survival: Age-0 juvenile female survival shortcut.
-            male_age0_survival: Age-0 juvenile male survival shortcut.
-            adult_survival: Adult survival shortcut (applied to all ages ≥ 1).
-
-        Returns:
-            ``None`` — writes config fields in-place.
-        """
-        self._has_domain_params = True
-        from natal.population_builder import PopulationConfigBuilder
-
-        n_ages = self._config.n_ages
-        # ---- per-age survival via resolve_age_param ----
-        # "female" and "male" accept flexible forms: scalar (applied to all
-        # ages), list, {age: val} dict, or callable(age)→float.
-        if female is not None:
-            arr = PopulationConfigBuilder.resolve_age_param(
-                female, n_ages, np.ones(n_ages)
-            )
-            self._config.age_based_survival_rates[0, :] = arr
-        if male is not None:
-            arr = PopulationConfigBuilder.resolve_age_param(
-                male, n_ages, np.ones(n_ages)
-            )
-            self._config.age_based_survival_rates[1, :] = arr
-        # ---- legacy aliases — last write wins if both modern + legacy given ----
-        if female_age_based_survival_rates is not None:
-            arr = PopulationConfigBuilder.resolve_age_param(
-                female_age_based_survival_rates, n_ages, np.ones(n_ages)
-            )
-            self._config.age_based_survival_rates[0, :] = arr
-        if male_age_based_survival_rates is not None:
-            arr = PopulationConfigBuilder.resolve_age_param(
-                male_age_based_survival_rates, n_ages, np.ones(n_ages)
-            )
-            self._config.age_based_survival_rates[1, :] = arr
-        # ---- discrete-generation shortcuts (only age-0 matters) ----
-        for name, value in [
-            ("female_age0_survival", female_age0_survival),
-            ("male_age0_survival", male_age0_survival),
-        ]:
-            if value is not None:
-                set_param(self._config, f"survival.{name}", value)
-        # ---- convenience: apply one value to all adult ages ----
-        if adult_survival is not None:
-            new_adult_age = self._config.new_adult_age
-            self._config.age_based_survival_rates[:, new_adult_age:] = float(adult_survival)
-
     def build(
         self,
         name: str | None = None,
@@ -1779,14 +1520,52 @@ class DiscreteConfigurator(Configurator):
             ``expected_num_adult_females`` is auto-computed as
             ``K * sex_ratio`` for the discrete model.
         """
-        self._competition_impl(
-            carrying_capacity=carrying_capacity,
-            low_density_growth_rate=low_density_growth_rate,
-            juvenile_growth_mode=juvenile_growth_mode,
-            age_1_carrying_capacity=age_1_carrying_capacity,
-        )
+        self._has_domain_params = True
+        mode_value: int | None = None
+        if isinstance(juvenile_growth_mode, str):
+            from natal.population_config import (
+                BEVERTON_HOLT,
+                CONCAVE,
+                FIXED,
+                LINEAR,
+                LOGISTIC,
+                NO_COMPETITION,
+            )
+            _MODE_MAP: dict[str, int] = {
+                "concave": CONCAVE, "linear": LINEAR, "logistic": LOGISTIC,
+                "beverton_holt": BEVERTON_HOLT, "fixed": FIXED,
+                "no_competition": NO_COMPETITION,
+            }
+            mode_value = _MODE_MAP.get(juvenile_growth_mode.lower())
+            if mode_value is None:
+                raise ValueError(
+                    f"Unknown growth mode string: {juvenile_growth_mode!r}. "
+                    f"Expected one of: {', '.join(sorted(_MODE_MAP))}."
+                )
+        elif juvenile_growth_mode is not None:
+            mode_value = juvenile_growth_mode
+        k_value = carrying_capacity
+        if k_value is None and age_1_carrying_capacity is not None:
+            k_value = age_1_carrying_capacity
+        # K auto-detection: only during initial build.
+        if k_value is None and self._pop_ref is None:
+            init_ind = self._config.initial_individual_count
+            if init_ind.size > 0 and init_ind.ndim >= 2 and init_ind.shape[1] >= 2:
+                age_1_count = float(init_ind[:, 1, :].sum())
+                if age_1_count >= 0.5:
+                    k_value = age_1_count
+                else:
+                    total = float(init_ind.sum())
+                    if total >= 0.5:
+                        k_value = total
+        for name, value in [
+            ("carrying_capacity", k_value),
+            ("low_density_growth_rate", low_density_growth_rate),
+            ("juvenile_growth_mode", mode_value),
+        ]:
+            if value is not None:
+                set_param(self._config, f"competition.{name}", value)
         # Auto-compute expected_num_adult_females = K × sex_ratio
-        # for discrete models when not explicitly set.
         if not getattr(self, "_has_user_expected_females", False):
             k = float(self._config.carrying_capacity)
             sr = float(self._config.sex_ratio)
@@ -2047,16 +1826,60 @@ class AgeStructuredConfigurator(Configurator):
         Returns:
             Self for chaining.
         """
-        self._competition_impl(
-            carrying_capacity=carrying_capacity,
-            low_density_growth_rate=low_density_growth_rate,
-            juvenile_growth_mode=juvenile_growth_mode,
-            competition_strength=competition_strength,
-            expected_num_adult_females=expected_num_adult_females,
-            equilibrium_distribution=equilibrium_distribution,
-            age_1_carrying_capacity=age_1_carrying_capacity,
-            old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
-        )
+        self._has_domain_params = True
+        mode_value: int | None = None
+        if isinstance(juvenile_growth_mode, str):
+            from natal.population_config import (
+                BEVERTON_HOLT,
+                CONCAVE,
+                FIXED,
+                LINEAR,
+                LOGISTIC,
+                NO_COMPETITION,
+            )
+            _MODE_MAP: dict[str, int] = {
+                "concave": CONCAVE, "linear": LINEAR, "logistic": LOGISTIC,
+                "beverton_holt": BEVERTON_HOLT, "fixed": FIXED,
+                "no_competition": NO_COMPETITION,
+            }
+            mode_value = _MODE_MAP.get(juvenile_growth_mode.lower())
+            if mode_value is None:
+                raise ValueError(
+                    f"Unknown growth mode string: {juvenile_growth_mode!r}. "
+                    f"Expected one of: {', '.join(sorted(_MODE_MAP))}."
+                )
+        elif juvenile_growth_mode is not None:
+            mode_value = juvenile_growth_mode
+        # ---- carrying capacity (K) fallback chain ----
+        k_value = carrying_capacity
+        if k_value is None and age_1_carrying_capacity is not None:
+            k_value = age_1_carrying_capacity
+        if k_value is None and old_juvenile_carrying_capacity is not None:
+            k_value = old_juvenile_carrying_capacity
+        # Only auto-detect K during initial build (no live Population).
+        if k_value is None and self._pop_ref is None:
+            init_ind = self._config.initial_individual_count
+            if init_ind.size > 0 and init_ind.ndim >= 2 and init_ind.shape[1] >= 2:
+                age_1_count = float(init_ind[:, 1, :].sum())
+                if age_1_count >= 0.5:
+                    k_value = age_1_count
+                else:
+                    total = float(init_ind.sum())
+                    if total >= 0.5:
+                        k_value = total
+        for name, value in [
+            ("carrying_capacity", k_value),
+            ("low_density_growth_rate", low_density_growth_rate),
+            ("juvenile_growth_mode", mode_value),
+            ("competition_strength", competition_strength),
+        ]:
+            if value is not None:
+                set_param(self._config, f"competition.{name}", value)
+        if expected_num_adult_females is not None:
+            self._user_expected_adult_females = float(expected_num_adult_females)
+            self._has_user_expected_females = True
+        if equilibrium_distribution is not None:
+            self._equilibrium_distribution = equilibrium_distribution
         return self
 
     def reproduction(
@@ -2088,17 +1911,44 @@ class AgeStructuredConfigurator(Configurator):
         Returns:
             Self for chaining.
         """
-        self._reproduction_impl(
-            eggs_per_female=eggs_per_female,
-            sex_ratio=sex_ratio,
-            sperm_displacement_rate=sperm_displacement_rate,
-            female_age_based_mating_rates=female_age_based_mating_rates,
-            male_age_based_mating_rates=male_age_based_mating_rates,
-            female_age_based_reproduction_rates=female_age_based_reproduction_rates,
-            female_age_based_relative_fertility=female_age_based_relative_fertility,
-            use_fixed_egg_count=use_fixed_egg_count,
-            use_sperm_storage=use_sperm_storage,
-        )
+        self._has_domain_params = True
+        from natal.population_builder import PopulationConfigBuilder
+
+        if use_sperm_storage is not None:
+            import warnings
+            warnings.warn(
+                "use_sperm_storage parameter has never been functional — "
+                "sperm storage is always enabled regardless of this setting. "
+                "The parameter is accepted for compatibility but has no effect.",
+                FutureWarning, stacklevel=2,
+            )
+        n_ages = self._config.n_ages
+        resolve = PopulationConfigBuilder.resolve_age_param
+        for name, value in [
+            ("eggs_per_female", eggs_per_female),
+            ("sex_ratio", sex_ratio),
+            ("sperm_displacement_rate", sperm_displacement_rate),
+        ]:
+            if value is not None:
+                set_param(self._config, f"reproduction.{name}", value,
+                          _sync_equilibrium=False)
+        if eggs_per_female is not None or sex_ratio is not None:
+            from natal.engine.simulation.age_structured import sync_equilibrium_metrics
+            sync_equilibrium_metrics(self._config)
+        if female_age_based_mating_rates is not None:
+            self._config.age_based_mating_rates[0, :] = resolve(
+                female_age_based_mating_rates, n_ages, np.zeros(n_ages))
+        if male_age_based_mating_rates is not None:
+            self._config.age_based_mating_rates[1, :] = resolve(
+                male_age_based_mating_rates, n_ages, np.zeros(n_ages))
+        if female_age_based_reproduction_rates is not None:
+            self._config.age_based_reproduction_rates[:] = resolve(
+                female_age_based_reproduction_rates, n_ages, np.ones(n_ages))
+        if female_age_based_relative_fertility is not None:
+            self._config.female_age_based_relative_fertility[:] = resolve(
+                female_age_based_relative_fertility, n_ages, np.ones(n_ages))
+        if use_fixed_egg_count is not None:
+            self._config = self._config._replace(use_fixed_egg_count=use_fixed_egg_count)
         return self
 
     def survival(
@@ -2126,14 +1976,29 @@ class AgeStructuredConfigurator(Configurator):
         Returns:
             Self for chaining.
         """
-        self._survival_impl(
-            female=female, male=male,
-            female_age_based_survival_rates=female_age_based_survival_rates,
-            male_age_based_survival_rates=male_age_based_survival_rates,
-            adult_survival=adult_survival,
-            female_age0_survival=female_age0_survival,
-            male_age0_survival=male_age0_survival,
-        )
+        self._has_domain_params = True
+        from natal.population_builder import PopulationConfigBuilder
+
+        n_ages = self._config.n_ages
+        if female is not None:
+            self._config.age_based_survival_rates[0, :] =                 PopulationConfigBuilder.resolve_age_param(female, n_ages, np.ones(n_ages))
+        if male is not None:
+            self._config.age_based_survival_rates[1, :] =                 PopulationConfigBuilder.resolve_age_param(male, n_ages, np.ones(n_ages))
+        if female_age_based_survival_rates is not None:
+            self._config.age_based_survival_rates[0, :] =                 PopulationConfigBuilder.resolve_age_param(
+                    female_age_based_survival_rates, n_ages, np.ones(n_ages))
+        if male_age_based_survival_rates is not None:
+            self._config.age_based_survival_rates[1, :] =                 PopulationConfigBuilder.resolve_age_param(
+                    male_age_based_survival_rates, n_ages, np.ones(n_ages))
+        for name, value in [
+            ("female_age0_survival", female_age0_survival),
+            ("male_age0_survival", male_age0_survival),
+        ]:
+            if value is not None:
+                set_param(self._config, f"survival.{name}", value)
+        if adult_survival is not None:
+            new_adult_age = self._config.new_adult_age
+            self._config.age_based_survival_rates[:, new_adult_age:] = float(adult_survival)
         return self
 
     def build(
