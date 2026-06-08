@@ -270,10 +270,28 @@ class _SpatialUpdate:
             Configurator.for_config(config).presets(*presets)
         return self
 
-    # TODO(human): add reconfigure_preset() to _SpatialUpdate.
-    # Currently raises AttributeError.  Follow the same pattern
-    # as presets() above — single-deme delegates to update_deme(),
-    # all-deme iterates unique configs with dedup by id().
+    def reconfigure_preset(
+        self, preset: GeneticPreset, **changes: object,
+    ) -> _SpatialUpdate:
+        """Reconfigure a preset parameter on target deme(s).
+
+        Single-deme delegates to ``update_deme()`` → ``reconfigure_preset()``.
+        All-deme iterates unique configs with dedup by ``id()``.
+        """
+        from natal.configurator import Configurator
+
+        if self._deme is not None:
+            self._pop.update_deme(self._deme).reconfigure_preset(preset, **changes)
+            return self
+
+        seen: set[int] = set()
+        for d in self._pop.demes:
+            cid = id(d.config)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            Configurator.for_population(d).reconfigure_preset(preset, **changes)
+        return self
 
     def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:
         from natal.configurator import Configurator
@@ -327,31 +345,19 @@ class _SpatialUpdate:
     def _dispatch_scalar(
         self, method_name: str, kwargs: dict[str, object],
     ) -> None:
-        """Apply scalar kwargs to target deme(s).
+        """Apply scalar kwargs to target deme(s) via the full Configurator method.
 
-        Uses ``set_param`` per-parameter (except ``custom`` / ``fitness`` /
-        ``modifiers``) to avoid triggering unintended side effects like K
-        auto-resolution.
+        Previously used ``set_param`` per-parameter for float/int/bool values
+        and the full method only for ``custom``/``fitness``/``modifiers``.
+        That silently skipped list/dict/callable values and failed on Python
+        bool fields.  Now every method call goes through the Configurator,
+        which handles all parameter types correctly.
         """
-        from natal.configurator import Configurator, set_param
-
-        # Methods whose params are complex types (Mapping, list, etc.)
-        # rather than simple float/int/bool scalars — use full method call.
-        use_full_method = method_name in ("custom", "fitness", "modifiers")
+        from natal.configurator import Configurator
 
         if self._deme is not None:
             cfg = self._pop.update_deme(self._deme)
-            # TODO(human): same refactor as lines 357-369 — replace
-            # per-parameter set_param dispatch with a single full method call:
-            #
-            #   getattr(cfg, method_name)(**kwargs)
-            #
-            if use_full_method:
-                getattr(cfg, method_name)(**kwargs)
-            else:
-                for key, val in kwargs.items():
-                    if isinstance(val, (float, int, bool)):
-                        set_param(cfg.config, f"{method_name}.{key}", val)
+            getattr(cfg, method_name)(**kwargs)
             return
 
         # Apply to all unique configs — deduplicate by object identity.
@@ -363,24 +369,7 @@ class _SpatialUpdate:
                 continue
             seen.add(cid)
             cfg = Configurator.for_population(d)
-            #
-            # TODO(human): refactor _dispatch_scalar to use the full
-            # Configurator method instead of per-parameter set_param().
-            # set_param() cannot handle:
-            #   - Python bool fields (setup.stochastic → TypeError)
-            #   - empty config_path on 2D arrays (survival.adult_survival → ValueError)
-            #   - list/dict/callable values (silently skipped)
-            # Replace the if/else below with a single line:
-            #
-            #   getattr(cfg, method_name)(**kwargs)
-            #
-            # Then delete the `use_full_method` variable (line 335) — no longer needed.
-            if use_full_method:
-                getattr(cfg, method_name)(**kwargs)
-            else:
-                for key, val in kwargs.items():
-                    if isinstance(val, (float, int, bool)):
-                        set_param(cfg.config, f"{method_name}.{key}", val)
+            getattr(cfg, method_name)(**kwargs)
 
 
 class SpatialPopulation:

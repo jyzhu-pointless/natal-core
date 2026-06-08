@@ -150,7 +150,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
         self._manual_zygote: list[tuple[int, str | None, ZygoteModifier]] = []
 
-        # Derived modifier lists — rebuilt by _rebuild_modifiers().
+        # Derived modifier lists — rebuilt by rebuild_from_presets().
         self._gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self._zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
@@ -249,7 +249,7 @@ class BasePopulation(ABC, Generic[T_State]):
         clone._presets = list(self._presets)
         clone._manual_gamete = list(self._manual_gamete)
         clone._manual_zygote = list(self._manual_zygote)
-        # Derived lists rebuilt on first use via _rebuild_modifiers().
+        # Derived lists rebuilt on first use via rebuild_from_presets().
 
         # --- config (shared reference for homogeneous, group-specific for heterogeneous) ---
         resolved_config = config if config is not None else self._config
@@ -484,6 +484,21 @@ class BasePopulation(ABC, Generic[T_State]):
 
         return Configurator.for_population(self)
 
+    @property
+    def presets(self) -> List[GeneticPreset]:
+        """Return the presets applied to this population."""
+        return self._presets
+
+    @property
+    def gamete_modifiers(self) -> List[tuple[int, str | None, GameteModifier]]:
+        """Return the list of registered gamete modifiers."""
+        return self._gamete_modifiers
+
+    @property
+    def zygote_modifiers(self) -> List[tuple[int, str | None, ZygoteModifier]]:
+        """Return the list of registered zygote modifiers."""
+        return self._zygote_modifiers
+
     @abstractmethod
     def update(self) -> Configurator:
         """Return a ``Configurator`` for modifying this population's config.
@@ -568,7 +583,7 @@ class BasePopulation(ABC, Generic[T_State]):
             return int(modifier_id)
         return self._next_modifier_id(modifiers)
 
-    def _rebuild_modifiers(self) -> None:
+    def rebuild_from_presets(self) -> None:
         """Rebuild modifiers AND fitness from _presets + _manual_*.
 
         Presets are applied in priority order.  Fitness tensors are
@@ -682,7 +697,9 @@ class BasePopulation(ABC, Generic[T_State]):
         self._manual_gamete.append((resolved_id, name, modifier))
         self._manual_gamete.sort(key=lambda x: x[0])
         if refresh:
-            self._rebuild_modifiers()
+            self._gamete_modifiers.append((resolved_id, name, modifier))
+            self._gamete_modifiers.sort(key=lambda x: x[0])
+            self._refresh_modifier_maps()
 
     def add_zygote_modifier(
         self,
@@ -702,7 +719,9 @@ class BasePopulation(ABC, Generic[T_State]):
         self._manual_zygote.append((resolved_id, name, modifier))
         self._manual_zygote.sort(key=lambda x: x[0])
         if refresh:
-            self._rebuild_modifiers()
+            self._zygote_modifiers.append((resolved_id, name, modifier))
+            self._zygote_modifiers.sort(key=lambda x: x[0])
+            self._refresh_modifier_maps()
 
     def add_preset(self, preset: GeneticPreset) -> None:
         """Add a preset to this population.
@@ -737,7 +756,7 @@ class BasePopulation(ABC, Generic[T_State]):
             :class:`natal.genetic_presets.HomingDrive` - Built-in gene drive preset
         """
         self.add_preset(preset)
-        self._rebuild_modifiers()
+        self.rebuild_from_presets()
 
     @classmethod
     def builder(cls, species: Species) -> Any:

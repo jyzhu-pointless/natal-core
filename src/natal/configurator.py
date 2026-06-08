@@ -791,6 +791,13 @@ class Configurator:
         # optional backref for writing config updates back to a Population when created via for_population()
         self._pop_ref: BasePopulation[Any] | None = None
 
+        # Discrete-specific scalar overrides (stored here so build() can
+        # extract them into DiscretePopulationConfig at the last moment).
+        self._female_mating_rate: float | None = None
+        self._male_mating_rate: float | None = None
+        self._base_survival_f: float | None = None
+        self._base_survival_m: float | None = None
+
     @property
     def config(self) -> PopulationConfig | DiscretePopulationConfig:
         """The wrapped PopulationConfig (read-only accessor)."""
@@ -982,6 +989,8 @@ class Configurator:
             overrides["use_fixed_egg_count"] = use_fixed_egg_count
         if overrides:
             self._config = self._config._replace(**overrides)
+            if self._pop_ref is not None:
+                self._pop_ref.set_config(self._config)
         return self
 
     # -- domain methods --------------------------------------------------------
@@ -1089,7 +1098,7 @@ class Configurator:
             # Collect presets, then apply in priority order.
             for preset in presets:
                 self._pop_ref.add_preset(preset)
-            self._pop_ref._rebuild_modifiers()  # pyright: ignore[reportPrivateUsage]
+            self._pop_ref.rebuild_from_presets()
             self._config = self._pop_ref.config
             return self
 
@@ -1266,30 +1275,25 @@ class Configurator:
             Self for chaining.
         """
         for attr, value in changes.items():
+            if not hasattr(preset, attr):
+                raise AttributeError(
+                    f"{type(preset).__name__} {preset.name!r} has no "
+                    f"attribute {attr!r}. Cannot reconfigure a non-existent "
+                    f"parameter — this would silently create a stray attribute "
+                    f"on the preset object."
+                )
             setattr(preset, attr, value)
 
-        # TODO(human): replace string-prefix matching with identity
-        # lookup in pop._presets.  _presets is now populated by
-        # presets() → add_preset().
-        #   1. Find in pop._presets by `is` → 2. setattr → 3. _rebuild_modifiers()
-        #   4. re-apply fitness patch → 5. sync_equilibrium
-        #
-        # Current (fragile) code:
-        prefix = f"{preset.name}/"
         if self._pop_ref is not None:
             pop = self._pop_ref
-            pop._gamete_modifiers = [m for m in pop._gamete_modifiers if m[1] is None or not m[1].startswith(prefix)]  # pyright: ignore[reportPrivateUsage]
-            pop._zygote_modifiers = [m for m in pop._zygote_modifiers if m[1] is None or not m[1].startswith(prefix)]  # pyright: ignore[reportPrivateUsage]
-            pop.apply_preset(preset)
+            pop.rebuild_from_presets()
             self._config = pop.config
         else:
-            self.gamete_modifiers = [
-                m for m in self.gamete_modifiers if m[1] is None or not m[1].startswith(prefix)
-            ]
-            self.zygote_modifiers = [
-                m for m in self.zygote_modifiers if m[1] is None or not m[1].startswith(prefix)
-            ]
-            self.presets(preset)
+            raise RuntimeError(
+                "reconfigure_preset() requires a live Population. "
+                "Use pop.update().reconfigure_preset(...) or "
+                "Configurator.for_population(pop).reconfigure_preset(...)."
+            )
 
         from natal.engine.simulation.age_structured import sync_equilibrium_metrics
         sync_equilibrium_metrics(self._config)
@@ -1427,16 +1431,17 @@ class Configurator:
         # 1. Explicit carrying_capacity argument.
         # 2. Legacy alias age_1_carrying_capacity.
         # 3. Legacy alias old_juvenile_carrying_capacity.
-        # 4. Auto-detect from initial_individual_count (age-1 sum → total).
+        # 4. Auto-detect from initial_individual_count (age-1 sum).
         # 5. Leave as None — set_param will skip the write.
         k_value = carrying_capacity
         if k_value is None and age_1_carrying_capacity is not None:
             k_value = age_1_carrying_capacity
         if k_value is None and old_juvenile_carrying_capacity is not None:
             k_value = old_juvenile_carrying_capacity
-        if k_value is None:
+        # Only auto-detect K during initial build (no live Population).
+        # During runtime updates, K is already set and must not be overridden.
+        if k_value is None and self._pop_ref is None:
             init_ind = self._config.initial_individual_count
-            # shape[1] >= 2 guards against discrete configs (n_ages=2 → has age-1).
             if init_ind.size > 0 and init_ind.ndim >= 2 and init_ind.shape[1] >= 2:
                 age_1_count = float(init_ind[:, 1, :].sum())
                 if age_1_count >= 0.5:
@@ -1621,11 +1626,6 @@ class Configurator:
                 set_param(self._config, f"survival.{name}", value)
         # ---- convenience: apply one value to all adult ages ----
         if adult_survival is not None:
-            # TODO(human): skip adult_survival for discrete models.
-            # The docstring claims it's a no-op for discrete, but
-            # currently writes adult survival = 0.5 over the 0.0
-            # invariant (adults replaced each tick).  xfail: TestAdultSurvivalDiscrete.
-            #
             new_adult_age = self._config.new_adult_age
             self._config.age_based_survival_rates[:, new_adult_age:] = float(adult_survival)
 
@@ -1696,12 +1696,6 @@ class Configurator:
                 fecundity_m=self._config.fecundity_fitness[1],
                 viability_f=self._config.viability_fitness[0, 0, :],
                 viability_m=self._config.viability_fitness[1, 0, :],
-                # TODO(human): sync the 5 pre-extracted SCALAR fields too
-                # (female_mating_rate, male_mating_rate, reproduction_rate,
-                # base_survival_f, base_survival_m).  Currently only the 6
-                # array views above are synced — these 5 go stale (xfail tests:
-                # TestDiscreteScalarSync).  Read from the same array sources
-                # as the views already synced above.
             )
             from natal.discrete_generation_population import (
                 DiscreteGenerationPopulation,
@@ -1820,13 +1814,36 @@ class DiscreteConfigurator(Configurator):
         Returns:
             Self for chaining.
         """
-        self._reproduction_impl(
-            eggs_per_female=eggs_per_female,
-            sex_ratio=sex_ratio,
-            female_adult_mating_rate=female_adult_mating_rate,
-            male_adult_mating_rate=male_adult_mating_rate,
-            use_fixed_egg_count=use_fixed_egg_count,
-        )
+        self._has_domain_params = True
+        # 0-d ndarray fields — write in-place, no staleness risk.
+        if eggs_per_female is not None:
+            set_param(self._config, "reproduction.eggs_per_female", eggs_per_female,
+                      _sync_equilibrium=False)
+        if sex_ratio is not None:
+            set_param(self._config, "reproduction.sex_ratio", sex_ratio,
+                      _sync_equilibrium=False)
+        if eggs_per_female is not None or sex_ratio is not None:
+            from natal.engine.simulation.age_structured import sync_equilibrium_metrics
+            sync_equilibrium_metrics(self._config)
+        # Scalars — write to config immediately (runtime) and store for build().
+        scalar_overrides: dict[str, float] = {}
+        if female_adult_mating_rate is not None:
+            val = float(female_adult_mating_rate)
+            self._female_mating_rate = val
+            scalar_overrides["female_mating_rate"] = val
+        if male_adult_mating_rate is not None:
+            val = float(male_adult_mating_rate)
+            self._male_mating_rate = val
+            scalar_overrides["male_mating_rate"] = val
+        if scalar_overrides:
+            self._config = self._config._replace(**scalar_overrides)
+            if self._pop_ref is not None:
+                self._pop_ref.set_config(self._config)
+        # Boolean flag — must use _replace (not a 0-d ndarray).
+        if use_fixed_egg_count is not None:
+            self._config = self._config._replace(use_fixed_egg_count=use_fixed_egg_count)
+            if self._pop_ref is not None:
+                self._pop_ref.set_config(self._config)
         return self
 
     def initial_state(
@@ -1876,31 +1893,60 @@ class DiscreteConfigurator(Configurator):
         *,
         female_age0_survival: float | None = None,
         male_age0_survival: float | None = None,
-        adult_survival: float | None = None,
     ) -> DiscreteConfigurator:
         """Configure survival.  Only age-0 (juvenile→adult) matters.
 
-        Both default to 1.0.
+        Both default to 1.0.  ``adult_survival`` is NOT accepted — in
+        discrete-generation models, adults are fully replaced each tick,
+        so adult survival is always 0.0 and cannot be overridden.
 
         Args:
             female_age0_survival: Female juvenile survival probability.
             male_age0_survival: Male juvenile survival probability.
-            adult_survival: Accepted for compat, no-op in discrete model.
 
         Returns:
             Self for chaining.
         """
-        self._survival_impl(
-            female_age0_survival=female_age0_survival,
-            male_age0_survival=male_age0_survival,
-            adult_survival=adult_survival,
-        )
+        self._has_domain_params = True
+        overrides: dict[str, float] = {}
+        if female_age0_survival is not None:
+            val = float(female_age0_survival)
+            self._base_survival_f = val
+            overrides["base_survival_f"] = val
+        if male_age0_survival is not None:
+            val = float(male_age0_survival)
+            self._base_survival_m = val
+            overrides["base_survival_m"] = val
+        if overrides:
+            self._config = self._config._replace(**overrides)
+            if self._pop_ref is not None:
+                self._pop_ref.set_config(self._config)
         return self
 
     def build(
         self, name: str | None = None, hooks: _HookMap | None = None,
     ) -> DiscreteGenerationPopulation:
-        """Build and return a ``DiscreteGenerationPopulation``."""
+        """Build and return a ``DiscreteGenerationPopulation``.
+
+        Extracts discrete-specific scalars from stored override values
+        before handing off to the base ``build()`` for finalisation.
+        """
+        # Extract scalars that replace the default values burned into
+        # DiscretePopulationConfig at construction time.  This is the
+        # only correct place — survival() and reproduction() store
+        # overrides here, and the engine reads these scalars directly.
+        overrides: dict[str, float] = {}
+        if self._female_mating_rate is not None:
+            overrides["female_mating_rate"] = self._female_mating_rate
+        if self._male_mating_rate is not None:
+            overrides["male_mating_rate"] = self._male_mating_rate
+        if self._base_survival_f is not None:
+            overrides["base_survival_f"] = self._base_survival_f
+        if self._base_survival_m is not None:
+            overrides["base_survival_m"] = self._base_survival_m
+        if overrides:
+            self._config = self._config._replace(**overrides)
+
         from natal.discrete_generation_population import (
             DiscreteGenerationPopulation as DGP,
         )

@@ -343,7 +343,7 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 
@@ -416,7 +416,7 @@ def test_spatial_compiled_hooks_are_pinned_to_owning_deme() -> None:
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 
@@ -471,7 +471,7 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 
@@ -567,7 +567,7 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 

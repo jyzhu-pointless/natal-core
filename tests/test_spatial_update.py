@@ -33,6 +33,25 @@ def homogeneous_pop(species):
 
 
 @pytest.fixture
+def homogeneous_age_pop(species):
+    """Age-structured variant for tests that need per-age parameters."""
+    topo = nt.SquareGrid(2, 2)
+    return (
+        nt.SpatialPopulation
+        .builder(species, n_demes=4, topology=topo, pop_type="age_structured")
+        .setup(name="test", stochastic=False)
+        .age_structure(n_ages=2, new_adult_age=1)
+        .initial_state(individual_count={
+            "female": {"WT|WT": {1: 100}}, "male": {"WT|WT": {1: 100}},
+        })
+        .reproduction(eggs_per_female=10)
+        .competition(carrying_capacity=500, low_density_growth_rate=6.0,
+                     juvenile_growth_mode="concave")
+        .build()
+    )
+
+
+@pytest.fixture
 def heterogeneous_pop(species):
     """2×2 spatial population with per-deme K via batch_setting."""
     topo = nt.SquareGrid(2, 2)
@@ -186,23 +205,14 @@ class TestSpatialUpdateSurvivalReproduction:
         pop.update().survival(female_age0_survival=0.6, male_age0_survival=0.4)
         for i in range(4):
             cfg = pop.deme(i).config
-            assert cfg.age_based_survival_rates[0, 0] == 0.6
-            assert cfg.age_based_survival_rates[1, 0] == 0.4
+            assert cfg.base_survival_f == pytest.approx(0.6)
+            assert cfg.base_survival_m == pytest.approx(0.4)
 
     def test_survival_single_deme(self, homogeneous_pop):
-        """pop.update(deme=N).survival(...) on a single deme.
-
-        Note: clone-on-write only covers 0-d ndarray fields, not
-        age_based_survival_rates — so this mutation currently leaks
-        to all demes sharing the same config reference.
-        """
+        """pop.update(deme=N).survival(...) on a single deme."""
         pop = homogeneous_pop
         pop.update(deme=1).survival(female_age0_survival=0.3)
-        # The write succeeds on the target deme...
-        assert pop.deme(1).config.age_based_survival_rates[0, 0] == 0.3
-        # ...but because age_based_survival_rates is shared by reference,
-        # other demes sharing the same config reference also see the change.
-        # (This is the current CoW limitation — only 0-d ndarrays are cloned.)
+        assert pop.deme(1).config.base_survival_f == pytest.approx(0.3)
 
     def test_reproduction_scalar_applies_to_all_demes(self, homogeneous_pop):
         """pop.update().reproduction(eggs_per_female=..., sex_ratio=...)."""
@@ -220,12 +230,6 @@ class TestSpatialUpdateSurvivalReproduction:
         assert pop.deme(2).config.expected_eggs_per_female[()] == 200.0
         assert pop.deme(0).config.expected_eggs_per_female[()] == 10.0  # unchanged
 
-    @pytest.mark.xfail(
-        reason="BUG: setup(stochastic=...) goes through set_param which "
-               "cannot handle Python bool fields (is_stochastic is not a "
-               "0-d ndarray). _SpatialUpdate should use _replace() for "
-               "boolean flags instead."
-    )
     def test_setup_applies_to_all_demes(self, homogeneous_pop):
         """pop.update().setup(stochastic=...) on all demes."""
         pop = homogeneous_pop
@@ -233,9 +237,6 @@ class TestSpatialUpdateSurvivalReproduction:
         for i in range(4):
             assert pop.deme(i).config.is_stochastic is True
 
-    @pytest.mark.xfail(
-        reason="BUG: same bool-in-set_param issue as above, single-deme variant."
-    )
     def test_setup_single_deme(self, homogeneous_pop):
         """pop.update(deme=N).setup(...) on a single deme."""
         pop = homogeneous_pop
@@ -252,7 +253,7 @@ class TestSpatialUpdateSurvivalReproduction:
         for i in range(4):
             cfg = pop.deme(i).config
             assert cfg.expected_eggs_per_female[()] == 50.0
-            assert cfg.age_based_survival_rates[0, 0] == 0.5
+            assert cfg.base_survival_f == pytest.approx(0.5)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -260,30 +261,25 @@ class TestSpatialUpdateSurvivalReproduction:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class TestDispatchScalarErrors:
-    """Verify that _dispatch_scalar handles or rejects non-scalar values."""
+class TestDispatchScalar:
+    """Verify _dispatch_scalar delegates to Configurator methods correctly.
 
-    @pytest.mark.xfail(
-        reason="BUG: _dispatch_scalar silently skips non-float/int/bool values "
-               "(list, dict, NDArray). Calls like survival(female=[0.5,0.6]) "
-               "do nothing with no error — the user gets no feedback."
-    )
-    def test_survival_with_list_raises_or_warns(self, homogeneous_pop):
-        """Passing a list to pop.update().survival(female=...) should raise
-        an error — _dispatch_scalar cannot handle non-scalar values.
-        The user should use update_deme(i) for per-age arrays."""
+    After the refactor, _dispatch_scalar calls the full Configurator method
+    (e.g. cfg.survival(...)).  For discrete models, this means age-structured
+    params (list/dict for per-age rates) correctly raise TypeError instead of
+    being silently dropped.
+    """
+
+    def test_survival_rejects_per_age_list_on_discrete(self, homogeneous_pop):
+        """Discrete model rejects per-age survival list — use age-structured."""
         pop = homogeneous_pop
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError):
             pop.update().survival(female=[0.5, 0.6])
 
-    @pytest.mark.xfail(
-        reason="BUG: same silent-drop issue for dict values in reproduction."
-    )
-    def test_reproduction_with_dict_raises_or_warns(self, homogeneous_pop):
-        """Passing a dict (age-keyed) to reproduction via update() should fail
-        clearly rather than silently doing nothing."""
+    def test_reproduction_rejects_per_age_dict_on_discrete(self, homogeneous_pop):
+        """Discrete model rejects per-age mating dict — use age-structured."""
         pop = homogeneous_pop
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError):
             pop.update().reproduction(
                 female_age_based_mating_rates={0: 0.5, 1: 0.8}
             )
@@ -298,21 +294,19 @@ class TestDispatchScalarErrors:
         for i, ek in enumerate(expected):
             assert pop.deme(i).config.expected_eggs_per_female[()] == ek
 
-    @pytest.mark.xfail(
-        reason="BUG: batch survival writes to age_based_survival_rates in-place "
-               "through set_param. For homogeneous demes sharing the same config "
-               "reference, each batch write overwrites the previous, leaving all "
-               "demes with the LAST batch value."
-    )
     def test_batch_survival_on_all_demes(self, homogeneous_pop):
-        """Batch survival params via batch_setting on all demes."""
+        """Batch survival params via batch_setting on all demes.
+
+        Each batch write goes through update_deme() + clone-on-write +
+        _replace(), creating per-deme private configs with correct scalars.
+        """
         pop = homogeneous_pop
         pop.update().survival(
             female_age0_survival=batch_setting([0.5, 0.6, 0.7, 0.8])
         )
         expected = [0.5, 0.6, 0.7, 0.8]
         for i, ek in enumerate(expected):
-            assert pop.deme(i).config.age_based_survival_rates[0, 0] == ek
+            assert pop.deme(i).config.base_survival_f == pytest.approx(ek)
 
 
 # ══════════════════════════════════════════════════════════════════════════

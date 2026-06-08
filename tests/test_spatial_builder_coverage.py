@@ -837,7 +837,6 @@ class TestBuilderMethodChaining:
                 .survival(
                     female_age0_survival=0.8,
                     male_age0_survival=0.7,
-                    adult_survival=0.9,
                 )
                 .reproduction(eggs_per_female=10)
                 .competition(carrying_capacity=1000)

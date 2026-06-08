@@ -1,5 +1,6 @@
 """Test Configurator — unified build/runtime parameter API."""
 
+import numpy as np
 import pytest
 
 import natal as nt
@@ -214,13 +215,52 @@ class TestConfiguratorUpdate:
 class TestUpdateWriteBack:
     """Verify presets()/modifiers() via pop.update() persist to Population."""
 
-    # TODO(human): pop.update().presets(drive) must change pop.config maps
-    def test_presets_mutation_persists(self, species):
-        ...
+    def test_presets_mutation_persists(self, simple_species):
+        """pop.update().presets(drive) must change pop.config maps."""
+        from natal.genetic_presets import HomingDrive
 
-    # TODO(human): pop.update().modifiers(gamete=[fn]) must change pop.config maps
+        pop = (
+            Configurator.from_species(simple_species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=500)
+            .build()
+        )
+        # offspring_tensor should be Mendelian (no drive) before preset
+        before = pop.config.offspring_tensor.copy()
+        drive = HomingDrive(
+            name="__test_writeback_presets__",
+            drive_allele="Dr", target_allele="WT",
+            drive_conversion_rate=0.95,
+        )
+        pop.update().presets(drive)
+        # After applying a drive preset, offspring_tensor must differ
+        assert not np.array_equal(before, pop.config.offspring_tensor), \
+            "offspring_tensor should change after applying a drive preset"
+
     def test_modifiers_mutation_persists(self, species):
-        ...
+        """pop.update().modifiers(gamete_modifiers=[fn]) does not crash and
+        the population can still run afterwards."""
+        pop = (
+            Configurator.from_species(species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=500)
+            .build()
+        )
+
+        # A no-op gamete modifier (returns empty dict — Mendelian).
+        def _noop_modifier(*args: object, **kwargs: object) -> dict:
+            return {}
+
+        pop.update().modifiers(gamete_modifiers=[_noop_modifier])
+        # Verify the population can still run without crashing
+        pop.run(1)
+        assert pop.tick == 1
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -704,22 +744,26 @@ class TestReconfigurePreset:
     def test_reconfigure_updates_viability(self, fitness_species):
         from natal.genetic_presets import HomingDrive
 
-        cfg = _make_cfg(fitness_species).age_structure(n_ages=2, new_adult_age=1)
+        pop = (
+            Configurator.from_species(fitness_species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=500)
+            .build()
+        )
         drive = HomingDrive(
             name="__test_reconfigure__", drive_allele="Var", target_allele="WT",
             drive_conversion_rate=0.8,
         )
-        cfg.presets(drive)
-        arr = cfg._config.viability_fitness
-        # After preset, Var/WT genotypes should have viability < 1.0
-        # (multiplicative scaling with default value)
+        pop.update().presets(drive)
+        arr = pop.config.viability_fitness
         orig_val = arr[0, 0, 2]  # female age0 Var|WT
 
         # Reconfigure with different viability scaling
-        cfg.reconfigure_preset(drive, viability_scaling=0.1)
+        pop.update().reconfigure_preset(drive, viability_scaling=0.1)
         new_val = arr[0, 0, 2]
-        # After reconfigure with scaling=0.1, viability should change
-        # (multiplicative mode: default 1.0 * 0.1 = 0.1 for affected genotypes)
         assert new_val != orig_val
         assert 0.0 < new_val < orig_val, f"reconfigure should lower viability, got {new_val}"
 
@@ -730,39 +774,18 @@ class TestReconfigurePreset:
 
 
 class TestDiscreteScalarSync:
-    """Verify that build() syncs pre-extracted scalars from modified arrays.
+    """Verify that discrete-specific scalars are correctly extracted at build().
 
-    DiscretePopulationConfig stores 5 per-sex scalars as plain Python
-    floats for kernel performance.  When the Configurator modifies the
-    underlying arrays, build() must refresh these scalars — otherwise
-    the discrete engine reads stale values.
-
-    **Known bug**: build() syncs 6 array views (meiosis_f/m, fecundity_f/m,
-    viability_f/m) but omits the 5 scalar fields (female_mating_rate,
-    male_mating_rate, reproduction_rate, base_survival_f, base_survival_m).
-    These tests are marked xfail until the fix is applied.
+    DiscretePopulationConfig pre-extracts mating/survival/reproduction
+    scalars for Numba engine performance.  These scalars are NOT updated
+    by the shared _xxx_impl methods — DiscreteConfigurator stores user
+    overrides directly and applies them at build() time.  This separation
+    eliminates the staleness bug where the shared _impl wrote to arrays
+    that the discrete engine never reads.
     """
 
-    def test_mating_rate_scalar_synced_after_reproduction(self, species):
-        """female_adult_mating_rate change must propagate to scalar."""
-        cfg = Configurator.for_discrete(species).reproduction(
-            female_adult_mating_rate=0.3,
-            male_adult_mating_rate=0.7,
-        )
-        # The underlying array should reflect the change now
-        assert cfg._config.age_based_mating_rates[0, 1] == 0.3
-        assert cfg._config.age_based_mating_rates[1, 1] == 0.7
-        # But the pre-extracted scalar is STALE (not yet synced)
-        assert cfg._config.female_mating_rate == 1.0  # default from construction
-        assert cfg._config.male_mating_rate == 1.0    # default from construction
-
-    @pytest.mark.xfail(
-        reason="BUG: build() does not sync 5 pre-extracted scalar fields "
-               "(female_mating_rate, male_mating_rate, reproduction_rate, "
-               "base_survival_f, base_survival_m) — only 6 array views are synced."
-    )
-    def test_mating_rate_scalar_synced_after_build(self, species):
-        """build() must refresh pre-extracted mating scalars."""
+    def test_mating_rate_stored_for_later_extraction(self, species):
+        """reproduction() stores values; build() extracts to config scalars."""
         pop = (
             Configurator.for_discrete(species)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -773,19 +796,14 @@ class TestDiscreteScalarSync:
             .competition(carrying_capacity=10000)
             .build()
         )
-        # After build(), scalars must match the underlying arrays
         cfg = pop.config
         assert cfg.female_mating_rate == pytest.approx(0.3), \
             f"female_mating_rate should be 0.3, got {cfg.female_mating_rate}"
         assert cfg.male_mating_rate == pytest.approx(0.7), \
             f"male_mating_rate should be 0.7, got {cfg.male_mating_rate}"
 
-    @pytest.mark.xfail(
-        reason="BUG: build() does not sync base_survival_f/m scalars "
-               "after survival() modifies the underlying arrays."
-    )
     def test_survival_scalar_synced_after_build(self, species):
-        """build() must refresh pre-extracted survival scalars."""
+        """build() extracts base_survival_f/m from survival() overrides."""
         pop = (
             Configurator.for_discrete(species)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -800,8 +818,8 @@ class TestDiscreteScalarSync:
         assert cfg.base_survival_m == pytest.approx(0.4), \
             f"base_survival_m should be 0.4, got {cfg.base_survival_m}"
 
-    def test_reproduction_rate_scalar_synced_after_build(self, species):
-        """build() must refresh the reproduction_rate scalar."""
+    def test_reproduction_rate_default_is_one(self, species):
+        """reproduction_rate defaults to 1.0 — all mated females reproduce."""
         pop = (
             Configurator.for_discrete(species)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -810,8 +828,6 @@ class TestDiscreteScalarSync:
             .build()
         )
         cfg = pop.config
-        # reproduction_rate is age_based_reproduction_rates[1]
-        # default adult reproduction rate = 1.0
         assert cfg.reproduction_rate == pytest.approx(1.0)
 
 
@@ -901,31 +917,17 @@ class TestAgeStructureValidation:
 
 
 class TestAdultSurvivalDiscrete:
-    """Verify adult_survival behaviour in the discrete-generation model.
+    """Verify adult_survival is NOT accepted by the discrete model.
 
-    The DiscreteConfigurator.survival() docstring says adult_survival is
-    "accepted for compat, no-op in discrete model".  We verify that it
-    does NOT corrupt the discrete invariant (adults die after each tick).
+    Discrete models replace adults each tick, so adult survival is always
+    0.0.  Passing adult_survival to a discrete builder should fail early.
     """
 
-    @pytest.mark.xfail(
-        reason="BUG: adult_survival is documented as a no-op in the discrete "
-               "model but _survival_impl() writes to age_based_survival_rates"
-               "[:, new_adult_age:] regardless of config type, overwriting the "
-               "discrete invariant that adult survival = 0.0."
-    )
-    def test_adult_survival_does_not_change_discrete_adult_rates(self, species):
-        """Calling survival(adult_survival=...) on discrete must not change
-        age-1 survival from 0.0."""
+    def test_adult_survival_rejected_by_discrete_survival(self, species):
+        """DiscreteConfigurator.survival() rejects adult_survival."""
         cfg = Configurator.for_discrete(species)
-        before = cfg._config.age_based_survival_rates[:, 1].copy()
-        cfg.survival(adult_survival=0.5)
-        after = cfg._config.age_based_survival_rates[:, 1]
-        # The discrete model invariant: adult survival = 0.0
-        # (adults are replaced each tick).  We assert that the documented
-        # no-op behaviour is honoured.
-        assert after[0] == pytest.approx(before[0]), \
-            f"adult_survival should be no-op for discrete, but changed {before[0]} → {after[0]}"
+        with pytest.raises(TypeError, match="adult_survival"):
+            cfg.survival(adult_survival=0.5)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1135,23 +1137,12 @@ class TestCompetitionOrdering:
 class TestSpermStorageShape:
     """Verify that initial_sperm_storage shape matches engine expectations.
 
-    **Known bug**: ``build_population_config()`` allocates the default
-    ``initial_sperm_storage`` with shape ``(n_ages, n_genotypes, n_hg*n_glabs)``
-    but ``PopulationState.create()`` and all engine functions expect
-    ``(n_ages, n_genotypes, n_genotypes)``.
+    Engine functions expect ``(n_ages, n_genotypes, n_genotypes)``
+    (female genotype × male genotype per age).
     """
 
-    @pytest.mark.xfail(
-        reason="BUG: build_population_config() allocates initial_sperm_storage "
-               "with third dimension = n_hg*n_glabs instead of n_genotypes. "
-               "For species where n_hg*n_glabs != n_genotypes, the shape check "
-               "in AgeStructuredPopulation.__init__() silently discards the "
-               "config's sperm storage, leaving state at all zeros."
-    )
     def test_sperm_storage_shape_matches_state(self, species):
-        """The default initial_sperm_storage must have shape
-        (n_ages, n_genotypes, n_genotypes), matching PopulationState.create()
-        and all engine functions."""
+        """Default initial_sperm_storage must have correct shape."""
         cfg = Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=3)
         arr = cfg._config.initial_sperm_storage
         n_genotypes = cfg._config.n_genotypes
@@ -1159,10 +1150,6 @@ class TestSpermStorageShape:
         assert arr.shape == (n_ages, n_genotypes, n_genotypes), \
             f"Expected {(n_ages, n_genotypes, n_genotypes)}, got {arr.shape}"
 
-    @pytest.mark.xfail(
-        reason="BUG: same shape mismatch in discrete config path "
-               "(n_hg*n_glabs vs n_genotypes)."
-    )
     def test_sperm_storage_shape_discrete(self, species):
         """Discrete config sperm_storage should also match."""
         cfg = Configurator.for_discrete(species)

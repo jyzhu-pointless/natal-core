@@ -110,8 +110,8 @@ class PopulationConfig(NamedTuple):
             probability of forming a given diploid genotype from two gametes.
         initial_individual_count: Shape (n_sexes, n_ages, n_genotypes) – initial
             population distribution.
-        initial_sperm_storage: Shape (n_ages, n_genotypes, n_hg * n_glabs) – initial
-            stored sperm counts.
+        initial_sperm_storage: Shape (n_ages, n_genotypes, n_genotypes) – initial
+            stored sperm counts (female genotype × male genotype).
     """
 
     # Scalars are immutable; rebuild this NamedTuple for scalar updates.
@@ -441,18 +441,17 @@ def build_population_config(
     if initial_sperm_storage is not None:
         init_sperm = initial_sperm_storage.copy()
     else:
-        # TODO(human): third dimension should be n_genotypes_i, not n_hg_glabs.
-        # PopulationState.create() and engine functions expect n_genotypes.
-        # When they differ, the shape guard in __init__ silently discards
-        # the data (xfail: TestSpermStorageShape).  Also update the
-        # PopulationConfig docstring that documents this shape.
-        init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_hg_glabs), dtype=np.float64)
+        init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_genotypes_i), dtype=np.float64)
 
     # Resolve carrying_capacity directly (no base/scale separation).
-    # TODO(human): `0 or x` evaluates to `x` in Python, so explicitly
-    # passing age_1_carrying_capacity=0 silently falls through.  Use an
-    # explicit `is not None` check instead of `or`.
-    resolved_age_1 = age_1_carrying_capacity or old_juvenile_carrying_capacity
+    # Use explicit `is not None` — `age_1_carrying_capacity=0` is a valid
+    # value that must not fall through to the legacy alias.
+    if age_1_carrying_capacity is not None:
+        resolved_age_1 = age_1_carrying_capacity
+    elif old_juvenile_carrying_capacity is not None:
+        resolved_age_1 = old_juvenile_carrying_capacity
+    else:
+        resolved_age_1 = None
     if resolved_age_1 is not None:
         carrying_capacity_f = np.array(float(resolved_age_1))
     elif carrying_capacity is not None:
