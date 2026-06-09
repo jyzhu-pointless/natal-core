@@ -846,7 +846,7 @@ class GeneticPreset(ABC):
         Args:
             name: Optional human-readable name for the preset.
             species: Optional species bound at construction time.
-            priority: Execution order — higher values apply first.
+            priority: Execution order — lower values apply first.
                 Same priority uses registration order (stable sort).
         """
         self.name = name or self.__class__.__name__
