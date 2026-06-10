@@ -283,11 +283,24 @@ class _SpatialUpdate:
             self._pop.update_deme(self._deme).reconfigure_preset(preset, **changes)
             return self
 
-        # Update every deme individually — rebuild_from_presets() creates
-        # a new config via _replace(), so dedup by id(d.config) would miss
-        # demes that share the old config reference.
-        for i in range(len(self._pop.demes)):
-            self._pop.update_deme(i).reconfigure_preset(preset, **changes)
+        from natal.configurator import Configurator
+
+        # reconfigure_preset modifies the preset in-place (setattr) then
+        # calls rebuild_from_presets() which replaces the config object
+        # via _replace().  id(d.config) dedup alone misses demes sharing
+        # the old config reference.  Track old→new config so every deme
+        # gets the new config, whether it was the one processed or shared.
+        updated_configs: dict[int, object] = {}
+        for d in self._pop.demes:
+            old_config = d.config
+            cid = id(old_config)
+            if cid in updated_configs:
+                d.set_config(cast(Any, updated_configs[cid]))
+                continue
+            Configurator.for_population(d).reconfigure_preset(preset, **changes)
+            new_config = d.config
+            if new_config is not old_config:
+                updated_configs[cid] = new_config
         return self
 
     def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:
