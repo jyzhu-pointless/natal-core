@@ -278,19 +278,16 @@ class _SpatialUpdate:
         Single-deme delegates to ``update_deme()`` → ``reconfigure_preset()``.
         All-deme iterates unique configs with dedup by ``id()``.
         """
-        from natal.configurator import Configurator
 
         if self._deme is not None:
             self._pop.update_deme(self._deme).reconfigure_preset(preset, **changes)
             return self
 
-        seen: set[int] = set()
-        for d in self._pop.demes:
-            cid = id(d.config)
-            if cid in seen:
-                continue
-            seen.add(cid)
-            Configurator.for_population(d).reconfigure_preset(preset, **changes)
+        # Update every deme individually — rebuild_from_presets() creates
+        # a new config via _replace(), so dedup by id(d.config) would miss
+        # demes that share the old config reference.
+        for i in range(len(self._pop.demes)):
+            self._pop.update_deme(i).reconfigure_preset(preset, **changes)
         return self
 
     def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:

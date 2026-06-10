@@ -249,7 +249,11 @@ class BasePopulation(ABC, Generic[T_State]):
         clone._presets = list(self._presets)
         clone._manual_gamete = list(self._manual_gamete)
         clone._manual_zygote = list(self._manual_zygote)
-        # Derived lists rebuilt on first use via rebuild_from_presets().
+        # Copy derived lists so clone starts with valid modifier state.
+        # Without this, add_gamete_modifier(refresh=True) on a clone
+        # would start from an empty list, dropping all preset modifiers.
+        clone._gamete_modifiers = list(self._gamete_modifiers)
+        clone._zygote_modifiers = list(self._zygote_modifiers)
 
         # --- config (shared reference for homogeneous, group-specific for heterogeneous) ---
         resolved_config = config if config is not None else self._config
