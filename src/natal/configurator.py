@@ -1981,15 +1981,21 @@ class AgeStructuredConfigurator(Configurator):
 
         n_ages = self._config.n_ages
         if female is not None:
-            self._config.age_based_survival_rates[0, :] =                 PopulationConfigBuilder.resolve_age_param(female, n_ages, np.ones(n_ages))
+            self._config.age_based_survival_rates[0, :] = (
+                PopulationConfigBuilder.resolve_age_param(
+                    female, n_ages, np.ones(n_ages)))
         if male is not None:
-            self._config.age_based_survival_rates[1, :] =                 PopulationConfigBuilder.resolve_age_param(male, n_ages, np.ones(n_ages))
+            self._config.age_based_survival_rates[1, :] = (
+                PopulationConfigBuilder.resolve_age_param(
+                    male, n_ages, np.ones(n_ages)))
         if female_age_based_survival_rates is not None:
-            self._config.age_based_survival_rates[0, :] =                 PopulationConfigBuilder.resolve_age_param(
-                    female_age_based_survival_rates, n_ages, np.ones(n_ages))
+            self._config.age_based_survival_rates[0, :] = (
+                PopulationConfigBuilder.resolve_age_param(
+                    female_age_based_survival_rates, n_ages, np.ones(n_ages)))
         if male_age_based_survival_rates is not None:
-            self._config.age_based_survival_rates[1, :] =                 PopulationConfigBuilder.resolve_age_param(
-                    male_age_based_survival_rates, n_ages, np.ones(n_ages))
+            self._config.age_based_survival_rates[1, :] = (
+                PopulationConfigBuilder.resolve_age_param(
+                    male_age_based_survival_rates, n_ages, np.ones(n_ages)))
         for name, value in [
             ("female_age0_survival", female_age0_survival),
             ("male_age0_survival", male_age0_survival),
