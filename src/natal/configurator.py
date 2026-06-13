@@ -287,15 +287,12 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         overrides["meiosis_m"] = genotype_to_gametes_map[1]
         overrides["fecundity_f"] = ctx.config.fecundity_fitness[0]
         overrides["fecundity_m"] = ctx.config.fecundity_fitness[1]
-        overrides["viability_f"] = ctx.config.viability_fitness[0, 0, :]
-        overrides["viability_m"] = ctx.config.viability_fitness[1, 0, :]
-        # Pre-extracted scalars must also stay in sync.
-        cfg = ctx.config
-        overrides["female_mating_rate"] = cfg.age_based_mating_rates[0, 1]
-        overrides["male_mating_rate"] = cfg.age_based_mating_rates[1, 1]
-        overrides["reproduction_rate"] = cfg.age_based_reproduction_rates[1]
-        overrides["base_survival_f"] = cfg.age_based_survival_rates[0, 0]
-        overrides["base_survival_m"] = cfg.age_based_survival_rates[1, 0]
+        # viability_f / viability_m are views of the original PopulationConfig's
+        # viability_fitness array, which is not rebuilt here, so they remain valid.
+        # Note: scalar fields (female_age0_survival, male_age0_survival,
+        # female_adult_mating_rate, male_adult_mating_rate, reproduction_rate)
+        # are now first-class 0-d ndarrays on DiscretePopulationConfig, not
+        # pre-extracted from age-based arrays.  Nothing to sync here.
     ctx.config = ctx.config._replace(**overrides)
 
 
@@ -401,7 +398,8 @@ def set_param(
     if _sync_equilibrium and key in _EQUILIBRIUM_SENSITIVE_KEYS:
         from natal.engine.simulation.age_structured import sync_equilibrium_metrics
 
-        sync_equilibrium_metrics(config)
+        if not isinstance(config, DiscretePopulationConfig):
+            sync_equilibrium_metrics(config)
 
 
 # ── Helpers: hook merging and fitness field writing ────────────────────────────
@@ -793,10 +791,10 @@ class Configurator:
 
         # Discrete-specific scalar overrides (stored here so build() can
         # extract them into DiscretePopulationConfig at the last moment).
-        self._female_mating_rate: float | None = None
-        self._male_mating_rate: float | None = None
-        self._base_survival_f: float | None = None
-        self._base_survival_m: float | None = None
+        self._female_adult_mating_rate: float | None = None
+        self._male_adult_mating_rate: float | None = None
+        self._female_age0_survival: float | None = None
+        self._male_age0_survival: float | None = None
 
     @property
     def config(self) -> PopulationConfig | DiscretePopulationConfig:
@@ -1342,23 +1340,52 @@ class Configurator:
         if getattr(self, "_has_user_expected_females", False):
             from natal.population_builder import PopulationConfigBuilder
 
+            if isinstance(config, DiscretePopulationConfig):
+                ext_surv: NDArray[np.float64] = np.array([
+                    [config.female_age0_survival, 0.0],
+                    [config.male_age0_survival, 0.0],
+                ])
+                ext_repro: NDArray[np.float64] = np.array([
+                    0.0, config.reproduction_rate,
+                ])
+            else:
+                ext_surv = config.age_based_survival_rates
+                ext_repro = config.age_based_reproduction_rates
+
             external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
                 expected_num_adult_females=getattr(self, "_user_expected_adult_females", 500.0),
                 expected_eggs_per_female=float(config.expected_eggs_per_female),
-                age_based_survival_rates=config.age_based_survival_rates,
-                age_based_reproduction_rates=config.age_based_reproduction_rates,
+                age_based_survival_rates=ext_surv,
+                age_based_reproduction_rates=ext_repro,
                 female_age_based_relative_fertility=config.female_age_based_relative_fertility,
                 sex_ratio=float(config.sex_ratio),
                 new_adult_age=int(config.new_adult_age),
                 n_ages=int(config.n_ages),
             )
 
+        if isinstance(config, DiscretePopulationConfig):
+            surv: NDArray[np.float64] = np.array([
+                [config.female_age0_survival, 0.0],
+                [config.male_age0_survival, 0.0],
+            ])
+            mate: NDArray[np.float64] = np.array([
+                [0.0, config.female_adult_mating_rate],
+                [0.0, config.male_adult_mating_rate],
+            ])
+            repro: NDArray[np.float64] = np.array([
+                0.0, config.reproduction_rate,
+            ])
+        else:
+            surv = config.age_based_survival_rates
+            mate = config.age_based_mating_rates
+            repro = config.age_based_reproduction_rates
+
         expected_comp, expected_surv = compute_equilibrium_metrics(
             carrying_capacity=float(config.carrying_capacity),
             expected_eggs_per_female=float(config.expected_eggs_per_female),
-            age_based_survival_rates=config.age_based_survival_rates,
-            age_based_mating_rates=config.age_based_mating_rates,
-            age_based_reproduction_rates=config.age_based_reproduction_rates,
+            age_based_survival_rates=surv,
+            age_based_mating_rates=mate,
+            age_based_reproduction_rates=repro,
             female_age_based_relative_fertility=config.female_age_based_relative_fertility,
             relative_competition_strength=config.age_based_relative_competition_strength,
             sex_ratio=float(config.sex_ratio),
@@ -1430,14 +1457,17 @@ class Configurator:
             # Sync pre-extracted discrete fields from the latest source maps.
             # These may be stale if gamete/fitness maps were rebuilt by presets
             # or if equilibrium metrics were recomputed after construction.
-            self._config = self._config._replace(
-                meiosis_f=self._config.genotype_to_gametes_map[0],
-                meiosis_m=self._config.genotype_to_gametes_map[1],
-                fecundity_f=self._config.fecundity_fitness[0],
-                fecundity_m=self._config.fecundity_fitness[1],
-                viability_f=self._config.viability_fitness[0, 0, :],
-                viability_m=self._config.viability_fitness[1, 0, :],
-            )
+            replace_kwargs: dict[str, object] = {
+                "meiosis_f": self._config.genotype_to_gametes_map[0],
+                "meiosis_m": self._config.genotype_to_gametes_map[1],
+                "fecundity_f": self._config.fecundity_fitness[0],
+                "fecundity_m": self._config.fecundity_fitness[1],
+            }
+            # Viability source array is only present on full PopulationConfig.
+            if hasattr(self._config, "viability_fitness"):
+                replace_kwargs["viability_f"] = self._config.viability_fitness[0, 0, :]  # type: ignore[reportAttributeAccessIssue]
+                replace_kwargs["viability_m"] = self._config.viability_fitness[1, 0, :]  # type: ignore[reportAttributeAccessIssue]
+            self._config = self._config._replace(**replace_kwargs)
             from natal.discrete_generation_population import (
                 DiscreteGenerationPopulation,
             )
@@ -1565,6 +1595,8 @@ class DiscreteConfigurator(Configurator):
         ]:
             if value is not None:
                 set_param(self._config, f"competition.{name}", value)
+        if k_value is not None:
+            self._sync_equilibrium()
         # Auto-compute expected_num_adult_females = K × sex_ratio
         if not getattr(self, "_has_user_expected_females", False):
             k = float(self._config.carrying_capacity)
@@ -1602,18 +1634,17 @@ class DiscreteConfigurator(Configurator):
             set_param(self._config, "reproduction.sex_ratio", sex_ratio,
                       _sync_equilibrium=False)
         if eggs_per_female is not None or sex_ratio is not None:
-            from natal.engine.simulation.age_structured import sync_equilibrium_metrics
-            sync_equilibrium_metrics(self._config)
+            self._sync_equilibrium()
         # Scalars — write to config immediately (runtime) and store for build().
         scalar_overrides: dict[str, float] = {}
         if female_adult_mating_rate is not None:
             val = float(female_adult_mating_rate)
-            self._female_mating_rate = val
-            scalar_overrides["female_mating_rate"] = val
+            self._female_adult_mating_rate = val
+            scalar_overrides["female_adult_mating_rate"] = val
         if male_adult_mating_rate is not None:
             val = float(male_adult_mating_rate)
-            self._male_mating_rate = val
-            scalar_overrides["male_mating_rate"] = val
+            self._male_adult_mating_rate = val
+            scalar_overrides["male_adult_mating_rate"] = val
         if scalar_overrides:
             self._config = self._config._replace(**scalar_overrides)
             if self._pop_ref is not None:
@@ -1690,12 +1721,12 @@ class DiscreteConfigurator(Configurator):
         overrides: dict[str, float] = {}
         if female_age0_survival is not None:
             val = float(female_age0_survival)
-            self._base_survival_f = val
-            overrides["base_survival_f"] = val
+            self._female_age0_survival = val
+            overrides["female_age0_survival"] = val
         if male_age0_survival is not None:
             val = float(male_age0_survival)
-            self._base_survival_m = val
-            overrides["base_survival_m"] = val
+            self._male_age0_survival = val
+            overrides["male_age0_survival"] = val
         if overrides:
             self._config = self._config._replace(**overrides)
             if self._pop_ref is not None:
@@ -1714,15 +1745,15 @@ class DiscreteConfigurator(Configurator):
         # DiscretePopulationConfig at construction time.  This is the
         # only correct place — survival() and reproduction() store
         # overrides here, and the engine reads these scalars directly.
-        overrides: dict[str, float] = {}
-        if self._female_mating_rate is not None:
-            overrides["female_mating_rate"] = self._female_mating_rate
-        if self._male_mating_rate is not None:
-            overrides["male_mating_rate"] = self._male_mating_rate
-        if self._base_survival_f is not None:
-            overrides["base_survival_f"] = self._base_survival_f
-        if self._base_survival_m is not None:
-            overrides["base_survival_m"] = self._base_survival_m
+        overrides: dict[str, Any] = {}
+        if self._female_adult_mating_rate is not None:
+            overrides["female_adult_mating_rate"] = self._female_adult_mating_rate
+        if self._male_adult_mating_rate is not None:
+            overrides["male_adult_mating_rate"] = self._male_adult_mating_rate
+        if self._female_age0_survival is not None:
+            overrides["female_age0_survival"] = self._female_age0_survival
+        if self._male_age0_survival is not None:
+            overrides["male_age0_survival"] = self._male_age0_survival
         if overrides:
             self._config = self._config._replace(**overrides)
 

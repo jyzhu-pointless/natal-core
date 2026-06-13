@@ -1340,17 +1340,37 @@ class SpatialBuilder:
         variant = base_config._replace(**replace_kwargs)
 
         if needs_equilibrium:
+            if isinstance(variant, DiscretePopulationConfig):
+                # Discrete configs store per-demographic scalars rather than
+                # age-based arrays. Build the required arrays for the equilibrium
+                # computation (n_ages=2: juvenile=0, adult=1).
+                age_based_survival_rates = np.array([
+                    [variant.female_age0_survival, 0.0],
+                    [variant.male_age0_survival, 0.0],
+                ])
+                age_based_mating_rates = np.array([
+                    [0.0, variant.female_adult_mating_rate],
+                    [0.0, variant.male_adult_mating_rate],
+                ])
+                age_based_reproduction_rates = np.array([
+                    0.0, variant.reproduction_rate,
+                ])
+            else:
+                age_based_survival_rates = variant.age_based_survival_rates
+                age_based_mating_rates = variant.age_based_mating_rates
+                age_based_reproduction_rates = variant.age_based_reproduction_rates
+
             new_comp, new_surv = compute_equilibrium_metrics(
                 carrying_capacity=variant.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
                 expected_eggs_per_female=variant.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
-                age_based_survival_rates=variant.age_based_survival_rates,
-                age_based_mating_rates=variant.age_based_mating_rates,
+                age_based_survival_rates=age_based_survival_rates,
+                age_based_mating_rates=age_based_mating_rates,
                 female_age_based_relative_fertility=variant.female_age_based_relative_fertility,
                 relative_competition_strength=variant.age_based_relative_competition_strength,
                 sex_ratio=variant.sex_ratio[()],  # pyright: ignore[reportArgumentType]
                 new_adult_age=int(variant.new_adult_age),
                 n_ages=int(variant.n_ages),
-                age_based_reproduction_rates=variant.age_based_reproduction_rates,
+                age_based_reproduction_rates=age_based_reproduction_rates,
             )
             variant = variant._replace(
                 expected_competition_strength=np.array(float(new_comp)),

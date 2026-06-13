@@ -973,14 +973,9 @@ class DiscretePopulationConfig(NamedTuple):
     n_haploid_genotypes: int
     n_glabs: int
 
-    # -- Age-structured arrays (n_ages ≤ 2, kept for spatial builder) --
-    age_based_mating_rates: NDArray[np.float64]        # (2, 2)
-    age_based_reproduction_rates: NDArray[np.float64]   # (2,)
-    age_based_survival_rates: NDArray[np.float64]       # (2, 2)
+    # -- Age-structured arrays (kept for spatial builder compat; inactive in discrete)
     female_age_based_relative_fertility: NDArray[np.float64]  # (2,)
-
-    # -- Viability / fecundity / fitness --
-    viability_fitness: NDArray[np.float64]              # (2, 2, g)
+    viability_fitness: NDArray[np.float64]              # (2, 2, g) — kept for compat with presets/fitness code
     fecundity_fitness: NDArray[np.float64]              # (2, g)
     zygote_viability_fitness: NDArray[np.float64]       # (2, g)
     sexual_selection_fitness: NDArray[np.float64]        # (g, g)
@@ -994,12 +989,13 @@ class DiscretePopulationConfig(NamedTuple):
     sex_ratio: NDArray[np.float64]                         # 0-d, mutable
     sperm_displacement_rate: NDArray[np.float64]           # 0-d, mutable
 
-    # -- Per-sex scalars (pre-extracted for kernel performance) --
-    male_mating_rate: float
-    female_mating_rate: float
+    # -- Per-demographic scalars (plain Python float, sole source of truth) --
+    female_adult_mating_rate: float
+    male_adult_mating_rate: float
     reproduction_rate: float
-    base_survival_f: float
-    base_survival_m: float
+    female_age0_survival: float
+    male_age0_survival: float
+    female_fertility: float
 
     # -- Reproduction arrays --
     genotype_to_gametes_map: NDArray[np.float64]         # (2, g, hl)
@@ -1075,9 +1071,6 @@ def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
         n_genotypes=cfg.n_genotypes,
         n_haploid_genotypes=cfg.n_haploid_genotypes,
         n_glabs=cfg.n_glabs,
-        age_based_mating_rates=cfg.age_based_mating_rates,
-        age_based_reproduction_rates=cfg.age_based_reproduction_rates,
-        age_based_survival_rates=cfg.age_based_survival_rates,
         female_age_based_relative_fertility=cfg.female_age_based_relative_fertility,
         viability_fitness=cfg.viability_fitness,
         fecundity_fitness=cfg.fecundity_fitness,
@@ -1088,11 +1081,15 @@ def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
         use_fixed_egg_count=cfg.use_fixed_egg_count,
         sex_ratio=cfg.sex_ratio,
         sperm_displacement_rate=cfg.sperm_displacement_rate,
-        male_mating_rate=cfg.age_based_mating_rates[1, 1],
-        female_mating_rate=cfg.age_based_mating_rates[0, 1],
-        reproduction_rate=cfg.age_based_reproduction_rates[1],
-        base_survival_f=cfg.age_based_survival_rates[0, 0],
-        base_survival_m=cfg.age_based_survival_rates[1, 0],
+        # Scalar fields must be plain Python floats, not 0-d ndarrays, so
+        # Numba's type inference sees a consistent type across all code paths
+        # (the Configurator's _build_config also writes Python floats).
+        female_adult_mating_rate=float(cfg.age_based_mating_rates[0, 1]),
+        male_adult_mating_rate=float(cfg.age_based_mating_rates[1, 1]),
+        reproduction_rate=float(cfg.age_based_reproduction_rates[1]),
+        female_age0_survival=float(cfg.age_based_survival_rates[0, 0]),
+        male_age0_survival=float(cfg.age_based_survival_rates[1, 0]),
+        female_fertility=float(cfg.female_age_based_relative_fertility[0]),
         genotype_to_gametes_map=cfg.genotype_to_gametes_map,
         gametes_to_zygote_map=cfg.gametes_to_zygote_map,
         offspring_tensor=cfg.offspring_tensor,

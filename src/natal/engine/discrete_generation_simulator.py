@@ -43,7 +43,7 @@ def run_discrete_reproduction(
 
     females = ind_count[0, 1, :]
     males = ind_count[1, 1, :]
-    effective_males = males * cfg.male_mating_rate
+    effective_males = males * cfg.male_adult_mating_rate
     if effective_males.sum() == 0.0 or females.sum() == 0.0:
         return ind_count
 
@@ -54,7 +54,7 @@ def run_discrete_reproduction(
     sperm = mate_discrete(
         females,
         mating_prob,
-        cfg.female_mating_rate,
+        cfg.female_adult_mating_rate,
         stochastic,
         continuous
     )
@@ -119,8 +119,8 @@ def run_discrete_survival(
         is_stochastic=stochastic, use_continuous_sampling=continuous,
     )
 
-    s_f = cfg.base_survival_f * cfg.viability_f
-    s_m = cfg.base_survival_m * cfg.viability_m
+    s_f = cfg.female_age0_survival * cfg.viability_f
+    s_m = cfg.male_age0_survival * cfg.viability_m
 
     if stochastic:
         if continuous:

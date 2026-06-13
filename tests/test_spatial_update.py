@@ -205,14 +205,14 @@ class TestSpatialUpdateSurvivalReproduction:
         pop.update().survival(female_age0_survival=0.6, male_age0_survival=0.4)
         for i in range(4):
             cfg = pop.deme(i).config
-            assert cfg.base_survival_f == pytest.approx(0.6)
-            assert cfg.base_survival_m == pytest.approx(0.4)
+            assert cfg.female_age0_survival == pytest.approx(0.6)
+            assert cfg.male_age0_survival == pytest.approx(0.4)
 
     def test_survival_single_deme(self, homogeneous_pop):
         """pop.update(deme=N).survival(...) on a single deme."""
         pop = homogeneous_pop
         pop.update(deme=1).survival(female_age0_survival=0.3)
-        assert pop.deme(1).config.base_survival_f == pytest.approx(0.3)
+        assert pop.deme(1).config.female_age0_survival == pytest.approx(0.3)
 
     def test_reproduction_scalar_applies_to_all_demes(self, homogeneous_pop):
         """pop.update().reproduction(eggs_per_female=..., sex_ratio=...)."""
@@ -253,7 +253,7 @@ class TestSpatialUpdateSurvivalReproduction:
         for i in range(4):
             cfg = pop.deme(i).config
             assert cfg.expected_eggs_per_female[()] == 50.0
-            assert cfg.base_survival_f == pytest.approx(0.5)
+            assert cfg.female_age0_survival == pytest.approx(0.5)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -306,7 +306,7 @@ class TestDispatchScalar:
         )
         expected = [0.5, 0.6, 0.7, 0.8]
         for i, ek in enumerate(expected):
-            assert pop.deme(i).config.base_survival_f == pytest.approx(ek)
+            assert pop.deme(i).config.female_age0_survival == pytest.approx(ek)
 
 
 # ══════════════════════════════════════════════════════════════════════════

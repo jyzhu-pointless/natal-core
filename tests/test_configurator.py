@@ -643,9 +643,9 @@ class TestFromSpeciesDiscrete:
 
     def test_discrete_defaults(self, species):
         cfg = Configurator.from_species(species, discrete=True)
-        # age-0 juvenile survival = 1.0, age-1 adult survival = 0.0
-        assert cfg._config.age_based_survival_rates[0, 0] == 1.0
-        assert cfg._config.age_based_survival_rates[0, 1] == 0.0
+        # age-0 juvenile survival defaults to 1.0 for both sexes
+        assert cfg._config.female_age0_survival == 1.0
+        assert cfg._config.male_age0_survival == 1.0
         assert cfg._config.n_ages == 2
 
 
@@ -797,13 +797,13 @@ class TestDiscreteScalarSync:
             .build()
         )
         cfg = pop.config
-        assert cfg.female_mating_rate == pytest.approx(0.3), \
-            f"female_mating_rate should be 0.3, got {cfg.female_mating_rate}"
-        assert cfg.male_mating_rate == pytest.approx(0.7), \
-            f"male_mating_rate should be 0.7, got {cfg.male_mating_rate}"
+        assert cfg.female_adult_mating_rate == pytest.approx(0.3), \
+            f"female_adult_mating_rate should be 0.3, got {cfg.female_adult_mating_rate}"
+        assert cfg.male_adult_mating_rate == pytest.approx(0.7), \
+            f"male_adult_mating_rate should be 0.7, got {cfg.male_adult_mating_rate}"
 
     def test_survival_scalar_synced_after_build(self, species):
-        """build() extracts base_survival_f/m from survival() overrides."""
+        """build() extracts female_age0_survival/male_age0_survival from survival() overrides."""
         pop = (
             Configurator.for_discrete(species)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -813,10 +813,10 @@ class TestDiscreteScalarSync:
             .build()
         )
         cfg = pop.config
-        assert cfg.base_survival_f == pytest.approx(0.6), \
-            f"base_survival_f should be 0.6, got {cfg.base_survival_f}"
-        assert cfg.base_survival_m == pytest.approx(0.4), \
-            f"base_survival_m should be 0.4, got {cfg.base_survival_m}"
+        assert cfg.female_age0_survival == pytest.approx(0.6), \
+            f"female_age0_survival should be 0.6, got {cfg.female_age0_survival}"
+        assert cfg.male_age0_survival == pytest.approx(0.4), \
+            f"male_age0_survival should be 0.4, got {cfg.male_age0_survival}"
 
     def test_reproduction_rate_default_is_one(self, species):
         """reproduction_rate defaults to 1.0 — all mated females reproduce."""

@@ -1086,7 +1086,6 @@ def compute_equilibrium_metrics(
     return expected_competition_strength, expected_survival_rate
 
 
-@njit_switch(cache=True)
 def sync_equilibrium_metrics(config: Any) -> None:
     """Recompute and write expected_competition_strength + expected_survival_rate.
 
@@ -1095,27 +1094,44 @@ def sync_equilibrium_metrics(config: Any) -> None:
     function reads the current values of all relevant config fields, computes
     fresh equilibrium metrics, and writes them back to *config* in-place.
 
-    Compatible with both Numba (njit hooks) and pure-Python callers
-    (Configurator, between-tick scripts).
+    Compatible with both ``PopulationConfig`` and ``DiscretePopulationConfig``.
 
     Args:
         config: ``PopulationConfig`` or ``DiscretePopulationConfig`` whose
             equilibrium fields will be updated in-place.
     """
-    comp, surv = compute_equilibrium_metrics(
-        carrying_capacity=config.carrying_capacity[()],
-        expected_eggs_per_female=config.expected_eggs_per_female[()],
-        sex_ratio=config.sex_ratio[()],
-        age_based_survival_rates=config.age_based_survival_rates,
-        age_based_mating_rates=config.age_based_mating_rates,
-        age_based_reproduction_rates=config.age_based_reproduction_rates,
+    from natal.population_config import DiscretePopulationConfig
+
+    if isinstance(config, DiscretePopulationConfig):
+        # Discrete config stores survival/mating/reproduction as scalars
+        # rather than full age-based arrays.  Build the (2, 2) and (2,)
+        # arrays expected by compute_equilibrium_metrics from the scalars.
+        surv = np.zeros((2, 2), dtype=np.float64)
+        surv[0, 0] = config.female_age0_survival
+        surv[1, 0] = config.male_age0_survival
+        mate = np.zeros((2, 2), dtype=np.float64)
+        mate[0, 1] = config.female_adult_mating_rate
+        mate[1, 1] = config.male_adult_mating_rate
+        repro = np.zeros(config.n_ages, dtype=np.float64)
+        repro[1] = config.reproduction_rate
+    else:
+        surv = config.age_based_survival_rates
+        mate = config.age_based_mating_rates
+        repro = config.age_based_reproduction_rates
+    comp, surv_val = compute_equilibrium_metrics(
+        carrying_capacity=float(config.carrying_capacity[()]),
+        expected_eggs_per_female=float(config.expected_eggs_per_female[()]),
+        sex_ratio=float(config.sex_ratio[()]),
+        age_based_survival_rates=surv,
+        age_based_mating_rates=mate,
+        age_based_reproduction_rates=repro,
         female_age_based_relative_fertility=config.female_age_based_relative_fertility,
         relative_competition_strength=config.age_based_relative_competition_strength,
         new_adult_age=config.new_adult_age,
         n_ages=config.n_ages,
     )
     config.expected_competition_strength[()] = comp
-    config.expected_survival_rate[()] = surv
+    config.expected_survival_rate[()] = surv_val
 
 
 # ============================================================================

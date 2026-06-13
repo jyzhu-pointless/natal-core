@@ -296,7 +296,7 @@ class TestHomogeneousBuildAgeStructured:
                 )
                 .survival(
                     female_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
-                    male_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+                    male_age0_survival=1.0,
                 )
                 .reproduction(eggs_per_female=10)
                 .competition(age_1_carrying_capacity=500)
