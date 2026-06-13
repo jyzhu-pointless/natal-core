@@ -36,8 +36,8 @@ def _minimal_pop(sp, *, pop_name: str = "AgePop"):
             eggs_per_female=10,
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 0.9, 0.8],
-            male_age_based_survival_rates=[1.0, 0.9, 0.8],
+            female_age_based_survival=[1.0, 0.9, 0.8],
+            male_age_based_survival=[1.0, 0.9, 0.8],
         )
         .competition(
             juvenile_growth_mode="concave",

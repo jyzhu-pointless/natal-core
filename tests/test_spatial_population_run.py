@@ -168,14 +168,13 @@ def _make_population_config(species: Species, name: str = "config_template") -> 
             }
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
-            male_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+            female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+            male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
         )
         .reproduction(
             female_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
             male_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
             eggs_per_female=0.0,
-            use_sperm_storage=False,
         )
         .competition(
             juvenile_growth_mode="logistic",

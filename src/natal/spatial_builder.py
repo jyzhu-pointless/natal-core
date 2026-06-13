@@ -617,8 +617,8 @@ class SpatialBuilder:
     def survival(
         self,
         # Age-structured params
-        female_age_based_survival_rates: Optional[Any] = None,
-        male_age_based_survival_rates: Optional[Any] = None,
+        female_age_based_survival: Optional[Any] = None,
+        male_age_based_survival: Optional[Any] = None,
         generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Any] = None,
         # Discrete-generation params
@@ -629,8 +629,8 @@ class SpatialBuilder:
         """Configure survival rates.
 
         Args:
-            female_age_based_survival_rates: Per-age female survival (age-structured).
-            male_age_based_survival_rates: Per-age male survival (age-structured).
+            female_age_based_survival: Per-age female survival (age-structured).
+            male_age_based_survival: Per-age male survival (age-structured).
             generation_time: Optional generation time override.
             equilibrium_distribution: Optional equilibrium distribution.
             female_age0_survival: Female age-0 survival (discrete-generation).
@@ -644,8 +644,8 @@ class SpatialBuilder:
             return self._detect_and_delegate(
                 "survival",
                 {
-                    "female_age_based_survival_rates": female_age_based_survival_rates,
-                    "male_age_based_survival_rates": male_age_based_survival_rates,
+                    "female_age_based_survival": female_age_based_survival,
+                    "male_age_based_survival": male_age_based_survival,
                     "generation_time": generation_time,
                     "equilibrium_distribution": equilibrium_distribution,
                 },
@@ -671,7 +671,6 @@ class SpatialBuilder:
         male_age_based_mating_rates: Optional[Any] = None,
         female_age_based_reproduction_rates: Optional[Any] = None,
         female_age_based_relative_fertility: Optional[Any] = None,
-        use_sperm_storage: bool = True,
         sperm_displacement_rate: float = 0.05,
         # Discrete-generation params
         female_adult_mating_rate: float = 1.0,
@@ -687,7 +686,6 @@ class SpatialBuilder:
             male_age_based_mating_rates: Male mating rates (age-structured).
             female_age_based_reproduction_rates: Reproduction participation rates.
             female_age_based_relative_fertility: Fertility weights.
-            use_sperm_storage: Whether to model sperm storage (age-structured).
             sperm_displacement_rate: Rate of sperm displacement (age-structured).
             female_adult_mating_rate: Adult female mating rate (discrete-generation).
             male_adult_mating_rate: Adult male mating rate (discrete-generation).
@@ -706,7 +704,6 @@ class SpatialBuilder:
                     "eggs_per_female": eggs_per_female,
                     "use_fixed_egg_count": use_fixed_egg_count,
                     "sex_ratio": sex_ratio,
-                    "use_sperm_storage": use_sperm_storage,
                     "sperm_displacement_rate": sperm_displacement_rate,
                 },
             )

@@ -1924,7 +1924,6 @@ class AgeStructuredConfigurator(Configurator):
         female_age_based_reproduction_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
         female_age_based_relative_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
         use_fixed_egg_count: bool | None = None,
-        use_sperm_storage: bool | None = None,
     ) -> AgeStructuredConfigurator:
         """Configure reproduction for the age-structured model.
 
@@ -1937,22 +1936,17 @@ class AgeStructuredConfigurator(Configurator):
             female_age_based_reproduction_rates: Per-age reproduction participation.
             female_age_based_relative_fertility: Per-age fertility weight.
             use_fixed_egg_count: Disable Poisson noise.
-            use_sperm_storage: Enable sperm storage.
 
         Returns:
             Self for chaining.
         """
         self._has_domain_params = True
+        from natal.population_config import DiscretePopulationConfig
+
+        assert not isinstance(self._config, DiscretePopulationConfig), \
+            "AgeStructuredConfigurator requires PopulationConfig"
         from natal.population_builder import PopulationConfigBuilder
 
-        if use_sperm_storage is not None:
-            import warnings
-            warnings.warn(
-                "use_sperm_storage parameter has never been functional — "
-                "sperm storage is always enabled regardless of this setting. "
-                "The parameter is accepted for compatibility but has no effect.",
-                FutureWarning, stacklevel=2,
-            )
         n_ages = self._config.n_ages
         resolve = PopulationConfigBuilder.resolve_age_param
         for name, value in [
@@ -1985,57 +1979,34 @@ class AgeStructuredConfigurator(Configurator):
     def survival(
         self,
         *,
-        female: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        male: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_age_based_survival_rates: list[float] | None = None,
-        male_age_based_survival_rates: list[float] | None = None,
-        adult_survival: float | None = None,
-        female_age0_survival: float | None = None,
-        male_age0_survival: float | None = None,
+        female_age_based_survival: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        male_age_based_survival: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
     ) -> AgeStructuredConfigurator:
-        """Configure survival rates.  Per-age params accept flexible forms.
+        """Configure survival rates. Per-age params accept flexible forms.
 
         Args:
-            female: Female survival rates (scalar, list, dict, or callable).
-            male: Male survival rates (same forms).
-            female_age_based_survival_rates: Legacy alias for *female*.
-            male_age_based_survival_rates: Legacy alias for *male*.
-            adult_survival: Shorthand — sets all adult ages uniformly.
-            female_age0_survival: Discrete-model shortcut for age-0 female.
-            male_age0_survival: Discrete-model shortcut for age-0 male.
+            female_age_based_survival: Female survival rates (scalar, list, dict, or callable).
+            male_age_based_survival: Male survival rates (same forms).
 
         Returns:
             Self for chaining.
         """
         self._has_domain_params = True
+        from natal.population_config import DiscretePopulationConfig
+
+        assert not isinstance(self._config, DiscretePopulationConfig), \
+            "AgeStructuredConfigurator requires PopulationConfig"
         from natal.population_builder import PopulationConfigBuilder
 
         n_ages = self._config.n_ages
-        if female is not None:
+        if female_age_based_survival is not None:
             self._config.age_based_survival_rates[0, :] = (
                 PopulationConfigBuilder.resolve_age_param(
-                    female, n_ages, np.ones(n_ages)))
-        if male is not None:
+                    female_age_based_survival, n_ages, np.ones(n_ages)))
+        if male_age_based_survival is not None:
             self._config.age_based_survival_rates[1, :] = (
                 PopulationConfigBuilder.resolve_age_param(
-                    male, n_ages, np.ones(n_ages)))
-        if female_age_based_survival_rates is not None:
-            self._config.age_based_survival_rates[0, :] = (
-                PopulationConfigBuilder.resolve_age_param(
-                    female_age_based_survival_rates, n_ages, np.ones(n_ages)))
-        if male_age_based_survival_rates is not None:
-            self._config.age_based_survival_rates[1, :] = (
-                PopulationConfigBuilder.resolve_age_param(
-                    male_age_based_survival_rates, n_ages, np.ones(n_ages)))
-        for name, value in [
-            ("female_age0_survival", female_age0_survival),
-            ("male_age0_survival", male_age0_survival),
-        ]:
-            if value is not None:
-                set_param(self._config, f"survival.{name}", value)
-        if adult_survival is not None:
-            new_adult_age = self._config.new_adult_age
-            self._config.age_based_survival_rates[:, new_adult_age:] = float(adult_survival)
+                    male_age_based_survival, n_ages, np.ones(n_ages)))
         return self
 
     def build(

@@ -295,7 +295,7 @@ class TestHomogeneousBuildAgeStructured:
                     }
                 )
                 .survival(
-                    female_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+                    female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
                     male_age0_survival=1.0,
                 )
                 .reproduction(eggs_per_female=10)
@@ -905,8 +905,8 @@ class TestBuilderMethodChaining:
                     }
                 )
                 .survival(
-                    female_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
-                    male_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+                    female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+                    male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
                 )
                 .reproduction(eggs_per_female=10)
                 .competition(age_1_carrying_capacity=500)
@@ -931,8 +931,8 @@ class TestBuilderMethodChaining:
                     }
                 )
                 .survival(
-                    female_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
-                    male_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+                    female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+                    male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
                 )
                 .reproduction(eggs_per_female=10)
                 .competition(old_juvenile_carrying_capacity=800)
@@ -1237,8 +1237,8 @@ class TestInitialStateWithSpermStorage:
                     sperm_storage={"WT|WT": {"WT|WT": {2: 5}}},
                 )
                 .survival(
-                    female_age_based_survival_rates=[1.0, 0.9, 0.8, 0.0],
-                    male_age_based_survival_rates=[1.0, 0.8, 0.7, 0.0],
+                    female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+                    male_age_based_survival=[1.0, 0.8, 0.7, 0.0],
                 )
                 .reproduction(
                     eggs_per_female=10,
@@ -1380,8 +1380,8 @@ class TestHeterogeneousAgeStructuredState:
                     ]),
                 )
                 .survival(
-                    female_age_based_survival_rates=[1.0, 0.9, 0.8, 0.0],
-                    male_age_based_survival_rates=[1.0, 0.8, 0.7, 0.0],
+                    female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+                    male_age_based_survival=[1.0, 0.8, 0.7, 0.0],
                 )
                 .reproduction(
                     eggs_per_female=10,

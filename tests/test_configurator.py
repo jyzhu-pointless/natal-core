@@ -96,21 +96,21 @@ class TestConfiguratorBuild:
     def test_survival_flexible_input(self, species):
         cfg = Configurator.from_species(species).age_structure(n_ages=3, new_adult_age=1)
         # Scalar fill
-        cfg.survival(female=0.9)
+        cfg.survival(female_age_based_survival=0.9)
         assert cfg._config.age_based_survival_rates[0, 0] == 0.9
         assert cfg._config.age_based_survival_rates[0, 1] == 0.9
 
         # List input
-        cfg.survival(male=[0.8, 0.7, 0.6])
+        cfg.survival(male_age_based_survival=[0.8, 0.7, 0.6])
         assert cfg._config.age_based_survival_rates[1, 0] == 0.8
         assert cfg._config.age_based_survival_rates[1, 2] == 0.6
 
     def test_survival_discrete_shortcuts(self, species):
-        cfg = Configurator.from_species(species).survival(
+        cfg = Configurator.for_discrete(species).survival(
             female_age0_survival=0.95, male_age0_survival=0.85
         )
-        assert cfg._config.age_based_survival_rates[0, 0] == 0.95
-        assert cfg._config.age_based_survival_rates[1, 0] == 0.85
+        assert cfg._config.female_age0_survival == 0.95
+        assert cfg._config.male_age0_survival == 0.85
 
     def test_initial_state(self, species):
         cfg = (

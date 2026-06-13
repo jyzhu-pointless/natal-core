@@ -97,8 +97,8 @@ class PopulationConfigBuilder:
         is_stochastic: bool,
         use_continuous_sampling: bool,
         # Survival & Mating
-        female_age_based_survival_rates: Optional[Any],
-        male_age_based_survival_rates: Optional[Any],
+        female_age_based_survival: Optional[Any],
+        male_age_based_survival: Optional[Any],
         female_age_based_mating_rates: Optional[ArrayF64],
         male_age_based_mating_rates: Optional[ArrayF64],
         female_age_based_reproduction_rates: Optional[ArrayF64],
@@ -136,8 +136,8 @@ class PopulationConfigBuilder:
             new_adult_age (int): Minimum age for adults.
             is_stochastic (bool): Whether to use stochastic sampling.
             use_continuous_sampling (bool): Whether to use Dirichlet sampling.
-            female_age_based_survival_rates (Any): Survival rates for females.
-            male_age_based_survival_rates (Any): Survival rates for males.
+            female_age_based_survival (Any): Survival rates for females.
+            male_age_based_survival (Any): Survival rates for males.
             female_age_based_mating_rates (NDArray): Mating rates for females.
             male_age_based_mating_rates (NDArray): Mating rates for males.
             female_age_based_reproduction_rates (NDArray): Reproduction participation
@@ -207,10 +207,10 @@ class PopulationConfigBuilder:
         _default_male = np.ones(n_ages - 1, dtype=np.float64)
 
         female_survival = PopulationConfigBuilder.resolve_age_param(
-            female_age_based_survival_rates, n_ages, _default_female
+            female_age_based_survival, n_ages, _default_female
         )
         male_survival = PopulationConfigBuilder.resolve_age_param(
-            male_age_based_survival_rates, n_ages, _default_male
+            male_age_based_survival, n_ages, _default_male
         )
 
         age_based_survival_rates = np.array([female_survival, male_survival], dtype=np.float64)
@@ -1160,8 +1160,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.initial_sperm_storage: Optional[InitialSpermStorageInput] = None
 
         # Survival and mating
-        self.female_age_based_survival_rates: Optional[Any] = None
-        self.male_age_based_survival_rates: Optional[Any] = None
+        self.female_age_based_survival: Optional[Any] = None
+        self.male_age_based_survival: Optional[Any] = None
         self.female_age_based_mating_rates: Optional[ArrayF64] = None
         self.male_age_based_mating_rates: Optional[ArrayF64] = None
         self.female_age_based_reproduction_rates: Optional[ArrayF64] = None
@@ -1289,17 +1289,17 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
     def survival(
         self,
-        female_age_based_survival_rates: Optional[Any] = None,
-        male_age_based_survival_rates: Optional[Any] = None,
+        female_age_based_survival: Optional[Any] = None,
+        male_age_based_survival: Optional[Any] = None,
         generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
         **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure survival rates."""
-        if female_age_based_survival_rates is not None:
-            self.female_age_based_survival_rates = female_age_based_survival_rates
-        if male_age_based_survival_rates is not None:
-            self.male_age_based_survival_rates = male_age_based_survival_rates
+        if female_age_based_survival is not None:
+            self.female_age_based_survival = female_age_based_survival
+        if male_age_based_survival is not None:
+            self.male_age_based_survival = male_age_based_survival
         if generation_time is not None:
             self.generation_time = generation_time
         if equilibrium_distribution is not None:
@@ -1578,8 +1578,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             new_adult_age=self.new_adult_age,
             is_stochastic=self.is_stochastic,
             use_continuous_sampling=self.use_continuous_sampling,
-            female_age_based_survival_rates=self.female_age_based_survival_rates,
-            male_age_based_survival_rates=self.male_age_based_survival_rates,
+            female_age_based_survival=self.female_age_based_survival,
+            male_age_based_survival=self.male_age_based_survival,
             female_age_based_mating_rates=self.female_age_based_mating_rates,
             male_age_based_mating_rates=self.male_age_based_mating_rates,
             female_age_based_reproduction_rates=self.female_age_based_reproduction_rates,
@@ -2055,8 +2055,8 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             new_adult_age=1,
             is_stochastic=self.is_stochastic,
             use_continuous_sampling=self.use_continuous_sampling,
-            female_age_based_survival_rates=female_survival,
-            male_age_based_survival_rates=male_survival,
+            female_age_based_survival=female_survival,
+            male_age_based_survival=male_survival,
             female_age_based_mating_rates=female_mating,
             male_age_based_mating_rates=male_mating,
             female_age_based_reproduction_rates=female_mating,

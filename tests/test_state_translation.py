@@ -116,10 +116,10 @@ def test_population_to_readable_dict_includes_sperm_storage_for_age_structured()
             }
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 1.0, 0.8],
-            male_age_based_survival_rates=[1.0, 1.0, 0.8],
+            female_age_based_survival=[1.0, 1.0, 0.8],
+            male_age_based_survival=[1.0, 1.0, 0.8],
         )
-        .reproduction(eggs_per_female=2, use_sperm_storage=True)
+        .reproduction(eggs_per_female=2)
         .competition(old_juvenile_carrying_capacity=100)
         .build()
     )
@@ -170,10 +170,10 @@ def test_population_history_to_readable_dict_for_age_structured() -> None:
             }
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 1.0, 0.9],
-            male_age_based_survival_rates=[1.0, 1.0, 0.9],
+            female_age_based_survival=[1.0, 1.0, 0.9],
+            male_age_based_survival=[1.0, 1.0, 0.9],
         )
-        .reproduction(eggs_per_female=2, use_sperm_storage=True)
+        .reproduction(eggs_per_female=2)
         .competition(old_juvenile_carrying_capacity=100)
         .build()
     )
@@ -430,10 +430,10 @@ def test_population_to_observation_json_is_valid_and_collapsed() -> None:
             }
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 1.0, 0.9],
-            male_age_based_survival_rates=[1.0, 1.0, 0.9],
+            female_age_based_survival=[1.0, 1.0, 0.9],
+            male_age_based_survival=[1.0, 1.0, 0.9],
         )
-        .reproduction(eggs_per_female=2, use_sperm_storage=True)
+        .reproduction(eggs_per_female=2)
         .competition(old_juvenile_carrying_capacity=100)
         .build()
     )
@@ -470,10 +470,10 @@ def test_spatial_population_to_readable_dict_contains_demes_and_aggregate() -> N
                 }
             )
             .survival(
-                female_age_based_survival_rates=[1.0, 1.0, 0.9],
-                male_age_based_survival_rates=[1.0, 1.0, 0.9],
+                female_age_based_survival=[1.0, 1.0, 0.9],
+                male_age_based_survival=[1.0, 1.0, 0.9],
             )
-            .reproduction(eggs_per_female=2, use_sperm_storage=False)
+            .reproduction(eggs_per_female=2)
             .competition(old_juvenile_carrying_capacity=100)
             .build()
         ),
@@ -488,10 +488,10 @@ def test_spatial_population_to_readable_dict_contains_demes_and_aggregate() -> N
                 }
             )
             .survival(
-                female_age_based_survival_rates=[1.0, 1.0, 0.9],
-                male_age_based_survival_rates=[1.0, 1.0, 0.9],
+                female_age_based_survival=[1.0, 1.0, 0.9],
+                male_age_based_survival=[1.0, 1.0, 0.9],
             )
-            .reproduction(eggs_per_female=2, use_sperm_storage=False)
+            .reproduction(eggs_per_female=2)
             .competition(old_juvenile_carrying_capacity=100)
             .build()
         ),
@@ -525,10 +525,10 @@ def test_spatial_population_to_observation_dict_aggregate_matches_sum() -> None:
                 }
             )
             .survival(
-                female_age_based_survival_rates=[1.0, 1.0, 0.9],
-                male_age_based_survival_rates=[1.0, 1.0, 0.9],
+                female_age_based_survival=[1.0, 1.0, 0.9],
+                male_age_based_survival=[1.0, 1.0, 0.9],
             )
-            .reproduction(eggs_per_female=2, use_sperm_storage=False)
+            .reproduction(eggs_per_female=2)
             .competition(old_juvenile_carrying_capacity=100)
             .build()
         ),
@@ -543,10 +543,10 @@ def test_spatial_population_to_observation_dict_aggregate_matches_sum() -> None:
                 }
             )
             .survival(
-                female_age_based_survival_rates=[1.0, 1.0, 0.9],
-                male_age_based_survival_rates=[1.0, 1.0, 0.9],
+                female_age_based_survival=[1.0, 1.0, 0.9],
+                male_age_based_survival=[1.0, 1.0, 0.9],
             )
-            .reproduction(eggs_per_female=2, use_sperm_storage=False)
+            .reproduction(eggs_per_female=2)
             .competition(old_juvenile_carrying_capacity=100)
             .build()
         ),

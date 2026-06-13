@@ -130,8 +130,8 @@ class TestCarryingCapacityResolution:
             .setup(species=sp, name="BuilderTest", stochastic=False)
             .age_structure(n_ages=6, new_adult_age=2)
             .survival(
-                female_age_based_survival_rates=[1.0, 0.95, 0.9, 0.8, 0.6, 0.0],
-                male_age_based_survival_rates=[1.0, 0.9, 0.85, 0.75, 0.5, 0.0],
+                female_age_based_survival=[1.0, 0.95, 0.9, 0.8, 0.6, 0.0],
+                male_age_based_survival=[1.0, 0.9, 0.85, 0.75, 0.5, 0.0],
             )
             .reproduction(
                 female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
@@ -354,8 +354,8 @@ class TestCarryingCapacityResolution:
                 eggs_per_female=50.0,
             )
             .survival(
-                female_age_based_survival_rates=[1.0, 1.0, 5 / 6, 4 / 5, 3 / 4, 2 / 3, 1 / 2],
-                male_age_based_survival_rates=[1.0, 1.0, 2 / 3, 1 / 2],
+                female_age_based_survival=[1.0, 1.0, 5 / 6, 4 / 5, 3 / 4, 2 / 3, 1 / 2],
+                male_age_based_survival=[1.0, 1.0, 2 / 3, 1 / 2],
             )
             .competition(
                 competition_strength=5.0,
@@ -431,8 +431,8 @@ class TestChamperModel:
             .setup(species=sp, name="ChamperPath1", stochastic=False)
             .age_structure(n_ages=self.n_ages, new_adult_age=self.new_adult_age)
             .survival(
-                female_age_based_survival_rates=self.female_survival,
-                male_age_based_survival_rates=self.male_survival,
+                female_age_based_survival=self.female_survival,
+                male_age_based_survival=self.male_survival,
             )
             .initial_state(
                 individual_count={
@@ -470,8 +470,8 @@ class TestChamperModel:
             .setup(species=sp, name="ChamperPath2", stochastic=False)
             .age_structure(n_ages=self.n_ages, new_adult_age=self.new_adult_age)
             .survival(
-                female_age_based_survival_rates=self.female_survival,
-                male_age_based_survival_rates=self.male_survival,
+                female_age_based_survival=self.female_survival,
+                male_age_based_survival=self.male_survival,
             )
             .initial_state(
                 individual_count={
@@ -514,8 +514,8 @@ class TestChamperModel:
             .setup(species=sp, name="ChamperPath3", stochastic=False)
             .age_structure(n_ages=self.n_ages, new_adult_age=self.new_adult_age)
             .survival(
-                female_age_based_survival_rates=self.female_survival,
-                male_age_based_survival_rates=self.male_survival,
+                female_age_based_survival=self.female_survival,
+                male_age_based_survival=self.male_survival,
             )
             .initial_state(
                 individual_count={
