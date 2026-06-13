@@ -13,7 +13,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal import numba_compat as nbc
-from natal.numba_compat import njit_switch
+from natal.numba_utils import njit_switch
 
 # ============================================================================
 # Continuous distribution helper functions (for use_continuous_sampling=True)
