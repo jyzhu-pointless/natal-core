@@ -55,7 +55,7 @@ class TestSetParam:
         assert new_comp > 0, f"competition strength should be positive, got {new_comp}"
 
     def test_unknown_param_raises(self, minimal_config):
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError, match="nonexistent"):
             set_param(minimal_config, "nonexistent", 1.0)
 
 
@@ -159,6 +159,10 @@ class TestConfiguratorUpdate:
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
 
+        assert pop.tick == 0, "test_update_changes_config: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_changes_config: population should be runnable after update"
+
     def test_update_chains(self, species):
         pop = (
             Configurator.from_species(species)
@@ -174,6 +178,10 @@ class TestConfiguratorUpdate:
         )
         assert pop.config.low_density_growth_rate[()] == 3.0
         assert pop.config.eggs_per_female[()] == 100.0
+
+        assert pop.tick == 0, "test_update_chains: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_chains: population should be runnable after update"
 
     def test_update_auto_sync(self, species):
         pop = (
@@ -191,6 +199,10 @@ class TestConfiguratorUpdate:
         assert new != old
         assert new > 0, f"competition strength should be positive, got {new}"
 
+        assert pop.tick == 0, "test_update_auto_sync: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_auto_sync: population should be runnable after update"
+
     def test_update_does_not_require_build(self, species):
         """update() writes immediately, no apply() needed."""
         pop = (
@@ -205,6 +217,10 @@ class TestConfiguratorUpdate:
         # Just call update() — no apply() or freeze()
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
+
+        assert pop.tick == 0, "test_update_does_not_require_build: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_does_not_require_build: population should be runnable after update"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -240,6 +256,10 @@ class TestUpdateWriteBack:
         assert not np.array_equal(before, pop.config.offspring_tensor), \
             "offspring_tensor should change after applying a drive preset"
 
+        assert pop.tick == 0, "test_presets_mutation_persists: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_presets_mutation_persists: population should be runnable after update"
+
     def test_modifiers_mutation_persists(self, species):
         """pop.update().modifiers(gamete_modifiers=[fn]) does not crash and
         the population can still run afterwards."""
@@ -257,6 +277,7 @@ class TestUpdateWriteBack:
         def _noop_modifier(*args: object, **kwargs: object) -> dict:
             return {}
 
+        assert pop.tick == 0, "test_modifiers_mutation_persists: initial tick should be 0"
         pop.update().modifiers(gamete_modifiers=[_noop_modifier])
         # Verify the population can still run without crashing
         pop.run(1)
@@ -283,6 +304,10 @@ class TestCustomFields:
         pop.update().custom(temperature=25.0)
         assert float(pop.config.custom["temperature"][()]) == 25.0
 
+        assert pop.tick == 0, "test_update_custom_scalar: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_custom_scalar: population should be runnable after update"
+
     def test_update_custom_multiple_fields(self, species):
         """pop.update().custom() with multiple fields."""
         pop = (
@@ -299,6 +324,10 @@ class TestCustomFields:
         assert int(pop.config.custom["season"][()]) == 1
         assert bool(pop.config.custom["debug"][()]) is True
 
+        assert pop.tick == 0, "test_update_custom_multiple_fields: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_custom_multiple_fields: population should be runnable after update"
+
     def test_custom_mutable(self, species):
         """Custom field can be mutated multiple times."""
         pop = (
@@ -314,6 +343,10 @@ class TestCustomFields:
         pop.update().custom(counter=1)
         pop.update().custom(counter=2)
         assert int(pop.config.custom["counter"][()]) == 2
+
+        assert pop.tick == 0, "test_custom_mutable: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_custom_mutable: population should be runnable after update"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -352,6 +385,10 @@ class TestLegacyBuilder:
         # Old builder can still use new update()
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
+
+        assert pop.tick == 0, "test_legacy_builder_update_works: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_legacy_builder_update_works: population should be runnable after update"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1149,6 +1186,7 @@ class TestSpermStorageShape:
         n_ages = cfg._config.n_ages
         assert arr.shape == (n_ages, n_genotypes, n_genotypes), \
             f"Expected {(n_ages, n_genotypes, n_genotypes)}, got {arr.shape}"
+        assert np.all(arr == 0), "Default initial_sperm_storage should be all zeros"
 
     def test_sperm_storage_shape_discrete(self, species):
         """Discrete config sperm_storage should also match."""
@@ -1158,6 +1196,7 @@ class TestSpermStorageShape:
         n_ages = cfg._config.n_ages
         assert arr.shape == (n_ages, n_genotypes, n_genotypes), \
             f"Expected {(n_ages, n_genotypes, n_genotypes)}, got {arr.shape}"
+        assert np.all(arr == 0), "Default discrete initial_sperm_storage should be all zeros"
 
     def test_sperm_storage_loads_into_population(self, species):
         """Building a population with explicit sperm storage must not

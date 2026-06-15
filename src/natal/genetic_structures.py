@@ -1721,8 +1721,13 @@ class Chromosome(GeneticStructure['Haplotype']):
         def __iter__(self):
             return iter(self._rates)
 
-        def __array__(self) -> np.ndarray:
-            return np.asarray(self._rates)
+        def __array__(self, dtype: Optional[np.dtype] = None, copy: Optional[bool] = None) -> np.ndarray:
+            if dtype is not None:
+                return np.asarray(self._rates, dtype=dtype)
+            arr = np.asarray(self._rates)
+            if copy:
+                arr = arr.copy()
+            return arr
 
         @property
         def dtype(self):

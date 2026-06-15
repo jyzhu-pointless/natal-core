@@ -37,17 +37,27 @@ class TestBuildAndSetup:
         sp = _make_species("Disc_build")
         pop = _minimal_pop(sp, pop_name="Disc_build_pop")
         assert pop is not None
+        assert pop.tick == 0, "tick should start at 0"
+        assert pop.state is not None, "state should be initialized"
+        assert pop.species is not None, "species should be set"
 
     def test_initial_tick_is_zero(self):
         sp = _make_species("Disc_tick0")
         pop = _minimal_pop(sp, pop_name="Disc_tick0_pop")
         assert pop._tick == 0
+        n_genotypes = len(pop._registry.index_to_genotype)
+        assert pop.state.individual_count.shape == (2, 2, n_genotypes), (
+            f"expected shape (2, 2, {n_genotypes}), got {pop.state.individual_count.shape}"
+        )
 
     def test_registry_has_expected_genotypes(self):
         sp = _make_species("Disc_gtypes")
         pop = _minimal_pop(sp, pop_name="Disc_gtypes_pop")
         genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
+        assert len(genotype_strs) == 4, (
+            f"expected 4 genotypes, got {len(genotype_strs)}"
+        )
 
     def test_initial_female_wt_count(self):
         sp = _make_species("Disc_init_cnt")
@@ -55,6 +65,9 @@ class TestBuildAndSetup:
         # Before running, check state was initialized
         state = pop._state
         assert state is not None
+        assert pop.state.individual_count.sum() > 0, (
+            "population should have positive counts after initialization"
+        )
 
 
 class TestRunTicks:
@@ -63,25 +76,44 @@ class TestRunTicks:
         pop = _minimal_pop(sp, pop_name="Disc_run_tick_pop")
         pop.run(5)
         assert pop._tick == 5
+        assert pop.state.individual_count.sum() > 0, (
+            "population should not be empty after 5 ticks"
+        )
 
     def test_run_zero_ticks(self):
         sp = _make_species("Disc_run0")
         pop = _minimal_pop(sp, pop_name="Disc_run0_pop")
+        initial_ind = pop.state.individual_count.copy()
         pop.run(0)
         assert pop._tick == 0
+        np.testing.assert_array_equal(
+            pop.state.individual_count, initial_ind,
+            err_msg="run(0) should not change population state",
+        )
 
     def test_run_single_tick(self):
         sp = _make_species("Disc_run1")
         pop = _minimal_pop(sp, pop_name="Disc_run1_pop")
+        initial_total = pop.state.individual_count.sum()
         pop.run(1)
         assert pop._tick == 1
+        assert pop.state.individual_count.sum() != initial_total, (
+            "population counts should change after one tick"
+        )
 
     def test_run_is_additive(self):
         sp = _make_species("Disc_run_add")
-        pop = _minimal_pop(sp, pop_name="Disc_run_add_pop")
-        pop.run(3)
-        pop.run(2)
-        assert pop._tick == 5
+        pop_a = _minimal_pop(sp, pop_name="Disc_run_add_A", stochastic=False)
+        pop_b = _minimal_pop(sp, pop_name="Disc_run_add_B", stochastic=False)
+        pop_a.run(5)
+        pop_b.run(3)
+        pop_b.run(2)
+        assert pop_b._tick == 5
+        np.testing.assert_array_almost_equal(
+            pop_a.state.individual_count,
+            pop_b.state.individual_count,
+            err_msg="run(2) + run(3) should be equivalent to run(5)",
+        )
 
 
 class TestDeterminism:
@@ -315,3 +347,11 @@ class TestHomingDriveIntegration:
         pop, _ = self._build_drive_pop(stochastic=True)
         pop.run(10)
         assert pop._tick == 10
+        assert pop._state.individual_count.sum() > 0, (
+            "stochastic population should not be empty after 10 ticks"
+        )
+        n_genotypes = len(pop._registry.index_to_genotype)
+        assert pop._state.individual_count.shape == (2, 2, n_genotypes), (
+            f"expected shape (2, 2, {n_genotypes}), "
+            f"got {pop._state.individual_count.shape}"
+        )
