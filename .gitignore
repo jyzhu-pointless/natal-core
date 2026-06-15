@@ -39,4 +39,5 @@ diagnose*
 demos/test*
 
 *.png
+*.html
 .coverage
