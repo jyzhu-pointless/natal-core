@@ -68,12 +68,12 @@ Key differences from `PopulationState`:
 
 1. **Dimensions and Control Parameters**
   - `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
-  - `is_stochastic`, `use_continuous_sampling`, `sex_ratio`
+  - `stochastic`, `continuous_sampling`, `sex_ratio`
 
 2. **Age-Related Parameters**
   - `age_based_survival_rates`
   - `age_based_mating_rates`
-  - `female_age_based_relative_fertility`
+  - `female_age_based_fertility`
   - `age_based_relative_competition_strength`
 
 3. **Fitness Parameters**

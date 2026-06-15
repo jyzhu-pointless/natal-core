@@ -1,0 +1,1281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>代码审查与修复 — fix/runtime-crash-and-data-corruption</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --elevated: #1c2128;
+    --border: #30363d; --text: #c9d1d9; --muted: #8b949e;
+    --critical: #f85149; --high: #d29922; --medium: #58a6ff; --low: #3fb950;
+    --accent: #79c0ff; --accent-dim: #1f6feb33;
+    --code-bg: #0d1117;
+    --tab-active-bg: #1c2128;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.65;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 1rem;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 1.15rem; color: #f0f6fc; white-space: nowrap; }
+  header .branch { font-family: monospace; font-size: 0.8rem; color: var(--accent); background: var(--accent-dim); padding: 0.15em 0.6em; border-radius: 1em; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--low); flex-shrink: 0; }
+  .status-dot.warn { background: var(--high); }
+
+  /* ── Tab Bar ── */
+  nav {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; overflow-x: auto; flex-shrink: 0; padding: 0 0.5rem;
+  }
+  nav button {
+    background: none; border: none; color: var(--muted);
+    padding: 0.6rem 1rem; font-size: 0.85rem; cursor: pointer;
+    border-bottom: 2px solid transparent; white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s; font-family: inherit;
+  }
+  nav button:hover { color: #e6edf3; }
+  nav button.active { color: #f0f6fc; border-bottom-color: var(--accent); }
+  nav button .badge { margin-left: 0.4rem; }
+
+  /* ── Content ── */
+  main { flex: 1; overflow-y: auto; padding: 1.5rem; }
+  .tab-panel { display: none; max-width: 960px; margin: 0 auto; }
+  .tab-panel.active { display: block; }
+
+  /* ── Shared Components ── */
+  h2 { font-size: 1.25rem; color: #f0f6fc; margin-bottom: 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1rem; color: #e6edf3; margin: 1.25rem 0 0.5rem; }
+  h4 { font-size: 0.9rem; color: var(--text); margin: 1rem 0 0.4rem; }
+  p { margin: 0.5rem 0; }
+  ul, ol { padding-left: 1.5rem; margin: 0.4rem 0; }
+  li { margin: 0.25rem 0; }
+  a { color: var(--accent); }
+
+  .badge {
+    display: inline-block; padding: 0.12em 0.5em; border-radius: 2em;
+    font-size: 0.75rem; font-weight: 600; line-height: 1.5;
+  }
+  .badge-critical { background: #f8514922; color: var(--critical); border: 1px solid #f8514944; }
+  .badge-high    { background: #d2992222; color: var(--high); border: 1px solid #d2992244; }
+  .badge-medium  { background: #58a6ff22; color: var(--medium); border: 1px solid #58a6ff44; }
+  .badge-low     { background: #3fb95022; color: var(--low); border: 1px solid #3fb95044; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1.25rem; margin: 0.75rem 0;
+  }
+  .card.accent-left { border-left: 3px solid var(--accent); }
+  .card.critical-l { border-left: 3px solid var(--critical); }
+  .card.high-l    { border-left: 3px solid var(--high); }
+
+  code {
+    background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 3px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.85em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.9rem 1rem; overflow-x: auto;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.78rem; line-height: 1.55; margin: 0.6rem 0;
+  }
+  pre.diff-add { border-left: 3px solid var(--low); }
+  pre.diff-del { border-left: 3px solid var(--critical); }
+  pre .hl { color: var(--accent); }
+  pre .add { color: var(--low); }
+  pre .del { color: var(--critical); }
+  pre .cmt { color: var(--muted); font-style: italic; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.6rem 0; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); }
+  th { background: var(--code-bg); font-weight: 600; color: #e6edf3; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  tr:hover td { background: #1c212866; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
+  @media (max-width: 700px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  .stat-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem; text-align: center;
+  }
+  .stat-box .num { font-size: 1.8rem; font-weight: 700; }
+  .stat-box .num.c { color: var(--critical); }
+  .stat-box .num.h { color: var(--high); }
+  .stat-box .num.m { color: var(--medium); }
+  .stat-box .num.g { color: var(--low); }
+  .stat-box .label { color: var(--muted); font-size: 0.8rem; margin-top: 0.1rem; }
+
+  .flow-row {
+    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    font-family: monospace; font-size: 0.85rem; margin: 0.6rem 0;
+  }
+  .flow-box {
+    padding: 0.35em 0.7em; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--code-bg);
+  }
+  .flow-box.src  { border-color: #58a6ff66; background: #58a6ff11; }
+  .flow-box.dst  { border-color: #3fb95066; background: #3fb95011; }
+  .flow-box.bad  { border-color: #f8514966; background: #f8514911; }
+  .flow-arrow { color: var(--muted); font-size: 1.1rem; }
+
+  .callout {
+    padding: 0.7rem 1rem; border-radius: 6px; margin: 0.6rem 0; font-size: 0.9rem;
+  }
+  .callout.info { background: #58a6ff11; border: 1px solid #58a6ff33; }
+  .callout.warn { background: #d2992211; border: 1px solid #d2992233; }
+
+  /* ── Diff comparison ── */
+  .side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 0.75rem 0; }
+  @media (max-width: 700px) { .side-by-side { grid-template-columns: 1fr; } }
+  .side-label {
+    font-size: 0.78rem; font-weight: 600; padding: 0.25em 0.6em; border-radius: 4px 4px 0 0;
+    display: inline-block;
+  }
+  .side-label.bad  { background: #f8514922; color: var(--critical); }
+  .side-label.good { background: #3fb95022; color: var(--low); }
+  .side-col { display: flex; flex-direction: column; }
+  .side-col pre { margin-top: 0; border-radius: 0 6px 6px 6px; }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+
+  .tag {
+    display: inline-block; padding: 0.1em 0.5em; border-radius: 3px;
+    font-size: 0.75rem; font-weight: 600; margin-right: 0.3rem;
+  }
+  .tag.fixed { background: #3fb95022; color: var(--low); }
+  .tag.regression { background: #f8514922; color: var(--critical); }
+  .tag.design { background: #58a6ff22; color: var(--medium); }
+
+  .commit-hash {
+    font-family: monospace; font-size: 0.8rem; color: var(--accent);
+    background: var(--accent-dim); padding: 0.1em 0.4em; border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot"></div>
+  <h1>代码审查与修复</h1>
+  <span class="branch">fix/runtime-crash-and-data-corruption</span>
+  <span style="color: var(--muted); font-size: 0.85rem; margin-left: auto;">2026-06-13</span>
+</header>
+
+<nav id="tab-bar">
+  <button class="active" data-tab="overview">📊 总览</button>
+  <button data-tab="regression">🔍 回归分析</button>
+  <button data-tab="fix1"><span class="badge badge-critical">fix-1</span> reconfigure_preset</button>
+  <button data-tab="fix2"><span class="badge badge-high">fix-2</span> modifiers 静默失效</button>
+  <button data-tab="fix3"><span class="badge badge-high">fix-3</span> 预提取标量不同步</button>
+  <button data-tab="refactor-plan">🔧 重构设计</button>
+  <button data-tab="naming-audit">🏷️ 命名审计</button>
+  <button data-tab="unified-naming">🎯 统一命名设计</button>
+  <button data-tab="design">🧠 设计演变</button>
+  <button data-tab="report">📋 完整审查报告</button>
+  <button data-tab="gates">✅ 质量门禁</button>
+</nav>
+
+<main>
+
+<!-- ====== TAB: 总览 ====== -->
+<div class="tab-panel active" id="tab-overview">
+  <h2>📊 总览</h2>
+
+  <div class="grid-3">
+    <div class="stat-box"><div class="num c">1</div><div class="label">🔴 Critical</div></div>
+    <div class="stat-box"><div class="num h">8</div><div class="label">🟠 High</div></div>
+    <div class="stat-box"><div class="num g">604</div><div class="label">✅ Tests Passed</div></div>
+  </div>
+
+  <div class="card accent-left">
+    <h4>审查方法</h4>
+    <p>使用 Workflow 编排 26 个子代理，5 维度并行审查 + 对抗验证：</p>
+    <div class="grid-2" style="font-size:0.85rem;">
+      <div>✅ <strong>正确性</strong> — 逻辑错误、边界情况、竞态</div>
+      <div>✅ <strong>简化机会</strong> — 死代码、重复、过度抽象</div>
+      <div>✅ <strong>测试覆盖</strong> — 缺失测试、弱断言</div>
+      <div>✅ <strong>类型安全</strong> — Any 滥用、类型窄化</div>
+      <div>✅ <strong>API 一致性</strong> — 破坏性变更、命名规范</div>
+    </div>
+  </div>
+
+  <h3>本次会话修复的 3 个阻塞问题</h3>
+  <table>
+    <tr><th>#</th><th>问题</th><th>严重性</th><th>根因</th></tr>
+    <tr>
+      <td>1</td>
+      <td><code>reconfigure_preset()</code> 导致 preset 条目重复</td>
+      <td><span class="badge badge-critical">CRITICAL</span></td>
+      <td>重入 <code>self.presets()</code> → <code>add_preset()</code> 二次追加</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td><code>modifiers()</code> 缺少 <code>_pop_ref</code> 写回路径</td>
+      <td><span class="badge badge-high">HIGH</span></td>
+      <td>工作树删除了 HEAD 中的 <code>_pop_ref</code> 分支</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td><code>DiscreteConfigurator</code> 预提取标量与源数组不同步</td>
+      <td><span class="badge badge-high">HIGH</span></td>
+      <td>两个独立 ndarray 存同一份数据，只更新了一个</td>
+    </tr>
+  </table>
+
+  <div class="callout info">
+    <strong>关键发现：</strong>3 个问题中有 2 个是<strong>回归</strong>——HEAD 提交已包含正确修复，但工作树未提交的修改把这些修复抹掉了。
+  </div>
+
+  <h3>变更文件</h3>
+  <table>
+    <tr><th>文件</th><th>变更</th><th>说明</th></tr>
+    <tr><td><code>src/natal/configurator.py</code></td><td>主要</td><td>恢复 <code>_pop_ref</code> 路径 + 双写修复 + docstring 更新</td></tr>
+    <tr><td>其他 29 个文件</td><td>既有</td><td>文档、测试、已有重构（本会话未改动）</td></tr>
+  </table>
+</div>
+
+<!-- ====== TAB: 回归分析 ====== -->
+<div class="tab-panel" id="tab-regression">
+  <h2>🔍 回归分析：工作树为什么比 HEAD 更旧？</h2>
+
+  <div class="callout warn">
+    <strong>核心发现：</strong>工作树中的未提交修改<strong>删除了</strong> HEAD 提交中已正确实现的 <code>_pop_ref</code> 直写路径，使得 3 个方法退回到旧的、有 bug 的实现。
+  </div>
+
+  <h3>提交历史示意</h3>
+  <div style="font-family:monospace;font-size:0.85rem;line-height:2;margin:1rem 0;">
+    <div>🔵 <span class="commit-hash">344d1b5</span> refactor: inline _xxx_impl — 重构了这些方法</div>
+    <div style="margin-left:2rem;">│</div>
+    <div>🟢 <span class="commit-hash">7fc7f59</span> fix: address Copilot review <span class="tag fixed">添加 _pop_ref 路径</span> <span class="tag fixed">添加 hasattr 检查</span></div>
+    <div style="margin-left:2rem;">│</div>
+    <div>🟢 <span class="commit-hash">444b899</span> fix: propagate new config to all demes <span class="tag fixed">reconfigure_preset 去重修复</span></div>
+    <div style="margin-left:2rem;">│</div>
+    <div style="color:var(--high);">⚠️ <strong>HEAD</strong> — 代码是正确的</div>
+    <div style="margin-left:2rem;">│</div>
+    <div>🔴 <strong>[工作树未提交修改]</strong> <span class="tag regression">删除了 _pop_ref 分支</span> <span class="tag regression">删除了 hasattr 检查</span></div>
+  </div>
+
+  <h3>具体对比：<code>modifiers()</code></h3>
+  <div class="side-by-side">
+    <div class="side-col">
+      <span class="side-label good">HEAD（正确）</span>
+<pre><span class="cmt"># ✅ 如果绑定了 Population，直接委托</span>
+<span class="hl">if self._pop_ref is not None:</span>
+<span class="hl">    if gamete_modifiers:</span>
+<span class="hl">        for mod in gamete_modifiers:</span>
+<span class="hl">            self._pop_ref.add_gamete_modifier(mod)</span>
+<span class="hl">    if zygote_modifiers:</span>
+<span class="hl">        for mod in zygote_modifiers:</span>
+<span class="hl">            self._pop_ref.add_zygote_modifier(mod)</span>
+<span class="hl">    if gamete_modifiers or zygote_modifiers:</span>
+<span class="hl">        self._pop_ref.refresh_modifier_maps()</span>
+<span class="hl">    self._config = self._pop_ref.config</span>
+<span class="hl">    return self</span>
+
+<span class="cmt"># 构建期走适配器</span>
+ctx = self._make_ctx()
+...</pre>
+    </div>
+    <div class="side-col">
+      <span class="side-label bad">工作树（回归）</span>
+<pre><span class="cmt"># ❌ 整个 _pop_ref 分支被删除</span>
+<span class="cmt"># 无条件走 _ConfigContext 适配器</span>
+ctx = self._make_ctx()
+next_gid = _ConfigContext.next_modifier_id(...)
+<span class="del">// 只更新了 Configurator 的 self._config，</span>
+<span class="del">// Population 的 _config 仍指向旧对象</span>
+<span class="del">// → pop.update().modifiers(...) 对运行时无影响</span>
+...</pre>
+    </div>
+  </div>
+
+  <h3>具体对比：<code>reconfigure_preset()</code></h3>
+  <div class="side-by-side">
+    <div class="side-col">
+      <span class="side-label good">HEAD（正确）</span>
+<pre><span class="cmt"># ✅ 属性存在性检查</span>
+<span class="hl">if not hasattr(preset, attr):</span>
+<span class="hl">    raise AttributeError(...)</span>
+
+<span class="cmt"># ✅ 直接重建，不重入 presets()</span>
+<span class="hl">if self._pop_ref is not None:</span>
+<span class="hl">    pop.rebuild_from_presets()</span>
+<span class="hl">    self._config = pop.config</span>
+<span class="hl">else:</span>
+<span class="hl">    raise RuntimeError(...)</span></pre>
+    </div>
+    <div class="side-col">
+      <span class="side-label bad">工作树（回归）</span>
+<pre><span class="cmt"># ❌ 无 hasattr 检查</span>
+setattr(preset, attr, value)
+
+<span class="cmt"># ❌ 按前缀清理 + 重入 presets()</span>
+<span class="del">prefix = f"{preset.name}/"</span>
+<span class="del">self.gamete_modifiers = [m for m in ...]</span>
+<span class="del">self.presets(preset)  ← 触发 add_preset() 重复追加</span></pre>
+    </div>
+  </div>
+
+  <div class="card accent-left">
+    <h4>为什么 <code>self.presets(preset)</code> 会导致重复？</h4>
+    <div class="flow-row">
+      <span class="flow-box bad">reconfigure_preset()</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad">self.presets(preset)</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad">pop.add_preset(preset)</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad">_presets.append(preset)</span>
+    </div>
+    <p style="margin-top:0.5rem;"><code>_presets</code> 是 <code>list[GeneticPreset]</code>，无去重机制。<code>add_preset()</code> 无条件 <code>append</code>。原来的 preset 已经在列表中，现在又被追加一次 → <code>rebuild_from_presets()</code> 遍历时同一 preset 出现两次，modifier 和 fitness 被双重应用。</p>
+  </div>
+</div>
+
+<!-- ====== TAB: Fix 1 ====== -->
+<div class="tab-panel" id="tab-fix1">
+  <h2><span class="badge badge-critical">CRITICAL</span> Fix 1: reconfigure_preset() 条目重复</h2>
+
+  <div class="card critical-l">
+    <h4>问题</h4>
+    <p>当用户调用 <code>pop.update().reconfigure_preset(drive, efficiency=0.5)</code> 时：</p>
+    <ol>
+      <li>修改 preset 属性</li>
+      <li>按 prefix 从 <code>self.gamete_modifiers</code> 清理旧条目</li>
+      <li>调用 <code>self.presets(preset)</code> → 走 <code>_pop_ref</code> 路径 → <code>pop.add_preset(preset)</code></li>
+      <li><strong>同一 preset 被追加到 <code>_presets</code> 列表第二次</strong></li>
+      <li><code>rebuild_from_presets()</code> 遍历时 modifier 和 fitness 双重应用</li>
+    </ol>
+    <p><strong>结果：静默数据损坏</strong> — 模拟结果偏离正确值，无任何警告或错误。</p>
+  </div>
+
+  <h3>修复方案</h3>
+  <div class="callout info">
+    <strong>策略：</strong>不重入 <code>presets()</code>，直接调用 <code>pop.rebuild_from_presets()</code> 进行全量重建。
+  </div>
+
+<pre>def reconfigure_preset(self, preset: GeneticPreset, **changes: object) -> Self:
+    <span class="cmt"># 1. 属性存在性检查 — 防止打错字静默创建 stray attribute</span>
+    for attr, value in changes.items():
+        <span class="hl">if not hasattr(preset, attr):</span>
+        <span class="hl">    raise AttributeError(</span>
+        <span class="hl">        f"{type(preset).__name__} {preset.name!r} has no "</span>
+        <span class="hl">        f"attribute {attr!r}. Cannot reconfigure a non-existent "</span>
+        <span class="hl">        f"parameter — this would silently create a stray attribute "</span>
+        <span class="hl">        f"on the preset object."</span>
+        <span class="hl">    )</span>
+        setattr(preset, attr, value)
+
+    <span class="cmt"># 2. 直接全量重建 — 不重入 presets()，避免重复追加</span>
+    <span class="hl">if self._pop_ref is not None:</span>
+    <span class="hl">    pop = self._pop_ref</span>
+    <span class="hl">    pop.rebuild_from_presets()</span>
+    <span class="hl">    self._config = pop.config</span>
+    <span class="hl">else:</span>
+    <span class="hl">    raise RuntimeError(</span>
+    <span class="hl">        "reconfigure_preset() requires a live Population. "</span>
+    <span class="hl">        "Use pop.update().reconfigure_preset(...) or "</span>
+    <span class="hl">        "Configurator.for_population(pop).reconfigure_preset(...)."</span>
+    <span class="hl">    )</span>
+
+    <span class="cmt"># 3. 同步平衡指标</span>
+    from natal.engine.simulation.age_structured import sync_equilibrium_metrics
+    sync_equilibrium_metrics(self._config)
+    return self</pre>
+
+  <h3>修复前后对比</h3>
+  <table>
+    <tr><th>场景</th><th>修复前</th><th>修复后</th></tr>
+    <tr>
+      <td>首次 reconfigure</td>
+      <td><code>_presets</code> 从 1 → 2 个条目</td>
+      <td><code>_presets</code> 保持 1 个条目</td>
+    </tr>
+    <tr>
+      <td>多次 reconfigure</td>
+      <td>每次调用追加 1 个 → 线性增长</td>
+      <td>始终 1 个条目</td>
+    </tr>
+    <tr>
+      <td>modifier 效果</td>
+      <td>双重应用 → 数值偏离</td>
+      <td>单次应用 → 数值正确</td>
+    </tr>
+    <tr>
+      <td>属性名打错</td>
+      <td>静默创建 stray attribute</td>
+      <td><code>AttributeError</code> 清晰报错</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ====== TAB: Fix 2 ====== -->
+<div class="tab-panel" id="tab-fix2">
+  <h2><span class="badge badge-high">HIGH</span> Fix 2: modifiers() 静默失效</h2>
+
+  <div class="card high-l">
+    <h4>问题</h4>
+    <p>工作树删除了 <code>modifiers()</code> 中整个 <code>_pop_ref</code> 分支。方法无条件走 <code>_ConfigContext</code> 适配器路径：</p>
+    <ol>
+      <li>创建 <code>_ConfigContext</code> → 把 modifier 加到 context 的列表里</li>
+      <li><code>_rebuild_config_maps(ctx)</code> → 通过 <code>_replace</code> 创建新 NamedTuple</li>
+      <li><code>_sync_from_ctx(ctx)</code> → <strong>只更新 Configurator 的 <code>self._config</code></strong></li>
+    </ol>
+    <p><strong><code>self._pop_ref._config</code> 从未被更新</strong>。Population（模拟引擎实际读取的对象）仍持有旧 config，modifier 对运行时完全无影响。</p>
+  </div>
+
+  <h3>数据流示意</h3>
+  <div style="margin:1rem 0;">
+    <h4 style="color:var(--critical);">修复前（损坏路径）</h4>
+    <div class="flow-row" style="font-size:0.8rem;">
+      <span class="flow-box bad">pop.update()</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad">modifiers(drive)</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">_ConfigContext</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">ctx._replace()</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad" style="border:2px dashed var(--critical);">Configurator._config ✅</span>
+    </div>
+    <div style="text-align:center;color:var(--muted);margin:0.3rem 0;">↓ 写入路径到此为止，不再向下</div>
+    <div class="flow-row" style="font-size:0.8rem;">
+      <span class="flow-box bad" style="border:2px dashed var(--critical); background:#f8514922;">Population._config ❌ 未更新</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad">引擎读旧 offspring_tensor</span>
+    </div>
+
+    <h4 style="color:var(--low); margin-top:1.25rem;">修复后（正确路径）</h4>
+    <div class="flow-row" style="font-size:0.8rem;">
+      <span class="flow-box src">pop.update()</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box src">modifiers(drive)</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box src">pop.add_gamete_modifier()</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box src">pop.refresh_modifier_maps()</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box dst">Population._config ✅</span>
+    </div>
+  </div>
+
+  <h3>修复方案</h3>
+<pre>def modifiers(self, gamete_modifiers=..., zygote_modifiers=...) -> Self:
+    <span class="cmt"># ✅ 如果绑定了 Population，直接委托给它</span>
+    <span class="hl">if self._pop_ref is not None:</span>
+    <span class="hl">    if gamete_modifiers:</span>
+    <span class="hl">        for mod in gamete_modifiers:</span>
+    <span class="hl">            self._pop_ref.add_gamete_modifier(mod)</span>
+    <span class="hl">    if zygote_modifiers:</span>
+    <span class="hl">        for mod in zygote_modifiers:</span>
+    <span class="hl">            self._pop_ref.add_zygote_modifier(mod)</span>
+    <span class="hl">    if gamete_modifiers or zygote_modifiers:</span>
+    <span class="hl">        self._pop_ref.refresh_modifier_maps()</span>
+    <span class="hl">    self._config = self._pop_ref.config    # 同步回 Configurator</span>
+    <span class="hl">    return self</span>
+
+    <span class="cmt"># 构建期（无 Population）走 _ConfigContext 适配器</span>
+    ctx = self._make_ctx()
+    ...</pre>
+
+  <div class="callout info">
+    <strong>一致性保障：</strong>与 <code>presets()</code>（通过 <code>add_preset</code> + <code>rebuild_from_presets</code>）和 <code>custom()</code>（通过 <code>set_config</code>）保持一致——所有绑定了 Population 的 Configurator 方法都应该<strong>直接委托</strong>给 Population，而非绕道 <code>_ConfigContext</code> 适配器。
+  </div>
+</div>
+
+<!-- ====== TAB: Fix 3 ====== -->
+<div class="tab-panel" id="tab-fix3">
+  <h2><span class="badge badge-high">HIGH</span> Fix 3: 离散预提取标量不同步</h2>
+
+  <div class="card high-l">
+    <h4>问题：同一真相的两个拷贝</h4>
+    <p><code>DiscretePopulationConfig</code> 有 5 个预提取的 0-d 标量字段，它们是从源数组<strong>复制</strong>出来的独立 ndarray（不是 view）：</p>
+    <table>
+      <tr><th>预提取字段（0-d）</th><th>源数组（2d/1d）</th></tr>
+      <tr><td><code>base_survival_f</code></td><td><code>age_based_survival_rates[0, 0]</code></td></tr>
+      <tr><td><code>base_survival_m</code></td><td><code>age_based_survival_rates[1, 0]</code></td></tr>
+      <tr><td><code>female_mating_rate</code></td><td><code>age_based_mating_rates[0, 1]</code></td></tr>
+      <tr><td><code>male_mating_rate</code></td><td><code>age_based_mating_rates[1, 1]</code></td></tr>
+      <tr><td><code>reproduction_rate</code></td><td><code>age_based_reproduction_rates[1]</code></td></tr>
+    </table>
+  </div>
+
+  <h3>损坏场景</h3>
+  <div class="card">
+    <p><strong>场景 A：</strong><code>survival()</code> 写预提取标量 → 源数组陈旧 → <code>_sync_equilibrium()</code> 用旧值算平衡指标</p>
+    <div class="flow-row" style="font-size:0.78rem;">
+      <span class="flow-box bad">survival(female_age0=0.8)</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad">base_survival_f = 0.8 ✅</span>
+      <span class="flow-arrow" style="color:var(--critical);">✗</span>
+      <span class="flow-box bad">age_based_survival_rates[0,0] = 1.0 ❌ 陈旧</span>
+    </div>
+
+    <p style="margin-top:0.75rem;"><strong>场景 B：</strong>后续调用 <code>modifiers()</code> → <code>_rebuild_config_maps()</code> 反向同步 → 陈旧值覆盖用户设置</p>
+    <div class="flow-row" style="font-size:0.78rem;">
+      <span class="flow-box bad">_rebuild_config_maps()</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box bad">base_survival_f = age_based...[0,0]</span>
+      <span class="flow-arrow" style="color:var(--critical);">✗</span>
+      <span class="flow-box bad">0.8 被覆盖为 1.0 ❌</span>
+    </div>
+  </div>
+
+  <h3>修复方案：双写</h3>
+  <div class="callout info">
+    <strong>策略：</strong>任何写入操作同时更新预提取标量<strong>和</strong>源数组，确保两份拷贝始终一致。
+  </div>
+
+  <h4><code>DiscreteConfigurator.survival()</code></h4>
+  <pre><span class="cmt"># 修复前 — 只写预提取标量</span>
+<span class="del">dcfg.base_survival_f[()] = float(female_age0_survival)</span>
+<span class="del">dcfg.base_survival_m[()] = float(male_age0_survival)</span>
+
+<span class="cmt"># 修复后 — 双写：预提取 + 源数组</span>
+<span class="add">val = float(female_age0_survival)</span>
+<span class="add">dcfg.base_survival_f[()] = val</span>
+<span class="add">dcfg.age_based_survival_rates[0, 0] = val    # ← 新增</span>
+<span class="add">val = float(male_age0_survival)</span>
+<span class="add">dcfg.base_survival_m[()] = val</span>
+<span class="add">dcfg.age_based_survival_rates[1, 0] = val    # ← 新增</span></pre>
+
+  <h4><code>DiscreteConfigurator.reproduction()</code></h4>
+  <pre><span class="cmt"># 修复前 — 只写预提取标量</span>
+<span class="del">dcfg.female_mating_rate[()] = float(female_adult_mating_rate)</span>
+<span class="del">dcfg.male_mating_rate[()] = float(male_adult_mating_rate)</span>
+
+<span class="cmt"># 修复后 — 双写：预提取 + 源数组</span>
+<span class="add">val = float(female_adult_mating_rate)</span>
+<span class="add">dcfg.female_mating_rate[()] = val</span>
+<span class="add">dcfg.age_based_mating_rates[0, 1] = val      # ← 新增</span>
+<span class="add">val = float(male_adult_mating_rate)</span>
+<span class="add">dcfg.male_mating_rate[()] = val</span>
+<span class="add">dcfg.age_based_mating_rates[1, 1] = val      # ← 新增</span></pre>
+
+  <div class="card accent-left">
+    <h4>长期建议</h4>
+    <p>这是「同一真相的两个拷贝」反模式。理想方案是<strong>废弃预提取字段</strong>，让 Numba 引擎直接读取源数组（如 <code>age_based_mating_rates[0, 1]</code>），从根本上消除同步问题。当前双写方案是低风险的最小修复。</p>
+  </div>
+</div>
+
+<!-- ====== TAB: 重构设计 ====== -->
+<div class="tab-panel" id="tab-refactor-plan">
+  <h2>🔧 重构设计：DiscretePopulationConfig 废弃源数组</h2>
+
+  <div class="callout info">
+    <strong>目标：</strong>消除 <code>DiscretePopulationConfig</code> 中「同一数据两份拷贝」的同步问题。让 0-d 标量成为唯一真相源，删除冗余的 2D 源数组字段。
+  </div>
+
+  <h3>关键发现</h3>
+  <div class="card accent-left">
+    <p><code>DiscretePopulationConfig</code> 是<strong>独立 NamedTuple</strong>，不继承 <code>PopulationConfig</code>。可以直接删字段，无需顾虑父类兼容。</p>
+  </div>
+
+  <h3>当前状态：两份拷贝</h3>
+  <pre><span class="cmt">DiscretePopulationConfig 存储了同一组标量值的两份拷贝：</span>
+
+<span class="cmt">── 源数组 (2D) ──</span>
+age_based_survival_rates:   (2, 2)  ← _sync_equilibrium() 读这里
+age_based_mating_rates:     (2, 2)  ← _rebuild_config_maps 从这里同步到标量
+age_based_reproduction_rates: (2,)  ← 构造时从 PopulationConfig 复制
+
+<span class="cmt">── 0-d 标量（引擎真正读取）──</span>
+base_survival_f:    0-d  ← Numba 引擎读这里
+base_survival_m:    0-d  ← DiscreteConfigurator 写这里
+female_mating_rate: 0-d
+male_mating_rate:   0-d
+reproduction_rate:  0-d
+
+<span class="del">↑ 两份拷贝需要 5 个同步点，方向不一致导致数据损坏</span></pre>
+
+  <h3>目标状态：只有标量</h3>
+  <pre><span class="cmt">DiscretePopulationConfig — 源数组字段删除，0-d 标量是唯一真相源：</span>
+
+<span class="add">base_survival_f:    0-d  ← 唯一写入点 + 唯一读取点（Numba 引擎）</span>
+<span class="add">base_survival_m:    0-d</span>
+<span class="add">female_mating_rate: 0-d</span>
+<span class="add">male_mating_rate:   0-d</span>
+<span class="add">reproduction_rate:  0-d</span>
+
+<span class="cmt">需要消费 2D 数组的共享函数 → 临时从标量重建 (2,2)，用完即弃</span></pre>
+
+  <h3>离散 Numba 引擎确认：只读 0-d 标量</h3>
+  <pre><span class="cmt">src/natal/engine/discrete_generation_simulator.py — 全部 5 次访问都是 0-d</span>
+effective_males = males * <span class="hl">cfg.male_mating_rate[()]</span>
+...mating(<span class="hl">cfg.female_mating_rate[()]</span>, ...)
+...reproduce(<span class="hl">cfg.reproduction_rate[()]</span>, ...)
+s_f = <span class="hl">cfg.base_survival_f[()]</span> * cfg.viability_f
+s_m = <span class="hl">cfg.base_survival_m[()]</span> * cfg.viability_m</pre>
+
+  <h3>源数组的 3 个消费方 & 处理策略</h3>
+  <table>
+    <tr><th>#</th><th>位置</th><th>文件</th><th>当前行为</th><th>处理策略</th></tr>
+    <tr>
+      <td>1</td>
+      <td><code>_rebuild_config_maps</code> L293-298</td>
+      <td><code>configurator.py</code></td>
+      <td>source → scalar 同步（覆盖用户值）</td>
+      <td><span class="tag fixed">isinstance 守卫跳过</span></td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td><code>_sync_equilibrium</code> L1336-1349</td>
+      <td><code>configurator.py</code></td>
+      <td>读 source arrays → 传给 compute_equilibrium_metrics</td>
+      <td><span class="tag fixed">从标量重建临时 (2,2) 数组</span></td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td><code>_build_variant_config</code> L1366-1378</td>
+      <td><code>spatial_configurator.py</code></td>
+      <td>同上，spatial 路径的 equilibrium 重算</td>
+      <td><span class="tag fixed">同上 + pop_type 分支</span></td>
+    </tr>
+  </table>
+
+  <h3>具体改动清单</h3>
+  <table>
+    <tr><th>#</th><th>文件</th><th>位置</th><th>改动</th></tr>
+    <tr>
+      <td>A1</td>
+      <td><code>population_config.py</code></td>
+      <td>DiscretePopulationConfig 字段</td>
+      <td><strong>删除</strong> <code>age_based_mating_rates</code>、<code>age_based_reproduction_rates</code>、<code>age_based_survival_rates</code></td>
+    </tr>
+    <tr>
+      <td>A2</td>
+      <td><code>population_config.py</code></td>
+      <td><code>from_population_config()</code></td>
+      <td>删除对这三个字段的赋值，保留标量提取（L1091-1095）</td>
+    </tr>
+    <tr>
+      <td>B1</td>
+      <td><code>configurator.py</code></td>
+      <td><code>_rebuild_config_maps</code> L293-298</td>
+      <td><code>if not isinstance(cfg, DiscretePopulationConfig):</code> 守卫</td>
+    </tr>
+    <tr>
+      <td>B2</td>
+      <td><code>configurator.py</code></td>
+      <td><code>_sync_equilibrium</code> L1336</td>
+      <td>discrete 分支：从标量重建 (2,2) 临时数组</td>
+    </tr>
+    <tr>
+      <td>B3</td>
+      <td><code>configurator.py</code></td>
+      <td><code>DiscreteConfigurator.survival</code></td>
+      <td>回退双写：只写标量，删除源数组写入（L1899,1903）</td>
+    </tr>
+    <tr>
+      <td>B4</td>
+      <td><code>configurator.py</code></td>
+      <td><code>DiscreteConfigurator.reproduction</code></td>
+      <td>回退双写：只写标量，删除源数组写入（L1822,1826）</td>
+    </tr>
+    <tr>
+      <td>C1</td>
+      <td><code>spatial_configurator.py</code></td>
+      <td><code>_build_variant_config</code> L1366</td>
+      <td>discrete 分支：重建临时数组 + 现有守卫 <code>if needs_equilibrium</code></td>
+    </tr>
+  </table>
+
+  <h3>数据流变化</h3>
+  <div class="side-by-side">
+    <div class="side-col">
+      <span class="side-label bad">修复前（双写方案 — 仍有同步风险）</span>
+      <pre style="font-size:0.72rem;">survival() → base_survival_f = 0.8
+           → age_based...[0,0] = 0.8   双写
+modifiers() → _rebuild_config_maps()
+            → base_survival_f = age_based...[0,0]
+            → 如果源数组是陈旧值 → 覆盖！
+_sync_equilibrium() → 读 age_based_... 源数组
+                    → 如果源数组是陈旧值 → 算错</pre>
+    </div>
+    <div class="side-col">
+      <span class="side-label good">重构后（标量是唯一真相源）</span>
+      <pre style="font-size:0.72rem;">survival() → base_survival_f = 0.8  唯一写入点
+modifiers() → _rebuild_config_maps()
+            → isinstance 检查 → 跳过同步
+_sync_equilibrium() → 从 base_survival_f
+                     重建临时 2D 数组 → 始终正确</pre>
+    </div>
+  </div>
+
+  <h3>风险评估</h3>
+  <table>
+    <tr><th>风险</th><th>缓解</th></tr>
+    <tr><td>其他地方读了源数组</td><td>已 grep 全量确认，离散路径只有这 3 个消费方</td></tr>
+    <tr><td><code>from_population_config()</code> 兼容</td><td>只删 3 个字段赋值，其余 40+ 字段不变</td></tr>
+    <tr><td>spatial 路径 discrete 类型</td><td>已有 <code>pop_type</code> 参数区分，加分支即可</td></tr>
+    <tr><td>临时重建性能</td><td><code>np.zeros((2,2))</code> 每 tick 至多一次，可忽略</td></tr>
+    <tr><td>NamedTuple <code>_replace</code> 兼容</td><td>字段删除后 <code>_replace</code> 自动不再包含，无需额外处理</td></tr>
+  </table>
+
+  <div class="callout info" style="margin-top:1rem;">
+    <strong>实施策略：</strong>A1→A2→B1→B2→B3→B4→C1 逐项执行，每项完成后跑 pytest+pyright。改动虽跨 3 个文件，但每项独立可验证。
+  </div>
+</div>
+
+<\!-- ====== TAB: 命名审计 ====== -->
+<div class="tab-panel" id="tab-naming-audit">
+  <h2>🏷️ 命名审计：全参数五层交叉对比</h2>
+
+  <div class="grid-3" style="margin-bottom:1rem;">
+    <div class="stat-box"><div class="num c">28</div><div class="label">命名不一致</div></div>
+    <div class="stat-box"><div class="num h">47</div><div class="label">审计概念总数</div></div>
+    <div class="stat-box"><div class="num m">3</div><div class="label">params 遗漏条目</div></div>
+  </div>
+
+  <div class="callout info">
+    <strong>方法：</strong>7 子代理并行提取 → 6 层交叉比对 → 47 概念逐行对照。
+  </div>
+
+  <h3>系统性命名模式</h3>
+  <table>
+    <tr><th>模式</th><th>不一致数</th><th>示例</th><th>修复方向</th></tr>
+    <tr style="background:#f8514911;">
+      <td><strong>🔴 Discrete 0-d 标量不同名</strong></td>
+      <td>4</td>
+      <td><code>base_survival_f</code> ≠ <code>female_age0_survival</code></td>
+      <td>Phase 1 重命名</td>
+    </tr>
+    <tr style="background:#f8514911;">
+      <td><strong>🔴 同名不同义</strong></td>
+      <td>1</td>
+      <td><code>female_mating_rate</code> = 数组 (params) vs 标量 (DiscreteConfig)</td>
+      <td>Phase 1 消除</td>
+    </tr>
+    <tr>
+      <td><strong>🟠 params 前缀不一致</strong></td>
+      <td>3</td>
+      <td><code>stochastic</code> vs <code>is_stochastic</code>；<code>continuous_sampling</code> vs <code>use_continuous_sampling</code></td>
+      <td>后续统一</td>
+    </tr>
+    <tr>
+      <td><strong>🟠 params <code>_fitness</code> 后缀缺失</strong></td>
+      <td>4</td>
+      <td><code>viability</code> vs <code>viability_fitness</code></td>
+      <td>后续统一</td>
+    </tr>
+    <tr>
+      <td><strong>🟠 API <code>age_based_</code> 前缀冗余</strong></td>
+      <td>8</td>
+      <td><code>female_survival_rates</code> (params) vs <code>female_age_based_survival_rates</code> (API)</td>
+      <td>后续删除</td>
+    </tr>
+    <tr>
+      <td><strong>🟡 API <code>initial_</code> 前缀缺失</strong></td>
+      <td>2</td>
+      <td><code>individual_count</code> (API) vs <code>initial_individual_count</code> (config)</td>
+      <td>后续统一</td>
+    </tr>
+    <tr>
+      <td><strong>🟡 params 重复定义</strong></td>
+      <td>4</td>
+      <td><code>female_survival</code> 与 <code>female_survival_rates</code> 映射到同一 config_path</td>
+      <td>删除重复</td>
+    </tr>
+    <tr>
+      <td><strong>⚪ params.jsonc 遗漏</strong></td>
+      <td>3</td>
+      <td><code>expected_num_adult_females</code> 等 API 参数无注册</td>
+      <td>补充注册</td>
+    </tr>
+    <tr>
+      <td><strong>⚪ 孤立条目</strong></td>
+      <td>1</td>
+      <td><code>migration_rate</code> — config_field 为空，无实现</td>
+      <td>删除</td>
+    </tr>
+  </table>
+
+  <h3>按域明细</h3>
+
+  <h4>SETUP（2 不一致）</h4>
+  <table>
+    <tr><th>概念</th><th>params</th><th>config</th><th>API</th><th>问题</th></tr>
+    <tr><td>连续采样</td><td><code>continuous_sampling</code></td><td><code>use_continuous_sampling</code></td><td><code>use_continuous_sampling</code></td><td>params 缺 <code>use_</code> 前缀</td></tr>
+    <tr><td>固定卵数</td><td><code>fixed_egg_count</code></td><td><code>use_fixed_egg_count</code></td><td><code>use_fixed_egg_count</code></td><td>params 缺 <code>use_</code> 前缀；同时出现在 setup/reproduction</td></tr>
+  </table>
+
+  <h4>SURVIVAL（7 不一致）</h4>
+  <table>
+    <tr><th>概念</th><th>params</th><th>Age API</th><th>Disc API</th><th>Disc 0-d</th><th>问题</th></tr>
+    <tr><td>雌 per-age</td><td><code>female_survival</code></td><td><span class="badge badge-high">female</span></td><td>—</td><td>—</td><td>过泛</td></tr>
+    <tr><td>雄 per-age</td><td><code>male_survival</code></td><td><span class="badge badge-high">male</span></td><td>—</td><td>—</td><td>同上</td></tr>
+    <tr><td>雌 age-0</td><td><code>female_age0_survival</code></td><td><code>female_age0_survival</code></td><td><code>female_age0_survival</code></td><td><span class="badge badge-critical">base_survival_f</span></td><td>0-d 标量不同名</td></tr>
+    <tr><td>雄 age-0</td><td><code>male_age0_survival</code></td><td><code>male_age0_survival</code></td><td><code>male_age0_survival</code></td><td><span class="badge badge-critical">base_survival_m</span></td><td>同上</td></tr>
+    <tr><td>雌 per-age(数组)</td><td><code>female_survival_rates</code></td><td><code>female_age_based_survival_rates</code></td><td>—</td><td>—</td><td>API 多了 age_based_</td></tr>
+    <tr><td>雄 per-age(数组)</td><td><code>male_survival_rates</code></td><td><code>male_age_based_survival_rates</code></td><td>—</td><td>—</td><td>同上</td></tr>
+    <tr><td>成年生存</td><td><code>adult_survival</code></td><td><code>adult_survival</code></td><td>❌</td><td>—</td><td>config_path=[] 但数组是 2D</td></tr>
+  </table>
+
+  <h4>REPRODUCTION（8 不一致）</h4>
+  <table>
+    <tr><th>概念</th><th>params</th><th>config</th><th>Age API</th><th>Disc 0-d</th><th>问题</th></tr>
+    <tr><td>每雌产卵</td><td><code>eggs_per_female</code></td><td><span class="badge badge-high">expected_eggs_per_female</span></td><td><code>eggs_per_female</code></td><td>—</td><td>config 多了 expected_</td></tr>
+    <tr style="background:#f8514911;"><td>雌成年交配</td><td><code>female_adult_mating_rate</code></td><td><code>age_based_mating_rates[0,1]</code></td><td>—</td><td><span class="badge badge-critical">female_mating_rate</span></td><td>0-d 标量不同名 + 同名不同义</td></tr>
+    <tr style="background:#f8514911;"><td>雄成年交配</td><td><code>male_adult_mating_rate</code></td><td><code>age_based_mating_rates[1,1]</code></td><td>—</td><td><span class="badge badge-critical">male_mating_rate</span></td><td>同上</td></tr>
+    <tr><td>雌 per-age 交配</td><td><code>female_mating_rate</code></td><td><code>age_based_mating_rates</code></td><td><code>female_age_based_mating_rates</code></td><td>—</td><td>API 多了 age_based_</td></tr>
+    <tr><td>雄 per-age 交配</td><td><code>male_mating_rate</code></td><td><code>age_based_mating_rates</code></td><td><code>male_age_based_mating_rates</code></td><td>—</td><td>同上</td></tr>
+    <tr><td>雌繁殖参与</td><td><code>reproduction_rate</code></td><td><code>age_based_reproduction_rates</code></td><td><code>female_age_based_reproduction_rates</code></td><td><code>reproduction_rate</code></td><td>API 含 female_ + age_based_</td></tr>
+    <tr><td>雌生育力</td><td><code>female_fertility</code></td><td><code>female_age_based_relative_fertility</code></td><td><code>female_age_based_relative_fertility</code></td><td>❌</td><td>含 age_based_relative_</td></tr>
+    <tr><td>雌 per-age 交配(数组)</td><td><code>female_mating_rates</code></td><td>—</td><td><code>female_age_based_mating_rates</code></td><td>—</td><td>API 多了 age_based_</td></tr>
+  </table>
+
+  <h4>COMPETITION / FITNESS / INITIAL_STATE（8 不一致）</h4>
+  <table>
+    <tr><th>域</th><th>概念</th><th>params</th><th>config/API</th><th>问题</th></tr>
+    <tr><td>competition</td><td>竞争强度</td><td><code>competition_strength</code></td><td><code>age_based_relative_competition_strength</code></td><td>config 名极长</td></tr>
+    <tr><td>competition</td><td>K 别名</td><td>aliases 含 <code>age_1_carrying_capacity</code></td><td>Builder 直接暴露别名作为主参数</td><td>别名当主参数用</td></tr>
+    <tr><td>fitness</td><td>4 个 fitness 参数</td><td><code>viability</code> 等 4 个</td><td><code>viability_fitness</code> 等 4 个</td><td>params 缺 _fitness 后缀</td></tr>
+    <tr><td>initial_state</td><td>初始个体数</td><td><code>initial_individual_count</code></td><td>API: <code>individual_count</code></td><td>API 缺 initial_</td></tr>
+    <tr><td>initial_state</td><td>初始精子</td><td><code>initial_sperm_storage</code></td><td>API: <code>sperm_storage</code></td><td>API 缺 initial_</td></tr>
+  </table>
+
+  <h3>params.jsonc 遗漏 & 孤立</h3>
+  <div class="grid-2">
+    <div class="card high-l">
+      <h4>🟠 遗漏（API 有，params 无注册）</h4>
+      <ul><li><code>expected_num_adult_females</code></li><li><code>equilibrium_distribution</code></li><li><code>use_sperm_storage</code></li></ul>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--muted);">
+      <h4>⚪ 孤立（params 有，无实现）</h4>
+      <ul><li><code>migration_rate</code> — config_field null，target="spatial"</li></ul>
+    </div>
+  </div>
+
+  <h3>Phase 1：精确重命名清单（行号级）</h3>
+  <table>
+    <tr><th>旧名</th><th>→ 新名</th><th colspan="2">访问点（文件:行号）</th></tr>
+    <tr>
+      <td rowspan="5"><code>base_survival_f</code></td>
+      <td rowspan="5"><code class="add">female_age0_survival</code></td>
+      <td><code>population_config.py</code></td><td>1001 (def), 1094 (构造)</td>
+    </tr>
+    <tr><td><code>configurator.py</code></td><td>297 (sync), 1898 (write)</td></tr>
+    <tr><td><code>discrete_generation_simulator.py</code></td><td>122 (read)</td></tr>
+    <tr><td><code>tests/test_configurator.py</code></td><td>806, 816-817</td></tr>
+    <tr style="border-bottom:2px solid var(--border);"><td></td><td></td></tr>
+
+    <tr>
+      <td rowspan="4"><code>base_survival_m</code></td>
+      <td rowspan="4"><code class="add">male_age0_survival</code></td>
+      <td><code>population_config.py</code></td><td>1002 (def), 1095 (构造)</td>
+    </tr>
+    <tr><td><code>configurator.py</code></td><td>298 (sync), 1902 (write)</td></tr>
+    <tr><td><code>discrete_generation_simulator.py</code></td><td>123 (read)</td></tr>
+    <tr style="border-bottom:2px solid var(--border);"><td><code>tests/test_configurator.py</code></td><td>818-819</td></tr>
+
+    <tr>
+      <td rowspan="4"><code>female_mating_rate</code></td>
+      <td rowspan="4"><code class="add">female_adult_mating_rate</code></td>
+      <td><code>population_config.py</code></td><td>999 (def), 1092 (构造)</td>
+    </tr>
+    <tr><td><code>configurator.py</code></td><td>294 (sync), 1821 (write)</td></tr>
+    <tr><td><code>discrete_generation_simulator.py</code></td><td>57 (read)</td></tr>
+    <tr style="border-bottom:2px solid var(--border);"><td><code>tests/test_configurator.py</code></td><td>800-801</td></tr>
+
+    <tr>
+      <td rowspan="4"><code>male_mating_rate</code></td>
+      <td rowspan="4"><code class="add">male_adult_mating_rate</code></td>
+      <td><code>population_config.py</code></td><td>998 (def), 1091 (构造)</td>
+    </tr>
+    <tr><td><code>configurator.py</code></td><td>295 (sync), 1825 (write)</td></tr>
+    <tr><td><code>discrete_generation_simulator.py</code></td><td>46 (read)</td></tr>
+    <tr><td><code>tests/test_configurator.py</code></td><td>802-803</td></tr>
+  </table>
+
+  <h3>执行阶段（0.x 激进模式）</h3>
+  <table>
+    <tr><th>阶段</th><th>内容</th><th>文件</th><th>行数</th></tr>
+    <tr><td><strong>Phase 0</strong></td><td>删除 Discrete 源数组（<code>age_based_*</code> 3 字段）</td><td>3</td><td>~15</td></tr>
+    <tr><td><strong>Phase 1</strong></td><td>重命名 4 标量 + 删除 4 冗余双写</td><td>5</td><td>~26</td></tr>
+    <tr><td><strong>Phase 2</strong></td><td>Age API 直接改名（<code>female→female_survival</code> 等）</td><td>2</td><td>~30</td></tr>
+    <tr><td><strong>Phase 3</strong></td><td>params.jsonc 清理（删重复 + 补遗漏 + 删孤立）</td><td>1</td><td>~10</td></tr>
+    <tr><td><strong>Phase 4</strong></td><td>统一 age_based_ 前缀</td><td>3</td><td>~50</td></tr>
+  </table>
+</div>
+<\!-- ====== TAB: 统一命名设计 (裁决版) ====== -->
+<div class="tab-panel" id="tab-unified-naming">
+  <h2>🎯 终裁：统一命名设计</h2>
+
+  <div class="grid-3" style="margin-bottom:1rem;">
+    <div class="stat-box"><div class="num g">21</div><div class="label">General-Purpose 参数</div></div>
+    <div class="stat-box"><div class="num m">6</div><div class="label">共享 (Age+Disc)</div></div>
+    <div class="stat-box"><div class="num h">3</div><div class="label">删除 (便捷/孤立)</div></div>
+  </div>
+
+  <div class="card accent-left">
+    <strong>裁决原则：</strong><br>
+    1. Disc 0-d 标量是 <strong>first-class 独立字段</strong>，不派生自 age_based_* 数组。<br>
+    2. 统一<strong>单数</strong>命名。仅 <code>age_based_reproduction_rates</code> 保留复数（引擎改动风险过高）。<br>
+    3. Age 保留 <code>age_based_</code> 前缀；Disc 用 <code>adult</code>/<code>age0</code> 限定。<br>
+    4. 便捷参数（<code>adult_survival</code>、<code>sperm_storage</code>）+ 孤立条目（<code>migration_rate</code>）<strong>删除</strong>。
+  </div>
+
+  <\!-- ====== SURVIVAL ====== -->
+  <h3>SURVIVAL</h3>
+  <table>
+    <tr><th>路径</th><th>API 参数名</th><th>Config 字段</th><th>类型</th></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code class="add">female_age_based_survival</code></td><td><code>age_based_survival_rates[0,:]</code></td><td>NDArray</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code class="add">male_age_based_survival</code></td><td><code>age_based_survival_rates[1,:]</code></td><td>NDArray</td></tr>
+    <tr style="background:#3fb95011;"><td><strong>Disc</strong></td><td><code class="add">female_age0_survival</code></td><td><code class="add">female_age0_survival</code> (独立)</td><td>float 0-d</td></tr>
+    <tr style="background:#3fb95011;"><td><strong>Disc</strong></td><td><code class="add">male_age0_survival</code></td><td><code class="add">male_age0_survival</code> (独立)</td><td>float 0-d</td></tr>
+  </table>
+  <p style="font-size:0.8rem;color:var(--muted);">Age: 移除 <code>female_age0_survival</code>/<code>male_age0_survival</code>/<code>adult_survival</code>。每概念一个参数，接受 <code>float|list|dict|Callable</code>。</p>
+
+  <\!-- ====== REPRODUCTION ====== -->
+  <h3>REPRODUCTION</h3>
+  <p style="color:var(--muted);font-size:0.85rem;">O = Age + Disc 共享</p>
+  <table>
+    <tr><th>路径</th><th>API 参数名</th><th>Config 字段</th><th>类型</th></tr>
+    <tr><td>O</td><td><code class="add">eggs_per_female</code></td><td><code class="add">eggs_per_female</code> (was <code>expected_eggs_per_female</code>)</td><td>float 0-d</td></tr>
+    <tr><td>O</td><td><code>sex_ratio</code></td><td><code>sex_ratio</code> ✅</td><td>float 0-d</td></tr>
+    <tr><td>O</td><td><code>sperm_displacement_rate</code></td><td><code>sperm_displacement_rate</code> ✅</td><td>float 0-d</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code class="add">female_age_based_mating_rate</code></td><td><code>age_based_mating_rates[0,:]</code></td><td>NDArray</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code class="add">male_age_based_mating_rate</code></td><td><code>age_based_mating_rates[1,:]</code></td><td>NDArray</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code>age_based_reproduction_rates</code></td><td><code>age_based_reproduction_rates</code></td><td>NDArray</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code class="add">female_age_based_relative_fertility</code></td><td><code>female_age_based_relative_fertility</code></td><td>NDArray</td></tr>
+    <tr style="background:#3fb95011;"><td><strong>Disc</strong></td><td><code class="add">female_adult_mating_rate</code></td><td><code class="add">female_adult_mating_rate</code> (独立)</td><td>float 0-d</td></tr>
+    <tr style="background:#3fb95011;"><td><strong>Disc</strong></td><td><code class="add">male_adult_mating_rate</code></td><td><code class="add">male_adult_mating_rate</code> (独立)</td><td>float 0-d</td></tr>
+    <tr style="background:#3fb95011;"><td><strong>Disc</strong></td><td><code>reproduction_rate</code></td><td><code>reproduction_rate</code> (独立)</td><td>float 0-d</td></tr>
+    <tr style="background:#3fb95011;"><td><strong>Disc</strong></td><td><code class="add">female_fertility</code></td><td><code class="add">female_fertility</code> (独立，新增)</td><td>float 0-d</td></tr>
+  </table>
+
+  <\!-- ====== COMPETITION ====== -->
+  <h3>COMPETITION</h3>
+  <table>
+    <tr><th>路径</th><th>API 参数名</th><th>Config 字段</th><th>类型</th></tr>
+    <tr><td>O</td><td><code>carrying_capacity</code></td><td><code>carrying_capacity</code> ✅</td><td>float 0-d</td></tr>
+    <tr><td>O</td><td><code>low_density_growth_rate</code></td><td>✅</td><td>float 0-d</td></tr>
+    <tr><td>O</td><td><code>juvenile_growth_mode</code></td><td>✅</td><td>int 0-d</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code class="add">age_based_competition_strength</code></td><td><code class="add">age_based_competition_strength</code> (was <code>age_based_relative_competition_strength</code>)</td><td>NDArray</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code class="add">expected_adult_females</code></td><td>— (derived)</td><td>float</td></tr>
+    <tr style="background:#58a6ff11;"><td><strong>Age</strong></td><td><code>equilibrium_distribution</code></td><td>— (derived)</td><td>NDArray</td></tr>
+    <tr style="background:#3fb95011;"><td><strong>Disc</strong></td><td colspan="3">(无独有竞争参数 — 直接用 <code>expected_competition_strength</code>)</td></tr>
+  </table>
+
+  <\!-- ====== Disc 独立字段 vs Age 数组 ====== -->
+  <h3>Disc vs Age 架构差异</h3>
+  <table>
+    <tr><th>数据</th><th>Age (数组)</th><th>Disc (独立 0-d 字段)</th></tr>
+    <tr><td>生存</td><td><code>age_based_survival_rates (2, n_ages)</code></td><td><code>female_age0_survival</code> + <code>male_age0_survival</code></td></tr>
+    <tr><td>交配</td><td><code>age_based_mating_rates (2, n_ages)</code></td><td><code>female_adult_mating_rate</code> + <code>male_adult_mating_rate</code></td></tr>
+    <tr><td>繁殖</td><td><code>age_based_reproduction_rates (n_ages,)</code></td><td><code>reproduction_rate</code></td></tr>
+    <tr><td>生育力</td><td><code>female_age_based_relative_fertility (n_ages,)</code></td><td><code>female_fertility</code> (新增)</td></tr>
+  </table>
+
+  <\!-- ====== SETUP / FITNESS / INITIAL_STATE ====== -->
+  <h3>公共域</h3>
+  <table>
+    <tr><th>域</th><th>统一名</th><th>Config 字段 (→ 新)</th></tr>
+    <tr><td>SETUP</td><td><code class="add">stochastic</code></td><td><code class="add">stochastic</code> (was <code>is_stochastic</code>)</td></tr>
+    <tr><td></td><td><code class="add">continuous_sampling</code></td><td><code class="add">continuous_sampling</code> (was <code>use_continuous_sampling</code>)</td></tr>
+    <tr><td></td><td><code class="add">fixed_egg_count</code></td><td><code class="add">fixed_egg_count</code> (was <code>use_fixed_egg_count</code>)</td></tr>
+    <tr><td></td><td><code>has_sex_chromosomes</code></td><td>不变</td></tr>
+    <tr style="border-top:2px solid var(--border);"><td>FITNESS</td><td><code>viability</code></td><td><code>viability_fitness</code> (内部保留 _fitness)</td></tr>
+    <tr><td></td><td><code>fecundity</code></td><td><code>fecundity_fitness</code></td></tr>
+    <tr><td></td><td><code>sexual_selection</code></td><td><code>sexual_selection_fitness</code></td></tr>
+    <tr><td></td><td><code>zygote_viability</code></td><td><code>zygote_viability_fitness</code></td></tr>
+    <tr style="border-top:2px solid var(--border);"><td>INITIAL_STATE</td><td><code class="add">initial_individual_count</code></td><td>✅ (API 补 <code>initial_</code>)</td></tr>
+    <tr><td></td><td><code class="add">initial_sperm_storage</code></td><td>✅</td></tr>
+  </table>
+
+  <\!-- ====== Age API 对比 ====== -->
+  <h3>Age Configurator API Before/After</h3>
+  <div class="side-by-side">
+    <div class="side-col"><span class="side-label bad">BEFORE — 7 参数 (survival)</span>
+<pre>def survival(self, *,
+    female=None, male=None,
+    female_age_based_survival_rates=None,
+    male_age_based_survival_rates=None,
+    adult_survival=None,
+    female_age0_survival=None,
+    male_age0_survival=None,
+):</pre></div>
+    <div class="side-col"><span class="side-label good">AFTER — 2 参数</span>
+<pre>def survival(self, *,
+    female_age_based_survival=None,
+    male_age_based_survival=None,
+):</pre></div>
+  </div>
+  <div class="side-by-side">
+    <div class="side-col"><span class="side-label bad">BEFORE (reproduction)</span>
+<pre>def reproduction(self, *,
+    ..., female_age_based_mating_rates=None,
+    male_age_based_mating_rates=None,
+    female_age_based_reproduction_rates=None,
+    female_age_based_relative_fertility=None,
+    use_fixed_egg_count=None, use_sperm_storage=None,
+):</pre></div>
+    <div class="side-col"><span class="side-label good">AFTER</span>
+<pre>def reproduction(self, *,
+    ..., female_age_based_mating_rate=None,
+    male_age_based_mating_rate=None,
+    age_based_reproduction_rates=None,
+    female_age_based_relative_fertility=None,
+    fixed_egg_count=None,
+):</pre></div>
+  </div>
+
+  <\!-- ====== 删除 ====== -->
+  <h3>删除清单</h3>
+  <div class="grid-3" style="font-size:0.85rem;">
+    <div class="card" style="border-left:3px solid var(--critical);padding:0.6rem;">
+      <strong>便捷参数 (3)</strong>
+      <ul><li><code>adult_survival</code></li><li><code>sperm_storage</code></li><li><code>equilibrium_distribution</code></li></ul>
+    </div>
+    <div class="card" style="border-left:3px solid var(--muted);padding:0.6rem;">
+      <strong>孤立条目 (1)</strong>
+      <ul><li><code>migration_rate</code></li></ul>
+    </div>
+    <div class="card" style="border-left:3px solid var(--critical);padding:0.6rem;">
+      <strong>Disc 源数组 (3)</strong>
+      <ul><li><code>age_based_survival_rates</code></li><li><code>age_based_mating_rates</code></li><li><code>age_based_reproduction_rates</code></li></ul>
+    </div>
+  </div>
+
+  <h3>改动统计</h3>
+  <table>
+    <tr><th>类别</th><th>数量</th></tr>
+    <tr><td>Disc config 删除源数组</td><td>3 字段</td></tr>
+    <tr><td>Disc config 0-d 标量重命名</td><td>4 字段</td></tr>
+    <tr><td>Disc config 0-d 标量新增</td><td>1 字段</td></tr>
+    <tr><td>公共 config 字段重命名</td><td>6 布尔/标量</td></tr>
+    <tr><td>Age config 内部数组重命名</td><td>1</td></tr>
+    <tr><td>Configurator API 重命名 + 参数合并</td><td>~8</td></tr>
+    <tr><td>Builder API 重命名</td><td>~6</td></tr>
+    <tr><td>params.jsonc 增/删/改</td><td>+3 / -5 / ~9</td></tr>
+    <tr><td><strong>影响文件</strong></td><td><strong>7</strong></td></tr>
+  </table>
+</div>
+<div class="tab-panel" id="tab-design">
+  <h2>🧠 设计演变：从累积清理到全量重建</h2>
+
+  <h3>旧设计：累积式 modifier 列表</h3>
+  <div class="card">
+    <div class="flow-row" style="font-size:0.82rem;">
+      <span class="flow-box">presets(drive)</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">self.gamete_modifiers.append(...)</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">self.zygote_modifiers.append(...)</span>
+    </div>
+    <p style="margin-top:0.5rem;">modifier 列表是<strong>累积状态</strong>。每次 <code>presets()</code> 调用追加条目。要修改 preset 参数，必须先"撤回"旧条目（按 prefix 匹配清理），再重新追加。</p>
+    <p style="color:var(--muted);">这带来了 prefix 清理的复杂性、重入风险、以及无法区分「preset 来源的 modifier」和「手动添加的 modifier」。</p>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">新设计：源列表 + 全量重建</h3>
+  <div class="card accent-left">
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0.8rem;align-items:center;font-size:0.82rem;">
+      <div>
+        <strong style="color:#58a6ff;">源列表（Source of Truth）</strong>
+        <div style="margin-top:0.4rem;">
+          <div class="flow-box src" style="display:block;margin:0.2rem 0;">_presets: list[GeneticPreset]</div>
+          <div class="flow-box src" style="display:block;margin:0.2rem 0;">_manual_gamete: list[...]</div>
+          <div class="flow-box src" style="display:block;margin:0.2rem 0;">_manual_zygote: list[...]</div>
+        </div>
+      </div>
+      <div style="font-size:1.5rem;color:var(--muted);">→</div>
+      <div>
+        <strong style="color:#3fb950;">派生列表（Derived）</strong>
+        <div style="margin-top:0.4rem;">
+          <div class="flow-box dst" style="display:block;margin:0.2rem 0;">_gamete_modifiers</div>
+          <div class="flow-box dst" style="display:block;margin:0.2rem 0;">_zygote_modifiers</div>
+          <div class="flow-box dst" style="display:block;margin:0.2rem 0;">config.offspring_tensor</div>
+          <div class="flow-box dst" style="display:block;margin:0.2rem 0;">config.viability_fitness</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h4><code>rebuild_from_presets()</code> 流程</h4>
+<pre>def rebuild_from_presets(self) -> None:
+    <span class="cmt"># 1. 重置 fitness 为中性值 (1.0)</span>
+    self._config.viability_fitness.fill(1.0)
+    self._config.fecundity_fitness.fill(1.0)
+
+    <span class="cmt"># 2. 清空派生 modifier 列表</span>
+    self._gamete_modifiers.clear()
+    self._zygote_modifiers.clear()
+
+    <span class="cmt"># 3. 按 priority 排序 preset，逐个应用</span>
+    for preset in sorted(self._presets, key=lambda p: p.priority):
+        preset.apply(self)        <span class="cmt"># → 向派生列表追加 modifier</span>
+        apply_preset_fitness_patch(self, preset)  <span class="cmt"># → 写 fitness tensor</span>
+
+    <span class="cmt"># 4. 追加手动添加的 modifier</span>
+    self._gamete_modifiers.extend(self._manual_gamete)
+    self._zygote_modifiers.extend(self._manual_zygote)
+
+    <span class="cmt"># 5. 刷新 modifier maps（offspring_tensor 等）</span>
+    self.refresh_modifier_maps()</pre>
+
+  <h3>为什么 prefix 清理不再需要</h3>
+  <div class="card">
+    <p>旧设计中，modifier 列表是<strong>唯一真实来源</strong>——要修改 preset 就必须操作这个列表（先删再加）。</p>
+    <p>新设计中，<code>_presets</code> 才是真实来源。<code>reconfigure_preset()</code> 修改 preset 属性后，直接调用 <code>rebuild_from_presets()</code> 从头构建派生列表。旧的派生数据自动丢弃，不存在"撤回"的概念。</p>
+    <p style="color:var(--muted);">这是「派生数据」和「累积状态」的设计区别——派生数据可以由源任意次重建，不需要增量维护。</p>
+  </div>
+</div>
+
+<!-- ====== TAB: 完整报告 ====== -->
+<div class="tab-panel" id="tab-report">
+  <h2>📋 完整审查发现摘要</h2>
+
+  <div class="grid-3">
+    <div class="stat-box"><div class="num c">1</div><div class="label">Critical</div></div>
+    <div class="stat-box"><div class="num h">8</div><div class="label">High</div></div>
+    <div class="stat-box"><div class="num m">15+</div><div class="label">Medium / Low</div></div>
+  </div>
+
+  <h3>严重/高危问题</h3>
+  <table>
+    <tr><th>#</th><th>问题</th><th>级别</th><th>状态</th></tr>
+    <tr><td>2.1</td><td><code>reconfigure_preset()</code> preset 条目重复</td><td><span class="badge badge-critical">CRITICAL</span></td><td><span class="tag fixed">已修复</span></td></tr>
+    <tr><td>2.2</td><td><code>modifiers()</code> 缺少 <code>_pop_ref</code> 写回</td><td><span class="badge badge-high">HIGH</span></td><td><span class="tag fixed">已修复</span></td></tr>
+    <tr><td>2.3</td><td><code>survival()</code> 预提取标量与源不同步</td><td><span class="badge badge-high">HIGH</span></td><td><span class="tag fixed">已修复</span></td></tr>
+    <tr><td>2.4</td><td><code>DiscretePopulationConfig</code> 双向同步缺失</td><td><span class="badge badge-high">HIGH</span></td><td><span class="tag fixed">已修复</span></td></tr>
+    <tr><td>2.5</td><td>modifier 存储路径不协调</td><td><span class="badge badge-high">HIGH</span></td><td><span class="tag fixed">已修复</span></td></tr>
+    <tr><td>2.6</td><td>空间多 deme 去重路径未测试</td><td><span class="badge badge-medium">MEDIUM</span></td><td>未处理</td></tr>
+    <tr><td>2.7</td><td><code>test_modifiers_mutation_persists</code> 用 noop modifier</td><td><span class="badge badge-high">HIGH</span></td><td>未处理</td></tr>
+    <tr><td>2.8</td><td><code>cast(Any, ...)</code> 违规</td><td><span class="badge badge-medium">MEDIUM</span></td><td>未处理</td></tr>
+    <tr><td>2.9</td><td>已合并到 2.6</td><td>—</td><td>—</td></tr>
+  </table>
+
+  <h3>破坏性 API 变更</h3>
+  <table>
+    <tr><th>变更</th><th>迁移指南</th></tr>
+    <tr><td><code>reconfigure_preset()</code> 要求 live Population</td><td>改用 <code>pop.update().reconfigure_preset(...)</code></td></tr>
+    <tr><td><code>set_gamete_modifier()</code> / <code>set_zygote_modifier()</code> 删除</td><td>改用 <code>add_*_modifier(mod, refresh=True)</code></td></tr>
+    <tr><td><code>competition()</code> 运行时不再自动检测 K</td><td>运行时显式传入 <code>carrying_capacity</code></td></tr>
+    <tr><td><code>DiscreteConfigurator.survival()</code> 移除 <code>adult_survival</code></td><td>删除所有 <code>adult_survival=...</code> 调用</td></tr>
+  </table>
+</div>
+
+<!-- ====== TAB: 质量门禁 ====== -->
+<div class="tab-panel" id="tab-gates">
+  <h2>✅ 质量门禁 & 实施进度</h2>
+
+  <div class="grid-3">
+    <div class="stat-box"><div class="num g">617</div><div class="label">pytest passed</div></div>
+    <div class="stat-box"><div class="num g">0</div><div class="label">pyright errors</div></div>
+    <div class="stat-box"><div class="num g">0</div><div class="label">ruff violations</div></div>
+  </div>
+
+  <div class="card accent-left" style="margin-top:1rem;">
+    <pre style="background:none;padding:0;">pytest                          # ✅ 617 passed, 17 skipped
+pyright                         # ✅ 0 errors, 0 warnings
+ruff check src                  # ✅ All checks passed</pre>
+  </div>
+
+  <!-- ====== 实施进度 ====== -->
+  <h3>📋 实施进度</h3>
+  <table>
+    <tr><th>阶段</th><th>内容</th><th>状态</th></tr>
+    <tr>
+      <td>Bug 修复</td>
+      <td><code>reconfigure_preset</code> / <code>modifiers</code> / 预提取标量同步</td>
+      <td><span class="tag fixed">✅ 完成</span></td>
+    </tr>
+    <tr>
+      <td>Phase 0</td>
+      <td>删除 <code>DiscretePopulationConfig</code> 源数组（<code>age_based_survival_rates</code> 等 3 字段）</td>
+      <td><span class="tag fixed">✅ 完成</span> (99dbb19)</td>
+    </tr>
+    <tr>
+      <td>Phase 1</td>
+      <td>重命名 6 个 0-d 标量 + 新增 <code>female_fertility</code>（纯 float 类型）</td>
+      <td><span class="tag fixed">✅ 完成</span> (99dbb19)</td>
+    </tr>
+    <tr>
+      <td>Engine</td>
+      <td><code>sync_equilibrium_metrics</code> + <code>_build_variant_config</code> Discrete 分支</td>
+      <td><span class="tag fixed">✅ 完成</span> (dd9a112)</td>
+    </tr>
+    <tr>
+      <td>Phase 2</td>
+      <td>Age <code>survival()</code> 7→2 参数 + 删 <code>use_sperm_storage</code></td>
+      <td><span class="tag fixed">✅ 完成</span> (f0e3a13)</td>
+    </tr>
+    <tr>
+      <td>Spatial</td>
+      <td>删除 <code>spatial_builder.py</code>（与 <code>spatial_configurator.py</code> 重复）+ API 对齐</td>
+      <td><span class="tag fixed">✅ 完成</span></td>
+    </tr>
+    <tr style="border-top:2px solid var(--border);">
+      <td>Phase 3</td>
+      <td><code>parameters.jsonc</code> 更新（合并重复 4 对 + 修正 config_field + 新增 3 条目）</td>
+      <td><span class="tag fixed">✅ 完成</span></td>
+    </tr>
+    <tr>
+      <td>Phase 4</td>
+      <td>Age reproduction() 参数统一（4 参数重命名）</td>
+      <td><span class="tag fixed">✅ 完成</span></td>
+    </tr>
+    <tr>
+      <td>Phase 5</td>
+      <td>Setup 布尔 + Config 标量重命名（<code>is_stochastic→stochastic</code>、<code>expected_eggs_per_female→eggs_per_female</code> 等 4 字段）</td>
+      <td><span class="tag fixed">✅ 完成</span></td>
+    </tr>
+    <tr>
+      <td>Phase 6</td>
+      <td>config 内部数组重命名（<code>female_age_based_relative_fertility→female_age_based_fertility</code>）</td>
+      <td><span class="tag fixed">✅ 完成</span></td>
+    </tr>
+  </table>
+
+  <!-- ====== 已改动文件 ====== -->
+  <h3>📁 已改动文件（本次会话）</h3>
+  <table>
+    <tr><th>文件</th><th>改动</th></tr>
+    <tr><td><code>src/natal/population_config.py</code></td><td>DiscretePopulationConfig: 删 3 源数组 + 重命名 6 标量 + 纯 float 类型</td></tr>
+    <tr><td><code>src/natal/configurator.py</code></td><td>Age survival 7→2 + 删 use_sperm_storage + _rebuild_config_maps/_sync_equilibrium Discrete 守卫</td></tr>
+    <tr><td><code>src/natal/engine/discrete_generation_simulator.py</code></td><td>字段名更新（base_survival_f→female_age0_survival 等）</td></tr>
+    <tr><td><code>src/natal/engine/simulation/age_structured.py</code></td><td>sync_equilibrium_metrics Discrete 分支</td></tr>
+    <tr><td><code>src/natal/spatial_configurator.py</code></td><td>survival/reproduction 参数对齐 + _build_variant_config Discrete 分支</td></tr>
+    <tr><td><code>src/natal/spatial_population.py</code></td><td>import spatial_builder→spatial_configurator, SpatialBuilder→SpatialConfigurator</td></tr>
+    <tr><td><code>src/natal/population_builder.py</code></td><td>survival/reproduction 参数对齐</td></tr>
+    <tr><td><code>src/natal/spatial_builder.py</code></td><td><span class="tag regression">🗑️ 删除</span>（与 spatial_configurator 重复）</td></tr>
+    <tr><td><code>src/natal/__init__.pyi</code></td><td>import 路径更新</td></tr>
+    <tr><td>7 个测试文件</td><td>参数名更新 + import 路径</td></tr>
+  </table>
+</div>
+
+</main>
+
+<script>
+  const tabs = document.querySelectorAll('nav button');
+  const panels = document.querySelectorAll('.tab-panel');
+
+  tabs.forEach(btn => {
+    btn.addEventListener('click', () => {
+      tabs.forEach(b => b.classList.remove('active'));
+      panels.forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  // Deep-link support: ?tab=fix1
+  const params = new URLSearchParams(location.search);
+  const initialTab = params.get('tab');
+  if (initialTab) {
+    const target = document.querySelector(`[data-tab="${initialTab}"]`);
+    if (target) target.click();
+  }
+</script>
+
+</body>
+</html>

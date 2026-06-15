@@ -105,14 +105,14 @@ Key point: Discrete emphasises “non‑overlapping generations” and does not 
 
 The stage order is unchanged, but how values are updated depends on the configuration:
 
-1. `is_stochastic=False` (deterministic)
+1. `stochastic=False` (deterministic)
   - Uses expectations / proportional scaling; results are usually continuous values (float).
   - No Binomial/Poisson sampling.
-2. `is_stochastic=True` (stochastic)
+2. `stochastic=True` (stochastic)
   - Uses sampling (e.g., Binomial/Poisson/Multinomial) for updates; trajectories exhibit random fluctuations.
-  - If `use_continuous_sampling=True`, continuous approximations (e.g., Beta/Dirichlet/Gamma approximations) are used to improve differentiability/continuity and numerical stability in certain scenarios.
+  - If `continuous_sampling=True`, continuous approximations (e.g., Beta/Dirichlet/Gamma approximations) are used to improve differentiability/continuity and numerical stability in certain scenarios.
 
-Additionally, the reproduction stage is influenced by `use_fixed_egg_count`:
+Additionally, the reproduction stage is influenced by `fixed_egg_count`:
 
 - `True`: lays eggs according to a fixed expected number.
 - `False`: lays eggs according to a Poisson mechanism (in stochastic mode this manifests as random egg numbers).

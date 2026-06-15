@@ -155,7 +155,7 @@ Internal flow: create `ObservationFilter` → `build_filter` → compile mask �
 
 #### _clone Compatibility
 
-`_clone()` is used by `SpatialBuilder` for efficient deme cloning. During cloning, `_observation` and `_observation_mask` are reset to `None` (lines 281-282), because each clone needs to set observations independently — the observation mask depends on the deme's state shape (although typically the same, explicit setting is required).
+`_clone()` is used by `SpatialConfigurator` for efficient deme cloning. During cloning, `_observation` and `_observation_mask` are reset to `None` (lines 281-282), because each clone needs to set observations independently — the observation mask depends on the deme's state shape (although typically the same, explicit setting is required).
 
 ### 3. Kernel Integration
 
@@ -402,7 +402,7 @@ When modifying observation recording-related code, ensure the following behavior
 2. **Backward compatibility of observation mode**: observation mode historical data can be correctly exported with `output_history()`
 3. **Post-hoc observation correctness**: `output_history(observation=obs)` produces consistent results in both raw history and observation history modes
 4. **Spatial aggregate verification**: the spatial aggregate from observation mode equals the per-deme grouped summation result
-5. **Clone compatibility**: demes cloned by `SpatialBuilder` can independently set observations
+5. **Clone compatibility**: demes cloned by `SpatialConfigurator` can independently set observations
 6. **Python dispatch path**: recording under the `_should_use_python_dispatch()` fallback path is also correct
 
 Test commands:

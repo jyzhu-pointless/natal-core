@@ -50,7 +50,7 @@ set_param(pop.config, "competition.carrying_capacity", 5000.0)
 # 全名、短名、别名均可
 set_param(pop.config, "carrying_capacity", 5000.0)
 set_param(pop.config, "reproduction.eggs_per_female", 100.0)
-set_param(pop.config, "expected_eggs_per_female", 100.0)  # 别名
+set_param(pop.config, "eggs_per_female", 100.0)  # 别名
 ```
 
 内部四步：
@@ -81,7 +81,7 @@ def environment_change(
 ) -> int:
     if state.n_tick == 10:
         config.carrying_capacity[()] *= 0.5
-        config.expected_eggs_per_female[()] *= 0.7
+        config.eggs_per_female[()] *= 0.7
         config.custom['temperature'][()] = 40.0
     return 0
 ```

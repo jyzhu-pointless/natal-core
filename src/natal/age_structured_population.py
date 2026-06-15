@@ -144,8 +144,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         species: Species,
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         *,
         legacy_path: Literal[True],
     ) -> AgeStructuredPopulationBuilder: ...
@@ -157,8 +157,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         species: Species,
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         *,
         legacy_path: Literal[False] = False,
     ) -> AgeStructuredConfigurator: ...
@@ -169,8 +169,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         species: Species,
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         *,
         legacy_path: bool = False,
     ) -> AgeStructuredPopulationBuilder | AgeStructuredConfigurator:
@@ -194,8 +194,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             builder.setup(
                 name=name,
                 stochastic=stochastic,
-                use_continuous_sampling=use_continuous_sampling,
-                use_fixed_egg_count=use_fixed_egg_count,
+                continuous_sampling=continuous_sampling,
+                fixed_egg_count=fixed_egg_count,
             )
             return builder
 
@@ -204,8 +204,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return Configurator.for_age_structured(species).setup(
             name=name,
             stochastic=stochastic,
-            use_continuous_sampling=use_continuous_sampling,
-            use_fixed_egg_count=use_fixed_egg_count,
+            continuous_sampling=continuous_sampling,
+            fixed_egg_count=fixed_egg_count,
         )
 
     def _distribute_initial_population(

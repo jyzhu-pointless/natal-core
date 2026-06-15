@@ -242,7 +242,7 @@ _spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry,
 
 3. **Config bank 始终使用**：即使所有 deme 共用同一个 config，也通过 config bank 传递，保持生成模块的签名统一
 
-4. **Migration 使用 config_bank[0]**：migration kernel 只需要读取 `is_stochastic` 和 `use_continuous_sampling` 两个参数，这些在 spatial population 构建时已验证为所有 deme 一致
+4. **Migration 使用 config_bank[0]**：migration kernel 只需要读取 `stochastic` 和 `continuous_sampling` 两个参数，这些在 spatial population 构建时已验证为所有 deme 一致
 
 5. **Stop 信号收集**：prange 内无法直接 break 回主线程，使用 `stopped[n_demes]` 布尔数组在每个 deme 的生命周期中标记。prange 结束后串行扫描 stopped 数组
 

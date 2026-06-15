@@ -27,8 +27,8 @@ def _make_deme(species: nt.Species, name: str, adult_count: float) -> nt.AgeStru
             male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
         )
         .reproduction(
-            female_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
-            male_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
+            female_age_based_mating_rate=[0.0, 0.0, 0.0, 0.0],
+            male_age_based_mating_rate=[0.0, 0.0, 0.0, 0.0],
             eggs_per_female=0.0,
         )
         .competition(
@@ -283,8 +283,8 @@ def test_spatial_population_migration_rejects_inconsistent_sampling_modes(
     ]
 
     cfg1 = demes[1].export_config()._replace(
-        is_stochastic=True,
-        use_continuous_sampling=True,
+        stochastic=True,
+        continuous_sampling=True,
     )
     demes[1].import_config(cfg1)
 

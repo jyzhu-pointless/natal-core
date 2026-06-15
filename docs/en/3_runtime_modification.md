@@ -52,7 +52,7 @@ set_param(pop.config, "competition.carrying_capacity", 5000.0)
 # Full name, short name, or alias all work
 set_param(pop.config, "carrying_capacity", 5000.0)
 set_param(pop.config, "reproduction.eggs_per_female", 100.0)
-set_param(pop.config, "expected_eggs_per_female", 100.0)  # alias
+set_param(pop.config, "eggs_per_female", 100.0)  # alias
 ```
 
 Resolution (four steps):
@@ -86,7 +86,7 @@ def environment_change(
 ) -> int:
     if state.n_tick == 10:
         config.carrying_capacity[()] *= 0.5
-        config.expected_eggs_per_female[()] *= 0.7
+        config.eggs_per_female[()] *= 0.7
         config.custom['temperature'][()] = 40.0
     return 0
 ```

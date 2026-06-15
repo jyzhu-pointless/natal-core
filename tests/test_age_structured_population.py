@@ -21,7 +21,7 @@ def _minimal_pop(sp, *, pop_name: str = "AgePop"):
             species=sp,
             name=pop_name,
             stochastic=False,
-            use_continuous_sampling=False,
+            continuous_sampling=False,
         )
         .age_structure(n_ages=4, new_adult_age=1)
         .initial_state(
@@ -31,8 +31,8 @@ def _minimal_pop(sp, *, pop_name: str = "AgePop"):
             }
         )
         .reproduction(
-            female_age_based_mating_rates=[0.0, 1.0, 1.0, 1.0],
-            male_age_based_mating_rates=[0.0, 1.0, 1.0, 1.0],
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
             eggs_per_female=10,
         )
         .survival(

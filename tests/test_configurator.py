@@ -43,8 +43,8 @@ class TestSetParam:
         assert minimal_config.low_density_growth_rate[()] == 3.0
 
     def test_alias(self, minimal_config):
-        set_param(minimal_config, "expected_eggs_per_female", 100.0)
-        assert minimal_config.expected_eggs_per_female[()] == 100.0
+        set_param(minimal_config, "eggs_per_female", 100.0)
+        assert minimal_config.eggs_per_female[()] == 100.0
 
     def test_auto_sync_equilibrium(self, minimal_config):
         old_comp = minimal_config.expected_competition_strength[()]
@@ -77,7 +77,7 @@ class TestConfiguratorBuild:
 
     def test_setup_flags(self, species):
         cfg = Configurator.from_species(species).setup(stochastic=False)
-        assert cfg._config.is_stochastic is False
+        assert cfg._config.stochastic is False
 
     def test_competition_writes_immediately(self, species):
         cfg = Configurator.from_species(species).competition(
@@ -90,7 +90,7 @@ class TestConfiguratorBuild:
         cfg = Configurator.from_species(species).reproduction(
             eggs_per_female=100.0, sex_ratio=0.6
         )
-        assert cfg._config.expected_eggs_per_female[()] == 100.0
+        assert cfg._config.eggs_per_female[()] == 100.0
         assert cfg._config.sex_ratio[()] == 0.6
 
     def test_survival_flexible_input(self, species):
@@ -173,7 +173,7 @@ class TestConfiguratorUpdate:
             eggs_per_female=100
         )
         assert pop.config.low_density_growth_rate[()] == 3.0
-        assert pop.config.expected_eggs_per_female[()] == 100.0
+        assert pop.config.eggs_per_female[()] == 100.0
 
     def test_update_auto_sync(self, species):
         pop = (
@@ -366,7 +366,7 @@ class TestSetParamErrors:
 
     def test_array_param_raises_valueerror(self, minimal_config):
         with pytest.raises(ValueError, match="tensor or array"):
-            set_param(minimal_config, "survival.female_survival_rates", 1.0)
+            set_param(minimal_config, "reproduction.age_based_reproduction_rate", 1.0)
 
     def test_python_scalar_field_raises_typeerror(self, minimal_config):
         with pytest.raises(TypeError, match="immutable config"):

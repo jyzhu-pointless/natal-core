@@ -36,14 +36,14 @@ sp = nt.Species.from_dict(
 # 每个链式方法内部调用 set_param() 立即写入 config，不需 freeze/build。
 #
 # Configurator 包装了一个 PopulationConfig，提供以下领域方法：
-#   .setup(...)           — 模拟标志（stochastic、continuous_sampling 等）
-#   .age_structure(...)   — 年龄维度（n_ages, new_adult_age, generation_time）
-#   .initial_state(...)   — 初始种群分布（字典 → 3-D 数组）
-#   .reproduction(...)    — 繁殖参数（eggs_per_female, sex_ratio 等）
-#   .competition(...)     — 竞争参数（carrying_capacity, low_density_growth_rate 等）
-#   .survival(...)        — 存活率（female_age0_survival, male= 等）
-#   .custom(...)          — 自定义字段（存储到 config.custom structured array）
-#   .hooks(...)           — 注册 hook（传给 Population 构造函数）
+#   .setup(...)             — 模拟标志（stochastic、continuous_sampling 等）
+#   .age_structure(...)     — 年龄维度（仅 AgeStructuredConfigurator）
+#   .initial_state(...)     — 初始种群分布（字典 → 3-D 数组）
+#   .reproduction(...)      — 繁殖参数（eggs_per_female, sex_ratio 等）
+#   .competition(...)       — 竞争参数（carrying_capacity, low_density_growth_rate 等）
+#   .survival(...)          — 存活率（female_age0_survival, male= 等）
+#   .custom(...)            — 自定义字段（存储到 config.custom structured array）
+#   .hooks(...)             — 注册 hook（传给 Population 构造函数）
 #
 # 终端方法：
 #   .apply()  — 执行 deferred 操作（presets/modifiers/fitness）+ sync equilibrium
@@ -53,29 +53,28 @@ pop = (
     nt.DiscreteGenerationPopulation
     .setup(sp, legacy_path=False)                     # ① 新路径入口
     .setup(stochastic=False)                          # ② 确定性模拟
-    .age_structure(n_ages=2, new_adult_age=1)          # ③ Discrete 固定 n_ages=2
-    .initial_state({                                   # ④ 初始种群
+    .initial_state({                                   # ③ 初始种群
         "female": {"WT|WT": 5000, "WT|Var": 1000},
         "male":   {"WT|WT": 5000, "WT|Var": 1000},
     })
-    .reproduction(                                     # ⑤ 繁殖参数
-        eggs_per_female=50,   # → config.expected_eggs_per_female[()]
+    .reproduction(                                     # ④ 繁殖参数
+        eggs_per_female=50,   # → config.eggs_per_female[()]
         sex_ratio=0.5,        # → config.sex_ratio[()]
     )
-    .competition(                                     # ⑥ 竞争参数
+    .competition(                                     # ⑤ 竞争参数
         carrying_capacity=10000,          # → config.carrying_capacity[()]
         low_density_growth_rate=6.0,      # → config.low_density_growth_rate[()]
         juvenile_growth_mode=CONCAVE,   # → config.juvenile_growth_mode[()]
     )
-    .custom(temperature=25.0, debug=False)             # ⑦ 自定义字段
-    .build(name="demo_params")                         # ⑧ 终端：apply() + 创建 Population
+    .custom(temperature=25.0, debug=False)             # ⑥ 自定义字段
+    .build(name="demo_params")                         # ⑦ 终端：apply() + 创建 Population
 )
 
 print("=" * 60)
 print("初始配置")
 print("=" * 60)
 print(f"  K          = {pop.config.carrying_capacity[()]}")
-print(f"  eggs       = {pop.config.expected_eggs_per_female[()]}")
+print(f"  eggs       = {pop.config.eggs_per_female[()]}")
 print(f"  sex_ratio  = {pop.config.sex_ratio[()]}")
 print(f"  growth_r   = {pop.config.low_density_growth_rate[()]}")
 print(f"  temperature = {pop.config.custom['temperature'][()]}")
@@ -99,7 +98,7 @@ print(f"  K = {pop.config.carrying_capacity[()]}  ← 立即生效")
 pop.update().reproduction(eggs_per_female=30, sex_ratio=0.4).competition(
     low_density_growth_rate=3.0
 )
-print(f"  eggs = {pop.config.expected_eggs_per_female[()]}")
+print(f"  eggs = {pop.config.eggs_per_female[()]}")
 print(f"  sr   = {pop.config.sex_ratio[()]}")
 print(f"  r    = {pop.config.low_density_growth_rate[()]}")
 
@@ -145,7 +144,7 @@ def hook_direct(
     # 只在 tick=5 触发一次：高温导致环境退化
     if state.n_tick == 5:
         config.carrying_capacity[()] *= 0.5       # K 减半
-        config.expected_eggs_per_female[()] *= 0.7 # 繁殖率降至 70%
+        config.eggs_per_female[()] *= 0.7 # 繁殖率降至 70%
     return 0
 
 
@@ -201,7 +200,7 @@ for t in range(1, 11):
     pop2.run(1)
     total = pop2.state.individual_count.sum()
     k = pop2.config.carrying_capacity[()]
-    eggs = pop2.config.expected_eggs_per_female[()]
+    eggs = pop2.config.eggs_per_female[()]
     marker = " <-- hook 触发!" if t in (5, 8) else ""
     print(f"  tick={t:>2}  total={total:>6.0f}  K={k:>6.0f}  eggs={eggs:>5.0f}{marker}")
 

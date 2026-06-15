@@ -56,7 +56,7 @@ class TestComputeEquilibriumMetrics:
     def test_auto_derived_distribution(self) -> None:
         """Auto-derive equilibrium distribution from carrying_capacity."""
         n_ages = 5
-        expected_eggs_per_female = 10.0
+        eggs_per_female = 10.0
         age_surv = np.array([
             [1.0, 0.8, 0.6, 0.4, 0.0],
             [1.0, 0.7, 0.5, 0.3, 0.0],
@@ -71,10 +71,10 @@ class TestComputeEquilibriumMetrics:
         with numba_disabled():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=1000.0,
-                expected_eggs_per_female=expected_eggs_per_female,
+                eggs_per_female=eggs_per_female,
                 age_based_survival_rates=age_surv,
                 age_based_mating_rates=age_mating,
-                female_age_based_relative_fertility=fert,
+                female_age_based_fertility=fert,
                 relative_competition_strength=comp_strength,
                 sex_ratio=0.5,
                 new_adult_age=2,
@@ -104,10 +104,10 @@ class TestComputeEquilibriumMetrics:
         with numba_disabled():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=800.0,
-                expected_eggs_per_female=10.0,
+                eggs_per_female=10.0,
                 age_based_survival_rates=age_surv,
                 age_based_mating_rates=age_mating,
-                female_age_based_relative_fertility=fert,
+                female_age_based_fertility=fert,
                 relative_competition_strength=comp_strength,
                 sex_ratio=0.5,
                 new_adult_age=2,
@@ -137,10 +137,10 @@ class TestComputeEquilibriumMetrics:
         with numba_disabled():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=800.0,
-                expected_eggs_per_female=10.0,
+                eggs_per_female=10.0,
                 age_based_survival_rates=age_surv,
                 age_based_mating_rates=age_mating,
-                female_age_based_relative_fertility=fert,
+                female_age_based_fertility=fert,
                 relative_competition_strength=comp_strength,
                 sex_ratio=0.5,
                 new_adult_age=2,
@@ -163,10 +163,10 @@ class TestComputeEquilibriumMetrics:
         with numba_disabled():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=100.0,
-                expected_eggs_per_female=0.0,
+                eggs_per_female=0.0,
                 age_based_survival_rates=age_surv,
                 age_based_mating_rates=age_mating,
-                female_age_based_relative_fertility=fert,
+                female_age_based_fertility=fert,
                 relative_competition_strength=comp_strength,
                 sex_ratio=0.5,
                 new_adult_age=1,
@@ -188,10 +188,10 @@ class TestComputeEquilibriumMetrics:
         with numba_disabled():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=100.0,
-                expected_eggs_per_female=10.0,
+                eggs_per_female=10.0,
                 age_based_survival_rates=age_surv,
                 age_based_mating_rates=age_mating,
-                female_age_based_relative_fertility=fert,
+                female_age_based_fertility=fert,
                 relative_competition_strength=comp_strength,
                 sex_ratio=0.5,
                 new_adult_age=2,
@@ -353,7 +353,7 @@ class TestRecruitJuvenilesSampling:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=100, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.array_equal(f_new, f)
         assert np.array_equal(m_new, m)
@@ -364,7 +364,7 @@ class TestRecruitJuvenilesSampling:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=20, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         expected = np.array([5.0, 5.0], dtype=np.float64)
         assert np.allclose(f_new, expected)
@@ -376,7 +376,7 @@ class TestRecruitJuvenilesSampling:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=100, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.all(f_new == 0.0)
         assert np.all(m_new == 0.0)
@@ -387,7 +387,7 @@ class TestRecruitJuvenilesSampling:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=50, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.allclose(f_new, [25.0, 0.0])
         assert np.allclose(m_new, [0.0, 25.0])
@@ -399,7 +399,7 @@ class TestRecruitJuvenilesSampling:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=100, n_genotypes=2,
-                is_stochastic=True,
+                stochastic=True,
             )
         assert abs(f_new.sum() + m_new.sum() - 100.0) < 1.0
 
@@ -418,7 +418,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=factor, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.allclose(f_new, [5.0, 10.0])
         assert np.allclose(m_new, [15.0, 20.0])
@@ -429,7 +429,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=0.5, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.all(f_new == 0.0)
         assert np.all(m_new == 0.0)
@@ -440,7 +440,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=0.0, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.all(f_new == 0.0)
         assert np.all(m_new == 0.0)
@@ -451,7 +451,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=1.0, n_genotypes=2,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.allclose(f_new, f)
         assert np.allclose(m_new, m)
@@ -463,7 +463,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
         with numba_disabled():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=0.5, n_genotypes=2,
-                is_stochastic=True,
+                stochastic=True,
             )
         total = f_new.sum() + m_new.sum()
         assert abs(total - 150.0) < 1.0
@@ -528,7 +528,7 @@ class TestSampleMating:
                 female_rates, sperm_displacement_rate=0.0,
                 adult_start_idx=1, n_ages=n_ages,
                 n_genotypes=n_genotypes,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert S.shape == (3, 2, 2)
         # Age 0: female_rate=0.0 -> no mating
@@ -561,7 +561,7 @@ class TestSampleMating:
                 female_rates, sperm_displacement_rate=0.5,
                 adult_start_idx=1, n_ages=n_ages,
                 n_genotypes=n_genotypes,
-                is_stochastic=False,
+                stochastic=False,
             )
         # Deterministic: virgins = 10, n_mating_virgins = 10 * 0.8 = 8
         # p_remating = 0.5 * 0.8 = 0.4, but mated_count = 0 so n_remating = 0
@@ -582,7 +582,7 @@ class TestSampleMating:
             female_counts, sperm_store, mating_prob,
             female_rates, sperm_displacement_rate=0.1,
             adult_start_idx=0, n_ages=n_ages, n_genotypes=n_genotypes,
-            is_stochastic=True, use_continuous_sampling=False,
+            stochastic=True, continuous_sampling=False,
         )
         assert S.shape == (1, 2, 2)
         assert S.sum() > 0
@@ -600,7 +600,7 @@ class TestSampleMating:
                 female_rates, sperm_displacement_rate=0.0,
                 adult_start_idx=1, n_ages=n_ages,
                 n_genotypes=n_genotypes,
-                is_stochastic=False,
+                stochastic=False,
             )
         assert np.allclose(S, 0.0)
 
@@ -850,7 +850,7 @@ class TestRecruitJuvenilesSamplingContinuous:
         male = np.array([50.0, 30.0], dtype=np.float64)
         result = recruit_juveniles_sampling(
             (female, male), carrying_capacity=200,
-            n_genotypes=2, is_stochastic=True, use_continuous_sampling=True,
+            n_genotypes=2, stochastic=True, continuous_sampling=True,
         )
         f_new, m_new = result
         assert f_new.shape == (2,)
@@ -872,7 +872,7 @@ class TestRecruitJuvenilesGivenScalingFactorContinuous:
         male = np.array([25.0, 15.0], dtype=np.float64)
         result = recruit_juveniles_given_scaling_factor_sampling(
             (female, male), scaling_factor=0.5,
-            n_genotypes=2, is_stochastic=True, use_continuous_sampling=True,
+            n_genotypes=2, stochastic=True, continuous_sampling=True,
         )
         f_new, m_new = result
         assert f_new.shape == (2,)
@@ -907,7 +907,7 @@ class TestSampleMatingContinuous:
             female_counts, existing_sperm, mating_prob,
             female_mating_rates_by_age, sperm_displacement_rate,
             adult_start_idx=0, n_ages=n_ages, n_genotypes=n_genotypes,
-            is_stochastic=True, use_continuous_sampling=True,
+            stochastic=True, continuous_sampling=True,
         )
         assert result is not None
         assert result.shape == (1, 2, 2)
@@ -969,8 +969,8 @@ class TestSampleSurvivalWithSpermStorageContinuous:
             male_genotype_compatibility=compat,
             female_only_by_sex_chrom=female_only,
             male_only_by_sex_chrom=male_only,
-            n_glabs=1, age_based_reproduction_rates=None, female_age_based_relative_fertility=None,
-            is_stochastic=False, has_sex_chromosomes=True,
+            n_glabs=1, age_based_reproduction_rates=None, female_age_based_fertility=None,
+            stochastic=False, has_sex_chromosomes=True,
             sex_ratio=0.5,
         )
         # Genotype 1 is male-only -> all offspring of that genotype should be male
@@ -1001,7 +1001,7 @@ class TestSampleSurvivalWithSpermStorageContinuous:
             male_genotype_compatibility=m_compat,
             female_only_by_sex_chrom=none_only,
             male_only_by_sex_chrom=none_only,
-            is_stochastic=False, has_sex_chromosomes=True,
+            stochastic=False, has_sex_chromosomes=True,
             sex_ratio=0.5,
         )
         # Genotype 0: f_w=0.8, m_w=0.2 => p_f=0.8, so 80% should be female
@@ -1031,7 +1031,7 @@ class TestSampleSurvivalWithSpermStorageContinuous:
             male_genotype_compatibility=compat,
             female_only_by_sex_chrom=none_only,
             male_only_by_sex_chrom=none_only,
-            is_stochastic=False,
+            stochastic=False,
             sex_ratio=0.5,
         )
         assert n_f.sum() == 0

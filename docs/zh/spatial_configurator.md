@@ -6,12 +6,12 @@
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial_builder import batch_setting
+from natal.spatial_configurator import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
 # 同构：所有 deme 参数一致
-pop = SpatialPopulation.builder(species, n_demes=100, topology=HexGrid(10, 10)) \
+pop = SpatialPopulation.setup(species, n_demes=100, topology=HexGrid(10, 10)) \
     .setup(name="homo_demo", stochastic=False) \
     .initial_state(individual_count={"female": {"A|A": 5000}, "male": {"A|A": 5000}}) \
     .reproduction(eggs_per_female=50) \
@@ -27,7 +27,7 @@ pop.run(10)
 ### 两层结构
 
 ```
-SpatialPopulation.builder(...)
+SpatialPopulation.setup(...)
     │
     └─► SpatialConfigurator         ← 面向用户的链式 API
            │
@@ -187,7 +187,7 @@ def _clone_deme(template, config, name):
 ## `BatchSetting`：跨 deme 变化的参数
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial_configurator import batch_setting
 
 # 列表：按索引一一对应
 batch_setting([10000, 5000, 5000, 8000])        # kind="scalar"

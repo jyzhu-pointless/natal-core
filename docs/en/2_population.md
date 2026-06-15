@@ -46,7 +46,7 @@ pop = (
     .survival(female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
               male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0])
     .reproduction(eggs_per_female=100,
-                  female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0])
+                  female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0])
     .competition(carrying_capacity=5000, low_density_growth_rate=6.0,
                  juvenile_growth_mode="logistic")
     .build()

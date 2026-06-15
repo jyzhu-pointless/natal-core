@@ -38,12 +38,12 @@ def test_fertilize_offspring_sex_is_genotype_determined_when_constrained() -> No
         male_only_by_sex_chrom=male_only,
         n_glabs=1,
         age_based_reproduction_rates=np.ones(1, dtype=np.float64),
-        female_age_based_relative_fertility=np.ones(1, dtype=np.float64),
+        female_age_based_fertility=np.ones(1, dtype=np.float64),
         fixed_eggs=True,
         sex_ratio=0.9,
         has_sex_chromosomes=True,
-        is_stochastic=False,
-        use_continuous_sampling=False,
+        stochastic=False,
+        continuous_sampling=False,
     )
 
     assert np.allclose(n_female, np.array([5.0, 0.0]))
@@ -82,12 +82,12 @@ def test_fertilize_offspring_sex_uses_sex_ratio_without_constraints() -> None:
         male_only_by_sex_chrom=none_only,
         n_glabs=1,
         age_based_reproduction_rates=np.ones(1, dtype=np.float64),
-        female_age_based_relative_fertility=np.ones(1, dtype=np.float64),
+        female_age_based_fertility=np.ones(1, dtype=np.float64),
         fixed_eggs=True,
         sex_ratio=0.3,
         has_sex_chromosomes=False,
-        is_stochastic=False,
-        use_continuous_sampling=False,
+        stochastic=False,
+        continuous_sampling=False,
     )
 
     assert np.allclose(n_female, np.array([3.0, 0.0]))
@@ -128,12 +128,12 @@ def test_fertilize_offspring_sex_ignores_asymmetric_compat_when_unconstrained() 
         male_only_by_sex_chrom=none_only,
         n_glabs=1,
         age_based_reproduction_rates=np.ones(1, dtype=np.float64),
-        female_age_based_relative_fertility=np.ones(1, dtype=np.float64),
+        female_age_based_fertility=np.ones(1, dtype=np.float64),
         fixed_eggs=True,
         sex_ratio=0.3,
         has_sex_chromosomes=False,
-        is_stochastic=False,
-        use_continuous_sampling=False,
+        stochastic=False,
+        continuous_sampling=False,
     )
 
     assert np.allclose(n_female, np.array([1.5, 1.5]))

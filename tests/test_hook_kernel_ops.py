@@ -27,8 +27,8 @@ def run_single_op(
     initial_male: float = 0.0,
     initial_sperm: float = 0.0,
     initial_sperm_row: list[float] | None = None,
-    is_stochastic: bool = False,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = False,
+    continuous_sampling: bool = False,
 ) -> tuple[int, np.ndarray, np.ndarray]:
     ind = np.zeros((2, 1, 1), dtype=np.float64)
     if initial_sperm_row is None:
@@ -71,8 +71,8 @@ def run_single_op(
         sperm_storage=sperm,
         has_sperm_storage=True,
         tick=10,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling,
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling,
         deme_id=0
     )
     return int(result), ind, sperm
@@ -90,7 +90,7 @@ if __name__ == "__main__":
         None,
         initial_female=8.0,
         initial_sperm=4.0,
-        is_stochastic=False,
+        stochastic=False,
     )
     assert result == RESULT_CONTINUE
     assert_close(float(ind[0, 0, 0]), 6.0)
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         None,
         initial_female=10.0,
         initial_sperm=6.0,
-        is_stochastic=True,
+        stochastic=True,
     )
     assert result == RESULT_CONTINUE
     survivors = float(ind[0, 0, 0])
@@ -132,7 +132,7 @@ if __name__ == "__main__":
         None,
         initial_female=9.0,
         initial_sperm_row=[2.0, 1.0, 0.0],
-        is_stochastic=True,
+        stochastic=True,
     )
     assert result == RESULT_CONTINUE
     sampled_sperm_sum = float(sperm[0, 0, :].sum())
@@ -147,8 +147,8 @@ if __name__ == "__main__":
         None,
         initial_female=7.5,
         initial_sperm=2.5,
-        is_stochastic=True,
-        use_continuous_sampling=True,
+        stochastic=True,
+        continuous_sampling=True,
     )
     assert result == RESULT_CONTINUE
     assert float(ind[0, 0, 0]) >= 0.0
@@ -161,7 +161,7 @@ if __name__ == "__main__":
         None,
         initial_female=4.0,
         initial_sperm=1.0,
-        is_stochastic=False,
+        stochastic=False,
     )
     assert result == RESULT_CONTINUE
     assert_close(float(ind[0, 0, 0]), 6.0)
@@ -174,7 +174,7 @@ if __name__ == "__main__":
         None,
         initial_female=8.0,
         initial_sperm=4.0,
-        is_stochastic=False,
+        stochastic=False,
     )
     assert result == RESULT_CONTINUE
     assert_close(float(ind[0, 0, 0]), 4.0)
@@ -187,7 +187,7 @@ if __name__ == "__main__":
         None,
         initial_female=10.0,
         initial_sperm=5.0,
-        is_stochastic=False,
+        stochastic=False,
     )
     assert result == RESULT_CONTINUE
     assert_close(float(ind[0, 0, 0]), 7.0)
@@ -200,7 +200,7 @@ if __name__ == "__main__":
         None,
         initial_female=10.0,
         initial_sperm=4.0,
-        is_stochastic=False,
+        stochastic=False,
     )
     assert result == RESULT_CONTINUE
     assert_close(float(ind[0, 0, 0]), 6.0)
@@ -213,7 +213,7 @@ if __name__ == "__main__":
         None,
         initial_female=5.0,
         initial_sperm=2.0,
-        is_stochastic=False,
+        stochastic=False,
     )
     assert result == RESULT_CONTINUE
     assert_close(float(ind[0, 0, 0]), 8.0)
@@ -225,7 +225,7 @@ if __name__ == "__main__":
         None,
         initial_female=8.0,
         initial_sperm=4.0,
-        is_stochastic=False,
+        stochastic=False,
     )
     assert result == RESULT_CONTINUE
     assert_close(float(ind[0, 0, 0]), 2.0)
@@ -239,7 +239,7 @@ if __name__ == "__main__":
         None,
         initial_female=9.0,
         initial_sperm_row=[2.0, 1.0, 1.0],
-        is_stochastic=True,
+        stochastic=True,
     )
     assert result == RESULT_CONTINUE
     assert float(ind[0, 0, 0]) + 1e-9 >= float(sperm[0, 0, :].sum())

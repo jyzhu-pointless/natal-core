@@ -194,8 +194,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         species: Species,
         name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         *,
         legacy_path: Literal[True],
     ) -> DiscreteGenerationPopulationBuilder: ...
@@ -207,8 +207,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         species: Species,
         name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         *,
         legacy_path: Literal[False] = False,
     ) -> DiscreteConfigurator: ...
@@ -219,8 +219,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         species: Species,
         name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         *,
         legacy_path: bool = False,
     ) -> DiscreteGenerationPopulationBuilder | DiscreteConfigurator:
@@ -243,8 +243,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             return DiscreteGenerationPopulationBuilder(species).setup(
                 name=name,
                 stochastic=stochastic,
-                use_continuous_sampling=use_continuous_sampling,
-                use_fixed_egg_count=use_fixed_egg_count,
+                continuous_sampling=continuous_sampling,
+                fixed_egg_count=fixed_egg_count,
             )
 
         from natal.configurator import Configurator
@@ -252,8 +252,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return Configurator.for_discrete(species).setup(
             name=name,
             stochastic=stochastic,
-            use_continuous_sampling=use_continuous_sampling,
-            use_fixed_egg_count=use_fixed_egg_count,
+            continuous_sampling=continuous_sampling,
+            fixed_egg_count=fixed_egg_count,
         )
 
     def _resolve_age_distribution(

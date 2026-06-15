@@ -19,7 +19,7 @@ pop = (
         "female": {"WT|WT": 100},
         "male": {"WT|WT": 100}
     })
-    .survival(female_age_based_survival_rates=0.85)
+    .survival(female_age_based_survival=0.85)
     .reproduction(eggs_per_female=50.0)
     .competition(age_1_carrying_capacity=1000)
     .hooks(my_hook)
@@ -69,8 +69,8 @@ NATAL Core 提供两种主要的种群类型：
 |---|---|---|---|---|---|
 | `name` | `str` | 种群标识名称 | `"AgeStructuredPop"` | 全流程 | 仅用于日志和标识，不影响动力学；实验时建议显式命名以便区分 |
 | `stochastic` | `bool` | 是否采用随机采样 | `True` | reproduction / survival 等采样阶段 | `True` 表示随机，`False` 表示确定性；调参阶段建议先使用 `False` |
-| `use_continuous_sampling` | `bool` | 采样策略选择 | `False` | 概率采样细节 | 控制采样方式，大多数场景保持默认即可 |
-| `use_fixed_egg_count` | `bool` | 产卵数是否固定 | `False` | reproduction | `True` 表示固定产卵数，`False` 更接近随机产卵过程 |
+| `continuous_sampling` | `bool` | 采样策略选择 | `False` | 概率采样细节 | 控制采样方式，大多数场景保持默认即可 |
+| `fixed_egg_count` | `bool` | 产卵数是否固定 | `False` | reproduction | `True` 表示固定产卵数，`False` 更接近随机产卵过程 |
 | `species` | `Species` | 物种对象 | 必填 | 全流程 | 定义种群的遗传结构，是配置的核心参数 |
 
 ### `age_structure(...)` – 年龄结构
@@ -90,7 +90,7 @@ NATAL Core 提供两种主要的种群类型：
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `individual_count` | `Mapping` | 初始个体数量分布，格式为 `{性别: {基因型: 年龄数据}}` | 必填 | 初始状态 | 如未设置，`build()` 会报错；支持标量、序列、映射等多种格式 |
-| `sperm_storage` | `Optional[Mapping]` | 初始精子库存（仅在启用储精时需要） | `None` | reproduction | 仅在 `use_sperm_storage=True` 时必需；格式为三层映射 |
+| `sperm_storage` | `Optional[Mapping]` | 初始精子库存（仅在启用储精时需要） | `None` | reproduction | 仅在 `=True` 时必需；格式为三层映射 |
 
 **年龄数据（`age_data`）的格式**（所有计数必须为非负数）：
 
@@ -131,43 +131,43 @@ NATAL Core 提供两种主要的种群类型：
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `female_age_based_survival_rates` | `Optional` | 雌性按年龄的存活率。 | `None` | survival | 支持标量、序列、映射、函数等；`None` 表示使用默认曲线；取值 `[0, 1]`。 |
-| `male_age_based_survival_rates` | `Optional` | 雄性按年龄的存活率。 | `None` | survival | 同上。 |
+| `female_age_based_survival` | `Optional` | 雌性按年龄的存活率。 | `None` | survival | 支持标量、序列、映射、函数等；`None` 表示使用默认曲线；取值 `[0, 1]`。 |
+| `male_age_based_survival` | `Optional` | 雄性按年龄的存活率。 | `None` | survival | 同上。 |
 
 **代码示例**（来自 `resolve_age_param`）：
 
 ```python
 # A) None → 使用默认曲线
-.survival(female_age_based_survival_rates=None)
+.survival(female_age_based_survival=None)
 
 # B) 标量 → 所有年龄使用相同值
-.survival(female_age_based_survival_rates=0.85)
+.survival(female_age_based_survival=0.85)
 
 # C) 序列 → 按年龄依次写入，不足补 0，超长截断
-.survival(female_age_based_survival_rates=[1.0, 1.0, 0.9, 0.7])
+.survival(female_age_based_survival=[1.0, 1.0, 0.9, 0.7])
 
 # D) 稀疏映射 → 未指定的年龄默认为 1.0
-.survival(female_age_based_survival_rates={0: 1.0, 1: 0.95, 2: 0.8})
+.survival(female_age_based_survival={0: 1.0, 1: 0.95, 2: 0.8})
 
 # E) 函数 → 必须接收一个 age 参数并返回数值
-.survival(female_age_based_survival_rates=lambda age: 1.0 if age < 2 else 0.8)
+.survival(female_age_based_survival=lambda age: 1.0 if age < 2 else 0.8)
 
 # F) 序列末尾用 None 哨兵 → 末尾用最后一个非 None 值填充
-.survival(female_age_based_survival_rates=[1.0, 0.9, None])
+.survival(female_age_based_survival=[1.0, 0.9, None])
 ```
 
 ### `reproduction(...)` – 繁殖参数
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `female_age_based_mating_rates` | `Optional` | 雌性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
-| `male_age_based_mating_rates` | `Optional` | 雄性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
-| `female_age_based_relative_fertility` | `Optional` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度必须等于 `n_ages`；用于调节不同年龄雌性的产卵贡献。 |
-| `female_age_based_reproduction_rates` | `Optional` | 雌性按年龄的繁殖参与率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时默认全为 1.0。支持标量、序列、映射、函数。 |
+| `female_age_based_mating_rate` | `Optional` | 雌性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
+| `male_age_based_mating_rate` | `Optional` | 雄性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
+| `female_age_based_fertility` | `Optional` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度必须等于 `n_ages`；用于调节不同年龄雌性的产卵贡献。 |
+| `age_based_reproduction_rate` | `Optional` | 雌性按年龄的繁殖参与率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时默认全为 1.0。支持标量、序列、映射、函数。 |
 | `eggs_per_female` | `float` | 每只雌性的基础产卵数。 | `50.0` | reproduction | 作为种群产卵数的基准；调参时可从中性值开始。 |
-| `use_fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 表示固定产卵数，`False` 表示随机产卵。 |
+| `fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 表示固定产卵数，`False` 表示随机产卵。 |
 | `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
-| `use_sperm_storage` | `bool` | 精子存储始终启用（该参数为兼容性保留，无实际效果）。 | `True` | reproduction | 该参数仅用于兼容性，设置任何值均不改变行为。 |
+| `` | `bool` | 精子存储始终启用（该参数为兼容性保留，无实际效果）。 | `True` | reproduction | 该参数仅用于兼容性，设置任何值均不改变行为。 |
 | `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 取值范围通常为 `(0, 1]`；值越大表示新精子替换速度越快。 |
 
 ### `competition(...)` – 竞争与密度调节
@@ -223,8 +223,8 @@ total_expected_eggs = Σ( N_f[age] × P_reproducing[age] × fertility[age] × eg
 - `N_f[age]`：平衡状态下该年龄的雌性个体数
   - 来自 `expected_num_adult_females` 时：从 new_adult_age 开始按雌性存活率向前传播
   - 来自平衡分布时：直接从分布中的雌性行读取
-- `P_reproducing[age]`：该年龄雌性参与繁殖的比例，来自 `female_age_based_reproduction_rates`（如未设置则使用 `female_age_based_mating_rates` 的雌性行）
-- `fertility[age]`：该年龄的相对生育力权重，来自 `female_age_based_relative_fertility`（默认为全 1）
+- `P_reproducing[age]`：该年龄雌性参与繁殖的比例，来自 `age_based_reproduction_rate`（如未设置则使用 `female_age_based_mating_rate` 的雌性行）
+- `fertility[age]`：该年龄的相对生育力权重，来自 `female_age_based_fertility`（默认为全 1）
 - `eggs_per_female`：每只雌性的基础产卵数
 
 **external_expected_eggs 的含义**：
@@ -387,7 +387,7 @@ def release_drive_carriers():
 
 ### `setup(...)`
 
-参数与年龄结构模型一致：`name`、`stochastic`、`use_continuous_sampling`、`use_fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
+参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
 
 ### `initial_state(...)`
 
@@ -432,7 +432,7 @@ def release_drive_carriers():
 |---|---|---|---|---|---|
 | `female_age0_survival` | `float` | 雌性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
 | `male_age0_survival` | `float` | 雄性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
-| `adult_survival` | `float` | 成体在世代间的存活率。 | `0.0` | survival / aging 边界 | 取值范围 `[0, 1]`；设为 `0` 表示严格的非重叠世代，较高的值允许成体跨世代存活。 |
+| `` | `float` | 成体在世代间的存活率。 | `0.0` | survival / aging 边界 | 取值范围 `[0, 1]`；设为 `0` 表示严格的非重叠世代，较高的值允许成体跨世代存活。 |
 
 ### `competition(...)`
 

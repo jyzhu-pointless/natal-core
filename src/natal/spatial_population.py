@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from natal.configurator import Configurator
     from natal.genetic_presets import GeneticPreset
     from natal.observation import Observation
-    from natal.spatial_builder import BatchSetting, SpatialBuilder
+    from natal.spatial_configurator import BatchSetting, SpatialConfigurator
 
 __all__ = ["SpatialPopulation"]
 
@@ -198,7 +198,7 @@ class _SpatialUpdate:
 
     Each chainable method accepts the same parameters as ``Configurator``,
     plus ``BatchSetting`` values for per-deme parameter variation — same API
-    as ``SpatialBuilder`` at build time.
+    as ``SpatialConfigurator`` at build time.
     """
 
     # Chain methods that support BatchSetting expansion across demes.
@@ -322,7 +322,7 @@ class _SpatialUpdate:
         self, method_name: str, kwargs: dict[str, object],
     ) -> None:
         """Dispatch kwargs: BatchSetting values → per-deme; scalars → all demes."""
-        from natal.spatial_builder import BatchSetting
+        from natal.spatial_configurator import BatchSetting
 
         batch_keys = [k for k, v in kwargs.items() if isinstance(v, BatchSetting)]
         if not batch_keys:
@@ -420,8 +420,8 @@ class SpatialPopulation:
         topology: Optional[GridTopology] = None,
         *,
         pop_type: Literal["age_structured", "discrete_generation"] = "age_structured",
-    ) -> SpatialBuilder:
-        """Create a ``SpatialBuilder`` for fluent spatial population construction.
+    ) -> SpatialConfigurator:
+        """Create a ``SpatialConfigurator`` for fluent spatial population construction.
 
         Args:
             species: Genetic architecture shared by all demes.
@@ -430,7 +430,7 @@ class SpatialPopulation:
             pop_type: ``"age_structured"`` (default) or ``"discrete_generation"``.
 
         Returns:
-            A ``SpatialBuilder`` instance ready for chaining.
+            A ``SpatialConfigurator`` instance ready for chaining.
 
         Examples:
             >>> pop = SpatialPopulation.builder(species, n_demes=100) \\
@@ -439,8 +439,8 @@ class SpatialPopulation:
             ...     .competition(carrying_capacity=batch_setting([...])) \\
             ...     .build()
         """
-        from natal.spatial_builder import SpatialBuilder
-        return SpatialBuilder(
+        from natal.spatial_configurator import SpatialConfigurator
+        return SpatialConfigurator(
             species=species,
             n_demes=n_demes,
             topology=topology,
@@ -790,7 +790,7 @@ class SpatialPopulation:
         """Return an updater for modifying this population's config.
 
         Supports both scalar and ``batch_setting`` values in chain calls,
-        matching the ``SpatialBuilder`` API::
+        matching the ``SpatialConfigurator`` API::
 
             # Modify all demes simultaneously
             pop.update().competition(carrying_capacity=5000)
@@ -799,7 +799,7 @@ class SpatialPopulation:
             pop.update(deme=3).competition(carrying_capacity=8000)
 
             # Batch per-deme modification (same API as build time)
-            from natal.spatial_builder import batch_setting
+            from natal.spatial_configurator import batch_setting
             pop.update().competition(
                 carrying_capacity=batch_setting([100, 200, 300, 400])
             )
@@ -820,7 +820,7 @@ class SpatialPopulation:
         if shared_count > 1:
             private = config._replace(
                 carrying_capacity=config.carrying_capacity.copy(),
-                expected_eggs_per_female=config.expected_eggs_per_female.copy(),
+                eggs_per_female=config.eggs_per_female.copy(),
                 sex_ratio=config.sex_ratio.copy(),
                 sperm_displacement_rate=config.sperm_displacement_rate.copy(),
                 low_density_growth_rate=config.low_density_growth_rate.copy(),
@@ -1553,8 +1553,8 @@ class SpatialPopulation:
     def _migration_config(self) -> ConfigObject:
         """Return one config object that carries migration runtime flags.
 
-        Migration kernels only use ``is_stochastic`` and
-        ``use_continuous_sampling``. Heterogeneous deme configs are supported
+        Migration kernels only use ``stochastic`` and
+        ``continuous_sampling``. Heterogeneous deme configs are supported
         as long as these migration-relevant flags are consistent when
         migration is enabled.
 
@@ -1574,21 +1574,21 @@ class SpatialPopulation:
         if np.all(self._migration_rate <= 0.0):
             return cfg
 
-        cfg_is_stochastic = bool(getattr(cfg, "is_stochastic", False))
-        cfg_use_continuous_sampling = bool(getattr(cfg, "use_continuous_sampling", False))
+        cfg_is_stochastic = bool(getattr(cfg, "stochastic", False))
+        cfg_continuous_sampling = bool(getattr(cfg, "continuous_sampling", False))
 
         for idx, deme in enumerate(self._demes[1:], start=1):
             deme_export = getattr(deme, "export_config", None)
             if not callable(deme_export):
                 raise TypeError(f"deme[{idx}] does not implement export_config()")
             other_cfg = deme_export()
-            if bool(getattr(other_cfg, "is_stochastic", False)) != cfg_is_stochastic:
+            if bool(getattr(other_cfg, "stochastic", False)) != cfg_is_stochastic:
                 raise ValueError(
-                    f"deme[{idx}] has different is_stochastic; migration requires consistent stochastic mode across demes"
+                    f"deme[{idx}] has different stochastic; migration requires consistent stochastic mode across demes"
                 )
-            if bool(getattr(other_cfg, "use_continuous_sampling", False)) != cfg_use_continuous_sampling:
+            if bool(getattr(other_cfg, "continuous_sampling", False)) != cfg_continuous_sampling:
                 raise ValueError(
-                    f"deme[{idx}] has different use_continuous_sampling; migration requires consistent sampling mode "
+                    f"deme[{idx}] has different continuous_sampling; migration requires consistent sampling mode "
                     "across demes"
                 )
         return cfg

@@ -56,7 +56,7 @@ def build_deme(..., idx):
 
 ---
 
-## 核心设计：SpatialBuilder + batch_setting
+## 核心设计：SpatialConfigurator + batch_setting
 
 ### `batch_setting` 包装器
 
@@ -75,7 +75,7 @@ batch_setting({
 
 当 builder 的某个参数是 `batch_setting` 对象时，内部自动切换为 spatial 批量模式。
 
-### SpatialBuilder 链式 API
+### SpatialConfigurator 链式 API
 
 ```python
 pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, cols=N)) \
@@ -96,7 +96,7 @@ pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, col
     .build()
 ```
 
-### SpatialBuilder 内部流程
+### SpatialConfigurator 内部流程
 
 ```
 build() 调用时:
@@ -115,9 +115,9 @@ build() 调用时:
 
 ## 实施路径
 
-### Phase 1a：同构 SpatialBuilder（无 batch_setting）
+### Phase 1a：同构 SpatialConfigurator（无 batch_setting）
 
-没有 `batch_setting` 时，所有 deme 完全一致。此时 SpatialBuilder 只需 build 一个 template，然后 N 次浅拷贝。
+没有 `batch_setting` 时，所有 deme 完全一致。此时 SpatialConfigurator 只需 build 一个 template，然后 N 次浅拷贝。
 
 ```python
 pop = SpatialPopulation.builder(species, n_demes=2601, ...) \
@@ -132,7 +132,7 @@ pop = SpatialPopulation.builder(species, n_demes=2601, ...) \
 
 预期：2601 demes ~50ms（不含 template 首次 build 的 2-3ms）。
 
-### Phase 1b：异构 SpatialBuilder（含 batch_setting）
+### Phase 1b：异构 SpatialConfigurator（含 batch_setting）
 
 检测到至少一个 `batch_setting` 参数时，按 config 等价性分组。
 
@@ -156,7 +156,7 @@ batch_setting.spatial(lambda x, y: 10000 if abs(x) < 5 else 5000, topology=hex_g
 
 接收拓扑坐标，隐式填充所有 deme 位置。
 
-### Phase 1d：`set_hook` 在 SpatialBuilder 中的集成
+### Phase 1d：`set_hook` 在 SpatialConfigurator 中的集成
 
 ```python
 SpatialPopulation.builder(...) \
@@ -276,7 +276,7 @@ for i in range(n_demes):
 | batch 展开后 config 分组 key 不可哈希（含 NumPy 数组）| 用 `id(arr)` 或序列化摘要 |
 | 克隆 demes 时 `_compiled_hooks` 共享引用导致状态泄漏 | Copy-on-write：`set_hook`/`remove_hook` 时按需复制 |
 | `PopulationConfig` 是否支持 `_replace`？ | 目测是 NamedTuple，确认后可用 |
-| SpatialBuilder 与现有 `DiscreteGenerationPopulationBuilder` 的关系 | SpatialBuilder 内部持有 per-deme builder，复用其校验逻辑 |
+| SpatialConfigurator 与现有 `DiscreteGenerationPopulationBuilder` 的关系 | SpatialConfigurator 内部持有 per-deme builder，复用其校验逻辑 |
 
 ---
 

@@ -1,6 +1,6 @@
 # Spatial 模拟指南
 
-SpatialPopulation 的实际用法：用 SpatialBuilder 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
+SpatialPopulation 的实际用法：用 SpatialConfigurator 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
 
 阅读完成后，可以写出下面这类代码：
 
@@ -16,11 +16,11 @@ spatial = (
 )
 ```
 
-> **提示**：`SpatialBuilder` 是同构/异构空间种群的首选构造方式。2601 个同构 deme 的构造时间从 ~2.6s 降至 ~16ms。详见 [SpatialBuilder 文档](spatial_builder.md)。
+> **提示**：`SpatialConfigurator` 是同构/异构空间种群的首选构造方式。2601 个同构 deme 的构造时间从 ~2.6s 降至 ~16ms。详见 [SpatialConfigurator 文档](spatial_builder.md)。
 
 ## 两种构造路径
 
-### 推荐：SpatialBuilder（链式 API）
+### 推荐：SpatialConfigurator（链式 API）
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
@@ -94,19 +94,19 @@ spatial = SpatialPopulation(
 
 ## 链式 API
 
-`SpatialBuilder` 的链式调用流程与 panmictic builder 一致，以下按推荐顺序列出各方法。带 `→` 标记的是空间特有方法，`[B]` 标记的参数接受 `batch_setting`（跨 deme 异构配置）。
+`SpatialConfigurator` 的链式调用流程与 panmictic builder 一致，以下按推荐顺序列出各方法。带 `→` 标记的是空间特有方法，`[B]` 标记的参数接受 `batch_setting`（跨 deme 异构配置）。
 
 ```python
 pop = (
     SpatialPopulation.builder(species, n_demes=9, topology=SquareGrid(3, 3))
     →                   # 入口：指定 deme 数量和拓扑
-    .setup(name="demo", stochastic=False, use_continuous_sampling=False)
+    .setup(name="demo", stochastic=False, continuous_sampling=False)
                         # 基本设定：名称、随机性、采样模式
     .age_structure(n_ages=8, new_adult_age=2)
                         # [仅 age_structured] 年龄分组数、成体起始年龄
     .initial_state(individual_count={"female": {"A|A": 500}, "male": {"A|A": 500}})
                         # [B] 初始基因型分布
-    .survival(female_age_based_survival_rates=[...], ...)
+    .survival(female_age_based_survival=[...], ...)
                         # 存活率（age_structured 为年龄向量，discrete 为标量）
     .reproduction(eggs_per_female=50.0, sex_ratio=0.5)
                         # [B] 繁殖参数
@@ -168,7 +168,7 @@ pop = (
 
 ## batch_setting 异构配置
 
-`batch_setting` 是 `SpatialBuilder` 的核心机制，允许不同 deme 在同一链式调用中指定不同的参数值。内部通过 config 等价性分组自动优化——相同参数的 deme 共享编译产物，仅 state 数组独立。
+`batch_setting` 是 `SpatialConfigurator` 的核心机制，允许不同 deme 在同一链式调用中指定不同的参数值。内部通过 config 等价性分组自动优化——相同参数的 deme 共享编译产物，仅 state 数组独立。
 
 ### 四种输入形式
 
@@ -229,7 +229,7 @@ states[n_demes // 2] = release_state
 
 pop = (
     SpatialPopulation.builder(species, n_demes=n_demes, topology=HexGrid(10, 10))
-    .setup(name="drive_release", stochastic=True, use_continuous_sampling=True)
+    .setup(name="drive_release", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6,
@@ -722,7 +722,7 @@ kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
 
 pop = (
     SpatialPopulation.builder(species, n_demes=100, topology=HexGrid(10, 10, wrap=False))
-    .setup(name="hex_demo", stochastic=True, use_continuous_sampling=True)
+    .setup(name="hex_demo", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count={"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="concave")
@@ -752,7 +752,7 @@ launch(spatial, port=8080, title="Spatial Debug Dashboard")
 ### 错误 2：deme 间迁移采样模式不一致
 
 支持异构 deme config。但当迁移开启时，所有 deme 的
-`is_stochastic` 与 `use_continuous_sampling` 必须保持一致；
+`stochastic` 与 `continuous_sampling` 必须保持一致；
 否则 `run_tick()` / `run(...)` 会报错。
 
 ### 错误 3：kernel 维度不对
@@ -780,7 +780,7 @@ SpatialPopulation 的实际使用顺序可以记成四步：
 
 ## 相关章节
 
-- [SpatialBuilder：批量构造](spatial_builder.md)
+- [SpatialConfigurator：批量构造](spatial_builder.md)
 - [空间生命周期包装器](spatial_lifecycle_wrapper.md)
 - [Migration Kernel 底层实现](migration_kernel_impl.md)
 - [模拟内核深度解析](4_simulation_engine.md)

@@ -15,14 +15,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from time import perf_counter
-from typing import TypeAlias
+from typing import Mapping, Sequence, TypeAlias
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
 
 import natal as nt
-from natal.genetic_entities import Genotype
 
 # Core constants
 NUM_ADULT_FEMALES = 50000
@@ -47,9 +46,9 @@ FEMALE_BALANCE_WEIGHTS = np.array([0, 6, 6, 5, 4, 3, 2, 1], dtype=np.float64)
 MALE_BALANCE_WEIGHTS = np.array([0, 6, 6, 4, 2], dtype=np.float64)
 BALANCE_SCALE = NUM_ADULT_FEMALES / 21.0
 
-InitialDistribution: TypeAlias = dict[
+InitialDistribution: TypeAlias = Mapping[
     str,
-    dict[Genotype | str, list[float | int] | tuple[float | int, ...] | dict[int, float | int] | int | float],
+    Mapping[str, float | Sequence[int] | Mapping[int, int]],
 ]
 
 
@@ -123,8 +122,8 @@ def sample_initial_state(rng: np.random.Generator) -> InitialDistribution:
     female_probs = FEMALE_BALANCE_WEIGHTS / FEMALE_BALANCE_WEIGHTS.sum()
     male_probs = MALE_BALANCE_WEIGHTS / MALE_BALANCE_WEIGHTS.sum()
 
-    female_counts: list[float | int] = [int(x) for x in rng.multinomial(female_total, female_probs).tolist()]
-    male_counts: list[float | int] = [int(x) for x in rng.multinomial(male_total, male_probs).tolist()]
+    female_counts = [int(x) for x in rng.multinomial(female_total, female_probs).tolist()]
+    male_counts = [int(x) for x in rng.multinomial(male_total, male_probs).tolist()]
 
     return {
         "female": {"WT|WT": female_counts},
@@ -158,8 +157,8 @@ def build_population(
         n_ages=8,
         new_adult_age=2,
     ).survival(
-        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0],
+        female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0],
     ).competition(
         competition_strength=5,
         juvenile_growth_mode="linear",
@@ -167,7 +166,7 @@ def build_population(
         age_1_carrying_capacity=NUM_ADULT_FEMALES * 12/21,
         expected_num_adult_females=NUM_ADULT_FEMALES,
     ).reproduction(
-        female_age_based_reproduction_rates=[0, 0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+        age_based_reproduction_rate=[0, 0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
         eggs_per_female=50,
         sperm_displacement_rate=0.05,
     ).presets(

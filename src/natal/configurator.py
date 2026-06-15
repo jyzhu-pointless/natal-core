@@ -23,8 +23,7 @@ Why this module exists:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Callable, Self, cast
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Self, Sequence, cast
 
 import numpy as np
 from numba import objmode  # pyright: ignore[reportMissingTypeStubs]
@@ -959,8 +958,8 @@ class Configurator:
         *,
         name: str | None = None,
         stochastic: bool | None = None,
-        use_continuous_sampling: bool | None = None,
-        use_fixed_egg_count: bool | None = None,
+        continuous_sampling: bool | None = None,
+        fixed_egg_count: bool | None = None,
     ) -> Self:
         """Configure simulation flags and optional population name.
 
@@ -969,9 +968,9 @@ class Configurator:
         Args:
             name: Population name (falls back to ``"Population"`` at build time).
             stochastic: If ``False``, use deterministic (median) outcomes.
-            use_continuous_sampling: If ``True``, sample from continuous
+            continuous_sampling: If ``True``, sample from continuous
                 distributions instead of discrete counts.
-            use_fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
+            fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
 
         Returns:
             Self for chaining.
@@ -980,11 +979,11 @@ class Configurator:
             self._name = name
         overrides: dict[str, bool] = {}
         if stochastic is not None:
-            overrides["is_stochastic"] = stochastic
-        if use_continuous_sampling is not None:
-            overrides["use_continuous_sampling"] = use_continuous_sampling
-        if use_fixed_egg_count is not None:
-            overrides["use_fixed_egg_count"] = use_fixed_egg_count
+            overrides["stochastic"] = stochastic
+        if continuous_sampling is not None:
+            overrides["continuous_sampling"] = continuous_sampling
+        if fixed_egg_count is not None:
+            overrides["fixed_egg_count"] = fixed_egg_count
         if overrides:
             self._config = self._config._replace(**overrides)
             if self._pop_ref is not None:
@@ -996,8 +995,8 @@ class Configurator:
 
     def initial_state(
         self,
-        individual_count: dict[str, dict[str, float | list[int] | dict[int, int]]],
-        sperm_storage: dict[str, dict[str, float | list[int] | dict[int, int]]] | None = None,
+        individual_count: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]],
+        sperm_storage: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]] | None = None,
     ) -> Self:
         """Set the initial population distribution.
 
@@ -1354,10 +1353,10 @@ class Configurator:
 
             external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
                 expected_num_adult_females=getattr(self, "_user_expected_adult_females", 500.0),
-                expected_eggs_per_female=float(config.expected_eggs_per_female),
+                eggs_per_female=float(config.eggs_per_female),
                 age_based_survival_rates=ext_surv,
                 age_based_reproduction_rates=ext_repro,
-                female_age_based_relative_fertility=config.female_age_based_relative_fertility,
+                female_age_based_fertility=config.female_age_based_fertility,
                 sex_ratio=float(config.sex_ratio),
                 new_adult_age=int(config.new_adult_age),
                 n_ages=int(config.n_ages),
@@ -1382,11 +1381,11 @@ class Configurator:
 
         expected_comp, expected_surv = compute_equilibrium_metrics(
             carrying_capacity=float(config.carrying_capacity),
-            expected_eggs_per_female=float(config.expected_eggs_per_female),
+            eggs_per_female=float(config.eggs_per_female),
             age_based_survival_rates=surv,
             age_based_mating_rates=mate,
             age_based_reproduction_rates=repro,
-            female_age_based_relative_fertility=config.female_age_based_relative_fertility,
+            female_age_based_fertility=config.female_age_based_fertility,
             relative_competition_strength=config.age_based_relative_competition_strength,
             sex_ratio=float(config.sex_ratio),
             new_adult_age=int(config.new_adult_age),
@@ -1611,7 +1610,7 @@ class DiscreteConfigurator(Configurator):
         sex_ratio: float | None = None,
         female_adult_mating_rate: float | None = None,
         male_adult_mating_rate: float | None = None,
-        use_fixed_egg_count: bool | None = None,
+        fixed_egg_count: bool | None = None,
     ) -> DiscreteConfigurator:
         """Configure reproduction for the discrete-generation model.
 
@@ -1620,7 +1619,7 @@ class DiscreteConfigurator(Configurator):
             sex_ratio: Female fraction of offspring (0–1).
             female_adult_mating_rate: Adult female mating probability.
             male_adult_mating_rate: Adult male mating probability.
-            use_fixed_egg_count: Disable Poisson noise.
+            fixed_egg_count: Disable Poisson noise.
 
         Returns:
             Self for chaining.
@@ -1650,16 +1649,16 @@ class DiscreteConfigurator(Configurator):
             if self._pop_ref is not None:
                 self._pop_ref.set_config(self._config)
         # Boolean flag — must use _replace (not a 0-d ndarray).
-        if use_fixed_egg_count is not None:
-            self._config = self._config._replace(use_fixed_egg_count=use_fixed_egg_count)
+        if fixed_egg_count is not None:
+            self._config = self._config._replace(fixed_egg_count=fixed_egg_count)
             if self._pop_ref is not None:
                 self._pop_ref.set_config(self._config)
         return self
 
     def initial_state(
         self,
-        individual_count: dict[str, dict[str, float | list[int] | dict[int, int]]],
-        sperm_storage: dict[str, dict[str, float | list[int] | dict[int, int]]] | None = None,
+        individual_count: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]],
+        sperm_storage: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]] | None = None,
     ) -> DiscreteConfigurator:
         """Set the initial population for a discrete-generation model.
 
@@ -1819,9 +1818,9 @@ class AgeStructuredConfigurator(Configurator):
             gametes_to_zygote_map=old.gametes_to_zygote_map,
             new_adult_age=new_adult_age,
             generation_time=generation_time,
-            is_stochastic=bool(old.is_stochastic),
-            use_continuous_sampling=bool(old.use_continuous_sampling),
-            use_fixed_egg_count=bool(old.use_fixed_egg_count),
+            stochastic=bool(old.stochastic),
+            continuous_sampling=bool(old.continuous_sampling),
+            fixed_egg_count=bool(old.fixed_egg_count),
             has_sex_chromosomes=old.has_sex_chromosomes,
         )
         # Rebuild registry for the new n_ages (affects genotype lookup dims).
@@ -1919,11 +1918,11 @@ class AgeStructuredConfigurator(Configurator):
         eggs_per_female: float | None = None,
         sex_ratio: float | None = None,
         sperm_displacement_rate: float | None = None,
-        female_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        male_age_based_mating_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_age_based_reproduction_rates: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_age_based_relative_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        use_fixed_egg_count: bool | None = None,
+        female_age_based_mating_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        male_age_based_mating_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        age_based_reproduction_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        fixed_egg_count: bool | None = None,
     ) -> AgeStructuredConfigurator:
         """Configure reproduction for the age-structured model.
 
@@ -1931,11 +1930,11 @@ class AgeStructuredConfigurator(Configurator):
             eggs_per_female: Base eggs per reproducing female.
             sex_ratio: Female fraction of offspring (0–1).
             sperm_displacement_rate: Fraction of stored sperm displaced.
-            female_age_based_mating_rates: Per-age female mating probability.
-            male_age_based_mating_rates: Per-age male mating probability.
-            female_age_based_reproduction_rates: Per-age reproduction participation.
-            female_age_based_relative_fertility: Per-age fertility weight.
-            use_fixed_egg_count: Disable Poisson noise.
+            female_age_based_mating_rate: Per-age female mating probability.
+            male_age_based_mating_rate: Per-age male mating probability.
+            age_based_reproduction_rate: Per-age reproduction participation.
+            female_age_based_fertility: Per-age fertility weight.
+            fixed_egg_count: Disable Poisson noise.
 
         Returns:
             Self for chaining.
@@ -1960,20 +1959,20 @@ class AgeStructuredConfigurator(Configurator):
         if eggs_per_female is not None or sex_ratio is not None:
             from natal.engine.simulation.age_structured import sync_equilibrium_metrics
             sync_equilibrium_metrics(self._config)
-        if female_age_based_mating_rates is not None:
+        if female_age_based_mating_rate is not None:
             self._config.age_based_mating_rates[0, :] = resolve(
-                female_age_based_mating_rates, n_ages, np.zeros(n_ages))
-        if male_age_based_mating_rates is not None:
+                female_age_based_mating_rate, n_ages, np.zeros(n_ages))
+        if male_age_based_mating_rate is not None:
             self._config.age_based_mating_rates[1, :] = resolve(
-                male_age_based_mating_rates, n_ages, np.zeros(n_ages))
-        if female_age_based_reproduction_rates is not None:
+                male_age_based_mating_rate, n_ages, np.zeros(n_ages))
+        if age_based_reproduction_rate is not None:
             self._config.age_based_reproduction_rates[:] = resolve(
-                female_age_based_reproduction_rates, n_ages, np.ones(n_ages))
-        if female_age_based_relative_fertility is not None:
-            self._config.female_age_based_relative_fertility[:] = resolve(
-                female_age_based_relative_fertility, n_ages, np.ones(n_ages))
-        if use_fixed_egg_count is not None:
-            self._config = self._config._replace(use_fixed_egg_count=use_fixed_egg_count)
+                age_based_reproduction_rate, n_ages, np.ones(n_ages))
+        if female_age_based_fertility is not None:
+            self._config.female_age_based_fertility[:] = resolve(
+                female_age_based_fertility, n_ages, np.ones(n_ages))
+        if fixed_egg_count is not None:
+            self._config = self._config._replace(fixed_egg_count=fixed_egg_count)
         return self
 
     def survival(

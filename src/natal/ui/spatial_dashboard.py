@@ -94,8 +94,8 @@ class SpatialDashboard:
     def _discrete_display(self) -> bool:
         """Whether individual counts should be displayed as integers."""
         config = self.pop.deme(0)._config
-        return bool(getattr(config, "is_stochastic", True)) and not bool(
-            getattr(config, "use_continuous_sampling", False)
+        return bool(getattr(config, "stochastic", True)) and not bool(
+            getattr(config, "continuous_sampling", False)
         )
 
     def _fmt_count(self, value: float, comma: bool = False) -> str:
@@ -1290,7 +1290,7 @@ class SpatialDashboard:
                                 ("Carrying Capacity", float(config.carrying_capacity)),
                                 ("Eggs per Female", float(config.expected_eggs_per_female)),
                                 ("Growth Mode", growth_mode_name(int(config.juvenile_growth_mode))),
-                                ("Stochastic", bool(config.is_stochastic)),
+                                ("Stochastic", bool(config.stochastic)),
                                 ("Sex Ratio", float(config.sex_ratio)),
                                 ("Low Density Growth", float(config.low_density_growth_rate)),
                                 ("New Adult Age", int(config.new_adult_age)),

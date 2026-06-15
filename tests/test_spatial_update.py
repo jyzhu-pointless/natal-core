@@ -3,7 +3,7 @@
 import pytest
 
 import natal as nt
-from natal.spatial_builder import batch_setting
+from natal.spatial_configurator import batch_setting
 
 
 @pytest.fixture(scope="module")
@@ -220,29 +220,29 @@ class TestSpatialUpdateSurvivalReproduction:
         pop.update().reproduction(eggs_per_female=100, sex_ratio=0.7)
         for i in range(4):
             cfg = pop.deme(i).config
-            assert cfg.expected_eggs_per_female[()] == 100.0
+            assert cfg.eggs_per_female[()] == 100.0
             assert cfg.sex_ratio[()] == 0.7
 
     def test_reproduction_single_deme(self, homogeneous_pop):
         """pop.update(deme=N).reproduction(...) on a single deme."""
         pop = homogeneous_pop
         pop.update(deme=2).reproduction(eggs_per_female=200)
-        assert pop.deme(2).config.expected_eggs_per_female[()] == 200.0
-        assert pop.deme(0).config.expected_eggs_per_female[()] == 10.0  # unchanged
+        assert pop.deme(2).config.eggs_per_female[()] == 200.0
+        assert pop.deme(0).config.eggs_per_female[()] == 10.0  # unchanged
 
     def test_setup_applies_to_all_demes(self, homogeneous_pop):
         """pop.update().setup(stochastic=...) on all demes."""
         pop = homogeneous_pop
         pop.update().setup(stochastic=True)
         for i in range(4):
-            assert pop.deme(i).config.is_stochastic is True
+            assert pop.deme(i).config.stochastic is True
 
     def test_setup_single_deme(self, homogeneous_pop):
         """pop.update(deme=N).setup(...) on a single deme."""
         pop = homogeneous_pop
         pop.update(deme=3).setup(stochastic=True)
-        assert pop.deme(3).config.is_stochastic is True
-        assert pop.deme(0).config.is_stochastic is False  # unchanged
+        assert pop.deme(3).config.stochastic is True
+        assert pop.deme(0).config.stochastic is False  # unchanged
 
     def test_combined_reproduction_and_survival(self, homogeneous_pop):
         """Chaining .reproduction() and .survival() in one update call."""
@@ -252,7 +252,7 @@ class TestSpatialUpdateSurvivalReproduction:
         )
         for i in range(4):
             cfg = pop.deme(i).config
-            assert cfg.expected_eggs_per_female[()] == 50.0
+            assert cfg.eggs_per_female[()] == 50.0
             assert cfg.female_age0_survival == pytest.approx(0.5)
 
 
@@ -281,7 +281,7 @@ class TestDispatchScalar:
         pop = homogeneous_pop
         with pytest.raises(TypeError):
             pop.update().reproduction(
-                female_age_based_mating_rates={0: 0.5, 1: 0.8}
+                female_age_based_mating_rate={0: 0.5, 1: 0.8}
             )
 
     def test_batch_reproduction_on_all_demes(self, homogeneous_pop):
@@ -292,7 +292,7 @@ class TestDispatchScalar:
         )
         expected = [50, 60, 70, 80]
         for i, ek in enumerate(expected):
-            assert pop.deme(i).config.expected_eggs_per_female[()] == ek
+            assert pop.deme(i).config.eggs_per_female[()] == ek
 
     def test_batch_survival_on_all_demes(self, homogeneous_pop):
         """Batch survival params via batch_setting on all demes.

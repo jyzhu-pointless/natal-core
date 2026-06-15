@@ -146,7 +146,7 @@ class TestZygoteFitness(unittest.TestCase):
                 "female": {"A|A": [0, 0, 10]},  # Put adults in age 2
                 "male": {"A|A": [0, 0, 5]},     # Put adults in age 2
             })
-            .reproduction(eggs_per_female=10.0, use_fixed_egg_count=True)  # Use fixed egg count for deterministic test
+            .reproduction(eggs_per_female=10.0, fixed_egg_count=True)  # Use fixed egg count for deterministic test
             .fitness(
                 zygote_viability={"A|A": 0.5},  # 50% zygote survival
             )
@@ -178,7 +178,7 @@ class TestZygoteFitness(unittest.TestCase):
                 "female": {"A|A": [0, 0, 10]},  # Put adults in age 2
                 "male": {"A|A": [0, 0, 5]},     # Put adults in age 2
             })
-            .reproduction(eggs_per_female=10.0, use_fixed_egg_count=True)
+            .reproduction(eggs_per_female=10.0, fixed_egg_count=True)
             .build()
         )
 

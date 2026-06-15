@@ -16,7 +16,7 @@ from natal import numba_compat as nbc
 from natal.numba_utils import njit_switch
 
 # ============================================================================
-# Continuous distribution helper functions (for use_continuous_sampling=True)
+# Continuous distribution helper functions (for continuous_sampling=True)
 # ============================================================================
 # Very small threshold to prevent numerical errors when distribution parameters are 0
 EPS = 1e-10
@@ -80,8 +80,8 @@ def sample_mating(
     adult_start_idx: int,
     n_ages: int,
     n_genotypes: int,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
 ) -> Annotated[NDArray[np.float64], "shape=(A,g,g)"]:
     """Vectorized version: batch sampling of mating events (monogamous). (67.0x speedup)
 
@@ -101,8 +101,8 @@ def sample_mating(
         adult_start_idx: Starting age index for adults
         n_ages: Total number of age classes
         n_genotypes: Number of genotypes g
-        is_stochastic: If True, use stochastic sampling; if False, use deterministic expectations
-        use_continuous_sampling: If True and is_stochastic=True, use Dirichlet distribution
+        stochastic: If True, use stochastic sampling; if False, use deterministic expectations
+        continuous_sampling: If True and stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
 
     Returns:
@@ -130,7 +130,7 @@ def sample_mating(
     # Historical mated state is preserved across ticks; remating displaces
     # existing sperm allocations controlled by sperm_displacement_rate.
 
-    if is_stochastic:
+    if stochastic:
         tmp = np.zeros(n_genotypes, dtype=np.float64)
 
         for age in range(adult_start_idx, n_ages):
@@ -146,7 +146,7 @@ def sample_mating(
                 virgins = max(0.0, n_female - mated_count)
 
                 # Virgin mating: how many virgins mate this tick.
-                if use_continuous_sampling:
+                if continuous_sampling:
                     n_mating_virgins = nbc.continuous_binomial(virgins, p_mating)
                 else:
                     n_mating_virgins = float(nbc.binomial(int(round(virgins)), p_mating))
@@ -155,7 +155,7 @@ def sample_mating(
                 p_remating = p_displace * p_mating
 
                 if mated_count > EPS and p_remating > EPS:
-                    if use_continuous_sampling:
+                    if continuous_sampling:
                         removed_frac = min(1.0, p_remating)
                         for gm in range(n_genotypes):
                             sperm[age, gf, gm] -= sperm[age, gf, gm] * removed_frac
@@ -175,7 +175,7 @@ def sample_mating(
                 # Allocate new matings to male genotypes.
                 n_new = n_mating_virgins + n_remating
                 if n_new > EPS:
-                    if use_continuous_sampling:
+                    if continuous_sampling:
                         nbc.continuous_multinomial(n_new, mating_prob_mat[gf, :], tmp)
                         for gm in range(n_genotypes):
                             sperm[age, gf, gm] += tmp[gm]
@@ -281,12 +281,12 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
     male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     n_glabs: int = 1,
     age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,  # (age,)
-    female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,  # (age,)
+    female_age_based_fertility: Optional[NDArray[np.float64]] = None,  # (age,)
     fixed_eggs: bool = False,
     sex_ratio: float = 0.5,
     has_sex_chromosomes: bool = False,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
 ) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Generate offspring using age-specific reproduction rates for consistency with equilibrium inference.
 
@@ -309,13 +309,13 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
         n_glabs: Unused parameter for API compatibility.
         age_based_reproduction_rates: Age-specific reproduction participation rates (n_ages,).
             If None, falls back to all females reproducing (equivalent to proportion=1.0).
-        female_age_based_relative_fertility: Age-specific relative fertility rates (n_ages,).
+        female_age_based_fertility: Age-specific relative fertility rates (n_ages,).
             If None, falls back to all females having full fertility (equivalent to 1.0).
         fixed_eggs: Whether to use fixed egg counts.
         sex_ratio: Offspring female ratio.
         has_sex_chromosomes: Whether offspring sex is genotype-constrained.
-        is_stochastic: Whether to sample stochastically.
-        use_continuous_sampling: Whether to use continuous sampling.
+        stochastic: Whether to sample stochastically.
+        continuous_sampling: Whether to use continuous sampling.
 
     Returns:
         Tuple containing female and male offspring counts with shape (g,).
@@ -331,8 +331,8 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
         else np.ones(n_ages, dtype=np.float64)
     )
     rel_fert = (
-        np.asarray(female_age_based_relative_fertility)
-        if female_age_based_relative_fertility is not None
+        np.asarray(female_age_based_fertility)
+        if female_age_based_fertility is not None
         else np.ones(n_ages, dtype=np.float64)
     )
 
@@ -357,24 +357,24 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                     average_eggs_per_wt_female * ff * fert_m_arr[gm] * fertility_factor
                 )
 
-                if is_stochastic:
-                    n_pairs_eff = n_pairs if use_continuous_sampling else np.round(n_pairs)
+                if stochastic:
+                    n_pairs_eff = n_pairs if continuous_sampling else np.round(n_pairs)
                     if n_pairs_eff <= 0.0:
                         continue
                     n_reproducing = float(n_pairs_eff)
                     if p_reproduce < 1.0 - EPS:
                         n_reproducing = (
                             nbc.continuous_binomial(n_pairs_eff, p_reproduce)
-                            if use_continuous_sampling
+                            if continuous_sampling
                             else float(nbc.binomial(int(n_pairs_eff), p_reproduce))
                         )
                     total_lambda = float(n_reproducing * eggs_per_pair)
                     if fixed_eggs:
-                        n_total = float(total_lambda) if use_continuous_sampling else float(np.round(total_lambda))
+                        n_total = float(total_lambda) if continuous_sampling else float(np.round(total_lambda))
                     else:
                         n_total = (
                             nbc.continuous_poisson(total_lambda)
-                            if use_continuous_sampling
+                            if continuous_sampling
                             else float(np.random.poisson(total_lambda))
                         )
                 else:
@@ -388,7 +388,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                 for go in range(n_genotypes):
                     p_surv += offspring_prob[gf, gm, go]
 
-                if is_stochastic:
+                if stochastic:
                     if p_surv <= EPS:
                         continue
                     n_viable = (
@@ -396,7 +396,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                         if p_surv >= 1.0 - EPS
                         else (
                             nbc.continuous_binomial(n_total, p_surv)
-                            if use_continuous_sampling
+                            if continuous_sampling
                             else float(nbc.binomial(int(round(n_total)), p_surv))
                         )
                     )
@@ -405,7 +405,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                     inv = 1.0 / p_surv
                     for go in range(n_genotypes):
                         prob_norm[go] = offspring_prob[gf, gm, go] * inv
-                    if use_continuous_sampling:
+                    if continuous_sampling:
                         nbc.continuous_multinomial(n_viable, prob_norm, tmp)
                         for go in range(n_genotypes):
                             offspring_acc[go] += tmp[go]
@@ -445,10 +445,10 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
             if has_sex_chromosomes:
                 denom = f_w + m_w
                 p_f = nbc.clamp01(f_w / denom) if denom > EPS else 0.5
-            if is_stochastic:
+            if stochastic:
                 n_fem = (
                     nbc.continuous_binomial(n_g, p_f)
-                    if use_continuous_sampling
+                    if continuous_sampling
                     else float(nbc.binomial(int(round(n_g)), p_f))
                 )
             else:
@@ -477,12 +477,12 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
     male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     n_glabs: int = 1,
     age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,  # (age,)
-    female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,  # (age,)
+    female_age_based_fertility: Optional[NDArray[np.float64]] = None,  # (age,)
     fixed_eggs: bool = False,
     sex_ratio: float = 0.5,
     has_sex_chromosomes: bool = False,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
 ) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Public interface for fertilization with age-specific reproduction rates.
 
@@ -506,12 +506,12 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
         male_only_by_sex_chrom: Male-only genotype mask.
         n_glabs: Unused parameter for API compatibility.
         age_based_reproduction_rates: Age-specific reproduction participation rates.
-        female_age_based_relative_fertility: Age-specific relative fertility rates.
+        female_age_based_fertility: Age-specific relative fertility rates.
         fixed_eggs: Whether to use fixed egg counts.
         sex_ratio: Offspring female ratio.
         has_sex_chromosomes: Whether offspring sex is genotype-constrained.
-        is_stochastic: Whether to sample stochastically.
-        use_continuous_sampling: Whether to use continuous sampling.
+        stochastic: Whether to sample stochastically.
+        continuous_sampling: Whether to use continuous sampling.
 
     Returns:
         Tuple containing female and male offspring counts.
@@ -534,12 +534,12 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
         female_only_by_sex_chrom=female_only_by_sex_chrom,
         male_only_by_sex_chrom=male_only_by_sex_chrom,
         age_based_reproduction_rates=age_based_reproduction_rates,
-        female_age_based_relative_fertility=female_age_based_relative_fertility,
+        female_age_based_fertility=female_age_based_fertility,
         fixed_eggs=fixed_eggs,
         sex_ratio=sex_ratio,
         has_sex_chromosomes=has_sex_chromosomes,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling,
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling,
     )
 
 
@@ -714,7 +714,7 @@ def sample_survival_with_sperm_storage(
     male_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
     n_genotypes: int,
     n_ages: int,
-    use_continuous_sampling: bool = False,
+    continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
     """Randomly apply survival rates with consistent sampling of sperm storage.
 
@@ -726,7 +726,7 @@ def sample_survival_with_sperm_storage(
         female_survival_rates: Female survival rates (supports 1D or 2D)
         male_survival_rates: Male survival rates (supports 1D or 2D)
         n_genotypes: Number of genotypes
-        use_continuous_sampling: If True, use Dirichlet distribution instead of discrete sampling.
+        continuous_sampling: If True, use Dirichlet distribution instead of discrete sampling.
             Currently not implemented (will use discrete).
         n_ages: Number of ages
 
@@ -772,15 +772,15 @@ def sample_survival_with_sperm_storage(
                     f"(age={age}, g={g}, n_f_raw={n_f_raw}, total_sperm={total_sperm})"
                 )
             n_virgins_raw = max(0.0, n_virgins_raw)
-            n_virgins = n_virgins_raw if use_continuous_sampling else float(int(round(n_virgins_raw)))
+            n_virgins = n_virgins_raw if continuous_sampling else float(int(round(n_virgins_raw)))
 
             new_sperm_sum = 0.0
             for gm in range(n_genotypes):
-                n_sperm = s_pop[age, g, gm] if use_continuous_sampling else float(int(round(s_pop[age, g, gm])))
+                n_sperm = s_pop[age, g, gm] if continuous_sampling else float(int(round(s_pop[age, g, gm])))
                 if n_sperm > EPS:
                     s_pop[age, g, gm] = (
                         nbc.continuous_binomial(n_sperm, p_f)
-                        if use_continuous_sampling
+                        if continuous_sampling
                         else float(nbc.binomial(int(n_sperm), p_f))
                     )
                 else:
@@ -791,21 +791,21 @@ def sample_survival_with_sperm_storage(
             if n_virgins > EPS:
                 surv_virgins = (
                     nbc.continuous_binomial(n_virgins, p_f)
-                    if use_continuous_sampling
+                    if continuous_sampling
                     else float(nbc.binomial(int(n_virgins), p_f))
                 )
 
             f_pop[age, g] = new_sperm_sum + surv_virgins
 
             # ── males ──
-            n_m = m_pop[age, g] if use_continuous_sampling else float(int(round(m_pop[age, g])))
+            n_m = m_pop[age, g] if continuous_sampling else float(int(round(m_pop[age, g])))
             gm_idx = g % surv_m_2d.shape[1]
             p_m = nbc.clamp01(float(surv_m_2d[age, gm_idx]))
 
             if n_m > EPS:
                 m_pop[age, g] = (
                     nbc.continuous_binomial(n_m, p_m)
-                    if use_continuous_sampling
+                    if continuous_sampling
                     else float(nbc.binomial(int(n_m), p_m))
                 )
             else:
@@ -818,14 +818,14 @@ def recruit_juveniles_sampling(
     age_0_juvenile_counts: Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]],
     carrying_capacity: int,
     n_genotypes: int,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Cohort-mode recruitment to carrying capacity.
 
     If total juveniles <= carrying_capacity, returns float copies. If
     greater, deterministically scale down to K while preserving genotype proportions
-    (with remainder distribution), unless `is_stochastic` is True in which case
+    (with remainder distribution), unless `stochastic` is True in which case
     exactly `K` juveniles are sampled by multinomial.
     Returns float64 arrays (containing integral values if stochastic).
 
@@ -833,8 +833,8 @@ def recruit_juveniles_sampling(
         age_0_juvenile_counts: Tuple of (female_0, male_0) age-0 juvenile counts
         carrying_capacity: Carrying capacity K
         n_genotypes: Number of genotypes
-        is_stochastic: If True, use stochastic sampling; if False, use deterministic scaling
-        use_continuous_sampling: If True and is_stochastic=True, use Dirichlet distribution
+        stochastic: If True, use stochastic sampling; if False, use deterministic scaling
+        continuous_sampling: If True and stochastic=True, use Dirichlet distribution
             instead of discrete sampling
 
     Returns:
@@ -843,7 +843,7 @@ def recruit_juveniles_sampling(
     female_0, male_0 = age_0_juvenile_counts
     # Keep deterministic paths on raw expected counts; only stochastic-discrete
     # paths require integerized trials.
-    if is_stochastic and (not use_continuous_sampling):
+    if stochastic and (not continuous_sampling):
         female_arr = np.rint(np.asarray(female_0))
         male_arr = np.rint(np.asarray(male_0))
     else:
@@ -866,8 +866,8 @@ def recruit_juveniles_sampling(
     counts = np.concatenate((female_arr, male_arr))
     probs = counts / total
 
-    if is_stochastic:
-        if use_continuous_sampling:
+    if stochastic:
+        if continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
             out_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
             nbc.continuous_multinomial(K, probs, out_counts)
@@ -891,20 +891,20 @@ def recruit_juveniles_given_scaling_factor_sampling(
     age_0_juvenile_counts: Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]],
     scaling_factor: float,
     n_genotypes: int,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Scale age-0 juveniles by `scaling_factor`.
 
-    If `is_stochastic` is True, sample exactly `round(total * scaling_factor)`
+    If `stochastic` is True, sample exactly `round(total * scaling_factor)`
     juveniles by multinomial according to genotype-by-sex proportions.
 
     Args:
         age_0_juvenile_counts: Tuple of (female_0, male_0) age-0 juvenile counts
         scaling_factor: Scaling factor to apply to total juvenile count
         n_genotypes: Number of genotypes
-        is_stochastic: If True, use stochastic sampling; if False, use deterministic scaling
-        use_continuous_sampling: If True and is_stochastic=True, use Dirichlet distribution
+        stochastic: If True, use stochastic sampling; if False, use deterministic scaling
+        continuous_sampling: If True and stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
 
     Returns:
@@ -912,7 +912,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
             Returns float64 arrays (containing integral values if stochastic).
     """
     female_0, male_0 = age_0_juvenile_counts
-    if is_stochastic and (not use_continuous_sampling):
+    if stochastic and (not continuous_sampling):
         female_arr = np.rint(np.asarray(female_0))
         male_arr = np.rint(np.asarray(male_0))
     else:
@@ -926,7 +926,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
     if total <= 0:
         return np.zeros_like(female_arr), np.zeros_like(male_arr)
 
-    if is_stochastic and (not use_continuous_sampling):
+    if stochastic and (not continuous_sampling):
         desired = float(int(round(total * float(scaling_factor))))
     else:
         desired = total * float(scaling_factor)
@@ -940,10 +940,10 @@ def recruit_juveniles_given_scaling_factor_sampling(
     total_counts = float(counts.sum())
     probs = counts / total_counts
 
-    if is_stochastic:
+    if stochastic:
         # Use nbc.multinomial instead of np.random.multinomial
         # This avoids Numba nested JIT dynamic probability array type inference bug
-        if use_continuous_sampling:
+        if continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
             temp_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
             nbc.continuous_multinomial(float(desired), probs, temp_counts)
@@ -965,10 +965,10 @@ def recruit_juveniles_given_scaling_factor_sampling(
 @njit_switch(cache=True)
 def compute_equilibrium_metrics(
     carrying_capacity: float,
-    expected_eggs_per_female: float,
+    eggs_per_female: float,
     age_based_survival_rates: NDArray[np.float64], # (sex, age)
     age_based_mating_rates: NDArray[np.float64],   # (sex, age)
-    female_age_based_relative_fertility: NDArray[np.float64], # (age,)
+    female_age_based_fertility: NDArray[np.float64], # (age,)
     relative_competition_strength: NDArray[np.float64], # (age,)
     sex_ratio: float,
     new_adult_age: int,
@@ -990,13 +990,13 @@ def compute_equilibrium_metrics(
 
     Args:
         carrying_capacity: Total carrying capacity K based on age=1
-        expected_eggs_per_female: Basic offspring count
+        eggs_per_female: Basic offspring count
         age_based_survival_rates: Survival rate matrix (2, n_ages)
         age_based_mating_rates: Mating rate matrix (2, n_ages)
         age_based_reproduction_rates: Female age-specific reproduction participation
             rates with shape (n_ages,). If None, falls back to
             ``age_based_mating_rates[0]``.
-        female_age_based_relative_fertility: Female age-dependent relative fertility (n_ages,)
+        female_age_based_fertility: Female age-dependent relative fertility (n_ages,)
         relative_competition_strength: Competition weights for each age (n_ages,)
         sex_ratio: Sex ratio (female proportion)
         new_adult_age: Adult starting age
@@ -1029,7 +1029,7 @@ def compute_equilibrium_metrics(
             # Use per-tick reproducing fraction and relative fertility
             # Contribution of this age to age0 production:
             # n_f * P(reproducing_this_tick) * relative_fertility * eggs_per_female
-            produced_age_0 += n_f * p_reproducing[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
+            produced_age_0 += n_f * p_reproducing[age] * female_age_based_fertility[age] * eggs_per_female
 
         total_age_1 = expected_distribution[0, 1] + expected_distribution[1, 1]
     else:
@@ -1056,7 +1056,7 @@ def compute_equilibrium_metrics(
         produced_age_0 = 0.0
         for age in range(new_adult_age, n_ages):
             n_f = expected_distribution[0, age]
-            produced_age_0 += n_f * p_reproducing[age] * female_age_based_relative_fertility[age] * expected_eggs_per_female
+            produced_age_0 += n_f * p_reproducing[age] * female_age_based_fertility[age] * eggs_per_female
 
     # Calculate total expected competition strength (limited to larvae participating in competition, i.e., age < new_adult_age)
     # Age 0 is produced Egg count; Age 1+ are survivors in distribution
@@ -1089,7 +1089,7 @@ def compute_equilibrium_metrics(
 def sync_equilibrium_metrics(config: Any) -> None:
     """Recompute and write expected_competition_strength + expected_survival_rate.
 
-    Call this after modifying *carrying_capacity*, *expected_eggs_per_female*,
+    Call this after modifying *carrying_capacity*, *eggs_per_female*,
     or *sex_ratio* at runtime (e.g. from a hook or Configurator).  The
     function reads the current values of all relevant config fields, computes
     fresh equilibrium metrics, and writes them back to *config* in-place.
@@ -1120,12 +1120,12 @@ def sync_equilibrium_metrics(config: Any) -> None:
         repro = config.age_based_reproduction_rates
     comp, surv_val = compute_equilibrium_metrics(
         carrying_capacity=float(config.carrying_capacity[()]),
-        expected_eggs_per_female=float(config.expected_eggs_per_female[()]),
+        eggs_per_female=float(config.eggs_per_female[()]),
         sex_ratio=float(config.sex_ratio[()]),
         age_based_survival_rates=surv,
         age_based_mating_rates=mate,
         age_based_reproduction_rates=repro,
-        female_age_based_relative_fertility=config.female_age_based_relative_fertility,
+        female_age_based_fertility=config.female_age_based_fertility,
         relative_competition_strength=config.age_based_relative_competition_strength,
         new_adult_age=config.new_adult_age,
         n_ages=config.n_ages,
@@ -1272,8 +1272,8 @@ def fertilize_with_precomputed_offspring_probability(
     fixed_eggs: bool = False,
     sex_ratio: float = 0.5,
     has_sex_chromosomes: bool = False,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
 ) -> tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
     """Deprecated: use _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction."""
     import warnings
@@ -1298,12 +1298,12 @@ def fertilize_with_precomputed_offspring_probability(
         male_only_by_sex_chrom=male_only_by_sex_chrom,
         n_glabs=n_glabs,
         age_based_reproduction_rates=None,
-        female_age_based_relative_fertility=None,
+        female_age_based_fertility=None,
         fixed_eggs=fixed_eggs,
         sex_ratio=sex_ratio,
         has_sex_chromosomes=has_sex_chromosomes,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling,
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling,
     )
 
 

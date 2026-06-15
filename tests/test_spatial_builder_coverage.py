@@ -1,4 +1,4 @@
-"""Comprehensive tests for ``natal.spatial_builder``.
+"""Comprehensive tests for ``natal.spatial_configurator``.
 
 Covers:
 - Homogeneous builds (discrete_generation and age_structured pop_types)
@@ -18,14 +18,14 @@ import pytest
 
 import natal as nt
 from natal.numba_utils import numba_disabled
-from natal.spatial_builder import BatchSetting, SpatialBuilder, batch_setting
+from natal.spatial_configurator import BatchSetting, SpatialConfigurator, batch_setting
 from natal.spatial_topology import HexGrid, SquareGrid
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _simple_species(name: str = "SpatialBuilderTestSpecies") -> nt.Species:
+def _simple_species(name: str = "SpatialConfiguratorTestSpecies") -> nt.Species:
     """Return a minimal species with one biallelic locus."""
     return nt.Species.from_dict(
         name,
@@ -530,17 +530,17 @@ class TestHexGridTopology:
 # ===========================================================================
 
 class TestErrorPaths:
-    """Error paths in SpatialBuilder and SpatialPopulation."""
+    """Error paths in SpatialConfigurator and SpatialPopulation."""
 
     def test_n_demes_zero_raises(self) -> None:
         species = _simple_species("ZeroDemes")
         with pytest.raises(ValueError, match="n_demes must be >= 1"):
-            SpatialBuilder(species, n_demes=0)
+            SpatialConfigurator(species, n_demes=0)
 
     def test_n_demes_negative_raises(self) -> None:
         species = _simple_species("NegDemes")
         with pytest.raises(ValueError, match="n_demes must be >= 1"):
-            SpatialBuilder(species, n_demes=-1)
+            SpatialConfigurator(species, n_demes=-1)
 
     def test_adjacency_mode_requires_kernel_raises(self) -> None:
         """Kernel mode with no kernel and no kernel_bank raises."""
@@ -585,13 +585,13 @@ class TestErrorPaths:
 
     def test_age_structure_on_discrete_raises(self) -> None:
         species = _simple_species("AgeStructOnDisc")
-        builder = SpatialBuilder(species, n_demes=2, pop_type="discrete_generation")
+        builder = SpatialConfigurator(species, n_demes=2, pop_type="discrete_generation")
         with pytest.raises(TypeError, match="age_structure.*only valid.*age_structured"):
             builder.age_structure(n_ages=4, new_adult_age=2)
 
     def test_batch_kernel_and_kernel_bank_conflict(self) -> None:
         species = _simple_species("KernelConflict")
-        builder = SpatialBuilder(species, n_demes=2, pop_type="discrete_generation")
+        builder = SpatialConfigurator(species, n_demes=2, pop_type="discrete_generation")
         with pytest.raises(ValueError, match="Cannot use batch_setting for kernel when kernel_bank"):
             builder.migration(
                 kernel=batch_setting([np.ones((3, 3)), np.ones((3, 3))]),
@@ -600,7 +600,7 @@ class TestErrorPaths:
 
     def test_batch_kernel_and_deme_kernel_ids_conflict(self) -> None:
         species = _simple_species("KernelIdsConflict")
-        builder = SpatialBuilder(species, n_demes=2, pop_type="discrete_generation")
+        builder = SpatialConfigurator(species, n_demes=2, pop_type="discrete_generation")
         with pytest.raises(ValueError, match="Cannot use batch_setting for kernel when deme_kernel_ids"):
             builder.migration(
                 kernel=batch_setting([np.ones((3, 3)), np.ones((3, 3))]),
@@ -1149,7 +1149,7 @@ class TestMakeHashableBranches:
     """Direct tests for _make_hashable covering dict/tuple/list branches."""
 
     def test_make_hashable_dict(self) -> None:
-        from natal.spatial_builder import _make_hashable
+        from natal.spatial_configurator import _make_hashable
         d = {"b": 2, "a": 1}
         h = _make_hashable(d)
         assert isinstance(h, tuple)
@@ -1157,28 +1157,28 @@ class TestMakeHashableBranches:
         assert len(h[1]) == 2
 
     def test_make_hashable_list(self) -> None:
-        from natal.spatial_builder import _make_hashable
+        from natal.spatial_configurator import _make_hashable
         lst = [3, 1, 2]
         h = _make_hashable(lst)
         assert isinstance(h, tuple)
         assert h == (3, 1, 2)
 
     def test_make_hashable_tuple(self) -> None:
-        from natal.spatial_builder import _make_hashable
+        from natal.spatial_configurator import _make_hashable
         tup = (10, 20)
         h = _make_hashable(tup)
         assert isinstance(h, tuple)
         assert h == (10, 20)
 
     def test_make_hashable_ndarray(self) -> None:
-        from natal.spatial_builder import _make_hashable
+        from natal.spatial_configurator import _make_hashable
         arr = np.array([[1.0, 2.0], [3.0, 4.0]])
         h = _make_hashable(arr)
         assert isinstance(h, tuple)
         assert h[0] == "__ndarray__"
 
     def test_make_hashable_scalar(self) -> None:
-        from natal.spatial_builder import _make_hashable
+        from natal.spatial_configurator import _make_hashable
         assert _make_hashable(42) == 42
         assert _make_hashable("hello") == "hello"
 
@@ -1242,8 +1242,8 @@ class TestInitialStateWithSpermStorage:
                 )
                 .reproduction(
                     eggs_per_female=10,
-                    female_age_based_mating_rates=[0.0, 0.0, 0.3, 0.5],
-                    male_age_based_mating_rates=[0.0, 0.0, 0.3, 0.5],
+                    female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+                    male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
                 )
                 .competition(carrying_capacity=1000, expected_num_adult_females=100)
                 .build()
@@ -1385,8 +1385,8 @@ class TestHeterogeneousAgeStructuredState:
                 )
                 .reproduction(
                     eggs_per_female=10,
-                    female_age_based_mating_rates=[0.0, 0.0, 0.3, 0.5],
-                    male_age_based_mating_rates=[0.0, 0.0, 0.3, 0.5],
+                    female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+                    male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
                 )
                 .competition(carrying_capacity=1000, expected_num_adult_females=100)
                 .build()

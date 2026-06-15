@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
-from natal.spatial_builder import batch_setting
+from natal.spatial_configurator import batch_setting
 from natal.spatial_population import SpatialPopulation
 from natal.spatial_topology import SquareGrid
 from natal.ui import launch
@@ -63,14 +63,13 @@ def build_spatial_population() -> SpatialPopulation:
             ])
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 0.96, 0.9, 0.75, 0.0],
-            male_age_based_survival_rates=[1.0, 0.96, 0.9, 0.75, 0.0],
+            female_age_based_survival=[1.0, 0.96, 0.9, 0.75, 0.0],
+            male_age_based_survival=[1.0, 0.96, 0.9, 0.75, 0.0],
         )
         .reproduction(
-            female_age_based_mating_rates=[0.0, 1.0, 1.0, 0.8, 0.0],
-            male_age_based_mating_rates=[0.0, 1.0, 1.0, 0.8, 0.0],
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.8, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.8, 0.0],
             eggs_per_female=10.0,
-            use_sperm_storage=False,
         )
         .competition(
             juvenile_growth_mode="logistic",

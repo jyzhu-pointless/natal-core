@@ -123,7 +123,7 @@ from .population_state import (
     to_plain_discrete_population_state,
     to_plain_population_state,
 )
-from .spatial_builder import BatchSetting, SpatialBuilder, batch_setting
+from .spatial_configurator import BatchSetting, SpatialConfigurator, batch_setting
 from .spatial_population import SpatialPopulation
 from .spatial_topology import (
     GridTopology,
@@ -315,7 +315,7 @@ __all__ = [
     "RESULT_STOP",
     "Sex",
     "SexSpec",
-    "SpatialBuilder",
+    "SpatialConfigurator",
     "SpatialDashboard",
     "SpatialPopulation",
     "SpatialTopology",
