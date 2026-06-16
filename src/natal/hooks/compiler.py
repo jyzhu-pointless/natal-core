@@ -438,15 +438,45 @@ def _build_filtered_hook_program(
         for hook in hooks:
             plan = hook.plan
 
+            # Deme selector MUST be appended for every hook (including no-ops)
+            # so that deme_selector_types/offsets/data stay aligned with n_hooks.
+            sel = hook.deme_selector
+
             # Skip CSR hooks for mixed events — they're handled by the unified function.
             if hook.event in mixed_events and plan is not None and plan.n_ops > 0:
                 n_ops_list.append(0)
                 op_offsets.append(op_offsets[-1])
+                if sel == "*":
+                    all_deme_sel_types.append(0)
+                elif isinstance(sel, int):
+                    all_deme_sel_types.append(1)
+                    all_deme_sel_data.append(int(sel))
+                elif isinstance(sel, range):
+                    all_deme_sel_types.append(2)
+                    all_deme_sel_data.append(int(sel.start))
+                    all_deme_sel_data.append(int(sel.stop))
+                else:
+                    all_deme_sel_types.append(3)
+                    all_deme_sel_data.extend([int(x) for x in sel])
+                all_deme_sel_offsets.append(len(all_deme_sel_data))
                 continue
 
             if plan is None or plan.n_ops == 0:
                 n_ops_list.append(0)
                 op_offsets.append(op_offsets[-1])
+                if sel == "*":
+                    all_deme_sel_types.append(0)
+                elif isinstance(sel, int):
+                    all_deme_sel_types.append(1)
+                    all_deme_sel_data.append(int(sel))
+                elif isinstance(sel, range):
+                    all_deme_sel_types.append(2)
+                    all_deme_sel_data.append(int(sel.start))
+                    all_deme_sel_data.append(int(sel.stop))
+                else:
+                    all_deme_sel_types.append(3)
+                    all_deme_sel_data.extend([int(x) for x in sel])
+                all_deme_sel_offsets.append(len(all_deme_sel_data))
                 continue
 
             n_ops_list.append(plan.n_ops)
