@@ -26,6 +26,7 @@ from .types import (
     EVENT_ID_MAP,
     NUM_EVENTS,
     RESULT_CONTINUE,
+    RESULT_SKIP,
     RESULT_STOP,
     CompiledHookDescriptor,
     DemeSelector,
@@ -311,7 +312,7 @@ def _execute_single_csr_hook(
     specific positions in a priority-ordered schedule.
     """
     if hook_idx < 0 or hook_idx >= n_hooks:
-        return RESULT_CONTINUE
+        return RESULT_SKIP
 
     # Filtering by deme_id using serialized selector data
     if not njit_deme_selector_matches(
@@ -321,7 +322,7 @@ def _execute_single_csr_hook(
         deme_selector_data,
         deme_id,
     ):
-        return RESULT_CONTINUE
+        return RESULT_SKIP
 
     op_start = op_offsets[hook_idx]
     op_end = op_offsets[hook_idx + 1]

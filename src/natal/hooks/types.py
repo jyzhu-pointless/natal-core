@@ -186,8 +186,9 @@ COND_OP_OR = 101
 COND_OP_NOT = 102
 
 # Execution result codes
-RESULT_CONTINUE = 0
-RESULT_STOP = 1
+RESULT_CONTINUE = 0   # "executed successfully, proceed to the next hook"
+RESULT_SKIP = 0       # "not applicable in this context, skip this hook silently"
+RESULT_STOP = 1       # "abort the current event immediately"
 
 # Event ID constants (for HookProgram)
 EVENT_FIRST = 0
