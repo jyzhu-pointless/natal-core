@@ -279,11 +279,165 @@ def _apply_target_with_sperm(
 
 
 @njit_switch(cache=True)
+def _execute_single_csr_hook(
+    hook_idx: int,
+    n_hooks: int | np.integer[Any],
+    op_offsets: np.ndarray,
+    op_types_data: np.ndarray,
+    gidx_offsets_data: np.ndarray,
+    gidx_data: np.ndarray,
+    age_offsets_data: np.ndarray,
+    age_data: np.ndarray,
+    sex_masks_data: np.ndarray,
+    params_data: np.ndarray,
+    condition_offsets_data: np.ndarray,
+    condition_types_data: np.ndarray,
+    condition_params_data: np.ndarray,
+    deme_selector_types: np.ndarray,
+    deme_selector_offsets: np.ndarray,
+    deme_selector_data: np.ndarray,
+    individual_count: np.ndarray,
+    sperm_storage: np.ndarray,
+    has_sperm_storage: bool,
+    tick: int,
+    stochastic: bool,
+    continuous_sampling: bool,
+    deme_id: int,
+) -> int:
+    """Execute a single hook at ``hook_idx`` from flattened CSR arrays.
+
+    This is the per-hook inner loop extracted from ``execute_csr_event_arrays``
+    so that unified mixed-type dispatch can call individual CSR hooks at
+    specific positions in a priority-ordered schedule.
+    """
+    if hook_idx < 0 or hook_idx >= n_hooks:
+        return RESULT_CONTINUE
+
+    # Filtering by deme_id using serialized selector data
+    if not njit_deme_selector_matches(
+        deme_selector_types[hook_idx],
+        deme_selector_offsets[hook_idx],
+        deme_selector_offsets[hook_idx + 1],
+        deme_selector_data,
+        deme_id,
+    ):
+        return RESULT_CONTINUE
+
+    op_start = op_offsets[hook_idx]
+    op_end = op_offsets[hook_idx + 1]
+
+    for op_idx in range(op_start, op_end):
+        cond_start = condition_offsets_data[op_idx]
+        cond_end = condition_offsets_data[op_idx + 1]
+
+        if not _eval_csr_condition_program(
+            condition_types_data,
+            condition_params_data,
+            cond_start,
+            cond_end,
+            tick,
+        ):
+            continue
+
+        op_type = op_types_data[op_idx]
+        param = params_data[op_idx]
+
+        gidx_start = gidx_offsets_data[op_idx]
+        gidx_end = gidx_offsets_data[op_idx + 1]
+        age_start = age_offsets_data[op_idx]
+        age_end = age_offsets_data[op_idx + 1]
+
+        sex_mask_idx = op_idx * 2
+        sex_female = sex_masks_data[sex_mask_idx]
+        sex_male = sex_masks_data[sex_mask_idx + 1]
+
+        for sex_idx in range(2):
+            if sex_idx == 0 and not sex_female:
+                continue
+            if sex_idx == 1 and not sex_male:
+                continue
+
+            for age_idx_ptr in range(age_start, age_end):
+                age = age_data[age_idx_ptr]
+
+                for gidx_ptr in range(gidx_start, gidx_end):
+                    gidx = gidx_data[gidx_ptr]
+                    current = individual_count[sex_idx, age, gidx]
+
+                    # Convert each operation to a target count first, then
+                    # route through one unified update function so survival
+                    # semantics are consistent across operators.
+                    if op_type == 0:     # Op.scale
+                        target = max(0.0, current * param)
+                    elif op_type == 1:   # Op.set
+                        target = max(0.0, param)
+                    elif op_type == 2:   # Op.add
+                        target = max(0.0, current + param)
+                    elif op_type == 3:   # Op.subtract
+                        target = max(0.0, current - param)
+                    elif op_type == 4:   # Op.kill
+                        target = max(0.0, current * (1.0 - param))
+                    elif op_type == 5:   # Op.sample
+                        target = min(current, max(0.0, param))
+                    else:
+                        target = current
+
+                    if op_type <= 5:   # Op.scale, Op.set, Op.add, Op.subtract, Op.kill, Op.sample
+                        if sex_idx == 0 and has_sperm_storage:
+                            individual_count[sex_idx, age, gidx] = _apply_target_with_sperm(
+                                current,
+                                target,
+                                sperm_storage[age, gidx, :],
+                                stochastic,
+                                continuous_sampling,
+                            )
+                        else:
+                            individual_count[sex_idx, age, gidx] = _apply_target_without_sperm(
+                                current,
+                                target,
+                                stochastic,
+                                continuous_sampling,
+                            )
+
+        # STOP_IF_* operators aggregate selected cells and may short-circuit
+        # event execution with RESULT_STOP.
+        if op_type == 6 or op_type == 7 or op_type == 8:   # Op.stop_if_zero, Op.stop_if_below, Op.stop_if_above
+            selected_total = 0.0
+            for sex_idx in range(2):
+                if sex_idx == 0 and not sex_female:
+                    continue
+                if sex_idx == 1 and not sex_male:
+                    continue
+
+                for age_idx_ptr in range(age_start, age_end):
+                    age = age_data[age_idx_ptr]
+                    for gidx_ptr in range(gidx_start, gidx_end):
+                        gidx = gidx_data[gidx_ptr]
+                        selected_total += individual_count[sex_idx, age, gidx]
+
+            if op_type == 6 and selected_total <= 0.0:
+                return RESULT_STOP
+            if op_type == 7 and selected_total < param:
+                return RESULT_STOP
+            if op_type == 8 and selected_total > param:
+                return RESULT_STOP
+        elif op_type == 9:   # Op.stop_if_extinction
+            if individual_count.sum() <= 0.0:
+                return RESULT_STOP
+
+    return RESULT_CONTINUE
+
+
+# Public alias for unified mixed-type dispatch and tests.
+execute_single_csr_hook = _execute_single_csr_hook
+
+
+@njit_switch(cache=True)
 def execute_csr_event_arrays(
     n_events: int | np.integer[Any],
     n_hooks: int | np.integer[Any],
     hook_offsets: np.ndarray,
-    n_ops_list: np.ndarray,
+    n_ops_list: np.ndarray,  # pyright: ignore[reportUnusedParameter] — retained for HookProgram positional unpacking compatibility
     op_offsets: np.ndarray,
     op_types_data: np.ndarray,
     gidx_offsets_data: np.ndarray,
@@ -315,125 +469,22 @@ def execute_csr_event_arrays(
     if event_id < 0 or event_id >= n_events:
         return 0
 
-    # Event span -> hook span -> op span (three-level CSR traversal)
+    # Event span -> hook span (three-level CSR traversal)
     hook_start = hook_offsets[event_id]
     hook_end = hook_offsets[event_id + 1]
 
     for hook_idx in range(hook_start, hook_end):
-        if hook_idx < 0 or hook_idx >= n_hooks:
-            continue
-
-        # Filtering by deme_id using serialized selector data
-        if not njit_deme_selector_matches(
-            deme_selector_types[hook_idx],
-            deme_selector_offsets[hook_idx],
-            deme_selector_offsets[hook_idx + 1],
-            deme_selector_data,
-            deme_id,
-        ):
-            continue
-
-        op_start = op_offsets[hook_idx]
-        op_end = op_offsets[hook_idx + 1]
-
-        for op_idx in range(op_start, op_end):
-            cond_start = condition_offsets_data[op_idx]
-            cond_end = condition_offsets_data[op_idx + 1]
-
-            if not _eval_csr_condition_program(
-                condition_types_data,
-                condition_params_data,
-                cond_start,
-                cond_end,
-                tick,
-            ):
-                continue
-
-            op_type = op_types_data[op_idx]
-            param = params_data[op_idx]
-
-            gidx_start = gidx_offsets_data[op_idx]
-            gidx_end = gidx_offsets_data[op_idx + 1]
-            age_start = age_offsets_data[op_idx]
-            age_end = age_offsets_data[op_idx + 1]
-
-            sex_mask_idx = op_idx * 2
-            sex_female = sex_masks_data[sex_mask_idx]
-            sex_male = sex_masks_data[sex_mask_idx + 1]
-
-            for sex_idx in range(2):
-                if sex_idx == 0 and not sex_female:
-                    continue
-                if sex_idx == 1 and not sex_male:
-                    continue
-
-                for age_idx_ptr in range(age_start, age_end):
-                    age = age_data[age_idx_ptr]
-
-                    for gidx_ptr in range(gidx_start, gidx_end):
-                        gidx = gidx_data[gidx_ptr]
-                        current = individual_count[sex_idx, age, gidx]
-
-                        # Convert each operation to a target count first, then
-                        # route through one unified update function so survival
-                        # semantics are consistent across operators.
-                        if op_type == 0:     # Op.scale
-                            target = max(0.0, current * param)
-                        elif op_type == 1:   # Op.set
-                            target = max(0.0, param)
-                        elif op_type == 2:   # Op.add
-                            target = max(0.0, current + param)
-                        elif op_type == 3:   # Op.subtract
-                            target = max(0.0, current - param)
-                        elif op_type == 4:   # Op.kill
-                            target = max(0.0, current * (1.0 - param))
-                        elif op_type == 5:   # Op.sample
-                            target = min(current, max(0.0, param))
-                        else:
-                            target = current
-
-                        if op_type <= 5:   # Op.scale, Op.set, Op.add, Op.subtract, Op.kill, Op.sample
-                            if sex_idx == 0 and has_sperm_storage:
-                                individual_count[sex_idx, age, gidx] = _apply_target_with_sperm(
-                                    current,
-                                    target,
-                                    sperm_storage[age, gidx, :],
-                                    stochastic,
-                                    continuous_sampling,
-                                )
-                            else:
-                                individual_count[sex_idx, age, gidx] = _apply_target_without_sperm(
-                                    current,
-                                    target,
-                                    stochastic,
-                                    continuous_sampling,
-                                )
-
-            # STOP_IF_* operators aggregate selected cells and may short-circuit
-            # event execution with RESULT_STOP.
-            if op_type == 6 or op_type == 7 or op_type == 8:   # Op.stop_if_zero, Op.stop_if_below, Op.stop_if_above
-                selected_total = 0.0
-                for sex_idx in range(2):
-                    if sex_idx == 0 and not sex_female:
-                        continue
-                    if sex_idx == 1 and not sex_male:
-                        continue
-
-                    for age_idx_ptr in range(age_start, age_end):
-                        age = age_data[age_idx_ptr]
-                        for gidx_ptr in range(gidx_start, gidx_end):
-                            gidx = gidx_data[gidx_ptr]
-                            selected_total += individual_count[sex_idx, age, gidx]
-
-                if op_type == 6 and selected_total <= 0.0:
-                    return RESULT_STOP
-                if op_type == 7 and selected_total < param:
-                    return RESULT_STOP
-                if op_type == 8 and selected_total > param:
-                    return RESULT_STOP
-            elif op_type == 9:   # Op.stop_if_extinction
-                if individual_count.sum() <= 0.0:
-                    return RESULT_STOP
+        result = _execute_single_csr_hook(
+            hook_idx, n_hooks, op_offsets,
+            op_types_data, gidx_offsets_data, gidx_data,
+            age_offsets_data, age_data, sex_masks_data, params_data,
+            condition_offsets_data, condition_types_data, condition_params_data,
+            deme_selector_types, deme_selector_offsets, deme_selector_data,
+            individual_count, sperm_storage, has_sperm_storage,
+            tick, stochastic, continuous_sampling, deme_id,
+        )
+        if result != RESULT_CONTINUE:
+            return result
 
     return RESULT_CONTINUE
 

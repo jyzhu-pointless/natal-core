@@ -19,6 +19,7 @@ from .executor import (
     execute_csr_event_arrays,
     execute_csr_event_program,
     execute_csr_event_program_with_state,
+    execute_single_csr_hook,
 )
 from .selector import compile_selector_hook
 from .types import (
@@ -62,6 +63,7 @@ __all__ = [
     "execute_csr_event_arrays",
     "execute_csr_event_program_with_state",
     "execute_csr_event_program",
+    "execute_single_csr_hook",
     "build_hook_program",
     "noop_hook",
     "compile_combined_hook",
