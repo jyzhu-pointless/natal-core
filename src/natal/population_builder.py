@@ -94,18 +94,18 @@ class PopulationConfigBuilder:
         # Basic settings
         n_ages: int,
         new_adult_age: int,
-        is_stochastic: bool,
-        use_continuous_sampling: bool,
+        stochastic: bool,
+        continuous_sampling: bool,
         # Survival & Mating
-        female_age_based_survival_rates: Optional[Any],
-        male_age_based_survival_rates: Optional[Any],
-        female_age_based_mating_rates: Optional[ArrayF64],
-        male_age_based_mating_rates: Optional[ArrayF64],
-        female_age_based_reproduction_rates: Optional[ArrayF64],
-        female_age_based_relative_fertility: Optional[ArrayF64],
+        female_age_based_survival: Optional[Any],
+        male_age_based_survival: Optional[Any],
+        female_age_based_mating_rate: Optional[ArrayF64],
+        male_age_based_mating_rate: Optional[ArrayF64],
+        age_based_reproduction_rate: Optional[ArrayF64],
+        female_age_based_fertility: Optional[ArrayF64],
         # Reproduction
-        expected_eggs_per_female: float,
-        use_fixed_egg_count: bool,
+        eggs_per_female: float,
+        fixed_egg_count: bool,
         sex_ratio: float,
         use_sperm_storage: bool,  # TODO
         sperm_displacement_rate: float,
@@ -134,17 +134,17 @@ class PopulationConfigBuilder:
             species (Species): Genetic architecture.
             n_ages (int): Number of age classes.
             new_adult_age (int): Minimum age for adults.
-            is_stochastic (bool): Whether to use stochastic sampling.
-            use_continuous_sampling (bool): Whether to use Dirichlet sampling.
-            female_age_based_survival_rates (Any): Survival rates for females.
-            male_age_based_survival_rates (Any): Survival rates for males.
-            female_age_based_mating_rates (NDArray): Mating rates for females.
-            male_age_based_mating_rates (NDArray): Mating rates for males.
-            female_age_based_reproduction_rates (NDArray): Reproduction participation
+            stochastic (bool): Whether to use stochastic sampling.
+            continuous_sampling (bool): Whether to use Dirichlet sampling.
+            female_age_based_survival (Any): Survival rates for females.
+            male_age_based_survival (Any): Survival rates for males.
+            female_age_based_mating_rate (NDArray): Mating rates for females.
+            male_age_based_mating_rate (NDArray): Mating rates for males.
+            age_based_reproduction_rate (NDArray): Reproduction participation
                 rates for females.
-            female_age_based_relative_fertility (NDArray): Fertility weights for females.
-            expected_eggs_per_female (float): Average egg production.
-            use_fixed_egg_count (bool): Whether egg count is deterministic.
+            female_age_based_fertility (NDArray): Fertility weights for females.
+            eggs_per_female (float): Average egg production.
+            fixed_egg_count (bool): Whether egg count is deterministic.
             sex_ratio (float): Offspring sex ratio.
             use_sperm_storage (bool): Whether to enable sperm storage.
             sperm_displacement_rate (float): Rate of sperm displacement.
@@ -207,32 +207,32 @@ class PopulationConfigBuilder:
         _default_male = np.ones(n_ages - 1, dtype=np.float64)
 
         female_survival = PopulationConfigBuilder.resolve_age_param(
-            female_age_based_survival_rates, n_ages, _default_female
+            female_age_based_survival, n_ages, _default_female
         )
         male_survival = PopulationConfigBuilder.resolve_age_param(
-            male_age_based_survival_rates, n_ages, _default_male
+            male_age_based_survival, n_ages, _default_male
         )
 
         age_based_survival_rates = np.array([female_survival, male_survival], dtype=np.float64)
 
         # TODO: 所有的 age-based 参数都应当支持类似 survival_rates 的灵活输入格式
         # ===== Mating rates =====
-        if female_age_based_mating_rates is not None:
-            if len(female_age_based_mating_rates) != n_ages:
+        if female_age_based_mating_rate is not None:
+            if len(female_age_based_mating_rate) != n_ages:
                 raise ValueError(
-                    f"female_age_based_mating_rates length {len(female_age_based_mating_rates)} != n_ages {n_ages}"
+                    f"female_age_based_mating_rate length {len(female_age_based_mating_rate)} != n_ages {n_ages}"
                 )
-            female_mating = np.array(female_age_based_mating_rates, dtype=np.float64)
+            female_mating = np.array(female_age_based_mating_rate, dtype=np.float64)
         else:
             female_mating = np.zeros(n_ages, dtype=np.float64)
             female_mating[new_adult_age:] = 1.0
 
-        if male_age_based_mating_rates is not None:
-            if len(male_age_based_mating_rates) != n_ages:
+        if male_age_based_mating_rate is not None:
+            if len(male_age_based_mating_rate) != n_ages:
                 raise ValueError(
-                    f"male_age_based_mating_rates length {len(male_age_based_mating_rates)} != n_ages {n_ages}"
+                    f"male_age_based_mating_rate length {len(male_age_based_mating_rate)} != n_ages {n_ages}"
                 )
-            male_mating = np.array(male_age_based_mating_rates, dtype=np.float64)
+            male_mating = np.array(male_age_based_mating_rate, dtype=np.float64)
         else:
             male_mating = np.zeros(n_ages, dtype=np.float64)
             male_mating[new_adult_age:] = 1.0
@@ -240,23 +240,23 @@ class PopulationConfigBuilder:
         age_based_mating_rates = np.array([female_mating, male_mating], dtype=np.float64)
 
         # ===== Female reproduction participation rates =====
-        if female_age_based_reproduction_rates is not None:
-            if len(female_age_based_reproduction_rates) != n_ages:
+        if age_based_reproduction_rate is not None:
+            if len(age_based_reproduction_rate) != n_ages:
                 raise ValueError(
-                    f"female_age_based_reproduction_rates length {len(female_age_based_reproduction_rates)} != n_ages {n_ages}"
+                    f"age_based_reproduction_rate length {len(age_based_reproduction_rate)} != n_ages {n_ages}"
                 )
-            female_reproduction = np.array(female_age_based_reproduction_rates, dtype=np.float64)
+            female_reproduction = np.array(age_based_reproduction_rate, dtype=np.float64)
         else:
             # Backward compatible default: reuse female mating rates.
             female_reproduction = female_mating.copy()
 
         # ===== Female fertility =====
-        if female_age_based_relative_fertility is not None:
-            if len(female_age_based_relative_fertility) != n_ages:
+        if female_age_based_fertility is not None:
+            if len(female_age_based_fertility) != n_ages:
                 raise ValueError(
-                    f"female_age_based_relative_fertility length {len(female_age_based_relative_fertility)} != n_ages {n_ages}"
+                    f"female_age_based_fertility length {len(female_age_based_fertility)} != n_ages {n_ages}"
                 )
-            female_fertility = np.array(female_age_based_relative_fertility, dtype=np.float64)
+            female_fertility = np.array(female_age_based_fertility, dtype=np.float64)
         else:
             female_fertility = np.ones(n_ages, dtype=np.float64)
 
@@ -301,10 +301,10 @@ class PopulationConfigBuilder:
         if expected_num_adult_females is not None:
             external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
                 expected_num_adult_females=expected_num_adult_females,
-                expected_eggs_per_female=expected_eggs_per_female,
+                eggs_per_female=eggs_per_female,
                 age_based_survival_rates=age_based_survival_rates,
                 age_based_reproduction_rates=female_reproduction,
-                female_age_based_relative_fertility=female_fertility,
+                female_age_based_fertility=female_fertility,
                 sex_ratio=sex_ratio,
                 new_adult_age=new_adult_age,
                 n_ages=n_ages,
@@ -319,12 +319,12 @@ class PopulationConfigBuilder:
             n_sexes=2,
             n_ages=n_ages,
             n_glabs=n_glabs,
-            is_stochastic=is_stochastic,
-            use_continuous_sampling=use_continuous_sampling,
+            stochastic=stochastic,
+            continuous_sampling=continuous_sampling,
             age_based_survival_rates=age_based_survival_rates,
             age_based_mating_rates=age_based_mating_rates,
             age_based_reproduction_rates=female_reproduction,
-            female_age_based_relative_fertility=female_fertility,
+            female_age_based_fertility=female_fertility,
             viability_fitness=viability_fitness,
             fecundity_fitness=fecundity_fitness,
             sexual_selection_fitness=sexual_selection_fitness,
@@ -332,8 +332,8 @@ class PopulationConfigBuilder:
             age_based_relative_competition_strength=age_based_relative_competition_strength,
             new_adult_age=new_adult_age,
             sperm_displacement_rate=sperm_displacement_rate,
-            expected_eggs_per_female=expected_eggs_per_female,
-            use_fixed_egg_count=use_fixed_egg_count,
+            eggs_per_female=eggs_per_female,
+            fixed_egg_count=fixed_egg_count,
             carrying_capacity=K,
             sex_ratio=sex_ratio,
             low_density_growth_rate=low_density_growth_rate,
@@ -455,10 +455,10 @@ class PopulationConfigBuilder:
     @staticmethod
     def compute_expected_eggs_from_females(
         expected_num_adult_females: float,
-        expected_eggs_per_female: float,
+        eggs_per_female: float,
         age_based_survival_rates: NDArray[np.float64],
         age_based_reproduction_rates: Optional[NDArray[np.float64]],
-        female_age_based_relative_fertility: NDArray[np.float64],
+        female_age_based_fertility: NDArray[np.float64],
         sex_ratio: float,
         new_adult_age: int,
         n_ages: int,
@@ -471,11 +471,11 @@ class PopulationConfigBuilder:
 
         Args:
             expected_num_adult_females: Number of adult females at new_adult_age.
-            expected_eggs_per_female: Base eggs per female.
+            eggs_per_female: Base eggs per female.
             age_based_survival_rates: (2, n_ages) survival array.
             age_based_reproduction_rates: Female reproduction participation by age.
                 If None, falls back to female mating rates.
-            female_age_based_relative_fertility: Relative fertility by age.
+            female_age_based_fertility: Relative fertility by age.
             sex_ratio: Sex ratio (not directly used in forward propagation).
             new_adult_age: First adult age class.
             n_ages: Total age classes.
@@ -499,16 +499,16 @@ class PopulationConfigBuilder:
         eggs = 0.0
         for age in range(new_adult_age, n_ages):
             p_reproducing = min(1.0, max(0.0, float(reproduction_rates[age])))
-            eggs += female_dist[age] * p_reproducing * female_age_based_relative_fertility[age] * expected_eggs_per_female
+            eggs += female_dist[age] * p_reproducing * female_age_based_fertility[age] * eggs_per_female
 
         return eggs
 
     @staticmethod
     def _compute_expected_eggs_from_distribution(
         equilibrium_distribution: NDArray[np.float64],
-        expected_eggs_per_female: float,
+        eggs_per_female: float,
         age_based_reproduction_rates: NDArray[np.float64],
-        female_age_based_relative_fertility: NDArray[np.float64],
+        female_age_based_fertility: NDArray[np.float64],
         new_adult_age: int,
         n_ages: int,
     ) -> float:
@@ -516,9 +516,9 @@ class PopulationConfigBuilder:
 
         Args:
             equilibrium_distribution: (2, n_ages) equilibrium distribution.
-            expected_eggs_per_female: Base eggs per female.
+            eggs_per_female: Base eggs per female.
             age_based_reproduction_rates: Female reproduction participation by age.
-            female_age_based_relative_fertility: Relative fertility by age.
+            female_age_based_fertility: Relative fertility by age.
             new_adult_age: First adult age class.
             n_ages: Total age classes.
 
@@ -529,7 +529,7 @@ class PopulationConfigBuilder:
         for age in range(new_adult_age, n_ages):
             n_f = float(equilibrium_distribution[0, age])
             p_reproducing = min(1.0, max(0.0, float(age_based_reproduction_rates[age])))
-            eggs += n_f * p_reproducing * female_age_based_relative_fertility[age] * expected_eggs_per_female
+            eggs += n_f * p_reproducing * female_age_based_fertility[age] * eggs_per_female
         return eggs
 
     @staticmethod
@@ -1145,9 +1145,9 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         super().__init__(species)
         # Store builder parameters directly
         self.name: str = "AgeStructuredPop"
-        self.is_stochastic: bool = True
-        self.use_continuous_sampling: bool = False
-        self.use_fixed_egg_count: bool = False
+        self.stochastic: bool = True
+        self.continuous_sampling: bool = False
+        self.fixed_egg_count: bool = False
 
         # Age structure
         self.n_ages: int = 8
@@ -1160,15 +1160,15 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.initial_sperm_storage: Optional[InitialSpermStorageInput] = None
 
         # Survival and mating
-        self.female_age_based_survival_rates: Optional[Any] = None
-        self.male_age_based_survival_rates: Optional[Any] = None
-        self.female_age_based_mating_rates: Optional[ArrayF64] = None
-        self.male_age_based_mating_rates: Optional[ArrayF64] = None
-        self.female_age_based_reproduction_rates: Optional[ArrayF64] = None
-        self.female_age_based_relative_fertility: Optional[ArrayF64] = None
+        self.female_age_based_survival: Optional[Any] = None
+        self.male_age_based_survival: Optional[Any] = None
+        self.female_age_based_mating_rate: Optional[ArrayF64] = None
+        self.male_age_based_mating_rate: Optional[ArrayF64] = None
+        self.age_based_reproduction_rate: Optional[ArrayF64] = None
+        self.female_age_based_fertility: Optional[ArrayF64] = None
 
         # Reproduction
-        self.expected_eggs_per_female: float = 50.0
+        self.eggs_per_female: float = 50.0
         self.sex_ratio: float = 0.5
         self.use_sperm_storage: bool = False
         self.sperm_displacement_rate: float = 0.0
@@ -1193,8 +1193,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self,
         name: str = "AgeStructuredPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure basic population settings.
@@ -1205,20 +1205,20 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         Args:
             name: Human-readable population name.
             stochastic: Whether to use stochastic sampling.
-            use_continuous_sampling: If True, use Dirichlet.
-            use_fixed_egg_count: If True, egg count is fixed.
+            continuous_sampling: If True, use Dirichlet.
+            fixed_egg_count: If True, egg count is fixed.
             **kwargs: Additional setup-domain parameters.
 
         Returns:
             Self for chaining.
         """
         self.name = name
-        self.is_stochastic = stochastic
-        self.use_continuous_sampling = use_continuous_sampling
-        self.use_fixed_egg_count = use_fixed_egg_count
+        self.stochastic = stochastic
+        self.continuous_sampling = continuous_sampling
+        self.fixed_egg_count = fixed_egg_count
         self._set_param("setup.stochastic", stochastic)
-        self._set_param("setup.continuous_sampling", use_continuous_sampling)
-        self._set_param("setup.fixed_egg_count", use_fixed_egg_count)
+        self._set_param("setup.continuous_sampling", continuous_sampling)
+        self._set_param("setup.fixed_egg_count", fixed_egg_count)
         self._set_params(domain="setup", **kwargs)
         return self
 
@@ -1289,17 +1289,17 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
     def survival(
         self,
-        female_age_based_survival_rates: Optional[Any] = None,
-        male_age_based_survival_rates: Optional[Any] = None,
+        female_age_based_survival: Optional[Any] = None,
+        male_age_based_survival: Optional[Any] = None,
         generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
         **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure survival rates."""
-        if female_age_based_survival_rates is not None:
-            self.female_age_based_survival_rates = female_age_based_survival_rates
-        if male_age_based_survival_rates is not None:
-            self.male_age_based_survival_rates = male_age_based_survival_rates
+        if female_age_based_survival is not None:
+            self.female_age_based_survival = female_age_based_survival
+        if male_age_based_survival is not None:
+            self.male_age_based_survival = male_age_based_survival
         if generation_time is not None:
             self.generation_time = generation_time
         if equilibrium_distribution is not None:
@@ -1309,28 +1309,28 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
     def reproduction(
         self,
-        female_age_based_mating_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
-        male_age_based_mating_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
-        female_age_based_reproduction_rates: Optional[Union[List[float], NDArray[np.float64]]] = None,
-        female_age_based_relative_fertility: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        female_age_based_mating_rate: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        male_age_based_mating_rate: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        age_based_reproduction_rate: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        female_age_based_fertility: Optional[Union[List[float], NDArray[np.float64]]] = None,
         eggs_per_female: float = 50.0,
-        use_fixed_egg_count: bool = False,
+        fixed_egg_count: bool = False,
         sex_ratio: float = 0.5,
         use_sperm_storage: bool = True,
         sperm_displacement_rate: float = 0.05,
         **kwargs: object,
     ) -> 'AgeStructuredPopulationBuilder':
         """Configure reproduction parameters."""
-        if female_age_based_mating_rates is not None:
-            self.female_age_based_mating_rates = np.array(female_age_based_mating_rates)
-        if male_age_based_mating_rates is not None:
-            self.male_age_based_mating_rates = np.array(male_age_based_mating_rates)
-        if female_age_based_reproduction_rates is not None:
-            self.female_age_based_reproduction_rates = np.array(female_age_based_reproduction_rates)
-        if female_age_based_relative_fertility is not None:
-            self.female_age_based_relative_fertility = np.array(female_age_based_relative_fertility)
-        self.expected_eggs_per_female = eggs_per_female
-        self.use_fixed_egg_count = use_fixed_egg_count
+        if female_age_based_mating_rate is not None:
+            self.female_age_based_mating_rate = np.array(female_age_based_mating_rate)
+        if male_age_based_mating_rate is not None:
+            self.male_age_based_mating_rate = np.array(male_age_based_mating_rate)
+        if age_based_reproduction_rate is not None:
+            self.age_based_reproduction_rate = np.array(age_based_reproduction_rate)
+        if female_age_based_fertility is not None:
+            self.female_age_based_fertility = np.array(female_age_based_fertility)
+        self.eggs_per_female = eggs_per_female
+        self.fixed_egg_count = fixed_egg_count
         self.sex_ratio = sex_ratio
         self.use_sperm_storage = use_sperm_storage
         self.sperm_displacement_rate = sperm_displacement_rate
@@ -1576,16 +1576,16 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
             species=self.species,
             n_ages=self.n_ages,
             new_adult_age=self.new_adult_age,
-            is_stochastic=self.is_stochastic,
-            use_continuous_sampling=self.use_continuous_sampling,
-            female_age_based_survival_rates=self.female_age_based_survival_rates,
-            male_age_based_survival_rates=self.male_age_based_survival_rates,
-            female_age_based_mating_rates=self.female_age_based_mating_rates,
-            male_age_based_mating_rates=self.male_age_based_mating_rates,
-            female_age_based_reproduction_rates=self.female_age_based_reproduction_rates,
-            female_age_based_relative_fertility=self.female_age_based_relative_fertility,
-            expected_eggs_per_female=self.expected_eggs_per_female,
-            use_fixed_egg_count=self.use_fixed_egg_count,
+            stochastic=self.stochastic,
+            continuous_sampling=self.continuous_sampling,
+            female_age_based_survival=self.female_age_based_survival,
+            male_age_based_survival=self.male_age_based_survival,
+            female_age_based_mating_rate=self.female_age_based_mating_rate,
+            male_age_based_mating_rate=self.male_age_based_mating_rate,
+            age_based_reproduction_rate=self.age_based_reproduction_rate,
+            female_age_based_fertility=self.female_age_based_fertility,
+            eggs_per_female=self.eggs_per_female,
+            fixed_egg_count=self.fixed_egg_count,
             sex_ratio=self.sex_ratio,
             use_sperm_storage=self.use_sperm_storage,
             sperm_displacement_rate=self.sperm_displacement_rate,
@@ -1752,13 +1752,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         super().__init__(species)
 
         self.name: str = "DiscreteGenerationPop"
-        self.is_stochastic: bool = True
-        self.use_continuous_sampling: bool = False
-        self.use_fixed_egg_count: bool = False
+        self.stochastic: bool = True
+        self.continuous_sampling: bool = False
+        self.fixed_egg_count: bool = False
 
         self.initial_individual_count: Optional[InitialIndividualCountInput] = None
 
-        self.expected_eggs_per_female: float = 50.0
+        self.eggs_per_female: float = 50.0
         self.sex_ratio: float = 0.5
 
         self.female_age0_survival: float = 1.0
@@ -1883,18 +1883,18 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self,
         name: str = "DiscreteGenerationPop",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
         **kwargs: object,
     ) -> 'DiscreteGenerationPopulationBuilder':
         """Configure basic population settings."""
         self.name = name
-        self.is_stochastic = stochastic
-        self.use_continuous_sampling = use_continuous_sampling
-        self.use_fixed_egg_count = use_fixed_egg_count
+        self.stochastic = stochastic
+        self.continuous_sampling = continuous_sampling
+        self.fixed_egg_count = fixed_egg_count
         self._set_param("setup.stochastic", stochastic)
-        self._set_param("setup.continuous_sampling", use_continuous_sampling)
-        self._set_param("setup.fixed_egg_count", use_fixed_egg_count)
+        self._set_param("setup.continuous_sampling", continuous_sampling)
+        self._set_param("setup.fixed_egg_count", fixed_egg_count)
         self._set_params(domain="setup", **kwargs)
         return self
 
@@ -1936,7 +1936,7 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         **kwargs: object,
     ) -> "DiscreteGenerationPopulationBuilder":
         """Configure reproduction parameters."""
-        self.expected_eggs_per_female = eggs_per_female
+        self.eggs_per_female = eggs_per_female
         self.sex_ratio = sex_ratio
         self.female_adult_mating_rate = female_adult_mating_rate
         self.male_adult_mating_rate = male_adult_mating_rate
@@ -2053,16 +2053,16 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             species=self.species,
             n_ages=2,
             new_adult_age=1,
-            is_stochastic=self.is_stochastic,
-            use_continuous_sampling=self.use_continuous_sampling,
-            female_age_based_survival_rates=female_survival,
-            male_age_based_survival_rates=male_survival,
-            female_age_based_mating_rates=female_mating,
-            male_age_based_mating_rates=male_mating,
-            female_age_based_reproduction_rates=female_mating,
-            female_age_based_relative_fertility=female_relative_fertility,
-            expected_eggs_per_female=self.expected_eggs_per_female,
-            use_fixed_egg_count=self.use_fixed_egg_count,
+            stochastic=self.stochastic,
+            continuous_sampling=self.continuous_sampling,
+            female_age_based_survival=female_survival,
+            male_age_based_survival=male_survival,
+            female_age_based_mating_rate=female_mating,
+            male_age_based_mating_rate=male_mating,
+            age_based_reproduction_rate=female_mating,
+            female_age_based_fertility=female_relative_fertility,
+            eggs_per_female=self.eggs_per_female,
+            fixed_egg_count=self.fixed_egg_count,
             sex_ratio=self.sex_ratio,
             use_sperm_storage=False,
             sperm_displacement_rate=0.0,

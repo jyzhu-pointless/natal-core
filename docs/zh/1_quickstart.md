@@ -135,13 +135,13 @@ pop = (nt.AgeStructuredPopulation
         }
     })
     .survival(
-        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+        female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
     .reproduction(
         eggs_per_female=100,
         sex_ratio=0.5,
-        use_sperm_storage=True,        # 启用精子存储机制
+        =True,        # 启用精子存储机制
     )
     .competition(
         juvenile_growth_mode=1,        # 1: 固定竞争模式
@@ -450,10 +450,10 @@ pop = (nt.AgeStructuredPopulation
         }
     })
     .survival(
-        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+        female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
-    .reproduction(eggs_per_female=100, sex_ratio=0.5, use_sperm_storage=True)
+    .reproduction(eggs_per_female=100, sex_ratio=0.5, =True)
     .competition(juvenile_growth_mode=1, age_1_carrying_capacity=1200)
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)
@@ -496,8 +496,8 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 
 ### Q: "确定性" vs "随机性" 是什么区别？
 **A**:
-- `is_stochastic=False`: 使用多项分布期望，结果完全确定（允许小数）
-- `is_stochastic=True`: 使用随机抽样，结果随机波动（必为整数）
+- `stochastic=False`: 使用多项分布期望，结果完全确定（允许小数）
+- `stochastic=True`: 使用随机抽样，结果随机波动（必为整数）
 
 ---
 

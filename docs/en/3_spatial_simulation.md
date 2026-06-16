@@ -1,6 +1,6 @@
 # Spatial Simulation Guide
 
-This chapter introduces the practical usage of `SpatialPopulation`: using the `SpatialBuilder` to quickly build multi-deme populations, configure topology and migration kernels, and control inter-deme flow.
+This chapter introduces the practical usage of `SpatialPopulation`: using the `SpatialConfigurator` to quickly build multi-deme populations, configure topology and migration kernels, and control inter-deme flow.
 
 After reading this, you will be able to write code like this:
 
@@ -16,11 +16,11 @@ spatial = (
 )
 ```
 
-> **Tip**: `SpatialBuilder` is the preferred construction method for homogeneous/heterogeneous spatial populations. The construction time for 2601 homogeneous demes has been reduced from ~2.6s to ~16ms. See [SpatialBuilder Documentation](spatial_builder.md).
+> **Tip**: `SpatialConfigurator` is the preferred construction method for homogeneous/heterogeneous spatial populations. The construction time for 2601 homogeneous demes has been reduced from ~2.6s to ~16ms. See [SpatialConfigurator Documentation](spatial_builder.md).
 
 ## Two Construction Paths
 
-### Recommended: SpatialBuilder (Chainable API)
+### Recommended: SpatialConfigurator (Chainable API)
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
@@ -94,19 +94,19 @@ The most important rules:
 
 ## Chainable API
 
-The `SpatialBuilder` chainable call flow is consistent with the panmictic builder. Below are the methods listed in recommended order. Methods marked with `->` are spatial-specific, and parameters marked with `[B]` accept `batch_setting` (cross-deme heterogeneous configuration).
+The `SpatialConfigurator` chainable call flow is consistent with the panmictic builder. Below are the methods listed in recommended order. Methods marked with `->` are spatial-specific, and parameters marked with `[B]` accept `batch_setting` (cross-deme heterogeneous configuration).
 
 ```python
 pop = (
     SpatialPopulation.builder(species, n_demes=9, topology=SquareGrid(3, 3))
     ->                   # Entry: specify deme count and topology
-    .setup(name="demo", stochastic=False, use_continuous_sampling=False)
+    .setup(name="demo", stochastic=False, continuous_sampling=False)
                         # Basic settings: name, stochasticity, sampling mode
     .age_structure(n_ages=8, new_adult_age=2)
                         # [age_structured only] Age group count, adult starting age
     .initial_state(individual_count={"female": {"A|A": 500}, "male": {"A|A": 500}})
                         # [B] Initial genotype distribution
-    .survival(female_age_based_survival_rates=[...], ...)
+    .survival(female_age_based_survival=[...], ...)
                         # Survival rates (age_structured uses age vectors, discrete uses scalars)
     .reproduction(eggs_per_female=50.0, sex_ratio=0.5)
                         # [B] Reproduction parameters
@@ -168,7 +168,7 @@ The following parameters do **not** accept `batch_setting`:
 
 ## batch_setting Heterogeneous Configuration
 
-`batch_setting` is the core mechanism of `SpatialBuilder`, allowing different demes to specify different parameter values within the same chainable call. Internally, it automatically optimizes through config equivalence grouping -- demes with the same parameters share compiled artifacts, only the state arrays are independent.
+`batch_setting` is the core mechanism of `SpatialConfigurator`, allowing different demes to specify different parameter values within the same chainable call. Internally, it automatically optimizes through config equivalence grouping -- demes with the same parameters share compiled artifacts, only the state arrays are independent.
 
 ### Four Input Forms
 
@@ -229,7 +229,7 @@ states[n_demes // 2] = release_state
 
 pop = (
     SpatialPopulation.builder(species, n_demes=n_demes, topology=HexGrid(10, 10))
-    .setup(name="drive_release", stochastic=True, use_continuous_sampling=True)
+    .setup(name="drive_release", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6,
@@ -721,7 +721,7 @@ kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
 
 pop = (
     SpatialPopulation.builder(species, n_demes=100, topology=HexGrid(10, 10, wrap=False))
-    .setup(name="hex_demo", stochastic=True, use_continuous_sampling=True)
+    .setup(name="hex_demo", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count={"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="concave")
@@ -751,7 +751,7 @@ If demes are not from the same Species, `SpatialPopulation` will raise an error 
 ### Error 2: Inconsistent Migration Sampling Mode Across Demes
 
 Heterogeneous deme configs are supported. However, when migration is enabled, all demes'
-`is_stochastic` and `use_continuous_sampling` must be consistent;
+`stochastic` and `continuous_sampling` must be consistent;
 otherwise `run_tick()` / `run(...)` will raise an error.
 
 ### Error 3: Incorrect Kernel Dimensions
@@ -779,7 +779,7 @@ The practical usage order of SpatialPopulation can be remembered in four steps:
 
 ## Related Chapters
 
-- [SpatialBuilder: Batch Construction](spatial_builder.md)
+- [SpatialConfigurator: Batch Construction](spatial_builder.md)
 - [Spatial Lifecycle Wrapper](spatial_lifecycle_wrapper.md)
 - [Migration Kernel Implementation](migration_kernel_impl.md)
 - [the Simulation Engine Deep Dive](4_simulation_engine.md)

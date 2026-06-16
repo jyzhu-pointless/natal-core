@@ -44,8 +44,8 @@ pop = (
         "male": {"WT|WT": 1000, "Drive|WT": 0}
     })
     .survival(
-        female_age_based_survival_rates=0.85,
-        male_age_based_survival_rates=0.8
+        female_age_based_survival=0.85,
+        male_age_based_survival=0.8
     )
     .reproduction(eggs_per_female=50.0)
     .competition(
@@ -90,10 +90,10 @@ Declarative Hook 中的 `Op` 操作会根据种群创建（链式 API 中）时 
 | `stochastic=True` | 使用二项分布随机采样 | 使用二项分布决定每个个体的存活 |
 | `stochastic=False` | 确定性缩放（直接乘以系数） | 确定性缩放（乘以存活概率） |
 
-当 `stochastic=True` 时，还可以通过 `use_continuous_sampling` 配置选择采样方式：
+当 `stochastic=True` 时，还可以通过 `continuous_sampling` 配置选择采样方式：
 
-- `use_continuous_sampling=True`：使用连续采样（使用矩匹配的 Beta/Gamma 分布替代二项/柏松分布）
-- `use_continuous_sampling=False`：使用离散采样
+- `continuous_sampling=True`：使用连续采样（使用矩匹配的 Beta/Gamma 分布替代二项/柏松分布）
+- `continuous_sampling=False`：使用离散采样
 
 声明式 Hook 的优势在于：你只需要用同样的 Op 语法编写规则，系统会根据配置自动在确定性和随机性之间切换，无需修改 Hook 代码。
 

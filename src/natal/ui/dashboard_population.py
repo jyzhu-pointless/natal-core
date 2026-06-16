@@ -151,8 +151,8 @@ class Dashboard:
     def _discrete_display(self) -> bool:
         """Whether individual counts should be displayed as integers."""
         config = self.pop._config
-        return bool(getattr(config, "is_stochastic", True)) and not bool(
-            getattr(config, "use_continuous_sampling", False)
+        return bool(getattr(config, "stochastic", True)) and not bool(
+            getattr(config, "continuous_sampling", False)
         )
 
     def _fmt_count(self, value: float) -> str:
@@ -855,8 +855,8 @@ class Dashboard:
         conf = self.pop.export_config()
         growth_mode = int(conf.juvenile_growth_mode)
         return {
-            "is_stochastic": bool(conf.is_stochastic),
-            "use_continuous_sampling": bool(conf.use_continuous_sampling),
+            "stochastic": bool(conf.stochastic),
+            "continuous_sampling": bool(conf.continuous_sampling),
             "n_sexes": int(conf.n_sexes),
             "n_ages": int(conf.n_ages),
             "n_genotypes": int(conf.n_genotypes),
@@ -865,7 +865,7 @@ class Dashboard:
             "new_adult_age": int(conf.new_adult_age),
             "sperm_displacement_rate": float(conf.sperm_displacement_rate),
             "expected_eggs_per_female": float(conf.expected_eggs_per_female),
-            "use_fixed_egg_count": bool(conf.use_fixed_egg_count),
+            "fixed_egg_count": bool(conf.fixed_egg_count),
             "carrying_capacity": float(conf.carrying_capacity),
             "sex_ratio": float(conf.sex_ratio),
             "low_density_growth_rate": float(conf.low_density_growth_rate),
@@ -1161,7 +1161,7 @@ class Dashboard:
                             ui.label(f"Eggs/Female: {conf.expected_eggs_per_female}").classes('text-base')
                             mode_code = int(conf.juvenile_growth_mode)
                             ui.label(f"Growth Mode: {mode_code} ({self._growth_mode_name(mode_code)})").classes('text-base')
-                            ui.label(f"Stochastic: {conf.is_stochastic}").classes('text-base')
+                            ui.label(f"Stochastic: {conf.stochastic}").classes('text-base')
 
                         # Fitness Tables
                         with ui.column().classes('flex-grow'):

@@ -1,8 +1,8 @@
-# SpatialBuilder Heterogeneous Config Sharing Mechanism
+# SpatialConfigurator Heterogeneous Config Sharing Mechanism
 
 ## Problem
 
-`SpatialBuilder._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `PopulationConfig`.
+`SpatialConfigurator._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `PopulationConfig`.
 
 If only a few parameters differ between groups, all large arrays (`genotype_to_gametes_map`, `gametes_to_zygote_map`, `viability_fitness`, `fecundity_fitness`, etc.) are still duplicated, causing memory waste.
 
@@ -48,7 +48,7 @@ Builder kwarg names that differ from config field names, defined in `_KWARG_RENA
 
 | Builder kwarg | Config Field |
 |---|---|
-| `eggs_per_female` | `expected_eggs_per_female` |
+| `eggs_per_female` | `eggs_per_female` |
 
 ### 4. Dynamic Discovery (Implicit)
 
@@ -60,7 +60,7 @@ Parameters not in any of the above categories (`presets`, `fitness`, survival ra
 
 ### Deliberately Unsupportable Heterogeneous Parameters
 
-`stochastic` and `use_continuous_sampling` are simulation-mode-level parameters that should not vary between demes. The `setup()` method does not pass through `_detect_and_delegate`, so these parameters **cannot** be provided via `batch_setting`.
+`stochastic` and `continuous_sampling` are simulation-mode-level parameters that should not vary between demes. The `setup()` method does not pass through `_detect_and_delegate`, so these parameters **cannot** be provided via `batch_setting`.
 
 ## Equilibrium Recalculation
 
@@ -155,6 +155,6 @@ All changes are concentrated in `src/natal/spatial_builder.py`:
 | `_KWARG_MULTI_FIELD` | Multi-field mapping (carrying_capacity variants) |
 | `_KWARG_RENAMES` | Builder kwarg → config field renames |
 | `_EQUILIBRIUM_SENSITIVE_KWARGS` | Set of parameters requiring equilibrium recalculation |
-| `SpatialBuilder._build_heterogeneous()` | Main build logic |
-| `SpatialBuilder._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
-| `SpatialBuilder._build_variant_config()` | Creates variant config |
+| `SpatialConfigurator._build_heterogeneous()` | Main build logic |
+| `SpatialConfigurator._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
+| `SpatialConfigurator._build_variant_config()` | Creates variant config |

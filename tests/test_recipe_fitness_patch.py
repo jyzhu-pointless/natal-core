@@ -5,7 +5,7 @@ import uuid
 
 import numpy as np
 
-from natal.genetic_presets import _apply_preset_fitness_patch
+from natal.genetic_presets import apply_preset_fitness_patch
 from natal.genetic_structures import Species
 
 
@@ -79,7 +79,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": 0.8,
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -95,7 +95,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": (0.8, "dominant"),
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -111,7 +111,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": 0.5,
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -127,7 +127,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": ((0.6, 0.3), "custom"),
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -143,7 +143,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": (0.4, "recessive"),
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         f_idx = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         m_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
@@ -160,7 +160,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": 0.5,
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -176,7 +176,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": (0.7, "dominant"),
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -192,7 +192,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": (0.3, "recessive"),
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -208,7 +208,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": ((0.6, 0.2), "custom"),
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
@@ -224,7 +224,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
                 "Drive": ({"female": 0.8, "male": 0.5}, "multiplicative"),
             }
         }
-        _apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+        apply_preset_fitness_patch(self.pop, patch)  # type: ignore
 
         idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
         idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]

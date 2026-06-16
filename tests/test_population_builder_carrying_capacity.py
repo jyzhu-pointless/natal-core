@@ -88,10 +88,10 @@ class TestCarryingCapacityResolution:
 
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=500.0,
-            expected_eggs_per_female=100.0,
+            eggs_per_female=100.0,
             age_based_survival_rates=survival,
             age_based_reproduction_rates=reproduction,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             sex_ratio=0.5,
             new_adult_age=2,
             n_ages=n_ages,
@@ -112,9 +112,9 @@ class TestCarryingCapacityResolution:
 
         eggs = PopulationConfigBuilder._compute_expected_eggs_from_distribution(
             equilibrium_distribution=dist,
-            expected_eggs_per_female=100.0,
+            eggs_per_female=100.0,
             age_based_reproduction_rates=reproduction,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             new_adult_age=2,
             n_ages=n_ages,
         )
@@ -130,12 +130,12 @@ class TestCarryingCapacityResolution:
             .setup(species=sp, name="BuilderTest", stochastic=False)
             .age_structure(n_ages=6, new_adult_age=2)
             .survival(
-                female_age_based_survival_rates=[1.0, 0.95, 0.9, 0.8, 0.6, 0.0],
-                male_age_based_survival_rates=[1.0, 0.9, 0.85, 0.75, 0.5, 0.0],
+                female_age_based_survival=[1.0, 0.95, 0.9, 0.8, 0.6, 0.0],
+                male_age_based_survival=[1.0, 0.9, 0.85, 0.75, 0.5, 0.0],
             )
             .reproduction(
-                female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
-                male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+                female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+                male_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
                 eggs_per_female=40.0,
             )
             .initial_state(
@@ -209,9 +209,9 @@ class TestCarryingCapacityResolution:
         reproduction = mating[0]  # use female mating rates
         eggs_from_dist = PopulationConfigBuilder._compute_expected_eggs_from_distribution(
             equilibrium_distribution=dist,
-            expected_eggs_per_female=eggs_per_female,
+            eggs_per_female=eggs_per_female,
             age_based_reproduction_rates=reproduction,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             new_adult_age=new_adult_age,
             n_ages=n_ages,
         )
@@ -221,10 +221,10 @@ class TestCarryingCapacityResolution:
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=K,
-            expected_eggs_per_female=eggs_per_female,
+            eggs_per_female=eggs_per_female,
             age_based_survival_rates=survival,
             age_based_mating_rates=mating,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             relative_competition_strength=np.ones(n_ages, dtype=np.float64),
             sex_ratio=sex_ratio,
             new_adult_age=new_adult_age,
@@ -271,10 +271,10 @@ class TestCarryingCapacityResolution:
         # Compute expected eggs from expected_num_adult_females
         external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=expected_females,
-            expected_eggs_per_female=eggs_per_female,
+            eggs_per_female=eggs_per_female,
             age_based_survival_rates=survival,
             age_based_reproduction_rates=mating[0],
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             sex_ratio=sex_ratio,
             new_adult_age=new_adult_age,
             n_ages=n_ages,
@@ -284,10 +284,10 @@ class TestCarryingCapacityResolution:
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=K,
-            expected_eggs_per_female=eggs_per_female,
+            eggs_per_female=eggs_per_female,
             age_based_survival_rates=survival,
             age_based_mating_rates=mating,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             relative_competition_strength=np.ones(n_ages, dtype=np.float64),
             sex_ratio=sex_ratio,
             new_adult_age=new_adult_age,
@@ -315,8 +315,8 @@ class TestCarryingCapacityResolution:
                 }
             )
             .reproduction(
-                female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0],
-                male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0],
+                female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0],
+                male_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0],
                 eggs_per_female=10.0,
             )
             .competition(
@@ -348,14 +348,14 @@ class TestCarryingCapacityResolution:
                 }
             )
             .reproduction(
-                female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-                male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
-                female_age_based_reproduction_rates=[0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+                female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                male_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                age_based_reproduction_rate=[0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
                 eggs_per_female=50.0,
             )
             .survival(
-                female_age_based_survival_rates=[1.0, 1.0, 5 / 6, 4 / 5, 3 / 4, 2 / 3, 1 / 2],
-                male_age_based_survival_rates=[1.0, 1.0, 2 / 3, 1 / 2],
+                female_age_based_survival=[1.0, 1.0, 5 / 6, 4 / 5, 3 / 4, 2 / 3, 1 / 2],
+                male_age_based_survival=[1.0, 1.0, 2 / 3, 1 / 2],
             )
             .competition(
                 competition_strength=5.0,
@@ -431,8 +431,8 @@ class TestChamperModel:
             .setup(species=sp, name="ChamperPath1", stochastic=False)
             .age_structure(n_ages=self.n_ages, new_adult_age=self.new_adult_age)
             .survival(
-                female_age_based_survival_rates=self.female_survival,
-                male_age_based_survival_rates=self.male_survival,
+                female_age_based_survival=self.female_survival,
+                male_age_based_survival=self.male_survival,
             )
             .initial_state(
                 individual_count={
@@ -470,8 +470,8 @@ class TestChamperModel:
             .setup(species=sp, name="ChamperPath2", stochastic=False)
             .age_structure(n_ages=self.n_ages, new_adult_age=self.new_adult_age)
             .survival(
-                female_age_based_survival_rates=self.female_survival,
-                male_age_based_survival_rates=self.male_survival,
+                female_age_based_survival=self.female_survival,
+                male_age_based_survival=self.male_survival,
             )
             .initial_state(
                 individual_count={
@@ -514,8 +514,8 @@ class TestChamperModel:
             .setup(species=sp, name="ChamperPath3", stochastic=False)
             .age_structure(n_ages=self.n_ages, new_adult_age=self.new_adult_age)
             .survival(
-                female_age_based_survival_rates=self.female_survival,
-                male_age_based_survival_rates=self.male_survival,
+                female_age_based_survival=self.female_survival,
+                male_age_based_survival=self.male_survival,
             )
             .initial_state(
                 individual_count={
@@ -546,10 +546,10 @@ class TestChamperModel:
         """Verify eggs computation with default reproduction (all adults mate, fertility=1)."""
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=self.expected_num_adult_females,
-            expected_eggs_per_female=self.eggs_per_female,
+            eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_reproduction_rates=None,
-            female_age_based_relative_fertility=np.ones(self.n_ages, dtype=np.float64),
+            female_age_based_fertility=np.ones(self.n_ages, dtype=np.float64),
             sex_ratio=self.sex_ratio,
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
@@ -564,10 +564,10 @@ class TestChamperModel:
 
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=self.expected_num_adult_females,
-            expected_eggs_per_female=self.eggs_per_female,
+            eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_reproduction_rates=reproduction,
-            female_age_based_relative_fertility=np.ones(self.n_ages, dtype=np.float64),
+            female_age_based_fertility=np.ones(self.n_ages, dtype=np.float64),
             sex_ratio=self.sex_ratio,
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
@@ -584,10 +584,10 @@ class TestChamperModel:
 
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
             expected_num_adult_females=self.expected_num_adult_females,
-            expected_eggs_per_female=self.eggs_per_female,
+            eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_reproduction_rates=reproduction,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             sex_ratio=self.sex_ratio,
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
@@ -604,9 +604,9 @@ class TestChamperModel:
 
         eggs = PopulationConfigBuilder._compute_expected_eggs_from_distribution(
             equilibrium_distribution=dist,
-            expected_eggs_per_female=self.eggs_per_female,
+            eggs_per_female=self.eggs_per_female,
             age_based_reproduction_rates=reproduction,
-            female_age_based_relative_fertility=np.ones(self.n_ages, dtype=np.float64),
+            female_age_based_fertility=np.ones(self.n_ages, dtype=np.float64),
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
         )
@@ -628,10 +628,10 @@ class TestChamperModel:
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=self.K,
-            expected_eggs_per_female=self.eggs_per_female,
+            eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_mating_rates=mating,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             relative_competition_strength=np.array(
                 [1.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64
             ),
@@ -664,10 +664,10 @@ class TestChamperModel:
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=self.K,
-            expected_eggs_per_female=self.eggs_per_female,
+            eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_mating_rates=mating,
-            female_age_based_relative_fertility=fertility,
+            female_age_based_fertility=fertility,
             relative_competition_strength=np.array(
                 [1.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64
             ),

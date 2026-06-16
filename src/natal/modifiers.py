@@ -447,8 +447,8 @@ def _parse_zygote_key(
     if key_tuple is None:
         raise TypeError("Zygote modifier key must be a 2-tuple")
     part1, part2 = key_tuple
-    idx_hg1, glab1 = index_registry.resolve_hg_glab_part(haploid_genotypes, part1, n_glabs, strict=True)
-    idx_hg2, glab2 = index_registry.resolve_hg_glab_part(haploid_genotypes, part2, n_glabs, strict=True)
+    idx_hg1, glab1 = index_registry.resolve_hg_glab_part(haploid_genotypes, part1, n_glabs)
+    idx_hg2, glab2 = index_registry.resolve_hg_glab_part(haploid_genotypes, part2, n_glabs)
     from natal.index_registry import compress_hg_glab
     c1 = compress_hg_glab(idx_hg1, glab1, n_glabs)
     c2 = compress_hg_glab(idx_hg2, glab2, n_glabs)

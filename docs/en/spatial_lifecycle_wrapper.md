@@ -242,7 +242,7 @@ _spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry,
 
 3. **Config bank always used**: even if all demes share the same config, it is still passed via config bank, keeping the generated module signature uniform
 
-4. **Migration uses config_bank[0]**: the migration kernel only needs to read `is_stochastic` and `use_continuous_sampling`, which are verified to be consistent across all demes during spatial population construction
+4. **Migration uses config_bank[0]**: the migration kernel only needs to read `stochastic` and `continuous_sampling`, which are verified to be consistent across all demes during spatial population construction
 
 5. **Stop signal collection**: prange cannot directly break back to the main thread; a `stopped[n_demes]` boolean array is used to mark each deme's lifecycle. After prange completes, the stopped array is scanned serially
 

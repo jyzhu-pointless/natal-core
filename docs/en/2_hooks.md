@@ -41,7 +41,7 @@ pop = (
         species=sp,
         name="MyPop",
         stochastic=True,
-        use_continuous_sampling=False
+        continuous_sampling=False
     )
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
@@ -49,8 +49,8 @@ pop = (
         "male": {"WT|WT": 1000, "Drive|WT": 0}
     })
     .survival(
-        female_age_based_survival_rates=0.85,
-        male_age_based_survival_rates=0.8
+        female_age_based_survival=0.85,
+        male_age_based_survival=0.8
     )
     .reproduction(eggs_per_female=50.0)
     .competition(
@@ -95,10 +95,10 @@ The `Op` operations in Declarative Hooks automatically select the execution meth
 | `stochastic=True` | Uses binomial distribution random sampling | Uses binomial distribution to determine each individual's survival |
 | `stochastic=False` | Deterministic scaling (directly multiply by factor) | Deterministic scaling (multiply by survival probability) |
 
-When `stochastic=True`, the sampling method can also be chosen via the `use_continuous_sampling` configuration:
+When `stochastic=True`, the sampling method can also be chosen via the `continuous_sampling` configuration:
 
-- `use_continuous_sampling=True`: Uses continuous sampling (uses moment-matched Beta/Gamma distributions instead of Binomial/Poisson distributions)
-- `use_continuous_sampling=False`: Uses discrete sampling
+- `continuous_sampling=True`: Uses continuous sampling (uses moment-matched Beta/Gamma distributions instead of Binomial/Poisson distributions)
+- `continuous_sampling=False`: Uses discrete sampling
 
 The advantage of Declarative Hooks is that you only need to write rules using the same Op syntax, and the system will automatically switch between deterministic and stochastic modes based on the configuration, without requiring Hook code modifications.
 

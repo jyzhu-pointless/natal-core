@@ -37,7 +37,7 @@ def _build_discrete_population(name: str) -> nt.DiscreteGenerationPopulation:
             }
         )
         .reproduction(eggs_per_female=0.0)
-        .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .build()
     )
 

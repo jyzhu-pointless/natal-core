@@ -168,14 +168,13 @@ def _make_population_config(species: Species, name: str = "config_template") -> 
             }
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
-            male_age_based_survival_rates=[1.0, 1.0, 1.0, 0.0],
+            female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+            male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
         )
         .reproduction(
-            female_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
-            male_age_based_mating_rates=[0.0, 0.0, 0.0, 0.0],
+            female_age_based_mating_rate=[0.0, 0.0, 0.0, 0.0],
+            male_age_based_mating_rate=[0.0, 0.0, 0.0, 0.0],
             eggs_per_female=0.0,
-            use_sperm_storage=False,
         )
         .competition(
             juvenile_growth_mode="logistic",
@@ -245,8 +244,8 @@ def test_spatial_population_run_stop_marks_finish():
 def test_spatial_population_stochastic_discrete_migration_preserves_integer_counts():
     species = _make_species("spatial_run_stochastic_discrete")
     shared_config = _make_population_config(species)._replace(
-        is_stochastic=True,
-        use_continuous_sampling=False,
+        stochastic=True,
+        continuous_sampling=False,
     )
 
     d0 = _RunDiscreteDemePopulation(species, "d0", shared_config)
@@ -281,8 +280,8 @@ def test_spatial_population_stochastic_discrete_migration_preserves_integer_coun
 def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency():
     species = _make_species("spatial_run_stochastic_age")
     shared_config = _make_population_config(species)._replace(
-        is_stochastic=True,
-        use_continuous_sampling=False,
+        stochastic=True,
+        continuous_sampling=False,
     )
 
     d0 = _RunDemePopulation(species, "d0", shared_config)
@@ -343,7 +342,7 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 
@@ -416,7 +415,7 @@ def test_spatial_compiled_hooks_are_pinned_to_owning_deme() -> None:
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 
@@ -471,7 +470,7 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 
@@ -567,7 +566,7 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
                 }
             )
             .reproduction(eggs_per_female=0.0)
-            .survival(female_age0_survival=1.0, male_age0_survival=1.0, adult_survival=1.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .build()
         )
 

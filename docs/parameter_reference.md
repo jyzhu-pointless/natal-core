@@ -8,13 +8,13 @@
 
 ---
 
-### `setup(name, stochastic, use_continuous_sampling, use_fixed_egg_count, **kwargs)`
+### `setup(name, stochastic, continuous_sampling, fixed_egg_count, **kwargs)`
 
 | 参数 | Config 字段 | 类型 | A | B | C | D | E | 注 |
 |---|---|---|---|---|---|---|---|---|
-| `stochastic` | `is_stochastic` | Python `bool` | — | — | ❌ | ❌ | ✅ | Python 标量，E 通过 `_replace` |
-| `use_continuous_sampling` | `use_continuous_sampling` | Python `bool` | — | — | ❌ | ❌ | ✅ | 同上 |
-| `use_fixed_egg_count` | `use_fixed_egg_count` | Python `bool` | — | — | ❌ | ❌ | ✅ | 同上 |
+| `stochastic` | `stochastic` | Python `bool` | — | — | ❌ | ❌ | ✅ | Python 标量，E 通过 `_replace` |
+| `continuous_sampling` | `continuous_sampling` | Python `bool` | — | — | ❌ | ❌ | ✅ | 同上 |
+| `fixed_egg_count` | `fixed_egg_count` | Python `bool` | — | — | ❌ | ❌ | ✅ | 同上 |
 
 ### `age_structure(n_ages, new_adult_age, generation_time, equilibrium_distribution, **kwargs)`
 
@@ -32,12 +32,12 @@
 | `individual_count` | `initial_individual_count` | 3-D `float64` | — | ✅ | ❌ | ❌ | ✅ | is_tensor，C/D 拒绝 |
 | `sperm_storage` | `initial_sperm_storage` | 3-D `float64` | — | ✅ | ❌ | ❌ | ✅ | 同上 |
 
-### `survival(female_age_based_survival_rates, male_age_based_survival_rates, generation_time, equilibrium_distribution, **kwargs)`
+### `survival(female_age_based_survival, male_age_based_survival, generation_time, equilibrium_distribution, **kwargs)`
 
 | 参数 | Config 字段 | 类型 | A | B | C | D | E | 注 |
 |---|---|---|---|---|---|---|---|---|
-| `female_age_based_survival_rates` | `age_based_survival_rates[0]` | 1-D | — | ✅ | — | — | ✅ | |
-| `male_age_based_survival_rates` | `age_based_survival_rates[1]` | 1-D | — | ✅ | — | — | ✅ | |
+| `female_age_based_survival` | `age_based_survival_rates[0]` | 1-D | — | ✅ | — | — | ✅ | |
+| `male_age_based_survival` | `age_based_survival_rates[1]` | 1-D | — | ✅ | — | — | ✅ | |
 | `generation_time` | 见 age_structure |
 
 ### `reproduction(...)` ← 参数多，分两表
@@ -46,20 +46,20 @@
 
 | 参数 | Config 字段 | 类型 | A | B | C | D | E | 注 |
 |---|---|---|---|---|---|---|---|---|
-| `female_age_based_mating_rates` | `age_based_mating_rates[0]` | 1-D | — | ✅ | — | — | ✅ | |
-| `male_age_based_mating_rates` | `age_based_mating_rates[1]` | 1-D | — | ✅ | — | — | ✅ | |
-| `female_age_based_reproduction_rates` | `age_based_reproduction_rates` | 1-D | — | ✅ | — | — | ✅ | |
-| `female_age_based_relative_fertility` | `female_age_based_relative_fertility` | 1-D | — | ✅ | — | — | ✅ | |
+| `female_age_based_mating_rate` | `age_based_mating_rates[0]` | 1-D | — | ✅ | — | — | ✅ | |
+| `male_age_based_mating_rate` | `age_based_mating_rates[1]` | 1-D | — | ✅ | — | — | ✅ | |
+| `age_based_reproduction_rate` | `age_based_reproduction_rates` | 1-D | — | ✅ | — | — | ✅ | |
+| `female_age_based_fertility` | `female_age_based_fertility` | 1-D | — | ✅ | — | — | ✅ | |
 
 **第 2 组：标量**
 
 | 参数 | Config 字段 | 类型 | A | B | C | D | E | 注 |
 |---|---|---|---|---|---|---|---|---|
-| `eggs_per_female` | `expected_eggs_per_female` | 0-d `float64` | ✅ | — | ✅ | ✅ | ✅ | 需同步(F) |
+| `eggs_per_female` | `eggs_per_female` | 0-d `float64` | ✅ | — | ✅ | ✅ | ✅ | 需同步(F) |
 | `sex_ratio` | `sex_ratio` | 0-d `float64` | ✅ | — | ✅ | ✅ | ✅ | 需同步(F) |
 | `sperm_displacement_rate` | `sperm_displacement_rate` | 0-d `float64` | ✅ | — | ✅ | ✅ | ✅ | |
-| `use_fixed_egg_count` | `use_fixed_egg_count` | Python `bool` | — | — | ❌ | ❌ | ✅ | |
-| `use_sperm_storage` | — | — | — | — | — | — | — | 未传入 Config |
+| `fixed_egg_count` | `fixed_egg_count` | Python `bool` | — | — | ❌ | ❌ | ✅ | |
+| `` | — | — | — | — | — | — | — | 未传入 Config |
 
 ### `competition(competition_strength, juvenile_growth_mode, low_density_growth_rate, age_1_carrying_capacity, old_juvenile_carrying_capacity, expected_num_adult_females, equilibrium_distribution, **kwargs)`
 
@@ -100,7 +100,7 @@
 
 | 参数 | Config 字段 | 类型 | A | B | C | D | E | 注 |
 |---|---|---|---|---|---|---|---|---|
-| `eggs_per_female` | `expected_eggs_per_female` | 0-d `float64` | ✅ | — | ✅ | ✅ | ✅ | Discrete 无需 F（内联） |
+| `eggs_per_female` | `eggs_per_female` | 0-d `float64` | ✅ | — | ✅ | ✅ | ✅ | Discrete 无需 F（内联） |
 | `sex_ratio` | `sex_ratio` | 0-d `float64` | ✅ | — | ✅ | ✅ | ✅ | 同上 |
 | `female_adult_mating_rate` | `age_based_mating_rates[0, 1]` | 标量 | — | ✅ | ✅ | ✅ | ✅ | |
 | `male_adult_mating_rate` | `age_based_mating_rates[1, 1]` | 标量 | — | ✅ | ✅ | ✅ | ✅ | |
@@ -136,7 +136,7 @@
 ## 特殊说明
 
 - **需同步(F) 的参数**：`carrying_capacity`、`eggs_per_female`、`sex_ratio`。Age-structured 模型通过 E 修改时自动调 F，hook 内 A/C/D 修改后需手动调 F。Discrete 模型内联计算，无需 F。
-- **Python 标量**（`is_stochastic`、`n_ages` 等）：A/B 不适用，C/D 跳过——只能通过 E 的 `_replace`。
+- **Python 标量**（`stochastic`、`n_ages` 等）：A/B 不适用，C/D 跳过——只能通过 E 的 `_replace`。
 - **is_tensor 参数**（fitness 数组、`initial_*`）：C/D 拒绝（`set_param` 检查 `is_tensor`），只能 A/B。
 - **Custom 字段**：不在 `parameters.py` 中，C/D 不适用。nopython 直接 `config.custom['name'][()] = v`。
 - **`fitness`/`presets`/`modifiers`**：立即写入 config 数组，不再使用 deferred 机制。调用时即生效，无需 `build()`。

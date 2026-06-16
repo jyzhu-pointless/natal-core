@@ -155,7 +155,7 @@ def set_observations(self, groups, *, collapse_age=False):
 
 #### _clone 的兼容性
 
-`_clone()` 被 `SpatialBuilder` 用于高效克隆 deme。克隆时 `_observation` 和 `_observation_mask` 被重置为 `None`（第 281-282 行），因为每个克隆需独立设置观测——observation mask 取决于 deme 的 state shape（虽然通常一样，但需要显式设置）。
+`_clone()` 被 `SpatialConfigurator` 用于高效克隆 deme。克隆时 `_observation` 和 `_observation_mask` 被重置为 `None`（第 281-282 行），因为每个克隆需独立设置观测——observation mask 取决于 deme 的 state shape（虽然通常一样，但需要显式设置）。
 
 ### 3. Kernel 集成
 
@@ -402,7 +402,7 @@ Observation mask 在 kernel 内部只用于 genotype 维度聚合（`sum(axis=-1
 2. **观测模式的回退兼容**：观测模式的历史数据可以用 `output_history()` 正确导出
 3. **Post-hoc 观测正确性**：`output_history(observation=obs)` 在原始历史和观测历史两种模式下都返回一致的结果
 4. **Spatial 聚合验证**：观测模式的 spatial aggregate 等于所有 deme 按分组求和的结果
-5. **Clone 兼容**：`SpatialBuilder` 克隆后的 deme 能独立设置 observation
+5. **Clone 兼容**：`SpatialConfigurator` 克隆后的 deme 能独立设置 observation
 6. **Python dispatch 路径**：`_should_use_python_dispatch()` 回退路径下的 recording 同样正确
 
 测试命令：

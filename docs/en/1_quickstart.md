@@ -135,13 +135,13 @@ pop = (nt.AgeStructuredPopulation
         }
     })
     .survival(
-        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+        female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
     .reproduction(
         eggs_per_female=100,
         sex_ratio=0.5,
-        use_sperm_storage=True,        # Enable sperm storage mechanism
+        =True,        # Enable sperm storage mechanism
     )
     .competition(
         juvenile_growth_mode=1,        # 1: Fixed competition mode
@@ -451,10 +451,10 @@ pop = (nt.AgeStructuredPopulation
         }
     })
     .survival(
-        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
+        female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
-    .reproduction(eggs_per_female=100, sex_ratio=0.5, use_sperm_storage=True)
+    .reproduction(eggs_per_female=100, sex_ratio=0.5, =True)
     .competition(juvenile_growth_mode=1, age_1_carrying_capacity=1200)
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)
@@ -497,8 +497,8 @@ Now that you have mastered the basics! Next, you can:
 
 ### Q: What is the difference between "deterministic" and "stochastic"?
 **A**:
-- `is_stochastic=False`: Uses expectations from the multinomial distribution, results are completely deterministic (allowing non-integer values)
-- `is_stochastic=True`: Uses random sampling, results fluctuate randomly (always integers)
+- `stochastic=False`: Uses expectations from the multinomial distribution, results are completely deterministic (allowing non-integer values)
+- `stochastic=True`: Uses random sampling, results fluctuate randomly (always integers)
 
 ---
 

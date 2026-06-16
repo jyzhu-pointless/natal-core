@@ -303,8 +303,8 @@ def execute_csr_event_arrays(
     sperm_storage: np.ndarray,
     has_sperm_storage: bool,
     tick: int,
-    is_stochastic: bool,
-    use_continuous_sampling: bool,
+    stochastic: bool,
+    continuous_sampling: bool,
     deme_id: int,
 ) -> int:
     """Execute one event from flattened CSR arrays.
@@ -398,15 +398,15 @@ def execute_csr_event_arrays(
                                     current,
                                     target,
                                     sperm_storage[age, gidx, :],
-                                    is_stochastic,
-                                    use_continuous_sampling,
+                                    stochastic,
+                                    continuous_sampling,
                                 )
                             else:
                                 individual_count[sex_idx, age, gidx] = _apply_target_without_sperm(
                                     current,
                                     target,
-                                    is_stochastic,
-                                    use_continuous_sampling,
+                                    stochastic,
+                                    continuous_sampling,
                                 )
 
             # STOP_IF_* operators aggregate selected cells and may short-circuit
@@ -450,9 +450,9 @@ def execute_csr_event_program_with_state(
     individual_count: np.ndarray,
     sperm_storage: np.ndarray,
     tick: int,
-    is_stochastic: bool,
+    stochastic: bool,
     has_sperm_storage: bool,
-    use_continuous_sampling: bool,
+    continuous_sampling: bool,
     deme_id: int = 0,
 ) -> int:
     """Execute event directly from ``HookProgram`` while exposing state flags."""
@@ -480,8 +480,8 @@ def execute_csr_event_program_with_state(
         sperm_storage,
         has_sperm_storage,
         tick,
-        is_stochastic,
-        use_continuous_sampling,
+        stochastic,
+        continuous_sampling,
         deme_id,
     )
 
@@ -503,7 +503,7 @@ def execute_csr_event_program(
         tick,
         False,
         False,
-        False,  # use_continuous_sampling
+        False,  # continuous_sampling
         0,      # deme_id
     )
 
@@ -562,9 +562,9 @@ class HookExecutor:
         if not has_sperm_storage:
             sperm_store = np.zeros((0, 0, 0), dtype=np.float64)
         assert sperm_store is not None
-        is_stochastic = bool(getattr(getattr(population, "_config", None), "is_stochastic", False))
-        use_continuous_sampling = bool(
-            getattr(getattr(population, "_config", None), "use_continuous_sampling", False)
+        stochastic = bool(getattr(getattr(population, "_config", None), "stochastic", False))
+        continuous_sampling = bool(
+            getattr(getattr(population, "_config", None), "continuous_sampling", False)
         )
 
         from ..numba_utils import NUMBA_ENABLED
@@ -599,8 +599,8 @@ class HookExecutor:
                     sperm_store,
                     has_sperm_storage,
                     tick,
-                    is_stochastic,
-                    use_continuous_sampling,
+                    stochastic,
+                    continuous_sampling,
                     deme_id,
                 )
                 if result == RESULT_STOP:

@@ -41,7 +41,7 @@ from natal.hooks import CompiledEventHooks
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.numba_utils import is_numba_enabled
-from natal.population_config import PopulationConfig
+from natal.population_config import DiscretePopulationConfig, PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
 from natal.state_translation import (
     output_current_state as _output_current_state,
@@ -55,7 +55,12 @@ T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationStat
 if TYPE_CHECKING:
     from natal.configurator import Configurator
     from natal.genetic_presets import GeneticPreset
-    from natal.hooks import CompiledHookDescriptor, DemeSelector, HookProgram
+    from natal.hooks import (
+        CompiledHookDescriptor,
+        DemeSelector,
+        HookExecutor,
+        HookProgram,
+    )
     from natal.observation import GroupsInput, Observation
 
 HookCallback = Callable[..., object]
@@ -137,20 +142,26 @@ class BasePopulation(ABC, Generic[T_State]):
             event: [] for event in self.ALLOWED_EVENTS
         }
 
-        # Unified gamete modifier list.
-        self._gamete_modifiers: List[Tuple[int, Optional[str], GameteModifier]] = []
+        # Presets with priority IDs.  Writes go to _presets; derived
+        # modifier lists are rebuilt from _presets + _manual_* on demand.
+        self._presets: list[GeneticPreset] = []
 
-        # Unified zygote modifier list.
-        self._zygote_modifiers: List[Tuple[int, Optional[str], ZygoteModifier]] = []
+        # Directly-added modifiers (manual, not from presets).
+        self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
+        self._manual_zygote: list[tuple[int, str | None, ZygoteModifier]] = []
+
+        # Derived modifier lists — rebuilt by refresh_modifiers().
+        self._gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
+        self._zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
         # Compiled hook descriptors (for Numba-accelerated execution).
-        self._compiled_hooks: List[Any] = []  # List[CompiledHookDescriptor]
+        self._compiled_hooks: List[CompiledHookDescriptor] = []
 
         # Hook executor (Python-side coordinator for all hook types).
-        self._hook_executor: Optional[Any] = None  # HookExecutor
+        self._hook_executor: Optional[HookExecutor] = None
 
         # Static data container.
-        self._config: Optional[PopulationConfig] = None
+        self._config: Optional[PopulationConfig | DiscretePopulationConfig] = None
 
         # PopulationState container.
         self._state: Optional[T_State] = None
@@ -234,7 +245,13 @@ class BasePopulation(ABC, Generic[T_State]):
         clone._index_registry = self._index_registry
         clone._registry = self._registry
 
-        # --- shared modifiers (shallow-copy the list) ---
+        # --- shared presets & modifiers ---
+        clone._presets = list(self._presets)
+        clone._manual_gamete = list(self._manual_gamete)
+        clone._manual_zygote = list(self._manual_zygote)
+        # Copy derived lists so clone starts with valid modifier state.
+        # Without this, add_gamete_modifier(refresh=True) on a clone
+        # would start from an empty list, dropping all preset modifiers.
         clone._gamete_modifiers = list(self._gamete_modifiers)
         clone._zygote_modifiers = list(self._zygote_modifiers)
 
@@ -251,15 +268,15 @@ class BasePopulation(ABC, Generic[T_State]):
                 object.__setattr__(clone, _attr, _val)
 
         # --- fresh state: copy data from template ---
-        state_cls = type(self._require_state())
+        state_cls = type(self.state)
         new_state = state_cls.create(
             n_genotypes=resolved_config.n_genotypes,
             n_sexes=resolved_config.n_sexes,
             n_ages=resolved_config.n_ages,
         )
         object.__setattr__(clone, '_state', new_state)
-        clone_state_nn = clone._require_state()
-        self_state_nn = self._require_state()
+        clone_state_nn = clone.state
+        self_state_nn = self.state
         clone_state_nn.individual_count[:] = self_state_nn.individual_count
         # sperm_storage only exists on PopulationState (age-structured), not
         # on DiscretePopulationState — use getattr for type-safe access.
@@ -335,7 +352,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _build_observation_mask(self, obs: Observation) -> np.ndarray:
         """Build the 4-D binary mask from an Observation and current state dims."""
-        state = self._require_state()
+        state = self.state
         ind = state.individual_count
         return obs.build_mask(
             n_sexes=ind.shape[0],
@@ -451,23 +468,15 @@ class BasePopulation(ABC, Generic[T_State]):
         return self._index_registry
 
     @property
-    def config(self) -> PopulationConfig:
+    def config(self) -> PopulationConfig | DiscretePopulationConfig:
         """Public accessor for compiled population configuration."""
         if self._config is None:
             raise AttributeError("Population config has not been initialized.")
         return self._config
 
-    def _require_registry(self) -> IndexRegistry:
-        """Return the initialized registry or raise a clear initialization error."""
-        if self._registry is None:
-            raise AttributeError("Index registry has not been initialized.")
-        return self._registry
-
-    def _require_config(self) -> PopulationConfig:
-        """Return the initialized config or raise a clear initialization error."""
-        if self._config is None:
-            raise AttributeError("Population config has not been initialized.")
-        return self._config
+    def set_config(self, config: PopulationConfig | DiscretePopulationConfig) -> None:
+        """Replace this population's configuration."""
+        self._config = config
 
     def _create_configurator(self) -> Configurator:
         """Create a ``Configurator`` wired back to this population.
@@ -477,9 +486,22 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         from natal.configurator import Configurator
 
-        cfg = Configurator.for_config(self._require_config())
-        object.__setattr__(cfg, '_pop_ref', self)
-        return cfg
+        return Configurator.for_population(self)
+
+    @property
+    def presets(self) -> List[GeneticPreset]:
+        """Return the presets applied to this population."""
+        return self._presets
+
+    @property
+    def gamete_modifiers(self) -> List[tuple[int, str | None, GameteModifier]]:
+        """Return the list of registered gamete modifiers."""
+        return self._gamete_modifiers
+
+    @property
+    def zygote_modifiers(self) -> List[tuple[int, str | None, ZygoteModifier]]:
+        """Return the list of registered zygote modifiers."""
+        return self._zygote_modifiers
 
     @abstractmethod
     def update(self) -> Configurator:
@@ -489,20 +511,14 @@ class BasePopulation(ABC, Generic[T_State]):
         write changes immediately — no ``.apply()`` or ``.freeze()`` needed
         for simple parameter updates.
 
-        Usage::
+        Examples:
 
-            pop.update().competition(carrying_capacity=5000)
-            pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+            >>> pop.update().competition(carrying_capacity=5000)
+            >>> pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
         .. versionadded:: NEXT
         """
         ...
-
-    def _require_state(self) -> T_State:
-        """Return the initialized state or raise a clear initialization error."""
-        if self._state is None:
-            raise AttributeError("Population state has not been initialized.")
-        return self._state
 
     @property
     def state(self) -> T_State:
@@ -571,7 +587,62 @@ class BasePopulation(ABC, Generic[T_State]):
             return int(modifier_id)
         return self._next_modifier_id(modifiers)
 
-    def _refresh_modifier_maps(self) -> None:
+    def reapply_preset_fitness(self) -> None:
+        """Reset fitness tensors to 1.0 and re-apply all preset fitness patches.
+
+        Called after structural changes to presets (addition, removal, or
+        reconfiguration).  Only preset-derived fitness is restored — any
+        fitness values set directly via ``pop.update().fitness()`` will be
+        overwritten, because there is currently no manual-fitness storage
+        analogous to ``_manual_gamete`` / ``_manual_zygote``.
+        """
+        from natal.genetic_presets import apply_preset_fitness_patch
+
+        if self._config is None:
+            return
+        self._config.viability_fitness.fill(1.0)
+        self._config.fecundity_fitness.fill(1.0)
+        self._config.sexual_selection_fitness.fill(1.0)
+        self._config.zygote_viability_fitness.fill(1.0)
+        for preset in sorted(self._presets, key=lambda p: p.priority):
+            preset.bind_species(self._species)
+            patch = preset.fitness_patch()
+            if patch:
+                apply_preset_fitness_patch(self, patch)
+
+    def refresh_modifiers(self) -> None:
+        """Rebuild derived modifier lists and maps from _presets + _manual_*.
+
+        Presets are applied in priority order, then manual modifiers are
+        appended.  Modifier maps (genotype_to_gametes_map,
+        gametes_to_zygote_map, offspring_tensor) are rebuilt from the
+        combined list.
+
+        .. note::
+
+            This method does **not** touch fitness tensors.  Callers that
+            need a full fitness rebuild should also call
+            :meth:`reapply_preset_fitness`.
+        """
+        self._gamete_modifiers.clear()
+        self._zygote_modifiers.clear()
+        for preset in sorted(self._presets, key=lambda p: p.priority):
+            preset.bind_species(self._species)
+            if gm := preset.gamete_modifier(self):
+                self._gamete_modifiers.append((
+                    self._next_modifier_id(self._gamete_modifiers),
+                    f"{preset.name}/gamete", gm,
+                ))
+            if zm := preset.zygote_modifier(self):
+                self._zygote_modifiers.append((
+                    self._next_modifier_id(self._zygote_modifiers),
+                    f"{preset.name}/zygote", zm,
+                ))
+        self._gamete_modifiers.extend(self._manual_gamete)
+        self._zygote_modifiers.extend(self._manual_zygote)
+        self.refresh_modifier_maps()
+
+    def refresh_modifier_maps(self) -> None:
         if self._config is None or self._registry is None:
             return
 
@@ -619,10 +690,6 @@ class BasePopulation(ABC, Generic[T_State]):
             offspring_tensor=offspring_tensor,
         )
 
-    def refresh_modifier_maps(self) -> None:
-        """Public wrapper that rebuilds modifier maps from registered modifiers."""
-        self._refresh_modifier_maps()
-
     def add_gamete_modifier(
         self,
         modifier: GameteModifier,
@@ -636,12 +703,18 @@ class BasePopulation(ABC, Generic[T_State]):
             modifier: A ``GameteModifier`` callable or object.
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
+            refresh: If True (default), immediately rebuild modifier maps.
+                Set to False when adding multiple modifiers in a batch;
+                call :meth:`refresh_modifiers` or
+                :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
+        self._manual_gamete.append((resolved_id, name, modifier))
+        self._manual_gamete.sort(key=lambda x: x[0])
         self._gamete_modifiers.append((resolved_id, name, modifier))
         self._gamete_modifiers.sort(key=lambda x: x[0])
         if refresh:
-            self._refresh_modifier_maps()
+            self.refresh_modifier_maps()
 
     def add_zygote_modifier(
         self,
@@ -656,52 +729,26 @@ class BasePopulation(ABC, Generic[T_State]):
             modifier: A ``ZygoteModifier`` callable or object.
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
+            refresh: If True (default), immediately rebuild modifier maps.
+                Set to False when adding multiple modifiers in a batch;
+                call :meth:`refresh_modifiers` or
+                :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
+        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
+        self._manual_zygote.append((resolved_id, name, modifier))
+        self._manual_zygote.sort(key=lambda x: x[0])
         self._zygote_modifiers.append((resolved_id, name, modifier))
         self._zygote_modifiers.sort(key=lambda x: x[0])
         if refresh:
-            self._refresh_modifier_maps()
+            self.refresh_modifier_maps()
 
-    # Keep set_zygote_modifier aligned with the ZygoteModifier contract.
-    def set_zygote_modifier(
-        self,
-        modifier: ZygoteModifier,
-        modifier_id: Optional[int] = None,
-        modifier_name: Optional[str] = None
-    ) -> None:
-        """Register a zygote modifier with an optional priority.
+    def add_preset(self, preset: GeneticPreset) -> None:
+        """Add a preset to this population.
 
         Args:
-            modifier: A ``ZygoteModifier`` instance or callable.
-            modifier_id: Numeric priority (lower values execute earlier). If omitted
-                an id will be auto-assigned.
-            modifier_name: Optional name for debugging.
+            preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
         """
-        if not callable(modifier):
-            raise TypeError("Zygote modifier must be callable")
-
-        resolved_id = self._resolve_modifier_id(modifier_id, self._zygote_modifiers)
-
-        # Add and sort by priority id.
-        self._zygote_modifiers.append((resolved_id, modifier_name, modifier))
-        self._zygote_modifiers.sort(key=lambda x: x[0])
-
-    def set_gamete_modifier(
-        self,
-        modifier: GameteModifier,
-        modifier_id: Optional[int] = None,
-        modifier_name: Optional[str] = None
-    ) -> None:
-        """Register a gamete modifier with optional priority and name."""
-        if not callable(modifier):
-            raise TypeError("Gamete modifier must be callable")
-
-        resolved_id = self._resolve_modifier_id(modifier_id, self._gamete_modifiers)
-
-        # Add and sort by priority id.
-        self._gamete_modifiers.append((resolved_id, modifier_name, modifier))
-        self._gamete_modifiers.sort(key=lambda x: x[0])
+        self._presets.append(preset)
 
     def apply_preset(self, preset: GeneticPreset) -> None:
         """Apply a genetic preset to this population.
@@ -727,8 +774,9 @@ class BasePopulation(ABC, Generic[T_State]):
             :class:`natal.genetic_presets.GeneticPreset` - Base class for creating custom presets
             :class:`natal.genetic_presets.HomingDrive` - Built-in gene drive preset
         """
-        from natal.genetic_presets import apply_preset_to_population
-        apply_preset_to_population(self, preset)
+        self.add_preset(preset)
+        self.refresh_modifiers()
+        self.reapply_preset_fitness()
 
     @classmethod
     def builder(cls, species: Species) -> Any:

@@ -44,7 +44,7 @@ def test_fertilization_sampling_consistency():
 
     results = {}
 
-    for mode_name, is_stochastic, use_continuous_sampling in modes:
+    for mode_name, stochastic, continuous_sampling in modes:
         # Test with age-specific reproduction rates
         n_female, n_male = _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
             sperm_storage_by_male_genotype=sperm_store,
@@ -61,12 +61,12 @@ def test_fertilization_sampling_consistency():
             male_only_by_sex_chrom=np.zeros(n_genotypes, dtype=np.bool_),
             n_glabs=1,
             age_based_reproduction_rates=np.array([0.0, 0.8, 0.5]),  # Age-specific rates
-            female_age_based_relative_fertility=np.array([0.0, 1.0, 0.8]),  # Age-specific fertility
+            female_age_based_fertility=np.array([0.0, 1.0, 0.8]),  # Age-specific fertility
             fixed_eggs=False,
             sex_ratio=0.5,
             has_sex_chromosomes=False,
-            is_stochastic=is_stochastic,
-            use_continuous_sampling=use_continuous_sampling
+            stochastic=stochastic,
+            continuous_sampling=continuous_sampling
         )
 
         results[mode_name] = (n_female.sum(), n_male.sum())
@@ -76,7 +76,7 @@ def test_fertilization_sampling_consistency():
         assert n_male.shape == (n_genotypes,)
 
         # In deterministic mode, values should be exact
-        if not is_stochastic:
+        if not stochastic:
             assert np.all(n_female >= 0)
             assert np.all(n_male >= 0)
 
@@ -105,13 +105,13 @@ def test_competition_sampling_consistency():
 
     results = {}
 
-    for mode_name, is_stochastic, use_continuous_sampling in modes:
+    for mode_name, stochastic, continuous_sampling in modes:
         female_new, male_new = recruit_juveniles_sampling(
             age_0_juvenile_counts=juvenile_counts,
             carrying_capacity=carrying_capacity,
             n_genotypes=n_genotypes,
-            is_stochastic=is_stochastic,
-            use_continuous_sampling=use_continuous_sampling
+            stochastic=stochastic,
+            continuous_sampling=continuous_sampling
         )
 
         results[mode_name] = (female_new.sum(), male_new.sum())
@@ -149,13 +149,13 @@ def test_scaling_sampling_consistency():
 
     results = {}
 
-    for mode_name, is_stochastic, use_continuous_sampling in modes:
+    for mode_name, stochastic, continuous_sampling in modes:
         female_new, male_new = recruit_juveniles_given_scaling_factor_sampling(
             age_0_juvenile_counts=juvenile_counts,
             scaling_factor=scaling_factor,
             n_genotypes=n_genotypes,
-            is_stochastic=is_stochastic,
-            use_continuous_sampling=use_continuous_sampling
+            stochastic=stochastic,
+            continuous_sampling=continuous_sampling
         )
 
         results[mode_name] = (female_new.sum(), male_new.sum())

@@ -1,6 +1,7 @@
 """Unit tests for AgeStructuredPopulation."""
 
 import numpy as np
+import pytest
 
 import natal as nt
 
@@ -21,7 +22,7 @@ def _minimal_pop(sp, *, pop_name: str = "AgePop"):
             species=sp,
             name=pop_name,
             stochastic=False,
-            use_continuous_sampling=False,
+            continuous_sampling=False,
         )
         .age_structure(n_ages=4, new_adult_age=1)
         .initial_state(
@@ -31,13 +32,13 @@ def _minimal_pop(sp, *, pop_name: str = "AgePop"):
             }
         )
         .reproduction(
-            female_age_based_mating_rates=[0.0, 1.0, 1.0, 1.0],
-            male_age_based_mating_rates=[0.0, 1.0, 1.0, 1.0],
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
             eggs_per_female=10,
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 0.9, 0.8],
-            male_age_based_survival_rates=[1.0, 0.9, 0.8],
+            female_age_based_survival=[1.0, 0.9, 0.8],
+            male_age_based_survival=[1.0, 0.9, 0.8],
         )
         .competition(
             juvenile_growth_mode="concave",
@@ -52,23 +53,30 @@ class TestBuildAndSetup:
     def test_build_succeeds(self):
         sp = _make_species("Age_build")
         pop = _minimal_pop(sp, pop_name="Age_build_pop")
-        assert pop is not None
+        assert pop.tick == 0
+        assert pop.state is not None
+        assert pop.species is not None
 
     def test_initial_tick_is_zero(self):
         sp = _make_species("Age_tick0")
         pop = _minimal_pop(sp, pop_name="Age_tick0_pop")
         assert pop._tick == 0
+        # individual_count shape: (n_sexes, n_ages, n_genotypes) = (2, 4, 4)
+        assert pop.state.individual_count.shape == (2, 4, 4)
 
     def test_state_is_initialized(self):
         sp = _make_species("Age_state_init")
         pop = _minimal_pop(sp, pop_name="Age_state_init_pop")
         assert pop._state is not None
+        assert pop.state.individual_count.shape == (2, 4, 4)
+        assert pop.state.individual_count.sum() > 0
 
     def test_registry_has_wt_wt(self):
         sp = _make_species("Age_reg")
         pop = _minimal_pop(sp, pop_name="Age_reg_pop")
         genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
+        assert len(pop._registry.index_to_genotype) == 4
 
 
 class TestRunTicks:
@@ -77,25 +85,36 @@ class TestRunTicks:
         pop = _minimal_pop(sp, pop_name="Age_run_pop")
         pop.run(5)
         assert pop._tick == 5
+        assert pop.state.individual_count.sum() > 0
 
     def test_run_zero_ticks(self):
         sp = _make_species("Age_run0")
         pop = _minimal_pop(sp, pop_name="Age_run0_pop")
+        initial = pop.state.individual_count.copy()
         pop.run(0)
         assert pop._tick == 0
+        np.testing.assert_array_equal(pop.state.individual_count, initial)
 
     def test_run_single_tick(self):
         sp = _make_species("Age_run1")
         pop = _minimal_pop(sp, pop_name="Age_run1_pop")
+        initial_total = pop.state.individual_count.sum()
         pop.run(1)
         assert pop._tick == 1
+        # Total count changes after one tick (reproduction + survival + aging)
+        assert pop.state.individual_count.sum() != initial_total
 
     def test_run_is_additive(self):
         sp = _make_species("Age_run_add")
         pop = _minimal_pop(sp, pop_name="Age_run_add_pop")
-        pop.run(4)
+        pop.run(2)
         pop.run(3)
-        assert pop._tick == 7
+        pop2 = _minimal_pop(sp, pop_name="Age_run_add_pop2")
+        pop2.run(5)
+        np.testing.assert_array_equal(
+            pop.state.individual_count,
+            pop2.state.individual_count,
+        )
 
 
 class TestDeterminism:
@@ -118,33 +137,41 @@ class TestAgeStructure:
         sp = _make_species("Age_shape_f")
         pop = _minimal_pop(sp, pop_name="Age_shape_f_pop")
         pop.run(1)
-        female_counts = pop._state.individual_count[0]
-        # 4 age classes; at least 1 genotype
+        female_counts = pop.state.individual_count[0]
+        # 4 age classes; 4 genotypes
         assert female_counts.ndim == 2
         assert female_counts.shape[0] == 4
+        # At least one age class has non-zero count after reproduction
+        assert np.any(female_counts.sum(axis=1) > 0)
 
     def test_individual_count_shape_males(self):
         sp = _make_species("Age_shape_m")
         pop = _minimal_pop(sp, pop_name="Age_shape_m_pop")
         pop.run(1)
-        male_counts = pop._state.individual_count[1]
+        male_counts = pop.state.individual_count[1]
         assert male_counts.ndim == 2
         assert male_counts.shape[0] == 4
+        # At least one age class has non-zero count after reproduction
+        assert np.any(male_counts.sum(axis=1) > 0)
 
     def test_youngest_age_is_zero_at_start(self):
-        """Age 0 (juveniles) should start at 0 before any reproduction."""
+        """Age 0 (juveniles) start at 0; after 1 tick, new offspring appear at age 1."""
         sp = _make_species("Age_juvenile0")
         pop = _minimal_pop(sp, pop_name="Age_juvenile0_pop")
-        state = pop._state
+        state = pop.state
         # Age index 0 is the juvenile compartment; initial_state set it to 0
         female_age0 = state.individual_count[0][0]
         assert np.all(female_age0 == 0.0)
+        # After 1 tick, reproduction adds offspring then aging shifts them to age 1
+        # (age 0 is cleared to 0 each tick by aging, so check age 1 instead)
+        pop.run(1)
+        assert pop.state.individual_count[0][1].sum() > 0
 
     def test_adults_survive_after_one_tick(self):
-        """After one tick, adults at age 1 should have survived with rate 1.0."""
+        """After one tick, age-1 adults (initial count 200) survive with rate 0.9 → age 2 ≈ 180."""
         sp = _make_species("Age_survive")
         pop = _minimal_pop(sp, pop_name="Age_survive_pop")
         pop.run(1)
-        # survival_rate for age 1 is 0.9 (index into survival rates [1.0, 0.9, 0.8])
-        adult_counts = pop._state.individual_count[0][1:]  # age ≥ 1
-        assert np.any(adult_counts > 0)
+        # Initial adults at age 1 = 200, survival rate 0.9 → 180 at age 2 after aging
+        female_age2 = pop.state.individual_count[0][2].sum()
+        assert female_age2 == pytest.approx(200 * 0.9)

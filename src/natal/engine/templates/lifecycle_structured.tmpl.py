@@ -63,13 +63,13 @@ def TICK_FN_NAME(
     ind_count = state.individual_count.copy()
     tick = state.n_tick
     sperm_store = state.sperm_storage.copy()
-    is_stochastic = bool(config.is_stochastic)
-    use_continuous = bool(config.use_continuous_sampling)
+    stochastic = bool(config.stochastic)
+    use_continuous = bool(config.continuous_sampling)
 
     # FIRST event
     result = execute_csr_event_program_with_state(
         registry, EVENT_FIRST, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, deme_id,
+        stochastic, True, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
@@ -85,7 +85,7 @@ def TICK_FN_NAME(
     # EARLY event
     result = execute_csr_event_program_with_state(
         registry, EVENT_EARLY, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, deme_id,
+        stochastic, True, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
@@ -101,7 +101,7 @@ def TICK_FN_NAME(
     # LATE event
     result = execute_csr_event_program_with_state(
         registry, EVENT_LATE, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, deme_id,
+        stochastic, True, use_continuous, deme_id,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP

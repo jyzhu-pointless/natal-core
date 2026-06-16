@@ -1,8 +1,8 @@
-# SpatialBuilder 异构 Config 共享机制
+# SpatialConfigurator 异构 Config 共享机制
 
 ## 问题
 
-`SpatialBuilder._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `PopulationConfig`。
+`SpatialConfigurator._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `PopulationConfig`。
 
 如果只有少数参数在组间不同，所有大数组（`genotype_to_gametes_map`、`gametes_to_zygote_map`、`viability_fitness`、`fecundity_fitness` 等）仍会被重复创建，造成内存浪费。
 
@@ -48,7 +48,7 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 
 | Builder kwarg | Config 字段 |
 |---|---|
-| `eggs_per_female` | `expected_eggs_per_female` |
+| `eggs_per_female` | `eggs_per_female` |
 
 ### 4. 动态发现（隐式）
 
@@ -60,7 +60,7 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 
 ### 故意不支持异构的参数
 
-`stochastic` 和 `use_continuous_sampling` 是 simulation mode 级别的参数，不应在不同 deme 间变化。`setup()` 方法不经过 `_detect_and_delegate`，因此这些参数**无法**通过 `batch_setting` 传递。
+`stochastic` 和 `continuous_sampling` 是 simulation mode 级别的参数，不应在不同 deme 间变化。`setup()` 方法不经过 `_detect_and_delegate`，因此这些参数**无法**通过 `batch_setting` 传递。
 
 ## 平衡态重算
 
@@ -155,6 +155,6 @@ _build_heterogeneous()
 | `_KWARG_MULTI_FIELD` | 多字段映射（carrying_capacity 变体） |
 | `_KWARG_RENAMES` | builder kwarg → config 字段重命名 |
 | `_EQUILIBRIUM_SENSITIVE_KWARGS` | 需重算平衡态的参数集合 |
-| `SpatialBuilder._build_heterogeneous()` | 主构建逻辑 |
-| `SpatialBuilder._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
-| `SpatialBuilder._build_variant_config()` | 创建 variant config |
+| `SpatialConfigurator._build_heterogeneous()` | 主构建逻辑 |
+| `SpatialConfigurator._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
+| `SpatialConfigurator._build_variant_config()` | 创建 variant config |

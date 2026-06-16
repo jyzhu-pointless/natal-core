@@ -28,7 +28,7 @@ class _DummyState:
 class _DummyPop:
     def __init__(self):
         self.state = _DummyState()
-        self._config = type("Cfg", (), {"is_stochastic": False, "use_continuous_sampling": False})()
+        self._config = type("Cfg", (), {"stochastic": False, "continuous_sampling": False})()
 
     @property
     def config(self):

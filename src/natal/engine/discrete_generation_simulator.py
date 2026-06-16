@@ -38,12 +38,12 @@ def run_discrete_reproduction(
     """One tick of discrete reproduction: mate → fertilize → offspring in age 0."""
     ind_count = ind_count.copy()
     g = cfg.n_genotypes
-    stochastic = cfg.is_stochastic
-    continuous = cfg.use_continuous_sampling
+    stochastic = cfg.stochastic
+    continuous = cfg.continuous_sampling
 
     females = ind_count[0, 1, :]
     males = ind_count[1, 1, :]
-    effective_males = males * cfg.male_mating_rate
+    effective_males = males * cfg.male_adult_mating_rate
     if effective_males.sum() == 0.0 or females.sum() == 0.0:
         return ind_count
 
@@ -54,7 +54,7 @@ def run_discrete_reproduction(
     sperm = mate_discrete(
         females,
         mating_prob,
-        cfg.female_mating_rate,
+        cfg.female_adult_mating_rate,
         stochastic,
         continuous
     )
@@ -62,7 +62,7 @@ def run_discrete_reproduction(
     n_f, n_m = fertilize_discrete(
         sperm, cfg.offspring_tensor,
         cfg.fecundity_f, cfg.fecundity_m,
-        cfg.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
+        cfg.eggs_per_female[()],  # pyright: ignore[reportArgumentType]
         cfg.reproduction_rate,
         cfg.sex_ratio[()],  # pyright: ignore[reportArgumentType]
         cfg.has_sex_chromosomes,
@@ -87,8 +87,8 @@ def run_discrete_survival(
     """Juvenile density regulation then genotype viability selection."""
     ind_count = ind_count.copy()
     g = cfg.n_genotypes
-    stochastic = cfg.is_stochastic
-    continuous = cfg.use_continuous_sampling
+    stochastic = cfg.stochastic
+    continuous = cfg.continuous_sampling
     mode = cfg.juvenile_growth_mode[()]  # pyright: ignore[reportArgumentType]
 
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
@@ -116,11 +116,11 @@ def run_discrete_survival(
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         (ind_count[0, 0, :], ind_count[1, 0, :]),
         scaling, g,
-        is_stochastic=stochastic, use_continuous_sampling=continuous,
+        stochastic=stochastic, continuous_sampling=continuous,
     )
 
-    s_f = cfg.base_survival_f * cfg.viability_f
-    s_m = cfg.base_survival_m * cfg.viability_m
+    s_f = cfg.female_age0_survival * cfg.viability_f
+    s_m = cfg.male_age0_survival * cfg.viability_m
 
     if stochastic:
         if continuous:

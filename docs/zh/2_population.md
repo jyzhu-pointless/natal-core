@@ -48,7 +48,7 @@ pop = (
     )
     .reproduction(
         eggs_per_female=100,
-        female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0],
+        female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0],
     )
     .competition(carrying_capacity=5000, low_density_growth_rate=6.0,
                  juvenile_growth_mode="logistic")
@@ -81,7 +81,7 @@ from natal.configurator import set_param
 # 支持全名、短名、别名
 set_param(config, "competition.carrying_capacity", 5000.0)
 set_param(config, "carrying_capacity", 5000.0)      # 短名
-set_param(config, "expected_eggs_per_female", 100.0) # 别名
+set_param(config, "eggs_per_female", 100.0) # 别名
 ```
 
 ## 启动模拟

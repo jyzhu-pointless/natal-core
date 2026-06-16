@@ -90,11 +90,11 @@ cfg.age_structure(n_ages=8, new_adult_age=2)
 cfg.reproduction(
     eggs_per_female=100,
     sex_ratio=0.5,
-    female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.5, 0.3, 0.0],
-    use_sperm_storage=True,
+    female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 0.5, 0.3, 0.0],
+    =True,
 )
 ```
-> Note: `use_sperm_storage=True` is accepted for compatibility but has **no effect** — sperm storage is always enabled in the age-structured model.
+> Note: `=True` is accepted for compatibility but has **no effect** — sperm storage is always enabled in the age-structured model.
 cfg.survival(
     female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
     male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],

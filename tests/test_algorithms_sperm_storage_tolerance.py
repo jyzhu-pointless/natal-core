@@ -19,7 +19,7 @@ def test_sample_survival_with_sperm_storage_clamps_near_zero_negative_virgins() 
         male_survival_rates=np.ones((1, 1), dtype=np.float64),
         n_genotypes=1,
         n_ages=1,
-        use_continuous_sampling=False,
+        continuous_sampling=False,
     )
 
     assert np.isfinite(female_new).all()

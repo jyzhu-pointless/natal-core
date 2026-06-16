@@ -83,8 +83,8 @@ pop = (nt.AgeStructuredPopulation.setup(
         n_ages=8,
         new_adult_age=2,
     ).survival(
-        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
-        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2, 0],
+        female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
+        male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0],
     ).competition(
         competition_strength=5,
         juvenile_growth_mode="linear",

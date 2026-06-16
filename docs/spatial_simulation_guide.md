@@ -241,8 +241,8 @@ If the demes do not share the same `Species`, `SpatialPopulation` will directly 
 ### Error 2: Inconsistent migration sampling mode across demes
 
 Heterogeneous deme configs are supported. However, when migration is enabled,
-all demes must use the same values for `is_stochastic` and
-`use_continuous_sampling`; otherwise `run_tick()` / `run(...)` raises an
+all demes must use the same values for `stochastic` and
+`continuous_sampling`; otherwise `run_tick()` / `run(...)` raises an
 error.
 
 When deme configs are heterogeneous, spatial execution uses the per-deme

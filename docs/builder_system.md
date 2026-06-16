@@ -47,8 +47,8 @@ Related chapters:
 |---|---|---|---|---|---|
 | `name` | `str` | Population identifier name. | `"AgeStructuredPop"` | whole simulation | For logging and identification; does not affect dynamics; name experiments explicitly. |
 | `stochastic` | `bool` | Choose stochastic or deterministic sampling. | `True` | sampling stages (reproduction/survival) | `True`=stochastic, `False`=deterministic; use `False` during tuning. |
-| `use_continuous_sampling` | `bool` | Sampling strategy choice. | `False` | probability sampling details | Controls sampling method; keep default for most scenarios. |
-| `use_fixed_egg_count` | `bool` | Whether egg count is fixed. | `False` | reproduction | `True` fixes egg count, `False` mimics random oviposition. |
+| `continuous_sampling` | `bool` | Sampling strategy choice. | `False` | probability sampling details | Controls sampling method; keep default for most scenarios. |
+| `fixed_egg_count` | `bool` | Whether egg count is fixed. | `False` | reproduction | `True` fixes egg count, `False` mimics random oviposition. |
 
 ### 3.2 `age_structure(...)`
 
@@ -64,7 +64,7 @@ Related chapters:
 | Parameter | Type | Explanation | Default | Affected stage | Remarks |
 |---|---|---|---|---|---|
 | `individual_count` | `Mapping[str, Mapping[Union[Genotype, str], Union[int, float, List, Tuple, NDArray, Dict[int, float]]]]` | Initial individual count distribution. Format `{sex: {genotype: age_data}}`. | required | initial state | Will cause `build()` to error if not set; supports scalar, sequence, mapping and other formats. |
-| `sperm_storage` | `Optional[Mapping[Union[Genotype, str], Mapping[Union[Genotype, str], Union[int, float, List, Tuple, NDArray, Dict[int, float]]]]]` | Initial sperm inventory (if sperm storage enabled). | `None` | reproduction | Only needed when `use_sperm_storage=True`; format is three-level mapping. |
+| `sperm_storage` | `Optional[Mapping[Union[Genotype, str], Mapping[Union[Genotype, str], Union[int, float, List, Tuple, NDArray, Dict[int, float]]]]]` | Initial sperm inventory (if sperm storage enabled). | `None` | reproduction | Only needed when `=True`; format is three-level mapping. |
 
 `age_data` supports: scalar, list/tuple/array, `{age: value}` mapping. Must be non‑negative.
 
@@ -101,8 +101,8 @@ Validation rules (source behaviour):
 
 | Parameter | Type | Explanation | Default | Affected stage | Remarks |
 |---|---|---|---|---|---|
-| `female_age_based_survival_rates` | `Optional[Union[int, float, List[float], NDArray[np.float64], Dict[int, float], Callable]]` | Female survival rates by age. | `None` | survival | Supports scalar/sequence/mapping/callable formats; `None` uses default curve; recommend limiting to `[0, 1]`. |
-| `male_age_based_survival_rates` | `Optional[Union[int, float, List[float], NDArray[np.float64], Dict[int, float], Callable]]` | Male survival rates by age. | `None` | survival | Same as `female_age_based_survival_rates`. |
+| `female_age_based_survival` | `Optional[Union[int, float, List[float], NDArray[np.float64], Dict[int, float], Callable]]` | Female survival rates by age. | `None` | survival | Supports scalar/sequence/mapping/callable formats; `None` uses default curve; recommend limiting to `[0, 1]`. |
+| `male_age_based_survival` | `Optional[Union[int, float, List[float], NDArray[np.float64], Dict[int, float], Callable]]` | Male survival rates by age. | `None` | survival | Same as `female_age_based_survival`. |
 | `generation_time` | `Optional[int]` | Generation time marker. | `None` | compilation parameter | Same name parameter as `age_structure`; later value overrides earlier. |
 | `equilibrium_distribution` | `Optional[Union[List[float], NDArray[np.float64]]]` | Auxiliary equilibrium distribution. | `None` | scaling helper | Same name parameter as `age_structure`; later value overrides earlier. |
 
@@ -115,22 +115,22 @@ Code‑aligned format (from `_resolve_survival_param`):
 
 ```python
 # A) None -> uses default curve
-.survival(female_age_based_survival_rates=None)
+.survival(female_age_based_survival=None)
 
 # B) Scalar -> same value for all ages
-.survival(female_age_based_survival_rates=0.85)
+.survival(female_age_based_survival=0.85)
 
 # C) Sequence -> written by age index; missing entries become 0, extra truncated
-.survival(female_age_based_survival_rates=[1.0, 1.0, 0.9, 0.7])
+.survival(female_age_based_survival=[1.0, 1.0, 0.9, 0.7])
 
 # D) Sparse mapping -> unspecified ages default to 1.0
-.survival(female_age_based_survival_rates={0: 1.0, 1: 0.95, 2: 0.8})
+.survival(female_age_based_survival={0: 1.0, 1: 0.95, 2: 0.8})
 
 # E) Callable -> must accept one age argument and return a numeric value
-.survival(female_age_based_survival_rates=lambda age: 1.0 if age < 2 else 0.8)
+.survival(female_age_based_survival=lambda age: 1.0 if age < 2 else 0.8)
 
 # F) Sequence ending with None sentinel -> trailing None are filled with the last non‑None value
-.survival(female_age_based_survival_rates=[1.0, 0.9, None])
+.survival(female_age_based_survival=[1.0, 0.9, None])
 ```
 
 Validation rules (source behaviour):
@@ -143,18 +143,18 @@ Validation rules (source behaviour):
 
 | Parameter | Type | Explanation | Default | Affected stage | Remarks |
 |---|---|---|---|---|---|
-| `female_age_based_mating_rates` | `Optional[list/ndarray]` | Female mating rates by age. | `None` | reproduction | Length must equal `n_ages`; uses defaults when not set. |
-| `male_age_based_mating_rates` | `Optional[list/ndarray]` | Male mating rates by age. | `None` | reproduction | Length must equal `n_ages`; uses defaults when not set. |
-| `female_age_based_relative_fertility` | `Optional[list/ndarray]` | Female relative fertility weight by age. | `None` | reproduction | Length must equal `n_ages`; tunes contribution to egg production by female age. |
+| `female_age_based_mating_rate` | `Optional[list/ndarray]` | Female mating rates by age. | `None` | reproduction | Length must equal `n_ages`; uses defaults when not set. |
+| `male_age_based_mating_rate` | `Optional[list/ndarray]` | Male mating rates by age. | `None` | reproduction | Length must equal `n_ages`; uses defaults when not set. |
+| `female_age_based_fertility` | `Optional[list/ndarray]` | Female relative fertility weight by age. | `None` | reproduction | Length must equal `n_ages`; tunes contribution to egg production by female age. |
 | `eggs_per_female` | `float` | Base egg count per female individual. | `50.0` | reproduction | Used as baseline for population egg production; start from neutral value. |
-| `use_fixed_egg_count` | `bool` | Whether egg count is fixed. | `False` | reproduction | `True` fixes egg count, `False` uses random oviposition. |
+| `fixed_egg_count` | `bool` | Whether egg count is fixed. | `False` | reproduction | `True` fixes egg count, `False` uses random oviposition. |
 | `sex_ratio` | `float` | Proportion of females in offspring. | `0.5` | reproduction | Range should be in `[0, 1]`; 0.5 represents 1:1 sex ratio. Ignored when sex chromosome constraints deterministically assign offspring sex (e.g., XX/ZW female, XY/ZZ male). |
-| `use_sperm_storage` | `bool` | Enable sperm storage mechanism. | `True` | reproduction | `True` enables storage, `False` disables; mating only in current generation. |
+| `` | `bool` | Enable sperm storage mechanism. | `True` | reproduction | `True` enables storage, `False` disables; mating only in current generation. |
 | `sperm_displacement_rate` | `float` | Rate of new sperm replacing old sperm. | `0.05` | reproduction | Range typically in `(0, 1]`; higher value = faster replacement. |
 
 Format and length requirements (source behaviour):
 
-- `female_age_based_mating_rates` / `male_age_based_mating_rates` / `female_age_based_relative_fertility`
+- `female_age_based_mating_rate` / `male_age_based_mating_rate` / `female_age_based_fertility`
   - When provided, they are converted to `np.array`.
   - During configuration compilation, their length must equal `n_ages`, otherwise `ValueError` is raised.
 
@@ -414,8 +414,8 @@ Same as for the age‑structured model:
 
 - `name`
 - `stochastic`
-- `use_continuous_sampling`
-- `use_fixed_egg_count`
+- `continuous_sampling`
+- `fixed_egg_count`
 
 ### 4.2 `initial_state(...)`
 
@@ -460,12 +460,12 @@ Validation rules:
 |---|---|---|---|---|---|
 | `female_age0_survival` | `float` | Female juvenile (age 0) survival rate. | `1.0` | survival | Range `[0, 1]`; 1.0 = complete survival. |
 | `male_age0_survival` | `float` | Male juvenile (age 0) survival rate. | `1.0` | survival | Range `[0, 1]`; 1.0 = complete survival. |
-| `adult_survival` | `float` | Adult inter-generational survival rate. | `0.0` | survival/aging boundary | Range `[0, 1]`; 0.0 approximates strict non-overlapping generations; higher values allow adult persistence. |
+| `` | `float` | Adult inter-generational survival rate. | `0.0` | survival/aging boundary | Range `[0, 1]`; 0.0 approximates strict non-overlapping generations; higher values allow adult persistence. |
 
 Modelling constraints:
 
 - All three probabilities should be in `[0, 1]`.
-- `adult_survival=0.0` is commonly used for strictly discrete generations.
+- `=0.0` is commonly used for strictly discrete generations.
 
 ### 4.5 `competition(...)`
 
@@ -490,7 +490,7 @@ Looking at one tick:
 - Key parameters: survival rate vectors/scalars, `viability`.
 
 3. aging
-- Key parameters: `n_ages`, `new_adult_age` (age‑structured model) or `adult_survival` (discrete‑generation model).
+- Key parameters: `n_ages`, `new_adult_age` (age‑structured model) or `` (discrete‑generation model).
 
 4. density regulation (juvenile competition)
 - Key parameters: `juvenile_growth_mode`, `low_density_growth_rate`, carrying‑capacity‑related parameters.

@@ -1,6 +1,6 @@
 """Spatial population builder with fluent API and batch-setting support.
 
-Provides ``SpatialBuilder`` for constructing ``SpatialPopulation`` instances
+Provides ``SpatialConfigurator`` for constructing ``SpatialPopulation`` instances
 via a chainable API. Supports both homogeneous (all demes identical) and
 heterogeneous (per-deme varying parameters via ``batch_setting``) construction.
 
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 __all__ = [
     "BatchSetting",
     "batch_setting",
-    "SpatialBuilder",
+    "SpatialConfigurator",
 ]
 
 # Type aliases for population and builder types used throughout.
@@ -74,7 +74,7 @@ _HookItem = Union[
 class BatchSetting:
     """Deferred per-deme parameter specification.
 
-    Wraps one of three value kinds used by ``SpatialBuilder`` to express
+    Wraps one of three value kinds used by ``SpatialConfigurator`` to express
     parameters that vary across demes:
 
     - **scalar**: A Python sequence (list/tuple), one element per deme.
@@ -87,7 +87,7 @@ class BatchSetting:
       ``(row, col) -> float`` (auto-detected by parameter count),
       expanded at build time.
 
-    ``SpatialBuilder`` detects ``BatchSetting`` values in builder method
+    ``SpatialConfigurator`` detects ``BatchSetting`` values in builder method
     calls, stores them, and expands them during ``build()``.
     """
 
@@ -208,7 +208,7 @@ class BatchSetting:
     def first_value(self) -> Any:
         """Return a single concrete element for template-builder delegation.
 
-        ``SpatialBuilder`` holds a single-deme template builder internally.
+        ``SpatialConfigurator`` holds a single-deme template builder internally.
         When a parameter is wrapped in ``batch_setting`` (a per-deme list),
         the template builder still needs one scalar value to proceed through
         ``setup() → … → build()``. This method provides that value —
@@ -246,7 +246,7 @@ def batch_setting(
             - An existing ``BatchSetting`` (returned as-is).
 
     Returns:
-        A ``BatchSetting`` instance that ``SpatialBuilder`` detects and
+        A ``BatchSetting`` instance that ``SpatialConfigurator`` detects and
         expands at build time.
     """
     if isinstance(values, BatchSetting):
@@ -260,13 +260,26 @@ def batch_setting(
 
 
 def _make_hashable(value: Any) -> Any:
-    """Convert a value to a hashable form for config-equivalence grouping.
+    """Recursively convert *value* into a hashable form for deduplication.
 
-    Scalars pass through; lists/tuples convert to nested tuples;
-    dicts convert to sorted (key, hashable_value) tuples;
-    numpy arrays convert to bytes.
+    Used by ``_build_heterogeneous()`` to detect which demes have identical
+    batch-parameter values and can share a compiled config.  Without this,
+    two numpy arrays with identical contents would be seen as different
+    dict keys (ndarray is not hashable).
+
+    Conversion rules:
+    - numpy arrays → (``"__ndarray__"``, raw bytes).  Same content = same bytes.
+    - dicts → sorted ``(key, hashable_value)`` tuples.  Sorting ensures
+      ``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` produce the same key.
+    - lists / tuples → recursively converted element by element.
+    - scalars (int, float, str) → pass through unchanged.
+
+    Returns:
+        A hashable object suitable for use as a dict key or set element.
     """
     if isinstance(value, np.ndarray):
+        # ndarray.tobytes() is order-sensitive — different layouts or dtypes
+        # produce different bytes, which is the desired behaviour.
         return ("__ndarray__", value.tobytes())
     if isinstance(value, dict):
         d = cast(Dict[Any, Any], value)
@@ -278,6 +291,7 @@ def _make_hashable(value: Any) -> Any:
     if isinstance(value, tuple):
         tup = cast(tuple[Any, ...], value)
         return tuple(_make_hashable(v) for v in tup)
+    # Scalar: int, float, str, bool — already hashable.
     return value
 
 
@@ -337,7 +351,7 @@ def _clone_deme(
 #   2. *multi-field kwarg* (carrying_capacity variants)
 #      → _replace into both base_carrying_capacity and the scaled
 #        carrying_capacity.
-#   3. *rename kwarg* (eggs_per_female → expected_eggs_per_female, etc.)
+#   3. *rename kwarg* (eggs_per_female → eggs_per_female, etc.)
 #      → _replace under the renamed config field.
 #   4. *any other kwarg*
 #      → try ``hasattr(base_config, kwarg)``; if the config field exists,
@@ -355,7 +369,7 @@ _ARRAY_KWARGS: frozenset[str] = frozenset({"individual_count", "sperm_storage"})
 # Builder kwarg → config field renames.
 # Kwargs not listed here are tried directly with ``hasattr(base_config, name)``.
 _KWARG_RENAMES: dict[str, str] = {
-    "eggs_per_female": "expected_eggs_per_female",
+    "eggs_per_female": "eggs_per_female",
 }
 
 # Builder kwargs that affect equilibrium metrics.
@@ -374,10 +388,10 @@ def _is_0d_field(config: PopulationConfig | DiscretePopulationConfig, name: str)
 
 
 # ---------------------------------------------------------------------------
-# SpatialBuilder
+# SpatialConfigurator
 # ---------------------------------------------------------------------------
 
-class SpatialBuilder:
+class SpatialConfigurator:
     """Fluent builder for ``SpatialPopulation``.
 
     Wraps a single-deme ``Configurator`` as a template. All chainable
@@ -444,7 +458,7 @@ class SpatialBuilder:
         self,
         method_name: str,
         kwargs: Dict[str, Any],
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Detect BatchSetting values in kwargs, store them, and delegate
         concrete (non-batch) values to the template builder's method.
 
@@ -501,7 +515,7 @@ class SpatialBuilder:
         method_name: str,
         args: tuple[object, ...],
         kwargs: Dict[str, Any],
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Like ``_detect_and_delegate`` but accepts positional args.
 
         Positional args are assumed to never be BatchSetting; only kwargs
@@ -536,16 +550,16 @@ class SpatialBuilder:
         self,
         name: str = "SpatialPopulation",
         stochastic: bool = True,
-        use_continuous_sampling: bool = False,
-        use_fixed_egg_count: bool = False,
-    ) -> SpatialBuilder:
+        continuous_sampling: bool = False,
+        fixed_egg_count: bool = False,
+    ) -> SpatialConfigurator:
         """Configure basic population settings.
 
         Args:
             name: Human-readable population name.
             stochastic: Whether to use stochastic sampling.
-            use_continuous_sampling: If True, use Dirichlet sampling.
-            use_fixed_egg_count: If True, egg count is fixed.
+            continuous_sampling: If True, use Dirichlet sampling.
+            fixed_egg_count: If True, egg count is fixed.
 
         Returns:
             Self for chaining.
@@ -554,14 +568,14 @@ class SpatialBuilder:
         self._replay_log.append(("setup", {
             "name": name,
             "stochastic": stochastic,
-            "use_continuous_sampling": use_continuous_sampling,
-            "use_fixed_egg_count": use_fixed_egg_count,
+            "continuous_sampling": continuous_sampling,
+            "fixed_egg_count": fixed_egg_count,
         }))
         self._template.setup(
             name=name,
             stochastic=stochastic,
-            use_continuous_sampling=use_continuous_sampling,
-            use_fixed_egg_count=use_fixed_egg_count,
+            continuous_sampling=continuous_sampling,
+            fixed_egg_count=fixed_egg_count,
         )
         return self
 
@@ -571,7 +585,7 @@ class SpatialBuilder:
         new_adult_age: int = 2,
         generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure age structure (age-structured models only).
 
         Args:
@@ -599,7 +613,7 @@ class SpatialBuilder:
         self,
         individual_count: Any,
         sperm_storage: Optional[Any] = None,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure the initial population state.
 
         Args:
@@ -617,25 +631,23 @@ class SpatialBuilder:
     def survival(
         self,
         # Age-structured params
-        female_age_based_survival_rates: Optional[Any] = None,
-        male_age_based_survival_rates: Optional[Any] = None,
+        female_age_based_survival: Optional[Any] = None,
+        male_age_based_survival: Optional[Any] = None,
         generation_time: Optional[float] = None,
         equilibrium_distribution: Optional[Any] = None,
         # Discrete-generation params
         female_age0_survival: Optional[float] = None,
         male_age0_survival: Optional[float] = None,
-        adult_survival: Optional[float] = None,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure survival rates.
 
         Args:
-            female_age_based_survival_rates: Per-age female survival (age-structured).
-            male_age_based_survival_rates: Per-age male survival (age-structured).
+            female_age_based_survival: Per-age female survival (age-structured).
+            male_age_based_survival: Per-age male survival (age-structured).
             generation_time: Optional generation time override.
             equilibrium_distribution: Optional equilibrium distribution.
             female_age0_survival: Female age-0 survival (discrete-generation).
             male_age0_survival: Male age-0 survival (discrete-generation).
-            adult_survival: Adult survival (discrete-generation).
 
         Returns:
             Self for chaining.
@@ -644,8 +656,8 @@ class SpatialBuilder:
             return self._detect_and_delegate(
                 "survival",
                 {
-                    "female_age_based_survival_rates": female_age_based_survival_rates,
-                    "male_age_based_survival_rates": male_age_based_survival_rates,
+                    "female_age_based_survival": female_age_based_survival,
+                    "male_age_based_survival": male_age_based_survival,
                     "generation_time": generation_time,
                     "equilibrium_distribution": equilibrium_distribution,
                 },
@@ -656,7 +668,6 @@ class SpatialBuilder:
                 {
                     "female_age0_survival": female_age0_survival,
                     "male_age0_survival": male_age0_survival,
-                    "adult_survival": adult_survival,
                 },
             )
 
@@ -665,29 +676,27 @@ class SpatialBuilder:
         # Shared params (accept BatchSetting for per-deme variation)
         eggs_per_female: Union[float, BatchSetting] = 50.0,
         sex_ratio: Union[float, BatchSetting] = 0.5,
-        use_fixed_egg_count: bool = False,
+        fixed_egg_count: bool = False,
         # Age-structured params
-        female_age_based_mating_rates: Optional[Any] = None,
-        male_age_based_mating_rates: Optional[Any] = None,
-        female_age_based_reproduction_rates: Optional[Any] = None,
-        female_age_based_relative_fertility: Optional[Any] = None,
-        use_sperm_storage: bool = True,
+        female_age_based_mating_rate: Optional[Any] = None,
+        male_age_based_mating_rate: Optional[Any] = None,
+        age_based_reproduction_rate: Optional[Any] = None,
+        female_age_based_fertility: Optional[Any] = None,
         sperm_displacement_rate: float = 0.05,
         # Discrete-generation params
         female_adult_mating_rate: float = 1.0,
         male_adult_mating_rate: float = 1.0,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure reproduction and mating parameters.
 
         Args:
             eggs_per_female: Expected offspring per adult female. Accepts ``BatchSetting``.
             sex_ratio: Proportion of female offspring.
-            use_fixed_egg_count: If True, egg count is deterministic.
-            female_age_based_mating_rates: Female mating rates (age-structured).
-            male_age_based_mating_rates: Male mating rates (age-structured).
-            female_age_based_reproduction_rates: Reproduction participation rates.
-            female_age_based_relative_fertility: Fertility weights.
-            use_sperm_storage: Whether to model sperm storage (age-structured).
+            fixed_egg_count: If True, egg count is deterministic.
+            female_age_based_mating_rate: Female mating rates (age-structured).
+            male_age_based_mating_rate: Male mating rates (age-structured).
+            age_based_reproduction_rate: Reproduction participation rates.
+            female_age_based_fertility: Fertility weights.
             sperm_displacement_rate: Rate of sperm displacement (age-structured).
             female_adult_mating_rate: Adult female mating rate (discrete-generation).
             male_adult_mating_rate: Adult male mating rate (discrete-generation).
@@ -699,14 +708,13 @@ class SpatialBuilder:
             return self._detect_and_delegate(
                 "reproduction",
                 {
-                    "female_age_based_mating_rates": female_age_based_mating_rates,
-                    "male_age_based_mating_rates": male_age_based_mating_rates,
-                    "female_age_based_reproduction_rates": female_age_based_reproduction_rates,
-                    "female_age_based_relative_fertility": female_age_based_relative_fertility,
+                    "female_age_based_mating_rate": female_age_based_mating_rate,
+                    "male_age_based_mating_rate": male_age_based_mating_rate,
+                    "age_based_reproduction_rate": age_based_reproduction_rate,
+                    "female_age_based_fertility": female_age_based_fertility,
                     "eggs_per_female": eggs_per_female,
-                    "use_fixed_egg_count": use_fixed_egg_count,
+                    "fixed_egg_count": fixed_egg_count,
                     "sex_ratio": sex_ratio,
-                    "use_sperm_storage": use_sperm_storage,
                     "sperm_displacement_rate": sperm_displacement_rate,
                 },
             )
@@ -733,7 +741,7 @@ class SpatialBuilder:
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64], BatchSetting]] = None,
         # Discrete-generation params
         carrying_capacity: Union[int, None, BatchSetting] = None,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure competition and density-dependence.
 
         Args:
@@ -780,7 +788,7 @@ class SpatialBuilder:
                 },
             )
 
-    def presets(self, *preset_list: GeneticPreset) -> SpatialBuilder:
+    def presets(self, *preset_list: GeneticPreset) -> SpatialConfigurator:
         """Add gene-drive presets (applied during build).
 
         Each positional argument may be a ``BatchSetting`` of preset objects,
@@ -817,7 +825,7 @@ class SpatialBuilder:
         sexual_selection: Optional[Any] = None,
         zygote_viability: Optional[Any] = None,
         mode: str = "replace",
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure fitness values (applied after presets).
 
         Args:
@@ -841,7 +849,7 @@ class SpatialBuilder:
             },
         )
 
-    def hooks(self, *hook_items: _HookItem) -> SpatialBuilder:
+    def hooks(self, *hook_items: _HookItem) -> SpatialConfigurator:
         """Register lifecycle hooks.
 
         Args:
@@ -858,7 +866,7 @@ class SpatialBuilder:
         self,
         gamete_modifiers: Optional[List[Tuple[int, Optional[str], Callable[..., object]]]] = None,
         zygote_modifiers: Optional[List[Tuple[int, Optional[str], Callable[..., object]]]] = None,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure custom modifier functions.
 
         Args:
@@ -881,7 +889,7 @@ class SpatialBuilder:
         groups: GroupsInput,
         *,
         collapse_age: bool = False,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Register observation groups for compressed history recording.
 
         The groups are compiled into a binary mask at build time and passed
@@ -895,7 +903,7 @@ class SpatialBuilder:
             collapse_age: Whether to collapse the age axis in exports.
 
         Returns:
-            SpatialBuilder: Self for chaining.
+            SpatialConfigurator: Self for chaining.
         """
         self._observation_groups = groups
         self._observation_collapse_age = collapse_age
@@ -915,7 +923,7 @@ class SpatialBuilder:
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
         adjust_migration_on_edge: bool = False,
-    ) -> SpatialBuilder:
+    ) -> SpatialConfigurator:
         """Configure spatial migration parameters.
 
         Args:
@@ -1030,6 +1038,19 @@ class SpatialBuilder:
 
     def build(self) -> SpatialPopulation:
         """Build and return the configured ``SpatialPopulation``.
+
+        Two paths, chosen automatically based on whether any ``batch_setting()``
+        values were used during the chain:
+
+        - **Homogeneous** (no ``batch_setting``): build ONE template deme,
+          clone N-1 times via ``_clone_deme()``.  All demes share the same
+          config object — maximum memory efficiency, zero redundant work.
+
+        - **Heterogeneous** (any ``batch_setting``): expand batch values,
+          group demes by parameter signature, build one template per group.
+          Within a group, demes share a config.  Across groups, heavy
+          ndarrays (genotype maps, fitness tensors) are shared via
+          ``_replace()`` when possible.
 
         Returns:
             A ``SpatialPopulation`` with all demes initialised.
@@ -1164,7 +1185,7 @@ class SpatialBuilder:
                 )
                 # _clone_deme copies state arrays from base_template;
                 # overwrite them with the variant group's own values.
-                state = group_template._require_state()  # pyright: ignore[reportPrivateUsage]
+                state = group_template.state  # pyright: ignore[reportPrivateUsage]
                 if "individual_count" in sig_map:
                     state.individual_count[:] = variant_config.initial_individual_count
                 if "sperm_storage" in sig_map:
@@ -1269,7 +1290,7 @@ class SpatialBuilder:
            genuinely differs between groups), then ``_replace`` it.
         2. **Multi-field kwargs** (carrying_capacity variants) —
            ``_replace`` both the base and population-scale fields.
-        3. **Rename kwargs** (eggs_per_female → expected_eggs_per_female) —
+        3. **Rename kwargs** (eggs_per_female → eggs_per_female) —
            ``_replace`` under the config-side field name.
         4. **Any other kwarg** — direct ``_replace`` by field name
            (pre-validated by ``_can_use_replace``).
@@ -1340,17 +1361,38 @@ class SpatialBuilder:
         variant = base_config._replace(**replace_kwargs)
 
         if needs_equilibrium:
+            # DiscretePopulationConfig stores only 0-d scalars — rebuild temp (2,2)
+            # arrays for compute_equilibrium_metrics which expects per-age arrays.
+            from natal.population_config import DiscretePopulationConfig as DPC
+
+            if isinstance(variant, DPC):
+                surv = np.zeros((2, 2), dtype=np.float64)
+                surv[0, 0] = variant.female_age0_survival
+                surv[1, 0] = variant.male_age0_survival
+                mating = np.zeros((2, 2), dtype=np.float64)
+                mating[0, 1] = variant.female_adult_mating_rate
+                mating[1, 1] = variant.male_adult_mating_rate
+                reprod = np.zeros(2, dtype=np.float64)
+                reprod[1] = variant.reproduction_rate
+                as_surv = surv
+                as_mating = mating
+                as_reprod = reprod
+            else:
+                as_surv = variant.age_based_survival_rates
+                as_mating = variant.age_based_mating_rates
+                as_reprod = variant.age_based_reproduction_rates
+
             new_comp, new_surv = compute_equilibrium_metrics(
                 carrying_capacity=variant.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
-                expected_eggs_per_female=variant.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
-                age_based_survival_rates=variant.age_based_survival_rates,
-                age_based_mating_rates=variant.age_based_mating_rates,
-                female_age_based_relative_fertility=variant.female_age_based_relative_fertility,
+                eggs_per_female=variant.eggs_per_female[()],  # pyright: ignore[reportArgumentType]
+                age_based_survival_rates=as_surv,
+                age_based_mating_rates=as_mating,
+                female_age_based_fertility=variant.female_age_based_fertility,
                 relative_competition_strength=variant.age_based_relative_competition_strength,
                 sex_ratio=variant.sex_ratio[()],  # pyright: ignore[reportArgumentType]
                 new_adult_age=int(variant.new_adult_age),
                 n_ages=int(variant.n_ages),
-                age_based_reproduction_rates=variant.age_based_reproduction_rates,
+                age_based_reproduction_rates=as_reprod,
             )
             variant = variant._replace(
                 expected_competition_strength=np.array(float(new_comp)),
@@ -1432,3 +1474,205 @@ class SpatialBuilder:
                 method(**filtered)
 
         return template_cfg.build(name=f"{self._spatial_name}_group")
+
+    # ------------------------------------------------------------------
+    # Runtime update support (for_population)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def for_population(
+        spatial_pop: SpatialPopulation,
+        *,
+        deme: int | None = None,
+    ) -> Configurator | _SpatialUpdate:
+        """Create a ``Configurator`` wired to one deme, or a multi-deme updater.
+
+        This is the runtime-update counterpart of ``SpatialConfigurator()``
+        (build-time).  It returns an object whose chainable methods modify
+        the existing spatial population's configs:
+
+        - ``for_population(pop, deme=3)`` → a single-deme ``Configurator``
+          (clone-on-write, same as ``pop.update_deme(3)``).
+        - ``for_population(pop)`` → a multi-deme updater whose chainable
+          methods apply the change to every deme.
+
+        Examples::
+
+            # Single deme
+            SpatialConfigurator.for_population(pop, deme=2).competition(
+                carrying_capacity=800,
+            )
+
+            # All demes
+            SpatialConfigurator.for_population(pop).competition(
+                carrying_capacity=800,
+            )
+
+            # All demes with per-deme variation
+            from natal.spatial_configurator import batch_setting
+            SpatialConfigurator.for_population(pop).competition(
+                carrying_capacity=batch_setting([100, 200, 300, 400]),
+            )
+        """
+        if deme is not None:
+            return spatial_pop.update_deme(deme)
+        return _SpatialUpdate(spatial_pop)
+
+
+class _SpatialUpdate:
+    """Multi-deme updater returned by ``SpatialConfigurator.for_population()``.
+
+    Each chainable method applies the change to every deme in the spatial
+    population.  Supports both scalar values (applied to all demes) and
+    ``BatchSetting`` values (applied per-deme).
+    """
+
+    # Chain methods that support BatchSetting expansion across demes.
+    _BATCHABLE_METHODS = frozenset({
+        "competition", "reproduction", "survival", "initial_state",
+        "fitness", "custom", "setup",
+    })
+
+    def __init__(self, spatial_pop: SpatialPopulation) -> None:
+        self._pop = spatial_pop
+
+    def competition(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("competition", kwargs)
+        return self
+
+    def reproduction(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("reproduction", kwargs)
+        return self
+
+    def survival(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("survival", kwargs)
+        return self
+
+    def fitness(self, **kwargs: object) -> _SpatialUpdate:
+        self._dispatch_scalar("fitness", kwargs)
+        return self
+
+    def custom(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("custom", kwargs)
+        return self
+
+    def setup(self, **kwargs: object) -> _SpatialUpdate:
+        self._apply_batch_or_scalar("setup", kwargs)
+        return self
+
+    def modifiers(self, **kwargs: object) -> _SpatialUpdate:
+        self._dispatch_scalar("modifiers", kwargs)
+        return self
+
+    def presets(self, *presets: Any) -> _SpatialUpdate:
+        if not self._pop.demes:
+            return self
+        # Track old→new config: refresh_modifiers() + reapply_preset_fitness() replaces
+        # the config object, so id(d.config) dedup alone misses
+        # other demes sharing the old reference.
+        updated_configs: dict[int, object] = {}
+        for d in self._pop.demes:
+            old_config = d.config
+            cid = id(old_config)
+            if cid in updated_configs:
+                d.set_config(cast(PopulationConfig | DiscretePopulationConfig, updated_configs[cid]))
+                continue
+            Configurator.for_population(d).presets(*presets)
+            new_config = d.config
+            if new_config is not old_config:
+                updated_configs[cid] = new_config
+        return self
+
+    def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:
+        if not self._pop.demes:
+            return self
+        seen: set[int] = set()
+        for d in self._pop.demes:
+            cid = id(d.config)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            Configurator.for_population(d).hooks(*hook_items)
+        return self
+
+    def _apply_batch_or_scalar(
+        self, method_name: str, kwargs: dict[str, object],
+    ) -> None:
+        """Dispatch kwargs: ``BatchSetting`` values → per-deme; scalars → all demes.
+
+        **Scalar mode** (no ``BatchSetting`` in kwargs):
+            Calls ``_dispatch_scalar`` which deduplicates by ``id(config)``
+            and calls the Configurator method once per unique config.
+
+        **Batch mode** (``BatchSetting`` values present):
+            Expands each ``BatchSetting`` into a per-deme list, then iterates
+            all demes via ``update_deme(i)`` (clone-on-write).  ``None``
+            values in the expanded lists skip that deme for that parameter.
+
+        This is the spatial equivalent of ``SpatialBuilder._detect_and_delegate``
+        but for runtime — values are applied immediately instead of being
+        recorded for later replay.
+        """
+        batch_keys = [k for k, v in kwargs.items() if isinstance(v, BatchSetting)]
+        if not batch_keys:
+            self._dispatch_scalar(method_name, kwargs)
+            return
+
+        n_demes = len(self._pop.demes)
+        # Materialise each BatchSetting into a concrete per-deme list.
+        expanded: dict[str, list[object]] = {}
+        for batch_key in batch_keys:
+            batch: BatchSetting = kwargs.pop(batch_key)  # type: ignore[assignment]
+            topology = getattr(self._pop, 'topology', None)
+            expanded[batch_key] = batch.expand(n_demes, topology)
+
+        # Per-deme loop: each deme gets its slice of expanded values
+        # plus any shared (non-BatchSetting) scalar kwargs.
+        for i in range(n_demes):
+            per_deme_kwargs: dict[str, object] = dict(kwargs)
+            all_none = True
+            for batch_key, vals in expanded.items():
+                val = vals[i]
+                if val is not None:
+                    per_deme_kwargs[batch_key] = val
+                    all_none = False
+            if all_none and not kwargs:
+                continue  # every batch value was None, no shared scalars — skip
+            cfg = self._pop.update_deme(i)
+            getattr(cfg, method_name)(**per_deme_kwargs)
+
+    def _dispatch_scalar(
+        self, method_name: str, kwargs: dict[str, object],
+    ) -> None:
+        """Apply scalar kwargs to all demes via the appropriate Configurator method.
+
+        Iterates all demes, deduplicating by ``id(config)``.  For methods
+        that write 0-d ndarrays in-place (e.g. ``competition()``), a single
+        write propagates to all demes sharing the config.  For methods that
+        call ``_replace()`` (e.g. ``presets()``, discrete ``survival()``),
+        the ``updated_configs`` dict tracks old→new config so every deme
+        in the group receives the result via ``set_config()``.
+
+        ``custom``, ``fitness``, and ``modifiers`` always use the full
+        ``Configurator.for_population()`` path because their parameter types
+        (Mapping, list, callable) cannot be dispatched through ``set_param``.
+        """
+        if not self._pop.demes:
+            return
+
+        # Track old→new config for methods that call _replace()
+        # (e.g. discrete survival, presets, setup).  Methods that
+        # write 0-d ndarrays in-place leave new_config == old_config,
+        # so no overhead for the common case.
+        updated_configs: dict[int, object] = {}
+        for d in self._pop.demes:
+            old_config = d.config
+            cid = id(old_config)
+            if cid in updated_configs:
+                d.set_config(cast(PopulationConfig | DiscretePopulationConfig, updated_configs[cid]))
+                continue
+            cfg = Configurator.for_population(d)
+            getattr(cfg, method_name)(**kwargs)
+            new_config = d.config
+            if new_config is not old_config:
+                updated_configs[cid] = new_config

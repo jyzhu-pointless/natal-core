@@ -29,7 +29,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
             topology=HexGrid(rows=5, cols=5, wrap=False),
             pop_type="age_structured",
         )
-        .setup(name="hex_deme", stochastic=True, use_continuous_sampling=True)
+        .setup(name="hex_deme", stochastic=True, continuous_sampling=True)
         .age_structure(n_ages=5, new_adult_age=1)
         .initial_state(
             individual_count={
@@ -44,14 +44,13 @@ def build_hex_spatial_population() -> SpatialPopulation:
             }
         )
         .survival(
-            female_age_based_survival_rates=[1.0, 0.96, 0.9, 0.75, 0.0],
-            male_age_based_survival_rates=[1.0, 0.96, 0.9, 0.75, 0.0],
+            female_age_based_survival=[1.0, 0.96, 0.9, 0.75, 0.0],
+            male_age_based_survival=[1.0, 0.96, 0.9, 0.75, 0.0],
         )
         .reproduction(
-            female_age_based_mating_rates=[0.0, 1.0, 1.0, 0.8, 0.0],
-            male_age_based_mating_rates=[0.0, 1.0, 1.0, 0.8, 0.0],
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.8, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.8, 0.0],
             eggs_per_female=10.0,
-            use_sperm_storage=False,
         )
         .competition(
             juvenile_growth_mode="logistic",

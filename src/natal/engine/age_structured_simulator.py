@@ -80,8 +80,8 @@ def run_reproduction_with_precomputed_offspring_probability(
     n_gen = config.n_genotypes
     adult_ages = config.adult_ages
     adult_start_age = adult_ages[0] if len(adult_ages) > 0 else 0
-    is_stochastic = config.is_stochastic
-    use_continuous_sampling = config.use_continuous_sampling
+    stochastic = config.stochastic
+    continuous_sampling = config.continuous_sampling
 
     # 1. Extract effective adult male counts (weighted by age-specific mating rates).
     # effective_male_counts = Σ (male_counts[age] * male_mating_rate[age])
@@ -115,8 +115,8 @@ def run_reproduction_with_precomputed_offspring_probability(
         adult_start_age,
         n_ages,
         n_gen,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling
     )
 
     # 4. Generate offspring (fertilization).
@@ -132,7 +132,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.fecundity_fitness[0], # sex=0 is FEMALE
         config.fecundity_fitness[1], # sex=1 is MALE
         offspring_probability,
-        config.expected_eggs_per_female[()],  # pyright: ignore[reportArgumentType]
+        config.eggs_per_female[()],  # pyright: ignore[reportArgumentType]
         adult_start_age,
         n_ages,
         n_gen,
@@ -143,12 +143,12 @@ def run_reproduction_with_precomputed_offspring_probability(
         male_only_by_sex_chrom,
         config.n_glabs,
         config.age_based_reproduction_rates,  # 直接传递年龄特定的繁殖率
-        config.female_age_based_relative_fertility,  # 传递年龄特定的相对生育率
-        config.use_fixed_egg_count, # fixed_eggs
+        config.female_age_based_fertility,  # 传递年龄特定的相对生育率
+        config.fixed_egg_count, # fixed_eggs
         config.sex_ratio[()],  # pyright: ignore[reportArgumentType]
         has_sex_chromosomes=has_sex_chromosomes,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling
     )
 
     # Note: Sex.FEMALE = 0, Sex.MALE = 1.
@@ -158,14 +158,14 @@ def run_reproduction_with_precomputed_offspring_probability(
     # 5. Apply zygote fitness to newly formed offspring (age-0 individuals)
     if hasattr(config, 'zygote_viability_fitness'):
         # Apply zygote fitness to age-0 individuals with proper stochastic sampling
-        if is_stochastic:
+        if stochastic:
             # Use stochastic sampling for zygote survival
             female_offspring = ind_count[0, 0, :].copy()
             male_offspring = ind_count[1, 0, :].copy()
 
             # Apply zygote fitness using binomial sampling
             for g in range(n_gen):
-                if use_continuous_sampling:
+                if continuous_sampling:
                     # Continuous sampling: use continuous_binomial function
                     if female_offspring[g] > 0:
                         female_offspring[g] = nbc.continuous_binomial(
@@ -244,8 +244,8 @@ def run_survival(
     sperm_store = sperm_store.copy()
     n_ages = config.n_ages
     n_gen = config.n_genotypes
-    is_stochastic = config.is_stochastic
-    use_continuous_sampling = config.use_continuous_sampling
+    stochastic = config.stochastic
+    continuous_sampling = config.continuous_sampling
 
     # =========================================================================
     # Firstly, apply density-dependent survival to age 0 individuals (juveniles) based on the configured growth mode.
@@ -301,8 +301,8 @@ def run_survival(
         age_0_counts,
         scaling_factor,
         n_gen,
-        is_stochastic=is_stochastic,
-        use_continuous_sampling=use_continuous_sampling
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling
     )
     ind_count[0, 0, :] = f_rec
     ind_count[1, 0, :] = m_rec
@@ -336,7 +336,7 @@ def run_survival(
     s_combined_m = s_age_m[:, None] * s_via_m  # (n_ages, n_genotypes)
 
     # 3 Apply combined survival rates to individuals
-    if is_stochastic:
+    if stochastic:
         # Stochastic sampling: keep sperm_store and individual counts synchronized.
         f_surv, m_surv, sperm_store = alg.sample_survival_with_sperm_storage(
             (ind_count[0], ind_count[1]),
@@ -345,7 +345,7 @@ def run_survival(
             s_combined_m,
             n_gen,
             n_ages,
-            use_continuous_sampling=use_continuous_sampling
+            continuous_sampling=continuous_sampling
         )
         ind_count[0], ind_count[1] = f_surv, m_surv
     else:
@@ -404,9 +404,9 @@ def _event_with_hooks(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
     tick: int,
-    is_stochastic: bool,
+    stochastic: bool,
     has_sperm_storage: bool,
-    use_continuous_sampling: bool,
+    continuous_sampling: bool,
     combined_hook: Callable[..., Any],
 ) -> int:
     """Execute one event: CSR declarative operations then combined njit hook.
@@ -417,9 +417,9 @@ def _event_with_hooks(
         ind_count: Individual count array (modified in-place by CSR ops).
         sperm_store: Sperm storage array (modified in-place by CSR ops).
         tick: Current tick number.
-        is_stochastic: Whether sampling is stochastic.
+        stochastic: Whether sampling is stochastic.
         has_sperm_storage: Whether sperm storage is active.
-        use_continuous_sampling: Whether to use continuous sampling.
+        continuous_sampling: Whether to use continuous sampling.
         combined_hook: A compiled @njit combined hook function.
 
     Returns:
@@ -427,7 +427,7 @@ def _event_with_hooks(
     """
     result = execute_csr_event_program_with_state(
         registry, event_id, ind_count, sperm_store, tick,
-        is_stochastic, has_sperm_storage, use_continuous_sampling,
+        stochastic, has_sperm_storage, continuous_sampling,
     )
     if result != RESULT_CONTINUE:
         return RESULT_STOP
@@ -463,13 +463,13 @@ def run_tick_with_hooks(
     ind_count = state.individual_count.copy()
     sperm_store = state.sperm_storage.copy()
     tick = state.n_tick
-    is_stochastic = bool(config.is_stochastic)
-    use_continuous = bool(config.use_continuous_sampling)
+    stochastic = bool(config.stochastic)
+    use_continuous = bool(config.continuous_sampling)
 
     # First event
     result = _event_with_hooks(
         registry, EVENT_FIRST, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, first_hook,
+        stochastic, True, use_continuous, first_hook,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
@@ -479,7 +479,7 @@ def run_tick_with_hooks(
     # Early event
     result = _event_with_hooks(
         registry, EVENT_EARLY, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, early_hook,
+        stochastic, True, use_continuous, early_hook,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP
@@ -489,7 +489,7 @@ def run_tick_with_hooks(
     # Late event
     result = _event_with_hooks(
         registry, EVENT_LATE, ind_count, sperm_store, tick,
-        is_stochastic, True, use_continuous, late_hook,
+        stochastic, True, use_continuous, late_hook,
     )
     if result != RESULT_CONTINUE:
         return (ind_count, sperm_store, tick), RESULT_STOP

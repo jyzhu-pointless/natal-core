@@ -50,8 +50,8 @@ class PopulationConfig(NamedTuple):
     mutable in-place.
 
     Attributes:
-        is_stochastic: Whether demographic events are stochastic.
-        use_continuous_sampling: If True, use Dirichlet sampling for gamete
+        stochastic: Whether demographic events are stochastic.
+        continuous_sampling: If True, use Dirichlet sampling for gamete
             proportions; otherwise use multinomial sampling.
         n_sexes: Number of sexes (usually 2).
         n_ages: Number of age classes.
@@ -62,7 +62,7 @@ class PopulationConfig(NamedTuple):
         age_based_reproduction_rates: Shape (n_ages,) – female reproduction
             participation rates per age.
         age_based_survival_rates: Shape (n_sexes, n_ages) – survival probabilities.
-        female_age_based_relative_fertility: Shape (n_ages,) – relative fertility
+        female_age_based_fertility: Shape (n_ages,) – relative fertility
             of females at each age.
         viability_fitness: Shape (n_sexes, n_ages, n_genotypes) – viability
             fitness coefficients.
@@ -78,8 +78,8 @@ class PopulationConfig(NamedTuple):
             contribution to competition for each age.
         sperm_displacement_rate: Probability that a new mating displaces stored
             sperm.
-        expected_eggs_per_female: Expected number of eggs per female per tick.
-        use_fixed_egg_count: If True, use the deterministic expected egg count;
+        eggs_per_female: Expected number of eggs per female per tick.
+        fixed_egg_count: If True, use the deterministic expected egg count;
             otherwise sample from a Poisson distribution.
         carrying_capacity: Current carrying capacity (0-d ndarray, mutable).
         sex_ratio: Proportion of newborns that are female.
@@ -110,13 +110,13 @@ class PopulationConfig(NamedTuple):
             probability of forming a given diploid genotype from two gametes.
         initial_individual_count: Shape (n_sexes, n_ages, n_genotypes) – initial
             population distribution.
-        initial_sperm_storage: Shape (n_ages, n_genotypes, n_hg * n_glabs) – initial
-            stored sperm counts.
+        initial_sperm_storage: Shape (n_ages, n_genotypes, n_genotypes) – initial
+            stored sperm counts (female genotype × male genotype).
     """
 
     # Scalars are immutable; rebuild this NamedTuple for scalar updates.
-    is_stochastic: bool
-    use_continuous_sampling: bool
+    stochastic: bool
+    continuous_sampling: bool
     n_sexes: int
     n_ages: int
     n_genotypes: int
@@ -125,15 +125,15 @@ class PopulationConfig(NamedTuple):
     age_based_mating_rates: NDArray[np.float64]
     age_based_reproduction_rates: NDArray[np.float64]
     age_based_survival_rates: NDArray[np.float64]
-    female_age_based_relative_fertility: NDArray[np.float64]
+    female_age_based_fertility: NDArray[np.float64]
     viability_fitness: NDArray[np.float64]
     fecundity_fitness: NDArray[np.float64]
     sexual_selection_fitness: NDArray[np.float64]
     zygote_viability_fitness: NDArray[np.float64]
     age_based_relative_competition_strength: NDArray[np.float64]
     sperm_displacement_rate: NDArray[np.float64]           # 0-d, mutable
-    expected_eggs_per_female: NDArray[np.float64]          # 0-d, mutable
-    use_fixed_egg_count: bool
+    eggs_per_female: NDArray[np.float64]          # 0-d, mutable
+    fixed_egg_count: bool
     carrying_capacity: NDArray[np.float64]                 # 0-d, mutable
     sex_ratio: NDArray[np.float64]                         # 0-d, mutable
     low_density_growth_rate: NDArray[np.float64]           # 0-d, mutable
@@ -226,7 +226,7 @@ class PopulationConfig(NamedTuple):
             for age in range(self.n_ages):
                 cumulative_mating_value = self.age_based_mating_rates[sex, age]
                 if sex == Sex.FEMALE:
-                    cumulative_mating_value *= self.female_age_based_relative_fertility[age]
+                    cumulative_mating_value *= self.female_age_based_fertility[age]
                 if cumulative_mating_value > 0:
                     numerator += age * cumulative_survival[age] * cumulative_mating_value
                     denominator += cumulative_survival[age] * cumulative_mating_value
@@ -259,8 +259,8 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         A new PopulationConfig instance (with the same scalar values).
     """
     return PopulationConfig(
-        is_stochastic=bool(config.is_stochastic),
-        use_continuous_sampling=bool(config.use_continuous_sampling),
+        stochastic=bool(config.stochastic),
+        continuous_sampling=bool(config.continuous_sampling),
         n_sexes=int(config.n_sexes),
         n_ages=int(config.n_ages),
         n_genotypes=int(config.n_genotypes),
@@ -269,15 +269,15 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         age_based_mating_rates=_maybe_copy_array(config.age_based_mating_rates, copy),
         age_based_reproduction_rates=_maybe_copy_array(config.age_based_reproduction_rates, copy),
         age_based_survival_rates=_maybe_copy_array(config.age_based_survival_rates, copy),
-        female_age_based_relative_fertility=_maybe_copy_array(config.female_age_based_relative_fertility, copy),
+        female_age_based_fertility=_maybe_copy_array(config.female_age_based_fertility, copy),
         viability_fitness=_maybe_copy_array(config.viability_fitness, copy),
         fecundity_fitness=_maybe_copy_array(config.fecundity_fitness, copy),
         sexual_selection_fitness=_maybe_copy_array(config.sexual_selection_fitness, copy),
         zygote_viability_fitness=_maybe_copy_array(config.zygote_viability_fitness, copy),
         age_based_relative_competition_strength=_maybe_copy_array(config.age_based_relative_competition_strength, copy),
         sperm_displacement_rate=config.sperm_displacement_rate.copy() if copy else config.sperm_displacement_rate,
-        expected_eggs_per_female=config.expected_eggs_per_female.copy() if copy else config.expected_eggs_per_female,
-        use_fixed_egg_count=bool(config.use_fixed_egg_count),
+        eggs_per_female=config.eggs_per_female.copy() if copy else config.eggs_per_female,
+        fixed_egg_count=bool(config.fixed_egg_count),
         carrying_capacity=config.carrying_capacity.copy() if copy else config.carrying_capacity,
         sex_ratio=config.sex_ratio.copy() if copy else config.sex_ratio,
         low_density_growth_rate=config.low_density_growth_rate.copy() if copy else config.low_density_growth_rate,
@@ -320,12 +320,12 @@ def build_population_config(
     n_sexes: Optional[int] = None,
     n_ages: int = 2,
     n_glabs: int = 1,
-    is_stochastic: bool = True,
-    use_continuous_sampling: bool = False,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
     age_based_mating_rates: Optional[NDArray[np.float64]] = None,
     age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,
     age_based_survival_rates: Optional[NDArray[np.float64]] = None,
-    female_age_based_relative_fertility: Optional[NDArray[np.float64]] = None,
+    female_age_based_fertility: Optional[NDArray[np.float64]] = None,
     viability_fitness: Optional[NDArray[np.float64]] = None,
     fecundity_fitness: Optional[NDArray[np.float64]] = None,
     sexual_selection_fitness: Optional[NDArray[np.float64]] = None,
@@ -333,8 +333,8 @@ def build_population_config(
     age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
     new_adult_age: int = 2,
     sperm_displacement_rate: float = 0.05,
-    expected_eggs_per_female: float = 100.0,
-    use_fixed_egg_count: bool = False,
+    eggs_per_female: float = 100.0,
+    fixed_egg_count: bool = False,
     carrying_capacity: Optional[float] = None,
     sex_ratio: float = 0.5,
     low_density_growth_rate: float = 6.0,
@@ -365,13 +365,13 @@ def build_population_config(
         n_sexes: Number of sexes (default 2).
         n_ages: Number of age classes (default 2).
         n_glabs: Number of gamete‑label variants per haplotype (default 1).
-        is_stochastic: Whether to use stochastic demography.
-        use_continuous_sampling: Use Dirichlet sampling for gamete proportions.
+        stochastic: Whether to use stochastic demography.
+        continuous_sampling: Use Dirichlet sampling for gamete proportions.
         age_based_mating_rates: Array (n_sexes, n_ages) – mating rates.
         age_based_reproduction_rates: Array (n_ages,) – female reproduction
             participation rates.
         age_based_survival_rates: Array (n_sexes, n_ages) – survival probabilities.
-        female_age_based_relative_fertility: Array (n_ages,) – relative female
+        female_age_based_fertility: Array (n_ages,) – relative female
             fertility per age.
         viability_fitness: Array (n_sexes, n_ages, n_genotypes) – viability fitness.
         fecundity_fitness: Array (n_sexes, n_genotypes) – fecundity fitness.
@@ -381,8 +381,8 @@ def build_population_config(
             weight per age.
         new_adult_age: Age at which individuals become adults (default 2).
         sperm_displacement_rate: Probability of sperm displacement (default 0.05).
-        expected_eggs_per_female: Expected number of eggs per female per tick.
-        use_fixed_egg_count: If True, use deterministic egg count.
+        eggs_per_female: Expected number of eggs per female per tick.
+        fixed_egg_count: If True, use deterministic egg count.
         carrying_capacity: Optional explicit carrying capacity (scaled later).
         sex_ratio: Proportion of newborns that are female.
         low_density_growth_rate: Intrinsic growth rate at low density.
@@ -441,10 +441,17 @@ def build_population_config(
     if initial_sperm_storage is not None:
         init_sperm = initial_sperm_storage.copy()
     else:
-        init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_hg_glabs), dtype=np.float64)
+        init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_genotypes_i), dtype=np.float64)
 
     # Resolve carrying_capacity directly (no base/scale separation).
-    resolved_age_1 = age_1_carrying_capacity or old_juvenile_carrying_capacity
+    # Use explicit `is not None` — `age_1_carrying_capacity=0` is a valid
+    # value that must not fall through to the legacy alias.
+    if age_1_carrying_capacity is not None:
+        resolved_age_1 = age_1_carrying_capacity
+    elif old_juvenile_carrying_capacity is not None:
+        resolved_age_1 = old_juvenile_carrying_capacity
+    else:
+        resolved_age_1 = None
     if resolved_age_1 is not None:
         carrying_capacity_f = np.array(float(resolved_age_1))
     elif carrying_capacity is not None:
@@ -498,9 +505,9 @@ def build_population_config(
         set_juvenile_values_to_zero=True,
     )
     female_fertility = _validate_or_default_array(
-        female_age_based_relative_fertility,
+        female_age_based_fertility,
         (n_ages_i,),
-        "female_age_based_relative_fertility",
+        "female_age_based_fertility",
         has_sex_dim=False,
         set_juvenile_values_to_zero=True,
     )
@@ -538,11 +545,11 @@ def build_population_config(
 
     expected_competition_strength, expected_survival_rate = alg.compute_equilibrium_metrics(
         carrying_capacity=float(carrying_capacity_f),
-        expected_eggs_per_female=float(expected_eggs_per_female),
+        eggs_per_female=float(eggs_per_female),
         age_based_survival_rates=survival,
         age_based_mating_rates=mating,
         age_based_reproduction_rates=reproduction,
-        female_age_based_relative_fertility=female_fertility,
+        female_age_based_fertility=female_fertility,
         relative_competition_strength=competition,
         sex_ratio=float(sex_ratio),
         new_adult_age=new_adult_age_i,
@@ -562,8 +569,8 @@ def build_population_config(
 
     if generation_time is None:
         temp_cfg = PopulationConfig(
-            is_stochastic=bool(is_stochastic),
-            use_continuous_sampling=bool(use_continuous_sampling),
+            stochastic=bool(stochastic),
+            continuous_sampling=bool(continuous_sampling),
             n_sexes=n_sexes_i,
             n_ages=n_ages_i,
             n_genotypes=n_genotypes_i,
@@ -572,15 +579,15 @@ def build_population_config(
             age_based_mating_rates=mating,
             age_based_reproduction_rates=reproduction,
             age_based_survival_rates=survival,
-            female_age_based_relative_fertility=female_fertility,
+            female_age_based_fertility=female_fertility,
             viability_fitness=viability,
             fecundity_fitness=fecundity,
             sexual_selection_fitness=sexual,
             zygote_viability_fitness=zygote,
             age_based_relative_competition_strength=competition,
             sperm_displacement_rate=np.array(float(sperm_displacement_rate)),
-            expected_eggs_per_female=np.array(float(expected_eggs_per_female)),
-            use_fixed_egg_count=bool(use_fixed_egg_count),
+            eggs_per_female=np.array(float(eggs_per_female)),
+            fixed_egg_count=bool(fixed_egg_count),
             carrying_capacity=carrying_capacity_f,
             sex_ratio=np.array(float(sex_ratio)),
             low_density_growth_rate=np.array(float(low_density_growth_rate)),
@@ -608,8 +615,8 @@ def build_population_config(
         generation_time_f = np.array(float(generation_time))
 
     return PopulationConfig(
-        is_stochastic=bool(is_stochastic),
-        use_continuous_sampling=bool(use_continuous_sampling),
+        stochastic=bool(stochastic),
+        continuous_sampling=bool(continuous_sampling),
         n_sexes=n_sexes_i,
         n_ages=n_ages_i,
         n_genotypes=n_genotypes_i,
@@ -618,15 +625,15 @@ def build_population_config(
         age_based_mating_rates=mating,
         age_based_reproduction_rates=reproduction,
         age_based_survival_rates=survival,
-        female_age_based_relative_fertility=female_fertility,
+        female_age_based_fertility=female_fertility,
         viability_fitness=viability,
         fecundity_fitness=fecundity,
         sexual_selection_fitness=sexual,
         zygote_viability_fitness=zygote,
         age_based_relative_competition_strength=competition,
         sperm_displacement_rate=np.array(float(sperm_displacement_rate)),
-        expected_eggs_per_female=np.array(float(expected_eggs_per_female)),
-        use_fixed_egg_count=bool(use_fixed_egg_count),
+        eggs_per_female=np.array(float(eggs_per_female)),
+        fixed_egg_count=bool(fixed_egg_count),
         carrying_capacity=carrying_capacity_f,
         sex_ratio=np.array(float(sex_ratio)),
         low_density_growth_rate=np.array(float(low_density_growth_rate)),
@@ -956,8 +963,8 @@ class DiscretePopulationConfig(NamedTuple):
     """Immutable configuration for discrete-generation simulations."""
 
     # -- Sampling --
-    is_stochastic: bool
-    use_continuous_sampling: bool
+    stochastic: bool
+    continuous_sampling: bool
 
     # -- Dimensions --
     n_sexes: int                    # always 2
@@ -966,14 +973,9 @@ class DiscretePopulationConfig(NamedTuple):
     n_haploid_genotypes: int
     n_glabs: int
 
-    # -- Age-structured arrays (n_ages ≤ 2, kept for spatial builder) --
-    age_based_mating_rates: NDArray[np.float64]        # (2, 2)
-    age_based_reproduction_rates: NDArray[np.float64]   # (2,)
-    age_based_survival_rates: NDArray[np.float64]       # (2, 2)
-    female_age_based_relative_fertility: NDArray[np.float64]  # (2,)
-
-    # -- Viability / fecundity / fitness --
-    viability_fitness: NDArray[np.float64]              # (2, 2, g)
+    # -- Age-structured arrays (kept for spatial builder compat; inactive in discrete)
+    female_age_based_fertility: NDArray[np.float64]  # (2,)
+    viability_fitness: NDArray[np.float64]              # (2, 2, g) — kept for compat with presets/fitness code
     fecundity_fitness: NDArray[np.float64]              # (2, g)
     zygote_viability_fitness: NDArray[np.float64]       # (2, g)
     sexual_selection_fitness: NDArray[np.float64]        # (g, g)
@@ -982,17 +984,18 @@ class DiscretePopulationConfig(NamedTuple):
     age_based_relative_competition_strength: NDArray[np.float64]  # (2,)
 
     # -- Reproduction scalars --
-    expected_eggs_per_female: NDArray[np.float64]          # 0-d, mutable
-    use_fixed_egg_count: bool
+    eggs_per_female: NDArray[np.float64]          # 0-d, mutable
+    fixed_egg_count: bool
     sex_ratio: NDArray[np.float64]                         # 0-d, mutable
     sperm_displacement_rate: NDArray[np.float64]           # 0-d, mutable
 
-    # -- Per-sex scalars (pre-extracted for kernel performance) --
-    male_mating_rate: float
-    female_mating_rate: float
+    # -- Per-demographic scalars (plain Python float, sole source of truth) --
+    female_adult_mating_rate: float
+    male_adult_mating_rate: float
     reproduction_rate: float
-    base_survival_f: float
-    base_survival_m: float
+    female_age0_survival: float
+    male_age0_survival: float
+    female_fertility: float
 
     # -- Reproduction arrays --
     genotype_to_gametes_map: NDArray[np.float64]         # (2, g, hl)
@@ -1061,31 +1064,32 @@ class DiscretePopulationConfig(NamedTuple):
 def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
     """Build a ``DiscretePopulationConfig`` from a full ``PopulationConfig``."""
     return DiscretePopulationConfig(
-        is_stochastic=cfg.is_stochastic,
-        use_continuous_sampling=cfg.use_continuous_sampling,
+        stochastic=cfg.stochastic,
+        continuous_sampling=cfg.continuous_sampling,
         n_sexes=int(cfg.n_sexes),
         n_ages=int(cfg.n_ages),
         n_genotypes=cfg.n_genotypes,
         n_haploid_genotypes=cfg.n_haploid_genotypes,
         n_glabs=cfg.n_glabs,
-        age_based_mating_rates=cfg.age_based_mating_rates,
-        age_based_reproduction_rates=cfg.age_based_reproduction_rates,
-        age_based_survival_rates=cfg.age_based_survival_rates,
-        female_age_based_relative_fertility=cfg.female_age_based_relative_fertility,
+        female_age_based_fertility=cfg.female_age_based_fertility,
         viability_fitness=cfg.viability_fitness,
         fecundity_fitness=cfg.fecundity_fitness,
         zygote_viability_fitness=cfg.zygote_viability_fitness,
         sexual_selection_fitness=cfg.sexual_selection_fitness,
         age_based_relative_competition_strength=cfg.age_based_relative_competition_strength,
-        expected_eggs_per_female=cfg.expected_eggs_per_female,
-        use_fixed_egg_count=cfg.use_fixed_egg_count,
+        eggs_per_female=cfg.eggs_per_female,
+        fixed_egg_count=cfg.fixed_egg_count,
         sex_ratio=cfg.sex_ratio,
         sperm_displacement_rate=cfg.sperm_displacement_rate,
-        male_mating_rate=cfg.age_based_mating_rates[1, 1],
-        female_mating_rate=cfg.age_based_mating_rates[0, 1],
-        reproduction_rate=cfg.age_based_reproduction_rates[1],
-        base_survival_f=cfg.age_based_survival_rates[0, 0],
-        base_survival_m=cfg.age_based_survival_rates[1, 0],
+        # Scalar fields must be plain Python floats, not 0-d ndarrays, so
+        # Numba's type inference sees a consistent type across all code paths
+        # (the Configurator's _build_config also writes Python floats).
+        female_adult_mating_rate=float(cfg.age_based_mating_rates[0, 1]),
+        male_adult_mating_rate=float(cfg.age_based_mating_rates[1, 1]),
+        reproduction_rate=float(cfg.age_based_reproduction_rates[1]),
+        female_age0_survival=float(cfg.age_based_survival_rates[0, 0]),
+        male_age0_survival=float(cfg.age_based_survival_rates[1, 0]),
+        female_fertility=float(cfg.female_age_based_fertility[0]),
         genotype_to_gametes_map=cfg.genotype_to_gametes_map,
         gametes_to_zygote_map=cfg.gametes_to_zygote_map,
         offspring_tensor=cfg.offspring_tensor,

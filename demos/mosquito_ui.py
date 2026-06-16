@@ -1,18 +1,16 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import natal as nt
-from natal.genetic_entities import Genotype
-from natal.ui import launch
 
 # for type annotations only
 IndividualDistribution = Mapping[
     str,
-    Mapping[Genotype | str, list[float] | tuple[float, ...] | dict[int, float] | int | float],
+    Mapping[str, Sequence[float] | Mapping[int, float] | int | float],
 ]
 
 SpermStorage = Mapping[
-    Genotype | str,
-    Mapping[Genotype | str, dict[int, float] | list[float] | tuple[float, ...] | int | float],
+    str,
+    Mapping[str, Mapping[int, float] | Sequence[float] | int | float],
 ]
 
 sp = nt.Species.from_dict(
@@ -73,7 +71,7 @@ pop = nt.AgeStructuredPopulation\
         species=sp,
         name="MosquitoPop",
         stochastic=True,
-        use_continuous_sampling=False,
+        continuous_sampling=False,
     ) \
     .age_structure(
         n_ages=8,
@@ -84,14 +82,14 @@ pop = nt.AgeStructuredPopulation\
         sperm_storage=initial_sperm,
     ) \
     .reproduction(
-        female_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
-        male_age_based_mating_rates=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
+        male_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
         eggs_per_female=50,
         sperm_displacement_rate=0.05,
     ) \
     .survival(
-        female_age_based_survival_rates=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2],
-        male_age_based_survival_rates=[1.0, 1.0, 2/3, 1/2],
+        female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2],
+        male_age_based_survival=[1.0, 1.0, 2/3, 1/2],
     ) \
     .competition(
         juvenile_growth_mode="concave",
@@ -102,4 +100,4 @@ pop = nt.AgeStructuredPopulation\
         drive
     ).hooks(release_drive_carriers_overl).build()
 
-launch(pop)
+nt.ui.launch(pop)

@@ -107,14 +107,14 @@ pop.run_tick()
 
 阶段顺序不变，但数值更新方式由配置决定：
 
-1. `is_stochastic=False`（确定性）
+1. `stochastic=False`（确定性）
   - 使用期望值/比例缩放，结果通常是连续值（float）。
   - 不进行 Binomial/Poisson 抽样。
-2. `is_stochastic=True`（随机）
+2. `stochastic=True`（随机）
   - 使用抽样更新（如 Binomial/Poisson/Multinomial 等），轨迹会有随机波动。
-  - 若 `use_continuous_sampling=True`，会采用连续近似抽样（如 Beta/Dirichlet/Gamma 近似）以提高可微/连续性和部分场景下的数值稳定性。
+  - 若 `continuous_sampling=True`，会采用连续近似抽样（如 Beta/Dirichlet/Gamma 近似）以提高可微/连续性和部分场景下的数值稳定性。
 
-此外，reproduction 阶段还受 `use_fixed_egg_count` 影响：
+此外，reproduction 阶段还受 `fixed_egg_count` 影响：
 
 - `True`：按固定期望卵数产卵。
 - `False`：按 Poisson 机制产卵（在随机模式下体现为随机卵数）。

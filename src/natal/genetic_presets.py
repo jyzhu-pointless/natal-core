@@ -568,7 +568,7 @@ def _apply_zygote_viability_allele_scaling(
                 f"Invalid zygote allele config for '{allele_name}': {type(config).__name__}"
             )
 
-def _apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetFitnessPatch) -> None:
+def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
     Patch schema (all keys optional):
@@ -807,7 +807,7 @@ def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'Genet
     # Preferred path: declarative fitness patch
     patch = preset.fitness_patch()
     if patch:
-        _apply_preset_fitness_patch(population, patch)
+        apply_preset_fitness_patch(population, patch)
         return
 
 class GeneticPreset(ABC):
@@ -839,16 +839,18 @@ class GeneticPreset(ABC):
         self,
         name: str = "",
         species: Optional[Species] = None,
+        priority: int = 0,
     ):
         """Initialize the preset.
 
         Args:
             name: Optional human-readable name for the preset.
-            species: Optional species bound at construction time. If provided,
-                applying this preset to a population with a different species
-                will raise an error.
+            species: Optional species bound at construction time.
+            priority: Execution order — lower values apply first.
+                Same priority uses registration order (stable sort).
         """
         self.name = name or self.__class__.__name__
+        self.priority = priority
         self.hook_id: Optional[int] = None
         self._bound_species: Optional[Species] = species
 
@@ -1067,6 +1069,7 @@ class HomingDrive(GeneticPreset):
         zygote_viability_mode: _AlleleScalingMode = "multiplicative",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
+        priority: int = 0,
         use_paternal_deposition: bool = False,
     ):
         """Initialize a homing-based gene drive (e.g., CRISPR/Cas9 homing drives).
@@ -1154,7 +1157,7 @@ class HomingDrive(GeneticPreset):
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
 
-        super().__init__(name=name, species=species)
+        super().__init__(name=name, species=species, priority=priority)
 
     def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for homing drive scaling configs."""
@@ -1418,6 +1421,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         zygote_viability_mode: _AlleleScalingMode = "recessive",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Species] = None,
+        priority: int = 0,
         use_paternal_deposition: bool = False,
     ):
         """Initialize a toxin-antidote gene drive.
@@ -1465,7 +1469,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
 
-        super().__init__(name=name, species=species)
+        super().__init__(name=name, species=species, priority=priority)
 
     def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for the disrupted allele."""

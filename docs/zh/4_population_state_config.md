@@ -68,12 +68,12 @@ class DiscretePopulationState(NamedTuple):
 
 1. **维度与控制参数**
   - `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
-  - `is_stochastic`, `use_continuous_sampling`, `sex_ratio`
+  - `stochastic`, `continuous_sampling`, `sex_ratio`
 
 2. **年龄相关参数**
   - `age_based_survival_rates`
   - `age_based_mating_rates`
-  - `female_age_based_relative_fertility`
+  - `female_age_based_fertility`
   - `age_based_relative_competition_strength`
 
 3. **适应度参数**

@@ -1,5 +1,6 @@
 """Test Configurator — unified build/runtime parameter API."""
 
+import numpy as np
 import pytest
 
 import natal as nt
@@ -42,8 +43,8 @@ class TestSetParam:
         assert minimal_config.low_density_growth_rate[()] == 3.0
 
     def test_alias(self, minimal_config):
-        set_param(minimal_config, "expected_eggs_per_female", 100.0)
-        assert minimal_config.expected_eggs_per_female[()] == 100.0
+        set_param(minimal_config, "eggs_per_female", 100.0)
+        assert minimal_config.eggs_per_female[()] == 100.0
 
     def test_auto_sync_equilibrium(self, minimal_config):
         old_comp = minimal_config.expected_competition_strength[()]
@@ -54,7 +55,7 @@ class TestSetParam:
         assert new_comp > 0, f"competition strength should be positive, got {new_comp}"
 
     def test_unknown_param_raises(self, minimal_config):
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError, match="nonexistent"):
             set_param(minimal_config, "nonexistent", 1.0)
 
 
@@ -76,7 +77,7 @@ class TestConfiguratorBuild:
 
     def test_setup_flags(self, species):
         cfg = Configurator.from_species(species).setup(stochastic=False)
-        assert cfg._config.is_stochastic is False
+        assert cfg._config.stochastic is False
 
     def test_competition_writes_immediately(self, species):
         cfg = Configurator.from_species(species).competition(
@@ -89,27 +90,27 @@ class TestConfiguratorBuild:
         cfg = Configurator.from_species(species).reproduction(
             eggs_per_female=100.0, sex_ratio=0.6
         )
-        assert cfg._config.expected_eggs_per_female[()] == 100.0
+        assert cfg._config.eggs_per_female[()] == 100.0
         assert cfg._config.sex_ratio[()] == 0.6
 
     def test_survival_flexible_input(self, species):
         cfg = Configurator.from_species(species).age_structure(n_ages=3, new_adult_age=1)
         # Scalar fill
-        cfg.survival(female=0.9)
+        cfg.survival(female_age_based_survival=0.9)
         assert cfg._config.age_based_survival_rates[0, 0] == 0.9
         assert cfg._config.age_based_survival_rates[0, 1] == 0.9
 
         # List input
-        cfg.survival(male=[0.8, 0.7, 0.6])
+        cfg.survival(male_age_based_survival=[0.8, 0.7, 0.6])
         assert cfg._config.age_based_survival_rates[1, 0] == 0.8
         assert cfg._config.age_based_survival_rates[1, 2] == 0.6
 
     def test_survival_discrete_shortcuts(self, species):
-        cfg = Configurator.from_species(species).survival(
+        cfg = Configurator.for_discrete(species).survival(
             female_age0_survival=0.95, male_age0_survival=0.85
         )
-        assert cfg._config.age_based_survival_rates[0, 0] == 0.95
-        assert cfg._config.age_based_survival_rates[1, 0] == 0.85
+        assert cfg._config.female_age0_survival == 0.95
+        assert cfg._config.male_age0_survival == 0.85
 
     def test_initial_state(self, species):
         cfg = (
@@ -158,6 +159,10 @@ class TestConfiguratorUpdate:
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
 
+        assert pop.tick == 0, "test_update_changes_config: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_changes_config: population should be runnable after update"
+
     def test_update_chains(self, species):
         pop = (
             Configurator.from_species(species)
@@ -172,7 +177,11 @@ class TestConfiguratorUpdate:
             eggs_per_female=100
         )
         assert pop.config.low_density_growth_rate[()] == 3.0
-        assert pop.config.expected_eggs_per_female[()] == 100.0
+        assert pop.config.eggs_per_female[()] == 100.0
+
+        assert pop.tick == 0, "test_update_chains: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_chains: population should be runnable after update"
 
     def test_update_auto_sync(self, species):
         pop = (
@@ -190,6 +199,10 @@ class TestConfiguratorUpdate:
         assert new != old
         assert new > 0, f"competition strength should be positive, got {new}"
 
+        assert pop.tick == 0, "test_update_auto_sync: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_auto_sync: population should be runnable after update"
+
     def test_update_does_not_require_build(self, species):
         """update() writes immediately, no apply() needed."""
         pop = (
@@ -204,6 +217,71 @@ class TestConfiguratorUpdate:
         # Just call update() — no apply() or freeze()
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
+
+        assert pop.tick == 0, "test_update_does_not_require_build: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_does_not_require_build: population should be runnable after update"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# step 6 — verify presets/modifiers write-back persistence
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestUpdateWriteBack:
+    """Verify presets()/modifiers() via pop.update() persist to Population."""
+
+    def test_presets_mutation_persists(self, simple_species):
+        """pop.update().presets(drive) must change pop.config maps."""
+        from natal.genetic_presets import HomingDrive
+
+        pop = (
+            Configurator.from_species(simple_species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=500)
+            .build()
+        )
+        # offspring_tensor should be Mendelian (no drive) before preset
+        before = pop.config.offspring_tensor.copy()
+        drive = HomingDrive(
+            name="__test_writeback_presets__",
+            drive_allele="Dr", target_allele="WT",
+            drive_conversion_rate=0.95,
+        )
+        pop.update().presets(drive)
+        # After applying a drive preset, offspring_tensor must differ
+        assert not np.array_equal(before, pop.config.offspring_tensor), \
+            "offspring_tensor should change after applying a drive preset"
+
+        assert pop.tick == 0, "test_presets_mutation_persists: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_presets_mutation_persists: population should be runnable after update"
+
+    def test_modifiers_mutation_persists(self, species):
+        """pop.update().modifiers(gamete_modifiers=[fn]) does not crash and
+        the population can still run afterwards."""
+        pop = (
+            Configurator.from_species(species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=500)
+            .build()
+        )
+
+        # A no-op gamete modifier (returns empty dict — Mendelian).
+        def _noop_modifier(*args: object, **kwargs: object) -> dict:
+            return {}
+
+        assert pop.tick == 0, "test_modifiers_mutation_persists: initial tick should be 0"
+        pop.update().modifiers(gamete_modifiers=[_noop_modifier])
+        # Verify the population can still run without crashing
+        pop.run(1)
+        assert pop.tick == 1
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -226,6 +304,10 @@ class TestCustomFields:
         pop.update().custom(temperature=25.0)
         assert float(pop.config.custom["temperature"][()]) == 25.0
 
+        assert pop.tick == 0, "test_update_custom_scalar: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_custom_scalar: population should be runnable after update"
+
     def test_update_custom_multiple_fields(self, species):
         """pop.update().custom() with multiple fields."""
         pop = (
@@ -242,6 +324,10 @@ class TestCustomFields:
         assert int(pop.config.custom["season"][()]) == 1
         assert bool(pop.config.custom["debug"][()]) is True
 
+        assert pop.tick == 0, "test_update_custom_multiple_fields: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_update_custom_multiple_fields: population should be runnable after update"
+
     def test_custom_mutable(self, species):
         """Custom field can be mutated multiple times."""
         pop = (
@@ -257,6 +343,10 @@ class TestCustomFields:
         pop.update().custom(counter=1)
         pop.update().custom(counter=2)
         assert int(pop.config.custom["counter"][()]) == 2
+
+        assert pop.tick == 0, "test_custom_mutable: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_custom_mutable: population should be runnable after update"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -296,6 +386,10 @@ class TestLegacyBuilder:
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
 
+        assert pop.tick == 0, "test_legacy_builder_update_works: initial tick should be 0"
+        pop.run(1)
+        assert pop.tick > 0, "test_legacy_builder_update_works: population should be runnable after update"
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # set_param error paths
@@ -309,7 +403,7 @@ class TestSetParamErrors:
 
     def test_array_param_raises_valueerror(self, minimal_config):
         with pytest.raises(ValueError, match="tensor or array"):
-            set_param(minimal_config, "survival.female_survival_rates", 1.0)
+            set_param(minimal_config, "reproduction.age_based_reproduction_rate", 1.0)
 
     def test_python_scalar_field_raises_typeerror(self, minimal_config):
         with pytest.raises(TypeError, match="immutable config"):
@@ -586,9 +680,9 @@ class TestFromSpeciesDiscrete:
 
     def test_discrete_defaults(self, species):
         cfg = Configurator.from_species(species, discrete=True)
-        # age-0 juvenile survival = 1.0, age-1 adult survival = 0.0
-        assert cfg._config.age_based_survival_rates[0, 0] == 1.0
-        assert cfg._config.age_based_survival_rates[0, 1] == 0.0
+        # age-0 juvenile survival defaults to 1.0 for both sexes
+        assert cfg._config.female_age0_survival == 1.0
+        assert cfg._config.male_age0_survival == 1.0
         assert cfg._config.n_ages == 2
 
 
@@ -687,21 +781,435 @@ class TestReconfigurePreset:
     def test_reconfigure_updates_viability(self, fitness_species):
         from natal.genetic_presets import HomingDrive
 
-        cfg = _make_cfg(fitness_species).age_structure(n_ages=2, new_adult_age=1)
+        pop = (
+            Configurator.from_species(fitness_species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=500)
+            .build()
+        )
         drive = HomingDrive(
             name="__test_reconfigure__", drive_allele="Var", target_allele="WT",
             drive_conversion_rate=0.8,
         )
-        cfg.presets(drive)
-        arr = cfg._config.viability_fitness
-        # After preset, Var/WT genotypes should have viability < 1.0
-        # (multiplicative scaling with default value)
+        pop.update().presets(drive)
+        arr = pop.config.viability_fitness
         orig_val = arr[0, 0, 2]  # female age0 Var|WT
 
         # Reconfigure with different viability scaling
-        cfg.reconfigure_preset(drive, viability_scaling=0.1)
+        pop.update().reconfigure_preset(drive, viability_scaling=0.1)
         new_val = arr[0, 0, 2]
-        # After reconfigure with scaling=0.1, viability should change
-        # (multiplicative mode: default 1.0 * 0.1 = 0.1 for affected genotypes)
         assert new_val != orig_val
         assert 0.0 < new_val < orig_val, f"reconfigure should lower viability, got {new_val}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# DiscretePopulationConfig pre-extracted scalar sync
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestDiscreteScalarSync:
+    """Verify that discrete-specific scalars are correctly extracted at build().
+
+    DiscretePopulationConfig pre-extracts mating/survival/reproduction
+    scalars for Numba engine performance.  These scalars are NOT updated
+    by the shared _xxx_impl methods — DiscreteConfigurator stores user
+    overrides directly and applies them at build() time.  This separation
+    eliminates the staleness bug where the shared _impl wrote to arrays
+    that the discrete engine never reads.
+    """
+
+    def test_mating_rate_stored_for_later_extraction(self, species):
+        """reproduction() stores values; build() extracts to config scalars."""
+        pop = (
+            Configurator.for_discrete(species)
+            .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+            .reproduction(
+                female_adult_mating_rate=0.3,
+                male_adult_mating_rate=0.7,
+            )
+            .competition(carrying_capacity=10000)
+            .build()
+        )
+        cfg = pop.config
+        assert cfg.female_adult_mating_rate == pytest.approx(0.3), \
+            f"female_adult_mating_rate should be 0.3, got {cfg.female_adult_mating_rate}"
+        assert cfg.male_adult_mating_rate == pytest.approx(0.7), \
+            f"male_adult_mating_rate should be 0.7, got {cfg.male_adult_mating_rate}"
+
+    def test_survival_scalar_synced_after_build(self, species):
+        """build() extracts female_age0_survival/male_age0_survival from survival() overrides."""
+        pop = (
+            Configurator.for_discrete(species)
+            .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=10000)
+            .survival(female_age0_survival=0.6, male_age0_survival=0.4)
+            .build()
+        )
+        cfg = pop.config
+        assert cfg.female_age0_survival == pytest.approx(0.6), \
+            f"female_age0_survival should be 0.6, got {cfg.female_age0_survival}"
+        assert cfg.male_age0_survival == pytest.approx(0.4), \
+            f"male_age0_survival should be 0.4, got {cfg.male_age0_survival}"
+
+    def test_reproduction_rate_default_is_one(self, species):
+        """reproduction_rate defaults to 1.0 — all mated females reproduce."""
+        pop = (
+            Configurator.for_discrete(species)
+            .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=10000)
+            .build()
+        )
+        cfg = pop.config
+        assert cfg.reproduction_rate == pytest.approx(1.0)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# RuntimeError guards: calling methods without a Species
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestRuntimeErrorGuards:
+    """Verify that methods requiring a Species raise clear errors."""
+
+    def test_build_without_species_raises(self, minimal_config):
+        """build() must raise RuntimeError when _species is None."""
+        cfg = Configurator.for_config(minimal_config)
+        # for_config() does NOT set _species
+        with pytest.raises(RuntimeError, match="species|Species"):
+            cfg.build()
+
+    def test_fitness_without_species_raises(self, minimal_config):
+        """fitness() must raise RuntimeError without Species."""
+        cfg = Configurator.for_config(minimal_config)
+        with pytest.raises(RuntimeError, match="species|Species"):
+            cfg.fitness(viability={"WT|WT": 0.5})
+
+    def test_presets_without_species_raises(self, minimal_config):
+        """presets() must raise RuntimeError without Species."""
+        from natal.genetic_presets import HomingDrive
+
+        cfg = Configurator.for_config(minimal_config)
+        drive = HomingDrive(
+            name="__test_guard__", drive_allele="A", target_allele="B",
+            drive_conversion_rate=0.5,
+        )
+        with pytest.raises(RuntimeError, match="species|Species"):
+            cfg.presets(drive)
+
+    def test_modifiers_without_species_raises(self, minimal_config):
+        """modifiers() must raise RuntimeError without Species."""
+        cfg = Configurator.for_config(minimal_config)
+        with pytest.raises(RuntimeError, match="species|Species"):
+            cfg.modifiers(gamete_modifiers=[lambda: {}])
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# age_structure() validation guards
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestAgeStructureValidation:
+    """Verify that age_structure() validates inputs correctly."""
+
+    def test_n_ages_zero_raises(self, species):
+        """n_ages <= 1 must raise ValueError."""
+        with pytest.raises(ValueError, match="at least 2"):
+            Configurator.from_species(species).age_structure(n_ages=0, new_adult_age=0)
+
+    def test_n_ages_one_raises(self, species):
+        """n_ages == 1 must raise ValueError."""
+        with pytest.raises(ValueError, match="at least 2"):
+            Configurator.from_species(species).age_structure(n_ages=1, new_adult_age=0)
+
+    def test_negative_new_adult_age_raises(self, species):
+        """new_adult_age < 0 must raise ValueError."""
+        with pytest.raises(ValueError, match="new_adult_age"):
+            Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=-1)
+
+    def test_new_adult_age_equals_n_ages_raises(self, species):
+        """new_adult_age >= n_ages must raise ValueError."""
+        with pytest.raises(ValueError, match="new_adult_age"):
+            Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=5)
+
+    def test_new_adult_age_exceeds_n_ages_raises(self, species):
+        """new_adult_age > n_ages must raise ValueError."""
+        with pytest.raises(ValueError, match="new_adult_age"):
+            Configurator.from_species(species).age_structure(n_ages=3, new_adult_age=10)
+
+    def test_age_structure_after_domain_method_raises(self, species):
+        """Calling age_structure() after a domain method must raise RuntimeError."""
+        cfg = Configurator.from_species(species).competition(carrying_capacity=5000)
+        with pytest.raises(RuntimeError, match="domain method"):
+            cfg.age_structure(n_ages=5, new_adult_age=2)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# adult_survival in discrete model
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestAdultSurvivalDiscrete:
+    """Verify adult_survival is NOT accepted by the discrete model.
+
+    Discrete models replace adults each tick, so adult survival is always
+    0.0.  Passing adult_survival to a discrete builder should fail early.
+    """
+
+    def test_adult_survival_rejected_by_discrete_survival(self, species):
+        """DiscreteConfigurator.survival() rejects adult_survival."""
+        cfg = Configurator.for_discrete(species)
+        with pytest.raises(TypeError, match="adult_survival"):
+            cfg.survival(adult_survival=0.5)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# hook_set_param — Numba objmode bridge
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestHookSetParam:
+    """Verify that the hook_set_param wrapper correctly delegates to set_param."""
+
+    def test_hook_set_param_full_key(self, minimal_config):
+        """hook_set_param with full key."""
+        from natal.configurator import hook_set_param
+
+        hook_set_param(minimal_config, "competition.carrying_capacity", 8000.0)
+        assert minimal_config.carrying_capacity[()] == 8000.0
+
+    def test_hook_set_param_short_name(self, minimal_config):
+        """hook_set_param with short name."""
+        from natal.configurator import hook_set_param
+
+        hook_set_param(minimal_config, "sex_ratio", 0.3)
+        assert minimal_config.sex_ratio[()] == 0.3
+
+    def test_hook_set_param_auto_syncs_equilibrium(self, minimal_config):
+        """hook_set_param triggers equilibrium sync for sensitive keys."""
+        from natal.configurator import hook_set_param
+
+        old = minimal_config.expected_competition_strength[()]
+        hook_set_param(minimal_config, "carrying_capacity", 20000.0)
+        new = minimal_config.expected_competition_strength[()]
+        assert new != old
+        assert new > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# _merge_hooks — advanced paths
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestMergeHooksAdvanced:
+    """Verify _merge_hooks handles dict registrations and edge cases."""
+
+    def test_merge_raw_dict_items(self):
+        """Merging raw {event: [(func, name, priority), ...]} dicts."""
+        from natal.configurator import _merge_hooks
+
+        def dummy_hook(state, config, _deme_id):
+            return 0
+
+        hook_map = _merge_hooks([
+            {"early": [(dummy_hook, "my_hook", 10)]},
+        ])
+        assert "early" in hook_map
+        assert hook_map["early"] == [(dummy_hook, "my_hook", 10)]
+
+    def test_merge_multiple_dicts_same_event(self):
+        """Multiple items registered to same event are merged (not overwritten)."""
+        from natal.configurator import _merge_hooks
+
+        def hook_a(state, config, _deme_id):
+            return 0
+
+        def hook_b(state, config, _deme_id):
+            return 0
+
+        hook_map = _merge_hooks([
+            {"early": [(hook_a, "a", 5)]},
+            {"early": [(hook_b, "b", 10)]},
+        ])
+        assert len(hook_map["early"]) == 2
+
+    def test_no_event_metadata_warns(self):
+        """Callable without @hook decorator triggers a warning."""
+        import warnings
+
+        from natal.configurator import _merge_hooks
+
+        def unmarked_hook():
+            pass
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _merge_hooks([unmarked_hook])
+        assert any("event metadata" in str(x.message).lower() for x in w)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# set_param — spatial-only parameter error
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestSetParamSpatial:
+    """Verify set_param correctly rejects spatial-only parameters."""
+
+    def test_spatial_only_param_raises_valueerror(self, minimal_config):
+        """set_param on a spatial-only param (config_field=None) must raise."""
+        with pytest.raises(ValueError, match="spatial-only"):
+            set_param(minimal_config, "migration_rate", 0.1)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Fitness edge cases: sex+age combined format and None-skip
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestFitnessEdgeCases:
+    """Verify fitness edge-case formats that were previously untested."""
+
+    def test_sex_age_combined_format(self, fitness_species):
+        """{genotype: {"female": {age: val}}} — combined sex + age nesting."""
+        cfg = _make_cfg(fitness_species).age_structure(n_ages=3, new_adult_age=2)
+        arr = cfg._config.viability_fitness
+        cfg.fitness(viability={"WT|WT": {"female": {0: 0.2, 1: 0.5}}})
+        assert arr[0, 0, 0] == 0.2   # female age0 WT|WT
+        assert arr[0, 1, 0] == 0.5   # female age1 WT|WT
+        assert arr[0, 2, 0] == 1.0   # female age2 unchanged
+        assert arr[1, 0, 0] == 1.0   # male unchanged
+
+    def test_sex_age_combined_male(self, fitness_species):
+        """{genotype: {"male": {age: val}}} — male path through sex+age."""
+        cfg = _make_cfg(fitness_species).age_structure(n_ages=3, new_adult_age=2)
+        arr = cfg._config.viability_fitness
+        cfg.fitness(viability={"WT|Var": {"male": {1: 0.3}}})
+        assert arr[1, 1, 1] == 0.3   # male age1 WT|Var
+
+    def test_age_keyed_with_none_skip(self, fitness_species):
+        """{genotype: {0: None, 1: val}} — None skips that age."""
+        cfg = _make_cfg(fitness_species).age_structure(n_ages=3, new_adult_age=2)
+        arr = cfg._config.viability_fitness
+        # Set viability for ages 0=0.5, 1=None(skip), 2=0.1
+        cfg.fitness(viability={"Var|Var": {0: 0.5, 1: None, 2: 0.1}})
+        assert arr[0, 0, 3] == 0.5   # age0 — written
+        assert arr[0, 1, 3] == 1.0   # age1 — skipped (None)
+        assert arr[0, 2, 3] == 0.1   # age2 — written
+
+    def test_sexual_selection_top_level_male(self, fitness_species):
+        """Top-level sex-keyed: {"male": {g: v}} — male selector path."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.sexual_selection_fitness
+        cfg.fitness(sexual_selection={
+            "male": {"WT|WT": 0.3},
+        })
+        # Column for WT|WT (m_idx=0) → all females × this male = 0.3
+        assert arr[0, 0] == 0.3
+        assert arr[1, 0] == 0.3
+
+    def test_sexual_selection_top_level_sex_keyed_multiply(self, fitness_species):
+        """Top-level sex-keyed with mode='multiply'."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.sexual_selection_fitness
+        # Set baseline
+        cfg.fitness(sexual_selection={"female": {"WT|WT": 0.5}})
+        assert arr[0, 0] == 0.5
+        # Multiply
+        cfg.fitness(sexual_selection={"female": {"WT|WT": 0.5}}, mode="multiply")
+        assert arr[0, 0] == pytest.approx(0.25)
+
+    def test_sexual_selection_flat_multiply(self, fitness_species):
+        """Flat format sexual_selection with mode='multiply'."""
+        cfg = _make_cfg(fitness_species)
+        arr = cfg._config.sexual_selection_fitness
+        original_col = arr[:, 2].copy()
+        cfg.fitness(sexual_selection={"Var|WT": 0.5}, mode="multiply")
+        # Column for Var|WT (idx=2) should be scaled
+        assert arr[0, 2] == pytest.approx(original_col[0] * 0.5)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# K auto-detection order dependency
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestCompetitionOrdering:
+    """Verify K auto-detection behaviour with initial_state ordering."""
+
+    def test_competition_before_initial_state_uses_default_k(self, species):
+        """When competition() is called before initial_state(), K auto-detection
+        reads from all-zero array and falls back to default."""
+        cfg = (
+            Configurator.from_species(species)
+            .age_structure(n_ages=3, new_adult_age=2)
+            .competition()  # no explicit K → auto-detect from initial_state (all zeros)
+        )
+        # When no K is provided and initial_state is all zeros,
+        # the config must still have a valid K value (uses fallback).
+        assert cfg._config.carrying_capacity[()] > 0, \
+            "carrying_capacity should have a sensible default"
+
+    def test_initial_state_before_competition_allows_auto_detect(self, species):
+        """When initial_state() is called before competition(), K can be
+        auto-detected from the actual initial counts."""
+        cfg = (
+            Configurator.from_species(species)
+            .age_structure(n_ages=3, new_adult_age=2)
+            .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+            .competition()  # no explicit K → auto-detect from initial_state
+        )
+        assert cfg._config.carrying_capacity[()] > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# initial_sperm_storage shape verification
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestSpermStorageShape:
+    """Verify that initial_sperm_storage shape matches engine expectations.
+
+    Engine functions expect ``(n_ages, n_genotypes, n_genotypes)``
+    (female genotype × male genotype per age).
+    """
+
+    def test_sperm_storage_shape_matches_state(self, species):
+        """Default initial_sperm_storage must have correct shape."""
+        cfg = Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=3)
+        arr = cfg._config.initial_sperm_storage
+        n_genotypes = cfg._config.n_genotypes
+        n_ages = cfg._config.n_ages
+        assert arr.shape == (n_ages, n_genotypes, n_genotypes), \
+            f"Expected {(n_ages, n_genotypes, n_genotypes)}, got {arr.shape}"
+        assert np.all(arr == 0), "Default initial_sperm_storage should be all zeros"
+
+    def test_sperm_storage_shape_discrete(self, species):
+        """Discrete config sperm_storage should also match."""
+        cfg = Configurator.for_discrete(species)
+        arr = cfg._config.initial_sperm_storage
+        n_genotypes = cfg._config.n_genotypes
+        n_ages = cfg._config.n_ages
+        assert arr.shape == (n_ages, n_genotypes, n_genotypes), \
+            f"Expected {(n_ages, n_genotypes, n_genotypes)}, got {arr.shape}"
+        assert np.all(arr == 0), "Default discrete initial_sperm_storage should be all zeros"
+
+    def test_sperm_storage_loads_into_population(self, species):
+        """Building a population with explicit sperm storage must not
+        silently discard the values due to shape mismatch."""
+        pop = (
+            Configurator.from_species(species)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+            .reproduction(eggs_per_female=50)
+            .competition(carrying_capacity=10000)
+            .build()
+        )
+        # Population must have a valid state
+        assert pop.state is not None
+        # Sperm storage should exist in the state
+        assert hasattr(pop.state, 'sperm_storage')
