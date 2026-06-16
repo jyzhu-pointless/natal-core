@@ -280,3 +280,82 @@ def test_unified_mixed_njit_only_event_unchanged() -> None:
 
     # 10 + njit_x(3) + njit_y(5) = 18 at age-1 after aging
     assert pop.state.individual_count[1, 1, 0] == 18.0
+
+
+def test_filtered_registry_preserves_non_mixed_csr() -> None:
+    """CSR hooks on a non-mixed event must still work through the filtered registry.
+
+    Regression test for the bug where ``_build_filtered_hook_program`` skipped
+    deme-selector entries for no-op hooks, causing misalignment when the
+    template's ``execute_csr_event_arrays`` iterated hooks for a non-mixed
+    event whose hook_idx lay beyond the removed mixed-event hooks.
+
+    Scenario:
+      - "first": mixed (1 CSR + 1 njit) → CSR removed from registry
+      - "early": CSR-only (non-mixed) → must still execute via template
+    """
+    pop = _build_simple_discrete_population("filtered_non_mixed_csr")
+
+    # Mixed event: "first"
+    @hook(event="first", priority=0)
+    def first_csr():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
+
+    @hook(event="first", priority=1)
+    def first_njit(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 100.0
+        return 0
+
+    # Non-mixed event: "early" — only CSR, should go through template
+    @hook(event="early", priority=0)
+    def early_csr():
+        return [Op.add(genotypes="WT|WT", ages=0, sex="male", delta=50)]
+
+    pop.set_hook("first", first_csr)
+    pop.set_hook("first", first_njit)
+    pop.set_hook("early", early_csr)
+
+    pop.run(n_steps=1)
+
+    # first: set 20 → +100 = 120 at age-0 → post-aging age-1
+    # early: +50 = 170 at age-0 → post-aging age-1
+    # Final: 120 + 50 = 170 (reproduction=0, survival=1.0, aging shifts to age1)
+    assert pop.state.individual_count[1, 1, 0] == 170.0
+
+
+def test_filtered_registry_preserves_non_mixed_njit() -> None:
+    """njit hooks on a non-mixed event must still work through the filtered registry.
+
+    Scenario:
+      - "first": mixed (CSR + njit) → CSR removed
+      - "late": njit-only (non-mixed) → must still execute via template's
+        combined njit hook (not the unified path)
+    """
+    pop = _build_simple_discrete_population("filtered_non_mixed_njit")
+
+    @hook(event="first", priority=0)
+    def first_csr():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
+
+    @hook(event="first", priority=1)
+    def first_njit(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 100.0
+        return 0
+
+    @hook(event="late", priority=0)
+    def late_njit(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 7.0
+        return 0
+
+    pop.set_hook("first", first_csr)
+    pop.set_hook("first", first_njit)
+    pop.set_hook("late", late_njit)
+
+    pop.run(n_steps=1)
+
+    # first: set 20 → +100 = 120
+    # late: +7 = 127
+    assert pop.state.individual_count[1, 1, 0] == 127.0
