@@ -21,7 +21,7 @@
   {"domain": "survival", "name": "female_age0_survival", "config_field": "age_based_survival_rates", "config_path": [0, 0], "dtype": "float", "bounds": [0, 1], "doc": "female juvenile survival (age-0)"},
   {"domain": "survival", "name": "male_age0_survival", "config_field": "age_based_survival_rates", "config_path": [1, 0], "dtype": "float", "bounds": [0, 1], "doc": "male juvenile survival (age-0)"},
   // REPRODUCTION
-  {"domain": "reproduction", "name": "eggs_per_female", "config_field": "eggs_per_female", "config_path": [], "dtype": "float", "bounds": [0, 1000000.0], "aliases": ["eggs_per_female"], "is_0d": true},
+  {"domain": "reproduction", "name": "eggs_per_female", "config_field": "eggs_per_female", "config_path": [], "dtype": "float", "bounds": [0, 1000000.0], "aliases": ["expected_eggs_per_female"], "is_0d": true},
   {"domain": "reproduction", "name": "sex_ratio", "config_field": "sex_ratio", "config_path": [], "dtype": "float", "bounds": [0, 1], "is_0d": true},
   {"domain": "reproduction", "name": "sperm_displacement_rate", "config_field": "sperm_displacement_rate", "config_path": [], "dtype": "float", "bounds": [0, 1], "is_0d": true},
   {"domain": "reproduction", "name": "female_age_based_mating_rate", "config_field": "age_based_mating_rates", "config_path": [0], "dtype": "float", "bounds": [0, 1], "doc": "(n_ages,) female per-age mating rate — accepts scalar, list, dict, or callable"},

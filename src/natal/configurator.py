@@ -148,7 +148,16 @@ class _ConfigContext:
         self.gamete_modifiers.append((resolved_id, name, modifier))
         self.gamete_modifiers.sort(key=lambda x: x[0])
         if refresh:
-            self.refresh_modifier_maps()
+            _rebuild_config_maps(self)
+
+    def refresh_modifier_maps(self) -> None:
+        """Rebuild config maps from the current modifier lists.
+
+        Mirrors :meth:`BasePopulation.refresh_modifier_maps` for the
+        adapter — required by :func:`apply_preset_to_population` which
+        accepts both Population and _ConfigContext objects.
+        """
+        _rebuild_config_maps(self)
 
     def add_zygote_modifier(
         self,
@@ -170,16 +179,7 @@ class _ConfigContext:
         self.zygote_modifiers.append((resolved_id, name, modifier))
         self.zygote_modifiers.sort(key=lambda x: x[0])
         if refresh:
-            self.refresh_modifier_maps()
-
-    def refresh_modifier_maps(self) -> None:
-        """Rebuild config maps from the current modifier lists.
-
-        Delegates to :func:`_rebuild_config_maps`, which recomputes the
-        offspring probability tensor from the accumulated gamete and
-        zygote modifier callables.
-        """
-        _rebuild_config_maps(self)
+            _rebuild_config_maps(self)
 
     # ``Any`` for the 3rd tuple element is justified: the function only
     # reads ``id`` and ``name`` (1st/2nd elements); the modifier object
@@ -1095,7 +1095,8 @@ class Configurator:
             # Collect presets, then apply in priority order.
             for preset in presets:
                 self._pop_ref.add_preset(preset)
-            self._pop_ref.rebuild_from_presets()
+            self._pop_ref.refresh_modifiers()
+            self._pop_ref.reapply_preset_fitness()
             self._config = self._pop_ref.config
             return self
 
@@ -1283,7 +1284,8 @@ class Configurator:
 
         if self._pop_ref is not None:
             pop = self._pop_ref
-            pop.rebuild_from_presets()
+            pop.refresh_modifiers()
+            pop.reapply_preset_fitness()
             self._config = pop.config
         else:
             raise RuntimeError(

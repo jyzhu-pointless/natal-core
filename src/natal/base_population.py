@@ -150,7 +150,7 @@ class BasePopulation(ABC, Generic[T_State]):
         self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
         self._manual_zygote: list[tuple[int, str | None, ZygoteModifier]] = []
 
-        # Derived modifier lists — rebuilt by rebuild_from_presets().
+        # Derived modifier lists — rebuilt by refresh_modifiers().
         self._gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self._zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
@@ -587,26 +587,45 @@ class BasePopulation(ABC, Generic[T_State]):
             return int(modifier_id)
         return self._next_modifier_id(modifiers)
 
-    def rebuild_from_presets(self) -> None:
-        """Rebuild modifiers AND fitness from _presets + _manual_*.
+    def reapply_preset_fitness(self) -> None:
+        """Reset fitness tensors to 1.0 and re-apply all preset fitness patches.
 
-        Presets are applied in priority order.  Fitness tensors are
-        reset to 1.0 first, then re-applied from presets — same full
-        rebuild strategy as modifiers.
+        Called after structural changes to presets (addition, removal, or
+        reconfiguration).  Only preset-derived fitness is restored — any
+        fitness values set directly via ``pop.update().fitness()`` will be
+        overwritten, because there is currently no manual-fitness storage
+        analogous to ``_manual_gamete`` / ``_manual_zygote``.
         """
         from natal.genetic_presets import apply_preset_fitness_patch
 
-        # -- reset fitness tensors to neutral (1.0) --
-        if self._config is not None:
-            self._config.viability_fitness.fill(1.0)
-            self._config.fecundity_fitness.fill(1.0)
-            self._config.sexual_selection_fitness.fill(1.0)
-            self._config.zygote_viability_fitness.fill(1.0)
+        if self._config is None:
+            return
+        self._config.viability_fitness.fill(1.0)
+        self._config.fecundity_fitness.fill(1.0)
+        self._config.sexual_selection_fitness.fill(1.0)
+        self._config.zygote_viability_fitness.fill(1.0)
+        for preset in sorted(self._presets, key=lambda p: p.priority):
+            preset.bind_species(self._species)
+            patch = preset.fitness_patch()
+            if patch:
+                apply_preset_fitness_patch(self, patch)
 
-        # -- collect modifiers and fitness from presets --
+    def refresh_modifiers(self) -> None:
+        """Rebuild derived modifier lists and maps from _presets + _manual_*.
+
+        Presets are applied in priority order, then manual modifiers are
+        appended.  Modifier maps (genotype_to_gametes_map,
+        gametes_to_zygote_map, offspring_tensor) are rebuilt from the
+        combined list.
+
+        .. note::
+
+            This method does **not** touch fitness tensors.  Callers that
+            need a full fitness rebuild should also call
+            :meth:`reapply_preset_fitness`.
+        """
         self._gamete_modifiers.clear()
         self._zygote_modifiers.clear()
-        fitness_patches: list[dict[str, object]] = []
         for preset in sorted(self._presets, key=lambda p: p.priority):
             preset.bind_species(self._species)
             if gm := preset.gamete_modifier(self):
@@ -619,19 +638,11 @@ class BasePopulation(ABC, Generic[T_State]):
                     self._next_modifier_id(self._zygote_modifiers),
                     f"{preset.name}/zygote", zm,
                 ))
-            if patch := preset.fitness_patch():
-                fitness_patches.append(patch)
-
-        # -- manual modifiers appended last --
         self._gamete_modifiers.extend(self._manual_gamete)
         self._zygote_modifiers.extend(self._manual_zygote)
-        self._refresh_modifier_maps()
+        self.refresh_modifier_maps()
 
-        # -- apply fitness patches (same priority order as modifiers) --
-        for patch in fitness_patches:
-            apply_preset_fitness_patch(self, patch)
-
-    def _refresh_modifier_maps(self) -> None:
+    def refresh_modifier_maps(self) -> None:
         if self._config is None or self._registry is None:
             return
 
@@ -679,10 +690,6 @@ class BasePopulation(ABC, Generic[T_State]):
             offspring_tensor=offspring_tensor,
         )
 
-    def refresh_modifier_maps(self) -> None:
-        """Public wrapper that rebuilds modifier maps from registered modifiers."""
-        self._refresh_modifier_maps()
-
     def add_gamete_modifier(
         self,
         modifier: GameteModifier,
@@ -696,14 +703,18 @@ class BasePopulation(ABC, Generic[T_State]):
             modifier: A ``GameteModifier`` callable or object.
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
+            refresh: If True (default), immediately rebuild modifier maps.
+                Set to False when adding multiple modifiers in a batch;
+                call :meth:`refresh_modifiers` or
+                :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
         resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
         self._manual_gamete.append((resolved_id, name, modifier))
         self._manual_gamete.sort(key=lambda x: x[0])
+        self._gamete_modifiers.append((resolved_id, name, modifier))
+        self._gamete_modifiers.sort(key=lambda x: x[0])
         if refresh:
-            self._gamete_modifiers.append((resolved_id, name, modifier))
-            self._gamete_modifiers.sort(key=lambda x: x[0])
-            self._refresh_modifier_maps()
+            self.refresh_modifier_maps()
 
     def add_zygote_modifier(
         self,
@@ -718,14 +729,18 @@ class BasePopulation(ABC, Generic[T_State]):
             modifier: A ``ZygoteModifier`` callable or object.
             name: Optional human-readable name for debugging.
             modifier_id: Optional numeric priority used for ordering.
+            refresh: If True (default), immediately rebuild modifier maps.
+                Set to False when adding multiple modifiers in a batch;
+                call :meth:`refresh_modifiers` or
+                :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
         resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
         self._manual_zygote.append((resolved_id, name, modifier))
         self._manual_zygote.sort(key=lambda x: x[0])
+        self._zygote_modifiers.append((resolved_id, name, modifier))
+        self._zygote_modifiers.sort(key=lambda x: x[0])
         if refresh:
-            self._zygote_modifiers.append((resolved_id, name, modifier))
-            self._zygote_modifiers.sort(key=lambda x: x[0])
-            self._refresh_modifier_maps()
+            self.refresh_modifier_maps()
 
     def add_preset(self, preset: GeneticPreset) -> None:
         """Add a preset to this population.
@@ -760,7 +775,8 @@ class BasePopulation(ABC, Generic[T_State]):
             :class:`natal.genetic_presets.HomingDrive` - Built-in gene drive preset
         """
         self.add_preset(preset)
-        self.rebuild_from_presets()
+        self.refresh_modifiers()
+        self.reapply_preset_fitness()
 
     @classmethod
     def builder(cls, species: Species) -> Any:

@@ -286,7 +286,7 @@ class _SpatialUpdate:
         from natal.configurator import Configurator
 
         # reconfigure_preset modifies the preset in-place (setattr) then
-        # calls rebuild_from_presets() which replaces the config object
+        # calls refresh_modifiers() + reapply_preset_fitness() which replaces
         # via _replace().  id(d.config) dedup alone misses demes sharing
         # the old config reference.  Track old→new config so every deme
         # gets the new config, whether it was the one processed or shared.

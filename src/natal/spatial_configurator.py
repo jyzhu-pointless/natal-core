@@ -1567,7 +1567,7 @@ class _SpatialUpdate:
     def presets(self, *presets: Any) -> _SpatialUpdate:
         if not self._pop.demes:
             return self
-        # Track old→new config: rebuild_from_presets() replaces
+        # Track old→new config: refresh_modifiers() + reapply_preset_fitness() replaces
         # the config object, so id(d.config) dedup alone misses
         # other demes sharing the old reference.
         updated_configs: dict[int, object] = {}

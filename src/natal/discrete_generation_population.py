@@ -127,60 +127,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._finalize_hooks()
 
-    def _refresh_modifier_maps(self) -> None:
-        """Rebuild genotype/gamete/zygote maps and offspring_tensor from registered modifiers."""
-        if self._config is None or self._registry is None:
-            return
-
-        haploid_genotypes = self._registry.index_to_haplo
-        diploid_genotypes = self._registry.index_to_genotype
-        if not haploid_genotypes or not diploid_genotypes:
-            return
-
-        from natal.modifiers import build_modifier_wrappers
-        from natal.population_config import (
-            initialize_gamete_map,
-            initialize_zygote_map,
-        )
-
-        n_glabs = self._config.n_glabs
-        gamete_funcs, zygote_funcs = build_modifier_wrappers(
-            gamete_modifiers=self._gamete_modifiers,
-            zygote_modifiers=self._zygote_modifiers,
-            population=self,
-            index_registry=self._index_registry,
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
-        )
-
-        z2g = initialize_gamete_map(
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
-            gamete_modifiers=gamete_funcs,
-        )
-        g2z = initialize_zygote_map(
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
-            zygote_modifiers=zygote_funcs,
-        )
-
-        import natal.engine.simulation.age_structured as _alg
-
-        self._config = self._config._replace(  # type: ignore[assignment]
-            genotype_to_gametes_map=z2g,
-            gametes_to_zygote_map=g2z,
-            offspring_tensor=_alg.compute_offspring_probability_tensor(
-                meiosis_f=z2g[0], meiosis_m=z2g[1],
-                haplo_to_genotype_map=g2z,
-                n_genotypes=self._config.n_genotypes,
-                n_haplogenotypes=self._config.n_haploid_genotypes,
-                n_glabs=n_glabs,
-            ),
-        )
-
     def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
         clone = super()._clone(name, config=config)  # type: ignore[arg-type]
         if config is not None:

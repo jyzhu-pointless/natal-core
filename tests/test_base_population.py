@@ -184,14 +184,15 @@ class TestClone:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TestRebuildFromPresets
+# TestRefreshModifiers
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestRebuildFromPresets:
-    """Tests for ``rebuild_from_presets()`` — rebuild modifiers and fitness maps.
+class TestRefreshModifiers:
+    """Tests for ``refresh_modifiers()`` — rebuild modifier lists and maps from sources.
 
-    ``rebuild_from_presets`` is not available on this branch yet.
+    ``refresh_modifiers`` replaces the former ``rebuild_from_presets``.
+    These tests require full ``GeneticPreset`` infrastructure and are skipped.
     """
 
     @pytest.mark.skip(reason="Needs full GeneticPreset infrastructure")
@@ -209,7 +210,7 @@ class TestRebuildFromPresets:
 
 
 class TestRefreshModifierMaps:
-    """Tests for ``refresh_modifier_maps()`` — refresh modifier maps."""
+    """Tests for ``refresh_modifier_maps()`` — rebuild modifier maps from derived lists."""
 
     def test_refresh_modifier_maps_no_error(self, simple_species: nt.Species) -> None:
         """``refresh_modifier_maps()`` should not raise."""
