@@ -278,15 +278,20 @@
 
 - Global hooks
 - Sparse（import / states）
-- 🎨 **`CompiledEventHooks` 拆分**（2026-06-18 审查结论）
-  当前这个类混了三件事，难以理解和维护：
-  1. **Hook 容器**（`first/early/late/finish/registry`）——本职，给模板提供每个事件的合并函数
-  2. **代码生成管线**（`from_compiled_hooks` 静态工厂）——检测混用、生成统一函数、过滤 registry、调 `compile_combined_hook` 和 `compile_unified_event_hook`。这不是"管理 hooks"，是"造 hooks"
-  3. **Engine run 函数**（`run_tick_fn` / `run_fn` / `run_discrete_*` / `spatial_*` 共 8 个）——lifecycle wrapper 编译结果，跟 hook 完全无关，纯粹因为编译是 `from_compiled_hooks` 顺手做的、结果没别处放
-  建议拆为：
-  - `CompiledEventHooks` 回归纯数据容器（只存 5 个 hook 引用 + registry）
-  - 抽出 `LifecycleWrappers` 存 8 个 run 函数 + 编译逻辑
-  - `from_compiled_hooks` 拆成两步：先造 hooks，再拿 hooks 编译 lifecycle wrapper
+- 🎨 **Hook 系统分层重构**（2026-06-18 审查结论）
+
+  **`CompiledEventHooks` 拆分**
+  当前这个类混了三件事：
+  1. Hook 容器（`first/early/late/finish/registry`）——本职
+  2. 代码生成管线（`from_compiled_hooks`）——检测混用、生成统一函数、过滤 registry
+  3. Engine run 函数（8 个 `run_*` / `spatial_*`）——lifecycle wrapper 结果，跟 hook 无关
+  建议拆为：`CompiledEventHooks` 回归容器、抽出 `LifecycleWrappers` 存 run 函数、`from_compiled_hooks` 拆成两步。
+
+  **`executor.py` 职责拆分**
+  文件名暗示通用执行器，实际混了两类：
+  1. CSR 热循环（`_execute_single_csr_hook`、`execute_csr_event_arrays`、条件求值、target-count helpers）——主体，是 declarative hook 的 Numba 内核
+  2. 通用回退调度（`HookExecutor`）——同时处理 CSR+njit+Python wrapper，跟 CSR 热循环无关，放在这里只因它调了 `execute_csr_event_arrays`
+  建议：CSR 内核保留在 `executor.py`，`HookExecutor` 移到 `hooks/` 下独立文件或合并到 compiler 管线中
 
 ## initialization / finish 现状
 
