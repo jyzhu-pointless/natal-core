@@ -359,3 +359,225 @@ def test_filtered_registry_preserves_non_mixed_njit() -> None:
     # first: set 20 → +100 = 120
     # late: +7 = 127
     assert pop.state.individual_count[1, 1, 0] == 127.0
+
+
+# ---------------------------------------------------------------------------
+# STOP_IF end-to-end lifecycle tests
+# ---------------------------------------------------------------------------
+
+
+def test_stop_if_zero_shortcircuits_remaining_hooks() -> None:
+    """Op.stop_if_zero should abort the event, skipping later hooks."""
+    pop = _build_simple_discrete_population("stop_if_zero")
+
+    @hook(event="first", priority=0)
+    def csr_kill():
+        # Set male to 0 → triggers stop_if_zero below.
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=0)]
+
+    @hook(event="first", priority=1)
+    def csr_stop():
+        return [Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male")]
+
+    @hook(event="first", priority=2)
+    def njit_should_be_skipped(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 999.0  # should never execute
+        return 0
+
+    pop.set_hook("first", csr_kill)
+    pop.set_hook("first", csr_stop)
+    pop.set_hook("first", njit_should_be_skipped)
+
+    pop.run(n_steps=1)
+
+    # csr_kill set to 0 → csr_stop sees 0 → STOP → njit skipped
+    assert pop.state.individual_count[1, 1, 0] == 0.0
+
+
+def test_stop_if_extinction_shortcircuits_remaining_hooks() -> None:
+    """Op.stop_if_extinction should abort when total population reaches 0."""
+    pop = _build_simple_discrete_population("stop_if_extinction")
+
+    @hook(event="first", priority=0)
+    def csr_kill():
+        # Set both sexes to 0.
+        return [
+            Op.set_count(genotypes="WT|WT", ages=0, sex="female", value=0),
+            Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=0),
+        ]
+
+    @hook(event="first", priority=1)
+    def csr_stop():
+        return [Op.stop_if_extinction()]
+
+    @hook(event="first", priority=2)
+    def njit_should_be_skipped(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 999.0
+        return 0
+
+    pop.set_hook("first", csr_kill)
+    pop.set_hook("first", csr_stop)
+    pop.set_hook("first", njit_should_be_skipped)
+
+    pop.run(n_steps=1)
+
+    assert pop.state.individual_count[1, 1, 0] == 0.0
+
+
+def test_stop_if_zero_condition_not_met_continues() -> None:
+    """Op.stop_if_zero should NOT abort when count > 0."""
+    pop = _build_simple_discrete_population("stop_if_zero_continue")
+
+    @hook(event="first", priority=0)
+    def csr_stop():
+        # Male count is 10 > 0 → condition not met → continue.
+        return [Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male")]
+
+    @hook(event="first", priority=1)
+    def njit_should_run(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 5.0
+        return 0
+
+    pop.set_hook("first", csr_stop)
+    pop.set_hook("first", njit_should_run)
+
+    pop.run(n_steps=1)
+
+    # STOP not triggered → njit runs → 10 + 5 = 15 at age-1
+    assert pop.state.individual_count[1, 1, 0] == 15.0
+
+
+# ---------------------------------------------------------------------------
+# Op type end-to-end lifecycle tests
+# ---------------------------------------------------------------------------
+
+
+def test_op_scale_end_to_end() -> None:
+    """Op.scale should multiply individual counts by a factor."""
+    pop = _build_simple_discrete_population("op_scale")
+
+    @hook(event="first", priority=0)
+    def csr_scale():
+        return [Op.scale(genotypes="WT|WT", ages=0, sex="male", factor=0.3)]
+
+    pop.set_hook("first", csr_scale)
+    pop.run(n_steps=1)
+
+    # 10 * 0.3 = 3 at age-1 (deterministic, no stochastic)
+    assert pop.state.individual_count[1, 1, 0] == 3.0
+
+
+def test_op_sample_end_to_end() -> None:
+    """Op.sample should clamp individual counts to at most the given size."""
+    pop = _build_simple_discrete_population("op_sample")
+
+    @hook(event="first", priority=0)
+    def csr_sample():
+        # Clamp to at most 4.
+        return [Op.sample(genotypes="WT|WT", ages=0, sex="male", size=4)]
+
+    pop.set_hook("first", csr_sample)
+    pop.run(n_steps=1)
+
+    # 10 clamped to 4 at age-1
+    assert pop.state.individual_count[1, 1, 0] == 4.0
+
+
+def test_op_kill_end_to_end() -> None:
+    """Op.kill should remove a fraction of individuals."""
+    pop = _build_simple_discrete_population("op_kill")
+
+    @hook(event="first", priority=0)
+    def csr_kill():
+        # Kill 60% → 40% survive.
+        return [Op.kill(genotypes="WT|WT", ages=0, sex="male", prob=0.6)]
+
+    pop.set_hook("first", csr_kill)
+    pop.run(n_steps=1)
+
+    # 10 * (1 - 0.6) = 4 at age-1
+    assert pop.state.individual_count[1, 1, 0] == 4.0
+
+
+def test_op_subtract_end_to_end() -> None:
+    """Op.subtract should remove a fixed number of individuals."""
+    pop = _build_simple_discrete_population("op_subtract")
+
+    @hook(event="first", priority=0)
+    def csr_sub():
+        return [Op.subtract(genotypes="WT|WT", ages=0, sex="male", delta=7)]
+
+    pop.set_hook("first", csr_sub)
+    pop.run(n_steps=1)
+
+    # 10 - 7 = 3 at age-1
+    assert pop.state.individual_count[1, 1, 0] == 3.0
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests
+# ---------------------------------------------------------------------------
+
+
+def test_no_hooks_runs_normally() -> None:
+    """Population with zero registered hooks should run without error."""
+    pop = _build_simple_discrete_population("no_hooks")
+    pop.run(n_steps=1)
+    assert pop.state.individual_count[1, 1, 0] == 10.0
+
+
+def test_same_priority_hooks_stable_order() -> None:
+    """Hooks with the same priority should execute in registration order."""
+    pop = _build_simple_discrete_population("same_priority")
+
+    @hook(event="first", priority=0)
+    def first_registered(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] = 100.0
+        return 0
+
+    @hook(event="first", priority=0)
+    def second_registered(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 1.0
+        return 0
+
+    pop.set_hook("first", first_registered)
+    pop.set_hook("first", second_registered)
+    pop.run(n_steps=1)
+
+    # first sets to 100, second adds 1 → 101 at age-1
+    assert pop.state.individual_count[1, 1, 0] == 101.0
+
+
+def test_single_njit_hook() -> None:
+    """A single njit hook on a single event should execute correctly."""
+    pop = _build_simple_discrete_population("single_njit")
+
+    @hook(event="first", priority=0)
+    def single(state, config, deme_id=-1):
+        _ = (config, deme_id)
+        state.individual_count[1, 0, 0] += 42.0
+        return 0
+
+    pop.set_hook("first", single)
+    pop.run(n_steps=1)
+
+    assert pop.state.individual_count[1, 1, 0] == 52.0
+
+
+def test_single_csr_hook() -> None:
+    """A single CSR hook on a single event should execute correctly."""
+    pop = _build_simple_discrete_population("single_csr")
+
+    @hook(event="early", priority=0)
+    def single():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99)]
+
+    pop.set_hook("early", single)
+    pop.run(n_steps=1)
+
+    assert pop.state.individual_count[1, 1, 0] == 99.0
