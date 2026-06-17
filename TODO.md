@@ -164,6 +164,23 @@
 
 - 添加非平凡 modifier 的端到端效果测试（验证 genotype_to_gametes_map 或 offspring_tensor 改变）
 
+### #11.1 ⚠️ Hook 系统测试覆盖缺口
+
+**来源**：2026-06-17 测试审计。`test_hook_kernel_ops.py` 是独立脚本不被 pytest 发现，`_apply_target_with_sperm` 零覆盖，多个 Op 类型无端到端生命周期测试。
+
+**优先级理由**：🟡 `_apply_target_with_sperm` 是最复杂的执行路径（virgin/sperm 拆分、随机采样、负值检测），其 bug 会静默破坏 sperm 数据。
+
+**已完成**：`d3aab26` 补充了 25 个测试：
+- `_apply_target_with_sperm` / `_apply_target_without_sperm` 14 个单元测试
+- `stop_if_zero` / `stop_if_extinction` / 条件不满足 3 个 E2E 测试
+- `Op.scale/sample/kill/subtract` 4 个 E2E 测试
+- 边界 case（空 hook、单 hook、同 priority）4 个测试
+
+**遗留**：
+- `test_hook_kernel_ops.py` 需转换为 pytest 格式（所有 Op 类型的运行时测试当前仅在直接执行时运行）
+- `execute_csr_event_program_with_state` 无直接单元测试（已被模板间接覆盖）
+- `_check_csr_condition` 无直接单元测试（已被 condition interpreter 测试覆盖）
+
 ---
 
 ## 🟢 低优先级 — UX / 远期功能
