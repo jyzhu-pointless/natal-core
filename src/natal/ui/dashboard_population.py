@@ -1158,7 +1158,7 @@ class Dashboard:
                             ui.label('Parameters').classes('text-xl font-bold text-gray-700')
                             conf = self.pop._config
                             ui.label(f"Carrying Capacity: {conf.carrying_capacity}").classes('text-base')
-                            ui.label(f"Eggs/Female: {conf.expected_eggs_per_female}").classes('text-base')
+                            ui.label(f"Eggs/Female: {conf.eggs_per_female}").classes('text-base')
                             mode_code = int(conf.juvenile_growth_mode)
                             ui.label(f"Growth Mode: {mode_code} ({self._growth_mode_name(mode_code)})").classes('text-base')
                             ui.label(f"Stochastic: {conf.stochastic}").classes('text-base')

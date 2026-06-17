@@ -1288,7 +1288,7 @@ class SpatialDashboard:
                         with ui.grid(columns=2).classes("w-full gap-y-1 gap-x-4"):
                             for label_text, value in [
                                 ("Carrying Capacity", float(config.carrying_capacity)),
-                                ("Eggs per Female", float(config.expected_eggs_per_female)),
+                                ("Eggs per Female", float(config.eggs_per_female)),
                                 ("Growth Mode", growth_mode_name(int(config.juvenile_growth_mode))),
                                 ("Stochastic", bool(config.stochastic)),
                                 ("Sex Ratio", float(config.sex_ratio)),
