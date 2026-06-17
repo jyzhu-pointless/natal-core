@@ -367,28 +367,42 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         was_stopped = False
         for _ in range(n_steps):
+            # Each tick begins with the "first" hook window, giving
+            # pre-reproduction intervention a chance to inspect or modify
+            # state. A hook returning STOP short-circuits the whole run.
             if self.trigger_event("first", deme_id=-1) != RESULT_CONTINUE:
                 was_stopped = True
                 break
 
+            # Produce offspring (age 0) from adults (age 1) using fecundity,
+            # sex ratio, and density-dependent competition from the config.
             self.state.individual_count[:] = run_discrete_reproduction(
                 self.state.individual_count,
                 self.config,  # pyright: ignore[reportArgumentType]
             )
 
+            # "Early" hooks fire after reproduction but before survival,
+            # allowing interventions such as juvenile mortality modifiers.
             if self.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
                 was_stopped = True
                 break
 
+            # Age-independent survival reduces counts based on viability
+            # parameters, applied uniformly across all age classes.
             self.state.individual_count[:] = run_discrete_survival(
                 self.state.individual_count,
                 self.config,  # pyright: ignore[reportArgumentType]
             )
 
+            # "Late" hooks fire after survival, the last opportunity to
+            # inspect or alter state before the tick's life cycle ends.
             if self.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
                 was_stopped = True
                 break
 
+            # Age all individuals by one year: offspring mature into
+            # adults, and the previous adult cohort becomes the new
+            # reproducing class.
             self.state.individual_count[:] = run_discrete_aging(
                 self.state.individual_count,
             )
@@ -415,6 +429,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._tick = 0
         self._history = []
         self._finished = False
+        # Guard against calls before __init__ finishes (e.g. during
+        # BasePopulation.__init__ -> _initialize -> reset chain).
         if hasattr(self, '_initial_population_snapshot'):
             ind_copy, _, _ = self._initial_population_snapshot
             self._state = DiscretePopulationState.create(
@@ -488,6 +504,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 or dict with ``individual_count`` key.
             history: Optional 2-D history array to restore.
         """
+        # Accept three representations to support checkpoints from
+        # export_state(), numpy serialization, and external tooling.
         assert isinstance(state, (np.ndarray, DiscretePopulationState, dict)), \
             "state must be a DiscretePopulationState, flattened ndarray, or dict"
         if isinstance(state, np.ndarray):
@@ -511,6 +529,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         )
         self._tick = int(state_obj.n_tick)
 
+        # Rebuild the history buffer row by row from a dense 2-D array as
+        # exported by export_state / get_history.
         if history is not None and history.shape[0] > 0:
             self.clear_history()
             for row_idx in range(history.shape[0]):
