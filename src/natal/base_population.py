@@ -1364,13 +1364,13 @@ class BasePopulation(ABC, Generic[T_State]):
                 Policy:
                         - When Numba is disabled, any registered hook type uses Python
                             dispatch so py/declarative/njit hooks share one sequential path.
-                        - When Numba is enabled, only mixed hook-type timelines fall back
-                            to Python dispatch; homogeneous compiled timelines stay on kernel
-                            wrappers.
+                        - When Numba is enabled, mixed hook-type timelines are handled by
+                            unified njit functions generated in ``CompiledEventHooks.from_compiled_hooks``,
+                            so no Python fallback is needed.
                 """
                 if not is_numba_enabled():
                         return self.has_python_hooks() or len(self.get_compiled_hooks()) > 0
-                return self.has_mixed_hook_types()
+                return False
 
     def ensure_hook_executor(self) -> None:
         """Build HookExecutor lazily for Python event-dispatch paths."""

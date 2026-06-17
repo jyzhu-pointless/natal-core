@@ -62,6 +62,8 @@ exclude = [
     "tests/**",
     "**/__pycache__",
     "**/*.pyc",
+    "src/natal/hooks/templates/unified_hook_csr_entry.tmpl.py",
+    "src/natal/hooks/templates/unified_hook_njit_entry.tmpl.py",
     "visualization.py",
     "dashboard.py",
 ]
@@ -94,6 +96,7 @@ ignore = [
     "tests/**",
     "**/__pycache__",
     "**/*.pyc",
+    "src/natal/hooks/templates/*.tmpl.py",
 ]
 
 typeCheckingMode = "strict"
@@ -102,6 +105,7 @@ typeCheckingMode = "strict"
 packages = ["src/natal"]
 artifacts = [
     "src/natal/engine/templates/*.tmpl.py",
+    "src/natal/hooks/templates/*.tmpl.py",
     "natal.svg",
     "natal-brand.svg",
 ]

@@ -19,6 +19,7 @@ from .executor import (
     execute_csr_event_arrays,
     execute_csr_event_program,
     execute_csr_event_program_with_state,
+    execute_single_csr_hook,
 )
 from .selector import compile_selector_hook
 from .types import (
@@ -40,6 +41,7 @@ from .types import (
     EVENT_NAMES,
     NUM_EVENTS,
     RESULT_CONTINUE,
+    RESULT_SKIP,
     RESULT_STOP,
     CompiledHookDescriptor,
     CompiledHookPlan,
@@ -62,6 +64,7 @@ __all__ = [
     "execute_csr_event_arrays",
     "execute_csr_event_program_with_state",
     "execute_csr_event_program",
+    "execute_single_csr_hook",
     "build_hook_program",
     "noop_hook",
     "compile_combined_hook",
@@ -87,6 +90,7 @@ __all__ = [
     "EVENT_ID_MAP",
     "NUM_EVENTS",
     "RESULT_CONTINUE",
+    "RESULT_SKIP",
     "RESULT_STOP",
     "parse_condition",
     "eval_csr_condition_program",

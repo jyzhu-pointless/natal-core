@@ -1,8 +1,35 @@
-"""Unified hook entrypoints and event-wise compiler.
-This module connects three authoring styles into one runtime contract:
-1) declarative hooks (Op list -> CompiledHookPlan)
-2) selector hooks (symbolic selectors -> wrapper/compiled callable)
-3) custom hooks (user-provided njit or Python callback)
+"""Hook compilation and codegen entrypoints.
+
+This module is the **front door** of the hook system.  It connects three
+authoring styles into one runtime contract:
+
+1. **Declarative hooks** — functions returning ``List[HookOp]``, compiled
+   into CSR plans and stored in the ``HookProgram``.
+2. **Selector hooks** — functions with symbolic ``selectors=``, compiled via
+   ``compile_selector_hook`` into njit wrappers or Python fallbacks.
+3. **Custom hooks** — user-provided ``@njit`` or Python callbacks, wrapped
+   with ``_normalize_njit_fn`` / ``_normalize_py_hook``.
+
+The ``hook()`` decorator auto-detects which style a function uses.
+``CompiledEventHooks.from_compiled_hooks`` is the central integration point:
+it groups compiled descriptors by event, detects mixed CSR+njit scenarios,
+and generates lifecycle wrappers (or unified dispatch functions for mixed
+cases) that the population models use directly.
+
+----
+Codegen approach
+----
+Rather than composing Python closures (which Numba cannot cache across
+process restarts), this module **generates Python source code** for each
+unique hook combination.  The source is written to ``.numba_cache/``,
+loaded as a module, and the resulting ``@njit_switch(cache=True)``
+functions are stable and cacheable.  Module globals (hook functions,
+HookProgram arrays) are injected via ``setattr`` after loading.
+
+Template files live in two directories:
+
+- ``engine/templates/`` — lifecycle wrapper templates
+- ``hooks/templates/`` — unified mixed-type dispatch templates
 """
 
 from __future__ import annotations
@@ -37,12 +64,18 @@ from .types import (
     write_codegen_module,
 )
 
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "engine" / "templates"
+_ENGINE_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "engine" / "templates"
+_HOOK_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 
-def _read_template(name: str) -> str:
+def _read_engine_template(name: str) -> str:
     """Read a lifecycle codegen template from ``engine/templates/``."""
-    return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
+    return (_ENGINE_TEMPLATE_DIR / name).read_text(encoding="utf-8")
+
+
+def _read_hook_template(name: str) -> str:
+    """Read a hook codegen template from ``hooks/templates/``."""
+    return (_HOOK_TEMPLATE_DIR / name).read_text(encoding="utf-8")
 
 
 if TYPE_CHECKING:
@@ -50,19 +83,26 @@ if TYPE_CHECKING:
 
     from .types import CompiledHookDescriptor
 
-# Plain callable type — used everywhere that only needs "something you can call".
-# noop hooks, njit functions, combined hooks all satisfy this.
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
+
+# Any callable that can serve as a hook body (noop, njit, combined, kernel).
 HookCallable = Callable[..., Any]
 DeclarativeCompiler = Callable[..., "CompiledHookDescriptor"]
 SelectorCompiler = Callable[..., "CompiledHookDescriptor"]
 
+
 class DecoratedHookFn(Protocol):
-    """Protocol for functions that have been decorated with @hook().
-    Only the @hook() decorator produces objects satisfying this protocol.
-    All other hook callables (noop, njit, combined, kernel wrappers) are
-    plain ``HookCallable``.
+    """Protocol for functions that have been decorated with ``@hook()``.
+
+    Only the ``@hook()`` decorator produces objects satisfying this
+    protocol.  All other hook callables (noop, njit, combined, kernel
+    wrappers) are plain ``HookCallable``.
     """
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
     __name__: str
     meta: Dict[str, Any]
     compiled: Optional[Any]
@@ -73,20 +113,36 @@ class DecoratedHookFn(Protocol):
     deme_selector: Any
     register: Callable[..., Any]
 
+
+# ---------------------------------------------------------------------------
+# No-op and signature normalisation
+# ---------------------------------------------------------------------------
+
+
 @njit_switch(cache=True)
 def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:
-    """Default hook: (state, config, deme_id) -> 0."""
+    """Default no-op hook: ``(state, config, deme_id) -> 0``.
+
+    Used as the fallback when no hooks are registered for an event.
+    """
     return 0
+
 
 noop_hook = _noop_hook
 
-def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
-    """Ensure an njit hook matches ``(state, config, deme_id)``.
 
-    Hooks with 3+ args are passed through unchanged.
-    Hooks with exactly 2 args are assumed to omit ``deme_id`` and are
-    wrapped to ``(state, config)`` automatically — useful for panmictic
-    models where ``deme_id`` is always ``-1``.
+def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
+    """Ensure an njit hook callable accepts ``(state, config, deme_id)``.
+
+    The unified calling convention for all compiled hooks is three
+    positional arguments.  This adapter handles two cases:
+
+    * **3+ args** — passed through unchanged.
+    * **2 args** — assumed to omit ``deme_id`` (panmictic-only hook).
+      Wrapped with a thunk that drops the third argument.
+
+    Returns:
+        A callable with signature ``(state, config, deme_id) -> int``.
     """
     py_fn = getattr(fn, "py_func", fn)
     sig = inspect.signature(py_fn)
@@ -97,41 +153,59 @@ def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
     @njit_switch(cache=True)
     def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
         return fn(state, config)
+
     return wrapped2
 
-def _normalize_py_hook(fn: HookCallable) -> HookCallable:
-    """Ensure a Python hook matches ``(state, config, deme_id)``.
 
-    Hooks with 3+ args are passed through unchanged.
-    Hooks with exactly 2 args are assumed to omit ``deme_id`` and are
-    wrapped to ``(state, config)`` automatically.
+def _normalize_py_hook(fn: HookCallable) -> HookCallable:
+    """Ensure a Python hook callable accepts ``(state, config, deme_id)``.
+
+    Python equivalent of ``_normalize_njit_fn``.  Used only when Numba
+    is disabled.
+
+    Returns:
+        A callable with signature ``(state, config, deme_id) -> int``.
     """
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
     if len(params) >= 3:
         return fn
+
     def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
         return fn(state, config)
+
     return wrapped2
+
+
+# ===================================================================
+# Combined hook codegen (njit-only, no CSR interleaving)
+# ===================================================================
+
 
 def compile_combined_hook(
     njit_fns: List[HookCallable],
     deme_selectors: Optional[List[DemeSelector]] = None,
 ) -> HookCallable:
-    """Combine multiple njit hooks into one generated njit function.
+    """Combine multiple njit hooks into a single generated njit function.
 
-    We generate source code instead of composing Python closures so the result
-    remains callable from njit engine.
+    Generates Python source for a new module containing a function that
+    calls each hook in sequence.  Each call is wrapped with an optional
+    ``if deme_id == X`` guard for spatial simulations.
 
-    When ``deme_selectors`` is provided and contains non-wildcard values,
-    each hook call is wrapped with an ``if deme_id == X`` guard so that
-    per-deme hooks only execute for their target deme(s) — critical for
-    spatial simulations where all hooks share one combined function.
+    The source is written to ``.numba_cache/`` so Numba's ``cache=True``
+    survives process restarts — this is not possible with runtime-composed
+    closures.
 
     Args:
-        njit_fns: List of njit-compiled hook functions.
-        deme_selectors: Optional per-function deme target.  When ``None``
-            or all ``"*"``, no guards are generated (panmictic-safe).
+        njit_fns: Njit-compiled hook functions to call in order.
+        deme_selectors: Per-function deme target.  ``None`` or ``"*"``
+            (default) means no guard.  ``int``, ``list``, ``range``
+            produce a guard for that specific deme or set.
+
+    Returns:
+        An ``@njit_switch(cache=True)`` function with signature
+        ``(state, config=None, deme_id=-1) -> int``.  Returns the
+        first non-zero result (``RESULT_STOP``), or 0.
     """
     if len(njit_fns) == 0:
         return _noop_hook
@@ -140,26 +214,31 @@ def compile_combined_hook(
     ds_list: List[DemeSelector] = deme_selectors if deme_selectors is not None else []
     needs_guard = any(ds != "*" for ds in ds_list)
 
-    # Without guards, single-hook combos can return the function directly.
+    # Single-hook, no guard — return the function directly (optimisation).
     if not needs_guard and len(njit_fns) == 1:
         return njit_fns[0]
 
-    # Stable key ensures deterministic module names and cache reuse.
+    # ---- Build stable cache key ----
     if needs_guard:
         combined_parts = ["combined_guarded"]
         for fn, ds in zip(njit_fns, ds_list):
             combined_parts.append(stable_callable_identity(fn))
             combined_parts.append(str(ds))
     else:
-        combined_parts = ["combined"] + [stable_callable_identity(fn) for fn in njit_fns]
+        combined_parts = ["combined"] + [
+            stable_callable_identity(fn) for fn in njit_fns
+        ]
     key = hash_key(combined_parts)
     fn_name = f"_combined_hook_{key}"
     module_stem = f"combined_hook_{key}"
     placeholder_names = [f"_FN_{i}" for i in range(len(njit_fns))]
 
-    # Generated module imports the same switch helper as the rest of hook DSL.
-    lines = ["from natal.numba_utils import njit_switch"]
-    lines.extend([f"{placeholder} = None" for placeholder in placeholder_names])
+    # ---- Generate module source ----
+    # Each placeholder ``_FN_i = None`` is overridden via setattr after load.
+    # The generated function calls each in sequence; the first non-zero
+    # return propagates upward as RESULT_STOP.
+    lines: list[str] = ["from natal.numba_utils import njit_switch"]
+    lines.extend(f"{p} = None" for p in placeholder_names)
     lines.extend(
         [
             "",
@@ -196,9 +275,14 @@ def compile_combined_hook(
             lines.append(f"    _result = {placeholder}(state, config, deme_id)")
             lines.append("    if _result != 0:")
             lines.append("        return _result")
+
     lines.append("    return 0")
     lines.append("")
 
+    # ---- Write, load, wire up globals ----
+    # Module is written to .numba_cache/ so Numba's cache=True survives
+    # restarts.  setattr overrides each ``_FN_i = None`` with the real
+    # njit function before returning the generated callable.
     module_path = write_codegen_module(module_stem, "\n".join(lines))
     module = load_codegen_module(module_stem, module_path)
 
@@ -207,20 +291,394 @@ def compile_combined_hook(
 
     return getattr(module, fn_name)
 
+
+# ===================================================================
+# Unified mixed-type dispatch codegen (CSR + njit interleaved)
+# ===================================================================
+
+# HookProgram field names required by _execute_single_csr_hook.
+# Excludes n_events, n_ops_list, and hook_offsets — those are only
+# needed for event-level dispatch, not per-hook execution.
+_CSR_HOOK_ARRAY_NAMES: Tuple[str, ...] = (
+    "op_offsets",
+    "op_types_data",
+    "gidx_offsets_data",
+    "gidx_data",
+    "age_offsets_data",
+    "age_data",
+    "sex_masks_data",
+    "params_data",
+    "condition_offsets_data",
+    "condition_types_data",
+    "condition_params_data",
+    "deme_selector_types",
+    "deme_selector_offsets",
+    "deme_selector_data",
+)
+
+# Prefix for HookProgram array globals in generated modules.
+_CSR_HOOK_GLOBAL_PREFIX = "_HP_"
+
+
+def compile_unified_event_hook(
+    schedule: List[Tuple[str, int]],
+    njit_fns: List[HookCallable],
+    deme_selectors: Optional[List[DemeSelector]],
+    hook_program: HookProgram,
+    has_sperm_storage: bool,
+) -> HookCallable:
+    """Generate a single njit function that interleaves CSR and njit hooks by priority.
+
+    This is the codegen counterpart of ``compile_combined_hook`` for the
+    case where a single event mixes CSR (declarative ``Op.*``) and njit
+    (custom ``@hook``) hooks.  Instead of generating a simple sequential
+    njit-call chain, it generates a function that alternates between
+    ``_execute_single_csr_hook`` calls and njit function calls according
+    to a priority-ordered *schedule*.
+
+    The generated module imports ``_execute_single_csr_hook`` from
+    ``executor`` and stores the ``HookProgram`` arrays as module globals
+    so they are available at call sites without bloating the argument list.
+
+    Template files used:
+    - ``hooks/templates/unified_hook.tmpl.py`` — main module skeleton
+    - ``hooks/templates/unified_hook_csr_entry.tmpl.py`` — per-CSR-entry fragment
+    - ``hooks/templates/unified_hook_njit_entry.tmpl.py`` — per-njit-entry fragment
+
+    Args:
+        schedule: Priority-ordered execution plan.  Each entry is
+            ``("csr", hook_idx)`` or ``("njit", fn_idx)`` where
+            ``hook_idx`` is the global position in the *full*
+            ``HookProgram`` and ``fn_idx`` indexes into ``njit_fns``.
+        njit_fns: Njit-compiled hook functions, indexed by ``fn_idx``.
+        deme_selectors: Per-njit-function deme targets.  ``None`` or
+            ``"*"`` means no guard.  CSR hooks handle deme filtering
+            inside ``_execute_single_csr_hook``.
+        hook_program: The original ``HookProgram`` whose arrays are set
+            as module globals so ``_execute_single_csr_hook`` can index
+            into them by ``hook_idx``.
+        has_sperm_storage: If ``True``, the generated function reads
+            ``state.sperm_storage``.  If ``False``, it creates a dummy
+            ``(0,0,0)`` array (discrete-generation case).
+
+    Returns:
+        A tuple ``(with_sperm_fn, without_sperm_fn)`` where each is an
+        ``@njit_switch(cache=True)`` function with signature
+        ``(state, config=None, deme_id=-1) -> int``.  The *with-sperm*
+        variant accesses ``state.sperm_storage``; the *without-sperm*
+        variant uses a dummy array.
+    """
+    if len(schedule) == 0:
+        return _noop_hook
+
+    # Single-njit, no guard → return directly (optimisation).
+    ds_list: List[DemeSelector] = deme_selectors if deme_selectors is not None else []
+    if len(schedule) == 1 and schedule[0][0] == "njit" and len(njit_fns) == 1:
+        if not ds_list or ds_list[0] == "*":
+            return njit_fns[0]
+
+    # ---- Build stable cache key ----
+    # The key must uniquely identify this hook combination.  It includes:
+    #   - "unified" prefix (distinguishes from combined_hook_* modules)
+    #   - sperm flag (with/without — different type signatures)
+    #   - every schedule entry (CSR idx or njit identity + deme selector)
+    # A SHA-256 of these parts produces the hex suffix in the module name.
+    # If any hook changes, the key changes → new module → no cache collision.
+    key_parts: List[str] = ["unified"]
+    key_parts.append("sperm" if has_sperm_storage else "nosperm")
+    for entry_type, idx in schedule:
+        if entry_type == "csr":
+            key_parts.append(f"csr{idx}")
+        else:
+            key_parts.append(stable_callable_identity(njit_fns[idx]))
+            if ds_list and idx < len(ds_list):
+                key_parts.append(str(ds_list[idx]))
+    key = hash_key(key_parts)
+    fn_name = f"_unified_hook_{key}"
+    module_stem = f"unified_hook_{key}"
+    n_njit = len(njit_fns)
+    placeholder_names = [f"_FN_{i}" for i in range(n_njit)]
+    hp_global_names = [
+        f"{_CSR_HOOK_GLOBAL_PREFIX}{name.upper()}" for name in _CSR_HOOK_ARRAY_NAMES
+    ]
+
+    # Sperm setup string — injected into the template's
+    # ``"PLACEHOLDER_SPERM_SETUP"`` string literal.
+    sperm_setup = (
+        "state.sperm_storage"
+        if has_sperm_storage
+        else "np.zeros((0, 0, 0), dtype=np.float64)"
+    )
+
+    # ---- Build schedule body from entry templates ----
+    # Each schedule entry is assembled from a fragment template (csr_entry
+    # or njit_entry).  The fragment already carries its own 4-space indent;
+    # the main template's ``# PLACEHOLDER_SCHEDULE_BODY`` line is at column 0
+    # so no double-indent occurs.
+    csr_tmpl = _read_hook_template("unified_hook_csr_entry.tmpl.py")
+    njit_tmpl = _read_hook_template("unified_hook_njit_entry.tmpl.py")
+    has_sperm_str = str(has_sperm_storage)
+
+    schedule_entries: List[str] = []
+    for entry_type, idx in schedule:
+        if entry_type == "csr":
+            schedule_entries.append(
+                csr_tmpl.replace("PLACEHOLDER_SCHEDULE_IDX", str(idx)).replace(
+                    "PLACEHOLDER_HAS_SPERM", has_sperm_str
+                )
+            )
+        else:  # "njit"
+            fn_idx = idx
+            ds: DemeSelector = ds_list[fn_idx] if fn_idx < len(ds_list) else "*"
+            if ds == "*":
+                guard_cond = "True"
+            elif isinstance(ds, int):
+                guard_cond = f"deme_id == {int(ds)}"
+            elif isinstance(ds, range):
+                guard_cond = f"{ds.start} <= deme_id < {ds.stop}"
+            else:
+                items = ", ".join(str(int(x)) for x in ds)
+                guard_cond = f"deme_id in ({items})"
+            schedule_entries.append(
+                njit_tmpl.replace(
+                    "PLACEHOLDER_NJIT_FN_NAME", placeholder_names[fn_idx]
+                ).replace("PLACEHOLDER_NJIT_GUARD_CONDITION", guard_cond)
+            )
+
+    schedule_body_str = "\n".join(schedule_entries)
+
+    # ---- Assemble module from template ----
+    # Three string replacements turn the template skeleton into a complete
+    # module: function name, sperm setup line, and the schedule body.
+    # ``"PLACEHOLDER_SPERM_SETUP"`` includes the quotes so the replacement
+    # text is injected as an expression (not a string literal).
+    template = _read_hook_template("unified_hook.tmpl.py")
+    source = (
+        template.replace("_unified_hook_TEMPLATE", fn_name)
+        .replace('"PLACEHOLDER_SPERM_SETUP"', sperm_setup)
+        .replace("# PLACEHOLDER_SCHEDULE_BODY", schedule_body_str)
+    )
+
+    # ---- Write, load, wire up globals ----
+    module_path = write_codegen_module(module_stem, source)
+    module = load_codegen_module(module_stem, module_path)
+
+    # Inject HookProgram arrays so _execute_single_csr_hook can index them.
+    setattr(module, "_HP_N_HOOKS", hook_program.n_hooks)  # noqa: B010
+    hp = hook_program
+    for name, gname in zip(_CSR_HOOK_ARRAY_NAMES, hp_global_names):
+        setattr(module, gname, getattr(hp, name))  # noqa: B010
+
+    # Inject njit functions.
+    for i, pname in enumerate(placeholder_names):
+        setattr(module, pname, njit_fns[i])  # noqa: B010
+
+    return cast(HookCallable, getattr(module, fn_name))
+
+
+def _build_filtered_hook_program(
+    compiled_hooks: List[CompiledHookDescriptor],
+    mixed_events: set[str],
+) -> HookProgram:
+    """Build a ``HookProgram`` that excludes CSR hooks for ``mixed_events``.
+
+    CSR hooks that belong to a mixed event are handled by the unified
+    njit function instead.  If they remained in the registry passed to
+    the lifecycle template, they would be executed **twice** — once by
+    the unified function and once by the template's ``execute_csr_*``
+    call.
+
+    This function rebuilds the entire ``HookProgram`` from scratch,
+    skipping CSR descriptors whose event is in ``mixed_events``.
+    The packing logic mirrors ``BasePopulation._build_hook_program``
+    (base_population.py) but with the filter applied.
+
+    **Important**: every hook (including no-ops and skipped CSR hooks)
+    must append a deme selector entry so that ``deme_selector_types``
+    stays aligned with ``n_hooks``.  Without this, the template's CSR
+    dispatch would index out of bounds for non-mixed events whose
+    hooks appear after the removed entries.
+
+    Args:
+        compiled_hooks: All compiled descriptors (CSR + njit + py).
+        mixed_events: Events that have both CSR and njit hooks.
+
+    Returns:
+        A new ``HookProgram`` with CSR ops removed for mixed events.
+    """
+    import numpy as np
+
+    from .types import EVENT_NAMES, HookProgram
+
+    events = EVENT_NAMES
+    n_events = len(events)
+
+    # 1. Collect per-event hooks, maintaining EVENT_NAMES order and
+    #    priority sort — the same layout as the original HookProgram.
+    hook_offsets: List[int] = [0]
+    hook_list_by_event: List[List[CompiledHookDescriptor]] = []
+
+    for event_name in events:
+        event_hooks = sorted(
+            [d for d in compiled_hooks if d.event == event_name],
+            key=lambda d: d.priority,
+        )
+        hook_list_by_event.append(event_hooks)
+        hook_offsets.append(hook_offsets[-1] + len(event_hooks))
+
+    n_hooks = hook_offsets[-1]
+
+    # 2. Pack operation data, skipping CSR hooks that belong to mixed events.
+    all_op_types: List[int] = []
+    all_gidx_offsets: List[int] = [0]
+    all_gidx_data: List[int] = []
+    all_age_offsets: List[int] = [0]
+    all_age_data: List[int] = []
+    all_sex_masks: List[bool] = []
+    all_params: List[float] = []
+    all_cond_offsets: List[int] = [0]
+    all_cond_types: List[int] = []
+    all_cond_params: List[int] = []
+
+    all_deme_sel_types: List[int] = []
+    all_deme_sel_offsets: List[int] = [0]
+    all_deme_sel_data: List[int] = []
+
+    n_ops_list: List[int] = []
+    op_offsets: List[int] = [0]
+
+    for hooks in hook_list_by_event:
+        for hook in hooks:
+            plan = hook.plan
+            sel = hook.deme_selector
+
+            # Inline helper: append a deme selector entry for *s*.
+            # Called for every hook to keep arrays aligned with n_hooks.
+            def _append_deme_sel(s: DemeSelector) -> None:
+                if s == "*":
+                    all_deme_sel_types.append(0)
+                elif isinstance(s, int):
+                    all_deme_sel_types.append(1)
+                    all_deme_sel_data.append(int(s))
+                elif isinstance(s, range):
+                    all_deme_sel_types.append(2)
+                    all_deme_sel_data.append(int(s.start))
+                    all_deme_sel_data.append(int(s.stop))
+                else:
+                    all_deme_sel_types.append(3)
+                    all_deme_sel_data.extend([int(x) for x in s])
+                all_deme_sel_offsets.append(len(all_deme_sel_data))
+
+            # Skip CSR hooks for mixed events — the unified function
+            # handles them.
+            if hook.event in mixed_events and plan is not None and plan.n_ops > 0:
+                n_ops_list.append(0)
+                op_offsets.append(op_offsets[-1])
+                _append_deme_sel(sel)
+                continue
+
+            # No-op hooks (njit/py without a CSR plan).
+            if plan is None or plan.n_ops == 0:
+                n_ops_list.append(0)
+                op_offsets.append(op_offsets[-1])
+                _append_deme_sel(sel)
+                continue
+
+            # ---- Pack a real CSR plan ----
+            n_ops_list.append(plan.n_ops)
+
+            all_op_types.extend(plan.op_types.tolist())
+
+            # Genotype indices (adjust offsets for concatenation).
+            gidx_offset_base = len(all_gidx_data)
+            for i in range(plan.n_ops):
+                all_gidx_offsets.append(
+                    gidx_offset_base
+                    + plan.gidx_offsets[i + 1]
+                    - plan.gidx_offsets[0]
+                )
+            all_gidx_data.extend(plan.gidx_data.tolist())
+
+            # Age indices.
+            age_offset_base = len(all_age_data)
+            for i in range(plan.n_ops):
+                all_age_offsets.append(
+                    age_offset_base
+                    + plan.age_offsets[i + 1]
+                    - plan.age_offsets[0]
+                )
+            all_age_data.extend(plan.age_data.tolist())
+
+            # Sex masks (flatten 2D → 1D).
+            all_sex_masks.extend(plan.sex_masks.flatten().tolist())
+
+            # Params and condition tokens.
+            all_params.extend(plan.params.tolist())
+            cond_offset_base = len(all_cond_types)
+            for i in range(plan.n_ops):
+                all_cond_offsets.append(
+                    cond_offset_base
+                    + plan.condition_offsets[i + 1]
+                    - plan.condition_offsets[0]
+                )
+            all_cond_types.extend(plan.condition_types.tolist())
+            all_cond_params.extend(plan.condition_params.tolist())
+
+            op_offsets.append(len(all_op_types))
+            _append_deme_sel(sel)
+
+    # 3. Build the filtered HookProgram.
+    return HookProgram(
+        n_events=np.int32(n_events),
+        n_hooks=np.int32(n_hooks),
+        hook_offsets=np.array(hook_offsets, dtype=np.int32),
+        n_ops_list=np.array(n_ops_list, dtype=np.int32),
+        op_offsets=np.array(op_offsets, dtype=np.int32),
+        op_types_data=np.array(all_op_types, dtype=np.int32),
+        gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
+        gidx_data=np.array(all_gidx_data, dtype=np.int32),
+        age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
+        age_data=np.array(all_age_data, dtype=np.int32),
+        sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
+        params_data=np.array(all_params, dtype=np.float64),
+        condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
+        condition_types_data=np.array(all_cond_types, dtype=np.int32),
+        condition_params_data=np.array(all_cond_params, dtype=np.int32),
+        deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
+        deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
+        deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
+    )
+
+
+# ===================================================================
+# Lifecycle wrapper codegen
+# ===================================================================
+
+
 def _gen_lifecycle_source(
     is_discrete: bool,
     tick_fn_name: str,
     run_fn_name: str,
 ) -> str:
-    """Generate the source code for a lifecycle wrapper module.
+    """Read a lifecycle template and substitute function name placeholders.
 
-    Reads the template from ``engine/templates/`` and substitutes
-    ``TICK_FN_NAME`` and ``RUN_FN_NAME`` placeholders.
+    Args:
+        is_discrete: ``True`` for discrete-generation, ``False`` for
+            age-structured.
+        tick_fn_name: Name to substitute for ``TICK_FN_NAME``.
+        run_fn_name: Name to substitute for ``RUN_FN_NAME``.
+
+    Returns:
+        The template source with placeholders replaced.
     """
-    name = "lifecycle_discrete_v2.tmpl.py" if is_discrete else "lifecycle_structured.tmpl.py"
-    return (_read_template(name)
-        .replace("TICK_FN_NAME", tick_fn_name)
-        .replace("RUN_FN_NAME", run_fn_name))
+    name = (
+        "lifecycle_discrete_v2.tmpl.py"
+        if is_discrete
+        else "lifecycle_structured.tmpl.py"
+    )
+    return _read_engine_template(name).replace("TICK_FN_NAME", tick_fn_name).replace(
+        "RUN_FN_NAME", run_fn_name
+    )
 
 
 def compile_lifecycle_wrapper(
@@ -229,27 +687,28 @@ def compile_lifecycle_wrapper(
     early_hook: HookCallable,
     late_hook: HookCallable,
 ) -> tuple[HookCallable, HookCallable]:
-    """Generate a lifecycle wrapper module with hooks as module-level globals.
+    """Generate a lifecycle wrapper module with hooks as module globals.
 
-    This ensures each unique hook combination gets its own Numba
-    ``@njit(cache=True)`` function keyed by source-code hash, so compilation
-    is cached across process restarts — something Numba cannot do for
-    function-valued parameters.
+    Each unique ``(first, early, late)`` hook combination gets its own
+    Numba ``@njit(cache=True)`` function keyed by source-code hash.
+    This is the mechanism that makes hook compilation survive process
+    restarts — Numba cannot do this with function-valued parameters,
+    so we generate source code and inject hooks as module globals.
 
     Args:
-        is_discrete: If True, generate discrete-generation (no sperm storage)
-            wrappers using ``DiscretePopulationConfig`` and dedicated engine.
-            Otherwise generate age-structured wrappers.
+        is_discrete: If ``True``, generate discrete-generation wrappers
+            using ``DiscretePopulationConfig``.  If ``False``, generate
+            age-structured wrappers with sperm storage.
         first_hook: Combined njit function for the ``first`` event.
         early_hook: Combined njit function for the ``early`` event.
         late_hook: Combined njit function for the ``late`` event.
 
     Returns:
-        A tuple ``(tick_fn, run_fn)`` where ``tick_fn`` executes one tick
-        and ``run_fn`` executes multiple ticks with history recording.
+        ``(tick_fn, run_fn)`` — the tick function executes one lifecycle
+        tick; the run function loops for ``n_ticks`` with history recording.
     """
     mode = "discrete" if is_discrete else "structured"
-    parts = [f"lifecycle_{mode}"] + [
+    parts = ["lifecycle_" + mode] + [
         stable_callable_identity(fn) for fn in [first_hook, early_hook, late_hook]
     ]
     key = hash_key(parts)
@@ -275,18 +734,33 @@ def _gen_spatial_lifecycle_source(
     panmictic_stem: str,
     panmictic_tick_fn_name: str,
 ) -> str:
-    """Generate source for a spatial lifecycle wrapper module.
+    """Read a spatial lifecycle template and substitute placeholders.
 
-    Reads the template from ``engine/templates/`` and substitutes
-    ``TICK_FN_NAME``, ``RUN_FN_NAME``, ``PANMICTIC_STEM``,
-    ``PANMICTIC_TICK_FN_NAME`` placeholders.
+    The spatial template wraps the panmictic tick inside ``prange``,
+    running one tick per deme in parallel.
+
+    Args:
+        is_discrete: ``True`` for discrete-generation.
+        tick_fn_name: Spatial tick function name.
+        run_fn_name: Spatial run function name.
+        panmictic_stem: Module stem of the corresponding panmictic wrapper.
+        panmictic_tick_fn_name: Tick function name in the panmictic module.
+
+    Returns:
+        The template source with placeholders replaced.
     """
-    name = "spatial_lifecycle_discrete.tmpl.py" if is_discrete else "spatial_lifecycle_structured.tmpl.py"
-    return (_read_template(name)
+    name = (
+        "spatial_lifecycle_discrete.tmpl.py"
+        if is_discrete
+        else "spatial_lifecycle_structured.tmpl.py"
+    )
+    return (
+        _read_engine_template(name)
         .replace("PANMICTIC_TICK_FN_NAME", panmictic_tick_fn_name)
         .replace("PANMICTIC_STEM", panmictic_stem)
         .replace("TICK_FN_NAME", tick_fn_name)
-        .replace("RUN_FN_NAME", run_fn_name))
+        .replace("RUN_FN_NAME", run_fn_name)
+    )
 
 
 def compile_spatial_lifecycle_wrapper(
@@ -295,40 +769,35 @@ def compile_spatial_lifecycle_wrapper(
     early_hook: HookCallable,
     late_hook: HookCallable,
 ) -> tuple[HookCallable, HookCallable]:
-    """Generate a spatial lifecycle wrapper that delegates per-deme work to the
-    panmictic lifecycle tick inside ``prange``.
+    """Generate a spatial lifecycle wrapper that delegates to the panmictic
+    tick inside ``prange``.
 
-    The generated module provides two njit-compiled functions:
-    - A ``tick`` function (parallel=True) that runs per-deme lifecycle by
-      calling the panmictic lifecycle tick inside ``prange``, then migration.
-    - A ``run`` function that calls the tick function in a loop with optional
-      history recording.
-
-    Hook globals (``_FIRST_HOOK``/``_EARLY_HOOK``/``_LATE_HOOK``) live on the
-    panmictic module, not the spatial module.  The spatial module imports and
-    calls the panmictic tick, which resolves hooks via its own module globals.
+    The spatial module does **not** hold its own hook globals.  It imports
+    and calls the panmictic tick function, which resolves ``_FIRST_HOOK``
+    / ``_EARLY_HOOK`` / ``_LATE_HOOK`` via its own module globals.
 
     Args:
-        is_discrete: If True, generate discrete-generation per-deme lifecycle.
+        is_discrete: If ``True``, generate discrete-generation per-deme
+            lifecycle.
         first_hook: Combined njit function for the ``first`` event.
         early_hook: Combined njit function for the ``early`` event.
         late_hook: Combined njit function for the ``late`` event.
 
     Returns:
-        A tuple ``(tick_fn, run_fn)`` where tick_fn executes one spatial tick
-        and run_fn executes multiple ticks with history recording.
+        ``(tick_fn, run_fn)`` — the spatial tick and run functions.
     """
     mode = "discrete" if is_discrete else "structured"
-    # Compute the panmictic wrapper identity (same key as compile_lifecycle_wrapper)
-    panmictic_parts = [f"lifecycle_{mode}"] + [
+
+    # Panmictic wrapper identity (same key as compile_lifecycle_wrapper).
+    panmictic_parts = ["lifecycle_" + mode] + [
         stable_callable_identity(fn) for fn in [first_hook, early_hook, late_hook]
     ]
     panmictic_key = hash_key(panmictic_parts)
     panmictic_stem = f"lifecycle_{mode}_{panmictic_key}"
     panmictic_tick_fn_name = f"_lifecycle_tick_{panmictic_key}"
 
-    # Compute the spatial wrapper identity
-    spatial_parts = [f"spatial_lifecycle_{mode}"] + [
+    # Spatial wrapper identity.
+    spatial_parts = ["spatial_lifecycle_" + mode] + [
         stable_callable_identity(fn) for fn in [first_hook, early_hook, late_hook]
     ]
     spatial_key = hash_key(spatial_parts)
@@ -337,26 +806,73 @@ def compile_spatial_lifecycle_wrapper(
     run_fn_name = f"_spatial_run_{spatial_key}"
 
     source = _gen_spatial_lifecycle_source(
-        is_discrete, tick_fn_name, run_fn_name,
-        panmictic_stem, panmictic_tick_fn_name,
+        is_discrete,
+        tick_fn_name,
+        run_fn_name,
+        panmictic_stem,
+        panmictic_tick_fn_name,
     )
     module_path = write_codegen_module(module_stem, source)
     module = load_codegen_module(module_stem, module_path)
 
-    # No need to set _FIRST_HOOK/ _EARLY_HOOK/ _LATE_HOOK — those live on
-    # the panmictic module and are already set by compile_lifecycle_wrapper.
-
     return getattr(module, tick_fn_name), getattr(module, run_fn_name)
 
 
-class CompiledEventHooks:
-    """Container for event-wise combined hook callables.
+# ===================================================================
+# CompiledEventHooks — integration point
+# ===================================================================
 
-    Kernel code expects one callable per event name. This class stores those
-    callables and optionally the declarative ``HookProgram`` registry.
-    When hooks are present and Numba is enabled, lifecycle wrappers are
-    pre-compiled with hooks as globals so Numba caching survives restarts.
+
+class CompiledEventHooks:
+    """Per-event hook container that a population model hands to the engine.
+
+    A population calls ``get_compiled_event_hooks()`` to obtain one of these.
+    The engine (lifecycle template) reads ``first`` / ``early`` / ``late`` /
+    ``finish`` — one combined callable per event — plus ``registry`` for CSR
+    dispatch, and drives the simulation tick.
+
+    **What this class actually bundles (layering violation)**
+
+    Three things that belong in different layers ended up here:
+
+    1. **Hook container** (this is the class's real job)
+       ``first`` / ``early`` / ``late`` / ``finish`` — combined callables.
+       ``registry`` — the ``HookProgram``.
+
+    2. **Code generation pipeline** (should live in a compiler module)
+       The ``from_compiled_hooks`` static factory runs the full codegen
+       pipeline: detect mixed events, generate unified dispatch functions,
+       build filtered registries, call ``compile_combined_hook`` and
+       ``compile_unified_event_hook``.
+
+    3. **Engine lifecycle wrappers** (should live in the engine layer)
+       ``run_tick_fn`` / ``run_fn`` / ``run_discrete_*`` / ``spatial_*``
+       (8 slots total) — pre-compiled lifecycle loop functions.  These are
+       engine artefacts with no connection to hook management; they are
+       stored here only because ``from_compiled_hooks`` happens to compile
+       them as a side effect.
+
+    **Will be refactored** in a future version (see TODO).  The intended
+    split is: this class keeps only the container role (item 1), codegen
+    moves to a compiler helper, and lifecycle wrappers move to a dedicated
+    ``LifecycleWrappers`` structure in the engine layer.
+
+    Slots
+    -----
+    ``first`` / ``early`` / ``late`` / ``finish``
+        Combined hook callables for each event.
+    ``registry``
+        ``HookProgram`` — may be filtered for mixed events.
+    ``run_tick_fn`` / ``run_fn``
+        Structured lifecycle wrapper (single-tick / multi-tick).
+    ``run_discrete_tick_fn`` / ``run_discrete_fn``
+        Discrete lifecycle wrapper.
+    ``spatial_tick_fn`` / ``spatial_run_fn``
+        Spatial structured wrappers.
+    ``spatial_discrete_tick_fn`` / ``spatial_discrete_run_fn``
+        Spatial discrete wrappers.
     """
+
     __slots__ = (
         "first",
         "early",
@@ -373,7 +889,7 @@ class CompiledEventHooks:
         "spatial_discrete_run_fn",
         "_event_hooks",
     )
-    # Type annotations for attributes
+
     first: HookCallable
     early: HookCallable
     late: HookCallable
@@ -406,9 +922,11 @@ class CompiledEventHooks:
         self._event_hooks = dict.fromkeys(EVENT_NAMES, _noop_hook)
 
     def get_hook(self, event_name: str) -> HookCallable:
+        """Return the combined callable for *event_name*."""
         return self._event_hooks.get(event_name, _noop_hook)
 
     def set_hook(self, event_name: str, hook_fn: HookCallable) -> None:
+        """Set the combined callable for *event_name* (both dict and attr)."""
         self._event_hooks[event_name] = hook_fn
         setattr(self, event_name, hook_fn)
 
@@ -420,11 +938,29 @@ class CompiledEventHooks:
     ) -> CompiledEventHooks:
         """Build event-wise combined callables and lifecycle wrappers.
 
-        Unlike the previous Jinja2-codegen approach, this method generates
-        only the necessary lifecycle wrapper per hook combination using
-        ``compile_lifecycle_wrapper``, which produces a uniquely-named njit
-        function with hooks as globals. This ensures Numba ``cache=True``
-        works across process restarts.
+        This is the **main integration point** between the compilation
+        pipeline and the population models.  It performs four steps:
+
+        1. **Detect mixed events** — events that have both CSR (plan) and
+           njit descriptors.
+        2. **Build filtered registry** — CSR hooks for mixed events are
+           removed from the ``HookProgram`` so the template's dispatch
+           becomes a no-op (the unified function handles them instead).
+        3. **Generate per-event functions** — for mixed events, generate
+           unified dispatch (CSR + njit interleaved).  For non-mixed,
+           use ``compile_combined_hook`` (njit-only chain).
+        4. **Compile lifecycle wrappers** — structured and discrete,
+           panmictic and spatial, using the generated hook functions.
+
+        Args:
+            compiled_hooks: All compiled descriptors for this population.
+            registry: The original ``HookProgram`` (before filtering).
+            include_spatial_wrappers: If ``True``, also compile spatial
+                lifecycle wrappers.
+
+        Returns:
+            A fully initialised ``CompiledEventHooks`` ready for use by
+            the population model.
         """
         from ..numba_utils import NUMBA_ENABLED
 
@@ -432,61 +968,187 @@ class CompiledEventHooks:
             for desc in compiled_hooks:
                 if desc.py_wrapper is not None:
                     raise TypeError(
-                        f"Hook '{desc.name}' uses py_wrapper, which is not allowed when Numba is enabled."
+                        f"Hook '{desc.name}' uses py_wrapper, which is "
+                        "not allowed when Numba is enabled."
                     )
 
         result = CompiledEventHooks()
         result.registry = registry
-        hooks_by_event: Dict[str, List[Tuple[int, HookCallable, DemeSelector]]] = {name: [] for name in EVENT_NAMES}
 
+        # ---- Step 1: detect mixed events ----
+        # An event is "mixed" when at least one CSR descriptor (plan.n_ops>0)
+        # and at least one njit descriptor coexist.  CSR-only or njit-only
+        # events are NOT mixed and use the standard (faster) paths.
+        mixed_events: set[str] = set()
+        for event_name in EVENT_NAMES:
+            event_descs = [d for d in compiled_hooks if d.event == event_name]
+            has_csr = any(
+                d.plan is not None and d.plan.n_ops > 0 for d in event_descs
+            )
+            has_njit = any(d.njit_fn is not None for d in event_descs)
+            if has_csr and has_njit:
+                mixed_events.add(event_name)
+
+        # ---- Step 2: filtered registry ----
+        # Rebuild the HookProgram without CSR hooks for mixed events.
+        # The lifecycle template still calls execute_csr_event_* for every
+        # event; with CSR ops removed, those calls become no-ops and the
+        # unified function handles everything.
+        if registry is not None and mixed_events:
+            result.registry = _build_filtered_hook_program(
+                compiled_hooks, mixed_events
+            )
+
+        # ---- Step 3: HookProgram index mapping ----
+        # The HookProgram packs hooks in (EVENT_NAMES, priority) order.
+        # We need each CSR descriptor's global hook_idx so the unified
+        # function can pass it to _execute_single_csr_hook.
+        hook_idx_map: Dict[int, int] = {}  # id(desc) → hook_idx
+        if mixed_events:
+            idx = 0
+            for event_name in EVENT_NAMES:
+                event_hooks = sorted(
+                    [d for d in compiled_hooks if d.event == event_name],
+                    key=lambda d: d.priority,
+                )
+                for desc in event_hooks:
+                    hook_idx_map[id(desc)] = idx
+                    idx += 1
+
+        # ---- Collect njit hooks per event ----
+        hooks_by_event: Dict[
+            str, List[Tuple[int, HookCallable, DemeSelector]]
+        ] = {name: [] for name in EVENT_NAMES}
         for desc in compiled_hooks:
             if desc.njit_fn is not None and desc.event in hooks_by_event:
-                hooks_by_event[desc.event].append((desc.priority, desc.njit_fn, desc.deme_selector))
+                hooks_by_event[desc.event].append(
+                    (desc.priority, desc.njit_fn, desc.deme_selector)
+                )
+
+        # ---- Step 4: generate per-event functions ----
+        # Two codegen paths diverge here:
+        #   Mixed event  → compile_unified_event_hook (CSR + njit interleaved)
+        #   Non-mixed    → compile_combined_hook (njit-only chain)
+        # Mixed events generate two variants (with/without sperm) — the
+        # without-sperm version is stored in a local dict and fed to the
+        # discrete lifecycle wrapper below.
+        discrete_hooks: Dict[str, HookCallable] = {}
 
         for event_name, hook_list in hooks_by_event.items():
-            if hook_list:
-                hook_list.sort(key=lambda x: x[0])
-                njit_fns = [fn for _, fn, _ in hook_list]
-                deme_selectors = cast("List[DemeSelector]", [ds for _, _, ds in hook_list])
+            if not hook_list:
+                # No njit hooks.  If mixed (CSR-only), still build a
+                # unified function so the CSR hooks execute.
+                if event_name in mixed_events:
+                    event_descs = sorted(
+                        [d for d in compiled_hooks if d.event == event_name],
+                        key=lambda d: d.priority,
+                    )
+                    csr_schedule: List[Tuple[str, int]] = [
+                        ("csr", hook_idx_map[id(d)])
+                        for d in event_descs
+                        if d.plan is not None and d.plan.n_ops > 0
+                    ]
+                    if csr_schedule and registry is not None:
+                        result.set_hook(
+                            event_name,
+                            compile_unified_event_hook(
+                                csr_schedule, [], None, registry,
+                                has_sperm_storage=True,
+                            ),
+                        )
+                        discrete_hooks[event_name] = (
+                            compile_unified_event_hook(
+                                csr_schedule, [], None, registry,
+                                has_sperm_storage=False,
+                            )
+                        )
+                continue
+
+            hook_list.sort(key=lambda x: x[0])
+            njit_fns = [fn for _, fn, _ in hook_list]
+            deme_selectors = cast(
+                "List[DemeSelector]", [ds for _, _, ds in hook_list]
+            )
+
+            if event_name in mixed_events and registry is not None:
+                # Mixed: build priority-ordered schedule.
+                event_descs = sorted(
+                    [d for d in compiled_hooks if d.event == event_name],
+                    key=lambda d: d.priority,
+                )
+                schedule: List[Tuple[str, int]] = []
+                njit_idx = 0
+                for desc in event_descs:
+                    if desc.njit_fn is not None:
+                        schedule.append(("njit", njit_idx))
+                        njit_idx += 1
+                    elif desc.plan is not None and desc.plan.n_ops > 0:
+                        schedule.append(("csr", hook_idx_map[id(desc)]))
+
+                result.set_hook(
+                    event_name,
+                    compile_unified_event_hook(
+                        schedule, njit_fns, deme_selectors, registry,
+                        has_sperm_storage=True,
+                    ),
+                )
+                discrete_hooks[event_name] = compile_unified_event_hook(
+                    schedule, njit_fns, deme_selectors, registry,
+                    has_sperm_storage=False,
+                )
+            else:
+                # Non-mixed: standard njit-only chain.
                 combined = compile_combined_hook(njit_fns, deme_selectors)
                 result.set_hook(event_name, combined)
 
-        # Pre-compile lifecycle wrappers per hook combination so Numba
-        # caches the compilation across process restarts. The wrappers use
-        # module-level globals for the combined hooks instead of function
-        # parameters, giving each combination a unique source-code hash.
+        # ---- Step 5: compile lifecycle wrappers ----
+        # Structured wrappers use the standard hooks (with sperm).
+        # Discrete wrappers use the without-sperm variants for mixed
+        # events; for non-mixed events they fall back to the standard hook.
         first_hook = result.first
         early_hook = result.early
         late_hook = result.late
 
-        # Always compile lifecycle wrappers when Numba is enabled so the
-        # population model can use them unconditionally.  Even with zero
-        # user hooks the wrapper compiles with _noop_hook globals, and its
-        # source hash stays stable across runs.
+        first_d = discrete_hooks.get("first", first_hook)
+        early_d = discrete_hooks.get("early", early_hook)
+        late_d = discrete_hooks.get("late", late_hook)
+
         if NUMBA_ENABLED:
             result.run_tick_fn, result.run_fn = compile_lifecycle_wrapper(
-                False, first_hook, early_hook, late_hook,
+                False, first_hook, early_hook, late_hook
             )
-            result.run_discrete_tick_fn, result.run_discrete_fn = compile_lifecycle_wrapper(
-                True, first_hook, early_hook, late_hook,
+            result.run_discrete_tick_fn, result.run_discrete_fn = (
+                compile_lifecycle_wrapper(True, first_d, early_d, late_d)
             )
 
             if include_spatial_wrappers:
-                result.spatial_tick_fn, result.spatial_run_fn = compile_spatial_lifecycle_wrapper(
-                    False, first_hook, early_hook, late_hook,
+                result.spatial_tick_fn, result.spatial_run_fn = (
+                    compile_spatial_lifecycle_wrapper(
+                        False, first_hook, early_hook, late_hook
+                    )
                 )
-                result.spatial_discrete_tick_fn, result.spatial_discrete_run_fn = compile_spatial_lifecycle_wrapper(
-                    True, first_hook, early_hook, late_hook,
+                result.spatial_discrete_tick_fn, result.spatial_discrete_run_fn = (
+                    compile_spatial_lifecycle_wrapper(
+                        True, first_d, early_d, late_d
+                    )
                 )
 
         return result
 
 
+# ===================================================================
+# Hook type detection helpers
+# ===================================================================
+
+
 def _has_required_parameters(func: HookCallable) -> bool:
-    """Return whether calling ``func()`` would require positional/keyword args."""
+    """Return ``True`` if *func* requires positional or keyword arguments."""
     sig = inspect.signature(func)
     for param in sig.parameters.values():
-        if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
             if param.default is inspect.Signature.empty:
                 return True
         elif param.kind is inspect.Parameter.KEYWORD_ONLY:
@@ -496,16 +1158,31 @@ def _has_required_parameters(func: HookCallable) -> bool:
 
 
 def _is_declarative_population_hook(func: HookCallable) -> bool:
-    """Return whether func accepts a single population parameter (declarative Python hook)."""
+    """Return ``True`` if *func* accepts a single required parameter.
+
+    This is a heuristic: single-parameter functions are treated as
+    "declarative population hooks" (legacy style) rather than custom
+    hooks.  Functions with zero or multiple params are not.
+    """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
     if len(params) == 1:
         param = params[0]
-        if (param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD) and
-                param.default is inspect.Signature.empty):
-            # Single required parameter - likely a population hook, not a custom ind_count hook
+        if (
+            param.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and param.default is inspect.Signature.empty
+        ):
             return True
     return False
+
+
+# ===================================================================
+# @hook decorator
+# ===================================================================
 
 
 def hook(
@@ -516,39 +1193,76 @@ def hook(
     deme: DemeSelector = "*",
     mode: str = "auto",
 ) -> Callable[[Callable[..., Any]], DecoratedHookFn]:
-    """Decorator entrypoint for all supported hook authoring styles.
+    """Decorator for all supported hook authoring styles.
 
-    The decorated function gets a ``register(pop, event_override=None)``
-    helper that compiles and registers a ``CompiledHookDescriptor``.
+    The decorated function gains a ``.register(pop)`` method that
+    compiles and registers a ``CompiledHookDescriptor`` against a
+    population instance.
 
-    Hook type is determined by:
-    - selectors specified -> Selector hook
-    - custom=True or has required params -> Custom hook
-    - otherwise -> Declarative hook (function returns List[HookOp])
+    **Hook type auto-detection** (evaluated at ``.register()`` time):
 
-    For custom/selector hooks, Numba compilation is automatic — you do
-    **not** need to stack ``@njit``.  If Numba is enabled, the function is
-    wrapped with ``njit_switch`` automatically.  If Numba is disabled, a
-    pure-Python wrapper is used.
+    * ``selectors=`` is set → **Selector hook**
+      (``compile_selector_hook``)
+    * ``custom=True`` or function has required parameters →
+      **Custom hook** (njit or Python wrapper)
+    * Otherwise → **Declarative hook** (function returns
+      ``List[HookOp]``, compiled via ``compile_declarative_hook``)
 
-    When a custom hook is called inside a spatial ``prange`` region, the
-    ``deme_id`` parameter receives the current deme index, enabling one
-    hook function to handle all demes with per-deme branching logic.
+    For custom and selector hooks, Numba compilation is automatic — you
+    do **not** need to stack ``@njit``.  When Numba is enabled the
+    function is wrapped with ``njit_switch`` automatically; when Numba
+    is disabled a pure-Python wrapper is used.
+
+    In spatial simulations the ``deme_id`` parameter receives the current
+    deme index, enabling one hook function to serve all demes with
+    per-deme branching.
 
     Args:
-        event: Hook event name.
-        selectors: Optional symbolic selectors for selector-mode hooks.
-        priority: Execution priority (lower values run earlier).
-        custom: If True, treat as custom hook (function is called directly).
-        deme: Target deme(s) for spatial populations.  ``"*"`` (default)
-            means all demes.  Accepts a single int, list, tuple, or range.
-        mode: Selector passing style.  ``"auto"`` (default) detects from
-            function signature.  ``"expand"`` passes each selector as a
-            separate keyword argument.  ``"aggregate"`` packs all selectors
-            into a single namedtuple argument.
+        event: Hook event name (``"first"``, ``"early"``, ``"late"``,
+            ``"finish"``).
+        selectors: Symbolic selectors for selector-mode hooks.
+        priority: Execution priority — lower values run first.
+        custom: If ``True``, treat as custom hook regardless of signature.
+        deme: Target deme(s).  ``"*"`` (default) means all demes.
+            Accepts ``int``, ``list``, ``tuple``, or ``range``.
+        mode: Selector passing style.  ``"auto"`` (default) auto-detects
+            from the function signature.  ``"expand"`` passes each
+            selector as a separate keyword argument.  ``"aggregate"``
+            packs all selectors into a single namedtuple argument.
+
+    Returns:
+        A decorator that transforms a function into a ``DecoratedHookFn``
+        with ``.register(pop)`` capability.
+
+    Raises:
+        ValueError: If *mode* is not one of ``"auto"``, ``"expand"``,
+            ``"aggregate"``.
+
+    Examples:
+
+        Declarative hook (returns ops):
+
+            @hook(event="early", priority=0)
+            def cull_juveniles():
+                return [Op.scale(ages=[0,1], factor=0.9)]
+
+        Custom njit hook:
+
+            @hook(event="first", priority=1)
+            def release_males(state, config, deme_id=-1):
+                state.individual_count[1, 2, 0] += 100
+                return 0
+
+        Selector hook:
+
+            @hook(event="late", selectors={"target": "AA"})
+            def count_homozygotes(state, config, target, deme_id=-1):
+                ...
     """
     if mode not in ("auto", "expand", "aggregate"):
-        raise ValueError(f"mode must be 'auto', 'expand', or 'aggregate', got {mode!r}")
+        raise ValueError(
+            f"mode must be 'auto', 'expand', or 'aggregate', got {mode!r}"
+        )
 
     def decorator(func: Callable[..., Any]) -> DecoratedHookFn:
         hook_func = cast(DecoratedHookFn, func)
@@ -572,23 +1286,50 @@ def hook(
             event_override: Optional[str] = None,
             deme_selector_override: Optional[DemeSelector] = None,
         ) -> CompiledHookDescriptor:
-            """Compile this hook against one population instance."""
+            """Compile this hook against *pop* and return a descriptor.
+
+            Called by ``pop.set_hook()``.  Detects the hook type from
+            the decorator metadata and function signature, then routes
+            to the appropriate compiler.
+
+            Args:
+                pop: The population to compile against.
+                event_override: Override the event name (used when
+                    ``set_hook(event_name, ...)`` is called with a
+                    different event than the decorator specifies).
+                deme_selector_override: Override the deme selector
+                    (used by SpatialPopulation to pin hooks to demes).
+
+            Returns:
+                A ``CompiledHookDescriptor`` registered on *pop*.
+            """
             from ..numba_utils import NUMBA_ENABLED
             from .types import CompiledHookDescriptor
 
             actual_event = event_override or event
-            actual_deme_selector: DemeSelector = deme if deme_selector_override is None else deme_selector_override
+            actual_deme_selector: DemeSelector = (
+                deme if deme_selector_override is None else deme_selector_override
+            )
             if actual_event is None:
                 raise ValueError(
                     f"Event not specified for hook '{func.__name__}'. "
-                    "Specify in decorator @hook(event='...') or call pop.set_hook('event', hook)"
+                    "Specify in decorator @hook(event='...') or call "
+                    "pop.set_hook('event', hook)"
                 )
 
+            # Detect hook type from decorator metadata + function signature.
+            # Priority: explicit selectors > explicit custom > has params
+            # (and not a single-param pop hook) > declarative (returns ops).
             has_required_params = _has_required_parameters(func)
-            is_declarative_pop_hook = _is_declarative_population_hook(func)
-            is_custom_or_selector = custom or selectors is not None or (has_required_params and not is_declarative_pop_hook)
+            is_decl_pop_hook = _is_declarative_population_hook(func)
+            is_custom_or_selector = (
+                custom
+                or selectors is not None
+                or (has_required_params and not is_decl_pop_hook)
+            )
 
             if is_custom_or_selector:
+                # ---- Selector mode ----
                 if selectors is not None:
                     desc = compile_selector_hook(
                         func,
@@ -600,22 +1341,27 @@ def hook(
                         mode=mode,
                     )
                 else:
+                    # ---- Custom hook (njit or Python fallback) ----
                     if is_njit_function(func):
-                        # Already njit-decorated
-                        norm_fn = func
+                        # Already decorated with @njit — use directly.
                         desc = CompiledHookDescriptor(
                             name=func.__name__,
                             event=actual_event,
                             priority=priority,
                             deme_selector=actual_deme_selector,
-                            njit_fn=norm_fn,
-                            meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                            njit_fn=func,
+                            meta={
+                                "n_genotypes": pop.index_registry.num_genotypes(),
+                                "n_ages": pop.config.n_ages,
+                            },
                         )
                     else:
-                        # Try to use njit_switch
+                        # Not @njit-decorated yet.  Wrap with njit_switch so
+                        # the function can run in Numba's nopython mode.
+                        # If Numba is disabled, njit_switch returns a Python
+                        # callable — we detect this and use py_wrapper instead.
                         try:
                             decorated_func = njit_switch(cache=False)(func)
-                            # Check if it's a valid compiled function
                             if NUMBA_ENABLED and is_njit_function(decorated_func):
                                 norm_fn = _normalize_njit_fn(decorated_func)
                                 desc = CompiledHookDescriptor(
@@ -624,10 +1370,13 @@ def hook(
                                     priority=priority,
                                     deme_selector=actual_deme_selector,
                                     njit_fn=norm_fn,
-                                    meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                                    meta={
+                                        "n_genotypes": pop.index_registry.num_genotypes(),
+                                        "n_ages": pop.config.n_ages,
+                                    },
                                 )
                             else:
-                                # NUMBA_ENABLED is False, use py wrapper
+                                # Numba disabled — use Python wrapper.
                                 wrapped_func = _normalize_py_hook(func)
                                 desc = CompiledHookDescriptor(
                                     name=func.__name__,
@@ -636,10 +1385,13 @@ def hook(
                                     deme_selector=actual_deme_selector,
                                     njit_fn=None,
                                     py_wrapper=wrapped_func,
-                                    meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                                    meta={
+                                        "n_genotypes": pop.index_registry.num_genotypes(),
+                                        "n_ages": pop.config.n_ages,
+                                    },
                                 )
                         except Exception:
-                            # Fall back to py wrapper
+                            # Fall back to Python wrapper.
                             wrapped_func = _normalize_py_hook(func)
                             desc = CompiledHookDescriptor(
                                 name=func.__name__,
@@ -648,14 +1400,18 @@ def hook(
                                 deme_selector=actual_deme_selector,
                                 njit_fn=None,
                                 py_wrapper=wrapped_func,
-                                meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                                meta={
+                                    "n_genotypes": pop.index_registry.num_genotypes(),
+                                    "n_ages": pop.config.n_ages,
+                                },
                             )
-            elif is_declarative_pop_hook:
-                # Single population parameter - use as py_wrapper, but check numba enabled
+            elif is_decl_pop_hook:
+                # Legacy single-parameter population hook (Python only).
                 if NUMBA_ENABLED:
                     raise TypeError(
-                        f"Python hook '{func.__name__}' is not allowed when Numba is enabled. "
-                        "Please convert it to @njit or use declarative Op hooks."
+                        f"Python hook '{func.__name__}' is not allowed "
+                        "when Numba is enabled.  Please convert it to "
+                        "@njit or use declarative Op hooks."
                     )
                 desc = CompiledHookDescriptor(
                     name=func.__name__,
@@ -663,16 +1419,25 @@ def hook(
                     priority=priority,
                     deme_selector=actual_deme_selector,
                     py_wrapper=func,
-                    meta={"n_genotypes": pop.index_registry.num_genotypes(), "n_ages": pop.config.n_ages},
+                    meta={
+                        "n_genotypes": pop.index_registry.num_genotypes(),
+                        "n_ages": pop.config.n_ages,
+                    },
                 )
             else:
+                # ---- Declarative hook (returns List[HookOp]) ----
+                # The function is called ONCE at registration time.  Its
+                # return value (a list of HookOp objects) is compiled into
+                # a CSR plan.  The function itself is NOT stored or called
+                # at runtime — only the compiled plan is.
                 result = func()
                 if isinstance(result, list):
                     result_ops = cast(List[object], result)
                     if not all(isinstance(op, HookOp) for op in result_ops):
                         raise TypeError(
-                            f"Declarative hook '{func.__name__}' must return List[HookOp], "
-                            "or use custom=True for custom mode."
+                            f"Declarative hook '{func.__name__}' must "
+                            "return List[HookOp], or use custom=True "
+                            "for custom mode."
                         )
                     ops = cast(List[HookOp], result_ops)
                     desc = compile_declarative_hook(
@@ -685,8 +1450,9 @@ def hook(
                     )
                 else:
                     raise TypeError(
-                        f"Hook '{func.__name__}' must return List[HookOp] for declarative mode, "
-                        "or use custom=True for custom mode."
+                        f"Hook '{func.__name__}' must return List[HookOp] "
+                        "for declarative mode, or use custom=True for "
+                        "custom mode."
                     )
 
             hook_func.compiled = desc  # type: ignore

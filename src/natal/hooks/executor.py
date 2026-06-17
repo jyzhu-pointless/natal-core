@@ -1,12 +1,35 @@
 """CSR execution engine and Python-level hook executor.
 
-Runtime flow for one event:
+The hot loop operates on flattened ndarrays and avoids Python objects entirely.
+Two dispatch paths exist:
 
-1) Evaluate declarative CSR plans in njit engine (fast data path)
-2) Execute compiled custom ``njit_fn`` hooks
-3) Execute Python wrappers (only when Numba mode allows it)
+* **Numba fast path** — lifecycle templates call ``execute_csr_event_arrays``
+  (batch) or unified functions from ``compiler.compile_unified_event_hook``
+  (mixed CSR + njit interleaved by priority).
+* **Python fallback** — ``HookExecutor`` sorts descriptors by priority and
+  dispatches CSR plans, njit functions, and Python wrappers sequentially.
+  Only used when Numba is disabled.
 
-The hot loop is intentionally array-driven and avoids Python objects.
+Return value protocol
+---------------------
+Every hook execution function returns an int:
+
+``RESULT_CONTINUE`` (0)
+    All operations completed; proceed to the next hook.
+``RESULT_SKIP`` (0, alias)
+    Hook not applicable in this context (e.g. wrong deme).  Same runtime
+    behaviour as ``RESULT_CONTINUE``; the distinct name is for readability.
+``RESULT_STOP`` (1)
+    Abort the current event immediately.  Subsequent hooks for the same
+    event are skipped, but the next event still executes normally.
+
+Sperm storage
+-------------
+Age-structured populations carry a ``sperm_storage`` array.  When a female
+count is reduced, sperm categories must be scaled by the same survival rate
+to stay coherent.  Discrete-generation models have no sperm storage
+(``has_sperm_storage=False``) and use the simpler ``_apply_target_without_sperm``
+path for all cells.
 """
 
 from __future__ import annotations
@@ -26,6 +49,7 @@ from .types import (
     EVENT_ID_MAP,
     NUM_EVENTS,
     RESULT_CONTINUE,
+    RESULT_SKIP,
     RESULT_STOP,
     CompiledHookDescriptor,
     DemeSelector,
@@ -36,13 +60,16 @@ if TYPE_CHECKING:
     from natal.base_population import BasePopulation
 
 
-def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
-    """Return whether one deme id should execute under ``selector``.
+# ---------------------------------------------------------------------------
+# Deme selector helpers
+# ---------------------------------------------------------------------------
 
-    Supported forms:
-    - "*" for all demes
-    - int for one deme
-    - list/tuple/range for a set of demes
+
+def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
+    """Return whether *deme_id* should execute under *selector* (Python path).
+
+    Supported forms: ``"*"`` (wildcard), ``int`` (single deme), or
+    ``list`` / ``tuple`` / ``range`` (set of demes).
     """
     if selector == "*":
         return True
@@ -54,54 +81,84 @@ def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
 
 
 @njit_switch(cache=True)
-def njit_deme_selector_matches(sel_type: int, start: int, end: int, data: np.ndarray, deme_id: int) -> bool:
-    """Numba-compatible version of deme_selector_matches.
+def njit_deme_selector_matches(
+    sel_type: int,
+    start: int,
+    end: int,
+    data: np.ndarray,
+    deme_id: int,
+) -> bool:
+    """Numba-compatible deme selector check against serialised arrays.
 
-    Types: 0=ANY, 1=SINGLE, 2=RANGE, 3=LIST
+    The selector is encoded in the HookProgram's ``deme_selector_*``
+    arrays with these *sel_type* values:
+
+    ==========  ============================================
+    sel_type    Meaning
+    ==========  ============================================
+    0           ``"*"`` (ANY) — always True
+    1           single integer — ``data[start] == deme_id``
+    2           ``range`` — ``start <= deme_id < end``
+    3           list/tuple — iterate ``data[start:end]``
+    ==========  ============================================
     """
-    if sel_type == 0:  # ANY ("*")
+    if sel_type == 0:  # ANY — wildcard
         return True
-    if sel_type == 1:  # SINGLE (int)
+    if sel_type == 1:  # SINGLE
         return data[start] == deme_id
-    if sel_type == 2:  # RANGE (range)
+    if sel_type == 2:  # RANGE
         return deme_id >= data[start] and deme_id < data[start + 1]
-    if sel_type == 3:  # LIST (list/tuple)
+    if sel_type == 3:  # LIST — linear scan
         if start >= end:
             return False
         for i in range(start, end):
             if data[i] == deme_id:
                 return True
         return False
-    return True
+    return True  # Unknown type — allow (conservative)
+
+
+# ---------------------------------------------------------------------------
+# CSR condition evaluation (RPN — Reverse Polish Notation)
+# ---------------------------------------------------------------------------
+
+# Condition token type constants inlined for njit scope (avoids attribute
+# lookup).  Values must match types.py:COND_*.
+_COND_ALWAYS = 0
+_COND_TICK_EQ = 1
+_COND_TICK_MOD = 2
+_COND_TICK_GE = 3
+_COND_TICK_LT = 4
+_COND_TICK_LE = 5
+_COND_TICK_GT = 6
 
 
 @njit_switch(cache=True)
 def _check_csr_condition(cond_type: int, cond_param: int, tick: int) -> bool:
-    """Evaluate one atomic condition token.
+    """Evaluate a single atomic condition token against the current tick.
 
-    Logical operators are not handled here and are expected to be evaluated by
-    ``_eval_csr_condition_program``.
+    Each declarative op can carry a ``when`` clause (e.g. ``"tick >= 100"``)
+    that gets parsed into an RPN token stream.  This function handles the
+    *leaf* tokens — tick comparisons like ``tick == 5`` or ``tick % 3 == 0``.
+    Logical operators (AND/OR/NOT) have higher token values and are handled
+    by ``_eval_csr_condition_program``.
     """
-    if cond_type == 0:
+    if cond_type == _COND_ALWAYS:
         return True
-    if cond_type == 1:
+    if cond_type == _COND_TICK_EQ:
         return tick == cond_param
-    if cond_type == 2:
+    if cond_type == _COND_TICK_MOD:
         return cond_param > 0 and tick % cond_param == 0
-    if cond_type == 3:
+    if cond_type == _COND_TICK_GE:
         return tick >= cond_param
-    if cond_type == 4:
+    if cond_type == _COND_TICK_LT:
         return tick < cond_param
-    if cond_type == 5:
+    if cond_type == _COND_TICK_LE:
         return tick <= cond_param
-    if cond_type == 6:
+    if cond_type == _COND_TICK_GT:
         return tick > cond_param
-    if cond_type == 100:
-        return False
-    if cond_type == 101:
-        return False
-    if cond_type == 102:
-        return False
+    if cond_type >= COND_OP_AND:
+        return False  # Logical operators should never reach the atomic evaluator.
     return True
 
 
@@ -113,35 +170,44 @@ def _eval_csr_condition_program(
     cond_end: int,
     tick: int,
 ) -> bool:
-    """Evaluate an RPN condition program span for one operation.
+    """Evaluate an RPN condition program spanning ``[cond_start, cond_end)``.
 
-    The condition program is stored in flattened arrays; ``cond_start`` and
-    ``cond_end`` define the current operation's token span.
+    Each operation's ``when`` clause is compiled to a postfix token stream
+    stored in the flattened ``condition_types_data`` and
+    ``condition_params_data`` arrays.  The evaluation uses an int8 stack:
+    leaf tokens push 0 or 1; AND/OR/NOT pop and push the result.
+
+    Returns:
+        True if the condition is satisfied or if the span is empty,
+        False otherwise.
     """
     max_len = cond_end - cond_start
     if max_len <= 0:
-        return True
+        return True  # No condition — always execute.
 
-    # int8 stack keeps memory tiny and works well in njit mode.
+    # int8 stack — values are only ever 0 or 1, minimal footprint.
     stack = np.zeros(max_len + 1, dtype=np.int8)
-    top = 0
+    top = 0  # Next free slot (one past the last pushed value).
 
     for idx in range(cond_start, cond_end):
         token_type = cond_types[idx]
         token_param = cond_params[idx]
 
+        # Leaf: atomic predicate → push 0 or 1.
         if token_type <= COND_TICK_GT:
             val = 1 if _check_csr_condition(token_type, token_param, tick) else 0
             stack[top] = val
             top += 1
             continue
 
+        # NOT: pop one, negate, push.
         if token_type == COND_OP_NOT:
             if top < 1:
                 return False
             stack[top - 1] = 0 if stack[top - 1] else 1
             continue
 
+        # AND: pop two, AND, push.
         if token_type == COND_OP_AND:
             if top < 2:
                 return False
@@ -152,6 +218,7 @@ def _eval_csr_condition_program(
             top += 1
             continue
 
+        # OR: pop two, OR, push.
         if token_type == COND_OP_OR:
             if top < 2:
                 return False
@@ -162,15 +229,26 @@ def _eval_csr_condition_program(
             top += 1
             continue
 
-        return False
+        return False  # Unknown token.
 
     if top != 1:
         return False
     return stack[0] != 0
 
 
-# Public alias for tests/interop layers.
+# Public alias for tests and external consumers.
 eval_csr_condition_program = _eval_csr_condition_program
+
+
+# ---------------------------------------------------------------------------
+# Target-count application helpers for survival sampling
+# ---------------------------------------------------------------------------
+#
+# Hook operations express a *target count* (e.g. "set to 20", "scale by 0.5").
+# When target < current, removal is modelled as *survival* — each individual
+# survives with probability = target / current.  This keeps ``Op.scale(0.5)``
+# semantically identical to "50 % survival" and ensures sperm storage scaling
+# stays coherent.
 
 
 @njit_switch(cache=True)
@@ -180,7 +258,17 @@ def _sample_survivors(
     stochastic_flag: bool,
     dirichlet_flag: bool,
 ) -> float:
-    """Sample survivors using deterministic or stochastic policy."""
+    """Return the survivor count after applying *survival_prob* to *n_base*.
+
+    Args:
+        n_base: Current count (may be fractional for continuous models).
+        survival_prob: Per-individual survival probability in [0, 1].
+        stochastic_flag: If False, use deterministic multiplication.
+        dirichlet_flag: If True, keep counts continuous (no integer rounding).
+
+    Returns:
+        Survivor count — continuous if *dirichlet_flag*, else integer-rounded.
+    """
     if n_base <= 0.0:
         return 0.0
     if stochastic_flag:
@@ -197,14 +285,21 @@ def _apply_target_without_sperm(
     stochastic_flag: bool,
     dirichlet_flag: bool,
 ) -> float:
-    """Apply target count update for male branch or no-sperm populations."""
+    """Apply a target count update for populations *without* sperm storage.
+
+    Used for males in all models and for all individuals in discrete-generation
+    models.  When *target_count* >= *current_count*, individuals are simply
+    added.  When *target_count* < *current_count*, a survival process is
+    applied with probability = target / current.
+    """
     if stochastic_flag and not dirichlet_flag:
         current_count = float(round(current_count))
 
     if target_count >= current_count:
-        return target_count
+        return target_count  # Adding individuals — no survival needed.
     if current_count <= 0.0:
         return 0.0
+
     survival_prob = max(0.0, min(1.0, target_count / current_count))
     return _sample_survivors(current_count, survival_prob, stochastic_flag, dirichlet_flag)
 
@@ -217,16 +312,33 @@ def _apply_target_with_sperm(
     stochastic_flag: bool,
     dirichlet_flag: bool,
 ) -> float:
-    """Apply target update for female branch while keeping sperm row consistent.
+    """Apply a target count update for the female branch with sperm storage.
 
-    When reducing female count, we scale or sample sperm categories with the
-    same survival rate so sperm storage remains coherent with female counts.
+    Used for age-structured models where female counts are linked to sperm
+    category counts.  When reducing the female count, sperm categories are
+    scaled (or sampled) by the **same survival rate**, keeping the population
+    state coherent.
+
+    The female count is conceptually split into *virgins* (no stored sperm)
+    and *mated* females (one entry per gamete-male genotype).  Each subgroup
+    survives independently; the results are summed back into the total.
+
+    Args:
+        current_count: Total female count before the operation.
+        target_count: Desired female count after the operation.
+        sperm_row: ``sperm_storage[age, gidx, :]`` — per-genotype-male sperm
+            counts for this (age, female-genotype) cell.  Mutated in-place.
+        stochastic_flag: If False, use deterministic proportional scaling.
+        dirichlet_flag: If True, use continuous sampling (no integer rounding).
+
+    Returns:
+        New total female count = surviving virgins + surviving mated.
     """
     if stochastic_flag and not dirichlet_flag:
         current_count = float(round(current_count))
 
     if target_count >= current_count:
-        return target_count
+        return target_count  # Adding — sperm storage unchanged.
 
     if current_count <= 0.0:
         for gm_idx in range(sperm_row.shape[0]):
@@ -235,22 +347,20 @@ def _apply_target_with_sperm(
 
     survival_prob = max(0.0, min(1.0, target_count / current_count))
 
+    # Deterministic: proportionally scale sperm and total.
     if not stochastic_flag:
-        ratio = survival_prob
         for gm_idx in range(sperm_row.shape[0]):
-            sperm_row[gm_idx] *= ratio
+            sperm_row[gm_idx] *= survival_prob
         return target_count
 
+    # Stochastic: sample each sperm category independently.
     n_f_raw = float(current_count)
-
     total_sperm_count = 0.0
     for gm_idx in range(sperm_row.shape[0]):
         total_sperm_count += float(sperm_row[gm_idx])
 
-    # Validate on raw mass first, then convert to sampling counts.
     n_virgins_raw = n_f_raw - total_sperm_count
     if n_virgins_raw >= -nbc.EPS:
-        # Prevent negative virgins.
         n_virgins_raw = max(0.0, n_virgins_raw)
     if n_virgins_raw < 0.0:
         print(
@@ -262,6 +372,7 @@ def _apply_target_with_sperm(
             total_sperm_count,
         )
         raise ValueError("Invalid state: n_virgins < 0 in _apply_target_with_sperm")
+
     n_virgins = n_virgins_raw if dirichlet_flag else float(int(round(n_virgins_raw)))
 
     new_sperm_sum = 0.0
@@ -270,7 +381,6 @@ def _apply_target_with_sperm(
             n_sperm = sperm_row[gm_idx]
         else:
             n_sperm = float(int(round(sperm_row[gm_idx])))
-
         sperm_row[gm_idx] = _sample_survivors(n_sperm, survival_prob, True, dirichlet_flag)
         new_sperm_sum += sperm_row[gm_idx]
 
@@ -278,12 +388,224 @@ def _apply_target_with_sperm(
     return new_sperm_sum + survivors_virgins
 
 
+# ===================================================================
+# Declarative CSR execution — the hot loop
+# ===================================================================
+#
+# Two callable granularities:
+#
+#   ``_execute_single_csr_hook(hook_idx, ...)``
+#       Per-hook primitive.  Extracted so unified mixed-type dispatch
+#       can interleave CSR hooks with njit calls at arbitrary positions
+#       in a priority-ordered schedule.
+#
+#   ``execute_csr_event_arrays(event_id, ...)``
+#       Batch dispatch for one event.  Used by lifecycle templates and
+#       ``HookExecutor`` (Python fallback).  Delegates each hook to
+#       ``_execute_single_csr_hook``.
+# ===================================================================
+
+# OpType enum values inlined for njit scope (avoids attribute lookup).
+_OP_SCALE = 0
+_OP_SET = 1
+_OP_ADD = 2
+_OP_SUBTRACT = 3
+_OP_KILL = 4
+_OP_SAMPLE = 5
+_OP_STOP_IF_ZERO = 6
+_OP_STOP_IF_BELOW = 7
+_OP_STOP_IF_ABOVE = 8
+_OP_STOP_IF_EXTINCTION = 9
+
+
+@njit_switch(cache=True)
+def _execute_single_csr_hook(
+    hook_idx: int,
+    n_hooks: int | np.integer[Any],
+    op_offsets: np.ndarray,
+    op_types_data: np.ndarray,
+    gidx_offsets_data: np.ndarray,
+    gidx_data: np.ndarray,
+    age_offsets_data: np.ndarray,
+    age_data: np.ndarray,
+    sex_masks_data: np.ndarray,
+    params_data: np.ndarray,
+    condition_offsets_data: np.ndarray,
+    condition_types_data: np.ndarray,
+    condition_params_data: np.ndarray,
+    deme_selector_types: np.ndarray,
+    deme_selector_offsets: np.ndarray,
+    deme_selector_data: np.ndarray,
+    individual_count: np.ndarray,
+    sperm_storage: np.ndarray,
+    has_sperm_storage: bool,
+    tick: int,
+    stochastic: bool,
+    continuous_sampling: bool,
+    deme_id: int,
+) -> int:
+    """Execute a single CSR hook at global index *hook_idx*.
+
+    This is the **per-hook CSR primitive**.  Given a global index into the
+    flattened ``HookProgram`` arrays, it:
+
+    1. Bounds-checks *hook_idx* (returns ``RESULT_SKIP`` if invalid).
+    2. Checks the serialised deme selector (returns ``RESULT_SKIP`` if
+       *deme_id* doesn't match).
+    3. Iterates over the hook's operations — ``op_offsets[hook_idx]``
+       to ``op_offsets[hook_idx + 1]``.
+    4. For each operation:
+       a. Evaluates the RPN condition (``when`` clause); skips if unmet.
+       b. Reads genotype / age / sex selectors (CSR ranges).
+       c. For each selected (sex, age, genotype) cell, computes a target
+          count from the operation type and applies it via
+          ``_apply_target_with_sperm`` or ``_apply_target_without_sperm``.
+       d. For ``stop_if_*`` operations, aggregates the selected cells and
+          returns ``RESULT_STOP`` if the threshold is met.
+    5. Returns ``RESULT_CONTINUE`` if all operations completed normally.
+
+    This function was extracted from the inner loop of
+    ``execute_csr_event_arrays`` so that ``compiler.compile_unified_event_hook``
+    can call individual CSR hooks at specific positions in a priority-ordered
+    schedule, interleaved with njit function calls.
+
+    Returns:
+        ``RESULT_CONTINUE`` (0) — all ops executed normally.
+        ``RESULT_SKIP`` (0) — hook not applicable (wrong deme or OOB).
+        ``RESULT_STOP`` (1) — a ``stop_if_*`` operation triggered.
+    """
+    # Guard: bounds check.
+    if hook_idx < 0 or hook_idx >= n_hooks:
+        return RESULT_SKIP
+
+    # Guard: deme selector.  Encoding: 0=ANY, 1=SINGLE, 2=RANGE, 3=LIST.
+    if not njit_deme_selector_matches(
+        deme_selector_types[hook_idx],
+        deme_selector_offsets[hook_idx],
+        deme_selector_offsets[hook_idx + 1],
+        deme_selector_data,
+        deme_id,
+    ):
+        return RESULT_SKIP
+
+    # op_offsets is a prefix-sum array: op_offsets[i] is the start index of
+    # hook i's operations in the flattened op_*_data arrays.
+    op_start = op_offsets[hook_idx]
+    op_end = op_offsets[hook_idx + 1]
+
+    for op_idx in range(op_start, op_end):
+        # ---- Condition evaluation ----
+        cond_start = condition_offsets_data[op_idx]
+        cond_end = condition_offsets_data[op_idx + 1]
+
+        if not _eval_csr_condition_program(
+            condition_types_data,
+            condition_params_data,
+            cond_start,
+            cond_end,
+            tick,
+        ):
+            continue  # Condition not met — skip this operation.
+
+        op_type = op_types_data[op_idx]
+        param = params_data[op_idx]
+
+        # ---- Genotype / age / sex selectors (CSR ranges) ----
+        gidx_start = gidx_offsets_data[op_idx]
+        gidx_end = gidx_offsets_data[op_idx + 1]
+        age_start = age_offsets_data[op_idx]
+        age_end = age_offsets_data[op_idx + 1]
+
+        # sex_masks_data is flat: [f0, m0, f1, m1, ...].
+        sex_mask_idx = op_idx * 2
+        sex_female = sex_masks_data[sex_mask_idx]
+        sex_male = sex_masks_data[sex_mask_idx + 1]
+
+        # Iterate sex × age × genotype.
+        for sex_idx in range(2):
+            if sex_idx == 0 and not sex_female:
+                continue
+            if sex_idx == 1 and not sex_male:
+                continue
+
+            for age_idx_ptr in range(age_start, age_end):
+                age = age_data[age_idx_ptr]
+
+                for gidx_ptr in range(gidx_start, gidx_end):
+                    gidx = gidx_data[gidx_ptr]
+                    current = individual_count[sex_idx, age, gidx]
+
+                    # Compute target count from operation type.
+                    if op_type == _OP_SCALE:
+                        target = max(0.0, current * param)
+                    elif op_type == _OP_SET:
+                        target = max(0.0, param)
+                    elif op_type == _OP_ADD:
+                        target = max(0.0, current + param)
+                    elif op_type == _OP_SUBTRACT:
+                        target = max(0.0, current - param)
+                    elif op_type == _OP_KILL:
+                        target = max(0.0, current * (1.0 - param))
+                    elif op_type == _OP_SAMPLE:
+                        target = min(current, max(0.0, param))
+                    else:
+                        target = current  # Unknown — no-op.
+
+                    # Mutation ops (0..5) write to individual_count.
+                    if op_type <= _OP_SAMPLE:
+                        if sex_idx == 0 and has_sperm_storage:
+                            individual_count[sex_idx, age, gidx] = _apply_target_with_sperm(
+                                current,
+                                target,
+                                sperm_storage[age, gidx, :],
+                                stochastic,
+                                continuous_sampling,
+                            )
+                        else:
+                            individual_count[sex_idx, age, gidx] = _apply_target_without_sperm(
+                                current,
+                                target,
+                                stochastic,
+                                continuous_sampling,
+                            )
+
+        # ---- STOP_IF: aggregate selected cells, check threshold ----
+        if op_type in (_OP_STOP_IF_ZERO, _OP_STOP_IF_BELOW, _OP_STOP_IF_ABOVE):
+            selected_total = 0.0
+            for sex_idx in range(2):
+                if sex_idx == 0 and not sex_female:
+                    continue
+                if sex_idx == 1 and not sex_male:
+                    continue
+                for age_idx_ptr in range(age_start, age_end):
+                    age = age_data[age_idx_ptr]
+                    for gidx_ptr in range(gidx_start, gidx_end):
+                        gidx = gidx_data[gidx_ptr]
+                        selected_total += individual_count[sex_idx, age, gidx]
+
+            if op_type == _OP_STOP_IF_ZERO and selected_total <= 0.0:
+                return RESULT_STOP
+            if op_type == _OP_STOP_IF_BELOW and selected_total < param:
+                return RESULT_STOP
+            if op_type == _OP_STOP_IF_ABOVE and selected_total > param:
+                return RESULT_STOP
+        elif op_type == _OP_STOP_IF_EXTINCTION:
+            if individual_count.sum() <= 0.0:
+                return RESULT_STOP
+
+    return RESULT_CONTINUE
+
+
+# Public alias — imported by compiler.compile_unified_event_hook and tests.
+execute_single_csr_hook = _execute_single_csr_hook
+
+
 @njit_switch(cache=True)
 def execute_csr_event_arrays(
     n_events: int | np.integer[Any],
     n_hooks: int | np.integer[Any],
     hook_offsets: np.ndarray,
-    n_ops_list: np.ndarray,
+    n_ops_list: np.ndarray,  # pyright: ignore[reportUnusedParameter] — positional caller compatibility
     op_offsets: np.ndarray,
     op_types_data: np.ndarray,
     gidx_offsets_data: np.ndarray,
@@ -307,139 +629,69 @@ def execute_csr_event_arrays(
     continuous_sampling: bool,
     deme_id: int,
 ) -> int:
-    """Execute one event from flattened CSR arrays.
+    """Execute all hooks for one event from flattened CSR arrays.
 
-    Inputs are plain arrays extracted from ``HookProgram``. This function is
-    the hottest part of declarative hook runtime.
+    Resolves *event_id* to a hook range via ``hook_offsets``, then calls
+    ``_execute_single_csr_hook`` for each hook.  The function signature
+    mirrors ``HookProgram`` fields positionally so callers can unpack
+    the NamedTuple directly.
+
+    Three-level CSR traversal::
+
+        event_id  →  hook_offsets[event_id]  →  hook range
+        hook_idx  →  op_offsets[hook_idx]    →  op range
+        op_idx    →  gidx/age/cond offsets   →  cell range
+
+    Returns:
+        ``RESULT_CONTINUE`` (0) — all hooks executed normally.
+        ``RESULT_STOP`` (1) — a hook returned STOP.
     """
     if event_id < 0 or event_id >= n_events:
         return 0
 
-    # Event span -> hook span -> op span (three-level CSR traversal)
+    # hook_offsets is a prefix-sum: [event_id] is the first hook,
+    # [event_id + 1] is one past the last.
     hook_start = hook_offsets[event_id]
     hook_end = hook_offsets[event_id + 1]
 
     for hook_idx in range(hook_start, hook_end):
-        if hook_idx < 0 or hook_idx >= n_hooks:
-            continue
-
-        # Filtering by deme_id using serialized selector data
-        if not njit_deme_selector_matches(
-            deme_selector_types[hook_idx],
-            deme_selector_offsets[hook_idx],
-            deme_selector_offsets[hook_idx + 1],
-            deme_selector_data,
-            deme_id,
-        ):
-            continue
-
-        op_start = op_offsets[hook_idx]
-        op_end = op_offsets[hook_idx + 1]
-
-        for op_idx in range(op_start, op_end):
-            cond_start = condition_offsets_data[op_idx]
-            cond_end = condition_offsets_data[op_idx + 1]
-
-            if not _eval_csr_condition_program(
-                condition_types_data,
-                condition_params_data,
-                cond_start,
-                cond_end,
-                tick,
-            ):
-                continue
-
-            op_type = op_types_data[op_idx]
-            param = params_data[op_idx]
-
-            gidx_start = gidx_offsets_data[op_idx]
-            gidx_end = gidx_offsets_data[op_idx + 1]
-            age_start = age_offsets_data[op_idx]
-            age_end = age_offsets_data[op_idx + 1]
-
-            sex_mask_idx = op_idx * 2
-            sex_female = sex_masks_data[sex_mask_idx]
-            sex_male = sex_masks_data[sex_mask_idx + 1]
-
-            for sex_idx in range(2):
-                if sex_idx == 0 and not sex_female:
-                    continue
-                if sex_idx == 1 and not sex_male:
-                    continue
-
-                for age_idx_ptr in range(age_start, age_end):
-                    age = age_data[age_idx_ptr]
-
-                    for gidx_ptr in range(gidx_start, gidx_end):
-                        gidx = gidx_data[gidx_ptr]
-                        current = individual_count[sex_idx, age, gidx]
-
-                        # Convert each operation to a target count first, then
-                        # route through one unified update function so survival
-                        # semantics are consistent across operators.
-                        if op_type == 0:     # Op.scale
-                            target = max(0.0, current * param)
-                        elif op_type == 1:   # Op.set
-                            target = max(0.0, param)
-                        elif op_type == 2:   # Op.add
-                            target = max(0.0, current + param)
-                        elif op_type == 3:   # Op.subtract
-                            target = max(0.0, current - param)
-                        elif op_type == 4:   # Op.kill
-                            target = max(0.0, current * (1.0 - param))
-                        elif op_type == 5:   # Op.sample
-                            target = min(current, max(0.0, param))
-                        else:
-                            target = current
-
-                        if op_type <= 5:   # Op.scale, Op.set, Op.add, Op.subtract, Op.kill, Op.sample
-                            if sex_idx == 0 and has_sperm_storage:
-                                individual_count[sex_idx, age, gidx] = _apply_target_with_sperm(
-                                    current,
-                                    target,
-                                    sperm_storage[age, gidx, :],
-                                    stochastic,
-                                    continuous_sampling,
-                                )
-                            else:
-                                individual_count[sex_idx, age, gidx] = _apply_target_without_sperm(
-                                    current,
-                                    target,
-                                    stochastic,
-                                    continuous_sampling,
-                                )
-
-            # STOP_IF_* operators aggregate selected cells and may short-circuit
-            # event execution with RESULT_STOP.
-            if op_type == 6 or op_type == 7 or op_type == 8:   # Op.stop_if_zero, Op.stop_if_below, Op.stop_if_above
-                selected_total = 0.0
-                for sex_idx in range(2):
-                    if sex_idx == 0 and not sex_female:
-                        continue
-                    if sex_idx == 1 and not sex_male:
-                        continue
-
-                    for age_idx_ptr in range(age_start, age_end):
-                        age = age_data[age_idx_ptr]
-                        for gidx_ptr in range(gidx_start, gidx_end):
-                            gidx = gidx_data[gidx_ptr]
-                            selected_total += individual_count[sex_idx, age, gidx]
-
-                if op_type == 6 and selected_total <= 0.0:
-                    return RESULT_STOP
-                if op_type == 7 and selected_total < param:
-                    return RESULT_STOP
-                if op_type == 8 and selected_total > param:
-                    return RESULT_STOP
-            elif op_type == 9:   # Op.stop_if_extinction
-                if individual_count.sum() <= 0.0:
-                    return RESULT_STOP
+        result = _execute_single_csr_hook(
+            hook_idx=hook_idx,
+            n_hooks=n_hooks,
+            op_offsets=op_offsets,
+            op_types_data=op_types_data,
+            gidx_offsets_data=gidx_offsets_data,
+            gidx_data=gidx_data,
+            age_offsets_data=age_offsets_data,
+            age_data=age_data,
+            sex_masks_data=sex_masks_data,
+            params_data=params_data,
+            condition_offsets_data=condition_offsets_data,
+            condition_types_data=condition_types_data,
+            condition_params_data=condition_params_data,
+            deme_selector_types=deme_selector_types,
+            deme_selector_offsets=deme_selector_offsets,
+            deme_selector_data=deme_selector_data,
+            individual_count=individual_count,
+            sperm_storage=sperm_storage,
+            has_sperm_storage=has_sperm_storage,
+            tick=tick,
+            stochastic=stochastic,
+            continuous_sampling=continuous_sampling,
+            deme_id=deme_id,
+        )
+        if result != RESULT_CONTINUE:
+            return result  # Propagate STOP immediately.
 
     return RESULT_CONTINUE
 
 
 def build_hook_program(program: HookProgram) -> HookProgram:
-    """Compatibility hook for future HookProgram validation/migration."""
+    """Return *program* unchanged (forward-compat hook point).
+
+    Exists as a hook for potential schema upgrades or validation logic.
+    Currently a no-op.
+    """
     return program
 
 
@@ -455,34 +707,54 @@ def execute_csr_event_program_with_state(
     continuous_sampling: bool,
     deme_id: int = 0,
 ) -> int:
-    """Execute event directly from ``HookProgram`` while exposing state flags."""
+    """Execute one event from a ``HookProgram``, unpacking all fields.
+
+    Primary adapter between the HookProgram NamedTuple and the flat-array
+    interface of ``execute_csr_event_arrays``.  Lifecycle templates call
+    this function directly.
+
+    Args:
+        program: Compiled HookProgram containing all declarative ops.
+        event_id: Which event to execute (EVENT_FIRST=0, EVENT_EARLY=1, …).
+        individual_count: 3-D array ``[sex, age, genotype]``, mutated in-place.
+        sperm_storage: 3-D array ``[age, genotype, gamete_male]``.  Pass a
+            dummy ``(0,0,0)`` array for discrete-generation models.
+        tick: Current simulation tick (used for ``when`` clause evaluation).
+        stochastic: Whether to use stochastic survival sampling.
+        has_sperm_storage: Whether *sperm_storage* contains real data.
+        continuous_sampling: Whether to use continuous-Dirichlet sampling.
+        deme_id: Deme index for spatial models (0 for panmictic).
+
+    Returns:
+        ``RESULT_CONTINUE`` or ``RESULT_STOP``.
+    """
     return execute_csr_event_arrays(
-        program.n_events,
-        program.n_hooks,
-        program.hook_offsets,
-        program.n_ops_list,
-        program.op_offsets,
-        program.op_types_data,
-        program.gidx_offsets_data,
-        program.gidx_data,
-        program.age_offsets_data,
-        program.age_data,
-        program.sex_masks_data,
-        program.params_data,
-        program.condition_offsets_data,
-        program.condition_types_data,
-        program.condition_params_data,
-        program.deme_selector_types,
-        program.deme_selector_offsets,
-        program.deme_selector_data,
-        event_id,
-        individual_count,
-        sperm_storage,
-        has_sperm_storage,
-        tick,
-        stochastic,
-        continuous_sampling,
-        deme_id,
+        n_events=program.n_events,
+        n_hooks=program.n_hooks,
+        hook_offsets=program.hook_offsets,
+        n_ops_list=program.n_ops_list,
+        op_offsets=program.op_offsets,
+        op_types_data=program.op_types_data,
+        gidx_offsets_data=program.gidx_offsets_data,
+        gidx_data=program.gidx_data,
+        age_offsets_data=program.age_offsets_data,
+        age_data=program.age_data,
+        sex_masks_data=program.sex_masks_data,
+        params_data=program.params_data,
+        condition_offsets_data=program.condition_offsets_data,
+        condition_types_data=program.condition_types_data,
+        condition_params_data=program.condition_params_data,
+        deme_selector_types=program.deme_selector_types,
+        deme_selector_offsets=program.deme_selector_offsets,
+        deme_selector_data=program.deme_selector_data,
+        event_id=event_id,
+        individual_count=individual_count,
+        sperm_storage=sperm_storage,
+        has_sperm_storage=has_sperm_storage,
+        tick=tick,
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling,
+        deme_id=deme_id,
     )
 
 
@@ -493,7 +765,12 @@ def execute_csr_event_program(
     individual_count: np.ndarray,
     tick: int,
 ) -> int:
-    """Compatibility wrapper with deterministic defaults and no sperm storage."""
+    """Execute one event with deterministic defaults and no sperm storage.
+
+    Convenience wrapper for quick tests or simple discrete-generation
+    setups.  For production use, prefer ``execute_csr_event_program_with_state``
+    which exposes the full state flags.
+    """
     dummy_sperm = np.zeros((0, 0, 0), dtype=np.float64)
     return execute_csr_event_program_with_state(
         program,
@@ -501,18 +778,35 @@ def execute_csr_event_program(
         individual_count,
         dummy_sperm,
         tick,
-        False,
-        False,
-        False,  # continuous_sampling
-        0,      # deme_id
+        stochastic=False,
+        has_sperm_storage=False,
+        continuous_sampling=False,
+        deme_id=0,
     )
 
 
-class HookExecutor:
-    """Python-layer coordinator for all hook execution modes.
+# ===================================================================
+# Python fallback: HookExecutor
+# ===================================================================
+#
+# Used ONLY when Numba is disabled.  Holds descriptors sorted by
+# priority and dispatches CSR plans, njit functions, and Python
+# wrappers in a single sequential loop.
+#
+# When Numba IS enabled, ``CompiledEventHooks.from_compiled_hooks``
+# generates compiled lifecycle wrappers that call CSR and njit hooks
+# directly (including unified dispatch for mixed types).  HookExecutor
+# is never constructed in that case.
+# ===================================================================
 
-    This class is used by population event dispatch where both njit and Python
-    callback hooks must coexist around the declarative CSR core.
+
+class HookExecutor:
+    """Python-layer coordinator for hook execution (Numba-disabled only).
+
+    When Numba is disabled, all hook types — CSR plans, njit functions,
+    Python wrappers — must run through a single sequential path.  This
+    class holds descriptors sorted by priority and dispatches each one
+    in order.
     """
 
     def __init__(
@@ -520,6 +814,13 @@ class HookExecutor:
         registry: HookProgram,
         hooks_by_event: Dict[int, List[CompiledHookDescriptor]],
     ) -> None:
+        """Initialise with a pre-built registry and descriptor map.
+
+        Args:
+            registry: HookProgram for CSR operations (may be empty).
+            hooks_by_event: Descriptors grouped by event_id and sorted
+                by priority.  Built by ``from_compiled_hooks``.
+        """
         self.registry = registry
         self.hooks_by_event = hooks_by_event
 
@@ -528,7 +829,11 @@ class HookExecutor:
         registry: HookProgram,
         compiled_hooks: List[CompiledHookDescriptor],
     ) -> HookExecutor:
-        """Group descriptors by event and sort by priority."""
+        """Group descriptors by event_id and sort by priority.
+
+        Descriptors without a recognised event_id or without any
+        execution payload are silently skipped.
+        """
         from collections import defaultdict
 
         hooks_by_event: Dict[int, List[CompiledHookDescriptor]] = defaultdict(list)
@@ -550,13 +855,26 @@ class HookExecutor:
         tick: int,
         deme_id: int = 0,
     ) -> int:
-        """Run one event with priority ordering across hook types."""
+        """Run all hooks for *event_id* in priority order.
+
+        For each descriptor, in priority order:
+
+        1. CSR plan — unpacks arrays and calls ``execute_csr_event_arrays``
+           with a single-hook wrapper.  Aborts on ``RESULT_STOP``.
+        2. njit function — calls ``desc.njit_fn(state, config, deme_id)``.
+        3. Python wrapper — calls with population (1-param) or
+           ``(state, config, deme_id)`` (3-param).  Only allowed when
+           Numba is disabled.
+
+        Returns:
+            ``RESULT_CONTINUE`` or ``RESULT_STOP``.
+        """
         if event_id < 0 or event_id >= NUM_EVENTS:
             return RESULT_CONTINUE
 
         ind_count = population.state.individual_count
 
-        # Prepare optional sperm-storage arrays for engine that require them.
+        # Resolve runtime state flags.
         sperm_store = getattr(population.state, "sperm_storage", None)
         has_sperm_storage = sperm_store is not None and sperm_store.size > 0
         if not has_sperm_storage:
@@ -569,43 +887,44 @@ class HookExecutor:
 
         from ..numba_utils import NUMBA_ENABLED
 
-        # Unified timeline: descriptors are pre-sorted by priority (stable).
         for desc in self.hooks_by_event.get(event_id, []):
             if not deme_selector_matches(desc.deme_selector, deme_id):
                 continue
 
+            # CSR: declarative Op.*
             if desc.plan is not None:
                 result = execute_csr_event_arrays(
-                    np.int32(1),
-                    np.int32(1),
-                    np.array([0, 1], dtype=np.int32),
-                    np.array([desc.plan.n_ops], dtype=np.int32),
-                    np.array([0, desc.plan.n_ops], dtype=np.int32),
-                    desc.plan.op_types,
-                    desc.plan.gidx_offsets,
-                    desc.plan.gidx_data,
-                    desc.plan.age_offsets,
-                    desc.plan.age_data,
-                    desc.plan.sex_masks.flatten(),
-                    desc.plan.params,
-                    desc.plan.condition_offsets,
-                    desc.plan.condition_types,
-                    desc.plan.condition_params,
-                    np.array([0], dtype=np.int32),   # selector ANY
-                    np.array([0, 0], dtype=np.int32),
-                    np.array([], dtype=np.int32),
-                    0,
-                    ind_count,
-                    sperm_store,
-                    has_sperm_storage,
-                    tick,
-                    stochastic,
-                    continuous_sampling,
-                    deme_id,
+                    n_events=np.int32(1),
+                    n_hooks=np.int32(1),
+                    hook_offsets=np.array([0, 1], dtype=np.int32),
+                    n_ops_list=np.array([desc.plan.n_ops], dtype=np.int32),
+                    op_offsets=np.array([0, desc.plan.n_ops], dtype=np.int32),
+                    op_types_data=desc.plan.op_types,
+                    gidx_offsets_data=desc.plan.gidx_offsets,
+                    gidx_data=desc.plan.gidx_data,
+                    age_offsets_data=desc.plan.age_offsets,
+                    age_data=desc.plan.age_data,
+                    sex_masks_data=desc.plan.sex_masks.flatten(),
+                    params_data=desc.plan.params,
+                    condition_offsets_data=desc.plan.condition_offsets,
+                    condition_types_data=desc.plan.condition_types,
+                    condition_params_data=desc.plan.condition_params,
+                    deme_selector_types=np.array([0], dtype=np.int32),
+                    deme_selector_offsets=np.array([0, 0], dtype=np.int32),
+                    deme_selector_data=np.array([], dtype=np.int32),
+                    event_id=0,
+                    individual_count=ind_count,
+                    sperm_storage=sperm_store,
+                    has_sperm_storage=has_sperm_storage,
+                    tick=tick,
+                    stochastic=stochastic,
+                    continuous_sampling=continuous_sampling,
+                    deme_id=deme_id,
                 )
                 if result == RESULT_STOP:
                     return RESULT_STOP
 
+            # njit: compiled custom/selector hook.
             if desc.njit_fn is not None:
                 try:
                     result = desc.njit_fn(population.state, population.config, deme_id)
@@ -614,20 +933,21 @@ class HookExecutor:
                 except Exception as e:
                     raise RuntimeError(f"Error in njit hook '{desc.name}': {e}") from e
 
+            # Python wrapper (Numba off only).
             if desc.py_wrapper is not None and desc.njit_fn is None:
                 if NUMBA_ENABLED:
                     raise RuntimeError(
-                        f"Python py_wrapper hook '{desc.name}' is not allowed when Numba is enabled."
+                        f"Python py_wrapper hook '{desc.name}' is not allowed "
+                        "when Numba is enabled."
                     )
                 try:
                     import inspect
+
                     sig = inspect.signature(desc.py_wrapper)
                     params = list(sig.parameters.values())
                     if len(params) == 1:
-                        # Single param - population-level hook
                         desc.py_wrapper(population)
                     else:
-                        # Custom hook - (state, config, deme_id)
                         desc.py_wrapper(population.state, population.config, deme_id)
                 except Exception as e:
                     raise RuntimeError(f"Error in py_wrapper hook '{desc.name}': {e}") from e
@@ -635,5 +955,5 @@ class HookExecutor:
         return RESULT_CONTINUE
 
     def get_hooks_for_event(self, event_id: int) -> List[CompiledHookDescriptor]:
+        """Return descriptors for *event_id*, sorted by priority."""
         return self.hooks_by_event.get(event_id, [])
-

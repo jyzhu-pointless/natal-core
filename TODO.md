@@ -14,20 +14,16 @@
 
 ## 🔴 高优先级 — 正确性 / 阻塞项
 
-### #1 ⚠️ 混用 CSR + njit Hook 时的 priority 跨类型比较与性能矛盾
+### #1 ✅ 混用 CSR + njit Hook 时的 priority 跨类型比较与性能矛盾
 
-**此分支改动**：Hook 签名从 `(ind_count, tick, deme_id)` 统一为 `(state, config, deme_id)`，Selector wrapper 和 normalize 逻辑已更新。检测机制已在 base_population.py 和 spatial_population.py 中实现，但 spatial 模型的 `_should_use_python_dispatch()` 未检查 `_has_mixed_hook_types()`。根本修复未实现。
+**此分支改动**：`feat/unified-hook-priority-dispatch` 已实现根本修复。生成统一的 njit 函数 per event（`compile_unified_event_hook`），在 Numba JIT 内部按 priority 交错执行 CSR 和 njit hook。模板结构不变——过滤后的 registry 让 CSR 调用变为 no-op，统一函数嵌入 `_HOOK` 调用。`should_use_python_dispatch()` 不再因混用回退 Python 路径。
 
-**优先级理由**：🔴 唯一经审计确认的 valid 正确性 bug。Spatial 模型混用 CSR + njit hook 时，priority 跨类型排序错误——CSR 始终先于 njit 执行，无视 priority 值。此分支刚改完 hook 调用约定，混合 hook 场景更可能出现，是修复的最佳时机。
-
-- `has_mixed_hook_types()` 的意图不是"保守"，而是**保护 priority 语义的正确性**：
-  - 内核模板中 CSR batch 先于 njit batch 执行，即使 njit hook 的 priority 更低，也总是排在所有 CSR 之后
-  - HookExecutor 统一按 priority 排序所有类型 → 正确，但代价是回到 Python dispatch
-  - `has_mixed_hook_types()` 检测到混用后强制回退 HookExecutor，牺牲性能换取正确性
-- **panmictic 模型**：`should_use_python_dispatch()` 检查 `has_mixed_hook_types()` → 混用时回退（牺牲性能保 priority 正确）
-- **spatial 模型**：`_should_use_python_dispatch()` **不**检查混合类型 → 混用时走 Numba 路径能并行，但 **priority 跨类型比较是错误的**
-- 根本原因：内核模板中 CSR（`execute_csr_event_program_with_state`）和 custom（合并后 `_*_HOOK`）是两个硬编码的先后阶段，无法按 priority 交错
-- 解决方向：把 CSR plan 执行嵌入 `compile_combined_hook`，在 Numba JIT 内部按 priority 生成统一 dispatch 序列，同时解决正确性和性能问题
+**实现要点**：
+- `executor.py`: 提取 `_execute_single_csr_hook`——从 HookProgram 中按 hook_idx 执行单个 CSR hook，供统一调度使用
+- `compiler.py`: 新增 `compile_unified_event_hook`（代码生成）+ `_build_filtered_hook_program`（过滤 registry）；重写 `from_compiled_hooks` 检测混用事件并生成两份统一函数（with_sperm / without_sperm）
+- `base_population.py`: `should_use_python_dispatch` 移除 `has_mixed_hook_types()` 检查
+- Spatial 模型自动受益——混用不再产生错误优先级
+- 测试：4 个 Numba 开启下的混用优先级排序测试全部通过
 
 ### #2 ⚠️ Selector hook 调用约定不一致
 
@@ -137,11 +133,11 @@
 - 添加多基因型索引选择器的 Python 路径测试
 - 注意：修复 #2 是 #8 的前提条件
 
-### #9 📋 重复的 modifier map 重建逻辑
+### #9 ⚠️ 重复的 modifier map 重建逻辑
 
 **来源**：`code-quality-review-report.html` #5
 
-**此分支改动**：无。三处独立的 modifier map 重建实现——`base_population.py`、`configurator.py`、`discrete_generation_population.py`。`discrete_generation_population._refresh_modifier_maps()` 是父方法的逐字副本。
+**此分支改动**：refresh 系统重构已移除 `discrete_generation_population` 中的冗余副本（原为父方法逐字覆写）。剩余双重实现：`BasePopulation.refresh_modifier_maps()` 与 `Configurator._rebuild_config_maps()`，两者策略不同（从头构建 vs 从 Mendelian blueprint 基线叠加），仍有维护二元性。
 
 **优先级理由**：🟡 维护负担——三处任意一处的改动可能遗漏同步到其他两处。
 
@@ -167,6 +163,23 @@
 **优先级理由**：🟡 测试只验证 modifier 不崩溃，不验证其效果正确性。
 
 - 添加非平凡 modifier 的端到端效果测试（验证 genotype_to_gametes_map 或 offspring_tensor 改变）
+
+### #11.1 ⚠️ Hook 系统测试覆盖缺口
+
+**来源**：2026-06-17 测试审计。`test_hook_kernel_ops.py` 是独立脚本不被 pytest 发现，`_apply_target_with_sperm` 零覆盖，多个 Op 类型无端到端生命周期测试。
+
+**优先级理由**：🟡 `_apply_target_with_sperm` 是最复杂的执行路径（virgin/sperm 拆分、随机采样、负值检测），其 bug 会静默破坏 sperm 数据。
+
+**已完成**：`d3aab26` 补充了 25 个测试：
+- `_apply_target_with_sperm` / `_apply_target_without_sperm` 14 个单元测试
+- `stop_if_zero` / `stop_if_extinction` / 条件不满足 3 个 E2E 测试
+- `Op.scale/sample/kill/subtract` 4 个 E2E 测试
+- 边界 case（空 hook、单 hook、同 priority）4 个测试
+
+**遗留**：
+- `test_hook_kernel_ops.py` 需转换为 pytest 格式（所有 Op 类型的运行时测试当前仅在直接执行时运行）
+- `execute_csr_event_program_with_state` 无直接单元测试（已被模板间接覆盖）
+- `_check_csr_condition` 无直接单元测试（已被 condition interpreter 测试覆盖）
 
 ---
 
@@ -265,6 +278,20 @@
 
 - Global hooks
 - Sparse（import / states）
+- 🎨 **Hook 系统分层重构**（2026-06-18 审查结论）
+
+  **`CompiledEventHooks` 拆分**
+  当前这个类混了三件事：
+  1. Hook 容器（`first/early/late/finish/registry`）——本职
+  2. 代码生成管线（`from_compiled_hooks`）——检测混用、生成统一函数、过滤 registry
+  3. Engine run 函数（8 个 `run_*` / `spatial_*`）——lifecycle wrapper 结果，跟 hook 无关
+  建议拆为：`CompiledEventHooks` 回归容器、抽出 `LifecycleWrappers` 存 run 函数、`from_compiled_hooks` 拆成两步。
+
+  **`executor.py` 职责拆分**
+  文件名暗示通用执行器，实际混了两类：
+  1. CSR 热循环（`_execute_single_csr_hook`、`execute_csr_event_arrays`、条件求值、target-count helpers）——主体，是 declarative hook 的 Numba 内核
+  2. 通用回退调度（`HookExecutor`）——同时处理 CSR+njit+Python wrapper，跟 CSR 热循环无关，放在这里只因它调了 `execute_csr_event_arrays`
+  建议：CSR 内核保留在 `executor.py`，`HookExecutor` 移到 `hooks/` 下独立文件或合并到 compiler 管线中
 
 ## initialization / finish 现状
 
