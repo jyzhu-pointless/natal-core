@@ -262,10 +262,10 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 clear_history_on_start=clear_history_on_start,
             )
 
-        hooks = self.get_compiled_event_hooks()
-        assert hooks.registry is not None, "hooks.registry should always be initialized"
+        wrappers = self.get_compiled_event_hooks()
+        assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
 
-        if hooks.run_discrete_fn is None:
+        if wrappers.run_discrete_fn is None:
             return self._run_python_dispatch(
                 n_steps=n_steps,
                 record_every=record_every,
@@ -276,10 +276,10 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         obs_mask = self._observation_mask
         n_obs = len(self._observation.labels) if self._observation is not None else 0
 
-        final_state_tuple, history_new, was_stopped = hooks.run_discrete_fn(
+        final_state_tuple, history_new, was_stopped = wrappers.run_discrete_fn(
             state=self.state,
             config=self.config,
-            registry=hooks.registry,
+            registry=wrappers.hooks.registry,
             n_ticks=n_steps,
             record_interval=record_every,
             observation_mask=obs_mask,

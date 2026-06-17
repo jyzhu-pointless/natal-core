@@ -12,7 +12,6 @@ from .declarative import (
     parse_condition,
 )
 from .executor import (
-    HookExecutor,
     build_hook_program,
     deme_selector_matches,
     eval_csr_condition_program,
@@ -21,6 +20,7 @@ from .executor import (
     execute_csr_event_program_with_state,
     execute_single_csr_hook,
 )
+from .hook_executor import HookExecutor
 from .selector import compile_selector_hook
 from .types import (
     COND_ALWAYS,

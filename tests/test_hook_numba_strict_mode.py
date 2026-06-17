@@ -10,6 +10,7 @@ import pytest  # type: ignore
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from natal.engine.lifecycle_wrappers import compile_lifecycle_wrappers  # noqa: E402
 from natal.hooks.compiler import CompiledEventHooks, hook, noop_hook  # noqa: E402
 from natal.hooks.selector import compile_selector_hook  # noqa: E402
 from natal.hooks.types import CompiledHookDescriptor  # noqa: E402
@@ -70,7 +71,7 @@ def test_py_wrapper_guard_in_compiled_event_hooks():
     )
     with numba_enabled():
         with pytest.raises(TypeError, match="py_wrapper"):
-            CompiledEventHooks.from_compiled_hooks([desc], registry=None)
+            compile_lifecycle_wrappers([desc], registry=None)
 
 
 def test_compiled_event_hooks_produces_event_chains():
@@ -80,11 +81,11 @@ def test_compiled_event_hooks_produces_event_chains():
         priority=0,
         njit_fn=noop_hook,
     )
-    hooks = CompiledEventHooks.from_compiled_hooks([desc], registry=None)
-    assert hooks.first is not None
-    assert hooks.early is not None
-    assert hooks.late is not None
-    assert hooks.finish is not None
+    wrappers = compile_lifecycle_wrappers([desc], registry=None)
+    assert wrappers.hooks.first is not None
+    assert wrappers.hooks.early is not None
+    assert wrappers.hooks.late is not None
+    assert wrappers.hooks.finish is not None
 
 
 def _build_population_for_numba_set_hook_test() -> nt.DiscreteGenerationPopulation:

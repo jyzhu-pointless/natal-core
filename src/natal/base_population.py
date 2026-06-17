@@ -34,10 +34,13 @@ import numpy as np
 
 import natal.modifiers as _modifiers
 import natal.population_config as _population_config
+from natal.engine.lifecycle_wrappers import (
+    LifecycleWrappers,
+    compile_lifecycle_wrappers,
+)
 from natal.engine.simulation.age_structured import compute_offspring_probability_tensor
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.genetic_structures import Species
-from natal.hooks import CompiledEventHooks
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
 from natal.numba_utils import is_numba_enabled
@@ -1629,25 +1632,25 @@ class BasePopulation(ABC, Generic[T_State]):
             deme_selector_data=np.array([], dtype=np.int32),
         )
 
-    def get_compiled_event_hooks(self) -> CompiledEventHooks:
-        """Get compiled hooks for use with generated kernel wrappers.
+    def get_compiled_event_hooks(self) -> LifecycleWrappers:
+        """Get compiled hooks and lifecycle wrappers for kernel-based simulation.
 
-        This method collects all registered hooks and compiles them into
-        Numba-friendly combined functions, one per event.
+        This method collects all registered hooks, compiles them into
+        Numba-friendly combined functions, and wraps them in pre-compiled
+        lifecycle loop functions (tick / run).
 
         Returns:
-            CompiledEventHooks: Container with combined @njit hooks per event.
-                                Access via .first, .early, .late, .finish
+            LifecycleWrappers: Container with compiled event hooks
+            (``.hooks.first`` etc.) plus pre-compiled lifecycle loop
+            functions (``.run_fn``, ``.run_discrete_fn``, etc.).
 
         Examples:
-            >>> hooks = pop.get_compiled_event_hooks()
-            >>> hooks.run_fn is not None
+            >>> wrappers = pop.get_compiled_event_hooks()
+            >>> wrappers.run_fn is not None
             True
         """
-        from natal.hooks import CompiledEventHooks
-
         registry = self._build_hook_program()
-        return CompiledEventHooks.from_compiled_hooks(
+        return compile_lifecycle_wrappers(
             self._compiled_hooks,
             registry=registry,
             include_spatial_wrappers=False,

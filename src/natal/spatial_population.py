@@ -27,12 +27,15 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.base_population import BasePopulation
+from natal.engine.lifecycle_wrappers import (
+    LifecycleWrappers,
+    compile_lifecycle_wrappers,
+)
 from natal.engine.spatial_simulator import (
     run_spatial_migration,
 )
 from natal.genetic_structures import Species
 from natal.hooks import (
-    CompiledEventHooks,
     CompiledHookDescriptor,
     DemeSelector,
     HookProgram,
@@ -1053,8 +1056,8 @@ class SpatialPopulation:
         self._enforce_history_limit()
 
     @property
-    def hooks(self) -> CompiledEventHooks:
-        """CompiledEventHooks: Global event hooks shared across all demes."""
+    def hooks(self) -> LifecycleWrappers:
+        """LifecycleWrappers: Compiled hooks and lifecycle loop functions."""
         return self._hooks
 
     def set_hook(
@@ -1305,12 +1308,13 @@ class SpatialPopulation:
             deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
         )
 
-    def _compile_spatial_hooks_from_demes(self) -> CompiledEventHooks:
+    def _compile_spatial_hooks_from_demes(self) -> LifecycleWrappers:
         """Compile one aggregate hook bundle from current per-deme hooks.
 
         Returns:
-            CompiledEventHooks: Event call chains plus CSR registry used by
-            both generated wrappers and Python dispatch fallback.
+            LifecycleWrappers: Event call chains plus CSR registry and
+            pre-compiled lifecycle loop functions.  Used by both generated
+            wrappers and Python dispatch fallback.
 
         Implementation detail:
             This function is the single rebuild entrypoint used by
@@ -1319,7 +1323,7 @@ class SpatialPopulation:
         """
         compiled_hooks = self._collect_effective_compiled_hooks()
         registry = self._build_hook_program(compiled_hooks)
-        return CompiledEventHooks.from_compiled_hooks(
+        return compile_lifecycle_wrappers(
             compiled_hooks,
             registry=registry,
             include_spatial_wrappers=True,
@@ -1910,13 +1914,13 @@ class SpatialPopulation:
         else:
             tick_fn = self._hooks.spatial_tick_fn
         assert tick_fn is not None, "spatial lifecycle wrapper not compiled (Numba disabled?)"
-        assert self._hooks.registry is not None, "spatial hooks must have a compiled registry"  # type: ignore[unreachable-code]
+        assert self._hooks.hooks.registry is not None, "spatial hooks must have a compiled registry"  # type: ignore[unreachable-code]
 
         het = self._build_heterogeneous_kernel_arrays()
         ind, sperm, tick, was_stopped = tick_fn(
             ind_all, sperm_all,
             config_bank, deme_config_ids,
-            self._hooks.registry, int(self._tick),
+            self._hooks.hooks.registry, int(self._tick),
             self._spatial_topo,
             self._migration_params,
             het,
@@ -1939,13 +1943,13 @@ class SpatialPopulation:
         else:
             run_fn = self._hooks.spatial_run_fn
         assert run_fn is not None, "spatial lifecycle run wrapper not compiled (Numba disabled?)"
-        assert self._hooks.registry is not None, "spatial hooks must have a compiled registry"  # pyright: ignore[reportUnreachable]
+        assert self._hooks.hooks.registry is not None, "spatial hooks must have a compiled registry"  # pyright: ignore[reportUnreachable]
 
         het = self._build_heterogeneous_kernel_arrays()
         final_state_tuple, history_new, was_stopped = run_fn(
             ind_all, sperm_all,
             config_bank, deme_config_ids,
-            self._hooks.registry, int(self._tick), int(n_steps),
+            self._hooks.hooks.registry, int(self._tick), int(n_steps),
             self._spatial_topo,
             self._migration_params,
             het,

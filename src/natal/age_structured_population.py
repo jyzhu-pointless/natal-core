@@ -719,18 +719,18 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         config = sk.export_config(self)
 
-        hooks = self.get_compiled_event_hooks()
+        wrappers = self.get_compiled_event_hooks()
 
-        assert hooks.registry is not None, "hooks.registry should always be initialized"
+        assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
 
         obs_mask = self._observation_mask
         n_obs = len(self._observation.labels) if self._observation is not None else 0
 
-        if hooks.run_fn is not None:
-            final_state_tuple, history_new, was_stopped = hooks.run_fn(
+        if wrappers.run_fn is not None:
+            final_state_tuple, history_new, was_stopped = wrappers.run_fn(
                 state=self.state,
                 config=config,
-                registry=hooks.registry,
+                registry=wrappers.hooks.registry,
                 n_ticks=n_steps,
                 record_interval=record_every,
                 observation_mask=obs_mask,
@@ -740,10 +740,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             final_state_tuple, history_new, was_stopped = sk.run_with_hooks(
                 state=self.state,
                 config=config,
-                registry=hooks.registry,
-                first_hook=hooks.first,
-                early_hook=hooks.early,
-                late_hook=hooks.late,
+                registry=wrappers.hooks.registry,
+                first_hook=wrappers.hooks.first,
+                early_hook=wrappers.hooks.early,
+                late_hook=wrappers.hooks.late,
                 n_ticks=n_steps,
                 record_interval=record_every,
                 observation_mask=obs_mask,

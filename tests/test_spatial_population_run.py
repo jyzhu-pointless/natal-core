@@ -12,7 +12,8 @@ import natal as nt
 from natal.base_population import BasePopulation
 from natal.numba_utils import numba_disabled
 from natal.genetic_structures import Species
-from natal.hooks import CompiledEventHooks, Op, hook
+from natal.engine.lifecycle_wrappers import LifecycleWrappers
+from natal.hooks import Op, hook
 from natal import numba_compat as nbc
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
@@ -81,7 +82,7 @@ class _RunDemePopulation(BasePopulation):
         return self._config
 
     def get_compiled_event_hooks(self):
-        return cast(CompiledEventHooks, self._hooks_obj)
+        return cast(LifecycleWrappers, self._hooks_obj)
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         if event_name == "finish":
@@ -134,7 +135,7 @@ class _RunDiscreteDemePopulation(BasePopulation):
         return self._config
 
     def get_compiled_event_hooks(self):
-        return cast(CompiledEventHooks, self._hooks_obj)
+        return cast(LifecycleWrappers, self._hooks_obj)
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         if event_name == "finish":
