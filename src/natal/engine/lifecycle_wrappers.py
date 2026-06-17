@@ -50,7 +50,7 @@ from natal.hooks.types import (
     stable_callable_identity,
     write_codegen_module,
 )
-from natal.numba_utils import NUMBA_ENABLED
+import natal.numba_utils as _numba_utils
 
 # Template directory for lifecycle wrapper templates.
 _ENGINE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
@@ -313,7 +313,7 @@ def compile_lifecycle_wrappers(
         A fully initialised ``LifecycleWrappers`` ready for use by
         the population model.
     """
-    if NUMBA_ENABLED:
+    if _numba_utils.NUMBA_ENABLED:
         for desc in compiled_hooks:
             if desc.py_wrapper is not None:
                 raise TypeError(
@@ -464,7 +464,7 @@ def compile_lifecycle_wrappers(
 
     result = LifecycleWrappers(hooks=hooks)
 
-    if NUMBA_ENABLED:
+    if _numba_utils.NUMBA_ENABLED:
         result.run_tick_fn, result.run_fn = compile_lifecycle_wrapper(
             False, first_hook, early_hook, late_hook
         )
