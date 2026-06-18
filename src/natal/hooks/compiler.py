@@ -146,6 +146,7 @@ def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
     # Wrap 2-arg (state, config) — omit deme_id for panmictic.
     @njit_switch(cache=True)
     def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
+        """Thunk adapting 2-arg fn to 3-arg ``(state, config, deme_id)``."""
         return fn(state, config)
 
     return wrapped2
@@ -166,6 +167,7 @@ def _normalize_py_hook(fn: HookCallable) -> HookCallable:
         return fn
 
     def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
+        """Python thunk adapting 2-arg fn to 3-arg ``(state, config, deme_id)``."""
         return fn(state, config)
 
     return wrapped2
@@ -546,9 +548,9 @@ def build_filtered_hook_program(
             plan = hook.plan
             sel = hook.deme_selector
 
-            # Inline helper: append a deme selector entry for *s*.
-            # Called for every hook to keep arrays aligned with n_hooks.
             def _append_deme_sel(s: DemeSelector) -> None:
+                """Append a serialised deme selector entry for *s*."""
+                # Called for every hook to keep arrays aligned with n_hooks.
                 if s == "*":
                     all_deme_sel_types.append(0)
                 elif isinstance(s, int):
@@ -683,6 +685,7 @@ class CompiledEventHooks:
     _event_hooks: Dict[str, HookCallable]
 
     def __init__(self) -> None:
+        """Initialise all event hooks to no-op and registry to None."""
         self.first = _noop_hook
         self.early = _noop_hook
         self.late = _noop_hook
@@ -829,6 +832,7 @@ def hook(
         )
 
     def decorator(func: Callable[..., Any]) -> DecoratedHookFn:
+        """Transform *func* into a ``DecoratedHookFn`` with ``.register(pop)``."""
         hook_func = cast(DecoratedHookFn, func)
         hook_func.meta = {
             "event": event,

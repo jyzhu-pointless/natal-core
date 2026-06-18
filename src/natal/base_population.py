@@ -325,6 +325,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @record_observation.setter
     def record_observation(self, obs: Optional[Observation]) -> None:
+        """Set the observation and rebuild the binary observation mask."""
         self._observation = obs
         if obs is not None:
             self._observation_mask = self._build_observation_mask(obs)
@@ -427,6 +428,11 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @property
     def hook_slot(self) -> int:
+        """Stable unique slot identifier derived from the population name.
+
+        Used by the hook dispatch system to route hooks to the correct
+        population instance in multi-deme simulations.
+        """
         return int(self._hook_slot)
 
     # ========================================================================
@@ -445,6 +451,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @name.setter
     def name(self, value: str) -> None:
+        """Set the population name."""
         self._name = value
 
     @property
@@ -454,6 +461,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @tick.setter
     def tick(self, value: int) -> None:
+        """Set the current simulation tick."""
         self._tick = value
 
     @property
@@ -548,6 +556,11 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @abstractmethod
     def clear_history(self) -> None:
+        """Clear all recorded history states.
+
+        Subclasses must implement this to reset their history storage
+        (e.g., ``_history`` list and any subclass-specific history buffers).
+        """
         pass
 
     def _process_kernel_history(
@@ -646,6 +659,25 @@ class BasePopulation(ABC, Generic[T_State]):
         self.refresh_modifier_maps()
 
     def refresh_modifier_maps(self) -> None:
+        """Rebuild the three modifier maps from current modifier lists.
+
+        Recomputes:
+        - ``genotype_to_gametes_map``: mapping from diploid genotype indices
+          to haploid gamete probability distributions (one per sex).
+        - ``gametes_to_zygote_map``: mapping from paired haploid gametes back
+          to diploid offspring genotype indices.
+        - ``offspring_tensor``: precomputed 4-D tensor combining both maps
+          for efficient Numba-based reproduction.
+
+        The maps are stored in ``_config`` via ``_replace``, which creates a
+        shallow copy of the config with updated fields.
+
+        .. note::
+
+            This method is called automatically by :meth:`refresh_modifiers`
+            and by individual ``add_gamete_modifier`` / ``add_zygote_modifier``
+            when ``refresh=True``.
+        """
         if self._config is None or self._registry is None:
             return
 
@@ -655,6 +687,11 @@ class BasePopulation(ABC, Generic[T_State]):
             return
 
         n_glabs = int(self._config.n_glabs)
+
+        # Step 1: Build wrapper callables from the combined modifier
+        # lists (preset-derived + manually added).  Each wrapper is a
+        # callable that accepts genotype indices and returns modified
+        # probability vectors.
         gamete_funcs, zygote_funcs = build_modifier_wrappers(
             gamete_modifiers=self._gamete_modifiers,
             zygote_modifiers=self._zygote_modifiers,
@@ -665,6 +702,9 @@ class BasePopulation(ABC, Generic[T_State]):
             n_glabs=n_glabs,
         )
 
+        # Step 2: Build the gametogenesis map.  For each diploid genotype
+        # and sex, produce a probability distribution over the resulting
+        # haploid gametes per gamete label.
         genotype_to_gametes_map = initialize_gamete_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
@@ -672,6 +712,9 @@ class BasePopulation(ABC, Generic[T_State]):
             gamete_modifiers=gamete_funcs,
         )
 
+        # Step 3: Build the fusion map.  For each pair of haploid gametes
+        # (one maternal, one paternal), determine the resulting diploid
+        # offspring genotype index.
         gametes_to_zygote_map = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
@@ -679,6 +722,10 @@ class BasePopulation(ABC, Generic[T_State]):
             zygote_modifiers=zygote_funcs,
         )
 
+        # Step 4: Compute the full offspring probability tensor by
+        # convolving the maternal and paternal gametogenesis maps through
+        # the fusion map.  The result is a 4-D array indexed by
+        # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
         offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=genotype_to_gametes_map[0],
             meiosis_m=genotype_to_gametes_map[1],
@@ -687,6 +734,8 @@ class BasePopulation(ABC, Generic[T_State]):
             n_haplogenotypes=int(self._config.n_haploid_genotypes),
             n_glabs=n_glabs,
         )
+
+        # Step 5: Persist all three maps into the config via shallow copy.
         self._config = self._config._replace(
             genotype_to_gametes_map=genotype_to_gametes_map,
             gametes_to_zygote_map=gametes_to_zygote_map,
