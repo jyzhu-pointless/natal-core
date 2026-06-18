@@ -134,7 +134,7 @@ class HookExecutor:
                     gidx_data=desc.plan.gidx_data,
                     age_offsets_data=desc.plan.age_offsets,
                     age_data=desc.plan.age_data,
-                    sex_masks_data=desc.plan.sex_masks.flatten(),
+                    sex_masks_data=desc.plan.sex_masks.ravel(),
                     params_data=desc.plan.params,
                     condition_offsets_data=desc.plan.condition_offsets,
                     condition_types_data=desc.plan.condition_types,
@@ -177,8 +177,14 @@ class HookExecutor:
                     params = list(sig.parameters.values())
                     if len(params) == 1:
                         desc.py_wrapper(population)
-                    else:
+                    elif len(params) == 3:
                         desc.py_wrapper(population.state, population.config, deme_id)
+                    else:
+                        raise TypeError(
+                            f"py_wrapper hook '{desc.name}' has {len(params)} "
+                            "parameters; must have 1 (population) or 3 "
+                            "(state, config, deme_id)."
+                        )
                 except Exception as e:
                     raise RuntimeError(f"Error in py_wrapper hook '{desc.name}': {e}") from e
 

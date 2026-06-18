@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Strict-mode and ABI checks for hook kernel integration."""
 
-import inspect
 import sys
 from pathlib import Path
 
@@ -10,12 +9,11 @@ import pytest  # type: ignore
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+import natal as nt  # noqa: E402
 from natal.engine.lifecycle_wrappers import compile_lifecycle_wrappers  # noqa: E402
-from natal.hooks.compiler import CompiledEventHooks, hook, noop_hook  # noqa: E402
-from natal.hooks.selector import compile_selector_hook  # noqa: E402
+from natal.hooks.compiler import hook, noop_hook  # noqa: E402
 from natal.hooks.types import CompiledHookDescriptor  # noqa: E402
 from natal.numba_utils import numba_enabled  # noqa: E402
-import natal as nt  # noqa: E402
 
 
 class _FakeIndexCore:

@@ -1641,8 +1641,8 @@ class BasePopulation(ABC, Generic[T_State]):
 
         Returns:
             LifecycleWrappers: Container with compiled event hooks
-            (``.hooks.first`` etc.) plus pre-compiled lifecycle loop
-            functions (``.run_fn``, ``.run_discrete_fn``, etc.).
+                (``.hooks.first`` etc.) plus pre-compiled lifecycle loop
+                functions (``.run_fn``, ``.run_discrete_fn``, etc.).
 
         Examples:
             >>> wrappers = pop.get_compiled_event_hooks()
