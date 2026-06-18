@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 from natal.numba_utils import njit_switch
 
-from .types import EVENT_NAMES, HookCallable
+from ..types import EVENT_NAMES, HookCallable
 
 
 @njit_switch(cache=True)

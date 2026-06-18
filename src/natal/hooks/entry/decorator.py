@@ -17,17 +17,17 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol, cast
 
-from natal.hooks.declarative import compile_declarative_hook
-from natal.hooks.selector import compile_selector_hook
+from natal.hooks.entry.declarative import compile_declarative_hook
+from natal.hooks.entry.selector import compile_selector_hook
 from natal.numba_utils import njit_switch
 
-from .declarative import HookOp
-from .types import (
+from ..types import (
     CompiledHookDescriptor,
     DemeSelector,
     HookCallable,
     is_njit_function,
 )
+from .declarative import HookOp
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
@@ -280,8 +280,8 @@ def hook(
             Returns:
                 A ``CompiledHookDescriptor`` registered on *pop*.
             """
-            from ..numba_utils import NUMBA_ENABLED
-            from .types import CompiledHookDescriptor
+            from ...numba_utils import NUMBA_ENABLED
+            from ..types import CompiledHookDescriptor
 
             actual_event = event_override or event
             actual_deme_selector: DemeSelector = (

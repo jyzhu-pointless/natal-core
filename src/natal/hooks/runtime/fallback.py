@@ -18,8 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 
-from .csr_kernel import deme_selector_matches, execute_csr_event_arrays
-from .types import (
+from ..types import (
     EVENT_ID_MAP,
     NUM_EVENTS,
     RESULT_CONTINUE,
@@ -27,6 +26,7 @@ from .types import (
     CompiledHookDescriptor,
     HookProgram,
 )
+from .csr_kernel import deme_selector_matches, execute_csr_event_arrays
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation

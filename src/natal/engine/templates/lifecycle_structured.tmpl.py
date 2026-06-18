@@ -14,7 +14,7 @@ from natal.engine.age_structured_simulator import (
     run_reproduction,
     run_survival,
 )
-from natal.hooks.csr_kernel import execute_csr_event_program_with_state
+from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import (
     EVENT_EARLY,
     EVENT_FIRST,

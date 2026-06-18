@@ -1,6 +1,6 @@
 import math
 
-import natal.hooks.csr_kernel as csr_kernel
+import natal.hooks.runtime.csr_kernel as csr_kernel
 
 
 def _call_python_impl(fn, *args):  # type: ignore[no-untyped-def]

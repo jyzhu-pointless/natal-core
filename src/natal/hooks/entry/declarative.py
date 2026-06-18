@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 import numpy as np
 from numpy.typing import NDArray
 
-from .types import (
+from ..types import (
     COND_ALWAYS,
     COND_OP_AND,
     COND_OP_NOT,

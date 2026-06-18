@@ -41,7 +41,7 @@ import numpy as np
 from natal import numba_compat as nbc
 from natal.numba_utils import njit_switch
 
-from .types import (
+from ..types import (
     COND_OP_AND,
     COND_OP_NOT,
     COND_OP_OR,

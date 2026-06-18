@@ -7,7 +7,7 @@ import pytest
 
 import natal as nt
 from natal.configurator import Configurator
-from natal.hooks.declarative import (
+from natal.hooks.entry.declarative import (
     Op,
     _resolve_ages,
     _resolve_genotypes,

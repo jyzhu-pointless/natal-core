@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from natal.hooks.csr_kernel import execute_single_csr_hook
+from natal.hooks.runtime.csr_kernel import execute_single_csr_hook
 from natal.numba_utils import njit_switch
 
 # HookProgram array globals (injected via setattr).  All 15 arrays are

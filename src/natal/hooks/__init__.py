@@ -1,8 +1,15 @@
 """Hook subsystem public API."""
 
-from .codegen import compile_combined_hook
-from .container import CompiledEventHooks, noop_hook
-from .csr_kernel import (
+from .compile.codegen import compile_combined_hook
+from .compile.container import CompiledEventHooks, noop_hook
+from .entry.declarative import (
+    Op,
+    compile_declarative_hook,
+    parse_condition,
+)
+from .entry.decorator import hook
+from .entry.selector import compile_selector_hook
+from .runtime.csr_kernel import (
     build_hook_program,
     deme_selector_matches,
     eval_csr_condition_program,
@@ -11,14 +18,7 @@ from .csr_kernel import (
     execute_csr_event_program_with_state,
     execute_single_csr_hook,
 )
-from .declarative import (
-    Op,
-    compile_declarative_hook,
-    parse_condition,
-)
-from .decorator import hook
-from .fallback import HookExecutor
-from .selector import compile_selector_hook
+from .runtime.fallback import HookExecutor
 from .types import (
     COND_ALWAYS,
     COND_OP_AND,

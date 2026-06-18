@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from natal.hooks import eval_csr_condition_program, parse_condition
-from natal.hooks.declarative import (
+from natal.hooks.entry.declarative import (
     _parse_atomic_condition,
     _parse_condition,
     _to_rpn_condition,

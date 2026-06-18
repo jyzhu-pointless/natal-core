@@ -26,8 +26,7 @@ from typing import List, Optional, Tuple, cast
 
 import numpy as np
 
-from .container import noop_hook
-from .types import (
+from ..types import (
     EVENT_NAMES,
     CompiledHookDescriptor,
     DemeSelector,
@@ -38,8 +37,9 @@ from .types import (
     stable_callable_identity,
     write_codegen_module,
 )
+from .container import noop_hook
 
-_HOOK_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+_HOOK_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 def _read_hook_template(name: str) -> str:
