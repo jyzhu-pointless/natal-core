@@ -232,11 +232,13 @@ def compile_unified_event_hook(
             ``(0,0,0)`` array (discrete-generation case).
 
     Returns:
-        A tuple ``(with_sperm_fn, without_sperm_fn)`` where each is an
-        ``@njit_switch(cache=True)`` function with signature
-        ``(state, config=None, deme_id=-1) -> int``.  The *with-sperm*
-        variant accesses ``state.sperm_storage``; the *without-sperm*
-        variant uses a dummy array.
+        An ``@njit_switch(cache=True)`` function with signature
+        ``(state, config=None, deme_id=-1) -> int``.  Whether it reads
+        ``state.sperm_storage`` or uses a dummy ``(0,0,0)`` array is
+        determined by the *has_sperm_storage* parameter.  The caller
+        (``compile_lifecycle_wrappers``) invokes this function twice to
+        obtain separate with/without-sperm variants for structured and
+        discrete lifecycle wrappers respectively.
     """
     if len(schedule) == 0:
         return noop_hook
