@@ -9,7 +9,7 @@ import pytest  # type: ignore
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from natal.hooks.compiler import hook  # noqa: E402
+from natal.hooks.decorator import hook  # noqa: E402
 from natal.hooks.selector import compile_selector_hook  # noqa: E402
 from natal.numba_utils import numba_disabled  # noqa: E402
 

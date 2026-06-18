@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 
-from .executor import deme_selector_matches, execute_csr_event_arrays
+from .csr_kernel import deme_selector_matches, execute_csr_event_arrays
 from .types import (
     EVENT_ID_MAP,
     NUM_EVENTS,

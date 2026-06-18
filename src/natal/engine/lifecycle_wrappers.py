@@ -34,17 +34,17 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
 import natal.numba_utils as _numba_utils
-from natal.hooks.compiler import (
-    CompiledEventHooks,
-    HookCallable,
+from natal.hooks.codegen import (
     build_filtered_hook_program,
     compile_combined_hook,
     compile_unified_event_hook,
 )
+from natal.hooks.container import CompiledEventHooks
 from natal.hooks.types import (
     EVENT_NAMES,
     CompiledHookDescriptor,
     DemeSelector,
+    HookCallable,
     HookProgram,
     hash_key,
     load_codegen_module,

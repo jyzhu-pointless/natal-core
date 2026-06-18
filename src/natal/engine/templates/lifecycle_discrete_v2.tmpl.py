@@ -22,7 +22,7 @@ from natal.engine.discrete_generation_simulator import (
     run_discrete_survival,
 )
 from natal.engine.simulation.discrete_generation import EPS
-from natal.hooks.executor import execute_csr_event_program_with_state
+from natal.hooks.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import (
     EVENT_EARLY,
     EVENT_FIRST,

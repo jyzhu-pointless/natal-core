@@ -11,7 +11,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import natal as nt  # noqa: E402
 from natal.engine.lifecycle_wrappers import compile_lifecycle_wrappers  # noqa: E402
-from natal.hooks.compiler import hook, noop_hook  # noqa: E402
+from natal.hooks.container import noop_hook
+from natal.hooks.decorator import hook  # noqa: E402
 from natal.hooks.types import CompiledHookDescriptor  # noqa: E402
 from natal.numba_utils import numba_enabled  # noqa: E402
 

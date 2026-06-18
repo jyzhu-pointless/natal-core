@@ -8,7 +8,7 @@ keep sperm storage coherent with female count changes.
 import numpy as np
 import pytest
 
-from natal.hooks.executor import _apply_target_with_sperm, _apply_target_without_sperm
+from natal.hooks.csr_kernel import _apply_target_with_sperm, _apply_target_without_sperm
 
 
 # ---------------------------------------------------------------------------
