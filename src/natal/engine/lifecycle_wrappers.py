@@ -415,7 +415,7 @@ def compile_lifecycle_wrappers(
 
         hook_list.sort(key=lambda x: x[0])
         njit_fns = [fn for _, fn, _ in hook_list]
-        demean_selectors = cast(
+        deme_selectors = cast(
             "List[DemeSelector]", [ds for _, _, ds in hook_list]
         )
 
@@ -437,17 +437,17 @@ def compile_lifecycle_wrappers(
             hooks.set_hook(
                 event_name,
                 compile_unified_event_hook(
-                    schedule, njit_fns, demean_selectors, registry,
+                    schedule, njit_fns, deme_selectors, registry,
                     has_sperm_storage=True,
                 ),
             )
             discrete_hooks[event_name] = compile_unified_event_hook(
-                schedule, njit_fns, demean_selectors, registry,
+                schedule, njit_fns, deme_selectors, registry,
                 has_sperm_storage=False,
             )
         else:
             # Non-mixed: standard njit-only chain.
-            combined = compile_combined_hook(njit_fns, demean_selectors)
+            combined = compile_combined_hook(njit_fns, deme_selectors)
             hooks.set_hook(event_name, combined)
 
     # ---- Step 5: compile lifecycle wrappers ----
