@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
+import natal.numba_utils as _numba_utils
 from natal.hooks.compiler import (
     CompiledEventHooks,
     HookCallable,
@@ -50,7 +51,6 @@ from natal.hooks.types import (
     stable_callable_identity,
     write_codegen_module,
 )
-import natal.numba_utils as _numba_utils
 
 # Template directory for lifecycle wrapper templates.
 _ENGINE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"

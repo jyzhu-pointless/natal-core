@@ -11,10 +11,10 @@ authoring styles into one runtime contract:
    with ``_normalize_njit_fn`` / ``_normalize_py_hook``.
 
 The ``hook()`` decorator auto-detects which style a function uses.
-``CompiledEventHooks.from_compiled_hooks`` is the central integration point:
-it groups compiled descriptors by event, detects mixed CSR+njit scenarios,
-and generates lifecycle wrappers (or unified dispatch functions for mixed
-cases) that the population models use directly.
+``natal.engine.lifecycle_wrappers.compile_lifecycle_wrappers()`` is the
+central integration point: it groups compiled descriptors by event, detects
+mixed CSR+njit scenarios, and generates lifecycle wrappers (or unified
+dispatch functions for mixed cases) that the population models use directly.
 
 ----
 Codegen approach

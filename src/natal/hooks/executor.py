@@ -1,14 +1,14 @@
-"""CSR execution engine and Python-level hook executor.
+"""CSR execution engine — Numba-accelerated declarative hook kernels.
 
 The hot loop operates on flattened ndarrays and avoids Python objects entirely.
-Two dispatch paths exist:
+These functions are called from two contexts:
 
 * **Numba fast path** — lifecycle templates call ``execute_csr_event_arrays``
   (batch) or unified functions from ``compiler.compile_unified_event_hook``
   (mixed CSR + njit interleaved by priority).
-* **Python fallback** — ``HookExecutor`` sorts descriptors by priority and
-  dispatches CSR plans, njit functions, and Python wrappers sequentially.
-  Only used when Numba is disabled.
+* **Python fallback** — ``HookExecutor`` (in ``natal.hooks.hook_executor``)
+  calls ``execute_csr_event_arrays`` for individual descriptors when Numba
+  is disabled.
 
 Return value protocol
 ---------------------

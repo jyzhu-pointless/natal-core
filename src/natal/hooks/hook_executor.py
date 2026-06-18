@@ -5,7 +5,7 @@ Python wrappers — must run through a single sequential path.  This
 module provides ``HookExecutor``, which holds descriptors sorted by
 priority and dispatches each one in order.
 
-When Numba IS enabled, ``CompiledEventHooks.from_compiled_hooks``
+When Numba IS enabled, ``natal.engine.lifecycle_wrappers.compile_lifecycle_wrappers()``
 generates compiled lifecycle wrappers that call CSR and njit hooks
 directly (including unified dispatch for mixed types).  HookExecutor
 is never constructed in that case.
