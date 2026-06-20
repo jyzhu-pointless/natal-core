@@ -1,4 +1,4 @@
-"""Unit tests for natal.hooks.declarative — Op factories, selectors, and compilation."""
+"""Unit tests for natal.hooks.entry.declarative — Op factories, selectors, and compilation."""
 
 from __future__ import annotations
 

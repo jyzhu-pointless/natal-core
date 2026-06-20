@@ -183,6 +183,34 @@
 
 ---
 
+## 📝 文档清理 — 过时路径引用
+
+> 以下条目由 `refactor/hooks-naming` 的对抗式 code review workflow 发现。模块路径已重命名，但文档/注释/缓存中仍有旧引用。
+> 本分支已修复 `src/` 和 `tests/` 范围内的全部 stale 引用（6 处）。`docs/` 和 `.numba_cache/` 不在此分支范围。
+
+### #14 📋 文档引用过时的模块路径
+
+`docs/` 下 8 个 .md 文件引用已删除或已移动的路径：
+
+| 文件 | 旧路径 | 正确路径 |
+|------|--------|---------|
+| `docs/en/spatial_lifecycle_wrapper.md` | `natal/hooks/compiler.py`（4 处） | `engine/lifecycle_wrappers.py` |
+| `docs/zh/spatial_lifecycle_wrapper.md` | 同上（4 处） | 同上 |
+| `docs/en/caching_and_codegen.md` | `natal/hooks/compiler.py`, `natal.hooks.executor` | `compile/codegen.py`, `runtime/csr_kernel.py` |
+| `docs/zh/caching_and_codegen.md` | 同上 | 同上 |
+| `docs/zh/spatial_builder.md` | `hook_executor` | `runtime/fallback` |
+| `docs/en/spatial_builder.md` | 同上 | 同上 |
+| `docs/zh/spatial_configurator.md` | `hook_executor` | `runtime/fallback` |
+| `docs/en/spatial_configurator.md` | 同上 | 同上 |
+
+**注意**：`compiler.py` 引用实为 **PR #9**（`lifecycle_wrappers` 拆分）时引入的遗留，非本分支新增。
+
+### #15 📋 `.numba_cache/` 缓存模块包含旧 import 路径
+
+`git clean -fdx .numba_cache/` 可解决。缓存模块是运行时生成/覆盖的，不会导致失败，但存在误导性。
+
+---
+
 ## 🟢 低优先级 — UX / 远期功能
 
 ### #12 ⚠️ Spatial API：migration kernel 边界效应优化
