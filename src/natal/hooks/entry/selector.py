@@ -4,14 +4,15 @@ Selector mode allows users to write hooks with symbolic selector arguments,
 for example ``selectors={"target_gt": "AA"}``. This module resolves those
 symbols once at registration time and then provides two execution paths:
 
-1) Python wrapper path (``py_wrapper(pop, **resolved_selectors)``)
-2) Numba path (generated ``njit_fn(ind_count, tick)`` with baked literals)
+1) Python wrapper path (``py_wrapper(state, config, deme_id, **resolved_selectors)``)
+2) Numba path (generated ``njit_fn(state, config, deme_id)`` with baked literals)
 """
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
 
 import numpy as np
@@ -27,10 +28,19 @@ from ..types import (
     write_codegen_module,
 )
 
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+
+def _read_template(name: str) -> str:
+    """Read a hook codegen template from ``hooks/templates/``."""
+    return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
+
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
     from natal.genetic_entities import Genotype
     from natal.index_registry import IndexRegistry
+    from natal.population_config import PopulationConfig
+    from natal.population_state import PopulationState
 
 
 
@@ -164,18 +174,28 @@ def compile_selector_hook(
             njit_fn=njit_fn,
         )
 
-    # Python path
+    # Python path — generate a 3-param wrapper (state, config, deme_id)
+    # matching the current hook calling convention.  HookExecutor.execute_event
+    # detects the parameter count and dispatches accordingly.
     if use_namedtuple:
         _Sel = _build_namedtuple_class(list(resolved.keys()))
         runtime_values = _build_selector_njit_runtime_values(resolved)
 
-        def py_wrapper(population: BasePopulation[Any]) -> None:
+        def py_wrapper(state: PopulationState, config: PopulationConfig | None = None, deme_id: int = -1) -> None:
             nt = _Sel(**runtime_values)
-            func(population, nt)
+            # Pass namedtuple as keyword arg so user's parameter name
+            # (nt_param_name) matches the kwarg.
+            if has_deme_id:
+                func(state, config, deme_id, **{nt_param_name: nt})
+            else:
+                func(state, config, **{nt_param_name: nt})
     else:
-        def py_wrapper(population: BasePopulation[Any]) -> None:
+        def py_wrapper(state: PopulationState, config: PopulationConfig | None = None, deme_id: int = -1) -> None:
             kwargs = _build_selector_python_kwargs(resolved)
-            func(population, **kwargs)
+            if has_deme_id:
+                func(state, config, deme_id, **kwargs)
+            else:
+                func(state, config, **kwargs)
 
     return CompiledHookDescriptor(
         name=func.__name__,
@@ -199,14 +219,14 @@ def _compile_selector_njit_wrapper(
     """Generate a Numba wrapper with selector constants baked in.
 
     The wrapper accepts ``(state, config, deme_id)`` — the current hook
-    calling convention — extracts ``ind_count`` / ``tick`` from *state*,
-    and forwards them plus the baked-in selector values to *user_fn*.
+    calling convention — and forwards ``state``, ``config``, ``deme_id``
+    plus the baked-in selector values to *user_fn*.
 
     When ``use_namedtuple`` is True, packs all selectors into a single
-    ``namedtuple`` argument::
+    ``namedtuple`` keyword argument::
 
-        nt = _Sel(_SEL_target, _SEL_drive)
-        return _USER_FN(ind_count, tick, deme_id, nt)
+        sel = _Sel(_SEL_target, _SEL_drive)
+        return _USER_FN(state, config, deme_id, sel=sel)
 
     Otherwise the original per-selector keyword-arg style is used.
     """
@@ -225,51 +245,41 @@ def _compile_selector_njit_wrapper(
     fn_name = f"_selector_wrapper_{key}"
     module_stem = f"selector_wrapper_{key}"
 
-    selector_placeholders = [f"_SEL_{name}" for name in selector_keys]
-    code_lines = [
-        "from natal.numba_utils import njit_switch",
-        f"from natal.population_state import {state_type_name}",
-    ]
+    # ---- Build replacement strings for template ----
+    sel_globals_lines = [f"_SEL_{name}: object = None  # type: ignore[assignment]" for name in selector_keys]
+    sel_globals_str = "\n".join(sel_globals_lines) if sel_globals_lines else ""
+
+    if has_deme_id:
+        pos_args = "state, config, deme_id"
+    else:
+        pos_args = "state, config"
 
     if use_namedtuple:
         nt_fields = ", ".join(f"'{k}'" for k in selector_keys)
-        code_lines.extend([
-            "from collections import namedtuple",
-            f"_Sel = namedtuple('_Sel', [{nt_fields}])",
-        ])
-
-    code_lines.append("_USER_FN = None")
-    code_lines.extend([f"{p} = None" for p in selector_placeholders])
-
-    call_args = "ind_count, tick, deme_id" if has_deme_id else "ind_count, tick"
-
-    if use_namedtuple:
+        namedtuple_import = "from collections import namedtuple"
+        namedtuple_def = f"_Sel = namedtuple('_Sel', [{nt_fields}])"
         nt_args = ", ".join(f"_SEL_{k}" for k in selector_keys)
-        code_lines.extend([
-            "",
-            "@njit_switch(cache=True)",
-            f"def {fn_name}(state: {state_type_name}, config, deme_id=-1):",
-            "    ind_count = state.individual_count",
-            "    tick = state.n_tick",
-            f"    {nt_param_name} = _Sel({nt_args})",
-            f"    return _USER_FN({call_args}, {nt_param_name})",
-            "",
-        ])
+        wrapper_body = (
+            f"    {nt_param_name} = _Sel({nt_args})\n"
+            f"    return _USER_FN({pos_args}, {nt_param_name}={nt_param_name})"
+        )
     else:
+        namedtuple_import = ""
+        namedtuple_def = ""
         args_str = _build_selector_njit_literal_args(resolved_selectors)
-        code_lines.extend([
-            "",
-            "@njit_switch(cache=True)",
-            f"def {fn_name}(state: {state_type_name}, config, deme_id=-1):",
-            "    ind_count = state.individual_count",
-            "    tick = state.n_tick",
-            f"    return _USER_FN({call_args}, {args_str})",
-            "",
-        ])
+        wrapper_body = f"    return _USER_FN({pos_args}, {args_str})"
 
-    code = "\n".join(code_lines)
+    # ---- Assemble module from template ----
+    template = _read_template("selector_wrapper.tmpl.py")
+    source = (
+        template.replace("# PLACEHOLDER_NAMEDTUPLE_IMPORT", namedtuple_import)
+        .replace("# PLACEHOLDER_NAMEDTUPLE_DEF", namedtuple_def)
+        .replace("# PLACEHOLDER_SEL_GLOBALS", sel_globals_str)
+        .replace("PLACEHOLDER_FN_NAME", fn_name)
+        .replace("# PLACEHOLDER_WRAPPER_BODY", wrapper_body)
+    )
 
-    module_path = write_codegen_module(module_stem, code)
+    module_path = write_codegen_module(module_stem, source)
     module = load_codegen_module(module_stem, module_path)
     module._USER_FN = user_fn  # type: ignore[assignment]
     for name, value in _build_selector_njit_runtime_values(resolved_selectors).items():
@@ -283,9 +293,9 @@ def _build_namedtuple_class(field_names: list[str]) -> type:  # type: ignore[ret
     return namedtuple("_Sel", field_names)  # type: ignore[return-value]
 
 
-def _build_selector_python_kwargs(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, Any]:
+def _build_selector_python_kwargs(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, int | NDArray[np.int32]]:
     """Convert internal selector arrays into user-facing kwargs."""
-    kwargs: Dict[str, Any] = {}
+    kwargs: Dict[str, int | NDArray[np.int32]] = {}
     for key, values in resolved_selectors.items():
         kwargs[key] = int(values[0]) if len(values) == 1 else values
     return kwargs
@@ -305,9 +315,9 @@ def _build_selector_njit_literal_args(resolved_selectors: Dict[str, NDArray[np.i
     return ", ".join(arg_lines)
 
 
-def _build_selector_njit_runtime_values(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, Any]:
+def _build_selector_njit_runtime_values(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, int | NDArray[np.int32]]:
     """Build runtime values injected into generated selector wrapper module."""
-    values: Dict[str, Any] = {}
+    values: Dict[str, int | NDArray[np.int32]] = {}
     for name, indices in resolved_selectors.items():
         if len(indices) == 1:
             values[name] = int(indices[0])
