@@ -64,7 +64,7 @@ Numba 编译 `_lifecycle_tick_527c055` 时，`_FIRST_HOOK` 是模块级全局变
 
 **入口**：`compile_combined_hook(njit_fns, name)`
 
-**生成逻辑**（`natal/hooks/compiler.py`：
+**生成逻辑**（`natal/hooks/compile/codegen.py`：
 
 ```python
 lines = ["from natal.hooks import njit_switch"]
@@ -111,7 +111,7 @@ import numpy as np
 from natal.engine.simulator import (
     run_discrete_reproduction, run_discrete_survival, run_discrete_aging,
 )
-from natal.hooks.executor import execute_csr_event_program_with_state
+from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import EVENT_FIRST, EVENT_EARLY, EVENT_LATE, ...
 from natal.population_state import DiscretePopulationState
 

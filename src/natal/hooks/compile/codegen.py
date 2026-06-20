@@ -103,57 +103,50 @@ def compile_combined_hook(
     module_stem = f"combined_hook_{key}"
     placeholder_names = [f"_FN_{i}" for i in range(len(njit_fns))]
 
-    # ---- Generate module source ----
-    # Each placeholder ``_FN_i = None`` is overridden via setattr after load.
-    # The generated function calls each in sequence; the first non-zero
-    # return propagates upward as RESULT_STOP.
-    lines: list[str] = ["from natal.numba_utils import njit_switch"]
-    lines.extend(f"{p} = None" for p in placeholder_names)
-    lines.extend(
-        [
-            "",
-            "@njit_switch(cache=True)",
-            f"def {fn_name}(state, config=None, deme_id=-1):",
-        ]
+    # ---- Build module-level placeholder declarations ----
+    # Each _FN_i = lambda … is a type-stub that gets overridden via setattr.
+    fn_decl_lines: List[str] = []
+    for pname in placeholder_names:
+        fn_decl_lines.append(
+            f"{pname}: Callable[..., int] = "
+            "lambda _s, _c=None, _d=-1: 0  # type: ignore[assignment]"
+        )
+
+    # ---- Build schedule body from njit entry template ----
+    # Reuse the same njit entry fragment that unified dispatch uses.
+    # Guard conditions computed identically to compile_unified_event_hook.
+    njit_tmpl = _read_hook_template("unified_hook_njit_entry.tmpl.py")
+    schedule_entries: List[str] = []
+
+    for pname, ds in zip(placeholder_names, ds_list):
+        if ds == "*":
+            guard_cond = "True"
+        elif isinstance(ds, int):
+            guard_cond = f"deme_id == {int(ds)}"
+        elif isinstance(ds, range):
+            guard_cond = f"{ds.start} <= deme_id < {ds.stop}"
+        else:
+            items = ", ".join(str(int(x)) for x in ds)
+            guard_cond = f"deme_id in ({items})"
+        schedule_entries.append(
+            njit_tmpl.replace("PLACEHOLDER_NJIT_FN_NAME", pname).replace(
+                "PLACEHOLDER_NJIT_GUARD_CONDITION", guard_cond
+            )
+        )
+
+    # ---- Assemble module from template ----
+    template = _read_hook_template("combined_hook.tmpl.py")
+    source = (
+        template.replace("_combined_hook_TEMPLATE", fn_name)
+        .replace("# PLACEHOLDER_FN_DECLARATIONS", "\n".join(fn_decl_lines))
+        .replace("# PLACEHOLDER_SCHEDULE_BODY", "\n".join(schedule_entries))
     )
-
-    if needs_guard:
-        for placeholder, ds in zip(placeholder_names, ds_list):
-            if ds == "*":
-                lines.append(f"    _result = {placeholder}(state, config, deme_id)")
-                lines.append("    if _result != 0:")
-                lines.append("        return _result")
-            elif isinstance(ds, int):
-                lines.append(f"    if deme_id == {int(ds)}:")
-                lines.append(f"        _result = {placeholder}(state, config, deme_id)")
-                lines.append("        if _result != 0:")
-                lines.append("            return _result")
-            elif isinstance(ds, range):
-                lines.append(f"    if {ds.start} <= deme_id < {ds.stop}:")
-                lines.append(f"        _result = {placeholder}(state, config, deme_id)")
-                lines.append("        if _result != 0:")
-                lines.append("            return _result")
-            else:
-                # List or tuple — generate a tuple literal for Numba's ``in``.
-                items = ", ".join(str(int(x)) for x in ds)
-                lines.append(f"    if deme_id in ({items}):")
-                lines.append(f"        _result = {placeholder}(state, config, deme_id)")
-                lines.append("        if _result != 0:")
-                lines.append("            return _result")
-    else:
-        for placeholder in placeholder_names:
-            lines.append(f"    _result = {placeholder}(state, config, deme_id)")
-            lines.append("    if _result != 0:")
-            lines.append("        return _result")
-
-    lines.append("    return 0")
-    lines.append("")
 
     # ---- Write, load, wire up globals ----
     # Module is written to .numba_cache/ so Numba's cache=True survives
-    # restarts.  setattr overrides each ``_FN_i = None`` with the real
-    # njit function before returning the generated callable.
-    module_path = write_codegen_module(module_stem, "\n".join(lines))
+    # restarts.  setattr overrides each placeholder with the real njit
+    # function before returning the generated callable.
+    module_path = write_codegen_module(module_stem, source)
     module = load_codegen_module(module_stem, module_path)
 
     for placeholder, fn in zip(placeholder_names, njit_fns):
