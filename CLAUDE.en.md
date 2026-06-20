@@ -30,6 +30,10 @@ Project-specific rules:
   - Don't say: "Preset parameters are managed by Configurator's deferred mechanism, and runtime changes also go through Configurator."
   - Instead say: "Genetic presets have an unusual requirement — their parameters can't be written directly into the config during construction. The Configurator stores them temporarily (deferred) and applies them all at once when `build()` executes. Runtime changes to preset parameters also go through the Configurator's `update()` entry point."
 
+- **Use multiple-choice questions for clarifying decisions**: When the user needs to choose among viable alternatives (design trade-offs, naming, parameter values), use the AskUserQuestion tool to present 2–4 concrete options for direct selection. This avoids open-ended back-and-forth communication.
+- **Maintain the Tasks list**: For multi-step work, use TaskCreate/TaskUpdate to track progress. Keep task statuses up to date (pending → in_progress → completed) and don't leave zombie tasks behind. Trivial single-step operations don't need a task.
+- **Prefer dedicated tools over Bash**: Read/Glob/Grep/Edit/Write are more reliable than shell commands — they aren't blocked by the sandbox, produce stable output formats, and render better. Use Bash only for batch operations, pipe compositions, or tasks that dedicated tools cannot handle.
+
 ## Validation Gates
 
 After every change, run the following commands:

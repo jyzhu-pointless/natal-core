@@ -28,6 +28,10 @@
   - 不这样说："preset 参数由 Configurator 的 deferred 管理，运行时也是 Configurator 来改。"
   - 而是说："遗传预设（preset）的参数比较特殊——它不能在构建过程中直接写入配置，必须等 Population 对象创建完成后才能生效。所以 Configurator 会先把这些参数暂存起来（deferred），等 `build()` 真正执行时再统一应用。运行时修改 preset 参数也是通过 Configurator 的 `update()` 入口。"
 
+- **善用选择题澄清细节**：当需要用户在多个可行方案之间做决策时（设计取舍、命名选择、参数值等），使用 AskUserQuestion 工具给出 2-4 个具体选项让用户直接选择，避免开放式追问造成沟通往返。
+- **维护 Tasks 列表**：多步骤任务使用 TaskCreate/TaskUpdate 跟踪进度。创建 task 后及时更新状态（pending → in_progress → completed），不要遗留僵尸 task。单步琐碎操作无需创建 task。
+- **优先使用专用工具**：Read/Glob/Grep/Edit/Write 等专用工具比 shell 命令更可靠（不会被沙箱拦截、输出格式稳定、渲染更友好）。仅在批量操作、管道组合、或专用工具无法实现时使用 Bash。
+
 ## 门禁检查
 
 每次修改后，必须运行以下命令：
