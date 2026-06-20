@@ -56,7 +56,7 @@ All three must pass before committing: `pytest` + `pyright` + `ruff check src de
 - **Files affected by the change**: If a signature or import change causes failures elsewhere, those must be fixed too.
 - **Pre-existing issues in untouched files**: Note and analyze them; fixing is encouraged but not required for the current commit.
 - **`cast(Any, …)` is forbidden**. Never use it to bypass type checking.
-- **`Any` in function parameter lists is forbidden** unless accompanied by a concrete, documented justification.
+- **Do not abuse `Any` or `object`**: parameter, return, and variable type annotations must use specific types — don't take shortcuts with `Any` or `object`. Adding new imports for type annotations is worth it. `Any` is acceptable only with a concrete, documented justification (e.g., `Callable[..., Any]` to mean "any callable").
 - **`cast(T, x)`** may be used only when static analysis cannot prove `x: T` at all (e.g., narrowing an `Optional` after a guard). Prefer type-narrowing assertions or restructuring first.
 - **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line.
 

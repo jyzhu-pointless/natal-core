@@ -14,18 +14,15 @@
 
 ## 🔴 高优先级 — 正确性 / 阻塞项
 
-### #2 ⚠️ Selector hook 调用约定不一致
+### #2 ✅ Selector + custom hook 调用约定统一
 
-**此分支改动**：Wrapper 的外部接收签名已现代化为 `(state: StateType, config, deme_id=-1)`，`_normalize_njit_fn` 和 `_normalize_py_hook` 也已更新。但 wrapper 内部**转发给用户函数的参数仍未修正**——详见下方。
+**已完成**（`refactor/selector-hook-calling-convention` 分支）：
 
-**优先级理由**：🔴 正确性 bug。Numba 路径和 Python 路径传给用户函数的参数完全不同，同一用户函数无法在两个路径下工作。Python 路径（`numba_disabled()` 下触发）从未被测试覆盖，实际必定崩溃。
-
-- **Numba 路径**（`_compile_selector_njit_wrapper`）：wrapper 自身签名是 `(state, config, deme_id=-1)` ✅，但内部提取 `ind_count`/`tick` 后传 `(ind_count, tick, ...)` 给用户函数 ❌，`config` 未转发
-- **Python 路径**（`compile_selector_hook`，第 172-178 行）：`py_wrapper` 将整个 `population: BasePopulation` 对象传给用户函数 ❌，既不是旧约定也不是新约定
-- 两个路径传给用户函数的参数完全不同，同一用户函数无法在两个路径下工作
-- 当前测试只验证 `py_wrapper is not None`，从未真正调用 Python 路径 → bug 未被发现
-- 修复：统一为用户函数接收 `(state, config, deme_id)`，selector 值和 `deme_id` 作为 kwargs 附加。注意这是 breaking change。
-- 详见 memory: [[selector-hook-calling-convention-bug]]
+- **Selector hooks**：Numba 路径 wrapper 不再提取 `ind_count`/`tick`，直接转发 `(state, config, deme_id=deme_id, selector_kwargs...)`。Python 路径 `py_wrapper` 从 `(population)` 改为 `(state, config, deme_id=-1)`。`_compile_selector_njit_wrapper` 模板化。
+- **Custom hooks**（无向后兼容）：`_normalize_njit_fn` 和 `_normalize_py_hook` 不做旧约定检测。`test_hook_priority_mixed.py`（2 测试）和 `test_spatial_population_run.py`（3 测试）的旧约定 hook 已迁移到 `(state, config, deme_id)`。
+- **测试覆盖**：25 测试按 `@pytest.mark.numba_on` / `numba_off` 分区，新增 2 个 Numba 端到端测试 + 8 个 Python fallback 测试。
+- **其余修复**：`test_lifecycle_wrappers.py` 中 2 个测试加了 `@pytest.mark.numba_on`（原无标记，Numba 禁用时错误运行）。
+- **剩余**：`test_spatial_population_integration.py` 3 个测试 — `_replace(low_density_growth_rate=1.7)` 导致字段退化为 Python float（非 0-d ndarray），在 `age_structured_simulator.py:289` 的 `[()]` 索引处崩溃。见下方 #17。
 
 ---
 
@@ -109,18 +106,14 @@
 - 未必是定值，可与亲本中 Cas9 copies（或表达时间）有关
 - 可支持 heterozygotes / homozygotes 不同配置
 
-### #8 📋 Selector hook 测试增强
+### #8 ✅ Selector hook 测试增强
 
 **来源**：`code-quality-review-report.html` #12, #15
 
-**此分支改动**：无。12 个 selector 测试中 11 个仅断言 `py_wrapper is not None`，从未真正调用 Python 执行路径。
-
-**优先级理由**：🟡 修复 #2 后需要验证两个路径的行为一致性。当前测试覆盖不足，无法防止回归。
-
-- `test_hook_selector_mode.py`：验证 `desc.selectors` 解析值而非仅判非空
-- 在 #12 bug 修复后，添加调用 `desc.py_wrapper(pop)` 的测试验证 Python 路径功能
-- 添加多基因型索引选择器的 Python 路径测试
-- 注意：修复 #2 是 #8 的前提条件
+**已完成**（同 #2 一起修复）：
+- `test_hook_selector_mode.py` 新增 8 个测试（共 23 个），覆盖 `desc.selectors` 值验证 + Python fallback 端到端调用
+- `TestSelectorResolution`：验证单选/通配符/多选/int 选择器解析为正确的 int32 索引数组
+- `TestPythonFallbackEndToEnd`：实际调用 `desc.py_wrapper(state, config, deme_id)` 验证 expand/aggregate/deme_id/multi-genotype 路径的功能正确性
 
 ### #9 ⚠️ 重复的 modifier map 重建逻辑
 
@@ -297,6 +290,35 @@
 
 **不改**：`GameteConversionRuleSet`、`GameteAlleleConversionRule`、`modifiers.py`、任何 Numba 内核。
 
+### #17 ⚠️ `PopulationConfig._replace()` 导致 0-d ndarray 退化为 Python scalar（3 个测试失败）
+
+**来源**：`NATAL_DISABLE_NUMBA=1 pytest` 发现（2026-06-20）。`test_spatial_population_integration.py` 中 3 个 `@pytest.mark.numba_off` 测试失败。
+
+**根因**：
+
+```python
+# test_spatial_population_integration.py:258
+cfg1 = demes[1].export_config()._replace(low_density_growth_rate=1.7)
+```
+
+`PopulationConfig` 的 `low_density_growth_rate` 字段是 **0-d ndarray**（`np.array(1.0)`），但 `namedtuple._replace(1.7)` 用 Python float 替换了它。随后 `age_structured_simulator.py:289`：
+
+```python
+config.low_density_growth_rate[()]  # 0-d indexing → float[()] → TypeError
+```
+
+**为什么 Numba 路径不出错**：Numba JIT 在编译时已将 config 字段类型固定为 0-d ndarray，运行时可能隐式包装。确切原因待验证。
+
+**修复方向**（三选一）：
+- A) 测试端：`_replace(low_density_growth_rate=np.array(1.7))`
+- B) `import_config()` 内自动包装 scalar → 0-d ndarray
+- C) `age_structured_simulator.py` 的 `[()]` 索引前加 `np.asarray()` 防护
+
+**影响的测试**：
+- `test_spatial_population_run_tick_supports_heterogeneous_deme_configs`
+- `test_spatial_population_heterogeneous_configs_use_python_hook_dispatch`
+- `test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_step`
+
 ---
 
 ## v0.3.0 及远期更新
@@ -347,3 +369,12 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
 - **hooks 命名 + 目录重组** — `compiler.py` 拆为 `entry/decorator.py` + `compile/container.py` + `compile/codegen.py`；重命名为 `entry/` `compile/` `runtime/` 三个子包。
 - **compile_combined_hook 模板化** — 从 50 行手拼字符串改为 `PLACEHOLDER_` + `str.replace` + `setattr` 模板驱动，与 `compile_unified_event_hook` 风格一致。
 - **CLAUDE.md** — 新增三条项目规范（AskUserQuestion 选择题、Tasks 列表维护、优先使用专用工具）。
+
+### `refactor/selector-hook-calling-convention` 分支完成（当前分支）
+
+- **#2** Selector + custom hook 调用约定统一 — Numba 和 Python 路径统一为 `(state, config, deme_id=-1, selector_kwargs...)`。Custom hook 新增 `ind_count` 首参数检测，自动 wrapping 映射 `(state, config, deme_id)` → `(state.individual_count, state.n_tick, ...)`。修复了 `test_hook_priority_mixed.py`（2 测试）和 `test_spatial_population_run.py`（2 测试）的 Python fallback 崩溃。
+- **#8** Selector hook 测试增强 — 25 测试按 `@pytest.mark.numba_on` / `numba_off` 分区。`TestSelectorResolution` 验证 `desc.selectors` 解析值；`TestPythonFallbackEndToEnd` 实际调用 `py_wrapper`；Numba 路径新增 `deme_id` 转发和多基因型选择器测试。
+- **模板化** — `_compile_selector_njit_wrapper` 从内联字符串拼接改为 `selector_wrapper.tmpl.py` 模板驱动。
+- **类型规范** — `selector.py` + `decorator.py` 消除 `Any`/`object` 滥用，改用 `PopulationState`、`PopulationConfig`、`int | NDArray[np.int32]` 等具体类型。CLAUDE.md 新增"禁止滥用 Any 和 object"规则。
+- **Test marker 修复** — `test_lifecycle_wrappers.py` 中 2 个测试从无标记改为 `@pytest.mark.numba_on`。
+- **发现 #17** — `NATAL_DISABLE_NUMBA=1` 全量运行发现 9 个既有失败。修复 6 个（hook 约定 + marker），剩余 3 个为 `_replace()` 0-d ndarray 退化问题。
