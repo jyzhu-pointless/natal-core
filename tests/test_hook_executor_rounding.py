@@ -1,6 +1,6 @@
 import math
 
-import natal.hooks.executor as executor
+import natal.hooks.runtime.csr_kernel as csr_kernel
 
 
 def _call_python_impl(fn, *args):  # type: ignore[no-untyped-def]
@@ -26,9 +26,9 @@ def test_apply_target_without_sperm_rounds_current_count_in_stochastic_mode(monk
         captured["dirichlet_flag"] = 1.0 if dirichlet_flag else 0.0
         return 123.0
 
-    monkeypatch.setattr(executor, "_sample_survivors", fake_sample_survivors)
+    monkeypatch.setattr(csr_kernel, "_sample_survivors", fake_sample_survivors)
 
-    result = _call_python_impl(executor._apply_target_without_sperm, 9.999999999, 8.0, True, False)
+    result = _call_python_impl(csr_kernel._apply_target_without_sperm, 9.999999999, 8.0, True, False)
 
     assert result == 123.0
     assert captured["n_base"] == 10.0
@@ -47,9 +47,9 @@ def test_apply_target_without_sperm_keeps_continuous_mode_unrounded(monkeypatch)
         captured["dirichlet_flag"] = 1.0 if dirichlet_flag else 0.0
         return 321.0
 
-    monkeypatch.setattr(executor, "_sample_survivors", fake_sample_survivors)
+    monkeypatch.setattr(csr_kernel, "_sample_survivors", fake_sample_survivors)
 
-    result = _call_python_impl(executor._apply_target_without_sperm, 9.999999999, 8.0, True, True)
+    result = _call_python_impl(csr_kernel._apply_target_without_sperm, 9.999999999, 8.0, True, True)
 
     assert result == 321.0
     assert not math.isclose(captured["n_base"], 10.0, rel_tol=0.0, abs_tol=1e-12)

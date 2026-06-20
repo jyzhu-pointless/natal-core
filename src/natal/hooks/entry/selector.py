@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
 import numpy as np
 from numpy.typing import NDArray
 
-from .types import (
+from ..types import (
     CompiledHookDescriptor,
     DemeSelector,
     hash_key,
@@ -117,7 +117,7 @@ def compile_selector_hook(
         "n_ages": pop.config.n_ages,
     }
 
-    from ..numba_utils import NUMBA_ENABLED
+    from ...numba_utils import NUMBA_ENABLED
 
     is_njit_fn = is_numba_dispatcher(func)
 

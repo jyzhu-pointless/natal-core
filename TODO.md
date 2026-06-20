@@ -1,6 +1,6 @@
 # TODO
 
-> 基于 `refactor/config-architecture` 分支审计结果重新排序（2026-06-01）。
+> 最后审计：2026-06-20。PR #9 + #11 完成 hook 系统分层重构，相关条目移至完成附录。
 >
 > 排序逻辑：正确性 bug > 性能优化 > UX 改进 > 代码质量。同一档内，部分完成 > 未开始 > 仅设计。
 >
@@ -13,17 +13,6 @@
 ---
 
 ## 🔴 高优先级 — 正确性 / 阻塞项
-
-### #1 ✅ 混用 CSR + njit Hook 时的 priority 跨类型比较与性能矛盾
-
-**此分支改动**：`feat/unified-hook-priority-dispatch` 已实现根本修复。生成统一的 njit 函数 per event（`compile_unified_event_hook`），在 Numba JIT 内部按 priority 交错执行 CSR 和 njit hook。模板结构不变——过滤后的 registry 让 CSR 调用变为 no-op，统一函数嵌入 `_HOOK` 调用。`should_use_python_dispatch()` 不再因混用回退 Python 路径。
-
-**实现要点**：
-- `executor.py`: 提取 `_execute_single_csr_hook`——从 HookProgram 中按 hook_idx 执行单个 CSR hook，供统一调度使用
-- `compiler.py`: 新增 `compile_unified_event_hook`（代码生成）+ `_build_filtered_hook_program`（过滤 registry）；重写 `from_compiled_hooks` 检测混用事件并生成两份统一函数（with_sperm / without_sperm）
-- `base_population.py`: `should_use_python_dispatch` 移除 `has_mixed_hook_types()` 检查
-- Spatial 模型自动受益——混用不再产生错误优先级
-- 测试：4 个 Numba 开启下的混用优先级排序测试全部通过
 
 ### #2 ⚠️ Selector hook 调用约定不一致
 
@@ -183,6 +172,42 @@
 
 ---
 
+## 📝 文档清理 — 过时路径引用
+
+> 以下条目由 `refactor/hooks-naming` 的对抗式 code review workflow 发现。模块路径已重命名，但文档/注释/缓存中仍有旧引用。
+> 本分支已修复 `src/` 和 `tests/` 范围内的全部 stale 引用（6 处）。`docs/` 和 `.numba_cache/` 不在此分支范围。
+
+### #14 📋 文档引用过时的模块路径
+
+`docs/` 下 8 个 .md 文件引用已删除或已移动的路径：
+
+| 文件 | 旧路径 | 正确路径 |
+|------|--------|---------|
+| `docs/en/spatial_lifecycle_wrapper.md` | `natal/hooks/compiler.py`（4 处） | `engine/lifecycle_wrappers.py` |
+| `docs/zh/spatial_lifecycle_wrapper.md` | 同上（4 处） | 同上 |
+| `docs/en/caching_and_codegen.md` | `natal/hooks/compiler.py`, `natal.hooks.executor` | `compile/codegen.py`, `runtime/csr_kernel.py` |
+| `docs/zh/caching_and_codegen.md` | 同上 | 同上 |
+| `docs/zh/spatial_builder.md` | `hook_executor` | `runtime/fallback` |
+| `docs/en/spatial_builder.md` | 同上 | 同上 |
+| `docs/zh/spatial_configurator.md` | `hook_executor` | `runtime/fallback` |
+| `docs/en/spatial_configurator.md` | 同上 | 同上 |
+
+**注意**：`compiler.py` 引用实为 **PR #9**（`lifecycle_wrappers` 拆分）时引入的遗留，非本分支新增。
+
+### #15 📋 `.numba_cache/` 缓存模块包含旧 import 路径
+
+`git clean -fdx .numba_cache/` 可解决。缓存模块是运行时生成/覆盖的，不会导致失败，但存在误导性。
+
+### #16 📋 spatial `deme_id` 合并+过滤机制未在文档中说明
+
+当前文档（`spatial_lifecycle_wrapper.md`、`3_advanced_hooks.md`）描述了 `_collect_effective_compiled_hooks()`（"收集所有 deme 的 hook"）和 Hook 签名接受 `deme_id` 参数，但**未解释两者的因果关系**：
+
+- **实际机制**：所有 deme 的 hook 被打平进一份全局 `CompiledEventHooks`，编译为一组 lifecycle wrapper；在 `prange` 中每个 deme 调用同一组 wrapper，通过 `deme_id` 过滤——CSR 路径用 `njit_deme_selector_matches()` 跳过不匹配的 hook，njit 路径生成 `if deme_id == X` guard。
+- **文档给人的印象**：每个 deme 独立运行自己的 hook 列表，`deme_id` 只是个"我是几号"的上下文。
+- **待补充**：在 `spatial_lifecycle_wrapper.md` 的编译阶段添加一段解释合并+过滤的设计动机（编译一次 vs 编译 N 次）。
+
+---
+
 ## 🟢 低优先级 — UX / 远期功能
 
 ### #12 ⚠️ Spatial API：migration kernel 边界效应优化
@@ -278,20 +303,7 @@
 
 - Global hooks
 - Sparse（import / states）
-- 🎨 **Hook 系统分层重构**（2026-06-18 审查结论）
-
-  **`CompiledEventHooks` 拆分**
-  当前这个类混了三件事：
-  1. Hook 容器（`first/early/late/finish/registry`）——本职
-  2. 代码生成管线（`from_compiled_hooks`）——检测混用、生成统一函数、过滤 registry
-  3. Engine run 函数（8 个 `run_*` / `spatial_*`）——lifecycle wrapper 结果，跟 hook 无关
-  建议拆为：`CompiledEventHooks` 回归容器、抽出 `LifecycleWrappers` 存 run 函数、`from_compiled_hooks` 拆成两步。
-
-  **`executor.py` 职责拆分**
-  文件名暗示通用执行器，实际混了两类：
-  1. CSR 热循环（`_execute_single_csr_hook`、`execute_csr_event_arrays`、条件求值、target-count helpers）——主体，是 declarative hook 的 Numba 内核
-  2. 通用回退调度（`HookExecutor`）——同时处理 CSR+njit+Python wrapper，跟 CSR 热循环无关，放在这里只因它调了 `execute_csr_event_arrays`
-  建议：CSR 内核保留在 `executor.py`，`HookExecutor` 移到 `hooks/` 下独立文件或合并到 compiler 管线中
+- ✅ **Hook 系统分层重构** — PR #9（拆分层级）+ PR #11（命名 + 子目录 + 模板化）已完成。最终结构：`hooks/entry/`（装饰器/声明式/selector）、`hooks/compile/`（容器/codegen）、`hooks/runtime/`（CSR 内核/Python 回退）。详见已完成附录。
 
 ## initialization / finish 现状
 
@@ -327,3 +339,11 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
 - **#8 部分** `batch_setting()` + `deme_selector` 局部 hook — `spatial_builder.py` 中已有的 `BatchSetting` 类和 `set_hook(deme_selector=...)`。
 - **#9** Spatial UI — `spatial_dashboard.py`（75KB，198 方法），热图渲染、deme config 信息、local hooks 显示、landscape genotype freq。
 - **#10** General UI — Observation 集成 + UI 导出。本分支仅做兼容适配。
+
+### `refactor/hooks-naming` 分支完成（PR #9 后续）
+
+- **#1** 混用 CSR + njit Hook priority 调度 — `feat/unified-hook-priority-dispatch` 已实现（PR #8 合并），生成统一 njit 函数按 priority 交错执行。
+- **Hook 系统分层重构** — `CompiledEventHooks` 拆分为纯容器 + `LifecycleWrappers`（engine 层）+ codegen 管线分离；`executor.py` 拆分为 `csr_kernel.py`（CSR 热循环）+ `fallback.py`（Python 回退）。
+- **hooks 命名 + 目录重组** — `compiler.py` 拆为 `entry/decorator.py` + `compile/container.py` + `compile/codegen.py`；重命名为 `entry/` `compile/` `runtime/` 三个子包。
+- **compile_combined_hook 模板化** — 从 50 行手拼字符串改为 `PLACEHOLDER_` + `str.replace` + `setattr` 模板驱动，与 `compile_unified_event_hook` 风格一致。
+- **CLAUDE.md** — 新增三条项目规范（AskUserQuestion 选择题、Tasks 列表维护、优先使用专用工具）。

@@ -4,9 +4,9 @@ The hot loop operates on flattened ndarrays and avoids Python objects entirely.
 These functions are called from two contexts:
 
 * **Numba fast path** — lifecycle templates call ``execute_csr_event_arrays``
-  (batch) or unified functions from ``compiler.compile_unified_event_hook``
+  (batch) or unified functions from ``compile.codegen.compile_unified_event_hook``
   (mixed CSR + njit interleaved by priority).
-* **Python fallback** — ``HookExecutor`` (in ``natal.hooks.hook_executor``)
+* **Python fallback** — ``HookExecutor`` (in ``natal.hooks.runtime.fallback``)
   calls ``execute_csr_event_arrays`` for individual descriptors when Numba
   is disabled.
 
@@ -41,7 +41,7 @@ import numpy as np
 from natal import numba_compat as nbc
 from natal.numba_utils import njit_switch
 
-from .types import (
+from ..types import (
     COND_OP_AND,
     COND_OP_NOT,
     COND_OP_OR,
@@ -458,7 +458,7 @@ def _execute_single_csr_hook(
     5. Returns ``RESULT_CONTINUE`` if all operations completed normally.
 
     This function was extracted from the inner loop of
-    ``execute_csr_event_arrays`` so that ``compiler.compile_unified_event_hook``
+    ``execute_csr_event_arrays`` so that ``compile.codegen.compile_unified_event_hook``
     can call individual CSR hooks at specific positions in a priority-ordered
     schedule, interleaved with njit function calls.
 
@@ -589,7 +589,7 @@ def _execute_single_csr_hook(
     return RESULT_CONTINUE
 
 
-# Public alias — imported by compiler.compile_unified_event_hook and tests.
+# Public alias — imported by compile.codegen.compile_unified_event_hook and tests.
 execute_single_csr_hook = _execute_single_csr_hook
 
 

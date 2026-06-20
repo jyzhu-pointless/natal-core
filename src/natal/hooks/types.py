@@ -15,6 +15,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Dict,
     List,
@@ -31,6 +32,9 @@ from natal.numba_utils import get_numba_cache_dir
 
 if TYPE_CHECKING:
     pass
+
+# Any callable that can serve as a hook body (noop, njit, combined, kernel).
+HookCallable = Callable[..., Any]
 
 
 class OpType(IntEnum):

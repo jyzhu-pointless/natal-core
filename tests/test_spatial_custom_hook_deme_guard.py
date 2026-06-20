@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
-from natal.hooks.compiler import compile_combined_hook
+from natal.hooks.compile.codegen import compile_combined_hook
 
 
 # ── compile_combined_hook unit tests ──────────────────────────────────

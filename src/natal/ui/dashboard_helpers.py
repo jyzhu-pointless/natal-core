@@ -105,7 +105,7 @@ def growth_mode_name(mode: int) -> str:
 
 def format_op(op: Any) -> str:
     """Format a declarative HookOp into a human-readable HTML string."""
-    from natal.hooks.declarative import OpType
+    from natal.hooks.entry.declarative import OpType
 
     try:
         normalized_type = OpType(int(op.op_type))

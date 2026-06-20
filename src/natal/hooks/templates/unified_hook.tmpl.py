@@ -1,13 +1,13 @@
 # pyright: ignore[reportUnusedImport, reportUnusedVariable, reportUnknownVariableType, reportUnknownParameterType, reportMissingParameterType, reportUnusedExpression, reportUndefinedVariable]
 # ruff: noqa
 
-"""Codegen template for unified mixed-type hook dispatch (see compiler.py)."""
+"""Codegen template for unified mixed-type hook dispatch (see compile/codegen.py)."""
 
 from typing import Callable, Optional
 
 import numpy as np
 
-from natal.hooks.executor import execute_single_csr_hook
+from natal.hooks.runtime.csr_kernel import execute_single_csr_hook
 from natal.numba_utils import njit_switch
 
 # HookProgram array globals (injected via setattr).  All 15 arrays are

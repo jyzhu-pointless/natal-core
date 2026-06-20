@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 
 import natal.engine.simulation.age_structured as alg
 import natal.numba_compat as nbc
-from natal.hooks.executor import execute_csr_event_program_with_state
+from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import (
     EVENT_EARLY,
     EVENT_FIRST,
