@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import pytest  # type: ignore
-
 from typing import Any, cast
 
 import numpy as np
+import pytest  # type: ignore
 
 import natal as nt
-from natal.base_population import BasePopulation
-from natal.numba_utils import numba_disabled
-from natal.genetic_structures import Species
-from natal.engine.lifecycle_wrappers import LifecycleWrappers
-from natal.hooks import Op, hook
 from natal import numba_compat as nbc
+from natal.base_population import BasePopulation
+from natal.engine.lifecycle_wrappers import LifecycleWrappers
+from natal.genetic_structures import Species
+from natal.hooks import Op, hook
+from natal.numba_utils import numba_disabled
 from natal.population_config import PopulationConfig
 from natal.population_state import DiscretePopulationState, PopulationState
 from natal.spatial_population import SpatialPopulation
@@ -364,12 +363,12 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
 
     @njit
     @hook(event="first", priority=1)
-    def first_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
-        _ = (tick, deme_id)
+    def first_njit(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = deme_id
         idx = int(idx_np[0])
         calls_np[idx] = 1
-        observed_first_njit_np[idx // 2] = float(ind_count[1, 1, 0])
-        ind_count[1, 1, 0] += 2.0
+        observed_first_njit_np[idx // 2] = float(state.individual_count[1, 1, 0])
+        state.individual_count[1, 1, 0] += 2.0
         idx_np[0] += 1
         return 0
 
@@ -490,11 +489,11 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
 
     @njit
     @hook(event="first", priority=1)
-    def d0_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
-        _ = (tick, deme_id)
+    def d0_njit(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = deme_id
         idx = int(idx_np[0])
         calls_np[idx] = 1
-        ind_count[1, 1, 0] += 2.0
+        state.individual_count[1, 1, 0] += 2.0
         idx_np[0] += 1
         return 0
 
@@ -515,11 +514,11 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
 
     @njit
     @hook(event="first", priority=0)
-    def d1_njit(ind_count, tick, deme_id):  # type: ignore[no-untyped-def]
-        _ = (tick, deme_id)
+    def d1_njit(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = deme_id
         idx = int(idx_np[0])
         calls_np[idx] = 3
-        ind_count[1, 1, 0] += 4.0
+        state.individual_count[1, 1, 0] += 4.0
         idx_np[0] += 1
         return 0
 

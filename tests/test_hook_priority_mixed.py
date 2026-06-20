@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-import pytest  # type: ignore
-
 from typing import List
+
+import pytest  # type: ignore
 
 import natal as nt
 from natal.hooks import Op, hook
@@ -54,10 +54,10 @@ def test_mixed_priority_ordering_first_event() -> None:
         observed["first_python_seen"] = float(population.state.individual_count[1, 1, 0])
 
     @hook(event="first", priority=1)
-    def first_njit(ind_count, tick, deme_id):
-        _ = (tick, deme_id)
+    def first_njit(state, config, deme_id):
+        _ = deme_id
         calls.append("njit_first")
-        ind_count[1, 1, 0] += 2.0
+        state.individual_count[1, 1, 0] += 2.0
         return 0
 
     @hook(event="first", priority=2)
@@ -94,10 +94,10 @@ def test_mixed_priority_ordering_early_event() -> None:
         observed["early_python_seen"] = float(population.state.individual_count[1, 1, 0])
 
     @hook(event="early", priority=1)
-    def early_njit(ind_count, tick, deme_id):
-        _ = (tick, deme_id)
+    def early_njit(state, config, deme_id):
+        _ = deme_id
         calls.append("njit_early")
-        ind_count[1, 1, 0] += 2.0
+        state.individual_count[1, 1, 0] += 2.0
         return 0
 
     @hook(event="early", priority=2)

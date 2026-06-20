@@ -17,20 +17,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from natal.engine.lifecycle_wrappers import (
+from natal.engine.lifecycle_wrappers import (  # noqa: E402
     LifecycleWrappers,
     compile_lifecycle_wrappers,
 )
-from natal.hooks import (
-    EVENT_EARLY,
-    EVENT_FIRST,
-    EVENT_LATE,
+from natal.hooks import (  # noqa: E402
     CompiledHookDescriptor,
     HookProgram,
-    noop_hook,
 )
-from natal.numba_utils import numba_disabled
-
+from natal.numba_utils import numba_disabled  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -181,6 +176,7 @@ def test_compile_preserves_noop_on_empty_event() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.numba_on
 def test_compile_rejects_py_wrapper_with_numba_enabled() -> None:
     """compile_lifecycle_wrappers raises TypeError when Numba is on and
     a py_wrapper descriptor is present."""
@@ -263,6 +259,7 @@ def test_compile_single_njit_with_guard_wraps_it() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.numba_on
 def test_compile_with_spatial_wrappers() -> None:
     """include_spatial_wrappers=True compiles spatial lifecycle wrappers."""
     wrappers = compile_lifecycle_wrappers(
