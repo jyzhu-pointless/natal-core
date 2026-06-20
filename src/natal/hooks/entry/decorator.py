@@ -31,6 +31,8 @@ from .declarative import HookOp
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
+    from natal.population_config import PopulationConfig
+    from natal.population_state import PopulationState
 
 
 # ---------------------------------------------------------------------------
@@ -67,12 +69,12 @@ class DecoratedHookFn(Protocol):
 def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
     """Ensure an njit hook callable accepts ``(state, config, deme_id)``.
 
-    The unified calling convention for all compiled hooks is three
-    positional arguments.  This adapter handles two cases:
+    The unified calling convention for all compiled hooks is
+    ``(state, config, deme_id=-1)``.  This adapter handles two cases:
 
-    * **3+ args** — passed through unchanged.
-    * **2 args** — assumed to omit ``deme_id`` (panmictic-only hook).
-      Wrapped with a thunk that drops the third argument.
+    * **3+ args** — assumed modern, passed through unchanged.
+    * **2 args** ``(state, config)`` — panmictic hook, thunk drops
+      ``deme_id``.
 
     Returns:
         A callable with signature ``(state, config, deme_id) -> int``.
@@ -80,11 +82,17 @@ def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
     py_fn = getattr(fn, "py_func", fn)
     sig = inspect.signature(py_fn)
     params = list(sig.parameters.values())
+
     if len(params) >= 3:
         return fn
+
     # Wrap 2-arg (state, config) — omit deme_id for panmictic.
     @njit_switch(cache=True)
-    def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
+    def wrapped2(
+        state: PopulationState,
+        config: PopulationConfig | None = None,
+        _deme_id: int = -1,
+    ) -> object:
         """Thunk adapting 2-arg fn to 3-arg ``(state, config, deme_id)``."""
         return fn(state, config)
 
@@ -102,10 +110,15 @@ def _normalize_py_hook(fn: HookCallable) -> HookCallable:
     """
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
+
     if len(params) >= 3:
         return fn
 
-    def wrapped2(state: Any, config: Any = None, deme_id: int = -1) -> object:
+    def wrapped2(
+        state: PopulationState,
+        config: PopulationConfig | None = None,
+        _deme_id: int = -1,
+    ) -> object:
         """Python thunk adapting 2-arg fn to 3-arg ``(state, config, deme_id)``."""
         return fn(state, config)
 
