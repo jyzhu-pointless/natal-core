@@ -209,6 +209,14 @@
 
 `git clean -fdx .numba_cache/` 可解决。缓存模块是运行时生成/覆盖的，不会导致失败，但存在误导性。
 
+### #16 📋 spatial `deme_id` 合并+过滤机制未在文档中说明
+
+当前文档（`spatial_lifecycle_wrapper.md`、`3_advanced_hooks.md`）描述了 `_collect_effective_compiled_hooks()`（"收集所有 deme 的 hook"）和 Hook 签名接受 `deme_id` 参数，但**未解释两者的因果关系**：
+
+- **实际机制**：所有 deme 的 hook 被打平进一份全局 `CompiledEventHooks`，编译为一组 lifecycle wrapper；在 `prange` 中每个 deme 调用同一组 wrapper，通过 `deme_id` 过滤——CSR 路径用 `njit_deme_selector_matches()` 跳过不匹配的 hook，njit 路径生成 `if deme_id == X` guard。
+- **文档给人的印象**：每个 deme 独立运行自己的 hook 列表，`deme_id` 只是个"我是几号"的上下文。
+- **待补充**：在 `spatial_lifecycle_wrapper.md` 的编译阶段添加一段解释合并+过滤的设计动机（编译一次 vs 编译 N 次）。
+
 ---
 
 ## 🟢 低优先级 — UX / 远期功能
