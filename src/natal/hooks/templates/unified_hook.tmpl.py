@@ -1,7 +1,7 @@
 # pyright: ignore[reportUnusedImport, reportUnusedVariable, reportUnknownVariableType, reportUnknownParameterType, reportMissingParameterType, reportUnusedExpression, reportUndefinedVariable]
 # ruff: noqa
 
-"""Codegen template for unified mixed-type hook dispatch (see compiler.py)."""
+"""Codegen template for unified mixed-type hook dispatch (see compile/codegen.py)."""
 
 from typing import Callable, Optional
 
