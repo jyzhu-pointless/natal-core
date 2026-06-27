@@ -713,11 +713,7 @@ class PopulationConfigBuilder:
             raise TypeError(f"genotype_key must be a genotype or str, got {type(genotype_key)}")
         if genotype.species is not species:
             raise ValueError("Genotype must belong to this species")
-        # Canonicalize: A|a and a|A share the same index.
-        # Skip canonicalization for species with sex chromosomes —
-        # X|Y and Y|X are biologically distinct genotypes.
-        if species.unordered:
-            genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
+        genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
         return int(genotype_to_index[genotype])
 
     @staticmethod

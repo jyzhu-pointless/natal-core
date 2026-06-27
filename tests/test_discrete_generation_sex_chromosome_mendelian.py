@@ -176,12 +176,11 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         np.array([125.0, 250.0, 125.0], dtype=np.float64),
     )
 
-    # Species has sex chromosomes → canonicalization disabled for all genotypes.
-    # A|a and a|A remain distinct, each getting half of heterozygous offspring.
-    np.testing.assert_allclose(female_by_phase["A|a"], 125.0)
-    np.testing.assert_allclose(female_by_phase["a|A"], 125.0)
-    np.testing.assert_allclose(male_by_phase["A|a"], 125.0)
-    np.testing.assert_allclose(male_by_phase["a|A"], 125.0)
+    # Canonicalization applies to all genotypes — A|a and a|A collapse to A|a.
+    np.testing.assert_allclose(female_by_phase["A|a"], 250.0)
+    np.testing.assert_allclose(female_by_phase["a|A"], 0.0)
+    np.testing.assert_allclose(male_by_phase["A|a"], 250.0)
+    np.testing.assert_allclose(male_by_phase["a|A"], 0.0)
 
 
 def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> None:
@@ -306,10 +305,11 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
     np.testing.assert_allclose(male_age1.sum(), 500.0)
 
     # Heterozygous mother transmits X1/X2 at 1:1 into both sex cohorts.
-    np.testing.assert_allclose(female_by_maternal_x["X1"], 250.0)
-    np.testing.assert_allclose(female_by_maternal_x["X2"], 250.0)
-    np.testing.assert_allclose(male_by_maternal_x["X1"], 250.0)
-    np.testing.assert_allclose(male_by_maternal_x["X2"], 250.0)
+    # Same-type sex chromosomes (X|X) are canonicalized — X2|X1 collapses to X1|X2.
+    np.testing.assert_allclose(female_by_maternal_x["X1"], 375.0)
+    np.testing.assert_allclose(female_by_maternal_x["X2"], 125.0)
+    np.testing.assert_allclose(male_by_maternal_x["X1"], 375.0)
+    np.testing.assert_allclose(male_by_maternal_x["X2"], 125.0)
 
 
 def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:

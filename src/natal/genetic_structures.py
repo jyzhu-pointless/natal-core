@@ -2667,11 +2667,7 @@ class Species(GeneticStructure['HaploidGenome']):
         # sex chromosomes preserve biologically significant ordering.
         try:
             exact_gt = self.get_genotype_from_str(selector)
-            if self.unordered:
-                unordered = self.unordered_genotype(exact_gt.maternal, exact_gt.paternal)
-            else:
-                unordered = exact_gt
-            return [unordered]
+            return [self.unordered_genotype(exact_gt.maternal, exact_gt.paternal)]
         except Exception as exact_err:
             # For unordered species, auto-promote | to :: in pattern
             # strings so that "*|A" matches both orderings of heterozygous
@@ -3370,7 +3366,11 @@ class Species(GeneticStructure['HaploidGenome']):
                             seen.add(key)
                             yield gt
                     else:
-                        yield Genotype(species=self, maternal=maternal, paternal=paternal)
+                        gt = Genotype(species=self, maternal=maternal, paternal=paternal)
+                        key = (gt.maternal, gt.paternal)
+                        if key not in seen:
+                            seen.add(key)
+                            yield gt
         else:
             # With no explicit constraints, all pairings are valid.
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())

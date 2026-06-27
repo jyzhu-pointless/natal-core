@@ -35,9 +35,7 @@ class _UnorderedGenotypeDict(dict[Genotype, int]):
     """
 
     def _canonicalize(self, key: Genotype) -> Genotype:
-        if key.species.unordered:
-            key = key.species.unordered_genotype(key.maternal, key.paternal)
-        return key
+        return key.species.unordered_genotype(key.maternal, key.paternal)
 
     def __getitem__(self, key: Genotype) -> int:
         return super().__getitem__(self._canonicalize(key))
@@ -114,12 +112,9 @@ class IndexRegistry:
             int: The assigned integer index.  Indices remain stable
             until the registry is compacted.
         """
-        # Only canonicalize unordered species — sex chromosomes
-        # require maternal/paternal ordering (X|Y ≠ Y|X).
-        if genotype_id.species.unordered:
-            genotype_id = genotype_id.species.unordered_genotype(
-                genotype_id.maternal, genotype_id.paternal,
-            )
+        genotype_id = genotype_id.species.unordered_genotype(
+            genotype_id.maternal, genotype_id.paternal,
+        )
         if genotype_id in self.genotype_to_index:
             return self.genotype_to_index[genotype_id]
         idx = len(self.index_to_genotype)
@@ -286,12 +281,9 @@ class IndexRegistry:
             KeyError: If the genotype_id is not registered.
         """
         if isinstance(genotype_id, Genotype):
-            # Only canonicalize unordered species — sex chromosomes
-            # require maternal/paternal ordering (X|Y ≠ Y|X).
-            if genotype_id.species.unordered:
-                genotype_id = genotype_id.species.unordered_genotype(
-                    genotype_id.maternal, genotype_id.paternal,
-                )
+            genotype_id = genotype_id.species.unordered_genotype(
+                genotype_id.maternal, genotype_id.paternal,
+            )
         return self.genotype_to_index[genotype_id]
 
     def haplo_index(self, haplo_id: Any) -> int:

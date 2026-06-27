@@ -1034,7 +1034,7 @@ class Configurator:
 
         ctx = _ConfigContext(
             self._species, self._config, self._registry,
-            compress=self._compress,
+            compress=False,  # compression is only enabled in build()
         )
         ctx.declared_zygote_types = self._declared_zygote_types
         ctx.gamete_modifiers = list(self.gamete_modifiers)
@@ -1747,6 +1747,7 @@ class Configurator:
         final_config = self._config
         if self._compress and not self._compression_applied:
             ctx = self._make_ctx()
+            ctx.compress = True  # compression only happens at build time
             _rebuild_config_maps(ctx)
             self._sync_from_ctx(ctx)
             final_config = ctx.config  # compressed copy

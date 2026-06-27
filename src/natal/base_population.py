@@ -428,10 +428,6 @@ class BasePopulation(ABC, Generic[T_State]):
             gt = genotype_key
         else:
             gt = self.species.get_genotype_from_str(genotype_key)
-        # Canonicalize string-parsed genotypes (A|a ≡ a|A).  Sex-chromosome
-        # species are skipped — maternal/paternal ordering is biological.
-        if getattr(self.species, "sex_chromosomes", None):
-            return gt
         return self.species.unordered_genotype(gt.maternal, gt.paternal)
 
     @staticmethod
