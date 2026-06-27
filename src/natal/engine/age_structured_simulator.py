@@ -77,7 +77,7 @@ def run_reproduction_with_precomputed_offspring_probability(
     # Modify ind_count in-place; callers do not expect original to be preserved.
 
     n_ages = config.n_ages
-    n_gen = config.n_genotypes
+    n_gen = config.n_ztypes
     adult_ages = config.adult_ages
     adult_start_age = adult_ages[0] if len(adult_ages) > 0 else 0
     stochastic = config.stochastic
@@ -243,7 +243,7 @@ def run_survival(
     ind_count = ind_count.copy()
     sperm_store = sperm_store.copy()
     n_ages = config.n_ages
-    n_gen = config.n_genotypes
+    n_gen = config.n_ztypes
     stochastic = config.stochastic
     continuous_sampling = config.continuous_sampling
 

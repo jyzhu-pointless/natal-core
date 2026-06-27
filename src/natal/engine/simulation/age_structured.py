@@ -26,7 +26,7 @@ EPS = 1e-10
 def compute_mating_probability_matrix(
     sexual_selection_matrix: Annotated[NDArray[np.float64], "shape=(g,g)"],
     male_counts: Annotated[NDArray[np.float64], "shape=(g,)"],
-    n_genotypes: int
+    n_ztypes: int
 ) -> Annotated[NDArray[np.float64], "shape=(g,g)"]:
     """Compute a row-normalized mating probability matrix.
 
@@ -37,7 +37,7 @@ def compute_mating_probability_matrix(
         sexual_selection_matrix: Preference weights with shape ``(g, g)``.
             Rows correspond to female genotypes, columns to male genotypes.
         male_counts: Male counts vector with shape ``(g,)``.
-        n_genotypes: Number of genotypes ``g`` used for shape validation.
+        n_ztypes: Number of genotypes ``g`` used for shape validation.
 
     Returns:
         np.ndarray: Row-normalized mating probability matrix ``P`` with shape
@@ -46,7 +46,7 @@ def compute_mating_probability_matrix(
     """
     A = np.asarray(sexual_selection_matrix)
     M = np.asarray(male_counts)
-    g = n_genotypes
+    g = n_ztypes
 
     assert A.shape == (g, g)
     assert M.shape == (g,)
@@ -79,7 +79,7 @@ def sample_mating(
     sperm_displacement_rate: float,
     adult_start_idx: int,
     n_ages: int,
-    n_genotypes: int,
+    n_ztypes: int,
     stochastic: bool = True,
     continuous_sampling: bool = False,
 ) -> Annotated[NDArray[np.float64], "shape=(A,g,g)"]:
@@ -100,7 +100,7 @@ def sample_mating(
             ``p_remating = p_mating(age) * sperm_displacement_rate``.
         adult_start_idx: Starting age index for adults
         n_ages: Total number of age classes
-        n_genotypes: Number of genotypes g
+        n_ztypes: Number of genotypes g
         stochastic: If True, use stochastic sampling; if False, use deterministic expectations
         continuous_sampling: If True and stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
@@ -131,17 +131,17 @@ def sample_mating(
     # existing sperm allocations controlled by sperm_displacement_rate.
 
     if stochastic:
-        tmp = np.zeros(n_genotypes, dtype=np.float64)
+        tmp = np.zeros(n_ztypes, dtype=np.float64)
 
         for age in range(adult_start_idx, n_ages):
             p_mating = nbc.clamp01(float(female_rates[age]))
             p_displace = nbc.clamp01(float(sperm_displacement_rate))
 
-            for gf in range(n_genotypes):
+            for gf in range(n_ztypes):
                 n_female = float(females[age, gf])
 
                 mated_count = 0.0
-                for gm in range(n_genotypes):
+                for gm in range(n_ztypes):
                     mated_count += sperm[age, gf, gm]
                 virgins = max(0.0, n_female - mated_count)
 
@@ -157,12 +157,12 @@ def sample_mating(
                 if mated_count > EPS and p_remating > EPS:
                     if continuous_sampling:
                         removed_frac = min(1.0, p_remating)
-                        for gm in range(n_genotypes):
+                        for gm in range(n_ztypes):
                             sperm[age, gf, gm] -= sperm[age, gf, gm] * removed_frac
                         n_remating = mated_count * removed_frac
                     else:
                         total_removed = 0.0
-                        for gm in range(n_genotypes):
+                        for gm in range(n_ztypes):
                             count = sperm[age, gf, gm]
                             if count > EPS:
                                 n_remove = float(nbc.binomial(int(round(count)), p_remating))
@@ -177,13 +177,13 @@ def sample_mating(
                 if n_new > EPS:
                     if continuous_sampling:
                         nbc.continuous_multinomial(n_new, mating_prob_mat[gf, :], tmp)
-                        for gm in range(n_genotypes):
+                        for gm in range(n_ztypes):
                             sperm[age, gf, gm] += tmp[gm]
                     else:
                         n_int = int(round(n_new))
                         if n_int > 0:
                             draws = nbc.multinomial(n_int, mating_prob_mat[gf, :])
-                            for gm in range(n_genotypes):
+                            for gm in range(n_ztypes):
                                 sperm[age, gf, gm] += float(draws[gm])
 
         return sperm
@@ -193,10 +193,10 @@ def sample_mating(
             p_mating = nbc.clamp01(float(female_rates[age]))
             p_displace = nbc.clamp01(float(sperm_displacement_rate))
 
-            for gf in range(n_genotypes):
+            for gf in range(n_ztypes):
                 n_female = float(females[age, gf])
                 mated_count = 0.0
-                for gm in range(n_genotypes):
+                for gm in range(n_ztypes):
                     mated_count += sperm[age, gf, gm]
 
                 virgins = max(0.0, n_female - mated_count)
@@ -206,12 +206,12 @@ def sample_mating(
 
                 if n_remating > EPS and mated_count > EPS:
                     frac = min(1.0, n_remating / mated_count)
-                    for gm in range(n_genotypes):
+                    for gm in range(n_ztypes):
                         sperm[age, gf, gm] -= sperm[age, gf, gm] * frac
 
                 n_new = n_mating_virgins + n_remating
                 if n_new > EPS:
-                    for gm in range(n_genotypes):
+                    for gm in range(n_ztypes):
                         sperm[age, gf, gm] += n_new * mating_prob_mat[gf, gm]
 
         return sperm
@@ -221,7 +221,7 @@ def compute_offspring_probability_tensor(
     meiosis_f: Annotated[NDArray[np.float64], "shape=(g,hl)"],
     meiosis_m: Annotated[NDArray[np.float64], "shape=(g,hl)"],
     haplo_to_genotype_map: Annotated[NDArray[np.float64], "shape=(hl,hl,g)"],
-    n_genotypes: int,
+    n_ztypes: int,
     n_haplogenotypes: int,
     n_glabs: int = 1,
 ) -> Annotated[NDArray[np.float64], "shape=(g,g,g)"]:
@@ -241,7 +241,7 @@ def compute_offspring_probability_tensor(
         haplo_to_genotype_map: Haplotype-pair to diploid-genotype mapping with
             shape (hl, hl, g). Entry [h1, h2, g] = 1 if haplotypes h1, h2
             combine to form genotype g, else 0.
-        n_genotypes: Number of diploid genotypes.
+        n_ztypes: Number of diploid genotypes.
         n_haplogenotypes: Number of haploid genotypes.
         n_glabs: Number of gamete-label variants per haplotype (default 1).
             If > 1, the total haplotype space is hl = n_haplogenotypes * n_glabs.
@@ -255,14 +255,30 @@ def compute_offspring_probability_tensor(
     zygote_map = np.asarray(haplo_to_genotype_map, dtype=np.float64)
 
     hl = n_haplogenotypes * n_glabs
-    zygote_flat = np.ascontiguousarray(zygote_map).reshape(hl * hl, n_genotypes)
+    zygote_flat = np.ascontiguousarray(zygote_map).reshape(hl * hl, n_ztypes)
 
-    # Tensor product: P[gf, gm, go] = Σ_{hf,hm} meio_f[gf,hf] · meio_m[gm,hm] · zygote[hf,hm,go]
-    f_exp = meio_f[:, None, :, None]   # (g, 1, hl, 1)
-    m_exp = meio_m[None, :, None, :]   # (1, g, 1, hl)
-    gamete_pairs = (f_exp * m_exp).reshape(n_genotypes * n_genotypes, hl * hl)
-    offspring_flat = np.dot(gamete_pairs, zygote_flat)
-    return offspring_flat.reshape(n_genotypes, n_genotypes, n_genotypes)
+    # Scalar-loop tensor product: P[gf, gm, go] = Σ_{hf,hm}
+    #   meio_f[gf, hf] · meio_m[gm, hm] · zygote[hf, hm, go]
+    #
+    # Avoids the O(G²·HL²) intermediate array that the previous
+    # np.dot(f_exp * m_exp, zygote_flat) approach allocated —
+    # for G≈1000, HL≈100 that intermediate is ~80 GB.
+    out = np.zeros((n_ztypes, n_ztypes, n_ztypes), dtype=np.float64)
+    for gf in range(n_ztypes):
+        for gm in range(n_ztypes):
+            for go in range(n_ztypes):
+                s = 0.0
+                for hf in range(hl):
+                    mf = meio_f[gf, hf]
+                    if mf == 0.0:
+                        continue
+                    for hm in range(hl):
+                        mm = meio_m[gm, hm]
+                        if mm == 0.0:
+                            continue
+                        s += mf * mm * zygote_flat[hf * hl + hm, go]
+                out[gf, gm, go] = s
+    return out
 
 # Forward declaration for the internal function
 @njit_switch(cache=True)
@@ -274,7 +290,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
     average_eggs_per_wt_female: float,
     adult_start_idx: int,
     n_ages: int,
-    n_genotypes: int,
+    n_ztypes: int,
     female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
     male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
     female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
@@ -301,7 +317,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
         average_eggs_per_wt_female: Expected egg count per reproducing wild-type female.
         adult_start_idx: First age class that reproduces.
         n_ages: Total number of age classes.
-        n_genotypes: Number of diploid genotypes.
+        n_ztypes: Number of diploid genotypes.
         female_genotype_compatibility: Female sex-compatibility weights.
         male_genotype_compatibility: Male sex-compatibility weights.
         female_only_by_sex_chrom: Female-only genotype mask.
@@ -336,18 +352,18 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
         else np.ones(n_ages, dtype=np.float64)
     )
 
-    offspring_acc = np.zeros(n_genotypes, dtype=np.float64)
-    prob_norm = np.zeros(n_genotypes, dtype=np.float64)
-    tmp = np.zeros(n_genotypes, dtype=np.float64)
+    offspring_acc = np.zeros(n_ztypes, dtype=np.float64)
+    prob_norm = np.zeros(n_ztypes, dtype=np.float64)
+    tmp = np.zeros(n_ztypes, dtype=np.float64)
 
     has_any = False
     for age in range(adult_start_idx, n_ages):
         p_reproduce = nbc.clamp01(float(repro_rates[age]))
         fertility_factor = nbc.clamp01(float(rel_fert[age]))
 
-        for gf in range(n_genotypes):
+        for gf in range(n_ztypes):
             ff = fert_f_arr[gf]
-            for gm in range(n_genotypes):
+            for gm in range(n_ztypes):
                 n_pairs = float(sperm[age, gf, gm])
                 if n_pairs <= 0.0:
                     continue
@@ -385,7 +401,7 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                     continue
 
                 p_surv = 0.0
-                for go in range(n_genotypes):
+                for go in range(n_ztypes):
                     p_surv += offspring_prob[gf, gm, go]
 
                 if stochastic:
@@ -403,32 +419,32 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
                     if n_viable <= EPS:
                         continue
                     inv = 1.0 / p_surv
-                    for go in range(n_genotypes):
+                    for go in range(n_ztypes):
                         prob_norm[go] = offspring_prob[gf, gm, go] * inv
                     if continuous_sampling:
                         nbc.continuous_multinomial(n_viable, prob_norm, tmp)
-                        for go in range(n_genotypes):
+                        for go in range(n_ztypes):
                             offspring_acc[go] += tmp[go]
                     else:
                         draws = nbc.multinomial(int(round(n_viable)), prob_norm)
-                        for go in range(n_genotypes):
+                        for go in range(n_ztypes):
                             offspring_acc[go] += float(draws[go])
                 else:
-                    for go in range(n_genotypes):
+                    for go in range(n_ztypes):
                         offspring_acc[go] += n_total * offspring_prob[gf, gm, go]
 
     if not has_any:
-        return np.zeros(n_genotypes), np.zeros(n_genotypes)
+        return np.zeros(n_ztypes), np.zeros(n_ztypes)
 
     total = offspring_acc.sum()
     if total <= EPS:
-        return np.zeros(n_genotypes), np.zeros(n_genotypes)
+        return np.zeros(n_ztypes), np.zeros(n_ztypes)
 
     sr = nbc.clamp01(float(sex_ratio))
-    n_f = np.zeros(n_genotypes, dtype=np.float64)
-    n_m = np.zeros(n_genotypes, dtype=np.float64)
+    n_f = np.zeros(n_ztypes, dtype=np.float64)
+    n_m = np.zeros(n_ztypes, dtype=np.float64)
 
-    for go in range(n_genotypes):
+    for go in range(n_ztypes):
         n_g = offspring_acc[go]
         if n_g <= EPS:
             continue
@@ -469,7 +485,7 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
     average_eggs_per_wt_female: float,
     adult_start_idx: int,
     n_ages: int,
-    n_genotypes: int,
+    n_ztypes: int,
     n_haplogenotypes: int,
     female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
     male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
@@ -498,7 +514,7 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
         average_eggs_per_wt_female: Expected eggs per wild-type female.
         adult_start_idx: First reproductive age class.
         n_ages: Total number of age classes.
-        n_genotypes: Number of diploid genotypes.
+        n_ztypes: Number of diploid genotypes.
         n_haplogenotypes: Unused parameter for API compatibility.
         female_genotype_compatibility: Female sex-compatibility weights.
         male_genotype_compatibility: Male sex-compatibility weights.
@@ -528,7 +544,7 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
         average_eggs_per_wt_female=average_eggs_per_wt_female,
         adult_start_idx=adult_start_idx,
         n_ages=n_ages,
-        n_genotypes=n_genotypes,
+        n_ztypes=n_ztypes,
         female_genotype_compatibility=female_genotype_compatibility,
         male_genotype_compatibility=male_genotype_compatibility,
         female_only_by_sex_chrom=female_only_by_sex_chrom,
@@ -566,7 +582,7 @@ def compute_age_based_survival_rates(
 def compute_viability_survival_rates(
     female_viability_rates: Annotated[NDArray[np.float64], "shape=(g,)"],
     male_viability_rates: Annotated[NDArray[np.float64], "shape=(g,)"],
-    n_genotypes: int,
+    n_ztypes: int,
     target_age: int,
     n_ages: int,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]]:
@@ -575,20 +591,20 @@ def compute_viability_survival_rates(
     Args:
         female_viability_rates: Female viability genotype-specific rates shape (g,)
         male_viability_rates: Male viability genotype-specific rates shape (g,)
-        n_genotypes: Number of genotypes
+        n_ztypes: Number of genotypes
         target_age: Age index where viability is applied
         n_ages: Total number of ages
 
     Returns:
-        Tuple[survival_rates_f, survival_rates_m]: Two matrices with shape (n_ages, n_genotypes),
+        Tuple[survival_rates_f, survival_rates_m]: Two matrices with shape (n_ages, n_ztypes),
             all rows are 1.0 except target_age row
     """
     v_f = np.asarray(female_viability_rates)
     v_m = np.asarray(male_viability_rates)
 
     # Initialize as all 1.0 matrices
-    surv_f = np.ones((n_ages, n_genotypes), dtype=np.float64)
-    surv_m = np.ones((n_ages, n_genotypes), dtype=np.float64)
+    surv_f = np.ones((n_ages, n_ztypes), dtype=np.float64)
+    surv_m = np.ones((n_ages, n_ztypes), dtype=np.float64)
 
     # Set viability survival rates only at target age
     surv_f[target_age, :] = v_f
@@ -602,7 +618,7 @@ def apply_survival_rates_deterministic(
     population: Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]],
     female_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
     male_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
-    n_genotypes: int,
+    n_ztypes: int,
     n_ages: int,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"]]:
     """Deterministically apply survival rates (direct multiplication, no sampling).
@@ -615,7 +631,7 @@ def apply_survival_rates_deterministic(
         population: (female, male) tuple
         female_survival_rates: Female survival rates
         male_survival_rates: Male survival rates
-        n_genotypes: Number of genotypes
+        n_ztypes: Number of genotypes
         n_ages: Number of ages
 
     Returns:
@@ -627,8 +643,8 @@ def apply_survival_rates_deterministic(
     s_f = np.asarray(female_survival_rates)
     s_m = np.asarray(male_survival_rates)
 
-    assert f_result.shape == (n_ages, n_genotypes)
-    assert m_result.shape == (n_ages, n_genotypes)
+    assert f_result.shape == (n_ages, n_ztypes)
+    assert m_result.shape == (n_ages, n_ztypes)
 
     if s_f.ndim == 1:
         # 1D array: Apply by age
@@ -636,7 +652,7 @@ def apply_survival_rates_deterministic(
         f_result = f_result * s_f[:, None]
     else:
         # 2D array: Direct application
-        assert s_f.shape == (n_ages, n_genotypes)
+        assert s_f.shape == (n_ages, n_ztypes)
         f_result = f_result * s_f
 
     if s_m.ndim == 1:
@@ -645,7 +661,7 @@ def apply_survival_rates_deterministic(
         m_result = m_result * s_m[:, None]
     else:
         # 2D array: Direct application
-        assert s_m.shape == (n_ages, n_genotypes)
+        assert s_m.shape == (n_ages, n_ztypes)
         m_result = m_result * s_m
 
     return f_result, m_result
@@ -657,7 +673,7 @@ def apply_survival_rates_deterministic_with_sperm_storage(
     sperm_store: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
     female_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
     male_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
-    n_genotypes: int,
+    n_ztypes: int,
     n_ages: int,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
     """Deterministically apply survival rates with consistent scaling of sperm storage (no sampling).
@@ -666,10 +682,10 @@ def apply_survival_rates_deterministic_with_sperm_storage(
 
     Args:
         population: (female, male) tuple
-        sperm_store: Sperm storage array shape (n_ages, n_genotypes, n_genotypes)
+        sperm_store: Sperm storage array shape (n_ages, n_ztypes, n_ztypes)
         female_survival_rates: Female survival rates (supports 1D or 2D)
         male_survival_rates: Male survival rates (supports 1D or 2D)
-        n_genotypes: Number of genotypes
+        n_ztypes: Number of genotypes
         n_ages: Number of ages
 
     Returns:
@@ -682,23 +698,23 @@ def apply_survival_rates_deterministic_with_sperm_storage(
     surv_f = np.asarray(female_survival_rates)
     surv_m = np.asarray(male_survival_rates)
 
-    assert f_pop.shape == (n_ages, n_genotypes)
-    assert m_pop.shape == (n_ages, n_genotypes)
-    assert s_pop.shape == (n_ages, n_genotypes, n_genotypes)
+    assert f_pop.shape == (n_ages, n_ztypes)
+    assert m_pop.shape == (n_ages, n_ztypes)
+    assert s_pop.shape == (n_ages, n_ztypes, n_ztypes)
 
     # Normalize to 2D for uniform access.
     surv_f_2d = surv_f.reshape(n_ages, 1) if surv_f.ndim == 1 else surv_f
     surv_m_2d = surv_m.reshape(n_ages, 1) if surv_m.ndim == 1 else surv_m
 
     for age in range(n_ages):
-        for g in range(n_genotypes):
+        for g in range(n_ztypes):
             gf_idx = g % surv_f_2d.shape[1]
             f_rate = float(surv_f_2d[age, gf_idx])
             f_pop[age, g] *= f_rate
             s_pop[age, g, :] *= f_rate
 
     for age in range(n_ages):
-        for g in range(n_genotypes):
+        for g in range(n_ztypes):
             gm_idx = g % surv_m_2d.shape[1]
             m_rate = float(surv_m_2d[age, gm_idx])
             m_pop[age, g] *= m_rate
@@ -712,7 +728,7 @@ def sample_survival_with_sperm_storage(
     sperm_store: Annotated[NDArray[np.float64], "shape=(A,g,g)"],
     female_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
     male_survival_rates: Annotated[NDArray[np.float64], "shape=(A,)|(A,g)"],
-    n_genotypes: int,
+    n_ztypes: int,
     n_ages: int,
     continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g)"], Annotated[NDArray[np.float64], "shape=(A,g,g)"]]:
@@ -722,10 +738,10 @@ def sample_survival_with_sperm_storage(
 
     Args:
         population: (female, male) tuple
-        sperm_store: Sperm storage array shape (n_ages, n_genotypes, n_genotypes)
+        sperm_store: Sperm storage array shape (n_ages, n_ztypes, n_ztypes)
         female_survival_rates: Female survival rates (supports 1D or 2D)
         male_survival_rates: Male survival rates (supports 1D or 2D)
-        n_genotypes: Number of genotypes
+        n_ztypes: Number of genotypes
         continuous_sampling: If True, use Dirichlet distribution instead of discrete sampling.
             Currently not implemented (will use discrete).
         n_ages: Number of ages
@@ -747,22 +763,22 @@ def sample_survival_with_sperm_storage(
     surv_f = np.asarray(female_survival_rates)
     surv_m = np.asarray(male_survival_rates)
 
-    assert f_pop.shape == (n_ages, n_genotypes)
-    assert m_pop.shape == (n_ages, n_genotypes)
-    assert s_pop.shape == (n_ages, n_genotypes, n_genotypes)
+    assert f_pop.shape == (n_ages, n_ztypes)
+    assert m_pop.shape == (n_ages, n_ztypes)
+    assert s_pop.shape == (n_ages, n_ztypes, n_ztypes)
 
     surv_f_2d = surv_f.reshape(n_ages, 1) if surv_f.ndim == 1 else surv_f
     surv_m_2d = surv_m.reshape(n_ages, 1) if surv_m.ndim == 1 else surv_m
 
     for age in range(n_ages):
-        for g in range(n_genotypes):
+        for g in range(n_ztypes):
             # ── females + sperm ──
             n_f_raw = float(f_pop[age, g])
             gf_idx = g % surv_f_2d.shape[1]
             p_f = nbc.clamp01(float(surv_f_2d[age, gf_idx]))
 
             total_sperm = 0.0
-            for gm in range(n_genotypes):
+            for gm in range(n_ztypes):
                 total_sperm += float(s_pop[age, g, gm])
 
             n_virgins_raw = n_f_raw - total_sperm
@@ -775,7 +791,7 @@ def sample_survival_with_sperm_storage(
             n_virgins = n_virgins_raw if continuous_sampling else float(int(round(n_virgins_raw)))
 
             new_sperm_sum = 0.0
-            for gm in range(n_genotypes):
+            for gm in range(n_ztypes):
                 n_sperm = s_pop[age, g, gm] if continuous_sampling else float(int(round(s_pop[age, g, gm])))
                 if n_sperm > EPS:
                     s_pop[age, g, gm] = (
@@ -817,7 +833,7 @@ def sample_survival_with_sperm_storage(
 def recruit_juveniles_sampling(
     age_0_juvenile_counts: Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]],
     carrying_capacity: int,
-    n_genotypes: int,
+    n_ztypes: int,
     stochastic: bool = True,
     continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
@@ -832,7 +848,7 @@ def recruit_juveniles_sampling(
     Args:
         age_0_juvenile_counts: Tuple of (female_0, male_0) age-0 juvenile counts
         carrying_capacity: Carrying capacity K
-        n_genotypes: Number of genotypes
+        n_ztypes: Number of genotypes
         stochastic: If True, use stochastic sampling; if False, use deterministic scaling
         continuous_sampling: If True and stochastic=True, use Dirichlet distribution
             instead of discrete sampling
@@ -850,8 +866,8 @@ def recruit_juveniles_sampling(
         female_arr = np.asarray(female_0)
         male_arr = np.asarray(male_0)
 
-    assert female_arr.shape == (n_genotypes,)
-    assert male_arr.shape == (n_genotypes,)
+    assert female_arr.shape == (n_ztypes,)
+    assert male_arr.shape == (n_ztypes,)
 
     total = float(female_arr.sum() + male_arr.sum())
     K = float(carrying_capacity)
@@ -869,20 +885,20 @@ def recruit_juveniles_sampling(
     if stochastic:
         if continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
-            out_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
+            out_counts = np.zeros(2 * n_ztypes, dtype=np.float64)
             nbc.continuous_multinomial(K, probs, out_counts)
             draws = out_counts
         else:
             # Discrete sampling: standard Multinomial
             draws = nbc.multinomial(int(round(K)), probs).astype(np.float64)
-        f_new = draws[:n_genotypes]
-        m_new = draws[n_genotypes:]
+        f_new = draws[:n_ztypes]
+        m_new = draws[n_ztypes:]
         return f_new, m_new
 
     # Deterministic scaling
     scaled = counts * (K / total)
-    f_new = scaled[:n_genotypes]
-    m_new = scaled[n_genotypes:]
+    f_new = scaled[:n_ztypes]
+    m_new = scaled[n_ztypes:]
     return f_new, m_new
 
 
@@ -890,7 +906,7 @@ def recruit_juveniles_sampling(
 def recruit_juveniles_given_scaling_factor_sampling(
     age_0_juvenile_counts: Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]],
     scaling_factor: float,
-    n_genotypes: int,
+    n_ztypes: int,
     stochastic: bool = True,
     continuous_sampling: bool = False,
 ) -> Tuple[Annotated[NDArray[np.float64], "shape=(g,)"], Annotated[NDArray[np.float64], "shape=(g,)"]]:
@@ -902,7 +918,7 @@ def recruit_juveniles_given_scaling_factor_sampling(
     Args:
         age_0_juvenile_counts: Tuple of (female_0, male_0) age-0 juvenile counts
         scaling_factor: Scaling factor to apply to total juvenile count
-        n_genotypes: Number of genotypes
+        n_ztypes: Number of genotypes
         stochastic: If True, use stochastic sampling; if False, use deterministic scaling
         continuous_sampling: If True and stochastic=True, use Dirichlet distribution
             instead of discrete sampling. Currently not implemented (will use discrete).
@@ -919,8 +935,8 @@ def recruit_juveniles_given_scaling_factor_sampling(
         female_arr = np.asarray(female_0)
         male_arr = np.asarray(male_0)
 
-    assert female_arr.shape == (n_genotypes,)
-    assert male_arr.shape == (n_genotypes,)
+    assert female_arr.shape == (n_ztypes,)
+    assert male_arr.shape == (n_ztypes,)
 
     total = float(female_arr.sum() + male_arr.sum())
     if total <= 0:
@@ -945,21 +961,21 @@ def recruit_juveniles_given_scaling_factor_sampling(
         # This avoids Numba nested JIT dynamic probability array type inference bug
         if continuous_sampling:
             # Continuous sampling: use Dirichlet instead of Multinomial
-            temp_counts = np.zeros(2 * n_genotypes, dtype=np.float64)
+            temp_counts = np.zeros(2 * n_ztypes, dtype=np.float64)
             nbc.continuous_multinomial(float(desired), probs, temp_counts)
-            f_new = temp_counts[:n_genotypes].astype(np.float64)
-            m_new = temp_counts[n_genotypes:].astype(np.float64)
+            f_new = temp_counts[:n_ztypes].astype(np.float64)
+            m_new = temp_counts[n_ztypes:].astype(np.float64)
         else:
             # Discrete sampling: standard Multinomial
             draws = nbc.multinomial(int(round(desired)), probs)
-            f_new = draws[:n_genotypes].astype(np.float64)
-            m_new = draws[n_genotypes:].astype(np.float64)
+            f_new = draws[:n_ztypes].astype(np.float64)
+            m_new = draws[n_ztypes:].astype(np.float64)
         return f_new, m_new
 
     # Deterministic: use scaled value directly without rounding
     scaled = counts * (desired / float(total))
-    f_new = scaled[:n_genotypes]
-    m_new = scaled[n_genotypes:]
+    f_new = scaled[:n_ztypes]
+    m_new = scaled[n_ztypes:]
     return f_new, m_new
 
 @njit_switch(cache=True)
@@ -1262,7 +1278,7 @@ def fertilize_with_precomputed_offspring_probability(
     average_eggs_per_wt_female: float,
     adult_start_idx: int,
     n_ages: int,
-    n_genotypes: int,
+    n_ztypes: int,
     n_haplogenotypes: int,
     female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
     male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
@@ -1291,7 +1307,7 @@ def fertilize_with_precomputed_offspring_probability(
         average_eggs_per_wt_female=average_eggs_per_wt_female,
         adult_start_idx=adult_start_idx,
         n_ages=n_ages,
-        n_genotypes=n_genotypes,
+        n_ztypes=n_ztypes,
         female_genotype_compatibility=female_genotype_compatibility,
         male_genotype_compatibility=male_genotype_compatibility,
         female_only_by_sex_chrom=female_only_by_sex_chrom,

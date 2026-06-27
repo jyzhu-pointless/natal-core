@@ -98,6 +98,7 @@ class LifecycleWrappers:
     run_fn: Optional[HookCallable] = None
     run_discrete_tick_fn: Optional[HookCallable] = None
     run_discrete_fn: Optional[HookCallable] = None
+    run_wf_fn: Optional[HookCallable] = None
     spatial_tick_fn: Optional[HookCallable] = None
     spatial_run_fn: Optional[HookCallable] = None
     spatial_discrete_tick_fn: Optional[HookCallable] = None
@@ -182,6 +183,40 @@ def compile_lifecycle_wrapper(
     setattr(module, "_FIRST_HOOK", first_hook)  # noqa: B010
     setattr(module, "_EARLY_HOOK", early_hook)  # noqa: B010
     setattr(module, "_LATE_HOOK", late_hook)  # noqa: B010
+
+    return getattr(module, tick_fn_name), getattr(module, run_fn_name)
+
+
+def compile_wf_lifecycle_wrapper(
+    first_hook: HookCallable,
+) -> tuple[HookCallable, HookCallable]:
+    """Generate a Wright-Fisher lifecycle wrapper.
+
+    Uses ``lifecycle_wf.tmpl.py`` — same hook-injection pattern as
+    ``compile_lifecycle_wrapper``, but only FIRST hooks are supported
+    (EARLY/LATE have no natural insertion point in the fused WF tick).
+
+    Args:
+        first_hook: Combined njit function for the ``first`` event.
+
+    Returns:
+        ``(tick_fn, run_fn)``.
+    """
+    parts = ["lifecycle_wf"] + [stable_callable_identity(first_hook)]
+    key = hash_key(parts)
+    module_stem = f"lifecycle_wf_{key}"
+    tick_fn_name = f"_lifecycle_wf_tick_{key}"
+    run_fn_name = f"_lifecycle_wf_run_{key}"
+
+    source = (
+        _read_engine_template("lifecycle_wf.tmpl.py")
+        .replace("TICK_FN_NAME", tick_fn_name)
+        .replace("RUN_FN_NAME", run_fn_name)
+    )
+    module_path = write_codegen_module(module_stem, source)
+    module = load_codegen_module(module_stem, module_path)
+
+    setattr(module, "_FIRST_HOOK", first_hook)  # noqa: B010
 
     return getattr(module, tick_fn_name), getattr(module, run_fn_name)
 
@@ -471,6 +506,9 @@ def compile_lifecycle_wrappers(
         result.run_discrete_tick_fn, result.run_discrete_fn = (
             compile_lifecycle_wrapper(True, first_d, early_d, late_d)
         )
+
+        # Wright-Fisher wrapper — FIRST → run_wf_tick (no EARLY/LATE).
+        _, result.run_wf_fn = compile_wf_lifecycle_wrapper(first_d)
 
         if include_spatial_wrappers:
             result.spatial_tick_fn, result.spatial_run_fn = (
