@@ -666,7 +666,6 @@ def build_population_config(
     initial_sperm_storage: Optional[NDArray[np.float64]] = None,
     age_1_carrying_capacity: Optional[float] = None,
     old_juvenile_carrying_capacity: Optional[float] = None,
-    expected_num_adult_females: Optional[float] = None,
     infer_capacity_from_initial_state: bool = True,
     equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None,
     external_expected_eggs: Optional[float] = None,
@@ -721,7 +720,6 @@ def build_population_config(
             n_ztypes). If None, filled with zeros.
         age_1_carrying_capacity: Population carrying capacity at age=1.
         old_juvenile_carrying_capacity: Alias for age_1_carrying_capacity (deprecated, use age_1_carrying_capacity).
-        expected_num_adult_females: Expected number of adult females (unscaled).
         infer_capacity_from_initial_state: If True and carrying_capacity is None,
             compute base capacity from initial_individual_count.
         equilibrium_individual_distribution: Optional distribution used to compute

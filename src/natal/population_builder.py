@@ -340,7 +340,6 @@ class PopulationConfigBuilder:
             juvenile_growth_mode=juvenile_growth_mode_int,
             age_1_carrying_capacity=age_1_carrying_capacity or old_juvenile_carrying_capacity,
             old_juvenile_carrying_capacity=None,
-            expected_num_adult_females=expected_num_adult_females,
             equilibrium_individual_distribution=eq_dist,
             external_expected_eggs=external_eggs,
             zygotes_to_gametes_map=gamete_map,

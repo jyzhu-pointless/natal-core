@@ -2204,6 +2204,8 @@ class AgeStructuredConfigurator(Configurator):
             self._has_user_expected_females = True
         if equilibrium_distribution is not None:
             self._equilibrium_distribution = equilibrium_distribution
+        if k_value is not None:
+            self._sync_equilibrium()
         return self
 
     def reproduction(
