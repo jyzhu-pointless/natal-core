@@ -377,9 +377,7 @@ class ZygoteConversionRuleSet:
             haploid_genotypes = population.registry.index_to_haplo
             diploid_genotypes = population.registry.index_to_genotype
 
-            # Build genotype index lookup — store both ordered and unordered
-            # forms so replacement genotypes (which may not be unordered) are
-            # found during allele conversion.
+            # Build genotype index lookup for the registered diploid set.
             genotype_index: Dict[Genotype, int] = {}
             for idx, gt in enumerate(diploid_genotypes):
                 genotype_index[gt] = idx
@@ -464,13 +462,6 @@ class ZygoteConversionRuleSet:
                 for gt, prob in current_freqs.items():
                     if prob > 1e-12:
                         idx = genotype_index.get(gt)
-                        if idx is None and gt.species.unordered:
-                            from natal.genetic_structures import (
-                                _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
-                            )
-                            mat, pat = _canonical_haploid_pair(gt.species, gt.maternal, gt.paternal)
-                            canonical_gt = Genotype(gt.species, mat, pat)
-                            idx = genotype_index.get(canonical_gt)
                         if idx is not None:
                             final_dist[idx] = final_dist.get(idx, 0.0) + prob
 
@@ -541,12 +532,12 @@ def _build_hg_glab_genotype_map(
     n_hg = len(haploid_genotypes)
 
     # Build a lookup from (maternal_hg, paternal_hg) -> Genotype.
-    # Since diploid_genotypes are unordered (maternal index <= paternal index),
-    # we store both ordered and reversed pairs for lookup robustness.
+    # The full (c1, c2) gamete-label iteration produces every ordering,
+    # so both (hg_A, hg_a) and (hg_a, hg_A) must map to the same Genotype.
     pair_to_gt: Dict[Tuple[HaploidGenotype, HaploidGenotype], Genotype] = {}
     for gt in diploid_genotypes:
         pair_to_gt[(gt.maternal, gt.paternal)] = gt
-        pair_to_gt[(gt.paternal, gt.maternal)] = gt  # reversed also valid
+        pair_to_gt[(gt.paternal, gt.maternal)] = gt
 
     result: Dict[Tuple[int, int], Optional[Genotype]] = {}
     for hg1_idx in range(n_hg):
