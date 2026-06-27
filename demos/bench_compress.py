@@ -1,8 +1,8 @@
 """End-to-end validation: compress A+B correctness + speed on mosquito model."""
 import sys
 import time
-import numpy as np
 from collections.abc import Mapping, Sequence
+
 import natal as nt
 
 IndividualDistribution = Mapping[

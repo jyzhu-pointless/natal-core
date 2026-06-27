@@ -97,7 +97,6 @@ def _build_registry(species: Species) -> IndexRegistry:
         for hg in haploid_genotypes:
             registry.register_haplogenotype(hg)
 
-    registry.n_ztypes = registry.num_genotypes()
     return registry
 
 
@@ -323,15 +322,21 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
                     try:
                         gt = ctx.species.get_genotype_from_str(dg)
                         if gt in diploid_genotypes:
-                            g_orig = diploid_genotypes.index(gt)
                             for s in range(n_slabs):
-                                declared_ints.add(g_orig * n_slabs + s)
+                                declared_ints.add(
+                                    ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
+                                )
                     except Exception:
                         pass
                 else:
                     g_orig = int(dg)
                     for s in range(n_slabs):
-                        declared_ints.add(g_orig * n_slabs + s)
+                        declared_ints.add(
+                            ctx.registry.ztype_index(
+                                diploid_genotypes[g_orig],
+                                ctx.registry.slab_labels[s],
+                            )
+                        )
 
         _gt_mask, _, _zt_mask, _ = (
             build_gamete_compression_mask(
@@ -842,11 +847,9 @@ def _write_fitness_field_flat(
                     context=f"fitness.{field_name}",
                 )
 
-            n_slabs = max(len(slab_to_idx), 1)
             for genotype in matched:
-                gidx = registry.genotype_to_index[genotype]
                 age_slice = slice(resolved_age, resolved_age + 1)
-                zidx = gidx * n_slabs + si
+                zidx = registry.ztype_index(genotype, _slab)
 
                 if field_name == "viability":
                     arr = config.viability_fitness
@@ -899,13 +902,11 @@ def _write_fitness_field_flat(
             all_genotypes=all_genotypes,
             context=f"fitness.{field_name}",
         )
-        n_slabs = max(len(slab_to_idx), 1)
         for genotype in matched:
-            gidx = registry.genotype_to_index[genotype]
             age_slice = slice(resolved_age, resolved_age + 1)
 
             for si in slab_indices:
-                zidx = gidx * n_slabs + si
+                zidx = registry.ztype_index(genotype, registry.slab_labels[si])
 
                 if field_name == "viability":
                     arr = config.viability_fitness
