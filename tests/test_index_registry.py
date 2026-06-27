@@ -21,18 +21,18 @@ def _hg(sp: Species, s: str) -> HaploidGenotype:
 
 
 class TestGenotype:
-    def test_register_first_returns_zero(self):
+    def test_register_first_returns_list_with_zero(self):
         reg = IndexRegistry()
         sp = _simple_species()
         idx = reg.register_genotype(_gt(sp, "A|A"))
-        assert idx == 0
+        assert idx == [0]
 
-    def test_register_second_returns_one(self):
+    def test_register_second_returns_list_with_one(self):
         reg = IndexRegistry()
         sp = _simple_species()
         reg.register_genotype(_gt(sp, "A|A"))
         idx = reg.register_genotype(_gt(sp, "A|a"))
-        assert idx == 1
+        assert idx == [1]
 
     def test_duplicate_registration_idempotent(self):
         reg = IndexRegistry()
@@ -91,9 +91,9 @@ class TestGenotype:
 
 
 class TestHaplogenotype:
-    def test_register_first_returns_zero(self):
+    def test_register_first_returns_list_with_zero(self):
         reg = IndexRegistry()
-        assert reg.register_haplogenotype("h0") == 0
+        assert reg.register_haplogenotype("h0") == [0]
 
     def test_duplicate_idempotent(self):
         reg = IndexRegistry()

@@ -584,13 +584,10 @@ def _apply_viability_slab_scaling(
 ) -> None:
     """Apply per-slab viability scaling by writing to the (G×S) flat array."""
     for slab_name, factor in patch['viability_per_slab'].items():
-        slab_idx = population.index_registry.somatic_label_index(slab_name)
-        n_slabs = population.index_registry.num_somatic_labels()
         default_age = int(population.config.new_adult_age) - 1
         arr = population.config.viability_fitness
         for genotype in all_genotypes:
-            g = population.index_registry.genotype_to_index[genotype]
-            z = g * n_slabs + slab_idx
+            z = population.index_registry.ztype_index(genotype, slab_name)
             for sex in (0, 1):
                 current = float(arr[sex, default_age, z])
                 arr[sex, default_age, z] = current * float(factor)
@@ -603,12 +600,9 @@ def _apply_fecundity_slab_scaling(
 ) -> None:
     """Apply per-slab fecundity scaling."""
     for slab_name, factor in patch['fecundity_per_slab'].items():
-        slab_idx = population.index_registry.somatic_label_index(slab_name)
-        n_slabs = population.index_registry.num_somatic_labels()
         arr = population.config.fecundity_fitness
         for genotype in all_genotypes:
-            g = population.index_registry.genotype_to_index[genotype]
-            z = g * n_slabs + slab_idx
+            z = population.index_registry.ztype_index(genotype, slab_name)
             for sex in (0, 1):
                 current = float(arr[sex, z])
                 arr[sex, z] = current * float(factor)
@@ -626,12 +620,9 @@ def _apply_sexual_selection_slab_scaling(
     female genotype determines the mating success modifier.
     """
     for slab_name, factor in patch['sexual_selection_per_slab'].items():
-        slab_idx = population.index_registry.somatic_label_index(slab_name)
-        n_slabs = population.index_registry.num_somatic_labels()
         arr = population.config.sexual_selection_fitness
         for genotype in all_genotypes:
-            g = population.index_registry.genotype_to_index[genotype]
-            z = g * n_slabs + slab_idx
+            z = population.index_registry.ztype_index(genotype, slab_name)
             # Female side: all male ZTypes paired with this female ZType
             for mz in range(arr.shape[1]):
                 current = float(arr[z, mz])
@@ -645,12 +636,9 @@ def _apply_zygote_slab_scaling(
 ) -> None:
     """Apply per-slab zygote viability scaling."""
     for slab_name, factor in patch['zygote_per_slab'].items():
-        slab_idx = population.index_registry.somatic_label_index(slab_name)
-        n_slabs = population.index_registry.num_somatic_labels()
         arr = population.config.zygote_viability_fitness
         for genotype in all_genotypes:
-            g = population.index_registry.genotype_to_index[genotype]
-            z = g * n_slabs + slab_idx
+            z = population.index_registry.ztype_index(genotype, slab_name)
             for sex in (0, 1):
                 current = float(arr[sex, z])
                 arr[sex, z] = current * float(factor)

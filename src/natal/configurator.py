@@ -70,22 +70,33 @@ def _build_registry(species: Species) -> IndexRegistry:
         When *species* does not define ``gamete_labels`` (or they are empty),
         a single ``"default"`` label is registered so that modifier code
         always has at least one gamete-label slot to index into.
+
+        Labels MUST be registered before genotypes/haplotypes so that
+        the auto-cross-product creates ZType/GType entries for ALL slabs/glabs.
     """
     registry = IndexRegistry()
-    for genotype in species.get_all_genotypes(unordered=species.unordered):
-        registry.register_genotype(genotype)
-    haploid_genotypes = species.get_all_haploid_genotypes()
-    if haploid_genotypes:
-        for hg in haploid_genotypes:
-            registry.register_haplogenotype(hg)
+
+    # 1. Register labels FIRST — so auto-cross-product covers all of them.
     raw_glabs = getattr(species, "gamete_labels", None)
     glabs = raw_glabs or ["default"]
     for glab in glabs:
         registry.register_gamete_label(glab)
+
     raw_slabs = getattr(species, "somatic_labels", None)
     slabs = raw_slabs or ["default"]
     for slab in slabs:
         registry.register_somatic_label(slab)
+
+    # 2. Register genotypes — auto-cross-products with ALL slab_labels above.
+    for genotype in species.get_all_genotypes(unordered=species.unordered):
+        registry.register_genotype(genotype)
+
+    # 3. Register haplotypes — auto-cross-products with ALL glab_labels above.
+    haploid_genotypes = species.get_all_haploid_genotypes()
+    if haploid_genotypes:
+        for hg in haploid_genotypes:
+            registry.register_haplogenotype(hg)
+
     registry.n_ztypes = registry.num_genotypes()
     return registry
 
@@ -369,8 +380,7 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
 
             ctx.config = compress_config(ctx.config, ztype_mask)
             n_g_compressed = int(ctx.config.n_ztypes)
-            ctx.registry.compress(ztype_mask, gtype_mask,
-                                  n_slabs=int(ctx.config.n_slabs))
+            ctx.registry.compress(ztype_mask, gtype_mask)
 
     # ---- recompute offspring probability tensor from the updated maps ----
     offspring_tensor = compute_offspring_probability_tensor(
