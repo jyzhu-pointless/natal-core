@@ -31,6 +31,7 @@ from natal.base_population import BasePopulation, HookRegistrationMap
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
 from natal.hooks.types import RESULT_CONTINUE
+from natal.index_registry import IndexRegistry
 from natal.population_config import PopulationConfig
 from natal.population_state import PopulationState
 from natal.type_def import Sex
@@ -64,6 +65,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         species: Species,
         population_config: PopulationConfig,
         name: Optional[str] = None,
+        index_registry: Optional[IndexRegistry] = None,
         initial_individual_count: Optional[Mapping[str, Mapping[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
         initial_sperm_storage: Optional[Mapping[Union[Genotype, str], Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
         hooks: Optional[HookRegistrationMap] = None,
@@ -94,6 +96,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         hooks_map: HookRegistrationMap = hooks or {}
         super().__init__(species, name, hooks=hooks_map)
 
+        if index_registry is not None:
+            self._index_registry = index_registry
+
         config_hook_slot = int(getattr(population_config, "hook_slot", 0))
         if config_hook_slot <= 0:
             config_hook_slot = self.hook_slot
@@ -105,7 +110,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._initialize_registry()
 
         self._state = PopulationState.create(
-            n_genotypes=population_config.n_genotypes,
+            n_ztypes=population_config.n_ztypes,
             n_sexes=population_config.n_sexes,
             n_ages=population_config.n_ages,
         )
@@ -160,6 +165,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
         *,
+        compress: bool = False,
+        declared_zygote_types: set[str] | set[int] | None = None,
         legacy_path: Literal[False] = False,
     ) -> AgeStructuredConfigurator: ...
 
@@ -172,6 +179,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
         *,
+        compress: bool = False,
+        declared_zygote_types: set[str] | set[int] | None = None,
+        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
         legacy_path: bool = False,
     ) -> AgeStructuredPopulationBuilder | AgeStructuredConfigurator:
         """Fluent population construction entry point.
@@ -201,11 +211,20 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         from natal.configurator import Configurator
 
+        if declared_genotypes is not None:
+            if declared_zygote_types is not None:
+                raise ValueError(
+                    "Cannot specify both declared_zygote_types and "
+                    "declared_genotypes (deprecated alias)."
+                )
+            declared_zygote_types = declared_genotypes
         return Configurator.for_age_structured(species).setup(
             name=name,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             fixed_egg_count=fixed_egg_count,
+            compress=compress,
+            declared_zygote_types=declared_zygote_types,
         )
 
     def _distribute_initial_population(
@@ -376,7 +395,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
 
             self._state = PopulationState.create(
-                n_genotypes=self.config.n_genotypes,
+                n_ztypes=self.config.n_ztypes,
                 n_sexes=self.config.n_sexes,
                 n_ages=self.config.n_ages,
                 n_tick=0,
@@ -614,7 +633,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 flattened,
                 n_sexes=2,
                 n_ages=self.config.n_ages,
-                n_genotypes=len(self.registry.index_to_genotype)
+                n_ztypes=len(self.registry.index_to_genotype)
             )
             result.append((tick, state))
         return result
@@ -636,7 +655,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     flattened,
                     n_sexes=2,
                     n_ages=self.config.n_ages,
-                    n_genotypes=len(self.registry.index_to_genotype)
+                    n_ztypes=len(self.registry.index_to_genotype)
                 )
                 # Copy state data directly.
                 self.state.individual_count[:] = state.individual_count

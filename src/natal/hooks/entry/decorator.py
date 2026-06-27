@@ -341,7 +341,7 @@ def hook(
                             deme_selector=actual_deme_selector,
                             njit_fn=func,
                             meta={
-                                "n_genotypes": pop.index_registry.num_genotypes(),
+                                "n_ztypes": pop.index_registry.n_ztypes,
                                 "n_ages": pop.config.n_ages,
                             },
                         )
@@ -361,7 +361,7 @@ def hook(
                                     deme_selector=actual_deme_selector,
                                     njit_fn=norm_fn,
                                     meta={
-                                        "n_genotypes": pop.index_registry.num_genotypes(),
+                                        "n_ztypes": pop.index_registry.n_ztypes,
                                         "n_ages": pop.config.n_ages,
                                     },
                                 )
@@ -376,7 +376,7 @@ def hook(
                                     njit_fn=None,
                                     py_wrapper=wrapped_func,
                                     meta={
-                                        "n_genotypes": pop.index_registry.num_genotypes(),
+                                        "n_ztypes": pop.index_registry.n_ztypes,
                                         "n_ages": pop.config.n_ages,
                                     },
                                 )
@@ -391,7 +391,7 @@ def hook(
                                 njit_fn=None,
                                 py_wrapper=wrapped_func,
                                 meta={
-                                    "n_genotypes": pop.index_registry.num_genotypes(),
+                                    "n_ztypes": pop.index_registry.n_ztypes,
                                     "n_ages": pop.config.n_ages,
                                 },
                             )
@@ -410,7 +410,7 @@ def hook(
                     deme_selector=actual_deme_selector,
                     py_wrapper=func,
                     meta={
-                        "n_genotypes": pop.index_registry.num_genotypes(),
+                        "n_ztypes": pop.index_registry.n_ztypes,
                         "n_ages": pop.config.n_ages,
                     },
                 )

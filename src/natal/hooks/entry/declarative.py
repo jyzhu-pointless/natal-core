@@ -603,7 +603,7 @@ def compile_declarative_hook(
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry
     diploid_genotypes = index_registry.index_to_genotype
-    n_genotypes = index_registry.num_genotypes()
+    n_genotypes = index_registry.n_ztypes
     n_ages = pop.config.n_ages
 
     # Initialize data structures for storing compiled hook operations
@@ -705,6 +705,6 @@ def compile_declarative_hook(
         priority=priority,            # Execution priority (higher = earlier)
         deme_selector=deme_selector, # Which demes this hook applies to
         plan=plan,                    # Compiled execution plan
-        meta={"n_genotypes": n_genotypes, "n_ages": n_ages},  # Population metadata
+        meta={"n_ztypes": n_genotypes, "n_ages": n_ages},  # Population metadata
         ops=ops,                     # Original operations for reference/debugging
     )

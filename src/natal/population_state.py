@@ -14,14 +14,6 @@ from numpy.typing import NDArray
 __all__ = [
     "PopulationState",
     "DiscretePopulationState",
-    "PlainPopulationState",
-    "PlainDiscretePopulationState",
-    "to_plain_population_state",
-    "to_plain_discrete_population_state",
-    "from_plain_population_state",
-    "from_plain_discrete_population_state",
-    "parse_flattened_state",
-    "parse_flattened_discrete_state",
 ]
 
 
@@ -46,10 +38,11 @@ class PopulationState(NamedTuple):
     @classmethod
     def create(
         cls,
-        n_genotypes: int,
+        n_ztypes: int,
         n_sexes: Optional[int] = None,
         n_ages: int = 2,
         n_tick: int = 0,
+        n_slabs: int = 1,
         individual_count: Optional[NDArray[np.float64]] = None,
         sperm_storage: Optional[NDArray[np.float64]] = None,
     ) -> PopulationState:
@@ -58,12 +51,12 @@ class PopulationState(NamedTuple):
         If arrays are not provided, they are initialised to zeros.
 
         Args:
-            n_genotypes: Number of diploid genotype types.
+            n_ztypes: Number of zygote types (diploid genotype types after slab expansion).
             n_sexes: Number of sexes (defaults to 2 if not given).
             n_ages: Number of age classes (default 2).
             n_tick: Initial tick value (default 0).
-            individual_count: Optional array (n_sexes, n_ages, n_genotypes).
-            sperm_storage: Optional array (n_ages, n_genotypes, n_genotypes).
+            individual_count: Optional array (n_sexes, n_ages, n_ztypes).
+            sperm_storage: Optional array (n_ages, n_ztypes, n_ztypes).
 
         Returns:
             A new PopulationState instance.
@@ -73,14 +66,18 @@ class PopulationState(NamedTuple):
         """
         if n_sexes is None:
             n_sexes = 2
-        assert n_genotypes > 0, "n_genotypes must be positive"
+        assert n_ztypes > 0, "n_ztypes must be positive"
         assert n_ages > 0, "n_ages must be positive"
         assert n_tick >= 0, "n_tick must be non-negative"
+        assert n_slabs >= 1, "n_slabs must be >= 1"
 
+        # ZType dimension = genotype × slab (defaults to genotype
+        # when n_slabs=1, leaving existing behaviour unchanged).
+        n_genotypes = n_ztypes // n_slabs
         if individual_count is None:
-            ind = np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64)
+            ind = np.zeros((n_sexes, n_ages, n_ztypes), dtype=np.float64)
         else:
-            expected_shape = (n_sexes, n_ages, n_genotypes)
+            expected_shape = (n_sexes, n_ages, n_ztypes)
             assert individual_count.shape == expected_shape, (
                 f"Invalid shape for individual_count: expected {expected_shape}, got {individual_count.shape}"
             )
@@ -186,8 +183,9 @@ class DiscretePopulationState(NamedTuple):
         cls,
         n_sexes: int,
         n_ages: int,
-        n_genotypes: int,
+        n_ztypes: int,
         n_tick: int = 0,
+        n_slabs: int = 1,
         individual_count: Optional[NDArray[np.float64]] = None,
     ) -> DiscretePopulationState:
         """Create a DiscretePopulationState with optionally provided array.
@@ -195,9 +193,10 @@ class DiscretePopulationState(NamedTuple):
         Args:
             n_sexes: Number of sexes.
             n_ages: Number of age classes.
-            n_genotypes: Number of diploid genotype types.
+            n_ztypes: Number of zygote types (diploid genotypes after slab expansion).
             n_tick: Initial tick value (default 0).
-            individual_count: Optional array (n_sexes, n_ages, n_genotypes);
+            n_slabs: Number of somatic label variants (default 1).
+            individual_count: Optional array (n_sexes, n_ages, n_ztypes);
                 if None, filled with zeros.
 
         Returns:
@@ -208,13 +207,14 @@ class DiscretePopulationState(NamedTuple):
         """
         assert n_sexes > 0, "n_sexes must be positive"
         assert n_ages > 0, "n_ages must be positive"
-        assert n_genotypes > 0, "n_genotypes must be positive"
+        assert n_ztypes > 0, "n_ztypes must be positive"
         assert n_tick >= 0, "n_tick must be non-negative"
+        assert n_slabs >= 1, "n_slabs must be >= 1"
 
         if individual_count is None:
-            ind = np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64)
+            ind = np.zeros((n_sexes, n_ages, n_ztypes), dtype=np.float64)
         else:
-            expected_shape = (n_sexes, n_ages, n_genotypes)
+            expected_shape = (n_sexes, n_ages, n_ztypes)
             assert individual_count.shape == expected_shape, (
                 f"Invalid shape for individual_count: expected {expected_shape}, got {individual_count.shape}"
             )
@@ -292,7 +292,7 @@ def parse_flattened_state(
     flat_array: NDArray[np.float64],
     n_sexes: Union[int, np.integer],
     n_ages: Union[int, np.integer],
-    n_genotypes: Union[int, np.integer],
+    n_ztypes: Union[int, np.integer],
     copy: bool = True,
 ) -> PopulationState:
     """Reconstruct a PopulationState from a flattened array.
@@ -303,16 +303,16 @@ def parse_flattened_state(
         flat_array: 1D array containing tick, individual_count, sperm_storage.
         n_sexes: Number of sexes.
         n_ages: Number of age classes.
-        n_genotypes: Number of diploid genotype types.
+        n_ztypes: Number of zygote types (diploid genotypes after slab expansion).
         copy: If True, arrays are deep‑copied; otherwise they are viewed.
 
     Returns:
         A PopulationState instance.
     """
     n_tick = int(flat_array[0])
-    end = 1 + n_sexes * n_ages * n_genotypes
-    individual_count = flat_array[1:end].reshape((n_sexes, n_ages, n_genotypes))
-    sperm_storage = flat_array[end:].reshape((n_ages, n_genotypes, n_genotypes))
+    end = 1 + n_sexes * n_ages * n_ztypes
+    individual_count = flat_array[1:end].reshape((n_sexes, n_ages, n_ztypes))
+    sperm_storage = flat_array[end:].reshape((n_ages, n_ztypes, n_ztypes))
 
     if copy:
         individual_count = individual_count.copy()
@@ -329,7 +329,7 @@ def parse_flattened_discrete_state(
     flat_array: NDArray[np.float64],
     n_sexes: Union[int, np.integer],
     n_ages: Union[int, np.integer],
-    n_genotypes: Union[int, np.integer],
+    n_ztypes: Union[int, np.integer],
     copy: bool = True,
 ) -> DiscretePopulationState:
     """Reconstruct a DiscretePopulationState from a flattened array.
@@ -340,14 +340,14 @@ def parse_flattened_discrete_state(
         flat_array: 1D array containing tick and individual_count.
         n_sexes: Number of sexes.
         n_ages: Number of age classes.
-        n_genotypes: Number of diploid genotype types.
+        n_ztypes: Number of zygote types (diploid genotypes after slab expansion).
         copy: If True, the array is deep‑copied; otherwise it is viewed.
 
     Returns:
         A DiscretePopulationState instance.
     """
     n_tick = int(flat_array[0])
-    individual_count = flat_array[1:].reshape((n_sexes, n_ages, n_genotypes))
+    individual_count = flat_array[1:].reshape((n_sexes, n_ages, n_ztypes))
 
     if copy:
         individual_count = individual_count.copy()

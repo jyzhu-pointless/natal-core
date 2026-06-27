@@ -11,7 +11,7 @@ It supports two flavors of rules:
    Match a whole HaploidGenotype and replace it with another.
    Examples: convert(hg_match=hg_AB, to_haploid_genotype=hg_CD, rate=0.8)
 
-Both create a GameteModifier that modifies genotype_to_gametes_map during gamete production.
+Both create a GameteModifier that modifies zygotes_to_gametes_map during gamete production.
 """
 
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -413,7 +413,7 @@ class GameteConversionRuleSet:
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
 
             n_glabs = int(population.config.n_glabs)
-            genotype_to_gametes_map = population.config.genotype_to_gametes_map
+            zygotes_to_gametes_map = population.config.zygotes_to_gametes_map
             haploid_genotypes = population.registry.index_to_haplo
 
             # Resolve glab names to indices for all rules (once)
@@ -428,7 +428,7 @@ class GameteConversionRuleSet:
 
                     # Extract glab-aware gamete frequencies
                     initial_freqs = extract_gamete_frequencies_by_glab(
-                        genotype_to_gametes_map,
+                        zygotes_to_gametes_map,
                         sex_idx,
                         genotype_idx,
                         haploid_genotypes,

@@ -178,7 +178,7 @@ class PopulationConfigBuilder:
         # ===== Extract genotypes =====
         raw_gamete_labels = cast(Optional[List[str]], getattr(species, "gamete_labels", None))
         gamete_labels = raw_gamete_labels or ["default"]
-        genotypes = species.get_all_genotypes()
+        genotypes = species.get_all_genotypes(unordered=species.unordered)
         haploid_genotypes = species.get_all_haploid_genotypes()
 
         n_genotypes = len(genotypes)
@@ -343,8 +343,8 @@ class PopulationConfigBuilder:
             expected_num_adult_females=expected_num_adult_females,
             equilibrium_individual_distribution=eq_dist,
             external_expected_eggs=external_eggs,
-            genotype_to_gametes_map=gamete_map,
-            gametes_to_zygote_map=zygote_map,
+            zygotes_to_gametes_map=gamete_map,
+            gametes_to_zygotes_map=zygote_map,
             generation_time=generation_time,
             initial_individual_count=initial_individual_count,
         )
@@ -714,6 +714,11 @@ class PopulationConfigBuilder:
             raise TypeError(f"genotype_key must be a genotype or str, got {type(genotype_key)}")
         if genotype.species is not species:
             raise ValueError("Genotype must belong to this species")
+        # Canonicalize: A|a and a|A share the same index.
+        # Skip canonicalization for species with sex chromosomes —
+        # X|Y and Y|X are biologically distinct genotypes.
+        if species.unordered:
+            genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
         return int(genotype_to_index[genotype])
 
     @staticmethod
@@ -788,21 +793,43 @@ class PopulationConfigBuilder:
         Returns:
             NDArray[np.float64]: A 3D array [sex, age, genotype].
         """
-        genotypes = species.get_all_genotypes()
+        genotypes = species.get_all_genotypes(unordered=species.unordered)
         genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        out = np.zeros((2, n_ages, len(genotypes)), dtype=np.float64)
+        n_slabs = len(species.somatic_labels or ["default"])
+        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
+        n_ztypes = len(genotypes) * n_slabs
+        out = np.zeros((2, n_ages, n_ztypes), dtype=np.float64)
 
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
             for genotype_key, age_data in genotype_dist.items():
+                # Support @slab suffix and tuple syntax:
+                #   "A|A@infected" → genotype A|A, slab infected
+                #   (genotype_obj, "infected") → genotype_obj, slab infected
+                slab_idx: int = 0
+                resolved_key: object = genotype_key
+                if isinstance(genotype_key, tuple):
+                    _key, _slab = cast("tuple[object, str]", genotype_key)
+                    resolved_key = _key
+                    if _slab not in slab_to_idx:
+                        raise ValueError(f"Unknown slab label '{_slab}'")
+                    slab_idx = slab_to_idx[_slab]
+                elif isinstance(genotype_key, str) and "@" in genotype_key:
+                    g_str, s_str = genotype_key.rsplit("@", 1)
+                    resolved_key = g_str
+                    if s_str not in slab_to_idx:
+                        raise ValueError(f"Unknown slab label '{s_str}' in key '{g_str}@{s_str}'")
+                    slab_idx = slab_to_idx[s_str]
+
                 genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, genotype_key, genotype_to_index
+                    species, resolved_key, genotype_to_index
                 )
+                z_idx = genotype_idx * n_slabs + slab_idx
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
                 )
                 for age, count in age_counts.items():
-                    out[sex_idx, age, genotype_idx] += float(count)
+                    out[sex_idx, age, z_idx] += float(count)
         return out
 
     @staticmethod
@@ -826,23 +853,48 @@ class PopulationConfigBuilder:
         Raises:
             TypeError: If storage value is not a dictionary.
         """
-        genotypes = species.get_all_genotypes()
+        genotypes = species.get_all_genotypes(unordered=species.unordered)
         genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        out = np.zeros((n_ages, len(genotypes), len(genotypes)), dtype=np.float64)
+        n_slabs = len(species.somatic_labels or ["default"])
+        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
+        n_ztypes = len(genotypes) * n_slabs
+        out = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
 
         for female_key, male_dict in sperm_storage.items():
-            female_idx = PopulationConfigBuilder._resolve_genotype_index(
+            female_idx, female_slab = PopulationConfigBuilder._resolve_genotype_index(
                 species, female_key, genotype_to_index
-            )
-            for male_key, age_data in male_dict.items():
-                male_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, male_key, genotype_to_index
+            ), 0
+            # Support @slab suffix on female key
+            if isinstance(female_key, str) and "@" in female_key:
+                g_str, s_str = female_key.rsplit("@", 1)
+                if s_str not in slab_to_idx:
+                    raise ValueError(f"Unknown slab label '{s_str}' in key '{female_key}'")
+                female_slab = slab_to_idx[s_str]
+                female_idx = PopulationConfigBuilder._resolve_genotype_index(
+                    species, g_str, genotype_to_index
                 )
+            f_z = female_idx * n_slabs + female_slab
+
+            for male_key, age_data in male_dict.items():
+                male_idx, male_slab = PopulationConfigBuilder._resolve_genotype_index(
+                    species, male_key, genotype_to_index
+                ), 0
+                # Support @slab suffix on male key
+                if isinstance(male_key, str) and "@" in male_key:
+                    g_str, s_str = male_key.rsplit("@", 1)
+                    if s_str not in slab_to_idx:
+                        raise ValueError(f"Unknown slab label '{s_str}' in key '{male_key}'")
+                    male_slab = slab_to_idx[s_str]
+                    male_idx = PopulationConfigBuilder._resolve_genotype_index(
+                        species, g_str, genotype_to_index
+                    )
+                m_z = male_idx * n_slabs + male_slab
+
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
                 )
                 for age, count in age_counts.items():
-                    out[age, female_idx, male_idx] += float(count)
+                    out[age, f_z, m_z] += float(count)
         return out
 
     @staticmethod
@@ -911,19 +963,38 @@ class PopulationConfigBuilder:
         Returns:
             NDArray[np.float64]: A 3D array [sex, age, genotype] with age max 2.
         """
-        genotypes = species.get_all_genotypes()
+        genotypes = species.get_all_genotypes(unordered=species.unordered)
         genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        out = np.zeros((2, 2, len(genotypes)), dtype=np.float64)
+        n_slabs = len(species.somatic_labels or ["default"])
+        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
+        n_ztypes = len(genotypes) * n_slabs
+        out = np.zeros((2, 2, n_ztypes), dtype=np.float64)
 
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
             for genotype_key, age_data in genotype_dist.items():
+                slab_idx: int = 0
+                resolved_key: object = genotype_key
+                if isinstance(genotype_key, tuple):
+                    _key, _slab = cast("tuple[object, str]", genotype_key)
+                    resolved_key = _key
+                    if _slab not in slab_to_idx:
+                        raise ValueError(f"Unknown slab label '{_slab}'")
+                    slab_idx = slab_to_idx[_slab]
+                elif isinstance(genotype_key, str) and "@" in genotype_key:
+                    g_str, s_str = genotype_key.rsplit("@", 1)
+                    resolved_key = g_str
+                    if s_str not in slab_to_idx:
+                        raise ValueError(f"Unknown slab label '{s_str}' in key '{g_str}@{s_str}'")
+                    slab_idx = slab_to_idx[s_str]
+
                 genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, genotype_key, genotype_to_index
+                    species, resolved_key, genotype_to_index
                 )
+                z_idx = genotype_idx * n_slabs + slab_idx
                 age0, age1 = PopulationConfigBuilder._resolve_discrete_age_distribution(age_data)
-                out[sex_idx, 0, genotype_idx] += age0
-                out[sex_idx, 1, genotype_idx] += age1
+                out[sex_idx, 0, z_idx] += age0
+                out[sex_idx, 1, z_idx] += age1
         return out
 
     @staticmethod

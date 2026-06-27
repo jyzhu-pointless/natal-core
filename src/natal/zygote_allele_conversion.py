@@ -11,7 +11,7 @@ It supports two flavors of rules:
    Replace a single allele inside the diploid genotype.
    Examples: convert(from_allele="A", to_allele="B", rate=0.5, side="both")
 
-Both create a ZygoteModifier that modifies gametes_to_zygote_map after fertilization.
+Both create a ZygoteModifier that modifies gametes_to_zygotes_map after fertilization.
 
 Typical use cases:
 - Maternal-effect lethality (certain maternal genotypes kill offspring)
@@ -377,8 +377,17 @@ class ZygoteConversionRuleSet:
             haploid_genotypes = population.registry.index_to_haplo
             diploid_genotypes = population.registry.index_to_genotype
 
-            # Build genotype index lookup
-            genotype_index = {gt: idx for idx, gt in enumerate(diploid_genotypes)}
+            # Build genotype index lookup — store both ordered and canonical
+            # forms so replacement genotypes (which may not be canonical) are
+            # found during allele conversion.
+            genotype_index: Dict[Genotype, int] = {}
+            for idx, gt in enumerate(diploid_genotypes):
+                genotype_index[gt] = idx
+                # Also register the reversed (non-canonical) form.
+                sp = gt.species
+                rev = Genotype(species=sp, maternal=gt.paternal, paternal=gt.maternal)
+                if rev not in genotype_index:
+                    genotype_index[rev] = idx
 
             hg_glab_to_genotype = _build_hg_glab_genotype_map(
                 haploid_genotypes, diploid_genotypes, n_glabs, population,
@@ -518,7 +527,7 @@ def _build_hg_glab_genotype_map(
     """Map every (c1, c2) compressed gamete pair to its baseline Genotype.
 
     This reproduces the structural determination performed during
-    ``gametes_to_zygote_map`` initialisation: the diploid genotype is
+    ``gametes_to_zygotes_map`` initialisation: the diploid genotype is
     uniquely determined by the maternal and paternal HaploidGenotype
     (glab is irrelevant for genotype identity but affects the compressed
     index).
@@ -529,10 +538,13 @@ def _build_hg_glab_genotype_map(
     """
     n_hg = len(haploid_genotypes)
 
-    # Build a lookup from (maternal_hg, paternal_hg) -> Genotype
+    # Build a lookup from (maternal_hg, paternal_hg) -> Genotype.
+    # Since diploid_genotypes are canonical (maternal index <= paternal index),
+    # we store both ordered and reversed pairs for lookup robustness.
     pair_to_gt: Dict[Tuple[HaploidGenotype, HaploidGenotype], Genotype] = {}
     for gt in diploid_genotypes:
         pair_to_gt[(gt.maternal, gt.paternal)] = gt
+        pair_to_gt[(gt.paternal, gt.maternal)] = gt  # reversed also valid
 
     result: Dict[Tuple[int, int], Optional[Genotype]] = {}
     for hg1_idx in range(n_hg):

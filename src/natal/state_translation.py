@@ -197,7 +197,7 @@ def population_state_to_dict(
         "dimensions": {
             "n_sexes": int(n_sexes),
             "n_ages": int(n_ages),
-            "n_genotypes": int(n_genotypes),
+            "n_ztypes": int(n_genotypes),
         },
         "individual_count": _build_individual_count_payload(
             state.individual_count,
@@ -272,7 +272,7 @@ def discrete_population_state_to_dict(
         "dimensions": {
             "n_sexes": int(n_sexes),
             "n_ages": int(n_ages),
-            "n_genotypes": int(n_genotypes),
+            "n_ztypes": int(n_genotypes),
         },
         "individual_count": _build_individual_count_payload(
             state.individual_count,
@@ -427,7 +427,7 @@ def population_history_to_readable_dict(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_genotypes=n_genotypes,
+                n_ztypes=n_genotypes,
                 copy=True,
             )
             snapshots.append(
@@ -444,7 +444,7 @@ def population_history_to_readable_dict(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_genotypes=n_genotypes,
+                n_ztypes=n_genotypes,
                 copy=True,
             )
             snapshots.append(
@@ -673,7 +673,7 @@ def _build_history_observation_payload(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_genotypes=n_genotypes,
+                n_ztypes=n_genotypes,
                 copy=True,
             )
         elif isinstance(state, DiscretePopulationState):
@@ -681,7 +681,7 @@ def _build_history_observation_payload(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_genotypes=n_genotypes,
+                n_ztypes=n_genotypes,
                 copy=True,
             )
         else:
