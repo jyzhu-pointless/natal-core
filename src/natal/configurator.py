@@ -399,13 +399,6 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         overrides["fecundity_m"] = ctx.config.fecundity_fitness[1]
         overrides["viability_f"] = ctx.config.viability_fitness[0, 0, :]
         overrides["viability_m"] = ctx.config.viability_fitness[1, 0, :]
-    else:
-        # Compression masks are index metadata, not population parameters.
-        # Cache them (per-Species, in index_registry) so
-        # refresh_modifier_maps can optionally reuse them.  The engine is
-        # index-transparent and never reads these masks.
-        from natal.index_registry import cache_compression_masks
-        cache_compression_masks(ctx.species, gtype_mask, ztype_mask)
     ctx.config = ctx.config._replace(**overrides)
 
 

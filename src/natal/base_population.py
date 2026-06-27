@@ -764,67 +764,13 @@ class BasePopulation(ABC, Generic[T_State]):
                 f"{int(self._config.n_ztypes)}"
             )
 
-        # Step 3.5: Index compression.
-        #
-        # Compression is only maintained — never initiated — at runtime.
-        # Masks are cached at build time and reused here.  New reachable
-        # genotypes must be declared via setup(declared_zygote_types=...).
-        n_g = int(self._config.n_ztypes)
-        n_hg = int(self._config.n_haploid_genotypes)
-        n_gl = n_glabs
-
-        # Reuse build-time masks — runtime modifier changes do not
-        # alter reachability (new types must be declared at setup time).
-        gtype_mask: Any = None
-        ztype_mask: Any = None
-        species = getattr(self, "_species", None)
-
-        if species is not None:
-            from natal.index_registry import get_cached_compression_masks
-            cached = get_cached_compression_masks(species)
-            if cached is not None:
-                gtype_mask, ztype_mask = cached
-
-        # Only apply compression when BFS found reachable genotypes.
-        # An all-pruned mask means no compression was active or the
-        # initial state has zero individuals.
-        has_reachable = (
-            gtype_mask is not None
-            and gtype_mask.size > 0
-            and int((gtype_mask >= 0).sum()) > 0
-        )
-
-        if has_reachable:
-            from natal.population_config import (
-                compress_gamete_map,
-                compress_zygote_map,
-            )
-            assert gtype_mask is not None and ztype_mask is not None
-            zygotes_to_gametes_map = compress_gamete_map(
-                zygotes_to_gametes_map, gtype_mask,
-            )
-            gametes_to_zygotes_map = compress_zygote_map(
-                gametes_to_zygotes_map, gtype_mask,
-            )
-            n_hg = int((gtype_mask >= 0).sum())
-            # GType compression collapses the (haplogenotype × glab) axis into
-            # a flat HL' list.  The n_glabs dimension is no longer separable —
-            # set it to 1 so downstream tensor computation uses HL' as-is.
-            n_gl = 1
-
-        if ztype_mask is not None and ztype_mask.size > 0:
-            _z_active = ztype_mask >= 0
-            zygotes_to_gametes_map = zygotes_to_gametes_map[:, _z_active, :]
-            gametes_to_zygotes_map = gametes_to_zygotes_map[:, :, _z_active]
-
-            from natal.population_config import compress_config
-            self._config = compress_config(self._config, ztype_mask)
-            n_g = int(self._config.n_ztypes)
-
         # Step 4: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
         # the fusion map.  The result is a 4-D array indexed by
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
+        n_g = int(self._config.n_ztypes)
+        n_hg = int(self._config.n_haploid_genotypes)
+        n_gl = n_glabs
         offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=zygotes_to_gametes_map[0],
             meiosis_m=zygotes_to_gametes_map[1],
@@ -843,14 +789,6 @@ class BasePopulation(ABC, Generic[T_State]):
             n_haploid_genotypes=n_hg,
             n_glabs=n_gl,
         )
-        if self._index_registry is not None:
-            if ztype_mask is not None and gtype_mask is not None:
-                self._index_registry.compress(
-                    ztype_mask, gtype_mask,
-                    n_slabs=int(self._config.n_slabs),
-                )
-            else:
-                self._index_registry.n_ztypes = n_g
 
     def add_gamete_modifier(
         self,
