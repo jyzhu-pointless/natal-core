@@ -1760,10 +1760,10 @@ class Configurator:
             )
 
         # Sync registry.n_ztypes.  When compress=True this was already
-        # done by _rebuild_config_maps; when compress=False it still
-        # equals num_genotypes().
-        if self._registry is not None:
-            self._registry.n_ztypes = int(final_config.n_ztypes)
+        # done by compress() inside _rebuild_config_maps; when compress=False
+        # it was set by _build_registry.
+        if self._registry is not None and not self._compression_applied:
+            self._registry.n_ztypes = int(final_config.n_ztypes) // max(int(getattr(final_config, "n_slabs", 1)), 1)
 
         # Resolve name: explicit argument > setup(name=...) > default
         if name is None:

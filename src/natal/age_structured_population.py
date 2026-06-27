@@ -633,7 +633,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 flattened,
                 n_sexes=2,
                 n_ages=self.config.n_ages,
-                n_ztypes=len(self.registry.index_to_genotype)
+                n_ztypes=self.config.n_ztypes
             )
             result.append((tick, state))
         return result
@@ -655,7 +655,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     flattened,
                     n_sexes=2,
                     n_ages=self.config.n_ages,
-                    n_ztypes=len(self.registry.index_to_genotype)
+                    n_ztypes=self.config.n_ztypes
                 )
                 # Copy state data directly.
                 self.state.individual_count[:] = state.individual_count
