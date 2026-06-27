@@ -907,7 +907,7 @@ class SpatialDashboard:
         n_demes = self.pop.n_demes
         n_sexes = int(config.n_sexes)
         n_ages = int(config.n_ages)
-        n_genotypes = int(config.n_genotypes)
+        n_genotypes = int(config.n_ztypes)
         ind_per_deme = n_sexes * n_ages * n_genotypes
         registry = first_deme.registry
 
@@ -983,7 +983,7 @@ class SpatialDashboard:
 
         config = self.pop.deme(0).export_config()
         registry = self.pop.deme(0).registry
-        g2g = config.genotype_to_gametes_map
+        z2g = config.zygotes_to_gametes_map
         n_glabs = config.n_glabs
         genotypes = registry.index_to_genotype
 
@@ -1000,7 +1000,7 @@ class SpatialDashboard:
         figs = []
         for sex_idx in range(config.n_sexes):
             sex_label = "Female" if sex_idx == 0 else "Male"
-            matrix = g2g[sex_idx]
+            matrix = z2g[sex_idx]
             fig = px.imshow(
                 matrix,
                 labels={"x": "Gamete", "y": "Parent", "color": "Prob"},
@@ -1018,7 +1018,7 @@ class SpatialDashboard:
 
         config = self.pop.deme(0).export_config()
         registry = self.pop.deme(0).registry
-        g2z = config.gametes_to_zygote_map
+        g2z = config.gametes_to_zygotes_map
         n_hg_glabs = int(config.n_haploid_genotypes * config.n_glabs)
         genotypes = registry.index_to_genotype
 
@@ -1297,7 +1297,7 @@ class SpatialDashboard:
                                 ("Sperm Displacement", float(config.sperm_displacement_rate)),
                                 ("N Sexes", int(config.n_sexes)),
                                 ("N Ages", int(config.n_ages)),
-                                ("N Genotypes", int(config.n_genotypes)),
+                                ("N Genotypes", int(config.n_ztypes)),
                             ]:
                                 ui.label(label_text).classes("font-bold text-gray-500 text-sm")
                                 ui.label(str(value)).classes("text-right font-mono text-sm")
@@ -1433,7 +1433,7 @@ class SpatialDashboard:
                     "carrying_capacity": float(first_config.carrying_capacity),
                     "n_sexes": int(first_config.n_sexes),
                     "n_ages": int(first_config.n_ages),
-                    "n_genotypes": int(first_config.n_genotypes),
+                    "n_genotypes": int(first_config.n_ztypes),
                     "sex_ratio": float(first_config.sex_ratio),
                     "eggs_per_female": float(first_config.expected_eggs_per_female),
                     "growth_mode": growth_mode_name(int(first_config.juvenile_growth_mode)),

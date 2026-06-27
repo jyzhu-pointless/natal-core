@@ -225,7 +225,7 @@ See the [Advanced Hook Tutorial](3_advanced_hooks.md) section on "Runtime Parame
 
 - [Runtime Parameter Modification](3_runtime_modification.md)
 - [Advanced Hook Tutorial](3_advanced_hooks.md)
-- [Configurator API Reference](../api/configurator.md)
+- [Configurator API Reference](api/configurator.md)
 - [Population Initialization](2_population_initialization.md)
 - [Modifier Mechanism](3_modifiers.md)
 - [Quick Start](1_quickstart.md)

@@ -225,3 +225,45 @@ else:
 # Manually finish simulation
 pop.finish_simulation()
 ```
+
+## Wright-Fisher Extreme Speed Mode
+
+Discrete-generation populations support a Wright-Fisher extreme speed mode: a single multinomial draw per tick replaces the step-by-step mate→fertilize→survive pipeline. Designed for effective population size modeling, 10-100× faster.
+
+### Sampling Modes
+
+| Mode | Description |
+|------|-------------|
+| DETERMINISTIC (3) | Infinite population limit, no randomness |
+| MULTINOMIAL (1) | Classic Wright-Fisher single multinomial draw |
+| POISSON (2) | Independent Poisson draws (large-N approximation) |
+
+### Enabling (preliminary API)
+
+```python
+object.__setattr__(pop, "_config", pop.config._replace(extreme_speed_mode=3))
+pop.run(100)
+```
+
+### Competition and Hooks
+
+All three competition modes (FIXED/LOGISTIC/BEVERTON_HOLT) are supported, sharing the same scaling functions as the standard path. Only FIRST hooks are supported (fired before the WF tick). Deterministic WF mode matches the standard deterministic path tick-by-tick.
+
+## Index Compression
+
+Index compression prunes unreachable gamete types (GType) and zygote/individual types (ZType) at build time, reducing array dimensions.
+
+### Enabling
+
+```python
+pop = nt.DiscreteGenerationPopulation.setup(
+    species=sp, stochastic=False, compress=True,
+).initial_state(...).competition(...)
+    .build()
+```
+
+### Effect
+
+- GType: single-locus with only A|A initially → HL from 2 to 1
+- ZType: only A|A reachable → G from 4 to 1, offspring_tensor from 64 to 1 elements
+- Combined: >98% reduction possible

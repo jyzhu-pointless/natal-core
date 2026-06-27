@@ -21,9 +21,7 @@ from numpy.typing import NDArray
 from .numba_utils import is_numba_enabled, njit_switch
 
 __all__ = [
-    "EPS", "binomial", "binomial_2d", "multinomial_rows", "multinomial",
-    "continuous_poisson", "continuous_binomial", "continuous_multinomial",
-    "set_numba_seed", "clamp01"
+    "set_numba_seed",
 ]
 
 EPS = 1e-10

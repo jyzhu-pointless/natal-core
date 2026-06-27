@@ -23,12 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypedDict, cast
 
-__all__ = [
-    "DomainStr",
-    "ParamDescriptor",
-    "ALL_PARAMETERS",
-    "PARAMETERS_BY_DOMAIN",
-]
+__all__: list[str] = []
 
 # ── domain ─────────────────────────────────────────────────────────────────
 

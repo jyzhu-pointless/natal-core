@@ -51,6 +51,24 @@ Pattern strings are parsed in three layers, from outer to inner:
 | `{A,B,C}` | Matches any element in the enumerated set | `{A1,A2}` |
 | `!X` | Excludes `X`, matches any other allele | `!A1` |
 
+### Label Matching (@lab)
+
+A `@` suffix on the pattern string constrains matches to specific gamete labels (`glab`) or somatic labels (`slab`). Label syntax mirrors allele syntax:
+
+| Pattern | Meaning | Example |
+|---------|---------|---------|
+| `@X` | Exact label match | `A\|a@Cas9_high` |
+| `@!X` | Exclude label X | `A\|a@!wildtype` |
+| `@{A,B}` | Any label in set | `A\|a@{high,low}` |
+| `@!{A,B}` | Exclude labels in set | `@!{wildtype,default}` |
+
+GenotypePattern uses `@` for somatic labels; HaploidGenotypePattern uses `@` for gamete labels:
+
+```python
+parser.parse("A|a@Cas9_high")                      # somatic label
+parser.parse_haplotype_pattern("A@Cas9_deposited")  # gamete label
+```
+
 ## GenotypePattern: Diploid Genotype Matching
 
 ### Basic Syntax

@@ -25,12 +25,7 @@ from typing import (
 
 __all__ = [
     "NUMBA_ENABLED", "is_numba_enabled", "enable_numba", "disable_numba",
-    "NUMBA_LOG_ENABLED", "is_numba_log_enabled", "enable_numba_log", "disable_numba_log",
-    "NUMBA_SIGNATURE_TRACE_ENABLED", "is_numba_signature_trace_enabled",
-    "enable_numba_signature_trace", "disable_numba_signature_trace",
-    "NUMBA_CACHE_DIR", "get_numba_cache_dir",
-    "njit_switch", "numba_disabled", "numba_enabled",
-    "with_numba_disabled", "with_numba_enabled"
+    "numba_enabled",
 ]
 
 # ============================================================================

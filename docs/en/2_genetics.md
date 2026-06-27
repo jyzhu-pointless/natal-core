@@ -65,7 +65,8 @@ sp = nt.Species.from_dict(
             "C": ["C1", "C2"],
         },
     },
-    gamete_labels=["default", "Cas9_deposited"]  # Optional: gamete labels for simulating maternal effects (e.g., Cas9 protein deposition)
+    gamete_labels=["default", "Cas9_deposited"],  # Optional: gamete labels for maternal effects (e.g. Cas9 deposition)
+    somatic_labels=["wildtype", "Cas9_high"],     # Optional: somatic labels for individual state (e.g. Cas9 expression)
 )
 ```
 

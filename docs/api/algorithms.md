@@ -8,6 +8,6 @@ The `algorithms` module provides Numba-accelerated helper functions for computin
 
 ## Complete Module Reference
 
-::: natal.algorithms
+::: natal.engine.simulation.age_structured
     options:
       heading_level: 3

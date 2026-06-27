@@ -176,7 +176,7 @@ class Dashboard:
         registry = self.pop.registry
         n_sexes = config.n_sexes
         n_ages = config.n_ages
-        n_genotypes = config.n_genotypes
+        n_genotypes = config.n_ztypes
 
         # Determine indices
         # flat_state structure: [tick, individual_count(flattened), sperm_storage(flattened)...]
@@ -568,7 +568,7 @@ class Dashboard:
         import plotly.express as px
         config = self.pop.export_config()
         registry = self.pop.registry
-        g2g = config.genotype_to_gametes_map
+        z2g = config.zygotes_to_gametes_map
         n_glabs = config.n_glabs
         genotypes = registry.index_to_genotype
 
@@ -585,7 +585,7 @@ class Dashboard:
         figs = []
         for sex_idx in range(config.n_sexes):
             sex_label = "Female" if sex_idx == 0 else "Male"
-            matrix = g2g[sex_idx]
+            matrix = z2g[sex_idx]
             fig = px.imshow(matrix,
                             labels={"x": "Gamete", "y": "Parent", "color": "Prob"},
                             x=col_labels, y=row_labels,
@@ -599,7 +599,7 @@ class Dashboard:
         import plotly.express as px
         config = self.pop.export_config()
         registry = self.pop.registry
-        g2z = config.gametes_to_zygote_map
+        g2z = config.gametes_to_zygotes_map
         n_hg_glabs = int(config.n_haploid_genotypes * config.n_glabs)
         genotypes = registry.index_to_genotype
 
@@ -793,7 +793,7 @@ class Dashboard:
             history_list = []
             n_sexes = self.pop._config.n_sexes
             n_ages = self.pop._config.n_ages
-            n_genotypes = self.pop._config.n_genotypes
+            n_genotypes = self.pop._config.n_ztypes
             expected_ind_size = int(n_sexes * n_ages * n_genotypes)
 
             for _tick, flat_state in self.pop.history:
@@ -859,7 +859,7 @@ class Dashboard:
             "continuous_sampling": bool(conf.continuous_sampling),
             "n_sexes": int(conf.n_sexes),
             "n_ages": int(conf.n_ages),
-            "n_genotypes": int(conf.n_genotypes),
+            "n_genotypes": int(conf.n_ztypes),
             "n_haploid_genotypes": int(conf.n_haploid_genotypes),
             "n_glabs": int(conf.n_glabs),
             "new_adult_age": int(conf.new_adult_age),
@@ -985,7 +985,7 @@ class Dashboard:
             # Parse state
             n_sexes = self.pop._config.n_sexes
             n_ages = self.pop._config.n_ages
-            n_genotypes = self.pop._config.n_genotypes
+            n_genotypes = self.pop._config.n_ztypes
 
             # Auto-detect state type based on flattened size
             expected_ind_size = int(n_sexes * n_ages * n_genotypes)
