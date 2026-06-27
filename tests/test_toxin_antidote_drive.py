@@ -210,7 +210,7 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
         wt_idx = self.population.index_registry.haplo_to_index[self.hg_wt]
         c_drive = compress_hg_glab(drive_idx, 0, n_glabs)
         c_wt = compress_hg_glab(wt_idx, 0, n_glabs)
-        # Canonical zygote map sorts haploid pairs by index — use sorted pair.
+        # Unordered zygote map sorts haploid pairs by index — use sorted pair.
         c_pair = (min(c_drive, c_wt), max(c_drive, c_wt))
 
         self.assertIn(c_pair, updates)

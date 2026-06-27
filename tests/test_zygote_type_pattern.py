@@ -117,7 +117,7 @@ class TestFitnessAtSlab:
         cfg = nt.Configurator.from_species(sp).setup(stochastic=False)
         cfg.fitness(viability={"A|a@infected": {"female": 0.5}})
         arr = cfg._config.viability_fitness
-        # Canonical genotypes: AA=0, Aa=1, aa=2
+        # Unordered genotypes: AA=0, Aa=1, aa=2
         # Slabs: normal=0, infected=1
         # ZType = genotype * n_slabs + slab
         # A|a@infected → genotype 1, slab 1 → ZType 1*2+1 = 3

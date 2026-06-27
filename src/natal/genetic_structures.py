@@ -2668,10 +2668,10 @@ class Species(GeneticStructure['HaploidGenome']):
         try:
             exact_gt = self.get_genotype_from_str(selector)
             if self.unordered:
-                canonical = self.unordered_genotype(exact_gt.maternal, exact_gt.paternal)
+                unordered = self.unordered_genotype(exact_gt.maternal, exact_gt.paternal)
             else:
-                canonical = exact_gt
-            return [canonical]
+                unordered = exact_gt
+            return [unordered]
         except Exception as exact_err:
             # For unordered species, auto-promote | to :: in pattern
             # strings so that "*|A" matches both orderings of heterozygous
@@ -3333,7 +3333,7 @@ class Species(GeneticStructure['HaploidGenome']):
             all_haploid_genotypes = list(self.iter_haploid_genotypes())
             if unordered:
                 # Triangular traversal (maternal index ≤ paternal index)
-                # eliminates whole-genome swaps.  A seen set on the canonical
+                # eliminates whole-genome swaps.  A seen set on the unordered
                 # (maternal, paternal) pair catches the remaining per-locus
                 # allele-swap duplicates (e.g. AB|ab ≡ Ab|aB).
                 seen: set[tuple[HaploidGenotype, HaploidGenotype]] = set()
@@ -3574,7 +3574,7 @@ class Species(GeneticStructure['HaploidGenome']):
             diploid_genotypes=self.get_all_genotypes(unordered=self.unordered),
             n_glabs=len(self.gamete_labels or ["default"]),
             zygote_modifiers=zygote_modifiers,
-            canonical=True,  # canonical genotype space
+            unordered=True,  # unordered genotype space
         )
 
     # -- lazy-loaded config blueprint ---------------------------------------------

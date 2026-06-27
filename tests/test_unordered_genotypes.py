@@ -7,12 +7,12 @@ import natal as nt
 from natal.index_registry import IndexRegistry
 
 # ============================================================================
-# Non-canonical (ordered) — default path must be preserved
+# Ordered (ordered) — default path must be preserved
 # ============================================================================
 
 
-class TestNonCanonicalDefault:
-    """Non-canonical (ordered) mode is the default and must work correctly."""
+class TestOrderedDefault:
+    """Ordered (ordered) mode is the default and must work correctly."""
 
     def test_ordered_default_count(self):
         """Default get_all_genotypes() returns ordered (4 for 2 alleles)."""
@@ -21,10 +21,10 @@ class TestNonCanonicalDefault:
         assert len(genotypes) == 4  # AA, Aa, aA, aa — ordered
 
     def test_ordered_blueprint_count(self):
-        """Config blueprint uses canonical count, but ordered is still accessible."""
+        """Config blueprint uses unordered count, but ordered is still accessible."""
         sp = nt.Species.from_dict("nc_bp", {"c1": {"l1": ["A", "a"]}})
         bp = sp.get_config_blueprint()
-        assert bp["n_ztypes"] == 3  # canonical in blueprint
+        assert bp["n_ztypes"] == 3  # unordered in blueprint
         # But ordered is still available
         ordered = sp.get_all_genotypes(unordered=False)
         assert len(ordered) == 4
@@ -37,7 +37,7 @@ class TestNonCanonicalDefault:
         ).age_structure(n_ages=2, new_adult_age=1).initial_state(
             individual_count={"female": {"A|A": 100}, "male": {"A|A": 100}},
         ).reproduction(eggs_per_female=50).competition(carrying_capacity=500).build()
-        # Canonical genotype count in config
+        # Unordered genotype count in config
         assert pop.config.n_ztypes == 3
         assert pop.state.individual_count.sum() > 0
 
@@ -55,31 +55,31 @@ class TestNonCanonicalDefault:
 
 
 # ============================================================================
-# Canonical enumeration
+# Unordered enumeration
 # ============================================================================
 
 
-class TestCanonicalGenotypeEnumeration:
-    """Verify that canonical genotype iteration collapses symmetric pairs."""
+class TestUnorderedGenotypeEnumeration:
+    """Verify that unordered genotype iteration collapses symmetric pairs."""
 
     def test_one_locus_two_alleles_unordered_count(self):
         sp = nt.Species.from_dict("canon_2", {"c1": {"l1": ["A", "a"]}})
         ordered = sp.get_all_genotypes(unordered=False)
-        canonical = sp.get_all_genotypes(unordered=True)
+        unordered = sp.get_all_genotypes(unordered=True)
         assert len(ordered) == 4
-        assert len(canonical) == 3
+        assert len(unordered) == 3
 
     def test_one_locus_three_alleles_unordered_count(self):
         sp = nt.Species.from_dict("canon_3", {"c1": {"l1": ["A", "B", "C"]}})
         ordered = sp.get_all_genotypes(unordered=False)
-        canonical = sp.get_all_genotypes(unordered=True)
+        unordered = sp.get_all_genotypes(unordered=True)
         assert len(ordered) == 9
-        assert len(canonical) == 6
+        assert len(unordered) == 6
 
-    def test_canonical_list_contains_no_duplicates(self):
+    def test_unordered_list_contains_no_duplicates(self):
         sp = nt.Species.from_dict("canon_dup", {"c1": {"l1": ["A", "a"]}})
-        canonical_strs = [str(g) for g in sp.get_all_genotypes(unordered=True)]
-        assert len(canonical_strs) == len(set(canonical_strs))
+        unordered_strs = [str(g) for g in sp.get_all_genotypes(unordered=True)]
+        assert len(unordered_strs) == len(set(unordered_strs))
 
     def test_two_loci_unordered_count(self):
         sp = nt.Species.from_dict(
@@ -87,14 +87,14 @@ class TestCanonicalGenotypeEnumeration:
             {"c1": {"l1": ["A", "a"]}, "c2": {"l2": ["B", "b"]}},
         )
         ordered = sp.get_all_genotypes(unordered=False)
-        canonical = sp.get_all_genotypes(unordered=True)
+        unordered = sp.get_all_genotypes(unordered=True)
         assert len(ordered) == 16
-        # 3×3 = 9 canonical (A/a × B/b), not 10 — per-locus allele-swapping
-        # collapses all 4 phase variants of AaBb into one canonical form.
-        assert len(canonical) == 9
+        # 3×3 = 9 unordered (A/a × B/b), not 10 — per-locus allele-swapping
+        # collapses all 4 phase variants of AaBb into one unordered form.
+        assert len(unordered) == 9
 
     def test_per_locus_phase_variants_collapse(self):
-        """All 4 phase variants of AaBb map to the same canonical genotype."""
+        """All 4 phase variants of AaBb map to the same unordered genotype."""
         sp = nt.Species.from_dict(
             "phase_test",
             {"c1": {"l1": ["A", "a"], "l2": ["B", "b"]}},
@@ -106,14 +106,14 @@ class TestCanonicalGenotypeEnumeration:
         gt2 = sp.unordered_genotype(Ab, aB)  # Ab|aB
         gt3 = sp.unordered_genotype(aB, Ab)  # aB|Ab
         gt4 = sp.unordered_genotype(ab, AB)  # ab|AB
-        # All must produce the same canonical form.
+        # All must produce the same unordered form.
         assert gt1 is gt2 is gt3 is gt4
-        # Verify the canonical form: maternal has smaller allele index at each locus.
+        # Verify the unordered form: maternal has smaller allele index at each locus.
         assert str(gt1.maternal) == "A/B"
         assert str(gt1.paternal) == "a/b"
 
-    def test_canonical_subset_of_ordered(self):
-        """Every canonical genotype string appears in the ordered set."""
+    def test_unordered_subset_of_ordered(self):
+        """Every unordered genotype string appears in the ordered set."""
         sp = nt.Species.from_dict("canon_sub", {"c1": {"l1": ["A", "a"]}})
         ordered_strs = {str(g) for g in sp.get_all_genotypes(unordered=False)}
         for g in sp.get_all_genotypes(unordered=True):
@@ -121,11 +121,11 @@ class TestCanonicalGenotypeEnumeration:
 
 
 # ============================================================================
-# Canonical registry
+# Unordered registry
 # ============================================================================
 
 
-class TestCanonicalRegistry:
+class TestUnorderedRegistry:
     """Verify IndexRegistry canonicalizes genotype registration."""
 
     def test_a_a_and_a_A_share_same_index(self):
@@ -176,8 +176,8 @@ class TestCanonicalRegistry:
         assert sp.get_genotype_from_str("A|a") in reg.genotype_to_index
         assert sp.get_genotype_from_str("a|A") in reg.genotype_to_index
 
-    def test_three_allele_canonical_count(self):
-        """3 alleles × 1 locus: 9 ordered → 6 canonical in registry."""
+    def test_three_allele_unordered_count(self):
+        """3 alleles × 1 locus: 9 ordered → 6 unordered in registry."""
         sp = nt.Species.from_dict("canon_reg6", {"c1": {"l1": ["W", "D", "R"]}})
         reg = IndexRegistry()
         for g in sp.get_all_genotypes(unordered=False):
@@ -186,14 +186,14 @@ class TestCanonicalRegistry:
 
 
 # ============================================================================
-# Canonical config blueprint and population building
+# Unordered config blueprint and population building
 # ============================================================================
 
 
-class TestCanonicalConfigBlueprint:
-    """Verify config blueprint uses canonical genotype count."""
+class TestUnorderedConfigBlueprint:
+    """Verify config blueprint uses unordered genotype count."""
 
-    def test_blueprint_uses_canonical_count(self):
+    def test_blueprint_uses_unordered_count(self):
         sp = nt.Species.from_dict("canon_bp", {"c1": {"l1": ["A", "a"]}})
         bp = sp.get_config_blueprint()
         assert bp["n_ztypes"] == 3
@@ -213,7 +213,7 @@ class TestCanonicalConfigBlueprint:
         assert cfg.sexual_selection_fitness.shape == (ng, ng)
         assert cfg.initial_individual_count.shape == (2, cfg.n_ages, ng)
 
-    def test_discrete_population_uses_canonical(self):
+    def test_discrete_population_uses_unordered(self):
         sp = nt.Species.from_dict("canon_disc", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
@@ -223,27 +223,27 @@ class TestCanonicalConfigBlueprint:
         assert pop.config.n_ztypes == 3
         assert pop.state.individual_count.shape[2] == 3
 
-    def test_three_allele_population_uses_canonical(self):
+    def test_three_allele_population_uses_unordered(self):
         sp = nt.Species.from_dict("canon_3pop", {"c1": {"l1": ["W", "D", "R"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
         ).initial_state(
             individual_count={"female": {"W|W": 50}, "male": {"W|W": 50}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
-        assert pop.config.n_ztypes == 6  # 3 alleles canonical count
+        assert pop.config.n_ztypes == 6  # 3 alleles unordered count
         assert pop.state.individual_count.shape[2] == 6
 
 
 # ============================================================================
-# Canonical pattern matching
+# Unordered pattern matching
 # ============================================================================
 
 
-class TestCanonicalPatternMatching:
-    """Verify pattern strings match canonical genotypes via configurator."""
+class TestUnorderedPatternMatching:
+    """Verify pattern strings match unordered genotypes via configurator."""
 
     def test_initial_state_with_both_ordered_forms(self):
-        """Both 'A|a' and 'a|A' in initial state map to same canonical index."""
+        """Both 'A|a' and 'a|A' in initial state map to same unordered index."""
         sp = nt.Species.from_dict("canon_pat1", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
@@ -253,12 +253,12 @@ class TestCanonicalPatternMatching:
         assert pop.state.individual_count.sum() == 100
 
     def test_viability_string_both_forms(self):
-        """Fitness string 'a|A' writes to the correct canonical genotype."""
+        """Fitness string 'a|A' writes to the correct unordered genotype."""
         sp = nt.Species.from_dict("canon_pat2", {"c1": {"l1": ["A", "a"]}})
         configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
         configurator.fitness(viability={"a|A": {"female": 0.5}})
         arr = configurator._config.viability_fitness
-        assert arr[0, 0, 1] == 0.5  # canonical heterozygous at idx 1
+        assert arr[0, 0, 1] == 0.5  # unordered heterozygous at idx 1
 
     def test_viability_string_A_a(self):
         """Fitness string 'A|a' also writes to idx 1."""
@@ -284,7 +284,7 @@ class TestCanonicalPatternMatching:
         """Pattern '{A}|{a}' matches Aa regardless of ordering — auto-promoted."""
         sp = nt.Species.from_dict("canon_pat5", {"c1": {"l1": ["A", "a"]}})
         configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
-        # {A}|{a} → in canonical space matches A|a (the canonical heterozygous)
+        # {A}|{a} → in unordered space matches A|a (the unordered heterozygous)
         configurator.fitness(viability={"{A}|{a}": {"female": 0.5}})
         arr = configurator._config.viability_fitness
         assert arr[0, 0, 0] == 1.0  # AA → maternal A, paternal A → paternal not {a}
@@ -300,7 +300,7 @@ class TestCanonicalPatternMatching:
         configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
         configurator.fitness(viability={"(A|a; B|b)": {"female": 0.5}})
         arr = configurator._config.viability_fitness
-        # Canonical order: AB|AB=0, AB|Ab=1, AB|aB=2, AB|ab=3,
+        # Unordered order: AB|AB=0, AB|Ab=1, AB|aB=2, AB|ab=3,
         # Ab|Ab=4, Ab|ab=5, aB|aB=6, aB|ab=7, ab|ab=8
         # (A|a; B|b) with :: matches AB|ab regardless of phase
         assert arr[0, 0, 0] == 1.0   # AB|AB → not matched
@@ -316,7 +316,7 @@ class TestCanonicalPatternMatching:
         configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
         configurator.fitness(viability={"A|a; B|b": {"female": 0.5}})
         arr = configurator._config.viability_fitness
-        # Canonical order (2 chr × 2 alleles → 9 genotypes):
+        # Unordered order (2 chr × 2 alleles → 9 genotypes):
         #   0:AA BB  1:AA Bb  2:Aa BB  3:Aa Bb  4:AA bb
         #   5:Aa bb  6:aa BB  7:aa Bb  8:aa bb
         assert arr[0, 0, 0] == 1.0   # AA BB → not matched
@@ -379,57 +379,57 @@ class TestDeclaredZygoteTypes:
 
 
 # ============================================================================
-# Canonical zygote map
+# Unordered zygote map
 
 
 # ============================================================================
-# Canonical zygote map
+# Unordered zygote map
 # ============================================================================
 
 
-class TestCanonicalZygoteMap:
-    """Verify canonical zygote map construction."""
+class TestUnorderedZygoteMap:
+    """Verify unordered zygote map construction."""
 
-    def test_canonical_zygote_map_symmetric(self):
-        """(hg_a, hg_b) and (hg_b, hg_a) map to same canonical genotype."""
+    def test_unordered_zygote_map_symmetric(self):
+        """(hg_a, hg_b) and (hg_b, hg_a) map to same unordered genotype."""
         sp = nt.Species.from_dict("canon_zyg1", {"c1": {"l1": ["A", "a"]}})
         from natal.population_config import initialize_zygote_map
         hgs = sp.get_all_haploid_genotypes()
         gts = sp.get_all_genotypes(unordered=True)
-        z2g = initialize_zygote_map(hgs, gts, n_glabs=1, canonical=True)
+        z2g = initialize_zygote_map(hgs, gts, n_glabs=1, unordered=True)
         # Both pairings should produce the same offspring genotype distribution
         np.testing.assert_array_equal(z2g[0, 1, :], z2g[1, 0, :])
 
-    def test_non_canonical_zygote_map_preserves_order(self):
-        """canonical=False keeps ordered mapping (for backward compat)."""
+    def test_ordered_zygote_map_preserves_order(self):
+        """unordered=False keeps ordered mapping (for backward compat)."""
         sp = nt.Species.from_dict("canon_zyg2", {"c1": {"l1": ["A", "a"]}})
         from natal.population_config import initialize_zygote_map
         hgs = sp.get_all_haploid_genotypes()
         gts = sp.get_all_genotypes(unordered=False)  # ordered
-        z2g = initialize_zygote_map(hgs, gts, n_glabs=1, canonical=False)
-        # Non-canonical: shape uses ordered genotype count
+        z2g = initialize_zygote_map(hgs, gts, n_glabs=1, unordered=False)
+        # Ordered: shape uses ordered genotype count
         assert z2g.shape == (2, 2, 4)  # 2 hgs, 2 hgs, 4 ordered genotypes
 
-    def test_canonical_zygote_map_with_three_alleles(self):
-        """Canonical zygote map for 3 alleles has correct shape."""
+    def test_unordered_zygote_map_with_three_alleles(self):
+        """Unordered zygote map for 3 alleles has correct shape."""
         sp = nt.Species.from_dict("canon_zyg3", {"c1": {"l1": ["A", "B", "C"]}})
         from natal.population_config import initialize_zygote_map
         hgs = sp.get_all_haploid_genotypes()
         gts = sp.get_all_genotypes(unordered=True)
-        z2g = initialize_zygote_map(hgs, gts, n_glabs=1, canonical=True)
-        assert z2g.shape == (3, 3, 6)  # 3 hgs, 3 hgs, 6 canonical
+        z2g = initialize_zygote_map(hgs, gts, n_glabs=1, unordered=True)
+        assert z2g.shape == (3, 3, 6)  # 3 hgs, 3 hgs, 6 unordered
 
 
 # ============================================================================
-# Canonical full population lifecycle
+# Unordered full population lifecycle
 # ============================================================================
 
 
-class TestCanonicalFullLifecycle:
-    """End-to-end tests: build, run, observe with canonical genotypes."""
+class TestUnorderedFullLifecycle:
+    """End-to-end tests: build, run, observe with unordered genotypes."""
 
     def test_run_one_tick_and_survive(self):
-        """Population with canonical genotypes runs without error."""
+        """Population with unordered genotypes runs without error."""
         sp = nt.Species.from_dict("canon_life1", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
@@ -443,7 +443,7 @@ class TestCanonicalFullLifecycle:
         assert pop.state.individual_count.sum() > 0
 
     def test_discrete_population_run(self):
-        """Discrete generation with canonical genotypes runs correctly."""
+        """Discrete generation with unordered genotypes runs correctly."""
         sp = nt.Species.from_dict("canon_life2", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
@@ -453,8 +453,8 @@ class TestCanonicalFullLifecycle:
         pop.run(2)
         assert pop.tick == 2
 
-    def test_observation_output_has_canonical_labels(self):
-        """Observation uses canonical genotype count."""
+    def test_observation_output_has_unordered_labels(self):
+        """Observation uses unordered genotype count."""
         sp = nt.Species.from_dict("canon_life3", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
@@ -462,21 +462,21 @@ class TestCanonicalFullLifecycle:
             individual_count={"female": {"A|A": 100}, "male": {"A|a": 100}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
         obs = pop.create_observation()
-        # Check that the observation's genotype list has canonical count
+        # Check that the observation's genotype list has unordered count
         assert obs.diploid_genotypes is not None
-        assert len(obs.diploid_genotypes) == 3  # canonical: AA, Aa, aa
+        assert len(obs.diploid_genotypes) == 3  # unordered: AA, Aa, aa
 
 
 # ============================================================================
-# Canonical with drive presets
+# Unordered with drive presets
 # ============================================================================
 
 
-class TestCanonicalWithDrive:
-    """Canonical genotypes + gene drive presets."""
+class TestUnorderedWithDrive:
+    """Unordered genotypes + gene drive presets."""
 
-    def test_homing_drive_with_canonical(self):
-        """HomingDrive preset works with canonical genotypes."""
+    def test_homing_drive_with_unordered(self):
+        """HomingDrive preset works with unordered genotypes."""
         sp = nt.Species.from_dict(
             "canon_drive1",
             {"c1": {"l1": ["WT", "Dr", "R2"]}},
@@ -494,13 +494,13 @@ class TestCanonicalWithDrive:
         ).initial_state(
             individual_count={"female": {"WT|WT": 450, "WT|Dr": 50}, "male": {"WT|WT": 500}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).presets(drive).build()
-        # Canonical: 6 genotypes (3 alleles)
+        # Unordered: 6 genotypes (3 alleles)
         assert pop.config.n_ztypes == 6
         pop.run(2)
         assert pop.tick == 2
 
-    def test_wolbachia_with_canonical(self):
-        """Wolbachia preset works with canonical genotypes."""
+    def test_wolbachia_with_unordered(self):
+        """Wolbachia preset works with unordered genotypes."""
         sp = nt.Species.from_dict(
             "canon_wolb",
             {"c1": {"l1": ["A", "a"]}},
@@ -513,7 +513,7 @@ class TestCanonicalWithDrive:
         ).initial_state(
             individual_count={"female": {"A|A@infected": 100}, "male": {"A|A": 100}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).presets(wMel).build()
-        # Canonical: 3 genotypes × 2 slabs = 6
+        # Unordered: 3 genotypes × 2 slabs = 6
         assert pop.config.n_ztypes == 6
         pop.run(2)
         assert pop.tick == 2

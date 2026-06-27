@@ -876,7 +876,7 @@ def initialize_zygote_map(
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
     zygote_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
-    canonical: bool = False,
+        unordered: bool = False,
     n_slabs: int = 1,
 ) -> NDArray[np.float64]:
     """Initialize the ``gametes_to_zygotes_map`` tensor.
@@ -885,8 +885,8 @@ def initialize_zygote_map(
     inheritance for all haplotype pairs and gamete-label combinations, and
     then applies optional zygote modifiers to transform the tensor.
 
-    When *canonical* is True, uses ``unordered_genotype()`` so that
-    ``(hg_a, hg_b)`` and ``(hg_b, hg_a)`` map to the same canonical
+    When *unordered* is True, uses ``unordered_genotype()`` so that
+    ``(hg_a, hg_b)`` and ``(hg_b, hg_a)`` map to the same unordered
     genotype index, collapsing symmetric pairs.  Default ``False``
     preserves maternal/paternal ordering.
 
@@ -900,7 +900,7 @@ def initialize_zygote_map(
         n_glabs: Number of gamete labels (default: 1).
         zygote_modifiers: Optional sequence of callables that accept and
             return a modified ``gametes_to_zygotes_map`` tensor.
-        canonical: If True, use unordered genotype canonicalization.
+        unordered: If True, use unordered genotype canonicalization.
         n_slabs: Number of somatic slabs (≥ 1).  When > 1 each genotype is
             replicated across slabs.
 
@@ -926,7 +926,7 @@ def initialize_zygote_map(
 
     for idx_hg1, hg1 in enumerate(haploid_genotypes):
         for idx_hg2, hg2 in enumerate(haploid_genotypes):
-            if canonical:
+            if unordered:
                 zygote_gt = hg1.species.unordered_genotype(hg1, hg2)
             else:
                 zygote_gt = Genotype(

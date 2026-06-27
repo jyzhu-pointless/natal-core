@@ -257,7 +257,7 @@ def test_full_execution_aggregate_mode():
     from natal.population_state import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
-    ind[0, 0, 1] = 30  # W|D (canonical for D|W) at index 1
+    ind[0, 0, 1] = 30  # W|D (unordered, covers both W|D and D|W) at index 1
     state = DiscretePopulationState(n_tick=0, individual_count=ind)
 
     @njit
@@ -412,9 +412,9 @@ def test_full_execution_numba_multi_genotype():
     from natal.population_state import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
-    # Canonical: W|W=0, W|D=1, D|D=2 — set to known values
+    # Unordered: W|W=0, W|D=1, D|D=2 — set to known values
     ind[0, 0, 0] = 100  # W|W
-    ind[0, 0, 1] = 200  # W|D (canonical, covers both W|D and D|W)
+    ind[0, 0, 1] = 200  # W|D (unordered, covers both W|D and D|W)
     ind[0, 0, 2] = 400  # D|D
     state = DiscretePopulationState(n_tick=0, individual_count=ind)
 

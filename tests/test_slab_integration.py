@@ -29,7 +29,7 @@ class TestWolbachiaMaternalTransmission:
         }).competition(juvenile_growth_mode=0).presets(
             nt.Wolbachia(name="wMel", infected_slab="infected", viability_scaling=0.9),
         ).build()
-        assert pop.config.n_ztypes == 6  # 3 canonical genotypes × 2 slabs
+        assert pop.config.n_ztypes == 6  # 3 unordered genotypes × 2 slabs
         assert pop.config.n_slabs == 2
 
     def test_fitness_applied(self):
@@ -118,7 +118,7 @@ class TestNSlabsIntegration:
         ).initial_state(individual_count={
             "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
         }).competition(juvenile_growth_mode=0).build()
-        assert pop.config.n_ztypes == 6  # 3 canonical genotypes × 2 slabs
+        assert pop.config.n_ztypes == 6  # 3 unordered genotypes × 2 slabs
         pop.run(3)
         h = pop.get_history()
         assert h.shape[0] >= 4
@@ -302,7 +302,7 @@ class TestRegressionFixes:
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
 
         n_genotypes_before = pop.config.n_ztypes
-        assert n_genotypes_before == 6  # 3 canonical genotypes × 2 slabs
+        assert n_genotypes_before == 6  # 3 unordered genotypes × 2 slabs
 
         # Directly call refresh_modifier_maps to simulate modifier rebuild
         pop.refresh_modifier_maps()

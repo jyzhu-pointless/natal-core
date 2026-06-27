@@ -55,9 +55,9 @@ class TestBuildAndSetup:
         pop = _minimal_pop(sp, pop_name="Disc_gtypes_pop")
         genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
-        # Canonical genotypes: WT|WT, WT|Var, Var|Var = 3
+        # Unordered genotypes: WT|WT, WT|Dr, Dr|Dr = 3
         assert len(genotype_strs) == 3, (
-            f"expected 3 canonical genotypes, got {len(genotype_strs)}"
+            f"expected 3 unordered genotypes, got {len(genotype_strs)}"
         )
 
     def test_initial_female_wt_count(self):

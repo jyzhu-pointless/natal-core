@@ -377,13 +377,13 @@ class ZygoteConversionRuleSet:
             haploid_genotypes = population.registry.index_to_haplo
             diploid_genotypes = population.registry.index_to_genotype
 
-            # Build genotype index lookup — store both ordered and canonical
-            # forms so replacement genotypes (which may not be canonical) are
+            # Build genotype index lookup — store both ordered and unordered
+            # forms so replacement genotypes (which may not be unordered) are
             # found during allele conversion.
             genotype_index: Dict[Genotype, int] = {}
             for idx, gt in enumerate(diploid_genotypes):
                 genotype_index[gt] = idx
-                # Also register the reversed (non-canonical) form.
+                # Also register the reversed (ordered) form.
                 sp = gt.species
                 rev = Genotype(species=sp, maternal=gt.paternal, paternal=gt.maternal)
                 if rev not in genotype_index:
@@ -539,7 +539,7 @@ def _build_hg_glab_genotype_map(
     n_hg = len(haploid_genotypes)
 
     # Build a lookup from (maternal_hg, paternal_hg) -> Genotype.
-    # Since diploid_genotypes are canonical (maternal index <= paternal index),
+    # Since diploid_genotypes are unordered (maternal index <= paternal index),
     # we store both ordered and reversed pairs for lookup robustness.
     pair_to_gt: Dict[Tuple[HaploidGenotype, HaploidGenotype], Genotype] = {}
     for gt in diploid_genotypes:

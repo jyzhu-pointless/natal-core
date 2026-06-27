@@ -24,9 +24,9 @@ def _make_simple_species() -> Species:
 class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
     def setUp(self) -> None:
         self.simple_species = _make_simple_species()
-        # Use canonical genotypes for an unordered species — the
+        # Use unordered genotypes for an unordered species — the
         # resolve_genotype_selectors function auto-promotes | to ::
-        # when species.unordered is True, and canonical genotypes
+        # when species.unordered is True, and unordered genotypes
         # are the correct matching target.
         self.all_genotypes = self.simple_species.get_all_genotypes(
             unordered=self.simple_species.unordered

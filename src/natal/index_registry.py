@@ -24,7 +24,7 @@ from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.numba_utils import njit_switch
 
 
-class _CanonicalGenotypeDict(dict[Genotype, int]):
+class _UnorderedGenotypeDict(dict[Genotype, int]):
     """Dict that auto-canonicalizes Genotype keys on lookup.
 
     Both ``A|a`` and ``a|A`` resolve to the same value because the key
@@ -79,7 +79,7 @@ class IndexRegistry:
         # entity mappings
         # genotype_to_index auto-canonicalizes Genotype keys on lookup
         # so that A|a and a|A both resolve to the same index.
-        self.genotype_to_index: Dict[Genotype, int] = _CanonicalGenotypeDict()
+        self.genotype_to_index: Dict[Genotype, int] = _UnorderedGenotypeDict()
         self.index_to_genotype: List[Genotype] = []
 
         self.haplo_to_index: Dict[HaploidGenotype, int] = {}
@@ -88,7 +88,7 @@ class IndexRegistry:
         self.glab_to_index: Dict[str, int] = {}
 
         # n_ztypes tracks the engine-visible G-axis count.  It starts at
-        # num_genotypes() (the registered canonical count) and is updated
+        # num_genotypes() (the registered count before compression) and is updated
         # by compression.  Hooks and pattern resolvers read this, not
         # num_genotypes().
         self.n_ztypes: int = 0
@@ -212,7 +212,7 @@ class IndexRegistry:
             if i < len(_z_active) and _z_active[i]
         ]
 
-        new_dict: dict[Genotype, int] = _CanonicalGenotypeDict()
+        new_dict: dict[Genotype, int] = _UnorderedGenotypeDict()
         for genotype, old_idx in list(self.genotype_to_index.items()):
             new_idx = old_to_new.get(old_idx)
             if new_idx is not None:
@@ -480,10 +480,10 @@ class IndexRegistry:
         except Exception:
             pass
 
-        # string match via to_string() — try canonical form first,
+            # string match via to_string() — try unordered form first,
         # then the reversed maternal/paternal form (since genotypes
         # are canonicalized, a user writing "a|A" should still match
-        # the canonical "A|a").
+                # the unordered "A|a").
         if isinstance(gk, str):
             for i, g in enumerate(diploid_genotypes):
                 try:
