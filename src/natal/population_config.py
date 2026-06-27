@@ -18,7 +18,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.genetic_entities import Genotype, HaploidGenotype
-from natal.index_registry import compress_hg_glab, decompress_hg_glab
 from natal.type_def import Sex
 
 __all__ = [
@@ -563,12 +562,16 @@ def _build_config_maps(
     female_only_by_sex_chrom = np.zeros(n_g_compressed, dtype=np.bool_)
     male_only_by_sex_chrom = np.zeros(n_g_compressed, dtype=np.bool_)
     if has_sex_chromosomes:
+        _ztype_index: dict[tuple[int, int], int] = {
+            (g, s): g * n_slabs_i + s
+            for g in range(n_genotypes_i) for s in range(n_slabs_i)
+        }
         for g_off in range(n_genotypes_i):
             f_ok = female_genotype_compatibility[g_off] > alg.EPS
             m_ok = male_genotype_compatibility[g_off] > alg.EPS
             if n_slabs_i > 1:
                 for s in range(n_slabs_i):
-                    z = g_off * n_slabs_i + s
+                    z = _ztype_index[(g_off, s)]
                     female_only_by_sex_chrom[z] = f_ok and not m_ok
                     male_only_by_sex_chrom[z] = m_ok and not f_ok
             else:
@@ -924,6 +927,12 @@ def initialize_zygote_map(
     # 1. Build baseline one-hot tensor according to Mendelian inheritance
     gametes_to_zygotes_map: NDArray[np.float64] = np.zeros((n_hg_glabs, n_hg_glabs, n_genotypes), dtype=np.float64)
 
+    # Local dict-based lookup replacing formula: compressed = hg_idx * n_glabs + glab_idx
+    _gtype_index: dict[tuple[int, int], int] = {
+        (hi, gi): hi * n_glabs + gi
+        for hi in range(n_hg) for gi in range(n_glabs)
+    }
+
     for idx_hg1, hg1 in enumerate(haploid_genotypes):
         for idx_hg2, hg2 in enumerate(haploid_genotypes):
             if unordered:
@@ -940,8 +949,8 @@ def initialize_zygote_map(
                 # Baseline: labels are equivalent — populate all (glab1, glab2)
                 for glab1 in range(n_glabs):
                     for glab2 in range(n_glabs):
-                        compressed_idx1 = compress_hg_glab(idx_hg1, glab1, n_glabs)
-                        compressed_idx2 = compress_hg_glab(idx_hg2, glab2, n_glabs)
+                        compressed_idx1 = _gtype_index[(idx_hg1, glab1)]
+                        compressed_idx2 = _gtype_index[(idx_hg2, glab2)]
                         gametes_to_zygotes_map[compressed_idx1, compressed_idx2, idx_gt] = 1.0
 
     # 2. Apply optional zygote modifiers (before slab expansion).
@@ -953,8 +962,12 @@ def initialize_zygote_map(
     if n_slabs > 1:
         n_ztypes = n_genotypes * n_slabs
         expanded = np.zeros((n_hg_glabs, n_hg_glabs, n_ztypes), dtype=np.float64)
+        _ztype_index: dict[tuple[int, int], int] = {
+            (g, s): g * n_slabs + s
+            for g in range(n_genotypes) for s in range(n_slabs)
+        }
         for g_raw in range(n_genotypes):
-            expanded[:, :, g_raw * n_slabs + 0] = gametes_to_zygotes_map[:, :, g_raw]
+            expanded[:, :, _ztype_index[(g_raw, 0)]] = gametes_to_zygotes_map[:, :, g_raw]
         gametes_to_zygotes_map = expanded
 
     return gametes_to_zygotes_map
@@ -1008,6 +1021,11 @@ def initialize_gamete_map(
     zygotes_to_gametes_map: NDArray[np.float64] = np.zeros((n_sexes, n_genotypes, n_hg_glabs), dtype=np.float64)
     haplo_to_idx = {hg: idx for idx, hg in enumerate(haploid_genotypes)}
 
+    _gtype_index: dict[tuple[int, int], int] = {
+        (hi, gi): hi * n_glabs + gi
+        for hi in range(n_hg) for gi in range(n_glabs)
+    }
+
     # Build optional sex-specific haploid availability constraints from species.
     # This keeps backward compatibility for autosome-only species (no filtering),
     # while making XY/ZW systems sex-aware by default.
@@ -1048,7 +1066,7 @@ def initialize_gamete_map(
                 if idx_hg is None:
                     continue
                 # By default, only map frequency for the default glab (0)
-                compressed_idx = compress_hg_glab(idx_hg, 0, n_glabs)
+                compressed_idx = _gtype_index[(idx_hg, 0)]
                 zygotes_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = float(freq) * inv_total
 
     # Apply optional modifier callables (before slab expansion).
@@ -1102,6 +1120,15 @@ def _expand_slab_maps(
 
     n_ztypes = n_genotypes * n_slabs
 
+    _ztype_index: dict[tuple[int, int], int] = {
+        (g, s): g * n_slabs + s
+        for g in range(n_genotypes) for s in range(n_slabs)
+    }
+    _gtype_index: dict[tuple[int, int], int] = {
+        (hi, gi): hi * n_glabs + gi
+        for hi in range(n_haploid_genotypes) for gi in range(n_glabs)
+    }
+
     # Meiosis: tile each genotype row S times (identity — slab does not
     # affect gamete production in the baseline).
     _m_f = np.repeat(z2g[0].copy(), n_slabs, axis=0)
@@ -1119,10 +1146,10 @@ def _expand_slab_maps(
             if idx >= len(gamete_labels) or idx >= len(somatic_labels):
                 continue
             for g_raw in range(n_genotypes):
-                z_target = g_raw * n_slabs + idx
+                z_target = _ztype_index[(g_raw, idx)]
                 for hg_idx in range(n_haploid_genotypes):
-                    src = hg_idx * n_glabs + 0   # default glab
-                    dst = hg_idx * n_glabs + idx
+                    src = _gtype_index[(hg_idx, 0)]   # default glab
+                    dst = _gtype_index[(hg_idx, idx)]
                     _m_f[z_target, dst] = _m_f[z_target, src]
                     _m_f[z_target, src] = 0.0
 
@@ -1130,7 +1157,7 @@ def _expand_slab_maps(
     # slab 0 (default) — symmetric with glab default behaviour.
     _z2g = np.zeros((g2z.shape[0], g2z.shape[1], n_ztypes), dtype=np.float64)
     for g_raw in range(n_genotypes):
-        _z2g[:, :, g_raw * n_slabs + 0] = g2z[:, :, g_raw]
+        _z2g[:, :, _ztype_index[(g_raw, 0)]] = g2z[:, :, g_raw]
 
     # Cytoplasmic zygote redirect: for each non-default glab/slab pair,
     # redirect tagged gamete pairs from slab-0 to the matching child slab.
@@ -1193,7 +1220,7 @@ def extract_gamete_frequencies(
 
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
-            hg_idx, _glab_idx = decompress_hg_glab(compressed_idx, n_glabs)
+            hg_idx = compressed_idx // n_glabs
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 # Aggregate frequencies across all glab variants
@@ -1237,7 +1264,8 @@ def extract_gamete_frequencies_by_glab(
 
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:
-            hg_idx, glab_idx = decompress_hg_glab(compressed_idx, n_glabs)
+            hg_idx = compressed_idx // n_glabs
+            glab_idx = compressed_idx % n_glabs
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 result[(hg, glab_idx)] = freq
