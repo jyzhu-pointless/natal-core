@@ -27,11 +27,6 @@ from natal.index_registry import IndexRegistry
 from natal.type_def import Sex
 
 __all__ = [
-    "AgeSpec",
-    "SexSpec",
-    "GroupSpec",
-    "GroupSpecDict",
-    "GroupsInput",
     "Observation",
     "ObservationFilter",
     "apply_rule",
@@ -185,12 +180,12 @@ class ObservationFilter:
             return None
         if isinstance(diploid_genotypes, BasePopulation):
             try:
-                return list(diploid_genotypes.species.iter_genotypes())
+                return list(diploid_genotypes.species.iter_genotypes(unordered=diploid_genotypes.species.unordered))
             except Exception:
                 return None
         if isinstance(diploid_genotypes, Species):
             try:
-                return list(diploid_genotypes.iter_genotypes())
+                return list(diploid_genotypes.iter_genotypes(unordered=diploid_genotypes.unordered))
             except Exception:
                 return None
         return diploid_genotypes

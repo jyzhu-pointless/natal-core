@@ -55,8 +55,9 @@ class TestBuildAndSetup:
         pop = _minimal_pop(sp, pop_name="Disc_gtypes_pop")
         genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
-        assert len(genotype_strs) == 4, (
-            f"expected 4 genotypes, got {len(genotype_strs)}"
+        # Unordered genotypes: WT|WT, WT|Dr, Dr|Dr = 3
+        assert len(genotype_strs) == 3, (
+            f"expected 3 unordered genotypes, got {len(genotype_strs)}"
         )
 
     def test_initial_female_wt_count(self):
@@ -158,7 +159,7 @@ class TestStateAndConfigInterop:
         custom_state = DiscretePopulationState.create(
             n_sexes=pop.config.n_sexes,
             n_ages=pop.config.n_ages,
-            n_genotypes=pop.config.n_genotypes,
+            n_ztypes=pop.config.n_ztypes,
             n_tick=11,
             individual_count=custom_counts,
         )
@@ -184,7 +185,7 @@ class TestStateAndConfigInterop:
         assert cfg.n_ages == 2
         assert cfg.new_adult_age == 1
         np.testing.assert_array_equal(cfg.adult_ages, np.array([1], dtype=np.int64))
-        assert cfg.n_genotypes == updated.n_genotypes
+        assert cfg.n_ztypes == updated.n_ztypes
 
 
 class TestMixedGenotypes:

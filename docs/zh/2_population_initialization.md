@@ -36,7 +36,7 @@ pop.update().competition(carrying_capacity=5000)
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ```
 
-参见 [Configurator API 参考](../api/configurator.md)。
+参见 [Configurator API 参考](api/configurator.md)。
 
 ## 配置流程
 

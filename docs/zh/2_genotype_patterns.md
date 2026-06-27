@@ -51,6 +51,28 @@ NATAL 支持两种模式匹配：
 | `{A,B,C}` | 枚举集合中的任一元素 | `{A1,A2}` |
 | `!X` | 排除 `X`，匹配其他等位基因 | `!A1` |
 
+### 标签匹配（@lab）
+
+模式字符串末尾可以用 `@` 附加标签约束，匹配特定配子标签（`glab`）或体细胞标签（`slab`）的基因型/单倍体。标签语法与等位基因模式一致：
+
+| 模式 | 含义 | 示例 |
+|---|---|---|
+| `@X` | 精确匹配标签 `X` | `A\|a@Cas9_high` |
+| `@!X` | 排除标签 `X` | `A\|a@!wildtype` |
+| `@{A,B}` | 匹配集合中的任一标签 | `A\|a@{high,low}` |
+| `@!{A,B}` | 排除集合中的标签 | `@!{wildtype,default}` |
+| `@*` | 任意标签（等同于不加 @） | `A\|a@*` |
+
+**GenotypePattern** 使用 `@` 匹配体细胞标签（slab），**HaploidGenotypePattern** 使用 `@` 匹配配子标签（glab）：
+
+```python
+# 匹配携带 Cas9_high 体细胞标签的 A|a 基因型
+parser.parse("A|a@Cas9_high")
+
+# 匹配携带 Cas9_deposited 配子标签的单倍体
+parser.parse_haplotype_pattern("A@Cas9_deposited")
+```
+
 ## GenotypePattern：二倍体基因型匹配
 
 ### 基本语法

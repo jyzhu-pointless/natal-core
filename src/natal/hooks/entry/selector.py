@@ -123,7 +123,7 @@ def compile_selector_hook(
     }
 
     meta = {
-        "n_genotypes": index_registry.num_genotypes(),
+        "n_ztypes": index_registry.n_ztypes,
         "n_ages": pop.config.n_ages,
     }
 

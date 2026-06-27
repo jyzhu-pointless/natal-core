@@ -43,12 +43,7 @@ from numpy.typing import NDArray
 
 from natal.numba_utils import njit_switch
 
-__all__ = [
-    "CompactMeta",
-    "build_compact_metadata",
-    "build_observation_row_panmictic",
-    "build_observation_row_spatial",
-]
+__all__: list[str] = []
 
 
 # ---------------------------------------------------------------------------

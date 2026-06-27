@@ -1488,8 +1488,8 @@ class SpatialPopulation:
             if s is None:
                 # Create a dummy array if storage is missing
                 cfg = getattr(deme, "config", None)
-                if cfg is not None and hasattr(cfg, "n_ages") and hasattr(cfg, "n_genotypes"):
-                    s = np.zeros((cfg.n_ages, cfg.n_genotypes, cfg.n_genotypes), dtype=np.float64)
+                if cfg is not None and hasattr(cfg, "n_ages") and hasattr(cfg, "n_ztypes"):
+                    s = np.zeros((cfg.n_ages, cfg.n_ztypes, cfg.n_ztypes), dtype=np.float64)
                 else:
                     # Conservative fallback derived from state tensor shape.
                     ind_shape = deme.state.individual_count.shape

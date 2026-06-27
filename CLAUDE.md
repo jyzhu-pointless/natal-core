@@ -8,6 +8,17 @@
 
 默认使用中文回答。仅在用户明确使用英文提问时用英文回复。
 
+## 规范引用
+
+以下文件定义本项目的编码、文档和测试规范，按优先级排列：
+
+1. `docstring_spec.md`
+2. `quality_checks_spec.md`
+3. `docstring_spec_cn.md`（中文说明）
+4. `quality_checks_spec_cn.md`（中文说明）
+
+规范冲突时以英文版为准。
+
 ## 行为指南
 
 遵循 Karpathy 编码指南（Claude Code 命令：`/andrej-karpathy-skills:karpathy-guidelines`）：
@@ -64,6 +75,21 @@ python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 - **已有模块新增代码**：≥95% 行覆盖。
 - **确定性模拟** (`stochastic=False`)：精确数值断言。
 - **随机模拟**：需统计验证（多次运行、置信区间或分布检验），单次通过不算。
+- **优先使用 pytest-collected 测试**，而非脚本式 smoke test。
+
+### Docstring 规范
+
+- 仅使用 Google 风格 section（`Args:`、`Returns:`、`Raises:` 等）。不发明新的 section 名称。
+- docstring 内容使用**英文**。
+- 所有参数、返回值、属性必须显式标注类型（优先使用 annotation）。
+
+### 变更说明
+
+每次修改完成后，必须包含以下四项：
+1. 变更的文件
+2. 行为变化
+3. 执行的验证命令
+4. 残余风险或后续事项（如有）
 
 ## 架构
 

@@ -183,10 +183,12 @@ class TestGenotype:
         *_, wt_hg, dr_hg, r2_hg, wt_wt, wt_dr, dr_wt, dr_dr = _make_entities(sp)
         assert str(wt_dr) == "WT|Dr"
 
-    def test_maternal_paternal_order_preserved(self):
+    def test_maternal_paternal_order_normalized(self):
+        """A|a and a|A normalize to the same canonical form."""
         sp = _make_species("GT_order")
         *_, wt_hg, dr_hg, r2_hg, wt_wt, wt_dr, dr_wt, dr_dr = _make_entities(sp)
-        assert str(wt_dr) != str(dr_wt)
+        assert str(wt_dr) == str(dr_wt)
+        assert wt_dr is dr_wt
 
     def test_singleton(self):
         sp = _make_species("GT_singleton")

@@ -72,7 +72,7 @@ class TestPopulationBuilderInitialInjection(unittest.TestCase):
         self.assertIsNotNone(pop)
         init_arr = build_mock.call_args.kwargs["initial_individual_count"]
         self.assertIsInstance(init_arr, np.ndarray)
-        self.assertEqual(init_arr.shape, (2, 4, len(self.species.get_all_genotypes())))
+        self.assertEqual(init_arr.shape, (2, 4, len(self.species.get_all_genotypes(unordered=True))))
         self.assertGreater(init_arr.sum(), 0)
 
     def test_discrete_builder_injects_initial_count_into_config(self) -> None:
@@ -104,7 +104,7 @@ class TestPopulationBuilderInitialInjection(unittest.TestCase):
         self.assertIsNotNone(pop)
         init_arr = build_mock.call_args.kwargs["initial_individual_count"]
         self.assertIsInstance(init_arr, np.ndarray)
-        self.assertEqual(init_arr.shape, (2, 2, len(self.species.get_all_genotypes())))
+        self.assertEqual(init_arr.shape, (2, 2, len(self.species.get_all_genotypes(unordered=True))))
         self.assertGreater(init_arr.sum(), 0)
 
 

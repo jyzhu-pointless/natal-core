@@ -11,7 +11,7 @@ It supports two flavors of rules:
    Replace a single allele inside the diploid genotype.
    Examples: convert(from_allele="A", to_allele="B", rate=0.5, side="both")
 
-Both create a ZygoteModifier that modifies gametes_to_zygote_map after fertilization.
+Both create a ZygoteModifier that modifies gametes_to_zygotes_map after fertilization.
 
 Typical use cases:
 - Maternal-effect lethality (certain maternal genotypes kill offspring)
@@ -33,7 +33,6 @@ from typing import (
 )
 
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
-from natal.index_registry import compress_hg_glab
 from natal.modifiers import (
     GenotypeFilter,
     ZygoteModifier,
@@ -374,15 +373,15 @@ class ZygoteConversionRuleSet:
             Tuple[int, int], Dict[int, float]
         ]:
             n_glabs = int(population.config.n_glabs)
-            haploid_genotypes = population.registry.index_to_haplo
             diploid_genotypes = population.registry.index_to_genotype
 
-            # Build genotype index lookup
-            genotype_index = {gt: idx for idx, gt in enumerate(diploid_genotypes)}
+            # Build genotype index lookup for the registered diploid set.
+            genotype_index: Dict[Genotype, int] = {}
+            for idx, gt in enumerate(diploid_genotypes):
+                genotype_index[gt] = idx
 
-            hg_glab_to_genotype = _build_hg_glab_genotype_map(
-                haploid_genotypes, diploid_genotypes, n_glabs, population,
-            )
+            baseline_g2z = population.config.gametes_to_zygotes_map
+            n_c = baseline_g2z.shape[0]
 
             # Resolve glab names to indices for all rules
             resolved_rules = _resolve_zygote_rule_glabs(rules, population)
@@ -391,81 +390,85 @@ class ZygoteConversionRuleSet:
 
             from natal.index_registry import decompress_hg_glab
 
-            for (c1, c2), base_gt in hg_glab_to_genotype.items():
-                if base_gt is None:
-                    continue
-
-                _, mat_glab = decompress_hg_glab(c1, n_glabs)
-                _, pat_glab = decompress_hg_glab(c2, n_glabs)
-
-                # current_freqs holds the distribution of genotypes derived from this (c1,c2) pairing.
-                # Initially, 100% of the zygotes form the `base_gt` (the normal Mendelian union).
-                current_freqs: Dict[Genotype, float] = {base_gt: 1.0}
-
-                # Evaluate rules sequentially (Cascade pipeline).
-                # Each rule receives the entire probability distribution from the previous rule,
-                # splitting it further based on its conversion rates.
-                for rule, mat_glab_req, pat_glab_req in resolved_rules:
-                    assert isinstance(rule, (ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule)), \
-                    "Resolved rules must be instances of ZygoteGenotypeConversionRule or ZygoteAlleleConversionRule"
-                    # glab filters on maternal (c1) and/or paternal (c2) gamete tags
-                    if mat_glab_req is not None and mat_glab != mat_glab_req:
+            for c1 in range(n_c):
+                for c2 in range(n_c):
+                    row = baseline_g2z[c1, c2]
+                    if row.sum() == 0:
                         continue
-                    if pat_glab_req is not None and pat_glab != pat_glab_req:
-                        continue
+                    g = int(row.argmax())
+                    base_gt = diploid_genotypes[g]
 
-                    # next_freqs accumulates the genotypes formed after THIS rule applies.
-                    next_freqs: Dict[Genotype, float] = {}
-                    for gt, prob in current_freqs.items():
-                        if prob <= 1e-12:
+                    _, mat_glab = decompress_hg_glab(c1, n_glabs)
+                    _, pat_glab = decompress_hg_glab(c2, n_glabs)
+
+                    # current_freqs holds the distribution of genotypes derived from this (c1,c2) pairing.
+                    # Initially, 100% of the zygotes form the `base_gt` (the normal Mendelian union).
+                    current_freqs: Dict[Genotype, float] = {base_gt: 1.0}
+
+                    # Evaluate rules sequentially (Cascade pipeline).
+                    # Each rule receives the entire probability distribution from the previous rule,
+                    # splitting it further based on its conversion rates.
+                    for rule, mat_glab_req, pat_glab_req in resolved_rules:
+                        assert isinstance(rule, (ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule)), \
+                        "Resolved rules must be instances of ZygoteGenotypeConversionRule or ZygoteAlleleConversionRule"
+                        # glab filters on maternal (c1) and/or paternal (c2) gamete tags
+                        if mat_glab_req is not None and mat_glab != mat_glab_req:
+                            continue
+                        if pat_glab_req is not None and pat_glab != pat_glab_req:
                             continue
 
-                        # ----- Genotype-level rule -----
-                        if isinstance(rule, ZygoteGenotypeConversionRule):
-                            if rule.matches(gt):
-                                # The genotype matches the rule. Split the probability:
-                                # - (1 - rate) fails conversion and remains unchanged.
-                                # - (rate) succeeds and alters the genotype entirely.
-                                replacement_gt = rule.replacement(gt)
-                                next_freqs[gt] = next_freqs.get(gt, 0.0) + prob * (1.0 - rule.rate)
-                                next_freqs[replacement_gt] = next_freqs.get(replacement_gt, 0.0) + prob * rule.rate
-                            else:
-                                # Rule does not match; genotype passes through untouched.
-                                next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
+                        # next_freqs accumulates the genotypes formed after THIS rule applies.
+                        next_freqs: Dict[Genotype, float] = {}
+                        for gt, prob in current_freqs.items():
+                            if prob <= 1e-12:
+                                continue
 
-                        # ----- Allele-level rule -----
-                        else:
-                            # The rule targets specific alleles. It will mathematically expand all combinations
-                            # of allele conversions based on diploid zygosity (homozygous/heterozygous).
-                            if rule.applies_to_genotype(gt):
-                                outcomes = _convert_diploid_genotype_to_gts(gt, rule)
-                                if outcomes is not None:
-                                    for out_gt, out_prob in outcomes.items():
-                                        # Multiply the current branch probability by the rule's outcome probability
-                                        next_freqs[out_gt] = next_freqs.get(out_gt, 0.0) + prob * out_prob
+                            # ----- Genotype-level rule -----
+                            if isinstance(rule, ZygoteGenotypeConversionRule):
+                                if rule.matches(gt):
+                                    # The genotype matches the rule. Split the probability:
+                                    # - (1 - rate) fails conversion and remains unchanged.
+                                    # - (rate) succeeds and alters the genotype entirely.
+                                    replacement_gt = rule.replacement(gt)
+                                    next_freqs[gt] = next_freqs.get(gt, 0.0) + prob * (1.0 - rule.rate)
+                                    next_freqs[replacement_gt] = next_freqs.get(replacement_gt, 0.0) + prob * rule.rate
                                 else:
-                                    # No valid targets found for this allele rule inside the genotype
+                                    # Rule does not match; genotype passes through untouched.
                                     next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
+
+                            # ----- Allele-level rule -----
                             else:
-                                next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
+                                # The rule targets specific alleles. It will mathematically expand all combinations
+                                # of allele conversions based on diploid zygosity (homozygous/heterozygous).
+                                if rule.applies_to_genotype(gt):
+                                    outcomes = _convert_diploid_genotype_to_gts(gt, rule)
+                                    if outcomes is not None:
+                                        for out_gt, out_prob in outcomes.items():
+                                            # Multiply the current branch probability by the rule's outcome probability
+                                            next_freqs[out_gt] = next_freqs.get(out_gt, 0.0) + prob * out_prob
+                                    else:
+                                        # No valid targets found for this allele rule inside the genotype
+                                        next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
+                                else:
+                                    next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
 
-                    # The output of this rule becomes the input for the next rule.
-                    # This enables tracking sequences like: Embyro edits -> CRISPR cutting -> NHEJ resistance.
-                    current_freqs = next_freqs
+                        # The output of this rule becomes the input for the next rule.
+                        # This enables tracking sequences like: Embyro edits -> CRISPR cutting -> NHEJ resistance.
+                        current_freqs = next_freqs
 
-                # Clean up and map the final Genotype objects back to integer indices for the C-core array.
-                final_dist: Dict[int, float] = {}
-                base_idx = genotype_index[base_gt]
+                    # Clean up and map the final Genotype objects back to integer indices for the C-core array.
+                    final_dist: Dict[int, float] = {}
+                    base_idx = genotype_index[base_gt]
 
-                for gt, prob in current_freqs.items():
-                    if prob > 1e-12:
-                        idx = genotype_index.get(gt)
-                        if idx is not None:
-                            final_dist[idx] = final_dist.get(idx, 0.0) + prob
+                    for gt, prob in current_freqs.items():
+                        if prob > 1e-12:
+                            idx = genotype_index.get(gt)
+                            if idx is not None:
+                                final_dist[idx] = final_dist.get(idx, 0.0) + prob
 
-                # If there's a difference from pure baseline genotype
-                if not (len(final_dist) == 1 and final_dist.get(base_idx) == 1.0):
-                    result[(c1, c2)] = final_dist
+                    # If there's a difference from pure baseline genotype
+                    if not (len(final_dist) == 1 and final_dist.get(base_idx) == 1.0):
+                        result[(c1, c2)] = final_dist
 
             return result
 
@@ -507,47 +510,6 @@ def _resolve_zygote_rule_glabs(
         pat_idx = resolve_optional_glab_index(rule.paternal_glab, glab_map)
         resolved.append((rule, mat_idx, pat_idx))
     return resolved
-
-
-def _build_hg_glab_genotype_map(
-    haploid_genotypes: List[HaploidGenotype],
-    diploid_genotypes: List[Genotype],
-    n_glabs: int,
-    population: "BasePopulation[Any]",
-) -> Dict[Tuple[int, int], Optional[Genotype]]:
-    """Map every (c1, c2) compressed gamete pair to its baseline Genotype.
-
-    This reproduces the structural determination performed during
-    ``gametes_to_zygote_map`` initialisation: the diploid genotype is
-    uniquely determined by the maternal and paternal HaploidGenotype
-    (glab is irrelevant for genotype identity but affects the compressed
-    index).
-
-    Returns:
-        ``{ (c1, c2): Genotype | None }`` covering all valid compressed
-        index pairs.
-    """
-    n_hg = len(haploid_genotypes)
-
-    # Build a lookup from (maternal_hg, paternal_hg) -> Genotype
-    pair_to_gt: Dict[Tuple[HaploidGenotype, HaploidGenotype], Genotype] = {}
-    for gt in diploid_genotypes:
-        pair_to_gt[(gt.maternal, gt.paternal)] = gt
-
-    result: Dict[Tuple[int, int], Optional[Genotype]] = {}
-    for hg1_idx in range(n_hg):
-        for glab1 in range(n_glabs):
-            c1 = compress_hg_glab(hg1_idx, glab1, n_glabs)
-            maternal_hg = haploid_genotypes[hg1_idx]
-            for hg2_idx in range(n_hg):
-                for glab2 in range(n_glabs):
-                    c2 = compress_hg_glab(hg2_idx, glab2, n_glabs)
-                    paternal_hg = haploid_genotypes[hg2_idx]
-                    result[(c1, c2)] = pair_to_gt.get(
-                        (maternal_hg, paternal_hg)
-                    )
-
-    return result
 
 
 # ---------------------------------------------------------------------------

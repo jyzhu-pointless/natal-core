@@ -8,6 +8,6 @@ The `simulation_engine` module provides the fundamental Numba-accengine engine f
 
 ## Complete Module Reference
 
-::: natal.engine.simulation_engine
+::: natal.engine.discrete_generation_simulator
     options:
       heading_level: 3

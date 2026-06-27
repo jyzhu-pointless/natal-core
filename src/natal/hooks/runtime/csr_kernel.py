@@ -37,6 +37,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from numba import prange  # type: ignore[reportMissingTypeStubs]
 
 from natal import numba_compat as nbc
 from natal.numba_utils import njit_switch
@@ -411,7 +412,7 @@ _OP_STOP_IF_ABOVE = 8
 _OP_STOP_IF_EXTINCTION = 9
 
 
-@njit_switch(cache=True)
+@njit_switch(cache=True, parallel=True)
 def _execute_single_csr_hook(
     hook_idx: int,
     n_hooks: int | np.integer[Any],
@@ -514,38 +515,43 @@ def _execute_single_csr_hook(
         sex_female = sex_masks_data[sex_mask_idx]
         sex_male = sex_masks_data[sex_mask_idx + 1]
 
-        # Iterate sex × age × genotype.
-        for sex_idx in range(2):
-            if sex_idx == 0 and not sex_female:
-                continue
-            if sex_idx == 1 and not sex_male:
-                continue
+        # Mutation ops (0..5): iterate sex × age × genotype, with prange
+        # on the innermost gidx loop.  Each (sex, age, gidx) cell is
+        # independent — different gidx values write to distinct rows of
+        # individual_count and sperm_storage, so no data races.
+        #
+        # Stop ops (6..9) are handled separately below with a serial
+        # reduction — prange is NOT used there.
+        if op_type <= _OP_SAMPLE:
+            for sex_idx in range(2):
+                if sex_idx == 0 and not sex_female:
+                    continue
+                if sex_idx == 1 and not sex_male:
+                    continue
 
-            for age_idx_ptr in range(age_start, age_end):
-                age = age_data[age_idx_ptr]
+                for age_idx_ptr in range(age_start, age_end):
+                    age = age_data[age_idx_ptr]
 
-                for gidx_ptr in range(gidx_start, gidx_end):
-                    gidx = gidx_data[gidx_ptr]
-                    current = individual_count[sex_idx, age, gidx]
+                    for gidx_ptr in prange(gidx_start, gidx_end):
+                        gidx = gidx_data[gidx_ptr]
+                        current = individual_count[sex_idx, age, gidx]
 
-                    # Compute target count from operation type.
-                    if op_type == _OP_SCALE:
-                        target = max(0.0, current * param)
-                    elif op_type == _OP_SET:
-                        target = max(0.0, param)
-                    elif op_type == _OP_ADD:
-                        target = max(0.0, current + param)
-                    elif op_type == _OP_SUBTRACT:
-                        target = max(0.0, current - param)
-                    elif op_type == _OP_KILL:
-                        target = max(0.0, current * (1.0 - param))
-                    elif op_type == _OP_SAMPLE:
-                        target = min(current, max(0.0, param))
-                    else:
-                        target = current  # Unknown — no-op.
+                        # Compute target count from operation type.
+                        if op_type == _OP_SCALE:
+                            target = max(0.0, current * param)
+                        elif op_type == _OP_SET:
+                            target = max(0.0, param)
+                        elif op_type == _OP_ADD:
+                            target = max(0.0, current + param)
+                        elif op_type == _OP_SUBTRACT:
+                            target = max(0.0, current - param)
+                        elif op_type == _OP_KILL:
+                            target = max(0.0, current * (1.0 - param))
+                        elif op_type == _OP_SAMPLE:
+                            target = min(current, max(0.0, param))
+                        else:
+                            target = current
 
-                    # Mutation ops (0..5) write to individual_count.
-                    if op_type <= _OP_SAMPLE:
                         if sex_idx == 0 and has_sperm_storage:
                             individual_count[sex_idx, age, gidx] = _apply_target_with_sperm(
                                 current,

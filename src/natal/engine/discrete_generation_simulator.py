@@ -37,7 +37,7 @@ def run_discrete_reproduction(
 ) -> NDArray[np.float64]:
     """One tick of discrete reproduction: mate → fertilize → offspring in age 0."""
     ind_count = ind_count.copy()
-    g = cfg.n_genotypes
+    g = cfg.n_ztypes
     stochastic = cfg.stochastic
     continuous = cfg.continuous_sampling
 
@@ -86,7 +86,7 @@ def run_discrete_survival(
 ) -> NDArray[np.float64]:
     """Juvenile density regulation then genotype viability selection."""
     ind_count = ind_count.copy()
-    g = cfg.n_genotypes
+    g = cfg.n_ztypes
     stochastic = cfg.stochastic
     continuous = cfg.continuous_sampling
     mode = cfg.juvenile_growth_mode[()]  # pyright: ignore[reportArgumentType]

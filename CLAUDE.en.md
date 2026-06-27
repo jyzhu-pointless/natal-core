@@ -10,6 +10,18 @@
 
 (This English version of CLAUDE.md exists for internationalization convenience — the project's working language remains Chinese.)
 
+## Spec References
+
+The following files define the coding, documentation, and testing standards for this project,
+in priority order:
+
+1. `docstring_spec.md`
+2. `quality_checks_spec.md`
+3. `docstring_spec_cn.md` (Chinese explanation)
+4. `quality_checks_spec_cn.md` (Chinese explanation)
+
+When rules conflict, the English specification files take precedence.
+
 ## Behavioral Guidelines
 
 Follow the Karpathy Coding Guidelines (Claude Code command: `/andrej-karpathy-skills:karpathy-guidelines`):
@@ -66,6 +78,21 @@ All three must pass before committing: `pytest` + `pyright` + `ruff check src de
 - **New code in existing modules**: ≥95% line coverage.
 - **Deterministic simulations** (`stochastic=False`): exact numerical assertions on counts, frequencies, or derived statistics.
 - **Stochastic simulations**: statistical validation required — multiple runs, confidence intervals, or distributional checks. A single passing run is not sufficient.
+- **Prefer pytest-collected tests** over script-style smoke tests.
+
+### Docstring Requirements
+
+- Use Google-style sections only (`Args:`, `Returns:`, `Raises:`, etc.). Do not invent new section names.
+- Docstring text must be in **English**.
+- All parameters, returns, and attributes must be explicitly typed (annotations preferred).
+
+### Change Notes
+
+Every change summary must include:
+1. Files changed
+2. Behavior changes
+3. Validation commands executed
+4. Residual risks or follow-up items (if any)
 
 ## Architecture
 

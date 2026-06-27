@@ -34,11 +34,11 @@ from natal.engine.discrete_generation_simulator import (
 )
 from natal.genetic_entities import Genotype
 from natal.genetic_structures import Species
-from natal.hooks.types import RESULT_CONTINUE
+from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP
+from natal.index_registry import IndexRegistry
 from natal.population_config import (
     DiscretePopulationConfig,
     PopulationConfig,
-    from_population_config,
 )
 from natal.population_state import (
     DiscretePopulationState,
@@ -58,21 +58,75 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     @staticmethod
     def _to_discrete_config(config: object) -> DiscretePopulationConfig:
-        """Normalize and convert any config to ``DiscretePopulationConfig``."""
+        """Normalize any config to ``DiscretePopulationConfig``.
+
+        For the deprecated builder path, assembles a ``DiscretePopulationConfig``
+        directly from a ``PopulationConfig``'s arrays — no public conversion
+        function needed.  The modern Configurator path builds
+        ``DiscretePopulationConfig`` independently via
+        ``build_discrete_engine_config``.
+        """
         if isinstance(config, DiscretePopulationConfig):
-            cfg = config._replace(
+            return config._replace(
                 n_ages=2,
                 new_adult_age=1,
                 adult_ages=np.array([1], dtype=np.int64),
             )
-            return cfg
         if isinstance(config, PopulationConfig):
-            normalized = config._replace(
-                n_ages=2,
+            cfg = config
+            return DiscretePopulationConfig(
+                stochastic=cfg.stochastic,
+                continuous_sampling=cfg.continuous_sampling,
+                n_sexes=int(cfg.n_sexes),
+                n_ages=int(cfg.n_ages),
+                n_ztypes=cfg.n_ztypes,
+                n_haploid_genotypes=cfg.n_haploid_genotypes,
+                n_glabs=cfg.n_glabs,
+                n_slabs=cfg.n_slabs,
+                female_age_based_fertility=cfg.female_age_based_fertility,
+                viability_fitness=cfg.viability_fitness,
+                fecundity_fitness=cfg.fecundity_fitness,
+                zygote_viability_fitness=cfg.zygote_viability_fitness,
+                sexual_selection_fitness=cfg.sexual_selection_fitness,
+                age_based_relative_competition_strength=cfg.age_based_relative_competition_strength,
+                eggs_per_female=cfg.eggs_per_female,
+                fixed_egg_count=cfg.fixed_egg_count,
+                sex_ratio=cfg.sex_ratio,
+                sperm_displacement_rate=cfg.sperm_displacement_rate,
+                female_adult_mating_rate=float(cfg.age_based_mating_rates[0, 1]),
+                male_adult_mating_rate=float(cfg.age_based_mating_rates[1, 1]),
+                reproduction_rate=float(cfg.age_based_reproduction_rates[1]),
+                female_age0_survival=float(cfg.age_based_survival_rates[0, 0]),
+                male_age0_survival=float(cfg.age_based_survival_rates[1, 0]),
+                female_fertility=float(cfg.female_age_based_fertility[0]),
+                zygotes_to_gametes_map=cfg.zygotes_to_gametes_map,
+                gametes_to_zygotes_map=cfg.gametes_to_zygotes_map,
+                offspring_tensor=cfg.offspring_tensor,
+                meiosis_f=cfg.zygotes_to_gametes_map[0],
+                meiosis_m=cfg.zygotes_to_gametes_map[1],
+                fecundity_f=cfg.fecundity_fitness[0],
+                fecundity_m=cfg.fecundity_fitness[1],
+                viability_f=cfg.viability_fitness[0, 0, :],
+                viability_m=cfg.viability_fitness[1, 0, :],
+                has_sex_chromosomes=cfg.has_sex_chromosomes,
+                female_genotype_compatibility=cfg.female_genotype_compatibility,
+                male_genotype_compatibility=cfg.male_genotype_compatibility,
+                female_only_by_sex_chrom=cfg.female_only_by_sex_chrom,
+                male_only_by_sex_chrom=cfg.male_only_by_sex_chrom,
+                juvenile_growth_mode=cfg.juvenile_growth_mode,
+                carrying_capacity=cfg.carrying_capacity,
+                expected_competition_strength=cfg.expected_competition_strength,
+                expected_survival_rate=cfg.expected_survival_rate,
+                low_density_growth_rate=cfg.low_density_growth_rate,
+                generation_time=cfg.generation_time,
                 new_adult_age=1,
                 adult_ages=np.array([1], dtype=np.int64),
+                initial_individual_count=cfg.initial_individual_count,
+                initial_sperm_storage=cfg.initial_sperm_storage,
+                hook_slot=int(cfg.hook_slot),
+                extreme_speed_mode=0,
+                custom=cfg.custom,
             )
-            return from_population_config(normalized)
         raise TypeError(f"Expected PopulationConfig or DiscretePopulationConfig, got {type(config)}")
 
     def __init__(
@@ -80,6 +134,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         species: Species,
         population_config: object,
         name: Optional[str] = None,
+        index_registry: Optional[IndexRegistry] = None,
         initial_individual_count: Optional[
             Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]]
         ] = None,
@@ -96,6 +151,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         super().__init__(species, name, hooks=hooks or {})
 
+        if index_registry is not None:
+            self._index_registry = index_registry
+
         self._config = self._to_discrete_config(population_config)  # type: ignore[assignment]
 
         self._genotypes_list = species.get_all_genotypes()
@@ -104,7 +162,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._initialize_registry()
 
         n_sexes = self.config.n_sexes
-        n_genotypes = self.config.n_genotypes
+        n_genotypes = self.config.n_ztypes
         n_ages = self.config.n_ages
 
         # Create an empty state first so we can check whether the config's
@@ -113,7 +171,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._state = DiscretePopulationState.create(
             n_sexes=n_sexes,
             n_ages=n_ages,
-            n_genotypes=n_genotypes,
+            n_ztypes=n_genotypes,
             n_tick=0,
             individual_count=np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64),
         )
@@ -170,6 +228,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
         *,
+        compress: bool = False,
+        declared_zygote_types: set[str] | set[int] | None = None,
+        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
         legacy_path: Literal[False] = False,
     ) -> DiscreteConfigurator:
         """Create a builder for a discrete-generation population."""
@@ -184,6 +245,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
         *,
+        compress: bool = False,
+        declared_zygote_types: set[str] | set[int] | None = None,
+        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
         legacy_path: bool = False,
     ) -> DiscreteGenerationPopulationBuilder | DiscreteConfigurator:
         """Fluent population construction entry point.
@@ -211,11 +275,20 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         from natal.configurator import Configurator
 
+        if declared_genotypes is not None:
+            if declared_zygote_types is not None:
+                raise ValueError(
+                    "Cannot specify both declared_zygote_types and "
+                    "declared_genotypes (deprecated alias)."
+                )
+            declared_zygote_types = declared_genotypes
         return Configurator.for_discrete(species).setup(
             name=name,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             fixed_egg_count=fixed_egg_count,
+            compress=compress,
+            declared_zygote_types=declared_zygote_types,
         )
 
     def _resolve_age_distribution(
@@ -286,6 +359,55 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             raise RuntimeError(
                 f"Population '{self.name}' has finished. Cannot run() again after finish=True."
             )
+
+        # Wright-Fisher extreme-speed path: single multinomial draw per tick.
+        if getattr(self.config, "extreme_speed_mode", 0) > 0:
+            record_every_resolved = record_every if record_every is not None else self.record_every
+            if self.should_use_python_dispatch():
+                return self._run_wright_fisher(
+                    n_steps=n_steps,
+                    record_every=record_every_resolved,
+                    finish=finish,
+                    clear_history_on_start=clear_history_on_start,
+                )
+
+            wrappers = self.get_compiled_event_hooks()
+            if wrappers.run_wf_fn is None:
+                return self._run_wright_fisher(
+                    n_steps=n_steps,
+                    record_every=record_every_resolved,
+                    finish=finish,
+                    clear_history_on_start=clear_history_on_start,
+                )
+
+            obs_mask = self._observation_mask
+            n_obs = len(self._observation.labels) if self._observation is not None else 0
+
+            final_state_tuple, history_new, was_stopped = wrappers.run_wf_fn(
+                state=self.state,
+                config=self.config,
+                registry=wrappers.hooks.registry,
+                n_ticks=n_steps,
+                record_interval=record_every_resolved,
+                observation_mask=obs_mask,
+                n_obs_groups=n_obs,
+            )
+
+            self._state = DiscretePopulationState(
+                n_tick=int(final_state_tuple[1]),
+                individual_count=final_state_tuple[0],
+            )
+            self._tick = int(final_state_tuple[1])
+            self._process_kernel_history(history_new, clear_history_on_start)
+
+            if was_stopped:
+                self._finished = True
+                self.trigger_event("finish")
+            elif finish:
+                self.finish_simulation()
+
+            return self
+
         if record_every is None:
             record_every = self.record_every
         if self.should_use_python_dispatch():
@@ -332,6 +454,108 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         # A STOP result from any hook means the simulation ended early; mark
         # finished so that downstream code and the caller know not to continue.
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
+
+    def _run_wright_fisher(
+        self,
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> DiscreteGenerationPopulation:
+        """Run using the Wright-Fisher extreme-speed path.
+
+        Only FIRST hooks are supported — they fire before the WF tick.
+        EARLY and LATE have no natural insertion point because the WF
+        tick fuses reproduction, survival, and aging into one step.
+        Both compiled (CSR + njit) and Python-fallback hooks are
+        dispatched through ``trigger_event``.
+        """
+        from natal.engine.simulation.discrete_generation import run_wf_loop
+
+        if clear_history_on_start:
+            self.clear_history()
+
+        # Build the HookExecutor lazily — covers CSR, njit custom,
+        # selector, and Python wrapper hooks.
+        self.ensure_hook_executor()
+
+        state = self._state
+        assert state is not None, "Population state must be initialized before running"
+
+        cfg = self.config
+        mode = cfg.extreme_speed_mode
+
+        # Record initial state snapshot (mirrors compiled WF wrapper and
+        # _run_python_dispatch which both record tick-0 before the loop).
+        if record_every > 0 and (state.n_tick % record_every == 0):
+            snapshot_init = state.individual_count.ravel().copy()
+            self._history.append((state.n_tick, snapshot_init))
+            self._enforce_history_limit()
+
+        was_stopped = False
+        for _ in range(n_steps):
+            # Keep self._tick in sync so that hook ``when`` conditions
+            # and CSR condition programs see the correct tick.
+            self._tick = state.n_tick
+
+            # ---- FIRST hooks (before reproduction) ----
+            if self.trigger_event("first", deme_id=-1) == RESULT_STOP:
+                was_stopped = True
+                break
+
+            # ---- WF tick (reproduction + survival + aging) ----
+            new_ind = run_wf_loop(
+                ind_count=state.individual_count,
+                n_ticks=1,
+                offspring_tensor=cfg.offspring_tensor,
+                fecundity_f=cfg.fecundity_f,
+                fecundity_m=cfg.fecundity_m,
+                sexual_selection=cfg.sexual_selection_fitness,
+                viability_f=cfg.viability_f,
+                viability_m=cfg.viability_m,
+                eggs_per_female=float(cfg.eggs_per_female[()]),
+                sex_ratio=float(cfg.sex_ratio[()]),
+                female_compat=cfg.female_genotype_compatibility,
+                male_compat=cfg.male_genotype_compatibility,
+                female_only=cfg.female_only_by_sex_chrom,
+                male_only=cfg.male_only_by_sex_chrom,
+                has_sex_chromosomes=cfg.has_sex_chromosomes,
+                mode=mode,
+                stochastic=cfg.stochastic,
+                mating_rate_f=cfg.female_adult_mating_rate,
+                mating_rate_m=cfg.male_adult_mating_rate,
+                reproduction_rate=cfg.reproduction_rate,
+                carrying_capacity=float(cfg.carrying_capacity[()]),
+                juvenile_growth_mode=int(cfg.juvenile_growth_mode[()]),
+                low_density_growth_rate=float(cfg.low_density_growth_rate[()]),
+                expected_competition_strength=float(cfg.expected_competition_strength[()]),
+                expected_survival_rate=float(cfg.expected_survival_rate[()]),
+            )
+
+            next_tick = state.n_tick + 1
+            state = DiscretePopulationState(
+                n_tick=next_tick, individual_count=new_ind,
+            )
+            self._state = state  # keep self._state in sync for hooks
+
+            if record_every > 0 and (next_tick % record_every == 0):
+                snapshot: np.ndarray = state.individual_count.ravel().copy()
+                self._history.append((next_tick, snapshot))
+                self._enforce_history_limit()
+
+            # No EARLY / LATE hooks — WF fuses reproduction + survival
+            # + aging into one atomic step with no intermediate stages.
+
+        self._state = state
+        self._tick = state.n_tick
+
         if was_stopped:
             self._finished = True
             self.trigger_event("finish")
@@ -436,7 +660,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._state = DiscretePopulationState.create(
                 n_sexes=self.config.n_sexes,
                 n_ages=self.config.n_ages,
-                n_genotypes=self.config.n_genotypes,
+                n_ztypes=self.config.n_ztypes,
                 n_tick=0,
                 individual_count=ind_copy.copy(),
             )
@@ -513,7 +737,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 state,
                 n_sexes=self.config.n_sexes,
                 n_ages=self.config.n_ages,
-                n_genotypes=self.config.n_genotypes,
+                n_ztypes=self.config.n_ztypes,
             )
         elif isinstance(state, DiscretePopulationState):
             state_obj = state

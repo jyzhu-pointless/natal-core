@@ -11,6 +11,8 @@ This module provides regex-like pattern matching for genetic sequences:
 - GenotypeSelector: Unified genotype selector for observation/filtering
 """
 
+from __future__ import annotations
+
 from abc import ABC
 from abc import abstractmethod as abstract_method
 from collections.abc import Sequence
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
     from natal.genetic_entities import Gene, Genotype, HaploidGenome, Haplotype
     from natal.genetic_structures import Species
 
-__all__ = ["GenotypePatternParser", "GenotypeSelector"]
+__all__ = ["GenotypePatternParser", "GenotypeSelector", "LabPattern", "GameteTypePattern", "ZygoteTypePattern"]
 
 
 class PatternParseError(Exception):
@@ -41,11 +43,115 @@ class PatternParseError(Exception):
     pass
 
 
+class LabPattern:
+    """Pattern for matching gamete / somatic label names.
+
+    Supports the same syntax as allele patterns:
+      - ``@cas9_high`` — exact match
+      - ``@!cas9_high`` — any label except "cas9_high"
+      - ``@{cas9_high,cas9_low}`` — any label in the set
+      - ``@!{cas9_high,cas9_low}`` — any label NOT in the set
+
+    When *lab* and *lab_set* are both ``None`` the pattern matches any label
+    (equivalent to omitting the ``@`` suffix entirely).
+    """
+
+    def __init__(
+        self,
+        lab: Optional[str] = None,
+        negate: bool = False,
+        lab_set: Optional[Set[str]] = None,
+    ):
+        self.lab = lab
+        self.negate = negate
+        self.lab_set = lab_set
+
+    def matches(self, value: str) -> bool:
+        """Return True if *value* satisfies this pattern."""
+        if self.lab_set is not None:
+            result = value in self.lab_set
+            return not result if self.negate else result
+        if self.lab is not None:
+            result = value == self.lab
+            return not result if self.negate else result
+        return True  # wildcard — matches anything
+
+    def __bool__(self) -> bool:
+        """False when this is a pure wildcard (no constraint).
+
+        Prefer :meth:`is_wildcard` for readability in conditional checks.
+        """
+        return self.lab is not None or self.lab_set is not None
+
+    def is_wildcard(self) -> bool:
+        """True if this pattern matches any label (no constraint)."""
+        return self.lab is None and self.lab_set is None
+
+    def __repr__(self) -> str:
+        if self.lab_set is not None:
+            inner = "{" + ",".join(sorted(self.lab_set)) + "}"
+        elif self.lab is not None:
+            inner = self.lab
+        else:
+            return "LabPattern(*)"
+        prefix = "!" if self.negate else ""
+        return f"LabPattern({prefix}{inner})"
+
+    @staticmethod
+    def parse(lab_str: str) -> LabPattern:
+        """Parse a ``@lab`` suffix string into a ``LabPattern``.
+
+        Returns a wildcard (matches-everything) pattern for ``"*"``
+        or the empty string.
+        """
+        from natal.helpers import validate_name
+
+        s = lab_str.strip()
+        if not s or s == "*":
+            return LabPattern()
+
+        negate = False
+        if s.startswith("!"):
+            negate = True
+            s = s[1:].strip()
+
+        if s.startswith("{") and s.endswith("}"):
+            inner = s[1:-1].strip()
+            if not inner:
+                raise PatternParseError("Empty lab set {}")
+            names = {n.strip() for n in inner.split(",")}
+            for name in names:
+                if not validate_name(name):
+                    raise PatternParseError(
+                        f"Invalid lab name {name!r} in set. "
+                        f"Lab names must match [A-Za-z0-9_]+."
+                    )
+            return LabPattern(lab_set=names, negate=negate)
+
+        # Single name or comma-separated (set without braces)
+        if "," in s:
+            names = {n.strip() for n in s.split(",")}
+            for name in names:
+                if not validate_name(name):
+                    raise PatternParseError(
+                        f"Invalid lab name {name!r}. "
+                        f"Lab names must match [A-Za-z0-9_]+."
+                    )
+            return LabPattern(lab_set=names, negate=negate)
+
+        if not validate_name(s):
+            raise PatternParseError(
+                f"Invalid lab name {s!r}. "
+                f"Lab names must match [A-Za-z0-9_]+."
+            )
+        return LabPattern(lab=s, negate=negate)
+
+
 class PatternElement(ABC):
     """Base class for all pattern elements representing allele-level matching."""
 
     @abstract_method
-    def matches(self, gene: Optional['Gene']) -> bool:
+    def matches(self, gene: Optional[Gene]) -> bool:
         """Check if a single allele matches this pattern element.
 
         Args:
@@ -67,7 +173,7 @@ class AllelePattern(PatternElement):
     def __init__(self, allele_name: str):
         self.allele_name = allele_name
 
-    def matches(self, gene: Optional['Gene']) -> bool:
+    def matches(self, gene: Optional[Gene]) -> bool:
         if gene is None:
             return False
         return gene.name == self.allele_name
@@ -79,7 +185,7 @@ class AllelePattern(PatternElement):
 class WildcardPattern(PatternElement):
     """Wildcard (*) - matches any allele."""
 
-    def matches(self, gene: Optional['Gene']) -> bool:
+    def matches(self, gene: Optional[Gene]) -> bool:
         return gene is not None
 
     def __repr__(self) -> str:
@@ -99,7 +205,7 @@ class SetPattern(PatternElement):
         self.alleles = alleles
         self.negate = negate
 
-    def matches(self, gene: Optional['Gene']) -> bool:
+    def matches(self, gene: Optional[Gene]) -> bool:
         if gene is None:
             return False
         result = gene.name in self.alleles
@@ -130,7 +236,7 @@ class LocusPattern:
         self.paternal_pattern = paternal_pattern
         self.unordered = unordered
 
-    def matches(self, mat_gene: Optional['Gene'], pat_gene: Optional['Gene']) -> bool:
+    def matches(self, mat_gene: Optional[Gene], pat_gene: Optional[Gene]) -> bool:
         """Check if a pair of alleles matches this locus pattern.
 
         Args:
@@ -164,18 +270,31 @@ class LocusPattern:
 
 
 class HaplotypePath:
-    """Pattern for a single Haplotype (one copy of a pair of homologous chromosomes)."""
+    """Pattern for a single Haplotype, optionally filtered by gamete label.
 
-    def __init__(self, locus_patterns: Sequence[PatternElement]):
+    The ``@lab`` suffix (e.g. ``A/B@cas9_deposited``) is parsed and stored
+    in *lab* but is NOT checked by :meth:`matches` — label filtering is the
+    caller's responsibility (e.g. ``GenotypeSelector``).  When *lab* is
+    ``None`` the pattern effectively matches any label.
+    """
+
+    def __init__(
+        self,
+        locus_patterns: Sequence[PatternElement],
+    ):
         """Initialize a haplotype pattern.
 
         Args:
-            locus_patterns: Sequence of PatternElement for each locus in order.
-                           Each PatternElement matches a single allele at that locus.
+            locus_patterns: Sequence of PatternElement for each locus.
+
+        Note:
+            The ``@lab`` suffix is stripped by the parser and stored on
+            the containing GenotypePattern, NOT on HaplotypePath.
+            A chromosomal haplotype has no intrinsic gamete label.
         """
         self.locus_patterns = locus_patterns
 
-    def matches(self, haplotype: 'Haplotype') -> bool:
+    def matches(self, haplotype: Haplotype) -> bool:
         """Check if a haplotype matches this pattern.
 
         Args:
@@ -197,7 +316,7 @@ class HaplotypePath:
 
         return True
 
-    def to_filter(self) -> Callable[['Haplotype'], bool]:
+    def to_filter(self) -> Callable[[Haplotype], bool]:
         """Convert to a filter function.
 
         Returns:
@@ -207,6 +326,30 @@ class HaplotypePath:
 
     def __repr__(self) -> str:
         return f"HaplotypePath([{', '.join(str(lp) for lp in self.locus_patterns)}])"
+
+
+class GameteTypePattern:
+    """Pattern for a gamete (haploid genome) with optional label constraint.
+
+    A gamete type pairs a :class:`HaplotypePath` (the genetic content across
+    all chromosomes) with an optional :class:`LabPattern` parsed from the
+    ``@lab`` suffix (e.g. ``A1/B1; C1@cas9_deposited``).
+
+    Label matching is the caller's responsibility — this class simply stores
+    both components so the parser doesn't silently discard the label.
+    """
+
+    def __init__(
+        self,
+        haplotype_path: HaplotypePath,
+        lab: Optional[LabPattern] = None,
+    ):
+        self.haplotype_path = haplotype_path
+        self.lab: Optional[LabPattern] = lab
+
+    def __repr__(self) -> str:
+        base = f"GameteTypePattern({self.haplotype_path!r})"
+        return f"{base}@{self.lab}" if self.lab else base
 
 
 class ChromosomePairPattern:
@@ -232,7 +375,7 @@ class ChromosomePairPattern:
         self.unordered = unordered
         self.explicit_grouping = explicit_grouping
 
-    def matches(self, haplotype_pair: Tuple['Haplotype', 'Haplotype']) -> bool:
+    def matches(self, haplotype_pair: Tuple[Haplotype, Haplotype]) -> bool:
         """Check if a pair of haplotypes (one chromosome pair) matches.
 
         Args:
@@ -261,7 +404,7 @@ class ChromosomePairPattern:
                 self.paternal_pattern.matches(pat_hap)
             )
 
-    def to_filter(self) -> Callable[[Tuple['Haplotype', 'Haplotype']], bool]:
+    def to_filter(self) -> Callable[[Tuple[Haplotype, Haplotype]], bool]:
         """Convert to a filter function.
 
         Returns:
@@ -275,18 +418,30 @@ class ChromosomePairPattern:
 
 
 class GenotypePattern:
-    """Complete genotype pattern matching multiple chromosomes."""
+    """Complete genotype pattern, optionally filtered by somatic label.
 
-    def __init__(self, chromosome_patterns: List[Optional[ChromosomePairPattern]]):
+    The ``@lab`` suffix (e.g. ``A|a@cas9_high``) is parsed and stored in
+    *lab* but is NOT checked by :meth:`matches` — label filtering is the
+    caller's responsibility (e.g. ``GenotypeSelector``).  When *lab* is
+    ``None`` the pattern effectively matches any label.
+    """
+
+    def __init__(
+        self,
+        chromosome_patterns: List[Optional[ChromosomePairPattern]],
+        lab: Optional[LabPattern] = None,
+    ):
         """Initialize a complete genotype pattern.
 
         Args:
-            chromosome_patterns: List of ChromosomePairPattern (or None for omitted chromosomes).
-                               None means that chromosome is not constrained by the pattern.
+            chromosome_patterns: List of ChromosomePairPattern (or None for
+                omitted chromosomes).
+            lab: Optional somatic-label constraint (parsed from ``@lab``).
         """
         self.chromosome_patterns = chromosome_patterns
+        self.lab: Optional[LabPattern] = lab
 
-    def matches(self, genotype: 'Genotype') -> bool:
+    def matches(self, genotype: Genotype) -> bool:
         """Check if a genotype matches this pattern.
 
         Args:
@@ -315,7 +470,7 @@ class GenotypePattern:
 
         return True
 
-    def to_filter(self) -> Callable[['Genotype'], bool]:
+    def to_filter(self) -> Callable[[Genotype], bool]:
         """Convert to a filter function for use in rules.
 
         Returns:
@@ -324,22 +479,95 @@ class GenotypePattern:
         return lambda genotype: self.matches(genotype)
 
     def __repr__(self) -> str:
-        return f"GenotypePattern([{', '.join(str(cp) if cp else 'None' for cp in self.chromosome_patterns)}])"
+        base = f"GenotypePattern([{', '.join(str(cp) if cp else 'None' for cp in self.chromosome_patterns)}])"
+        return f"{base}@{self.lab}" if self.lab else base
+
+
+class ZygoteTypePattern:
+    """Pattern for a zygote (diploid genotype) with a slab (somatic) label.
+
+    A zygote type pairs a :class:`GenotypePattern` with an optional
+    :class:`LabPattern` parsed from the ``@slab`` suffix (e.g.
+    ``A|a@infected``).  This is the slab-aware equivalent of
+    ``GenotypePattern`` — it resolves to a ``(genotype_index, slab_index)``
+    pair used for ZType indexing in config arrays.
+
+    Supports both string and tuple construction::
+
+        ZygoteTypePattern.parse("A|a@infected", species)
+        ZygoteTypePattern.from_pair(genotype_obj, "infected", species)
+    """
+
+    def __init__(
+        self,
+        genotype: GenotypePattern,
+        slab: Optional[LabPattern] = None,
+    ):
+        self.genotype = genotype
+        self.slab: Optional[LabPattern] = slab
+
+    @staticmethod
+    def parse(pattern_str: str, species: Species) -> ZygoteTypePattern:
+        """Parse a ZType pattern string like ``"A|a@infected"``.
+
+        The ``@slab`` suffix is extracted; everything before it is parsed
+        as a :class:`GenotypePattern`.
+        """
+        parser = GenotypePatternParser(species)
+        # Inline _strip_lab logic to avoid protected-access warning.
+        lab: Optional[LabPattern] = None
+        base = pattern_str
+        if "@" in pattern_str:
+            idx = pattern_str.rindex("@")
+            base = pattern_str[:idx].strip()
+            suffix = pattern_str[idx + 1:].strip()
+            if suffix:
+                lab = LabPattern.parse(suffix)
+        genotype = parser.parse(base)
+        return ZygoteTypePattern(genotype, lab)
+
+    @staticmethod
+    def from_pair(
+        genotype: Genotype,
+        slab: str,
+        species: Species,
+    ) -> ZygoteTypePattern:
+        """Build from a (Genotype, slab_name) tuple."""
+        parser = GenotypePatternParser(species)
+        pattern = parser.parse(str(genotype))
+        return ZygoteTypePattern(pattern, LabPattern(lab=slab))
+
+    def matches(self, genotype: Genotype, slab_label: str = "default") -> bool:
+        """Check if this pattern matches a (genotype, slab_label) pair."""
+        if not self.genotype.matches(genotype):
+            return False
+        if self.slab is not None:
+            return self.slab.matches(slab_label)
+        return True
+
+    def __repr__(self) -> str:
+        base = f"ZygoteTypePattern({self.genotype!r})"
+        return f"{base}@{self.slab}" if self.slab else base
 
 
 class HaploidGenomePattern:
-    """Pattern for a complete HaploidGenome (one DNA strand of an individual)."""
+    """Pattern for a HaploidGenome, optionally filtered by gamete label."""
 
-    def __init__(self, haplotype_patterns: List[Optional[HaplotypePath]]):
+    def __init__(
+        self,
+        haplotype_patterns: List[Optional[HaplotypePath]],
+        lab: Optional[LabPattern] = None,
+    ):
         """Initialize a haploid genome pattern.
 
         Args:
             haplotype_patterns: List of HaplotypePath for each chromosome.
-                               None means that chromosome is not constrained.
+            lab: Optional gamete-label constraint (parsed from ``@lab``).
         """
         self.haplotype_patterns = haplotype_patterns
+        self.lab: Optional[LabPattern] = lab
 
-    def matches(self, haploid_genome: 'HaploidGenome') -> bool:
+    def matches(self, haploid_genome: HaploidGenome) -> bool:
         """Check if a haploid genome matches this pattern.
 
         Args:
@@ -367,7 +595,7 @@ class HaploidGenomePattern:
 
         return True
 
-    def to_filter(self) -> Callable[['HaploidGenome'], bool]:
+    def to_filter(self) -> Callable[[HaploidGenome], bool]:
         """Convert to a filter function.
 
         Returns:
@@ -376,14 +604,15 @@ class HaploidGenomePattern:
         return lambda genome: self.matches(genome)
 
     def __repr__(self) -> str:
-        return f"HaploidGenomePattern([{', '.join(str(hp) if hp else 'None' for hp in self.haplotype_patterns)}])"
+        base = f"HaploidGenomePattern([{', '.join(str(hp) if hp else 'None' for hp in self.haplotype_patterns)}])"
+        return f"{base}@{self.lab}" if self.lab else base
 
 class GenotypePatternParser:
     """Parses genotype pattern strings into GenotypePattern objects."""
 
-    _pattern_cache: Dict[Tuple[int, str], 'GenotypePattern'] = {}
+    _pattern_cache: Dict[Tuple[int, str], GenotypePattern] = {}
 
-    def __init__(self, species: 'Species'):
+    def __init__(self, species: Species):
         """Initialize parser for a specific species.
 
         Args:
@@ -391,18 +620,37 @@ class GenotypePatternParser:
         """
         self.species = species
 
+    @staticmethod
+    def _strip_lab(pattern_str: str) -> tuple[str, Optional[LabPattern]]:
+        """Extract an ``@lab`` suffix from a pattern string.
+
+        Returns ``(base, lab_pattern)`` where *lab_pattern* is ``None``
+        (wildcard — matches any label) if no ``@`` suffix was present.
+        The suffix supports ``!`` negation and ``{...}`` set syntax.
+        """
+        if "@" in pattern_str:
+            idx = pattern_str.rindex("@")
+            base = pattern_str[:idx].strip()
+            suffix = pattern_str[idx + 1:].strip()
+            if not suffix:
+                raise PatternParseError("Empty @lab suffix")
+            return base, LabPattern.parse(suffix)
+        return pattern_str, None
+
     def parse(self, pattern_str: str) -> GenotypePattern:
         """Parse a pattern string into a GenotypePattern.
 
         Supported syntax includes:
-            - `;` separates chromosomes (outside parentheses)
-            - `|` separates maternal (left) and paternal (right)
-            - `/` separates loci within a chromosome
-            - `*` matches any allele
-            - `{A,B,C}` matches any allele in the set
-            - `!A` matches any allele except A
-            - `::` matches unordered pair (A::B matches A|B or B|A)
-            - `()` groups loci within a chromosome, `;` inside () separates loci
+            - ``;`` separates chromosomes (outside parentheses)
+            - ``|`` separates maternal (left) and paternal (right)
+            - ``/`` separates loci within a chromosome
+            - ``*`` matches any allele
+            - ``{A,B,C}`` matches any allele in the set
+            - ``!A`` matches any allele except A
+            - ``::`` matches unordered pair (A::B matches A|B or B|A)
+            - ``()`` groups loci within a chromosome
+            - ``@lab`` suffix selects a somatic label (ZType constraint),
+              e.g. ``A|a@cas9_high``
             - Omitted chromosomes default to wildcard matching (optional)
 
         Args:
@@ -414,10 +662,12 @@ class GenotypePatternParser:
         Raises:
             PatternParseError: If the pattern is invalid.
         """
-        pattern_str = pattern_str.strip()
+        original = pattern_str.strip()
+        pattern_str, lab = self._strip_lab(original)
 
-        # Check cache
-        cache_key = (id(self.species), pattern_str)
+        # Check cache — use the original string (before @lab stripping) as
+        # the cache key so that "A|a" and "A|a@cas9_high" are distinct.
+        cache_key = (id(self.species), original)
         if cache_key in self._pattern_cache:
             return self._pattern_cache[cache_key]
 
@@ -451,7 +701,7 @@ class GenotypePatternParser:
             while len(final_patterns) < len(self.species.chromosomes):
                 final_patterns.append(None)
 
-            result = GenotypePattern(final_patterns)
+            result = GenotypePattern(final_patterns, lab=lab)
             self._pattern_cache[cache_key] = result
             return result
 
@@ -623,16 +873,19 @@ class GenotypePatternParser:
             explicit_grouping=True
         )
 
-    def _parse_haplotype_path(self, haplotype_str: str, species: Optional["nt.Species"] = None) -> HaplotypePath:
+    def _parse_haplotype_path(self, haplotype_str: str, species: Optional[nt.Species] = None) -> HaplotypePath:
         """Parse a haplotype pattern string into HaplotypePath.
 
         Args:
-            haplotype_str: Pattern string like "A1/B1" or "A1/*" or "AB" (for single-character loci)
-            species: Optional species to check if all genes are single characters
+            haplotype_str: Pattern string like ``"A1/B1"`` or ``"A1/*"`` or
+                ``"A1/B1@cas9_deposited"`` for gamete-label filtering.
+            species: Optional species to check if all genes are single characters.
 
         Returns:
             HaplotypePath object.
         """
+        haplotype_str, _ = self._strip_lab(haplotype_str)  # lab stripped; stored on parent pattern
+
         # If the string contains /, split by / to get individual loci
         if "/" in haplotype_str:
             locus_strs = haplotype_str.split("/")
@@ -652,17 +905,7 @@ class GenotypePatternParser:
         return HaplotypePath(locus_patterns)
 
     def _parse_flexible_loci(self, haplotype_str: str) -> List[str]:
-        """Parse haplotype string using flexible strategy similar to Species.
-
-        Since gene names are restricted to [A-Za-z0-9_], we can safely parse
-        without ambiguity by detecting pattern elements.
-
-        Args:
-            haplotype_str: Pattern string without / separators
-
-        Returns:
-            List of locus pattern strings
-        """
+        """Parse a haplotype string without ``/`` separators."""
         locus_strs: List[str] = []
         i = 0
         while i < len(haplotype_str):
@@ -725,7 +968,7 @@ class GenotypePatternParser:
         """
         return char.isalnum() or char == '_'
 
-    def _are_all_genes_single_characters(self, species: "nt.Species") -> bool:
+    def _are_all_genes_single_characters(self, species: nt.Species) -> bool:
         """Check if all genes in the species are single characters.
 
         Args:
@@ -769,19 +1012,20 @@ class GenotypePatternParser:
 
         return HaplotypePath(locus_patterns)
 
-    def parse_haplotype_pattern(self, pattern_str: str) -> HaplotypePath:
+    def parse_haplotype_pattern(self, pattern_str: str) -> GameteTypePattern:
         """Parse a complete haplotype pattern.
 
         Args:
-            pattern_str: Pattern string for a single haplotype (e.g., "A1/B1; C1")
+            pattern_str: Pattern string for a single haplotype
+                (e.g. ``"A1/B1; C1"`` or ``"A1/B1@cas9_deposited"``).
 
         Returns:
-            HaplotypePath object with all loci patterns combined.
+            GameteTypePattern with haplotype path and optional lab constraint.
 
         Raises:
             PatternParseError: If the pattern is invalid.
         """
-        pattern_str = pattern_str.strip()
+        pattern_str, lab = self._strip_lab(pattern_str.strip())
 
         try:
             # Split by semicolon to get loci from all chromosomes
@@ -794,7 +1038,7 @@ class GenotypePatternParser:
                     pattern_elem = self._parse_allele_element(locus_str.strip())
                     all_locus_patterns.append(pattern_elem)
 
-            return HaplotypePath(all_locus_patterns)
+            return GameteTypePattern(HaplotypePath(all_locus_patterns), lab)
 
         except PatternParseError:
             raise
@@ -957,7 +1201,7 @@ class GenotypeSelector:
     input formats, leveraging the existing pattern matching system.
     """
 
-    def __init__(self, species: 'Species'):
+    def __init__(self, species: Species):
         """Initialize genotype selector for a specific species.
 
         Args:

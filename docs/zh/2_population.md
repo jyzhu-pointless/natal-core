@@ -245,3 +245,57 @@ else:
 # 手动结束模拟
 pop.finish_simulation()
 ```
+
+## Wright-Fisher 极速模式
+
+离散世代种群支持 Wright-Fisher 极速模式：用单次多项分布抽样替代逐步的 mate→fertilize→survive 管线。适用于有效种群大小建模，计算量降低 10-100 倍。
+
+### 三种采样模式
+
+| 模式 | 说明 |
+|------|------|
+| DETERMINISTIC (3) | 无限种群极限，无随机性 |
+| MULTINOMIAL (1) | 标准 Wright-Fisher 单次多项分布 |
+| POISSON (2) | 独立泊松抽样（大 N 近似） |
+
+### 启用方式
+
+通过 `Configurator` 在构建时设置：
+
+```python
+pop = nt.DiscreteGenerationPopulation.setup(
+    species=sp, stochastic=False,
+).initial_state(...).competition(...).build()
+```
+
+目前通过 `_replace` 修改配置启用（后续将添加链式 API）：
+
+```python
+object.__setattr__(pop, "_config", pop.config._replace(extreme_speed_mode=3))
+pop.run(100)
+```
+
+### 竞争与 Hook 支持
+
+极速模式支持三种密度调节模式（FIXED/LOGISTIC/BEVERTON_HOLT），与标准路径共用同一套 scaling 函数。仅支持 FIRST hooks（在 WF tick 之前触发），EARLY/LATE 在融合的 WF tick 中无自然插入点。
+
+确定性 WF 模式与标准确定性路径 tick-by-tick 结果完全一致（NO_COMPETITION 模式下已验证）。
+
+## 索引压缩
+
+索引压缩通过在构建时分析可达性，剪除永远不会出现的配子类型（GType）和合子/个体类型（ZType），减少数组维度。
+
+### 启用压缩
+
+```python
+pop = nt.DiscreteGenerationPopulation.setup(
+    species=sp, stochastic=False, compress=True,
+).initial_state(...).competition(...)
+    .build()
+```
+
+### 效果
+
+- **GType 压缩**：初始仅含 A|A 的单 locus 种群，HL 从 2 压缩到 1
+- **ZType 压缩**：仅 A|A 可达时，G 从 4 压缩到 1，offspring_tensor 从 64 元素降至 1
+- **双轴同时**：综合减少可达 98% 以上

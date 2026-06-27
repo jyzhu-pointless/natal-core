@@ -7,7 +7,7 @@
   // AGE_STRUCTURE
   {"domain": "age_structure", "name": "n_ages", "config_field": "n_ages", "config_path": [], "dtype": "int", "bounds": [1, 200]},
   {"domain": "age_structure", "name": "n_sexes", "config_field": "n_sexes", "config_path": [], "dtype": "int", "bounds": [1, 10]},
-  {"domain": "age_structure", "name": "n_genotypes", "config_field": "n_genotypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
+  {"domain": "age_structure", "name": "n_ztypes", "config_field": "n_ztypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
   {"domain": "age_structure", "name": "n_haploid_genotypes", "config_field": "n_haploid_genotypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
   {"domain": "age_structure", "name": "n_glabs", "config_field": "n_glabs", "config_path": [], "dtype": "int", "bounds": [1, 100]},
   {"domain": "age_structure", "name": "new_adult_age", "config_field": "new_adult_age", "config_path": [], "dtype": "int", "bounds": [1, 100]},

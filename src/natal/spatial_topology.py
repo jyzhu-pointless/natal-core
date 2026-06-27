@@ -27,8 +27,6 @@ __all__ = [
     "HexGrid",
     "build_adjacency_matrix",
     "build_gaussian_kernel",
-    "apply_migration_adjacency",
-    "apply_migration_convolution",
 ]
 
 

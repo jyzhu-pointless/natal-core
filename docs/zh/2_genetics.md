@@ -65,7 +65,8 @@ sp = nt.Species.from_dict(
             "C": ["C1", "C2"],
         },
     },
-    gamete_labels=["default", "Cas9_deposited"]  # 可选：配子标签，用于模拟母源效应（如 Cas9 蛋白沉积）
+    gamete_labels=["default", "Cas9_deposited"],  # 可选：配子标签，用于模拟母源效应（如 Cas9 蛋白沉积）
+    somatic_labels=["wildtype", "Cas9_high"],     # 可选：体细胞标签，用于标记个体状态（如 Cas9 表达水平）
 )
 ```
 
@@ -105,6 +106,23 @@ sp = nt.Species.from_dict(
 if chr_x.is_sex_chromosome:
     print(f"性染色体类型: {chr_x.sex_type}")  # 输出: "X"
     print(f"性染色体系统: {chr_x.sex_system}")  # 输出: "XY"
+```
+
+#### 配子标签与体细胞标签
+
+`gamete_labels` 和 `somatic_labels` 为遗传系统引入标签维度，用于标记配子和个体携带的额外信息。
+
+**配子标签**（已有）定义配子可携带的标记类型。默认值为 `["default"]`，表示不区分标记。常见用法包括标记 Cas9 蛋白沉积的配子（`"Cas9_deposited"`），配合 HomingDrive 等预设使用。
+
+**体细胞标签**（新增）与之对称——定义个体可携带的体细胞标记。默认值为 `["wildtype"]`，表示不区分。可用于标记个体的 Cas9 表达水平、毒素负荷等状态。
+
+两者都在 `Species` 构建时声明，同一个物种的所有种群共享：
+
+```python
+sp = nt.Species("Mosquito",
+    gamete_labels=["default", "Cas9_deposited"],
+    somatic_labels=["wildtype", "Cas9_high"],
+)
 ```
 
 #### 创建方式 2：链式 API

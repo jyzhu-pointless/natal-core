@@ -45,7 +45,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from natal.genetic_entities import Gene, Genotype, HaploidGenome, Haplotype
+    from natal.genetic_entities import (
+        Gene,
+        Genotype,
+        HaploidGenome,
+        HaploidGenotype,
+        Haplotype,
+    )
 
 __all__ = [
     "Locus",
@@ -980,6 +986,22 @@ class Locus(GeneticStructure['Gene']):
         """Alias for all_entities - returns all registered alleles (genes)."""
         return self.all_entities
 
+    def allele_index(self, gene_name: str) -> int:
+        """Return the positional index of *gene_name* in this locus's allele list.
+
+        Alleles are stored in registration order, giving each a deterministic
+        index used for canonical genotype ordering (e.g. :meth:`Species.unordered_genotype`).
+
+        Raises:
+            ValueError: If *gene_name* is not a registered allele at this locus.
+        """
+        for i, g in enumerate(self.alleles):
+            if g.name == gene_name:
+                return i
+        raise ValueError(
+            f"Allele {gene_name!r} not found at locus {self.name!r}"
+        )
+
     def register_allele(self, gene: Gene) -> Locus:
         """Alias for register - register a single allele."""
         return self.register(gene)
@@ -1806,11 +1828,12 @@ class SpeciesConfigBlueprint(TypedDict):
     consumed by ``Configurator`` / ``PopulationBuilder``.
     """
 
-    n_genotypes: int
+    n_ztypes: int
     n_haploid_genotypes: int
     n_glabs: int
-    genotype_to_gametes_map: NDArray[np.float64]
-    gametes_to_zygote_map: NDArray[np.float64]
+    n_slabs: int
+    zygotes_to_gametes_map: NDArray[np.float64]
+    gametes_to_zygotes_map: NDArray[np.float64]
     offspring_tensor: NDArray[np.float64]
     female_genotype_compatibility: NDArray[np.float64]
     male_genotype_compatibility: NDArray[np.float64]
@@ -1841,7 +1864,8 @@ class Species(GeneticStructure['HaploidGenome']):
         self,
         name: str,
         chromosomes: Optional[List[Chromosome]] = None,
-        gamete_labels: Optional[list[str]] = None
+        gamete_labels: Optional[list[str]] = None,
+        somatic_labels: Optional[list[str]] = None,
     ):
         # Initialize structure caches for this Species
         # Format: {structure_type: {name: instance}}
@@ -1860,9 +1884,29 @@ class Species(GeneticStructure['HaploidGenome']):
 
         # Gamete labels for this species
         if gamete_labels is not None:
+            from natal.helpers import validate_name
+            for glab in gamete_labels:
+                if not validate_name(glab):
+                    raise ValueError(
+                        f"Invalid gamete label {glab!r}. "
+                        f"Labels must match [A-Za-z0-9_]+."
+                    )
             self._gamete_labels = list(gamete_labels)
         else:
             self._gamete_labels = []
+
+        # Somatic labels for this species (symmetric with gamete_labels)
+        if somatic_labels is not None:
+            from natal.helpers import validate_name
+            for slab in somatic_labels:
+                if not validate_name(slab):
+                    raise ValueError(
+                        f"Invalid somatic label {slab!r}. "
+                        f"Labels must match [A-Za-z0-9_]+."
+                    )
+            self._somatic_labels = list(somatic_labels)
+        else:
+            self._somatic_labels = []
 
     @property
     def gamete_labels(self) -> List[str]:
@@ -1872,6 +1916,15 @@ class Species(GeneticStructure['HaploidGenome']):
     @gamete_labels.setter
     def gamete_labels(self, labels: List[str]) -> None:
         self._gamete_labels = list(labels)
+
+    @property
+    def somatic_labels(self) -> List[str]:
+        """Return the list of somatic labels for this species."""
+        return self._somatic_labels
+
+    @somatic_labels.setter
+    def somatic_labels(self, labels: List[str]) -> None:
+        self._somatic_labels = list(labels)
 
     @property
     def entity_type(self):
@@ -1930,6 +1983,17 @@ class Species(GeneticStructure['HaploidGenome']):
     def sex_chromosomes(self) -> List[Chromosome]:
         """Returns all sex chromosomes"""
         return [c for c in self.chromosomes if c.is_sex_chromosome]
+
+    @property
+    def unordered(self) -> bool:
+        """True for autosomal species (maternal/paternal ordering irrelevant).
+
+        False when sex chromosomes exist (X|Y ≠ Y|X biologically).
+        Controls whether genotype enumeration uses canonical (unordered)
+        or ordered genotype space.  Defaults to the inverse of
+        ``bool(self.sex_chromosomes)``.
+        """
+        return not bool(self.sex_chromosomes)
 
     @property
     def autosomes(self) -> List[Chromosome]:
@@ -2113,7 +2177,8 @@ class Species(GeneticStructure['HaploidGenome']):
         cls,
         name: str,
         structure: Dict[str, Union[List[str], Dict[str, List[str]], Dict[str, Any]]],
-        gamete_labels: Optional[List[str]] = None
+        gamete_labels: Optional[List[str]] = None,
+        somatic_labels: Optional[List[str]] = None,
     ) -> Species:
         """Create a Species with complete hierarchy from a dictionary specification.
 
@@ -2159,7 +2224,7 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         from natal.genetic_entities import Gene
 
-        species = cls(name, gamete_labels=gamete_labels)
+        species = cls(name, gamete_labels=gamete_labels, somatic_labels=somatic_labels)
 
         for chrom_name, loci_spec in structure.items():
             sex_type: Optional[Union[SexChromosomeType, str]] = None
@@ -2591,17 +2656,27 @@ class Species(GeneticStructure['HaploidGenome']):
             f"{context} selector must be Genotype or str, got {type(selector).__name__}"
 
         if all_genotypes is None:
-            all_genotypes = self.get_all_genotypes()
+            all_genotypes = self.get_all_genotypes(unordered=self.unordered)
 
         if isinstance(selector, Genotype):
             return [selector]
 
         # Keep backward compatibility: exact parser first, pattern parser fallback.
+        # Canonicalize the parsed genotype so "Var|WT" maps to the same
+        # index as "WT|Var" — but only for unordered species.  Species with
+        # sex chromosomes preserve biologically significant ordering.
         try:
-            return [self.get_genotype_from_str(selector)]
+            exact_gt = self.get_genotype_from_str(selector)
+            return [self.unordered_genotype(exact_gt.maternal, exact_gt.paternal)]
         except Exception as exact_err:
+            # For unordered species, auto-promote | to :: in pattern
+            # strings so that "*|A" matches both orderings of heterozygous
+            # genotypes.  Preserve any :: that the user already wrote.
+            pattern_str = selector
+            if self.unordered:
+                pattern_str = selector.replace("::", "\x00").replace("|", "::").replace("\x00", "::")
             try:
-                pattern_filter = self.parse_genotype_pattern(selector)
+                pattern_filter = self.parse_genotype_pattern(pattern_str)
             except Exception as pattern_err:
                 raise ValueError(
                     f"Invalid {context} selector '{selector}'. "
@@ -2649,7 +2724,7 @@ class Species(GeneticStructure['HaploidGenome']):
                 a pattern matches no genotypes, or if a tuple selector is empty.
         """
         if all_genotypes is None:
-            all_genotypes = self.get_all_genotypes()
+            all_genotypes = self.get_all_genotypes(unordered=self.unordered)
 
         if isinstance(selector, tuple):
             if len(selector) == 0:
@@ -2760,7 +2835,11 @@ class Species(GeneticStructure['HaploidGenome']):
         pattern_obj = parser.parse(pattern)
 
         count = 0
+        seen: set[int] = set()
         for genotype in self.iter_genotypes():
+            if id(genotype) in seen:
+                continue
+            seen.add(id(genotype))
             if pattern_obj.matches(genotype):
                 if max_count is not None and count >= max_count:
                     return
@@ -3221,14 +3300,21 @@ class Species(GeneticStructure['HaploidGenome']):
         """
         return self._iter_haploid_genotypes_for_parent(is_paternal=True)
 
-    def iter_genotypes(self) -> Iterable[Genotype]:
+    def iter_genotypes(self, unordered: bool = False) -> Iterable[Genotype]:
         """
         Iterate all possible diploid genotypes.
 
-        Maternal and paternal sides are ordered, so ``(A|B)`` and ``(B|A)``
-        are distinct genotypes. When ``_valid_sex_genotypes`` or
-        ``Chromosome.sex_type`` constraints are present, only valid sex
-        chromosome pairings are emitted.
+        Maternal and paternal sides are ordered by default, so ``(A|B)`` and ``(B|A)``
+        are distinct genotypes. When ``unordered=True``, symmetric pairs are collapsed
+        via ``unordered_genotype()`` — ``A|a`` and ``a|A`` map to the same canonical
+        Genotype, halving the heterozygous genotype space.
+
+        When ``_valid_sex_genotypes`` or ``Chromosome.sex_type`` constraints are
+        present, only valid sex chromosome pairings are emitted.
+
+        Args:
+            unordered: If True, collapse maternal/paternal symmetric pairs
+                into canonical forms (default False for backward compatibility).
 
         Yields:
             Genotype instances.
@@ -3245,24 +3331,46 @@ class Species(GeneticStructure['HaploidGenome']):
         if not sex_chr_groups:
             # No sex chromosomes: simple Cartesian product.
             all_haploid_genotypes = list(self.iter_haploid_genotypes())
-            for maternal, paternal in itertools.product(all_haploid_genotypes, repeat=2):
-                yield Genotype(species=self, maternal=maternal, paternal=paternal)
+            if unordered:
+                # Triangular traversal (maternal index ≤ paternal index)
+                # eliminates whole-genome swaps.  A seen set on the unordered
+                # (maternal, paternal) pair catches the remaining per-locus
+                # allele-swap duplicates (e.g. AB|ab ≡ Ab|aB).
+                seen: set[tuple[HaploidGenotype, HaploidGenotype]] = set()
+                for i, maternal in enumerate(all_haploid_genotypes):
+                    for paternal in all_haploid_genotypes[i:]:
+                        gt = self.unordered_genotype(maternal, paternal)
+                        key = (gt.maternal, gt.paternal)
+                        if key not in seen:
+                            seen.add(key)
+                            yield gt
+            else:
+                for maternal, paternal in itertools.product(all_haploid_genotypes, repeat=2):
+                    yield Genotype(species=self, maternal=maternal, paternal=paternal)
         elif valid_sex_gts:
-            # Validate pairings against the explicitly valid chromosome pairs.
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
 
-            # Build a set for fast valid-pair lookup.
             valid_chrom_pairs: Set[Tuple[Chromosome, Chromosome]] = set(valid_sex_gts)
 
+            seen: set[tuple[HaploidGenotype, HaploidGenotype]] = set()
             for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
-                # Resolve selected maternal and paternal sex chromosomes.
                 mat_sex_chrom = self._get_sex_chromosome(maternal, sex_chr_groups)
                 pat_sex_chrom = self._get_sex_chromosome(paternal, sex_chr_groups)
 
-                # Keep only valid pairings.
                 if (mat_sex_chrom, pat_sex_chrom) in valid_chrom_pairs:
-                    yield Genotype(species=self, maternal=maternal, paternal=paternal)
+                    if unordered:
+                        gt = self.unordered_genotype(maternal, paternal)
+                        key = (gt.maternal, gt.paternal)
+                        if key not in seen:
+                            seen.add(key)
+                            yield gt
+                    else:
+                        gt = Genotype(species=self, maternal=maternal, paternal=paternal)
+                        key = (gt.maternal, gt.paternal)
+                        if key not in seen:
+                            seen.add(key)
+                            yield gt
         else:
             # With no explicit constraints, all pairings are valid.
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
@@ -3350,16 +3458,47 @@ class Species(GeneticStructure['HaploidGenome']):
             f"Unknown parent role: {parent!r}. Expected 'maternal', 'paternal', or None."
         )
 
-    def get_all_genotypes(self) -> List[Genotype]:
+    def get_all_genotypes(self, unordered: bool = False) -> List[Genotype]:
         """
         Get a list of all possible diploid genotypes.
+
+        .. note::
+            Most callers should pass ``unordered=self.unordered`` so that
+            maternal/paternal symmetric pairs are collapsed for autosome-only
+            species while sex-chromosome species preserve biological ordering.
+            The default ``False`` is kept for backward compatibility.
+
+        Args:
+            unordered: If True, collapse maternal/paternal symmetric pairs
+                into canonical forms (default False for backward compatibility).
 
         Returns:
             List of all Genotype instances.
         """
-        return list(self.iter_genotypes())
+        return list(self.iter_genotypes(unordered=unordered))
 
     # -- gamete / zygote map builders ---------------------------------------------
+
+    def unordered_genotype(
+        self,
+        hg1: HaploidGenotype,
+        hg2: HaploidGenotype,
+    ) -> Genotype:
+        """Return a canonical Genotype where maternal/paternal order is irrelevant.
+
+        Canonicalises per-locus: at each locus the maternal allele has the
+        smaller :meth:`Locus.allele_index`.  When individual alleles must be
+        swapped between the two haploid genomes (multi-locus free combination)
+        new :class:`HaploidGenotype` objects are assembled so that every
+        genotype with the same per-locus allele composition collapses to the
+        same canonical form.
+
+        Used by :meth:`iter_genotypes` (unordered mode), ``initialize_zygote_map``,
+        and :class:`IndexRegistry` to deduplicate symmetric genotype pairs.
+        """
+        from natal.genetic_entities import Genotype
+        mat, pat = _canonical_haploid_pair(self, hg1, hg2)
+        return Genotype(species=self, maternal=mat, paternal=pat)
 
     def build_gamete_map(
         self,
@@ -3372,7 +3511,7 @@ class Species(GeneticStructure['HaploidGenome']):
         from natal.population_config import initialize_gamete_map as _impl
 
         return _impl(
-            diploid_genotypes=self.get_all_genotypes(),
+            diploid_genotypes=self.get_all_genotypes(unordered=self.unordered),
             haploid_genotypes=self.get_all_haploid_genotypes(),
             n_glabs=len(self.gamete_labels or ["default"]),
             gamete_modifiers=gamete_modifiers,
@@ -3390,9 +3529,10 @@ class Species(GeneticStructure['HaploidGenome']):
 
         return _impl(
             haploid_genotypes=self.get_all_haploid_genotypes(),
-            diploid_genotypes=self.get_all_genotypes(),
+            diploid_genotypes=self.get_all_genotypes(unordered=self.unordered),
             n_glabs=len(self.gamete_labels or ["default"]),
             zygote_modifiers=zygote_modifiers,
+            unordered=True,  # unordered genotype space
         )
 
     # -- lazy-loaded config blueprint ---------------------------------------------
@@ -3410,9 +3550,9 @@ class Species(GeneticStructure['HaploidGenome']):
         recomputing species-level arrays on every construction.
 
         Returns:
-            Dict with keys ``n_genotypes`` (int), ``n_haploid_genotypes``
-            (int), ``n_glabs`` (int), ``genotype_to_gametes_map``
-            (ndarray), ``gametes_to_zygote_map`` (ndarray),
+            Dict with keys ``n_ztypes`` (int), ``n_haploid_genotypes``
+            (int), ``n_glabs`` (int), ``zygotes_to_gametes_map``
+            (ndarray), ``gametes_to_zygotes_map`` (ndarray),
             ``offspring_tensor`` (ndarray), and compatibility arrays
             (ndarray).
         """
@@ -3423,23 +3563,24 @@ class Species(GeneticStructure['HaploidGenome']):
             compute_offspring_probability_tensor,
         )
 
-        genotypes = self.get_all_genotypes()
+        genotypes = self.get_all_genotypes(unordered=self.unordered)
         haplotypes = self.get_all_haploid_genotypes()
         n_glabs = len(self.gamete_labels or ["default"])
+        n_slabs = len(self.somatic_labels or ["default"])
         n_g = len(genotypes)
         n_hg = len(haplotypes)
 
-        g2g = self.build_gamete_map()
+        z2g = self.build_gamete_map()
         g2z = self.build_zygote_map()
 
-        meiosis_f = cast(NDArray[np.float64], g2g[0])
-        meiosis_m = cast(NDArray[np.float64], g2g[1])
+        meiosis_f = cast(NDArray[np.float64], z2g[0])
+        meiosis_m = cast(NDArray[np.float64], z2g[1])
 
         offspring = compute_offspring_probability_tensor(
             meiosis_f=meiosis_f,
             meiosis_m=meiosis_m,
             haplo_to_genotype_map=g2z,
-            n_genotypes=n_g,
+            n_ztypes=n_g,
             n_haplogenotypes=n_hg,
             n_glabs=n_glabs,
         )
@@ -3451,16 +3592,231 @@ class Species(GeneticStructure['HaploidGenome']):
         m_compat = meiosis_m.sum(axis=1)  # male side
 
         self._config_blueprint = {
-            "n_genotypes": n_g,
+            "n_ztypes": n_g,
             "n_haploid_genotypes": n_hg,
             "n_glabs": n_glabs,
-            "genotype_to_gametes_map": g2g,
-            "gametes_to_zygote_map": g2z,
+            "n_slabs": n_slabs,
+            "zygotes_to_gametes_map": z2g,
+            "gametes_to_zygotes_map": g2z,
             "offspring_tensor": offspring,
             "female_genotype_compatibility": f_compat,
             "male_genotype_compatibility": m_compat,
         }
         return self._config_blueprint
+
+
+def _canonical_haploid_pair(
+    species: Species,
+    hg1: HaploidGenotype,
+    hg2: HaploidGenotype,
+) -> tuple[HaploidGenotype, HaploidGenotype]:
+    """Return the canonical (maternal, paternal) pair for unordered species.
+
+    Per-locus allele-index comparison.  When alleles at a locus must be
+    swapped between the two haploid genomes, new Haplotype/HaploidGenotype
+    objects are assembled.  Does NOT construct Genotype objects — safe
+    to call from Genotype.__new__ without recursion.
+
+    Sex chromosomes with different types (X|Y, Z|W) preserve their
+    maternal/paternal ordering.  Same-type sex chromosomes (X|X, Z|Z)
+    are canonicalized per-locus like autosomes.
+    """
+    from natal.genetic_entities import HaploidGenotype, Haplotype
+
+    maternal_haps: list[Haplotype] = []
+    paternal_haps: list[Haplotype] = []
+    needs_reassembly = False
+
+    for chromosome in species.chromosomes:
+        try:
+            hap1 = hg1.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            hap1 = None
+        try:
+            hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            hap2 = None
+
+        # Different-type sex chromosomes (X|Y, Z|W) — one parent lacks
+        # this chromosome, or the chromosomes are different objects.
+        # Preserve maternal/paternal ordering.
+        if chromosome.is_sex_chromosome and (
+            hap1 is None or hap2 is None or hap1.chromosome is not hap2.chromosome
+        ):
+            if hap1 is not None:
+                maternal_haps.append(hap1)
+            if hap2 is not None:
+                paternal_haps.append(hap2)
+            continue
+
+        if hap1 is None or hap2 is None:
+            continue
+
+        # Autosome or same-type sex chromosome — canonicalize per-locus.
+        mat_genes: list[Gene] = []
+        pat_genes: list[Gene] = []
+        for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
+            idx1 = locus.allele_index(g1.name)
+            idx2 = locus.allele_index(g2.name)
+            if idx1 <= idx2:
+                mat_genes.append(g1)
+                pat_genes.append(g2)
+            else:
+                mat_genes.append(g2)
+                pat_genes.append(g1)
+                needs_reassembly = True
+
+        if needs_reassembly:
+            maternal_haps.append(Haplotype(chromosome=chromosome, genes=mat_genes))
+            paternal_haps.append(Haplotype(chromosome=chromosome, genes=pat_genes))
+        else:
+            maternal_haps.append(hap1)
+            paternal_haps.append(hap2)
+
+    if needs_reassembly:
+        new_maternal = HaploidGenotype(species=species, haplotypes=maternal_haps)
+        new_paternal = HaploidGenotype(species=species, haplotypes=paternal_haps)
+        return (new_maternal, new_paternal)
+
+    for chromosome in species.chromosomes:
+        try:
+            hap1 = hg1.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            continue
+        try:
+            hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            continue
+        if chromosome.is_sex_chromosome and hap1.chromosome is not hap2.chromosome:
+            continue
+        for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
+            idx1 = locus.allele_index(g1.name)
+            idx2 = locus.allele_index(g2.name)
+            if idx1 < idx2:
+                return (hg1, hg2)
+            elif idx1 > idx2:
+                return (hg2, hg1)
+    return (hg1, hg2)
+
+
+# ---------------------------------------------------------------------------
+# Gamete-axis index compression
+# ---------------------------------------------------------------------------
+
+
+def build_gamete_compression_mask(
+    z2g_map: NDArray[np.float64],
+    g2z_map: NDArray[np.float64],
+    initial_individual_count: NDArray[np.float64],
+    declared_genotypes: set[int] | None = None,
+    n_glabs: int = 1,
+    n_slabs: int = 1,
+) -> tuple[NDArray[np.int32], int, NDArray[np.int32], int]:
+    """Build compression masks for both the GType (gamete) and ZType axes.
+
+    Uses a unified gamete-set fixed-point BFS that simultaneously tracks
+    reachable GTypes and ZTypes.  For n_slabs=1 the ZType mask reduces
+    to a plain genotype compress map (G_orig,).
+
+    Args:
+        z2g_map: ``zygotes_to_gametes_map``, shape ``(2, G, HL)``,
+            after modifier application.
+        g2z_map: ``gametes_to_zygotes_map``, shape ``(HL, HL, G)``.
+        initial_individual_count: ``(2, A, G)`` — genotypes with
+            count > 0 are the seeds for the BFS.
+        declared_genotypes: Manual override — these genotype indices
+            are treated as reachable regardless of initial state.
+        n_glabs: Number of gamete labels (for GType decompression).
+        n_slabs: Number of somatic labels (for ZType — default 1).
+
+    Returns:
+        ``(gtype_mask, hl_compressed, ztype_mask, ztype_compressed)``
+        where each mask is ``int32`` with -1 for pruned entries.
+    """
+    G = int(z2g_map.shape[1])
+    HL = int(z2g_map.shape[2])
+
+    # Precompute: which gametes each genotype produces
+    gametes_of: list[set[int]] = [set() for _ in range(G)]
+    for g in range(G):
+        for hl in range(HL):
+            if z2g_map[0, g, hl] > 0.0 or z2g_map[1, g, hl] > 0.0:
+                gametes_of[g].add(hl)
+
+    # Precompute: zygote reverse index (hl1, hl2) → set of genotypes
+    zygotes_of: dict[tuple[int, int], set[int]] = {}
+    for hl1 in range(HL):
+        for hl2 in range(HL):
+            targets: set[int] = set()
+            for g in range(G):
+                if g2z_map[hl1, hl2, g] > 0.0:
+                    targets.add(g)
+            if targets:
+                zygotes_of[(hl1, hl2)] = targets
+
+    # Initial reachable set: genotypes present + manually declared.
+    declared: set[int] = declared_genotypes if declared_genotypes is not None else set()
+    reachable_g: set[int] = set(declared)
+    for g in range(G):
+        if initial_individual_count[:, :, g].sum() > 0.0:
+            reachable_g.add(g)
+
+    reachable_hl: set[int] = set()
+    for g in reachable_g:
+        reachable_hl.update(gametes_of[g])
+
+    # Fixed-point iteration — stop when gamete set stops expanding.
+    # Use a growing work-list: newly discovered gametes are appended
+    # within the same iteration so the loop pair-checks them sooner.
+    changed = True
+    while changed:
+        changed = False
+        hl_list = list(reachable_hl)
+        i = 0
+        while i < len(hl_list):
+            hl1 = hl_list[i]
+            for j in range(i, len(hl_list)):
+                hl2 = hl_list[j]
+                # When hl1 == hl2 the two orderings are identical —
+                # skip the duplicate lookup.
+                pairs = [(hl1, hl2)] if hl1 == hl2 else [(hl1, hl2), (hl2, hl1)]
+                for pair in pairs:
+                    for go in zygotes_of.get(pair, ()):
+                        if go not in reachable_g:
+                            reachable_g.add(go)
+                            new_hl = gametes_of[go] - reachable_hl
+                            if new_hl:
+                                reachable_hl.update(new_hl)
+                                hl_list.extend(new_hl)
+                                changed = True
+            i += 1
+
+    # Build GType mask
+    from natal.index_registry import compress_hg_glab, decompress_hg_glab
+
+    gtype_mask = np.full(HL, -1, dtype=np.int32)
+    sorted_pairs = sorted(
+        decompress_hg_glab(hl, n_glabs) for hl in reachable_hl
+    )
+    for j, (hg, glab) in enumerate(sorted_pairs):
+        hl = compress_hg_glab(hg, glab, n_glabs)
+        gtype_mask[hl] = j
+
+    # Build ZType mask — for n_slabs=1 this is just (G_orig,).
+    # When n_slabs > 1, the mask is (G_orig × n_slabs,) and each
+    # (g, slab) pair that is reachable gets a sequential index.
+    ztype_mask = np.full(G * n_slabs, -1, dtype=np.int32)
+    ztype_compressed = 0
+    for g_orig in sorted(reachable_g):
+        # For n_slabs=1: one ZType per genotype.
+        # For n_slabs>1: all slab variants of a reachable genotype
+        # are included (we expand per-slab filtering later).
+        for s in range(n_slabs):
+            flat = g_orig * n_slabs + s
+            ztype_mask[flat] = ztype_compressed
+            ztype_compressed += 1
+
+    return gtype_mask, len(sorted_pairs), ztype_mask, ztype_compressed
 
 
 # Aliases for backward compatibility

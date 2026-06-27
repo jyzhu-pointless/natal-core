@@ -1,6 +1,6 @@
 # TODO
 
-> 最后审计：2026-06-20。PR #9 + #11 完成 hook 系统分层重构，相关条目移至完成附录。
+> 最后审计：2026-06-21。新增 v0.3.0 四大功能设计（索引压缩、Somatic Label、引擎优化、极速模式），详见 `v0.3.0-acceleration-and-compression-design.html`。
 >
 > 排序逻辑：正确性 bug > 性能优化 > UX 改进 > 代码质量。同一档内，部分完成 > 未开始 > 仅设计。
 >
@@ -262,7 +262,7 @@
 
    **数值示例**（`r = [0.3, 0.5, 0.1]`）：
 
-   | k | 期望 rₖ | 调整后 r'ₖ | 有效份额 | 
+   | k | 期望 rₖ | 调整后 r'ₖ | 有效份额 |
    |---|---------|-----------|---------|
    |1| 0.3 | 0.3 | 0.3 × 1.0 = 0.3 ✓ |
    |2| 0.5 | 0.714 | 0.714 × 0.7 = 0.5 ✓ |
@@ -322,6 +322,123 @@ config.low_density_growth_rate[()]  # 0-d indexing → float[()] → TypeError
 ---
 
 ## v0.3.0 及远期更新
+
+> 以下四大功能详见 `v0.3.0-acceleration-and-compression-design.html` 综合设计方案。
+
+### #18 🎨 基因型及配子索引压缩
+
+**来源**：2026-06-21 设计讨论。用户需求：母本/父本对称性压缩（n² → n(n+1)/2）、修饰器可达性闭环分析、完全连锁配子空间压缩。
+
+**优先级理由**：🟡 架构增强。offspring_tensor 三次方压缩（单 locus k=10: 100³ → 55³，6× 内存缩减）。对大型基因组模拟有显著空间和时间收益。但需要仔细处理兼容性（hook、observation、preset 均通过 index 访问状态）。
+
+**设计方案**：
+
+1. **压缩模式**：`NONE`（当前 dense）| `MATERNAL_PATERNAL`（合并 A|a ≡ a|A）| `REACHABLE`（BFS 可达性分析）| `FULL_LINKAGE`（完全连锁配子压缩）| `AUTO`（自动检测）。
+
+2. **可达性分析（BFS）**：从 `initial_individual_count > 0` 的基因型 + `declared_genotypes`（手动声明）出发，通过 `offspring_tensor[gf, gm, go] > 0` 边 BFS 到不动点。保守分析（假设所有 (gf, gm) 对都可共存）。
+
+3. **配置入口**：`Configurator.setup(compress_indices=True)` 或 `compression_mode="mp"`。支持 `declared_genotypes=["A|A", "A|a"]` 手动强制保留。
+
+4. **实现路径**（~590 行，6 文件）：
+   - `index_registry.py`：实现 `compact()` + `CompressionMap` 数据类 + `compute_genotype_reachability()` + `compute_gamete_reachability()`（~180 行）
+   - `population_config.py`：新增 `n_genotypes_compressed`、`compress_map` 等字段 + `compress_population_config()`（~140 行）
+   - `configurator.py`：build 管线集成（~30 行）
+   - `engine/simulation/*.py`：确保引擎正确处理压缩维度（~40 行）
+   - 测试：可达性 BFS 单元 + 端到端压缩 + 对称性验证（~200 行）
+
+**不改**：Hook 签名、Observation API、Preset 系统（均通过名称/选择器访问，不直接依赖 index）。
+
+### #19 🎨 Somatic Label (slab) + 基因型压缩 → 统一 EffectiveGenotypeSpace
+
+**来源**：2026-06-21 设计讨论。用户需求：对称于 gamete label 的个体级标记系统。**关键洞察**（用户提出）：引擎对 index 完全透明——`g = int(fert_f.shape[0])`，`for go in range(g)`。压缩和 slab 在引擎看来只是 `G_total = G_comp × n_slabs` 的基数变化，两个变换正交组合。统一设计节省约 52% 代码量（975 vs 2,040 行）。
+
+**优先级理由**：🟡 架构增强。与 #18 基因型压缩共用 GenotypeSpace 基础设施。默认 n_slabs=1 + 无压缩 → 零行为变化。
+
+**优先级理由**：🟡 重大架构变更。牵涉 12+ 文件、~1,450 行。建议推迟到 v0.4.0。默认 `n_slabs=1` 时零破坏、零性能损失。
+
+**设计方案**：
+
+1. **维度扩展**：`individual_count: (2, A, G) → (2, A, G, S)`。`sperm_storage: (A, G, G) → (A, G, S, G)`（保留雌性 slab，雄性 donor 可选保留）。`viability_fitness`、`fecundity_fitness` 等 fitness 数组也扩展 slab 维度。
+
+2. **三类 Slab 转换**：
+   - `T_zygotic`（glab → slab）：受精时，给定母本 glab、父本 glab、合子基因型 → 子代 slab 分布
+   - `T_gametic`（slab → glab）：减数分裂时，给定个体 slab、基因型、性别 → 配子 glab 分布
+   - `T_somatic`（slab → slab）：每 tick 存活阶段，个体 slab 转换（如 Cas9 表达衰退）
+
+3. **Slab 压缩**：与 #18 基��型压缩同模式——计算 slab 可达闭包 → 构建 compress_map → 重塑数组。
+
+4. **实现路径**（~1,450 行，12+ 文件）：
+   - Phase 1（数据结构）：Species 新增 `somatic_labels`、IndexRegistry 新增 slab 索引、PopulationConfig 新增 `n_slabs`/转换矩阵、PopulationState 重塑（~200 行）
+   - Phase 2（引擎适配）：所有 `@njit_switch` 函数 + 4 个模板文件更新索引循环（~500 行）
+   - Phase 3（上层 API）：Configurator `.somatic_labels()`、修饰器 slab-aware、Hook 适配、Preset 适配（~400 行）
+   - Phase 4（压缩 + 测试）：`compute_slab_reachability()` + `compress_slab_dimension()` + 全覆盖（~350 行）
+
+5. **向后兼容**：默认 `n_slabs=1`，引擎 `if n_slabs == 1: skip slab loop` 避免性能损失。所有现有测试无修改通过。
+
+### #20 🎨 仿真引擎性能优化审计
+
+**来源**：2026-06-21 架构审计。对引擎热路径的 6 个优化点进行系统评估。
+
+**优先级理由**：🟡 性能工程。4 个纳入 v0.3.0，2 个推迟。均为纯优化，不改行为。
+
+**纳入 v0.3.0 的优化**：
+
+| ID | 优化 | 难度 | 预期收益 | 行数 |
+|----|------|------|---------|------|
+| #A | offspring_tensor Numba 化 | 低 | 3-5×（modifier 变更时） | ~100 |
+| #B | CSR prange 并行化 | 中 | 2-4×（G≥200 时，per-op 内 genotype 维度并行） | ~120 |
+| #C | 交配矩阵缓存 | 低 | ~30% 交配计算开销 | ~80 |
+| #D | 内存分配复用（TickBuffers） | 中 | 减少 40-60% 分配调用 | ~200 |
+
+**推迟的优化**：
+- #E（deme 间负载均衡）：仅在 deme 间个体数差异 >10× 时有意义，大多数均匀场景无收益。
+- #F（观测录制路径统一）：与 TODO #3 重复，维护收益 > 性能收益。
+
+### #21 🎨 离散世代极速模式（Wright-Fisher）
+
+**来源**：2026-06-21 设计讨论。用户需求：离散世代模型的极速模式——每 tick 单次多项分布抽样替代逐步模拟（mate → fertilize → survive），建模有效种群大小。
+
+**优先级理由**：🟡 新模式。实现成本最低（~660 行），与现有完整模式完全解耦。计算量降低 10-100×。
+
+**设计方案**：
+
+1. **三种采样模式**：
+   - `DETERMINISTIC`：无限种群极限，无随机性。适用于平衡分析、参数扫描。
+   - `MULTINOMIAL`：标准 Wright-Fisher 单次多项分布抽样。适用于群体遗传学标准建模。
+   - `POISSON`：独立泊松抽样。适用于极大 N（>10⁵），比多项分布快 ~2×。
+
+2. **核心计算**：
+   ```
+   p[go] = Σ_{gf,gm} freq_f[gf] · freq_m[gm] · sexual_selection[gf,gm]
+           · offspring_tensor[gf, gm, go] · eggs · sex_ratio
+   new_count = Multinomial(N_eff, p)
+   ```
+   跳过：交配对抽样、受精抽样、存活抽样（均合并到 p 的权重中）。
+
+3. **随机性差异**：极速模式轻微低估方差（缺少交配阶段的额外二项抽样），但差异 <5%。此时 N 的含义从"普查种群大小"变为"有效种群大小"——这是群体遗传学标准做法。文档需明确说明。
+
+4. **限制**：仅支持离散世代模型。不支持精子置换、`fixed_egg_count=True`（可实现）、性染色体（可实现）。Hook 兼容性有限（per-individual kill/add 无意义）。
+
+5. **实现路径**（~660 行，7 文件）：
+   - `engine/simulation/discrete_generation.py`：新增 `compute_expected_offspring_wf()` @njit 函数（~80 行）
+   - `engine/discrete_generation_simulator.py`：新增 `run_extreme_speed_tick()`（~60 行）
+   - `population_config.py`：添加 `extreme_speed_mode` 和 `extreme_speed_N_eff`（~20 行）
+   - `discrete_generation_population.py`：`run()` 中检测极速模式分支（~40 行）
+   - `engine/templates/`：新增 `lifecycle_extreme_speed.tmpl.py`（~120 行）
+   - `engine/lifecycle_wrappers.py`：编译管线扩展（~40 行）
+   - 测试：中性等价性 + 选择场景 + 边界条件（~300 行）
+
+6. **API**：
+   ```python
+   cfg = Configurator.for_discrete(species).setup(
+       extreme_speed=True,
+       extreme_speed_mode="multinomial",
+   ).build()
+   # 或运行时切换
+   pop.enable_extreme_speed(mode="multinomial")
+   ```
+
+### 远期功能
 
 - Global hooks
 - Sparse（import / states）

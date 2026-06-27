@@ -72,7 +72,7 @@ def _build_registry(species: Species) -> IndexRegistry:
         always has at least one gamete-label slot to index into.
     """
     registry = IndexRegistry()
-    for genotype in species.get_all_genotypes():
+    for genotype in species.get_all_genotypes(unordered=species.unordered):
         registry.register_genotype(genotype)
     haploid_genotypes = species.get_all_haploid_genotypes()
     if haploid_genotypes:
@@ -82,6 +82,11 @@ def _build_registry(species: Species) -> IndexRegistry:
     glabs = raw_glabs or ["default"]
     for glab in glabs:
         registry.register_gamete_label(glab)
+    raw_slabs = getattr(species, "somatic_labels", None)
+    slabs = raw_slabs or ["default"]
+    for slab in slabs:
+        registry.register_somatic_label(slab)
+    registry.n_ztypes = registry.num_genotypes()
     return registry
 
 
@@ -110,6 +115,7 @@ class _ConfigContext:
         species: Species,
         config: PopulationConfig | DiscretePopulationConfig,
         registry: IndexRegistry,
+        compress: bool = False,
     ) -> None:
         """Initialise the adapter with species, config, and registry.
 
@@ -117,12 +123,15 @@ class _ConfigContext:
             species: The genetic architecture for the population.
             config: The PopulationConfig or DiscretePopulationConfig to wrap.
             registry: An IndexRegistry pre-populated with genotypes/haplotypes.
+            compress: Enable both GType and ZType index compression at once.
         """
         self.species = species
         self.config = config
         self.registry = registry
         self.index_registry = registry
-        # Mirror names matching BasePopulation for drop-in compatibility.
+        self.compress = compress
+        self.compression_applied: bool = False
+        self.declared_zygote_types: set[str] | set[int] | None = None
         self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
@@ -246,52 +255,150 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
     # calling it is cheap.  We copy the arrays so that modifier callables
     # can mutate them without corrupting the cached originals.
     bp = ctx.species.get_config_blueprint()
-    genotype_to_gametes_map = bp["genotype_to_gametes_map"].copy()
-    gametes_to_zygote_map = bp["gametes_to_zygote_map"].copy()
+    zygotes_to_gametes_map = bp["zygotes_to_gametes_map"].copy()
+    gametes_to_zygotes_map = bp["gametes_to_zygotes_map"].copy()
 
     # ---- chain modifier callables on top of the baseline ----
     # Each callable accepts and returns a tensor of the same shape,
     # allowing modifiers to be composed in registration order.
     for fn in gamete_funcs:
-        genotype_to_gametes_map = fn(genotype_to_gametes_map)
+        zygotes_to_gametes_map = fn(zygotes_to_gametes_map)
     for fn in zygote_funcs:
-        gametes_to_zygote_map = fn(gametes_to_zygote_map)
+        gametes_to_zygotes_map = fn(gametes_to_zygotes_map)
+
+    # ---- slab expansion (applied after modifiers, before compression) ----
+    n_slabs = int(ctx.config.n_slabs)
+    if n_slabs > 1:
+        from natal.population_config import (
+            _expand_slab_maps,  # pyright: ignore[reportPrivateUsage]
+        )
+        zygotes_to_gametes_map, gametes_to_zygotes_map, _ = _expand_slab_maps(
+            z2g=zygotes_to_gametes_map,
+            g2z=gametes_to_zygotes_map,
+            n_slabs=n_slabs,
+            n_genotypes=int(zygotes_to_gametes_map.shape[1]),
+            gamete_labels=ctx.species.gamete_labels if ctx.species else None,
+            somatic_labels=ctx.species.somatic_labels if ctx.species else None,
+            n_haploid_genotypes=int(ctx.config.n_haploid_genotypes),
+            n_glabs=n_glabs,
+        )
+
+    # ---- index compression (optional) ----
+    n_g_compressed = int(ctx.config.n_ztypes)
+    n_hg_effective = int(ctx.config.n_haploid_genotypes)
+    n_glabs_effective = n_glabs
+    gtype_mask = np.array([], dtype=np.int32)
+    ztype_mask = np.array([], dtype=np.int32)
+
+    if ctx.compress:
+        from natal.genetic_structures import build_gamete_compression_mask
+        from natal.population_config import (
+            compress_config,
+            compress_gamete_map,
+            compress_zygote_map,
+        )
+
+        ctx.compression_applied = True
+
+        # Resolve declared_zygote_types to integer indices for the BFS.
+        # Each declared genotype is expanded to all slab variants because
+        # the BFS operates in the slab-expanded space (G = G_orig × n_slabs).
+        declared_ints: set[int] | None = None
+        if ctx.declared_zygote_types is not None:
+            declared_ints = set()
+            n_slabs = int(ctx.config.n_slabs)
+            for dg in ctx.declared_zygote_types:
+                if isinstance(dg, str):
+                    try:
+                        gt = ctx.species.get_genotype_from_str(dg)
+                        if gt in diploid_genotypes:
+                            g_orig = diploid_genotypes.index(gt)
+                            for s in range(n_slabs):
+                                declared_ints.add(g_orig * n_slabs + s)
+                    except Exception:
+                        pass
+                else:
+                    g_orig = int(dg)
+                    for s in range(n_slabs):
+                        declared_ints.add(g_orig * n_slabs + s)
+
+        _gt_mask, _, _zt_mask, _ = (
+            build_gamete_compression_mask(
+                zygotes_to_gametes_map,
+                gametes_to_zygotes_map,
+                ctx.config.initial_individual_count,
+                n_glabs=n_glabs,
+                n_slabs=1,  # maps are pre-expanded; mask lives in G_orig space
+                declared_genotypes=declared_ints,
+            )
+        )
+        gtype_mask = _gt_mask
+        ztype_mask = _zt_mask
+
+        # Guard: if no genotypes or gametes are reachable, skip compression
+        # entirely (initial state is empty and no declared_genotypes given).
+        # Without this guard the compression code produces zero-length arrays
+        # that crash downstream code.
+        has_reachable = (gtype_mask >= 0).any() or (ztype_mask >= 0).any()
+        if not has_reachable:
+            return
+
+        # GType (gamete-axis) + ZType (genotype-axis) compression.
+        # Both masks are produced by a single BFS and must be applied together.
+        n_hg_effective = int(ctx.config.n_haploid_genotypes)
+        n_glabs_effective = n_glabs
+        if gtype_mask.size > 0:
+            n_hl_compressed = int((gtype_mask >= 0).sum())
+            if n_hl_compressed < zygotes_to_gametes_map.shape[2]:
+                zygotes_to_gametes_map = compress_gamete_map(
+                    zygotes_to_gametes_map, gtype_mask,
+                )
+                gametes_to_zygotes_map = compress_zygote_map(
+                    gametes_to_zygotes_map, gtype_mask,
+                )
+                # GType compression collapses the (haplogenotype × glab) axis
+                # into a flat HL' list.  The n_glabs dimension is no longer
+                # separable — set it to 1.
+                n_hg_effective = n_hl_compressed
+                n_glabs_effective = 1
+
+        if ztype_mask.size > 0:
+            _z_active = ztype_mask >= 0
+            zygotes_to_gametes_map = zygotes_to_gametes_map[:, _z_active, :]
+            gametes_to_zygotes_map = gametes_to_zygotes_map[:, :, _z_active]
+
+            ctx.config = compress_config(ctx.config, ztype_mask)
+            n_g_compressed = int(ctx.config.n_ztypes)
+            ctx.registry.compress(ztype_mask, gtype_mask,
+                                  n_slabs=int(ctx.config.n_slabs))
 
     # ---- recompute offspring probability tensor from the updated maps ----
-    # This tensor pre-computes P(offspring_genotype | mother, father) for
-    # all genotype pairs.  It depends on meiosis maps and zygote maps,
-    # both of which may have been altered by modifiers above.
     offspring_tensor = compute_offspring_probability_tensor(
-        meiosis_f=genotype_to_gametes_map[0],
-        meiosis_m=genotype_to_gametes_map[1],
-        haplo_to_genotype_map=gametes_to_zygote_map,
-        n_genotypes=int(ctx.config.n_genotypes),
-        n_haplogenotypes=int(ctx.config.n_haploid_genotypes),
-        n_glabs=n_glabs,
+        meiosis_f=zygotes_to_gametes_map[0],
+        meiosis_m=zygotes_to_gametes_map[1],
+        haplo_to_genotype_map=gametes_to_zygotes_map,
+        n_ztypes=n_g_compressed,
+        n_haplogenotypes=n_hg_effective,
+        n_glabs=n_glabs_effective,
     )
 
     # ---- write everything back into the config via _replace ----
-    # The three maps replace their config counterparts.  For
-    # DiscretePopulationConfig we must additionally update the
-    # pre-extracted per-sex slices (meiosis_f, viability_f, etc.),
-    # because those are what the discrete engine reads at runtime.
     overrides: dict[str, Any] = {
-        "genotype_to_gametes_map": genotype_to_gametes_map,
-        "gametes_to_zygote_map": gametes_to_zygote_map,
+        "zygotes_to_gametes_map": zygotes_to_gametes_map,
+        "gametes_to_zygotes_map": gametes_to_zygotes_map,
         "offspring_tensor": offspring_tensor,
+        "n_ztypes": n_g_compressed,
+        "n_haploid_genotypes": n_hg_effective,
+        "n_glabs": n_glabs_effective,
     }
     if isinstance(ctx.config, DiscretePopulationConfig):
         # Keep the pre-extracted slices in sync with the source maps.
-        overrides["meiosis_f"] = genotype_to_gametes_map[0]
-        overrides["meiosis_m"] = genotype_to_gametes_map[1]
+        overrides["meiosis_f"] = zygotes_to_gametes_map[0]
+        overrides["meiosis_m"] = zygotes_to_gametes_map[1]
         overrides["fecundity_f"] = ctx.config.fecundity_fitness[0]
         overrides["fecundity_m"] = ctx.config.fecundity_fitness[1]
-        # viability_f / viability_m are views of the original PopulationConfig's
-        # viability_fitness array, which is not rebuilt here, so they remain valid.
-        # Note: scalar fields (female_age0_survival, male_age0_survival,
-        # female_adult_mating_rate, male_adult_mating_rate, reproduction_rate)
-        # are now first-class 0-d ndarrays on DiscretePopulationConfig, not
-        # pre-extracted from age-based arrays.  Nothing to sync here.
+        overrides["viability_f"] = ctx.config.viability_fitness[0, 0, :]
+        overrides["viability_m"] = ctx.config.viability_fitness[1, 0, :]
     ctx.config = ctx.config._replace(**overrides)
 
 
@@ -484,7 +591,8 @@ def _write_fitness_field(
             raise TypeError(
                 "sex-keyed fitness dict values must be genotype→value mappings"
             )
-        sex_patch = cast(Mapping[str, Mapping[str, float]], patch)
+        sex_patch: Mapping[str, Mapping[str | tuple[Genotype | str, str], float]]
+        sex_patch = patch  # type: ignore[assignment]  # Mapping key invariance; narrowed by branch guard
         # ---- write female slice, then male slice ----
         for sex_key, geno_dict in sex_patch.items():
             sex_idx = 0 if sex_key == "female" else 1
@@ -644,7 +752,7 @@ def _write_fitness_field(
 def _write_fitness_field_flat(
     config: PopulationConfig | DiscretePopulationConfig,
     field_name: str,
-    patch: Mapping[str, float],
+    patch: Mapping[str | tuple[Genotype | str, str], float],
     mode: str,
     *,
     sex_idx: int,
@@ -687,49 +795,138 @@ def _write_fitness_field_flat(
         getattr(config, "new_adult_age", 1) - 1
     )
 
+    # Resolve slab index mapping once (used when selectors have @slab suffix).
+    slab_to_idx: dict[str, int] = {}
+    if hasattr(config, "n_slabs"):
+        raw_slabs = getattr(species, "somatic_labels", None) or ["default"]
+        slab_to_idx = {s: i for i, s in enumerate(raw_slabs)}
+
     for selector, value in patch.items():
+        # ---- extract @slab suffix for ZType indexing ----
+        # Supports plain names (@infected), negation (@!infected),
+        # and sets (@{normal,infected}).  Parsed via LabPattern.
+        slab_indices: list[int] = list(range(max(len(slab_to_idx), 1)))
+        genotype_selector = selector
+
+        # ── tuple syntax: (Genotype, "slab_label") ──
+        if isinstance(selector, tuple):
+            if len(selector) != 2:
+                raise TypeError(
+                    f"fitness tuple selector must have 2 elements "
+                    f"(genotype_key, slab_label), got {len(selector)}"
+                )
+            _genotype_key, _slab = selector
+            if _slab not in slab_to_idx:
+                raise ValueError(
+                    f"Unknown slab label '{_slab}'. "
+                    f"Available slabs: {list(slab_to_idx)}"
+                )
+            si = slab_to_idx[_slab]
+
+            if isinstance(_genotype_key, Genotype):
+                matched = [_genotype_key]
+            else:
+                matched = species.resolve_genotype_selectors(
+                    selector=_genotype_key,
+                    all_genotypes=all_genotypes,
+                    context=f"fitness.{field_name}",
+                )
+
+            n_slabs = max(len(slab_to_idx), 1)
+            for genotype in matched:
+                gidx = registry.genotype_to_index[genotype]
+                age_slice = slice(resolved_age, resolved_age + 1)
+                zidx = gidx * n_slabs + si
+
+                if field_name == "viability":
+                    arr = config.viability_fitness
+                    if mode == "replace":
+                        arr[sex_idx, age_slice, zidx] = float(value)
+                    else:
+                        arr[sex_idx, age_slice, zidx] *= float(value)
+                elif field_name == "fecundity":
+                    arr = config.fecundity_fitness
+                    if mode == "replace":
+                        arr[sex_idx, zidx] = float(value)
+                    else:
+                        arr[sex_idx, zidx] *= float(value)
+                elif field_name == "sexual_selection":
+                    arr = config.sexual_selection_fitness
+                    if mode == "replace":
+                        if sex_idx == 0:
+                            arr[zidx, :] = float(value)
+                        else:
+                            arr[:, zidx] = float(value)
+                    else:
+                        if sex_idx == 0:
+                            arr[zidx, :] *= float(value)
+                        else:
+                            arr[:, zidx] *= float(value)
+                elif field_name == "zygote_viability":
+                    arr = config.zygote_viability_fitness
+                    if mode == "replace":
+                        arr[sex_idx, zidx] = float(value)
+                    else:
+                        arr[sex_idx, zidx] *= float(value)
+            continue
+        # ── end tuple branch ──
+
+        if "@" in str(selector):
+            g_str, s_str = str(selector).rsplit("@", 1)
+            genotype_selector = g_str
+            from natal.genetic_patterns import LabPattern
+            lab = LabPattern.parse(s_str)
+            raw_slabs = list(slab_to_idx.keys())
+            slab_indices = [i for i, s in enumerate(raw_slabs) if lab.matches(s)]
+            if not slab_indices:
+                raise ValueError(
+                    f"No slab matches '{s_str}' in fitness.{field_name} "
+                    f"selector '{selector}'.  Available: {raw_slabs}"
+                )
+
         matched = species.resolve_genotype_selectors(
-            selector=selector,
+            selector=genotype_selector,
             all_genotypes=all_genotypes,
             context=f"fitness.{field_name}",
         )
+        n_slabs = max(len(slab_to_idx), 1)
         for genotype in matched:
             gidx = registry.genotype_to_index[genotype]
             age_slice = slice(resolved_age, resolved_age + 1)
 
-            if field_name == "viability":
-                arr = config.viability_fitness
-                if mode == "replace":
-                    arr[sex_idx, age_slice, gidx] = float(value)
-                else:
-                    arr[sex_idx, age_slice, gidx] *= float(value)
-            elif field_name == "fecundity":
-                arr = config.fecundity_fitness          # no age axis — age_idx ignored
-                if mode == "replace":
-                    arr[sex_idx, gidx] = float(value)
-                else:
-                    arr[sex_idx, gidx] *= float(value)
-            elif field_name == "sexual_selection":
-                arr = config.sexual_selection_fitness
-                # sexual_selection is indexed [female_idx, male_idx].
-                # sex_idx=0 → genotype is female → write row (arr[gidx, :])
-                # sex_idx=1 → genotype is male   → write col (arr[:, gidx])
-                if mode == "replace":
-                    if sex_idx == 0:
-                        arr[gidx, :] = float(value)
+            for si in slab_indices:
+                zidx = gidx * n_slabs + si
+
+                if field_name == "viability":
+                    arr = config.viability_fitness
+                    if mode == "replace":
+                        arr[sex_idx, age_slice, zidx] = float(value)
                     else:
-                        arr[:, gidx] = float(value)
-                else:
-                    if sex_idx == 0:
-                        arr[gidx, :] *= float(value)
+                        arr[sex_idx, age_slice, zidx] *= float(value)
+                elif field_name == "fecundity":
+                    arr = config.fecundity_fitness
+                    if mode == "replace":
+                        arr[sex_idx, zidx] = float(value)
                     else:
-                        arr[:, gidx] *= float(value)
-            elif field_name == "zygote_viability":
-                arr = config.zygote_viability_fitness  # no age axis — age_idx ignored
-                if mode == "replace":
-                    arr[sex_idx, gidx] = float(value)
-                else:
-                    arr[sex_idx, gidx] *= float(value)
+                        arr[sex_idx, zidx] *= float(value)
+                elif field_name == "sexual_selection":
+                    arr = config.sexual_selection_fitness
+                    if mode == "replace":
+                        if sex_idx == 0:
+                            arr[zidx, :] = float(value)
+                        else:
+                            arr[:, zidx] = float(value)
+                    else:
+                        if sex_idx == 0:
+                            arr[zidx, :] *= float(value)
+                        else:
+                            arr[:, zidx] *= float(value)
+                elif field_name == "zygote_viability":
+                    arr = config.zygote_viability_fitness
+                    if mode == "replace":
+                        arr[sex_idx, zidx] = float(value)
+                    else:
+                        arr[sex_idx, zidx] *= float(value)
 
 
 # ── Configurator ───────────────────────────────────────────────────────────────
@@ -785,6 +982,7 @@ class Configurator:
         # only at the end.
         self._custom_kwargs: dict[str, object] = {}
 
+
         # optional backref for writing config updates back to a Population when created via for_population()
         self._pop_ref: BasePopulation[Any] | None = None
 
@@ -794,6 +992,15 @@ class Configurator:
         self._male_adult_mating_rate: float | None = None
         self._female_age0_survival: float | None = None
         self._male_age0_survival: float | None = None
+
+        # Index compression flag — enabled via setup(compress=True).
+        # Applied during _rebuild_config_maps (build-time) or
+        # refresh_modifier_maps() (runtime).
+        # GType and ZType compression always run together — one BFS produces
+        # both masks and they must be applied in tandem.
+        self._compress: bool = False
+        self._compression_applied: bool = False
+        self._declared_zygote_types: set[str] | set[int] | None = None
 
     @property
     def config(self) -> PopulationConfig | DiscretePopulationConfig:
@@ -809,10 +1016,9 @@ class Configurator:
         preset / modifier calls can append without mutating the originals
         until :meth:`_sync_from_ctx` explicitly commits them back.
 
-        Raises:
-            RuntimeError: If ``_species`` is ``None`` — the Configurator
-                must be created via :meth:`from_species` when using
-                presets, modifiers, or fitness.
+        Flushes both deferred fitness and initial_state before creating
+        the context.  The BFS in ``_rebuild_config_maps`` needs the
+        initial state as its seed — empty seeds cause over-pruning.
         """
         # _species and _registry are set either:
         #   - by from_species() (build path) — _species directly, registry lazy
@@ -825,7 +1031,12 @@ class Configurator:
             )
         if self._registry is None:
             self._registry = _build_registry(self._species)
-        ctx = _ConfigContext(self._species, self._config, self._registry)
+
+        ctx = _ConfigContext(
+            self._species, self._config, self._registry,
+            compress=False,  # compression is only enabled in build()
+        )
+        ctx.declared_zygote_types = self._declared_zygote_types
         ctx.gamete_modifiers = list(self.gamete_modifiers)
         ctx.zygote_modifiers = list(self.zygote_modifiers)
         return ctx
@@ -839,6 +1050,8 @@ class Configurator:
         self._config = ctx.config
         self.gamete_modifiers = ctx.gamete_modifiers
         self.zygote_modifiers = ctx.zygote_modifiers
+        if ctx.compression_applied:
+            self._compression_applied = True
 
     # -- factory ---------------------------------------------------------------
 
@@ -866,19 +1079,23 @@ class Configurator:
             ready for further chaining.
         """
         bp = species.get_config_blueprint()
-        n_g = bp["n_genotypes"]
+        n_g = bp["n_ztypes"]
         n_hg = bp["n_haploid_genotypes"]
         n_gl = bp["n_glabs"]
-        g2g = bp["genotype_to_gametes_map"]
-        g2z = bp["gametes_to_zygote_map"]
+        n_sl = bp.get("n_slabs", 1)
+        z2g = bp["zygotes_to_gametes_map"]
+        g2z = bp["gametes_to_zygotes_map"]
         has_sc = getattr(species, "has_sex_chromosomes", False)
 
         if discrete:
-            from natal.population_config import build_discrete_population_config
+            from natal.population_config import build_discrete_engine_config
 
-            config = build_discrete_population_config(
+            config = build_discrete_engine_config(
                 n_genotypes=n_g, n_haploid_genotypes=n_hg, n_glabs=n_gl,
-                genotype_to_gametes_map=g2g, gametes_to_zygote_map=g2z,
+                n_slabs=n_sl,
+                gamete_labels=species.gamete_labels or ["default"],
+                somatic_labels=species.somatic_labels or ["default"],
+                zygotes_to_gametes_map=z2g, gametes_to_zygotes_map=g2z,
                 has_sex_chromosomes=has_sc,
             )
             result = DiscreteConfigurator(config, species=species)
@@ -888,7 +1105,10 @@ class Configurator:
 
             config = build_population_config(
                 n_genotypes=n_g, n_haploid_genotypes=n_hg, n_glabs=n_gl,
-                genotype_to_gametes_map=g2g, gametes_to_zygote_map=g2z,
+                n_slabs=n_sl,
+                gamete_labels=species.gamete_labels or ["default"],
+                somatic_labels=species.somatic_labels or ["default"],
+                zygotes_to_gametes_map=z2g, gametes_to_zygotes_map=g2z,
                 n_ages=2, new_adult_age=1, carrying_capacity=1000.0,
                 has_sex_chromosomes=has_sc,
             )
@@ -960,10 +1180,28 @@ class Configurator:
         stochastic: bool | None = None,
         continuous_sampling: bool | None = None,
         fixed_egg_count: bool | None = None,
+        compress: bool = False,
+        declared_zygote_types: set[str] | set[int] | None = None,
+        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
     ) -> Self:
         """Configure simulation flags and optional population name.
 
         *name* is stored and used by ``build()`` when no explicit name is given.
+
+        *compress* enables index compression at build time.  It enables both
+        GType (gamete-axis) and ZType (genotype-axis) compression in one flag.
+        The older ``compress_gametes()`` / ``compress_genotypes()`` chain
+        methods have been removed — use this parameter instead.
+
+        *declared_zygote_types* is a set of genotype strings (``"WT|WT"``) or
+        integer indices that are treated as reachable by the BFS even if they
+        have zero individuals in the initial state.  Use this to prevent
+        compression from pruning genotypes that may appear later via hooks or
+        runtime presets.
+
+        .. deprecated:: 0.1
+            The parameter name ``declared_genotypes`` is a deprecated alias
+            for ``declared_zygote_types`` and still works.
 
         Args:
             name: Population name (falls back to ``"Population"`` at build time).
@@ -971,12 +1209,31 @@ class Configurator:
             continuous_sampling: If ``True``, sample from continuous
                 distributions instead of discrete counts.
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
+            compress: If ``True``, enable full index compression at build time.
+            declared_zygote_types: Optional set of genotype selectors to protect
+                from compression pruning.
 
         Returns:
             Self for chaining.
         """
         if name is not None:
             self._name = name
+        if compress:
+            self._compress = True
+        if declared_genotypes is not None:
+            import warnings
+            warnings.warn(
+                "declared_genotypes is deprecated. Use declared_zygote_types instead.",
+                FutureWarning, stacklevel=2,
+            )
+            if declared_zygote_types is not None:
+                raise ValueError(
+                    "Cannot specify both declared_zygote_types and "
+                    "declared_genotypes (deprecated alias)."
+                )
+            declared_zygote_types = declared_genotypes
+        if declared_zygote_types is not None:
+            self._declared_zygote_types = declared_zygote_types
         overrides: dict[str, bool] = {}
         if stochastic is not None:
             overrides["stochastic"] = stochastic
@@ -998,12 +1255,16 @@ class Configurator:
         individual_count: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]],
         sperm_storage: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]] | None = None,
     ) -> Self:
-        """Set the initial population distribution.
+        """Set the initial population distribution (deferred — applied at build time).
 
         *individual_count* is a dict like
         ``{"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}}``.
         Genotype selectors accept both strings and ``Genotype`` objects.
-        Resolved to a 3-D array using the same logic as the Builder.
+
+        The distribution is NOT written to config immediately.  Instead it is
+        stored in a deferred buffer and applied during :meth:`build` — after
+        index compression, so that genotype selectors resolve to compressed
+        indices.
 
         Args:
             individual_count: Per-sex, per-genotype initial counts.
@@ -1014,13 +1275,13 @@ class Configurator:
         Returns:
             Self for chaining.
         """
-        from natal.population_builder import PopulationConfigBuilder
-
         if self._species is None:
             raise RuntimeError(
                 "initial_state() requires a Species reference. "
                 "Use Configurator.from_species() to create the instance."
             )
+        from natal.population_builder import PopulationConfigBuilder
+
         n_ages = self._config.n_ages
         new_adult_age = self._config.new_adult_age
         array = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
@@ -1169,6 +1430,14 @@ class Configurator:
         Sex-specific fitness can be specified with nested dicts:
         ``{"female": {"WT|WT": 0.9}, "male": {"WT|WT": 1.0}}``.
 
+        The ``@slab`` suffix is supported for slab-aware writing::
+
+            cfg.fitness(viability={"A|a@infected": 0.5})
+            # Writes 0.5 to ZType index = genotype_index × n_slabs + slab_index
+
+        Without ``@slab``, the value is written to ALL slab columns
+        (backward compatible).
+
         Args:
             viability: Per-genotype viability (juvenile survival) fitness.
             fecundity: Per-genotype fecundity (egg production) fitness.
@@ -1194,20 +1463,50 @@ class Configurator:
 
         registry = self._registry
         all_genotypes = list(registry.genotype_to_index.keys())
-
         for patch_name, patch_dict in [
             ("viability", viability),
             ("fecundity", fecundity),
             ("sexual_selection", sexual_selection),
             ("zygote_viability", zygote_viability),
         ]:
-            if patch_dict is None:
-                continue
-            _write_fitness_field(
-                self._config, patch_name, patch_dict, mode,
-                species=self._species, registry=registry,
-                all_genotypes=all_genotypes,
-            )
+            if patch_dict is not None:
+                _write_fitness_field(
+                    self._config, patch_name, patch_dict, mode,
+                    species=self._species, registry=registry,
+                    all_genotypes=all_genotypes,
+                )
+        return self
+
+    # -- deprecated compression methods (use setup(compress=True)) ----------------
+
+    def compress_gametes(self, enabled: bool = True) -> Self:
+        """Enable GType compression (deprecated — use setup(compress=True)).
+
+        .. deprecated::
+            Use ``setup(compress=True)`` instead.  This method will be
+            removed in a future version.
+        """
+        import warnings
+        warnings.warn(
+            "compress_gametes() is deprecated. Use setup(compress=True) instead.",
+            FutureWarning, stacklevel=2,
+        )
+        self._compress = enabled
+        return self
+
+    def compress_genotypes(self, enabled: bool = True) -> Self:
+        """Enable ZType compression (deprecated — use setup(compress=True)).
+
+        .. deprecated::
+            Use ``setup(compress=True)`` instead.  This method will be
+            removed in a future version.
+        """
+        import warnings
+        warnings.warn(
+            "compress_genotypes() is deprecated. Use setup(compress=True) instead.",
+            FutureWarning, stacklevel=2,
+        )
+        self._compress = enabled
         return self
 
     # -- hooks ------------------------------------------------------------------
@@ -1414,10 +1713,18 @@ class Configurator:
                 .build(name="pop")
 
         Internally it: (1) syncs equilibrium metrics via :meth:`apply`,
-        (2) merges hooks registered via :meth:`hooks` with the *hooks*
-        argument, and (3) passes ``self._config`` to the Population
-        constructor.  After this point the Configurator no longer owns
-        the config — the Population does.
+        (2) runs compression if enabled, (3) flushes deferred-write buffers,
+        (4) merges hooks, and (5) passes ``self._config`` to the Population
+        constructor.
+
+        .. note::
+
+           ``fitness()`` and ``initial_state()`` store their patches in
+           deferred buffers rather than writing config immediately.  The
+           buffers are flushed here — AFTER compression — so all genotype
+           selectors resolve to compressed indices.  Genotypes pruned by
+           compression raise ``ValueError`` at flush time instead of being
+           silently dropped.
 
         Args:
             name: Population name (falls back to ``.setup(name=...)``
@@ -1430,8 +1737,33 @@ class Configurator:
             depending on whether *self._config* is a ``PopulationConfig``
             or ``DiscretePopulationConfig``.
         """
-        # Sync equilibrium metrics.
+        # Sync equilibrium metrics and apply index compression (if enabled).
         self.apply()
+
+        # Compression runs on a COPY — self._config stays in G_orig space.
+        # Population receives the compressed config.  All user writes
+        # (fitness, initial_state) already happened on the full-size
+        # config; compression subslices the arrays naturally.
+        final_config = self._config
+        if self._compress and not self._compression_applied:
+            ctx = self._make_ctx()
+            ctx.compress = True  # compression only happens at build time
+            _rebuild_config_maps(ctx)
+            self._sync_from_ctx(ctx)
+            final_config = ctx.config  # compressed copy
+
+        # Custom kwargs (accumulated by .custom()) applied to final config.
+        if self._custom_kwargs:
+            from natal.population_config import build_custom_array
+            final_config = final_config._replace(
+                custom=build_custom_array(self._custom_kwargs)
+            )
+
+        # Sync registry.n_ztypes.  When compress=True this was already
+        # done by compress() inside _rebuild_config_maps; when compress=False
+        # it was set by _build_registry.
+        if self._registry is not None and not self._compression_applied:
+            self._registry.n_ztypes = int(final_config.n_ztypes) // max(int(getattr(final_config, "n_slabs", 1)), 1)
 
         # Resolve name: explicit argument > setup(name=...) > default
         if name is None:
@@ -1454,21 +1786,21 @@ class Configurator:
                 "Use Configurator.from_species() to create this instance."
             )
 
-        if isinstance(self._config, DiscretePopulationConfig):
+        if isinstance(final_config, DiscretePopulationConfig):
             # Sync pre-extracted discrete fields from the latest source maps.
             # These may be stale if gamete/fitness maps were rebuilt by presets
             # or if equilibrium metrics were recomputed after construction.
             replace_kwargs: dict[str, object] = {
-                "meiosis_f": self._config.genotype_to_gametes_map[0],
-                "meiosis_m": self._config.genotype_to_gametes_map[1],
-                "fecundity_f": self._config.fecundity_fitness[0],
-                "fecundity_m": self._config.fecundity_fitness[1],
+                "meiosis_f": final_config.zygotes_to_gametes_map[0],
+                "meiosis_m": final_config.zygotes_to_gametes_map[1],
+                "fecundity_f": final_config.fecundity_fitness[0],
+                "fecundity_m": final_config.fecundity_fitness[1],
             }
             # Viability source array is only present on full PopulationConfig.
-            if hasattr(self._config, "viability_fitness"):
-                replace_kwargs["viability_f"] = self._config.viability_fitness[0, 0, :]  # type: ignore[reportAttributeAccessIssue]
-                replace_kwargs["viability_m"] = self._config.viability_fitness[1, 0, :]  # type: ignore[reportAttributeAccessIssue]
-            self._config = self._config._replace(**replace_kwargs)
+            if hasattr(final_config, "viability_fitness"):
+                replace_kwargs["viability_f"] = final_config.viability_fitness[0, 0, :]  # type: ignore[reportAttributeAccessIssue]
+                replace_kwargs["viability_m"] = final_config.viability_fitness[1, 0, :]  # type: ignore[reportAttributeAccessIssue]
+            final_config = final_config._replace(**replace_kwargs)
             from natal.discrete_generation_population import (
                 DiscreteGenerationPopulation,
             )
@@ -1476,7 +1808,8 @@ class Configurator:
             pop: DiscreteGenerationPopulation | AgeStructuredPopulation = \
                 DiscreteGenerationPopulation(
                     species=self._species,
-                    population_config=self._config,
+                    population_config=final_config,
+                    index_registry=self._registry,
                     name=name,
                     hooks=hooks,
                 )
@@ -1487,7 +1820,8 @@ class Configurator:
 
             pop = AgeStructuredPopulation(
                 species=self._species,
-                population_config=self._config,
+                population_config=final_config,
+                index_registry=self._registry,
                 name=name,
                 hooks=hooks,
             )
@@ -1811,13 +2145,30 @@ class AgeStructuredConfigurator(Configurator):
         from natal.population_config import build_population_config
 
         old = self._config
+        # Use species blueprint maps (unexpanded) so that
+        # build_population_config applies slab expansion exactly once.
+        if self._species is not None:
+            bp = self._species.get_config_blueprint()
+            n_g_orig = bp["n_ztypes"]
+            n_hg_orig = bp["n_haploid_genotypes"]
+            z2g_bp = bp["zygotes_to_gametes_map"]
+            g2z_bp = bp["gametes_to_zygotes_map"]
+        else:
+            n_g_orig = old.n_ztypes
+            n_hg_orig = old.n_haploid_genotypes
+            z2g_bp = old.zygotes_to_gametes_map
+            g2z_bp = old.gametes_to_zygotes_map
+
         self._config = build_population_config(
-            n_genotypes=old.n_genotypes,
-            n_haploid_genotypes=old.n_haploid_genotypes,
+            n_genotypes=n_g_orig,
+            n_haploid_genotypes=n_hg_orig,
             n_ages=n_ages,
             n_glabs=old.n_glabs,
-            genotype_to_gametes_map=old.genotype_to_gametes_map,
-            gametes_to_zygote_map=old.gametes_to_zygote_map,
+            n_slabs=old.n_slabs,
+            gamete_labels=self._species.gamete_labels if self._species else None,
+            somatic_labels=self._species.somatic_labels if self._species else None,
+            zygotes_to_gametes_map=z2g_bp,
+            gametes_to_zygotes_map=g2z_bp,
             new_adult_age=new_adult_age,
             generation_time=generation_time,
             stochastic=bool(old.stochastic),
@@ -1912,6 +2263,8 @@ class AgeStructuredConfigurator(Configurator):
             self._has_user_expected_females = True
         if equilibrium_distribution is not None:
             self._equilibrium_distribution = equilibrium_distribution
+        if k_value is not None:
+            self._sync_equilibrium()
         return self
 
     def reproduction(

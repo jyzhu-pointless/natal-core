@@ -12,7 +12,7 @@ while NumPy arrays can be mutated in place.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Callable, List, NamedTuple, Optional, cast, overload
+from typing import Any, Callable, List, NamedTuple, Optional, Union, cast, overload
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,16 +24,10 @@ from natal.type_def import Sex
 __all__ = [
     'NO_COMPETITION', 'FIXED', 'LOGISTIC', 'LINEAR', 'CONCAVE', 'BEVERTON_HOLT',
     'PopulationConfig',
-    'build_population_config',
-    'PlainPopulationConfig',
-    'to_plain_population_config',
-    'from_plain_population_config',
     'extract_gamete_frequencies',
     'extract_gamete_frequencies_by_glab',
     'extract_zygote_frequencies',
-    'DiscretePopulationConfig', 'from_population_config',
-    'build_discrete_population_config',
-    'build_custom_array',
+    'DiscretePopulationConfig',
 ]
 
 # Growth mode constants (keep in sync with algorithms.py)
@@ -55,7 +49,7 @@ class PopulationConfig(NamedTuple):
             proportions; otherwise use multinomial sampling.
         n_sexes: Number of sexes (usually 2).
         n_ages: Number of age classes.
-        n_genotypes: Number of diploid genotype types.
+        n_ztypes: Number of zygote types (diploid genotype types after slab expansion).
         n_haploid_genotypes: Number of haploid genotype types.
         n_glabs: Number of gamete‑label variants per haplotype.
         age_based_mating_rates: Shape (n_sexes, n_ages) – mating rates per sex/age.
@@ -64,13 +58,13 @@ class PopulationConfig(NamedTuple):
         age_based_survival_rates: Shape (n_sexes, n_ages) – survival probabilities.
         female_age_based_fertility: Shape (n_ages,) – relative fertility
             of females at each age.
-        viability_fitness: Shape (n_sexes, n_ages, n_genotypes) – viability
+        viability_fitness: Shape (n_sexes, n_ages, n_ztypes) – viability
             fitness coefficients.
-        fecundity_fitness: Shape (n_sexes, n_genotypes) – fecundity fitness
+        fecundity_fitness: Shape (n_sexes, n_ztypes) – fecundity fitness
             coefficients.
-        sexual_selection_fitness: Shape (n_genotypes, n_genotypes) – sexual
+        sexual_selection_fitness: Shape (n_ztypes, n_ztypes) – sexual
             selection coefficients (female genotype × male genotype).
-        zygote_viability_fitness: Shape (n_sexes, n_genotypes) – zygote fitness
+        zygote_viability_fitness: Shape (n_sexes, n_ztypes) – zygote fitness
             coefficients applied during reproduction stage before survival.
             Represents the probability that a zygote survives to become an
             individual, applied before competition and viability selection.
@@ -95,22 +89,22 @@ class PopulationConfig(NamedTuple):
             (e.g., XY or ZW systems). Used to determine if offspring sex is
             genotype-determined (True) or ratio-determined (False). This flag
             is independent of gamete modifier effects or temporary lethality.
-        female_genotype_compatibility: Shape (n_genotypes,) – female-side
+        female_genotype_compatibility: Shape (n_ztypes,) – female-side
             compatibility weight per genotype.
-        male_genotype_compatibility: Shape (n_genotypes,) – male-side
+        male_genotype_compatibility: Shape (n_ztypes,) – male-side
             compatibility weight per genotype.
-        female_only_by_sex_chrom: Shape (n_genotypes,) – True where genotype
+        female_only_by_sex_chrom: Shape (n_ztypes,) – True where genotype
             is female-only under sex-chromosome constraints.
-        male_only_by_sex_chrom: Shape (n_genotypes,) – True where genotype is
+        male_only_by_sex_chrom: Shape (n_ztypes,) – True where genotype is
             male-only under sex-chromosome constraints.
         adult_ages: 1D array of age indices that are considered adult.
-        genotype_to_gametes_map: Shape (n_sexes, n_genotypes, n_hg*n_glabs) –
+        zygotes_to_gametes_map: Shape (n_sexes, n_ztypes, n_hg*n_glabs) –
             probability of producing each (haplotype, glab) combination.
-        gametes_to_zygote_map: Shape (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) –
+        gametes_to_zygotes_map: Shape (n_hg*n_glabs, n_hg*n_glabs, n_ztypes) –
             probability of forming a given diploid genotype from two gametes.
-        initial_individual_count: Shape (n_sexes, n_ages, n_genotypes) – initial
+        initial_individual_count: Shape (n_sexes, n_ages, n_ztypes) – initial
             population distribution.
-        initial_sperm_storage: Shape (n_ages, n_genotypes, n_genotypes) – initial
+        initial_sperm_storage: Shape (n_ages, n_ztypes, n_ztypes) – initial
             stored sperm counts (female genotype × male genotype).
     """
 
@@ -119,9 +113,10 @@ class PopulationConfig(NamedTuple):
     continuous_sampling: bool
     n_sexes: int
     n_ages: int
-    n_genotypes: int
+    n_ztypes: int
     n_haploid_genotypes: int
     n_glabs: int
+    n_slabs: int
     age_based_mating_rates: NDArray[np.float64]
     age_based_reproduction_rates: NDArray[np.float64]
     age_based_survival_rates: NDArray[np.float64]
@@ -150,11 +145,13 @@ class PopulationConfig(NamedTuple):
     male_only_by_sex_chrom: NDArray[np.bool_]
     # NumPy arrays are still mutable in-place.
     adult_ages: NDArray[np.int64]
-    genotype_to_gametes_map: NDArray[np.float64]
-    gametes_to_zygote_map: NDArray[np.float64]
+    zygotes_to_gametes_map: NDArray[np.float64]
+    gametes_to_zygotes_map: NDArray[np.float64]
     offspring_tensor: NDArray[np.float64]    # (g, g, g) — precomputed from meiosis × zygote maps
     initial_individual_count: NDArray[np.float64]
     initial_sperm_storage: NDArray[np.float64]
+
+    # -- slab inheritance (set by presets) --
 
     # -- custom fields (structured numpy scalar, set via Configurator.custom()) --
     custom: NDArray[Any]  # typed structured array when custom fields registered; float64 placeholder otherwise
@@ -263,9 +260,10 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         continuous_sampling=bool(config.continuous_sampling),
         n_sexes=int(config.n_sexes),
         n_ages=int(config.n_ages),
-        n_genotypes=int(config.n_genotypes),
+        n_ztypes=int(config.n_ztypes),
         n_haploid_genotypes=int(config.n_haploid_genotypes),
         n_glabs=int(config.n_glabs),
+        n_slabs=int(config.n_slabs),
         age_based_mating_rates=_maybe_copy_array(config.age_based_mating_rates, copy),
         age_based_reproduction_rates=_maybe_copy_array(config.age_based_reproduction_rates, copy),
         age_based_survival_rates=_maybe_copy_array(config.age_based_survival_rates, copy),
@@ -293,8 +291,8 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         female_only_by_sex_chrom=_maybe_copy_array(config.female_only_by_sex_chrom, copy),
         male_only_by_sex_chrom=_maybe_copy_array(config.male_only_by_sex_chrom, copy),
         adult_ages=config.adult_ages.copy() if copy else config.adult_ages,
-        genotype_to_gametes_map=_maybe_copy_array(config.genotype_to_gametes_map, copy),
-        gametes_to_zygote_map=_maybe_copy_array(config.gametes_to_zygote_map, copy),
+        zygotes_to_gametes_map=_maybe_copy_array(config.zygotes_to_gametes_map, copy),
+        gametes_to_zygotes_map=_maybe_copy_array(config.gametes_to_zygotes_map, copy),
         offspring_tensor=_maybe_copy_array(config.offspring_tensor, copy),
         initial_individual_count=_maybe_copy_array(config.initial_individual_count, copy),
         initial_sperm_storage=_maybe_copy_array(config.initial_sperm_storage, copy),
@@ -314,115 +312,124 @@ def from_plain_population_config(plain: PopulationConfig) -> PopulationConfig:
     return to_plain_population_config(plain, copy=True)
 
 
-def build_population_config(
-    n_genotypes: int = 0,
-    n_haploid_genotypes: int = 0,
-    n_sexes: Optional[int] = None,
-    n_ages: int = 2,
-    n_glabs: int = 1,
-    stochastic: bool = True,
-    continuous_sampling: bool = False,
-    age_based_mating_rates: Optional[NDArray[np.float64]] = None,
-    age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,
-    age_based_survival_rates: Optional[NDArray[np.float64]] = None,
-    female_age_based_fertility: Optional[NDArray[np.float64]] = None,
-    viability_fitness: Optional[NDArray[np.float64]] = None,
-    fecundity_fitness: Optional[NDArray[np.float64]] = None,
-    sexual_selection_fitness: Optional[NDArray[np.float64]] = None,
-    zygote_viability_fitness: Optional[NDArray[np.float64]] = None,
-    age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
-    new_adult_age: int = 2,
-    sperm_displacement_rate: float = 0.05,
-    eggs_per_female: float = 100.0,
-    fixed_egg_count: bool = False,
-    carrying_capacity: Optional[float] = None,
-    sex_ratio: float = 0.5,
-    low_density_growth_rate: float = 6.0,
-    juvenile_growth_mode: int = LOGISTIC,
-    generation_time: Optional[float] = None,
-    hook_slot: int = 0,
-    has_sex_chromosomes: bool = False,
-    genotype_to_gametes_map: Optional[NDArray[np.float64]] = None,
-    gametes_to_zygote_map: Optional[NDArray[np.float64]] = None,
-    initial_individual_count: Optional[NDArray[np.float64]] = None,
-    initial_sperm_storage: Optional[NDArray[np.float64]] = None,
-    age_1_carrying_capacity: Optional[float] = None,
-    old_juvenile_carrying_capacity: Optional[float] = None,
-    expected_num_adult_females: Optional[float] = None,
-    infer_capacity_from_initial_state: bool = True,
-    equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None,
-    external_expected_eggs: Optional[float] = None,
-) -> PopulationConfig:
-    """Build an immutable PopulationConfig directly (legacy‑free path).
+class _ComputedMaps(NamedTuple):
+    """Intermediate result of shared config computation.
 
-    This function constructs a complete configuration, filling missing arrays
-    with sensible defaults and computing derived values such as equilibrium
-    metrics and generation time.
-
-    Args:
-        n_genotypes: Number of diploid genotype types.
-        n_haploid_genotypes: Number of haploid genotype types.
-        n_sexes: Number of sexes (default 2).
-        n_ages: Number of age classes (default 2).
-        n_glabs: Number of gamete‑label variants per haplotype (default 1).
-        stochastic: Whether to use stochastic demography.
-        continuous_sampling: Use Dirichlet sampling for gamete proportions.
-        age_based_mating_rates: Array (n_sexes, n_ages) – mating rates.
-        age_based_reproduction_rates: Array (n_ages,) – female reproduction
-            participation rates.
-        age_based_survival_rates: Array (n_sexes, n_ages) – survival probabilities.
-        female_age_based_fertility: Array (n_ages,) – relative female
-            fertility per age.
-        viability_fitness: Array (n_sexes, n_ages, n_genotypes) – viability fitness.
-        fecundity_fitness: Array (n_sexes, n_genotypes) – fecundity fitness.
-        sexual_selection_fitness: Array (n_genotypes, n_genotypes) – sexual
-            selection coefficients.
-        age_based_relative_competition_strength: Array (n_ages,) – competition
-            weight per age.
-        new_adult_age: Age at which individuals become adults (default 2).
-        sperm_displacement_rate: Probability of sperm displacement (default 0.05).
-        eggs_per_female: Expected number of eggs per female per tick.
-        fixed_egg_count: If True, use deterministic egg count.
-        carrying_capacity: Optional explicit carrying capacity (scaled later).
-        sex_ratio: Proportion of newborns that are female.
-        low_density_growth_rate: Intrinsic growth rate at low density.
-        juvenile_growth_mode: Growth mode (see constants).
-        generation_time: Optional pre‑computed generation time; if None, computed.
-        hook_slot: Slot index for hooks (default 0).
-        has_sex_chromosomes: Whether the species has sex‑chromosome constraints.
-            If True, offspring sex is determined by genotype compatibility;
-            if False, only sex_ratio is used (default False).
-        genotype_to_gametes_map: Pre‑built mapping from genotype to gametes.
-        gametes_to_zygote_map: Pre‑built mapping from gamete pair to zygote.
-        initial_individual_count: Initial population counts (n_sexes, n_ages,
-            n_genotypes). If None, filled with zeros.
-        initial_sperm_storage: Initial sperm storage counts (n_ages, n_genotypes,
-            n_genotypes). If None, filled with zeros.
-        age_1_carrying_capacity: Population carrying capacity at age=1.
-        old_juvenile_carrying_capacity: Alias for age_1_carrying_capacity (deprecated, use age_1_carrying_capacity).
-        expected_num_adult_females: Expected number of adult females (unscaled).
-        infer_capacity_from_initial_state: If True and carrying_capacity is None,
-            compute base capacity from initial_individual_count.
-        equilibrium_individual_distribution: Optional distribution used to compute
-            equilibrium metrics.
-        external_expected_eggs: Optional override for ``produced_age_0`` in the
-            survival rate calculation. When provided, the expected survival rate is
-            computed as ``total_age_1 / (external_expected_eggs * s_0_avg)`` instead
-            of using the distribution-computed egg count.
-
-    Returns:
-        A fully populated PopulationConfig instance.
-
-    Raises:
-        AssertionError: If required dimensions are invalid or shape mismatches occur.
+    Contains all arrays derived from raw inputs — before packaging into
+    either ``PopulationConfig`` or ``DiscretePopulationConfig``.  Not part
+    of the public API.
     """
-    if n_sexes is None:
-        n_sexes = 2
 
-    assert n_genotypes > 0 and n_haploid_genotypes > 0 and n_glabs > 0, "invalid dimensions for PopulationConfig"
+    # -- Dimensions --
+    n_sexes: int
+    n_ages: int
+    n_genotypes_orig: int   # G_orig (pre-expansion)
+    n_haploid_genotypes: int
+    n_glabs: int
+    n_slabs: int
+    n_ztypes: int           # engine-visible G = G_orig × n_slabs
+    n_g_compressed: int     # after slab expansion (may differ from n_ztypes if compressed later)
+    n_hg_effective: int
+    n_glabs_effective: int
+    new_adult_age: int
+    adult_ages: NDArray[np.int64]
+
+    # -- Demographic arrays --
+    mating: NDArray[np.float64]          # (2, A)
+    reproduction: NDArray[np.float64]    # (A,)
+    survival: NDArray[np.float64]        # (2, A)
+    female_fertility: NDArray[np.float64]  # (A,)
+
+    # -- Fitness arrays --
+    viability: NDArray[np.float64]       # (2, A, G×S)
+    fecundity: NDArray[np.float64]       # (2, G×S)
+    sexual: NDArray[np.float64]          # (G×S, G×S)
+    zygote: NDArray[np.float64]          # (2, G×S)
+    competition: NDArray[np.float64]     # (A,)
+
+    # -- Expanded maps (pre-compression) --
+    meiosis_f: NDArray[np.float64]       # (G×S, HL)
+    meiosis_m: NDArray[np.float64]       # (G×S, HL)
+    zygote_map: NDArray[np.float64]      # (HL, HL, G×S)
+
+    # -- Compatibility --
+    female_genotype_compatibility: NDArray[np.float64]
+    male_genotype_compatibility: NDArray[np.float64]
+    female_only_by_sex_chrom: NDArray[np.bool_]
+    male_only_by_sex_chrom: NDArray[np.bool_]
+
+    # -- Offspring tensor --
+    offspring_tensor: NDArray[np.float64]
+
+    # -- Initial state --
+    initial_individual_count: NDArray[np.float64]
+    initial_sperm_storage: NDArray[np.float64]
+
+    # -- Equilibrium & competition --
+    carrying_capacity: NDArray[np.float64]          # 0-d
+    expected_competition_strength: float
+    expected_survival_rate: float
+    eggs_per_female: float
+    sex_ratio: float
+    sperm_displacement_rate: float
+    fixed_egg_count: bool
+    low_density_growth_rate: float
+    juvenile_growth_mode: int
+    has_sex_chromosomes: bool
+
+
+def _build_config_maps(
+    n_genotypes: int,
+    n_haploid_genotypes: int,
+    n_sexes: int,
+    n_ages: int,
+    n_glabs: int,
+    n_slabs: int,
+    gamete_labels: Optional[list[str]],
+    somatic_labels: Optional[list[str]],
+    new_adult_age: int,
+    stochastic: bool,
+    continuous_sampling: bool,
+    age_based_mating_rates: Optional[NDArray[np.float64]],
+    age_based_reproduction_rates: Optional[NDArray[np.float64]],
+    age_based_survival_rates: Optional[NDArray[np.float64]],
+    female_age_based_fertility: Optional[NDArray[np.float64]],
+    viability_fitness: Optional[NDArray[np.float64]],
+    fecundity_fitness: Optional[NDArray[np.float64]],
+    sexual_selection_fitness: Optional[NDArray[np.float64]],
+    zygote_viability_fitness: Optional[NDArray[np.float64]],
+    age_based_relative_competition_strength: Optional[NDArray[np.float64]],
+    sperm_displacement_rate: float,
+    eggs_per_female: float,
+    fixed_egg_count: bool,
+    carrying_capacity: Optional[float],
+    sex_ratio: float,
+    low_density_growth_rate: float,
+    juvenile_growth_mode: int,
+    has_sex_chromosomes: bool,
+    zygotes_to_gametes_map: Optional[NDArray[np.float64]],
+    gametes_to_zygotes_map: Optional[NDArray[np.float64]],
+    initial_individual_count: Optional[NDArray[np.float64]],
+    initial_sperm_storage: Optional[NDArray[np.float64]],
+    age_1_carrying_capacity: Optional[float],
+    old_juvenile_carrying_capacity: Optional[float],
+    infer_capacity_from_initial_state: bool,
+    equilibrium_individual_distribution: Optional[NDArray[np.float64]],
+    external_expected_eggs: Optional[float],
+) -> _ComputedMaps:
+    """Shared computation engine for config building.
+
+    Validates inputs, fills defaults, expands slabs, and computes the
+    offspring probability tensor.  Returns all derived arrays in a single
+    structure that both ``build_population_config`` and
+    ``build_discrete_engine_config`` consume independently.
+
+    Not part of the public API.
+    """
+    import natal.engine.simulation.age_structured as alg
+
+    assert n_genotypes > 0 and n_haploid_genotypes > 0 and n_glabs > 0, "invalid dimensions"
     assert n_ages > 0, "n_ages must be positive"
-
-    import natal.engine.simulation.age_structured as alg  # lazy import to avoid pulling engine at module level
 
     n_hg_glabs = n_haploid_genotypes * n_glabs
     n_sexes_i = int(n_sexes)
@@ -430,22 +437,22 @@ def build_population_config(
     n_genotypes_i = int(n_genotypes)
     n_haploid_genotypes_i = int(n_haploid_genotypes)
     n_glabs_i = int(n_glabs)
+    n_slabs_i = int(n_slabs)
+    n_ztypes_i = n_genotypes_i * n_slabs_i
     new_adult_age_i = int(new_adult_age)
     adult_ages = np.arange(new_adult_age_i, n_ages_i, dtype=np.int64)
 
     if initial_individual_count is not None:
         init_ind = initial_individual_count.copy()
     else:
-        init_ind = np.zeros((n_sexes_i, n_ages_i, n_genotypes_i), dtype=np.float64)
+        init_ind = np.zeros((n_sexes_i, n_ages_i, n_ztypes_i), dtype=np.float64)
 
     if initial_sperm_storage is not None:
         init_sperm = initial_sperm_storage.copy()
     else:
-        init_sperm = np.zeros((n_ages_i, n_genotypes_i, n_genotypes_i), dtype=np.float64)
+        init_sperm = np.zeros((n_ages_i, n_ztypes_i, n_ztypes_i), dtype=np.float64)
 
-    # Resolve carrying_capacity directly (no base/scale separation).
-    # Use explicit `is not None` — `age_1_carrying_capacity=0` is a valid
-    # value that must not fall through to the legacy alias.
+    # Resolve carrying_capacity.
     if age_1_carrying_capacity is not None:
         resolved_age_1 = age_1_carrying_capacity
     elif old_juvenile_carrying_capacity is not None:
@@ -484,65 +491,36 @@ def build_population_config(
         return arr2
 
     mating = _validate_or_default_array(
-        age_based_mating_rates,
-        (n_sexes_i, n_ages_i),
-        "age_based_mating_rates",
-        has_sex_dim=True,
-        set_juvenile_values_to_zero=True,
+        age_based_mating_rates, (n_sexes_i, n_ages_i), "age_based_mating_rates",
+        has_sex_dim=True, set_juvenile_values_to_zero=True,
     )
     reproduction = _validate_or_default_array(
-        age_based_reproduction_rates,
-        (n_ages_i,),
-        "age_based_reproduction_rates",
-        has_sex_dim=False,
-        set_juvenile_values_to_zero=True,
+        age_based_reproduction_rates, (n_ages_i,), "age_based_reproduction_rates",
+        has_sex_dim=False, set_juvenile_values_to_zero=True,
     )
     survival = _validate_or_default_array(
-        age_based_survival_rates,
-        (n_sexes_i, n_ages_i),
-        "age_based_survival_rates",
-        has_sex_dim=True,
-        set_juvenile_values_to_zero=True,
+        age_based_survival_rates, (n_sexes_i, n_ages_i), "age_based_survival_rates",
+        has_sex_dim=True, set_juvenile_values_to_zero=True,
     )
     female_fertility = _validate_or_default_array(
-        female_age_based_fertility,
-        (n_ages_i,),
-        "female_age_based_fertility",
-        has_sex_dim=False,
-        set_juvenile_values_to_zero=True,
+        female_age_based_fertility, (n_ages_i,), "female_age_based_fertility",
+        has_sex_dim=False, set_juvenile_values_to_zero=True,
     )
-    viability = _validate_or_default_array(viability_fitness, (n_sexes_i, n_ages_i, n_genotypes_i), "viability_fitness")
-    fecundity = _validate_or_default_array(fecundity_fitness, (n_sexes_i, n_genotypes_i), "fecundity_fitness")
-    sexual = _validate_or_default_array(sexual_selection_fitness, (n_genotypes_i, n_genotypes_i), "sexual_selection_fitness")
-    zygote = _validate_or_default_array(zygote_viability_fitness, (n_sexes_i, n_genotypes_i), "zygote_viability_fitness")
+    viability = _validate_or_default_array(viability_fitness, (n_sexes_i, n_ages_i, n_ztypes_i), "viability_fitness")
+    fecundity = _validate_or_default_array(fecundity_fitness, (n_sexes_i, n_ztypes_i), "fecundity_fitness")
+    sexual = _validate_or_default_array(sexual_selection_fitness, (n_ztypes_i, n_ztypes_i), "sexual_selection_fitness")
+    zygote = _validate_or_default_array(zygote_viability_fitness, (n_sexes_i, n_ztypes_i), "zygote_viability_fitness")
     competition = _validate_or_default_array(
-        age_based_relative_competition_strength,
-        (n_ages_i,),
-        "age_based_relative_competition_strength",
+        age_based_relative_competition_strength, (n_ages_i,), "age_based_relative_competition_strength",
     )
-    g2g = _validate_or_default_array(
-        genotype_to_gametes_map,
-        (n_sexes_i, n_genotypes_i, n_hg_glabs),
-        "genotype_to_gametes_map",
+    z2g = _validate_or_default_array(
+        zygotes_to_gametes_map, (n_sexes_i, n_genotypes_i, n_hg_glabs), "zygotes_to_gametes_map",
         default_value=np.zeros,
     )
     g2z = _validate_or_default_array(
-        gametes_to_zygote_map,
-        (n_hg_glabs, n_hg_glabs, n_genotypes_i),
-        "gametes_to_zygote_map",
+        gametes_to_zygotes_map, (n_hg_glabs, n_hg_glabs, n_genotypes_i), "gametes_to_zygotes_map",
         default_value=np.zeros,
     )
-    female_genotype_compatibility = g2g[0].sum(axis=1)
-    male_genotype_compatibility = g2g[1].sum(axis=1)
-    female_only_by_sex_chrom = np.zeros(n_genotypes_i, dtype=np.bool_)
-    male_only_by_sex_chrom = np.zeros(n_genotypes_i, dtype=np.bool_)
-    if has_sex_chromosomes:
-        for g_off in range(n_genotypes_i):
-            f_ok = female_genotype_compatibility[g_off] > alg.EPS
-            m_ok = male_genotype_compatibility[g_off] > alg.EPS
-            female_only_by_sex_chrom[g_off] = f_ok and not m_ok
-            male_only_by_sex_chrom[g_off] = m_ok and not f_ok
-
     expected_competition_strength, expected_survival_rate = alg.compute_equilibrium_metrics(
         carrying_capacity=float(carrying_capacity_f),
         eggs_per_female=float(eggs_per_female),
@@ -558,56 +536,287 @@ def build_population_config(
         external_expected_eggs=external_expected_eggs,
     )
 
-    # Precompute offspring probability tensor from meiosis and zygote maps.
+    # Index compression mask placeholders (compression is applied externally).
+    n_g_compressed = n_genotypes_i
+    n_hg_effective = n_haploid_genotypes_i
+    n_glabs_effective = n_glabs_i
+
+    # Slab expansion (skip if maps are already expanded by the caller).
+    if z2g.shape[1] == n_genotypes_i:
+        z2g_expanded, _z2g, n_g_compressed = _expand_slab_maps(
+            z2g=z2g, g2z=g2z,
+            n_slabs=n_slabs_i, n_genotypes=n_genotypes_i,
+            gamete_labels=gamete_labels, somatic_labels=somatic_labels,
+            n_haploid_genotypes=n_haploid_genotypes_i, n_glabs=n_glabs_i,
+        )
+    else:
+        # Maps already slab-expanded — use as-is.
+        z2g_expanded = z2g
+        _z2g = g2z
+        n_g_compressed = z2g.shape[1]
+    _m_f = z2g_expanded[0]
+    _m_m = z2g_expanded[1]
+
+    # Genotype compatibility (computed from expanded maps).
+    female_genotype_compatibility = _m_f.sum(axis=1)
+    male_genotype_compatibility = _m_m.sum(axis=1)
+    female_only_by_sex_chrom = np.zeros(n_g_compressed, dtype=np.bool_)
+    male_only_by_sex_chrom = np.zeros(n_g_compressed, dtype=np.bool_)
+    if has_sex_chromosomes:
+        for g_off in range(n_genotypes_i):
+            f_ok = female_genotype_compatibility[g_off] > alg.EPS
+            m_ok = male_genotype_compatibility[g_off] > alg.EPS
+            if n_slabs_i > 1:
+                for s in range(n_slabs_i):
+                    z = g_off * n_slabs_i + s
+                    female_only_by_sex_chrom[z] = f_ok and not m_ok
+                    male_only_by_sex_chrom[z] = m_ok and not f_ok
+            else:
+                female_only_by_sex_chrom[g_off] = f_ok and not m_ok
+                male_only_by_sex_chrom[g_off] = m_ok and not f_ok
+
+    # Offspring probability tensor.
     offspring_tensor = alg.compute_offspring_probability_tensor(
-        meiosis_f=g2g[0], meiosis_m=g2g[1],
-        haplo_to_genotype_map=g2z,
-        n_genotypes=n_genotypes_i,
-        n_haplogenotypes=n_haploid_genotypes_i,
+        meiosis_f=_m_f, meiosis_m=_m_m,
+        haplo_to_genotype_map=_z2g,
+        n_ztypes=n_g_compressed,
+        n_haplogenotypes=n_hg_effective,
+        n_glabs=n_glabs_effective,
+    )
+
+    return _ComputedMaps(
+        n_sexes=n_sexes_i,
+        n_ages=n_ages_i,
+        n_genotypes_orig=n_genotypes_i,
+        n_haploid_genotypes=n_haploid_genotypes_i,
         n_glabs=n_glabs_i,
+        n_slabs=n_slabs_i,
+        n_ztypes=n_ztypes_i,
+        n_g_compressed=n_g_compressed,
+        n_hg_effective=n_hg_effective,
+        n_glabs_effective=n_glabs_effective,
+        new_adult_age=new_adult_age_i,
+        adult_ages=adult_ages,
+        mating=mating,
+        reproduction=reproduction,
+        survival=survival,
+        female_fertility=female_fertility,
+        viability=viability,
+        fecundity=fecundity,
+        sexual=sexual,
+        zygote=zygote,
+        competition=competition,
+        meiosis_f=_m_f,
+        meiosis_m=_m_m,
+        zygote_map=_z2g,
+        female_genotype_compatibility=female_genotype_compatibility,
+        male_genotype_compatibility=male_genotype_compatibility,
+        female_only_by_sex_chrom=female_only_by_sex_chrom,
+        male_only_by_sex_chrom=male_only_by_sex_chrom,
+        offspring_tensor=offspring_tensor,
+        initial_individual_count=init_ind,
+        initial_sperm_storage=init_sperm,
+        carrying_capacity=carrying_capacity_f,
+        expected_competition_strength=expected_competition_strength,
+        expected_survival_rate=expected_survival_rate,
+        eggs_per_female=float(eggs_per_female),
+        sex_ratio=float(sex_ratio),
+        sperm_displacement_rate=float(sperm_displacement_rate),
+        fixed_egg_count=bool(fixed_egg_count),
+        low_density_growth_rate=float(low_density_growth_rate),
+        juvenile_growth_mode=int(juvenile_growth_mode),
+        has_sex_chromosomes=bool(has_sex_chromosomes),
+    )
+
+
+def build_population_config(
+    n_genotypes: int = 0,
+    n_haploid_genotypes: int = 0,
+    n_sexes: Optional[int] = None,
+    n_ages: int = 2,
+    n_glabs: int = 1,
+    n_slabs: int = 1,
+    gamete_labels: Optional[list[str]] = None,
+    somatic_labels: Optional[list[str]] = None,
+    stochastic: bool = True,
+    continuous_sampling: bool = False,
+    age_based_mating_rates: Optional[NDArray[np.float64]] = None,
+    age_based_reproduction_rates: Optional[NDArray[np.float64]] = None,
+    age_based_survival_rates: Optional[NDArray[np.float64]] = None,
+    female_age_based_fertility: Optional[NDArray[np.float64]] = None,
+    viability_fitness: Optional[NDArray[np.float64]] = None,
+    fecundity_fitness: Optional[NDArray[np.float64]] = None,
+    sexual_selection_fitness: Optional[NDArray[np.float64]] = None,
+    zygote_viability_fitness: Optional[NDArray[np.float64]] = None,
+    age_based_relative_competition_strength: Optional[NDArray[np.float64]] = None,
+    new_adult_age: int = 2,
+    sperm_displacement_rate: float = 0.05,
+    eggs_per_female: float = 100.0,
+    fixed_egg_count: bool = False,
+    carrying_capacity: Optional[float] = None,
+    sex_ratio: float = 0.5,
+    low_density_growth_rate: float = 6.0,
+    juvenile_growth_mode: int = LOGISTIC,
+    generation_time: Optional[float] = None,
+    hook_slot: int = 0,
+    has_sex_chromosomes: bool = False,
+    zygotes_to_gametes_map: Optional[NDArray[np.float64]] = None,
+    gametes_to_zygotes_map: Optional[NDArray[np.float64]] = None,
+    initial_individual_count: Optional[NDArray[np.float64]] = None,
+    initial_sperm_storage: Optional[NDArray[np.float64]] = None,
+    age_1_carrying_capacity: Optional[float] = None,
+    old_juvenile_carrying_capacity: Optional[float] = None,
+    infer_capacity_from_initial_state: bool = True,
+    equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None,
+    external_expected_eggs: Optional[float] = None,
+) -> PopulationConfig:
+    """Build an immutable PopulationConfig directly (legacy‑free path).
+
+    This function constructs a complete configuration, filling missing arrays
+    with sensible defaults and computing derived values such as equilibrium
+    metrics and generation time.
+
+    Args:
+        n_genotypes: Number of diploid genotype types BEFORE slab expansion
+            (G_orig).  The engine-visible axis size is ``n_ztypes = n_genotypes *
+            n_slabs``, so fitness and initial-state arrays must use the expanded
+            shape.
+        n_haploid_genotypes: Number of haploid genotype types.
+        n_sexes: Number of sexes (default 2).
+        n_ages: Number of age classes (default 2).
+        n_glabs: Number of gamete‑label variants per haplotype (default 1).
+        stochastic: Whether to use stochastic demography.
+        continuous_sampling: Use Dirichlet sampling for gamete proportions.
+        age_based_mating_rates: Array (n_sexes, n_ages) – mating rates.
+        age_based_reproduction_rates: Array (n_ages,) – female reproduction
+            participation rates.
+        age_based_survival_rates: Array (n_sexes, n_ages) – survival probabilities.
+        female_age_based_fertility: Array (n_ages,) – relative female
+            fertility per age.
+        viability_fitness: Array (n_sexes, n_ages, n_ztypes) – viability fitness.
+        fecundity_fitness: Array (n_sexes, n_ztypes) – fecundity fitness.
+        sexual_selection_fitness: Array (n_ztypes, n_ztypes) – sexual
+            selection coefficients.
+        age_based_relative_competition_strength: Array (n_ages,) – competition
+            weight per age.
+        new_adult_age: Age at which individuals become adults (default 2).
+        sperm_displacement_rate: Probability of sperm displacement (default 0.05).
+        eggs_per_female: Expected number of eggs per female per tick.
+        fixed_egg_count: If True, use deterministic egg count.
+        carrying_capacity: Optional explicit carrying capacity (scaled later).
+        sex_ratio: Proportion of newborns that are female.
+        low_density_growth_rate: Intrinsic growth rate at low density.
+        juvenile_growth_mode: Growth mode (see constants).
+        generation_time: Optional pre‑computed generation time; if None, computed.
+        hook_slot: Slot index for hooks (default 0).
+        has_sex_chromosomes: Whether the species has sex‑chromosome constraints.
+            If True, offspring sex is determined by genotype compatibility;
+            if False, only sex_ratio is used (default False).
+        zygotes_to_gametes_map: Pre‑built mapping from genotype to gametes.
+        gametes_to_zygotes_map: Pre‑built mapping from gamete pair to zygote.
+        initial_individual_count: Initial population counts (n_sexes, n_ages,
+            n_ztypes). If None, filled with zeros.
+        initial_sperm_storage: Initial sperm storage counts (n_ages, n_ztypes,
+            n_ztypes). If None, filled with zeros.
+        age_1_carrying_capacity: Population carrying capacity at age=1.
+        old_juvenile_carrying_capacity: Alias for age_1_carrying_capacity (deprecated, use age_1_carrying_capacity).
+        infer_capacity_from_initial_state: If True and carrying_capacity is None,
+            compute base capacity from initial_individual_count.
+        equilibrium_individual_distribution: Optional distribution used to compute
+            equilibrium metrics.
+        external_expected_eggs: Optional override for ``produced_age_0`` in the
+            survival rate calculation. When provided, the expected survival rate is
+            computed as ``total_age_1 / (external_expected_eggs * s_0_avg)`` instead
+            of using the distribution-computed egg count.
+
+    Returns:
+        A fully populated PopulationConfig instance.
+
+    Raises:
+        AssertionError: If required dimensions are invalid or shape mismatches occur.
+    """
+    m = _build_config_maps(
+        n_genotypes=n_genotypes,
+        n_haploid_genotypes=n_haploid_genotypes,
+        n_sexes=2 if n_sexes is None else int(n_sexes),
+        n_ages=int(n_ages),
+        n_glabs=int(n_glabs),
+        n_slabs=int(n_slabs),
+        gamete_labels=gamete_labels,
+        somatic_labels=somatic_labels,
+        new_adult_age=int(new_adult_age),
+        stochastic=bool(stochastic),
+        continuous_sampling=bool(continuous_sampling),
+        age_based_mating_rates=age_based_mating_rates,
+        age_based_reproduction_rates=age_based_reproduction_rates,
+        age_based_survival_rates=age_based_survival_rates,
+        female_age_based_fertility=female_age_based_fertility,
+        viability_fitness=viability_fitness,
+        fecundity_fitness=fecundity_fitness,
+        sexual_selection_fitness=sexual_selection_fitness,
+        zygote_viability_fitness=zygote_viability_fitness,
+        age_based_relative_competition_strength=age_based_relative_competition_strength,
+        sperm_displacement_rate=float(sperm_displacement_rate),
+        eggs_per_female=float(eggs_per_female),
+        fixed_egg_count=bool(fixed_egg_count),
+        carrying_capacity=carrying_capacity,
+        sex_ratio=float(sex_ratio),
+        low_density_growth_rate=float(low_density_growth_rate),
+        juvenile_growth_mode=int(juvenile_growth_mode),
+        has_sex_chromosomes=bool(has_sex_chromosomes),
+        zygotes_to_gametes_map=zygotes_to_gametes_map,
+        gametes_to_zygotes_map=gametes_to_zygotes_map,
+        initial_individual_count=initial_individual_count,
+        initial_sperm_storage=initial_sperm_storage,
+        age_1_carrying_capacity=age_1_carrying_capacity,
+        old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
+        infer_capacity_from_initial_state=infer_capacity_from_initial_state,
+        equilibrium_individual_distribution=equilibrium_individual_distribution,
+        external_expected_eggs=external_expected_eggs,
     )
 
     if generation_time is None:
         temp_cfg = PopulationConfig(
             stochastic=bool(stochastic),
             continuous_sampling=bool(continuous_sampling),
-            n_sexes=n_sexes_i,
-            n_ages=n_ages_i,
-            n_genotypes=n_genotypes_i,
-            n_haploid_genotypes=n_haploid_genotypes_i,
-            n_glabs=n_glabs_i,
-            age_based_mating_rates=mating,
-            age_based_reproduction_rates=reproduction,
-            age_based_survival_rates=survival,
-            female_age_based_fertility=female_fertility,
-            viability_fitness=viability,
-            fecundity_fitness=fecundity,
-            sexual_selection_fitness=sexual,
-            zygote_viability_fitness=zygote,
-            age_based_relative_competition_strength=competition,
-            sperm_displacement_rate=np.array(float(sperm_displacement_rate)),
-            eggs_per_female=np.array(float(eggs_per_female)),
-            fixed_egg_count=bool(fixed_egg_count),
-            carrying_capacity=carrying_capacity_f,
-            sex_ratio=np.array(float(sex_ratio)),
-            low_density_growth_rate=np.array(float(low_density_growth_rate)),
-            juvenile_growth_mode=np.array(int(juvenile_growth_mode), dtype=np.int64),
-            expected_competition_strength=np.array(float(expected_competition_strength)),
-            expected_survival_rate=np.array(float(expected_survival_rate)),
+            n_sexes=m.n_sexes,
+            n_ages=m.n_ages,
+            n_ztypes=m.n_ztypes,
+            n_haploid_genotypes=m.n_haploid_genotypes,
+            n_glabs=m.n_glabs,
+            n_slabs=m.n_slabs,
+            age_based_mating_rates=m.mating,
+            age_based_reproduction_rates=m.reproduction,
+            age_based_survival_rates=m.survival,
+            female_age_based_fertility=m.female_fertility,
+            viability_fitness=m.viability,
+            fecundity_fitness=m.fecundity,
+            sexual_selection_fitness=m.sexual,
+            zygote_viability_fitness=m.zygote,
+            age_based_relative_competition_strength=m.competition,
+            sperm_displacement_rate=np.array(m.sperm_displacement_rate),
+            eggs_per_female=np.array(m.eggs_per_female),
+            fixed_egg_count=m.fixed_egg_count,
+            carrying_capacity=m.carrying_capacity,
+            sex_ratio=np.array(m.sex_ratio),
+            low_density_growth_rate=np.array(m.low_density_growth_rate),
+            juvenile_growth_mode=np.array(m.juvenile_growth_mode, dtype=np.int64),
+            expected_competition_strength=np.array(m.expected_competition_strength),
+            expected_survival_rate=np.array(m.expected_survival_rate),
             generation_time=np.array(0.0),
-            new_adult_age=new_adult_age_i,
+            new_adult_age=m.new_adult_age,
             hook_slot=int(hook_slot),
-            has_sex_chromosomes=bool(has_sex_chromosomes),
-            female_genotype_compatibility=female_genotype_compatibility,
-            male_genotype_compatibility=male_genotype_compatibility,
-            female_only_by_sex_chrom=female_only_by_sex_chrom,
-            male_only_by_sex_chrom=male_only_by_sex_chrom,
-            adult_ages=adult_ages,
-            genotype_to_gametes_map=g2g,
-            gametes_to_zygote_map=g2z,
-            offspring_tensor=offspring_tensor,
-            initial_individual_count=init_ind,
-            initial_sperm_storage=init_sperm,
+            has_sex_chromosomes=m.has_sex_chromosomes,
+            female_genotype_compatibility=m.female_genotype_compatibility,
+            male_genotype_compatibility=m.male_genotype_compatibility,
+            female_only_by_sex_chrom=m.female_only_by_sex_chrom,
+            male_only_by_sex_chrom=m.male_only_by_sex_chrom,
+            adult_ages=m.adult_ages,
+            zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
+            gametes_to_zygotes_map=m.zygote_map,
+            offspring_tensor=m.offspring_tensor,
+            initial_individual_count=m.initial_individual_count,
+            initial_sperm_storage=m.initial_sperm_storage,
             custom=np.zeros(0, dtype=np.float64),
         )
         generation_time_f = np.array(float(temp_cfg.compute_generation_time()))
@@ -617,43 +826,44 @@ def build_population_config(
     return PopulationConfig(
         stochastic=bool(stochastic),
         continuous_sampling=bool(continuous_sampling),
-        n_sexes=n_sexes_i,
-        n_ages=n_ages_i,
-        n_genotypes=n_genotypes_i,
-        n_haploid_genotypes=n_haploid_genotypes_i,
-        n_glabs=n_glabs_i,
-        age_based_mating_rates=mating,
-        age_based_reproduction_rates=reproduction,
-        age_based_survival_rates=survival,
-        female_age_based_fertility=female_fertility,
-        viability_fitness=viability,
-        fecundity_fitness=fecundity,
-        sexual_selection_fitness=sexual,
-        zygote_viability_fitness=zygote,
-        age_based_relative_competition_strength=competition,
-        sperm_displacement_rate=np.array(float(sperm_displacement_rate)),
-        eggs_per_female=np.array(float(eggs_per_female)),
-        fixed_egg_count=bool(fixed_egg_count),
-        carrying_capacity=carrying_capacity_f,
-        sex_ratio=np.array(float(sex_ratio)),
-        low_density_growth_rate=np.array(float(low_density_growth_rate)),
-        juvenile_growth_mode=np.array(int(juvenile_growth_mode), dtype=np.int64),
-        expected_competition_strength=np.array(float(expected_competition_strength)),
-        expected_survival_rate=np.array(float(expected_survival_rate)),
+        n_sexes=m.n_sexes,
+        n_ages=m.n_ages,
+        n_ztypes=m.n_ztypes,
+        n_haploid_genotypes=m.n_haploid_genotypes,
+        n_glabs=m.n_glabs,
+        n_slabs=m.n_slabs,
+        age_based_mating_rates=m.mating,
+        age_based_reproduction_rates=m.reproduction,
+        age_based_survival_rates=m.survival,
+        female_age_based_fertility=m.female_fertility,
+        viability_fitness=m.viability,
+        fecundity_fitness=m.fecundity,
+        sexual_selection_fitness=m.sexual,
+        zygote_viability_fitness=m.zygote,
+        age_based_relative_competition_strength=m.competition,
+        sperm_displacement_rate=np.array(m.sperm_displacement_rate),
+        eggs_per_female=np.array(m.eggs_per_female),
+        fixed_egg_count=m.fixed_egg_count,
+        carrying_capacity=m.carrying_capacity,
+        sex_ratio=np.array(m.sex_ratio),
+        low_density_growth_rate=np.array(m.low_density_growth_rate),
+        juvenile_growth_mode=np.array(m.juvenile_growth_mode, dtype=np.int64),
+        expected_competition_strength=np.array(m.expected_competition_strength),
+        expected_survival_rate=np.array(m.expected_survival_rate),
         generation_time=generation_time_f,
-        new_adult_age=new_adult_age_i,
+        new_adult_age=m.new_adult_age,
         hook_slot=int(hook_slot),
-        has_sex_chromosomes=bool(has_sex_chromosomes),
-        female_genotype_compatibility=female_genotype_compatibility,
-        male_genotype_compatibility=male_genotype_compatibility,
-        female_only_by_sex_chrom=female_only_by_sex_chrom,
-        male_only_by_sex_chrom=male_only_by_sex_chrom,
-        adult_ages=adult_ages,
-        genotype_to_gametes_map=g2g,
-        gametes_to_zygote_map=g2z,
-        offspring_tensor=offspring_tensor,
-        initial_individual_count=init_ind,
-        initial_sperm_storage=init_sperm,
+        has_sex_chromosomes=m.has_sex_chromosomes,
+        female_genotype_compatibility=m.female_genotype_compatibility,
+        male_genotype_compatibility=m.male_genotype_compatibility,
+        female_only_by_sex_chrom=m.female_only_by_sex_chrom,
+        male_only_by_sex_chrom=m.male_only_by_sex_chrom,
+        adult_ages=m.adult_ages,
+        zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
+        gametes_to_zygotes_map=m.zygote_map,
+        offspring_tensor=m.offspring_tensor,
+        initial_individual_count=m.initial_individual_count,
+        initial_sperm_storage=m.initial_sperm_storage,
         custom=np.zeros(0, dtype=np.float64),
     )
 
@@ -665,24 +875,38 @@ def initialize_zygote_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    zygote_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None
+    zygote_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+        unordered: bool = False,
+    n_slabs: int = 1,
 ) -> NDArray[np.float64]:
-    """Initialize the ``gametes_to_zygote_map`` tensor.
+    """Initialize the ``gametes_to_zygotes_map`` tensor.
 
     The function first populates a baseline mapping following Mendelian
     inheritance for all haplotype pairs and gamete-label combinations, and
     then applies optional zygote modifiers to transform the tensor.
+
+    When *unordered* is True, uses ``unordered_genotype()`` so that
+    ``(hg_a, hg_b)`` and ``(hg_b, hg_a)`` map to the same unordered
+    genotype index, collapsing symmetric pairs.  Default ``False``
+    preserves maternal/paternal ordering.
+
+    When *n_slabs* > 1 the genotype axis is expanded so that each base
+    genotype has *n_slabs* slab variants.  Zygote modifiers are applied
+    BEFORE expansion — they operate in the unexpanded G_orig space.
 
     Args:
         haploid_genotypes: List of all haploid genotype objects.
         diploid_genotypes: List of all diploid genotype objects.
         n_glabs: Number of gamete labels (default: 1).
         zygote_modifiers: Optional sequence of callables that accept and
-            return a modified ``gametes_to_zygote_map`` tensor.
+            return a modified ``gametes_to_zygotes_map`` tensor.
+        unordered: If True, use unordered genotype canonicalization.
+        n_slabs: Number of somatic slabs (≥ 1).  When > 1 each genotype is
+            replicated across slabs.
 
     Returns:
-        Array of shape (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) representing
-        the probability of each zygote genotype given a pair of gametes.
+        Array of shape (HL, HL, G_orig * n_slabs) representing the
+        probability of each zygote genotype given a pair of gametes.
 
     Raises:
         ValueError: If any of the input lists is empty or n_glabs is not positive.
@@ -698,15 +922,18 @@ def initialize_zygote_map(
         raise ValueError("n_glabs must be positive")
 
     # 1. Build baseline one-hot tensor according to Mendelian inheritance
-    gametes_to_zygote_map: NDArray[np.float64] = np.zeros((n_hg_glabs, n_hg_glabs, n_genotypes), dtype=np.float64)
+    gametes_to_zygotes_map: NDArray[np.float64] = np.zeros((n_hg_glabs, n_hg_glabs, n_genotypes), dtype=np.float64)
 
     for idx_hg1, hg1 in enumerate(haploid_genotypes):
         for idx_hg2, hg2 in enumerate(haploid_genotypes):
-            zygote_gt = Genotype(
-                species=hg1.species,
-                maternal=hg1,
-                paternal=hg2
-            )
+            if unordered:
+                zygote_gt = hg1.species.unordered_genotype(hg1, hg2)
+            else:
+                zygote_gt = Genotype(
+                    species=hg1.species,
+                    maternal=hg1,
+                    paternal=hg2,
+                )
 
             if zygote_gt in diploid_genotypes:
                 idx_gt = diploid_genotypes.index(zygote_gt)
@@ -715,36 +942,52 @@ def initialize_zygote_map(
                     for glab2 in range(n_glabs):
                         compressed_idx1 = compress_hg_glab(idx_hg1, glab1, n_glabs)
                         compressed_idx2 = compress_hg_glab(idx_hg2, glab2, n_glabs)
-                        gametes_to_zygote_map[compressed_idx1, compressed_idx2, idx_gt] = 1.0
+                        gametes_to_zygotes_map[compressed_idx1, compressed_idx2, idx_gt] = 1.0
 
-    # 2. Apply optional zygote modifiers
+    # 2. Apply optional zygote modifiers (before slab expansion).
     if zygote_modifiers:
         for modifier in zygote_modifiers:
-            gametes_to_zygote_map = modifier(gametes_to_zygote_map)
-    return gametes_to_zygote_map
+            gametes_to_zygotes_map = modifier(gametes_to_zygotes_map)
+
+    # 3. Slab expansion: expand from G_orig → G_orig * n_slabs.
+    if n_slabs > 1:
+        n_ztypes = n_genotypes * n_slabs
+        expanded = np.zeros((n_hg_glabs, n_hg_glabs, n_ztypes), dtype=np.float64)
+        for g_raw in range(n_genotypes):
+            expanded[:, :, g_raw * n_slabs + 0] = gametes_to_zygotes_map[:, :, g_raw]
+        gametes_to_zygotes_map = expanded
+
+    return gametes_to_zygotes_map
 
 
 def initialize_gamete_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    gamete_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None
+    gamete_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+    n_slabs: int = 1,
 ) -> NDArray[np.float64]:
-    """Create and return a ``genotype_to_gametes_map`` tensor.
+    """Create and return a ``zygotes_to_gametes_map`` tensor.
 
     This mirrors the style of :func:`initialize_zygote_map`: build a baseline
     mapping from each diploid genotype's gamete production and then apply
     optional modifier callables.
+
+    When *n_slabs* > 1 the genotype axis is tiled so that each base genotype
+    is replicated *n_slabs* times (one per somatic label).  Modifier callables
+    are applied BEFORE tiling — they operate in the unexpanded G_orig space.
 
     Args:
         haploid_genotypes: List of all haploid genotype objects.
         diploid_genotypes: List of all diploid genotype objects.
         n_glabs: Number of gamete labels (default: 1).
         gamete_modifiers: Optional sequence of callables that accept and
-            return a modified ``genotype_to_gametes_map`` tensor.
+            return a modified ``zygotes_to_gametes_map`` tensor.
+        n_slabs: Number of somatic slabs (≥ 1).  When > 1 each genotype is
+            replicated across slabs with identical gamete production.
 
     Returns:
-        NDArray[np.float64]: Array shaped ``(n_sexes, n_genotypes, n_hg*n_glabs)``.
+        NDArray[np.float64]: Array shaped ``(n_sexes, G_orig * n_slabs, n_hg*n_glabs)``.
 
     Raises:
         ValueError: If any of the input lists is empty or n_glabs is not positive.
@@ -762,7 +1005,7 @@ def initialize_gamete_map(
     n_sexes = max(int(s.value) for s in Sex) + 1
     n_hg_glabs = n_hg * n_glabs
 
-    genotype_to_gametes_map: NDArray[np.float64] = np.zeros((n_sexes, n_genotypes, n_hg_glabs), dtype=np.float64)
+    zygotes_to_gametes_map: NDArray[np.float64] = np.zeros((n_sexes, n_genotypes, n_hg_glabs), dtype=np.float64)
     haplo_to_idx = {hg: idx for idx, hg in enumerate(haploid_genotypes)}
 
     # Build optional sex-specific haploid availability constraints from species.
@@ -806,18 +1049,111 @@ def initialize_gamete_map(
                     continue
                 # By default, only map frequency for the default glab (0)
                 compressed_idx = compress_hg_glab(idx_hg, 0, n_glabs)
-                genotype_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = float(freq) * inv_total
+                zygotes_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = float(freq) * inv_total
 
-    # Apply optional modifier callables
+    # Apply optional modifier callables (before slab expansion).
     if gamete_modifiers:
         for modifier in gamete_modifiers:
-            genotype_to_gametes_map = modifier(genotype_to_gametes_map)
+            zygotes_to_gametes_map = modifier(zygotes_to_gametes_map)
 
-    return genotype_to_gametes_map
+    # Slab expansion: tile each genotype row S times.
+    if n_slabs > 1:
+        zygotes_to_gametes_map = np.repeat(zygotes_to_gametes_map, n_slabs, axis=1)
+
+    return zygotes_to_gametes_map
+
+
+def _expand_slab_maps(
+    z2g: NDArray[np.float64],
+    g2z: NDArray[np.float64],
+    n_slabs: int,
+    n_genotypes: int,
+    gamete_labels: Optional[list[str]] = None,
+    somatic_labels: Optional[list[str]] = None,
+    n_haploid_genotypes: int = 0,
+    n_glabs: int = 1,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], int]:
+    """Expand genotype-to-gamete and gametes-to-zygote maps for n_slabs > 1.
+
+    When ``n_slabs <= 1``, returns the originals unchanged (identity).
+
+    When ``n_slabs > 1``, the genotype axis of both maps is expanded from
+    ``G_orig`` to ``G_orig * n_slabs`` via tiling (meiosis maps) and slab-0
+    default expansion (zygote map).  Cytoplasmic gamete tagging (Wolbachia)
+    and zygote redirect are applied if the relevant label sets are provided.
+
+    Args:
+        z2g: Genotype-to-gamete map, shape ``(2, G, HL)``.
+        g2z: Gametes-to-zygote map, shape ``(HL, HL, G)``.
+        n_slabs: Number of somatic labels (>= 1).
+        n_genotypes: Original G_orig (pre-expansion).
+        gamete_labels: Ordered gamete label names (for Wolbachia tagging).
+        somatic_labels: Ordered somatic label names (for Wolbachia tagging).
+        n_haploid_genotypes: Number of haploid genotype types.
+        n_glabs: Number of gamete label types.
+
+    Returns:
+        ``(z2g_expanded, g2z_expanded, n_ztypes)`` where ``z2g_expanded`` has
+        shape ``(2, G_orig * n_slabs, HL)`` and ``g2z_expanded`` has shape
+        ``(HL, HL, G_orig * n_slabs)``.  ``n_ztypes == G_orig * n_slabs``.
+    """
+    if n_slabs <= 1:
+        return z2g, g2z, n_genotypes
+
+    n_ztypes = n_genotypes * n_slabs
+
+    # Meiosis: tile each genotype row S times (identity — slab does not
+    # affect gamete production in the baseline).
+    _m_f = np.repeat(z2g[0].copy(), n_slabs, axis=0)
+    _m_m = np.repeat(z2g[1].copy(), n_slabs, axis=0)
+
+    # Cytoplasmic gamete tagging: non-default glabs tag maternal gametes
+    # from the corresponding non-default slab.  For example, glab "wolbachia"
+    # tags gametes from "infected" mothers, enabling maternal inheritance.
+    # The mapping is convention-based: glab[i] ↔ slab[i] for i >= 1.
+    # We iterate matching index pairs — glab 1 ↔ slab 1, glab 2 ↔ slab 2,
+    # etc. — NOT the Cartesian product, because each glab belongs to exactly
+    # one slab.
+    if gamete_labels and somatic_labels and n_glabs > 1 and n_slabs > 1:
+        for idx in range(1, min(n_slabs, n_glabs)):
+            if idx >= len(gamete_labels) or idx >= len(somatic_labels):
+                continue
+            for g_raw in range(n_genotypes):
+                z_target = g_raw * n_slabs + idx
+                for hg_idx in range(n_haploid_genotypes):
+                    src = hg_idx * n_glabs + 0   # default glab
+                    dst = hg_idx * n_glabs + idx
+                    _m_f[z_target, dst] = _m_f[z_target, src]
+                    _m_f[z_target, src] = 0.0
+
+    # Zygote map: expand from G_orig → G_orig * n_slabs, filling only
+    # slab 0 (default) — symmetric with glab default behaviour.
+    _z2g = np.zeros((g2z.shape[0], g2z.shape[1], n_ztypes), dtype=np.float64)
+    for g_raw in range(n_genotypes):
+        _z2g[:, :, g_raw * n_slabs + 0] = g2z[:, :, g_raw]
+
+    # Cytoplasmic zygote redirect: for each non-default glab/slab pair,
+    # redirect tagged gamete pairs from slab-0 to the matching child slab.
+    # Convention: glab[i] ↔ slab[i] for i >= 1 — same matching-index
+    # iteration as the gamete tagging block above.
+    if gamete_labels and somatic_labels and n_glabs > 1 and n_slabs > 1:
+        from natal.genetic_presets import CytoplasmicPreset
+        for idx in range(1, min(n_slabs, n_glabs)):
+            if idx >= len(gamete_labels) or idx >= len(somatic_labels):
+                continue
+            CytoplasmicPreset.apply_zygote_redirect(
+                _z2g, gamete_labels[idx], somatic_labels[idx],
+                gamete_labels, somatic_labels,
+                n_slabs, n_genotypes,
+                n_haploid_genotypes, n_glabs,
+            )
+
+    z2g_expanded = np.stack([_m_f, _m_m], axis=0)
+    return z2g_expanded, _z2g, n_ztypes
 
 
 def extract_gamete_frequencies(
-    genotype_to_gametes_map: NDArray[np.float64],
+    zygotes_to_gametes_map: NDArray[np.float64],
     sex_idx: int,
     genotype_idx: int,
     haploid_genotypes: List[HaploidGenotype],
@@ -825,12 +1161,12 @@ def extract_gamete_frequencies(
 ) -> dict[HaploidGenotype, float]:
     """Extract gamete frequencies for a specific (sex, genotype) pair.
 
-    This convenience function converts a row of genotype_to_gametes_map
+    This convenience function converts a row of zygotes_to_gametes_map
     from compressed haploid-glab indices back to HaploidGenotype objects with
     their aggregated frequencies across all glab variants.
 
     Args:
-        genotype_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
+        zygotes_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
         sex_idx: Sex index (0, 1, ...).
         genotype_idx: Diploid genotype index.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
@@ -844,7 +1180,7 @@ def extract_gamete_frequencies(
         >>> config = population._config
         >>> hg_list = population._get_all_possible_haploid_genotypes()
         >>> freqs = extract_gamete_frequencies(
-        ...     config.genotype_to_gametes_map,
+        ...     config.zygotes_to_gametes_map,
         ...     sex_idx=0,
         ...     genotype_idx=5,
         ...     haploid_genotypes=hg_list,
@@ -852,7 +1188,7 @@ def extract_gamete_frequencies(
         ... )
         >>> # freqs = {haplotype_obj: 0.5, another_haplotype_obj: 0.5}
     """
-    gamete_freqs_array = genotype_to_gametes_map[sex_idx, genotype_idx, :]
+    gamete_freqs_array = zygotes_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[HaploidGenotype, float] = {}
 
     for compressed_idx, freq in enumerate(gamete_freqs_array):
@@ -867,7 +1203,7 @@ def extract_gamete_frequencies(
 
 
 def extract_gamete_frequencies_by_glab(
-    genotype_to_gametes_map: NDArray[np.float64],
+    zygotes_to_gametes_map: NDArray[np.float64],
     sex_idx: int,
     genotype_idx: int,
     haploid_genotypes: List[HaploidGenotype],
@@ -880,7 +1216,7 @@ def extract_gamete_frequencies_by_glab(
     entries for each (haplotype, glab) combination.
 
     Args:
-        genotype_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
+        zygotes_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
         sex_idx: Sex index (0, 1, ...).
         genotype_idx: Diploid genotype index.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
@@ -892,11 +1228,11 @@ def extract_gamete_frequencies_by_glab(
 
     Examples:
         >>> freqs = extract_gamete_frequencies_by_glab(
-        ...     config.genotype_to_gametes_map, 0, 5, hg_list, n_glabs=2
+        ...     config.zygotes_to_gametes_map, 0, 5, hg_list, n_glabs=2
         ... )
         >>> # freqs = {(hg_A, 0): 0.3, (hg_A, 1): 0.2, (hg_B, 0): 0.5}
     """
-    gamete_freqs_array = genotype_to_gametes_map[sex_idx, genotype_idx, :]
+    gamete_freqs_array = zygotes_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[tuple[HaploidGenotype, int], float] = {}
 
     for compressed_idx, freq in enumerate(gamete_freqs_array):
@@ -910,7 +1246,7 @@ def extract_gamete_frequencies_by_glab(
 
 
 def extract_zygote_frequencies(
-    gametes_to_zygote_map: NDArray[np.float64],
+    gametes_to_zygotes_map: NDArray[np.float64],
     gamete1_compressed_idx: int,
     gamete2_compressed_idx: int,
     diploid_genotypes: List[Genotype],
@@ -918,11 +1254,11 @@ def extract_zygote_frequencies(
 ) -> dict[Genotype, float]:
     """Extract zygote frequencies for a specific pair of gametes.
 
-    This convenience function converts a slice of gametes_to_zygote_map
+    This convenience function converts a slice of gametes_to_zygotes_map
     from compressed gamete indices to Genotype objects with their frequencies.
 
     Args:
-        gametes_to_zygote_map: The (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) array.
+        gametes_to_zygotes_map: The (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) array.
         gamete1_compressed_idx: Compressed index of first gamete (maternal).
         gamete2_compressed_idx: Compressed index of second gamete (paternal).
         diploid_genotypes: List of all Genotype objects (aligned with indices).
@@ -936,7 +1272,7 @@ def extract_zygote_frequencies(
         >>> config = population._config
         >>> genotypes = list(population._genotypes)
         >>> zygote_freqs = extract_zygote_frequencies(
-        ...     config.gametes_to_zygote_map,
+        ...     config.gametes_to_zygotes_map,
         ...     gamete1_compressed_idx=0,
         ...     gamete2_compressed_idx=1,
         ...     diploid_genotypes=genotypes,
@@ -944,7 +1280,7 @@ def extract_zygote_frequencies(
         ... )
         >>> # zygote_freqs = {genotype1: 1.0 or {genotype2: 0.5, genotype3: 0.5}, etc}
     """
-    zygote_freqs_array = gametes_to_zygote_map[gamete1_compressed_idx, gamete2_compressed_idx, :]
+    zygote_freqs_array = gametes_to_zygotes_map[gamete1_compressed_idx, gamete2_compressed_idx, :]
     result: dict[Genotype, float] = {}
 
     for genotype_idx, freq in enumerate(zygote_freqs_array):
@@ -969,9 +1305,10 @@ class DiscretePopulationConfig(NamedTuple):
     # -- Dimensions --
     n_sexes: int                    # always 2
     n_ages: int                     # always 2
-    n_genotypes: int
+    n_ztypes: int
     n_haploid_genotypes: int
     n_glabs: int
+    n_slabs: int
 
     # -- Age-structured arrays (kept for spatial builder compat; inactive in discrete)
     female_age_based_fertility: NDArray[np.float64]  # (2,)
@@ -998,13 +1335,13 @@ class DiscretePopulationConfig(NamedTuple):
     female_fertility: float
 
     # -- Reproduction arrays --
-    genotype_to_gametes_map: NDArray[np.float64]         # (2, g, hl)
-    gametes_to_zygote_map: NDArray[np.float64]           # (hl, hl, g)
+    zygotes_to_gametes_map: NDArray[np.float64]         # (2, g, hl)
+    gametes_to_zygotes_map: NDArray[np.float64]           # (hl, hl, g)
     offspring_tensor: NDArray[np.float64]                # (g, g, g)
 
     # -- Per-sex array views (pre-extracted from full arrays) --
-    meiosis_f: NDArray[np.float64]                      # genotype_to_gametes_map[0]
-    meiosis_m: NDArray[np.float64]                      # genotype_to_gametes_map[1]
+    meiosis_f: NDArray[np.float64]                      # zygotes_to_gametes_map[0]
+    meiosis_m: NDArray[np.float64]                      # zygotes_to_gametes_map[1]
     fecundity_f: NDArray[np.float64]                    # fecundity_fitness[0]
     fecundity_m: NDArray[np.float64]                    # fecundity_fitness[1]
     viability_f: NDArray[np.float64]                    # viability_fitness[0, 0, :]
@@ -1034,8 +1371,11 @@ class DiscretePopulationConfig(NamedTuple):
     initial_sperm_storage: NDArray[np.float64]            # (2, g, g) — empty for discrete
     hook_slot: int
 
+    # -- Extreme speed (Wright-Fisher) --
+    extreme_speed_mode: int            # 0=off, 1=multinomial, 2=poisson, 3=deterministic
+
     # -- custom fields --
-    custom: NDArray[np.void]
+    custom: NDArray[Any]  # placeholder float64; replaced by build_custom_array when registered
 
     def set_viability_fitness(
         self, sex: int, genotype_idx: int, value: float, age: int = -1
@@ -1061,99 +1401,142 @@ class DiscretePopulationConfig(NamedTuple):
 
 
 
-def from_population_config(cfg: PopulationConfig) -> DiscretePopulationConfig:
-    """Build a ``DiscretePopulationConfig`` from a full ``PopulationConfig``."""
-    return DiscretePopulationConfig(
-        stochastic=cfg.stochastic,
-        continuous_sampling=cfg.continuous_sampling,
-        n_sexes=int(cfg.n_sexes),
-        n_ages=int(cfg.n_ages),
-        n_genotypes=cfg.n_genotypes,
-        n_haploid_genotypes=cfg.n_haploid_genotypes,
-        n_glabs=cfg.n_glabs,
-        female_age_based_fertility=cfg.female_age_based_fertility,
-        viability_fitness=cfg.viability_fitness,
-        fecundity_fitness=cfg.fecundity_fitness,
-        zygote_viability_fitness=cfg.zygote_viability_fitness,
-        sexual_selection_fitness=cfg.sexual_selection_fitness,
-        age_based_relative_competition_strength=cfg.age_based_relative_competition_strength,
-        eggs_per_female=cfg.eggs_per_female,
-        fixed_egg_count=cfg.fixed_egg_count,
-        sex_ratio=cfg.sex_ratio,
-        sperm_displacement_rate=cfg.sperm_displacement_rate,
-        # Scalar fields must be plain Python floats, not 0-d ndarrays, so
-        # Numba's type inference sees a consistent type across all code paths
-        # (the Configurator's _build_config also writes Python floats).
-        female_adult_mating_rate=float(cfg.age_based_mating_rates[0, 1]),
-        male_adult_mating_rate=float(cfg.age_based_mating_rates[1, 1]),
-        reproduction_rate=float(cfg.age_based_reproduction_rates[1]),
-        female_age0_survival=float(cfg.age_based_survival_rates[0, 0]),
-        male_age0_survival=float(cfg.age_based_survival_rates[1, 0]),
-        female_fertility=float(cfg.female_age_based_fertility[0]),
-        genotype_to_gametes_map=cfg.genotype_to_gametes_map,
-        gametes_to_zygote_map=cfg.gametes_to_zygote_map,
-        offspring_tensor=cfg.offspring_tensor,
-        meiosis_f=cfg.genotype_to_gametes_map[0],
-        meiosis_m=cfg.genotype_to_gametes_map[1],
-        fecundity_f=cfg.fecundity_fitness[0],
-        fecundity_m=cfg.fecundity_fitness[1],
-        viability_f=cfg.viability_fitness[0, 0, :],
-        viability_m=cfg.viability_fitness[1, 0, :],
-        has_sex_chromosomes=cfg.has_sex_chromosomes,
-        female_genotype_compatibility=cfg.female_genotype_compatibility,
-        male_genotype_compatibility=cfg.male_genotype_compatibility,
-        female_only_by_sex_chrom=cfg.female_only_by_sex_chrom,
-        male_only_by_sex_chrom=cfg.male_only_by_sex_chrom,
-        juvenile_growth_mode=cfg.juvenile_growth_mode,
-        carrying_capacity=cfg.carrying_capacity,
-        expected_competition_strength=cfg.expected_competition_strength,
-        expected_survival_rate=cfg.expected_survival_rate,
-        low_density_growth_rate=cfg.low_density_growth_rate,
-        generation_time=cfg.generation_time,
-        new_adult_age=int(cfg.new_adult_age),
-        adult_ages=cfg.adult_ages.copy(),
-        initial_individual_count=cfg.initial_individual_count,
-        initial_sperm_storage=cfg.initial_sperm_storage,
-        hook_slot=int(cfg.hook_slot),
-        custom=cfg.custom,
-    )
-
-
-def build_discrete_population_config(
+def build_discrete_engine_config(
     *,
     n_genotypes: int,
     n_haploid_genotypes: int,
     n_glabs: int,
-    genotype_to_gametes_map: NDArray[np.float64],
-    gametes_to_zygote_map: NDArray[np.float64],
-    n_ages: int = 2,
+    n_slabs: int = 1,
+    gamete_labels: Optional[list[str]] = None,
+    somatic_labels: Optional[list[str]] = None,
+    zygotes_to_gametes_map: NDArray[np.float64],
+    gametes_to_zygotes_map: NDArray[np.float64],
     carrying_capacity: float | None = None,
     has_sex_chromosomes: bool = False,
-    **kwargs: Any,  # forwarded to build_population_config()
+    **kwargs: Any,
 ) -> DiscretePopulationConfig:
-    """Build a ``DiscretePopulationConfig`` directly, without intermediate ``PopulationConfig``.
+    """Build a ``DiscretePopulationConfig`` independently of ``PopulationConfig``.
 
-    This is a thin wrapper around :func:`build_population_config` that sets
-    discrete-specific defaults (juvenile survival=1.0, adult survival=0.0)
-    and returns a ``DiscretePopulationConfig`` via :func:`from_population_config`.
+    Unlike the old ``from_population_config`` / ``build_discrete_population_config``
+    path, this function computes everything from the shared blueprint without
+    creating an intermediate ``PopulationConfig``.  The two config types are
+    built from the same computation engine (``_build_config_maps``) but assembled
+    independently — no conversion, no field-by-field copy.
+
+    Discrete-specific defaults (juvenile survival=1.0, adult survival=0.0,
+    new_adult_age=1) are applied before the shared computation runs.
     """
-    cfg = build_population_config(
+    # Discrete-generation defaults.
+    n_ages = int(kwargs.pop("n_ages", 2))
+    new_adult_age = int(kwargs.pop("new_adult_age", 1))
+
+    # Survival: juveniles survive to adult (1.0), adults replaced every tick (0.0).
+    survival = np.ones((2, n_ages), dtype=np.float64)
+    survival[:, 0] = 1.0
+    survival[:, 1] = 0.0
+
+    # Mating / reproduction: only adults (age 1) participate.
+    mating = np.ones((2, n_ages), dtype=np.float64)
+    mating[:, 0] = 0.0
+    reproduction = np.ones(n_ages, dtype=np.float64)
+    reproduction[0] = 0.0
+    fertility = np.ones(n_ages, dtype=np.float64)
+    fertility[0] = 0.0
+
+    m = _build_config_maps(
         n_genotypes=n_genotypes,
         n_haploid_genotypes=n_haploid_genotypes,
-        n_glabs=n_glabs,
-        genotype_to_gametes_map=genotype_to_gametes_map,
-        gametes_to_zygote_map=gametes_to_zygote_map,
+        n_sexes=2,
         n_ages=n_ages,
-        new_adult_age=1,
+        n_glabs=n_glabs,
+        n_slabs=n_slabs,
+        gamete_labels=gamete_labels,
+        somatic_labels=somatic_labels,
+        new_adult_age=new_adult_age,
+        stochastic=bool(kwargs.pop("stochastic", True)),
+        continuous_sampling=bool(kwargs.pop("continuous_sampling", False)),
+        age_based_mating_rates=mating,
+        age_based_reproduction_rates=reproduction,
+        age_based_survival_rates=survival,
+        female_age_based_fertility=fertility,
+        viability_fitness=kwargs.pop("viability_fitness", None),
+        fecundity_fitness=kwargs.pop("fecundity_fitness", None),
+        sexual_selection_fitness=kwargs.pop("sexual_selection_fitness", None),
+        zygote_viability_fitness=kwargs.pop("zygote_viability_fitness", None),
+        age_based_relative_competition_strength=kwargs.pop("age_based_relative_competition_strength", None),
+        sperm_displacement_rate=float(kwargs.pop("sperm_displacement_rate", 0.05)),
+        eggs_per_female=float(kwargs.pop("eggs_per_female", 100.0)),
+        fixed_egg_count=bool(kwargs.pop("fixed_egg_count", False)),
         carrying_capacity=carrying_capacity or 1000.0,
+        sex_ratio=float(kwargs.pop("sex_ratio", 0.5)),
+        low_density_growth_rate=float(kwargs.pop("low_density_growth_rate", 6.0)),
+        juvenile_growth_mode=int(kwargs.pop("juvenile_growth_mode", 0)),  # LOGISTIC
         has_sex_chromosomes=has_sex_chromosomes,
-        **kwargs,
+        zygotes_to_gametes_map=zygotes_to_gametes_map,
+        gametes_to_zygotes_map=gametes_to_zygotes_map,
+        initial_individual_count=kwargs.pop("initial_individual_count", None),
+        initial_sperm_storage=kwargs.pop("initial_sperm_storage", None),
+        age_1_carrying_capacity=kwargs.pop("age_1_carrying_capacity", None),
+        old_juvenile_carrying_capacity=kwargs.pop("old_juvenile_carrying_capacity", None),
+        infer_capacity_from_initial_state=bool(kwargs.pop("infer_capacity_from_initial_state", True)),
+        equilibrium_individual_distribution=kwargs.pop("equilibrium_individual_distribution", None),
+        external_expected_eggs=kwargs.pop("external_expected_eggs", None),
     )
-    # Discrete-generation model: juveniles (age 0) survive to become
-    # adults (age 1), but adults are replaced every tick.
-    cfg.age_based_survival_rates[:, 0] = 1.0
-    cfg.age_based_survival_rates[:, 1] = 0.0
-    return from_population_config(cfg)
+
+    return DiscretePopulationConfig(
+        stochastic=bool(kwargs.pop("stochastic", True)),
+        continuous_sampling=bool(kwargs.pop("continuous_sampling", False)),
+        n_sexes=m.n_sexes,
+        n_ages=m.n_ages,
+        n_ztypes=m.n_g_compressed,
+        n_haploid_genotypes=m.n_haploid_genotypes,
+        n_glabs=m.n_glabs,
+        n_slabs=m.n_slabs,
+        female_age_based_fertility=m.female_fertility,
+        viability_fitness=m.viability,
+        fecundity_fitness=m.fecundity,
+        zygote_viability_fitness=m.zygote,
+        sexual_selection_fitness=m.sexual,
+        age_based_relative_competition_strength=m.competition,
+        eggs_per_female=np.array(m.eggs_per_female),
+        fixed_egg_count=m.fixed_egg_count,
+        sex_ratio=np.array(m.sex_ratio),
+        sperm_displacement_rate=np.array(m.sperm_displacement_rate),
+        female_adult_mating_rate=float(m.mating[0, 1]),
+        male_adult_mating_rate=float(m.mating[1, 1]),
+        reproduction_rate=float(m.reproduction[1]),
+        female_age0_survival=float(m.survival[0, 0]),
+        male_age0_survival=float(m.survival[1, 0]),
+        female_fertility=float(m.female_fertility[0]),
+        zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
+        gametes_to_zygotes_map=m.zygote_map,
+        offspring_tensor=m.offspring_tensor,
+        meiosis_f=m.meiosis_f,
+        meiosis_m=m.meiosis_m,
+        fecundity_f=m.fecundity[0],
+        fecundity_m=m.fecundity[1],
+        viability_f=m.viability[0, 0, :],
+        viability_m=m.viability[1, 0, :],
+        has_sex_chromosomes=m.has_sex_chromosomes,
+        female_genotype_compatibility=m.female_genotype_compatibility,
+        male_genotype_compatibility=m.male_genotype_compatibility,
+        female_only_by_sex_chrom=m.female_only_by_sex_chrom,
+        male_only_by_sex_chrom=m.male_only_by_sex_chrom,
+        juvenile_growth_mode=np.array(m.juvenile_growth_mode, dtype=np.int64),
+        carrying_capacity=m.carrying_capacity,
+        expected_competition_strength=np.array(m.expected_competition_strength),
+        expected_survival_rate=np.array(m.expected_survival_rate),
+        low_density_growth_rate=np.array(m.low_density_growth_rate),
+        generation_time=np.array(0.0),
+        new_adult_age=m.new_adult_age,
+        adult_ages=m.adult_ages.copy(),
+        initial_individual_count=m.initial_individual_count,
+        initial_sperm_storage=m.initial_sperm_storage,
+        hook_slot=int(kwargs.pop("hook_slot", 0)),
+        extreme_speed_mode=int(kwargs.pop("extreme_speed_mode", 0)),
+        custom=np.zeros(0, dtype=np.float64),
+    )
+
 
 
 @overload
@@ -1254,3 +1637,114 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
             )
 
     return custom
+
+
+# ---------------------------------------------------------------------------
+# Gamete-axis compression helpers
+# ---------------------------------------------------------------------------
+
+
+def compress_gamete_map(
+    z2g: NDArray[np.float64],
+    mask: NDArray[np.int32],
+) -> NDArray[np.float64]:
+    """Compress the last axis of a genotype-to-gametes map.
+
+    Args:
+        z2g: ``(n_sexes, n_genotypes, HL)`` — full gamete map.
+        mask: ``(HL,) int32`` — compression mask (-1 = prune).
+
+    Returns:
+        Compressed map, shape ``(n_sexes, n_genotypes, HL')``.
+    """
+    active = mask >= 0
+    return z2g[:, :, active]
+
+
+def compress_zygote_map(
+    z2g: NDArray[np.float64],
+    mask: NDArray[np.int32],
+) -> NDArray[np.float64]:
+    """Compress both gamete axes of a zygote map.
+
+    Args:
+        z2g: ``(HL, HL, n_genotypes)`` — full zygote map.
+        mask: ``(HL,) int32`` — compression mask.
+
+    Returns:
+        Compressed map, shape ``(HL', HL', n_genotypes)``.
+    """
+    active = mask >= 0
+    return z2g[active, :, :][:, active, :]
+
+
+def apply_ztype_mask(
+    z2g: NDArray[np.float64],
+    mask: NDArray[np.int32],
+) -> NDArray[np.float64]:
+    """Compress the genotype (ZType) axis of a genotype-to-gametes map.
+
+    Args:
+        z2g: ``(n_sexes, G_orig, HL)`` — full map.
+        mask: ``(G_orig,)`` int32 — ZType compression mask (-1 = prune).
+
+    Returns:
+        Compressed map, shape ``(n_sexes, G_total, HL)``.
+    """
+    active = mask >= 0
+    return z2g[:, active, :]
+
+
+def apply_ztype_mask_zygote(
+    z2g: NDArray[np.float64],
+    mask: NDArray[np.int32],
+) -> NDArray[np.float64]:
+    """Compress the genotype (ZType) axis of a zygote map.
+
+    Args:
+        z2g: ``(HL, HL, G_orig)`` — full zygote map.
+        mask: ``(G_orig,)`` int32 — ZType compression mask.
+
+    Returns:
+        Compressed map, shape ``(HL, HL, G_total)``.
+    """
+    active = mask >= 0
+    return z2g[:, :, active]
+
+
+def compress_config(
+    config: Union[PopulationConfig, DiscretePopulationConfig],
+    ztype_mask: NDArray[np.int32],
+) -> Union[PopulationConfig, DiscretePopulationConfig]:
+    """Subslice all G-axis-dependent fields to match a ZType compression mask.
+
+    Pure function — returns a new config via ``_replace`` without mutating
+    the original.  Handles both ``PopulationConfig`` and
+    ``DiscretePopulationConfig``.
+
+    Args:
+        config: Config to compress.  All arrays indexed by ``n_ztypes``
+            will be subsliced.
+        ztype_mask: ``(n_ztypes,)`` int32 array — -1 = pruned.
+
+    Returns:
+        A new config with all G-dependent arrays compressed.
+    """
+    _z_active = ztype_mask >= 0
+    n_g = int(_z_active.sum())
+
+    overrides: dict[str, Any] = {
+        "n_ztypes": n_g,
+        "initial_individual_count": config.initial_individual_count[:, :, _z_active],
+        "viability_fitness": config.viability_fitness[:, :, _z_active],
+        "fecundity_fitness": config.fecundity_fitness[:, _z_active],
+        "sexual_selection_fitness": config.sexual_selection_fitness[_z_active, :][:, _z_active],
+        "zygote_viability_fitness": config.zygote_viability_fitness[:, _z_active],
+        "female_genotype_compatibility": config.female_genotype_compatibility[_z_active],
+        "male_genotype_compatibility": config.male_genotype_compatibility[_z_active],
+        "female_only_by_sex_chrom": config.female_only_by_sex_chrom[_z_active],
+        "male_only_by_sex_chrom": config.male_only_by_sex_chrom[_z_active],
+        "initial_sperm_storage": config.initial_sperm_storage[:, _z_active, :][:, :, _z_active],
+    }
+
+    return config._replace(**overrides)

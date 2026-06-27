@@ -273,7 +273,7 @@ class BasePopulation(ABC, Generic[T_State]):
         # --- fresh state: copy data from template ---
         state_cls = type(self.state)
         new_state = state_cls.create(
-            n_genotypes=resolved_config.n_genotypes,
+            n_ztypes=resolved_config.n_ztypes,
             n_sexes=resolved_config.n_sexes,
             n_ages=resolved_config.n_ages,
         )
@@ -371,17 +371,16 @@ class BasePopulation(ABC, Generic[T_State]):
     def _initialize_registry(self) -> None:
         """Template method: Initialize registry and register all genotypes.
 
-        This method uses the Template Method Pattern to orchestrate
-        initialization in a consistent sequence:
-          1. Call _create_registry() to get a registry instance
-          2. Register all genotypes from _get_genotypes()
-          3. Attempt to get haplogenotypes and register them (if available)
-
-        Subclasses customize behavior via _create_registry() and _get_genotypes().
-        This method should be called once during subclass __init__,
-        after super().__init__() but before other initialization.
+        If a registry was already provided (e.g. from Configurator, possibly
+        compressed), it is reused.  Otherwise a fresh registry is created
+        and populated from the Species.
         """
-        # Step 1: Create registry
+        # If a registry was already injected (e.g. compressed by Configurator),
+        # keep it — don't overwrite with a fresh one.
+        if self._index_registry is not None:
+            self._registry = self._index_registry
+            return
+
         self._index_registry = self._create_registry()
         self._registry = self._index_registry
 
@@ -402,6 +401,16 @@ class BasePopulation(ABC, Generic[T_State]):
         for glab in glabs:
             self._index_registry.register_gamete_label(glab)
 
+        # Step 5: Register somatic labels (symmetric with gamete labels)
+        raw_slabs = cast(Optional[List[str]], getattr(self._species, "somatic_labels", None))
+        slabs = raw_slabs or ["default"]
+        for slab in slabs:
+            self._index_registry.register_somatic_label(slab)
+
+        # Step 6: Set the engine-visible ZType count.  Updated later by
+        # compression (refresh_modifier_maps) if compress=True.
+        self._index_registry.n_ztypes = self._index_registry.num_genotypes()
+
     # Helpers
     def _create_registry(self) -> IndexRegistry:
         return IndexRegistry()
@@ -416,8 +425,10 @@ class BasePopulation(ABC, Generic[T_State]):
 
     def _resolve_genotype_key(self, genotype_key: Union[Genotype, str]) -> Genotype:
         if isinstance(genotype_key, Genotype):
-            return genotype_key
-        return self.species.get_genotype_from_str(genotype_key)
+            gt = genotype_key
+        else:
+            gt = self.species.get_genotype_from_str(genotype_key)
+        return self.species.unordered_genotype(gt.maternal, gt.paternal)
 
     @staticmethod
     def _derive_hook_slot(name: str) -> int:
@@ -630,8 +641,8 @@ class BasePopulation(ABC, Generic[T_State]):
         """Rebuild derived modifier lists and maps from _presets + _manual_*.
 
         Presets are applied in priority order, then manual modifiers are
-        appended.  Modifier maps (genotype_to_gametes_map,
-        gametes_to_zygote_map, offspring_tensor) are rebuilt from the
+        appended.  Modifier maps (zygotes_to_gametes_map,
+        gametes_to_zygotes_map, offspring_tensor) are rebuilt from the
         combined list.
 
         .. note::
@@ -662,9 +673,9 @@ class BasePopulation(ABC, Generic[T_State]):
         """Rebuild the three modifier maps from current modifier lists.
 
         Recomputes:
-        - ``genotype_to_gametes_map``: mapping from diploid genotype indices
+        - ``zygotes_to_gametes_map``: mapping from diploid genotype indices
           to haploid gamete probability distributions (one per sex).
-        - ``gametes_to_zygote_map``: mapping from paired haploid gametes back
+        - ``gametes_to_zygotes_map``: mapping from paired haploid gametes back
           to diploid offspring genotype indices.
         - ``offspring_tensor``: precomputed 4-D tensor combining both maps
           for efficient Numba-based reproduction.
@@ -705,7 +716,7 @@ class BasePopulation(ABC, Generic[T_State]):
         # Step 2: Build the gametogenesis map.  For each diploid genotype
         # and sex, produce a probability distribution over the resulting
         # haploid gametes per gamete label.
-        genotype_to_gametes_map = initialize_gamete_map(
+        zygotes_to_gametes_map = initialize_gamete_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
@@ -715,31 +726,64 @@ class BasePopulation(ABC, Generic[T_State]):
         # Step 3: Build the fusion map.  For each pair of haploid gametes
         # (one maternal, one paternal), determine the resulting diploid
         # offspring genotype index.
-        gametes_to_zygote_map = initialize_zygote_map(
+        gametes_to_zygotes_map = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             zygote_modifiers=zygote_funcs,
         )
 
+        # Step 3.3: Apply slab expansion if n_slabs > 1.  This must run
+        # after modifier callables (which operate in unexpanded genotype
+        # space) and before index compression (which expects expanded maps).
+        n_slabs = int(self._config.n_slabs)
+        if n_slabs > 1:
+            from natal.population_config import (
+                _expand_slab_maps,  # pyright: ignore[reportPrivateUsage]
+            )
+            species = getattr(self, "_species", None)
+            zygotes_to_gametes_map, gametes_to_zygotes_map, _n_g_exp = (
+                _expand_slab_maps(
+                    z2g=zygotes_to_gametes_map,
+                    g2z=gametes_to_zygotes_map,
+                    n_slabs=n_slabs,
+                    n_genotypes=int(zygotes_to_gametes_map.shape[1]),
+                    gamete_labels=species.gamete_labels if species else None,
+                    somatic_labels=species.somatic_labels if species else None,
+                    n_haploid_genotypes=int(self._config.n_haploid_genotypes),
+                    n_glabs=n_glabs,
+                )
+            )
+            # After expansion, n_g must match the config's declared value.
+            assert _n_g_exp == int(self._config.n_ztypes), (
+                f"Slab expansion mismatch: {_n_g_exp} vs "
+                f"{int(self._config.n_ztypes)}"
+            )
+
         # Step 4: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
         # the fusion map.  The result is a 4-D array indexed by
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
+        n_g = int(self._config.n_ztypes)
+        n_hg = int(self._config.n_haploid_genotypes)
+        n_gl = n_glabs
         offspring_tensor = compute_offspring_probability_tensor(
-            meiosis_f=genotype_to_gametes_map[0],
-            meiosis_m=genotype_to_gametes_map[1],
-            haplo_to_genotype_map=gametes_to_zygote_map,
-            n_genotypes=int(self._config.n_genotypes),
-            n_haplogenotypes=int(self._config.n_haploid_genotypes),
-            n_glabs=n_glabs,
+            meiosis_f=zygotes_to_gametes_map[0],
+            meiosis_m=zygotes_to_gametes_map[1],
+            haplo_to_genotype_map=gametes_to_zygotes_map,
+            n_ztypes=n_g,
+            n_haplogenotypes=n_hg,
+            n_glabs=n_gl,
         )
 
         # Step 5: Persist all three maps into the config via shallow copy.
         self._config = self._config._replace(
-            genotype_to_gametes_map=genotype_to_gametes_map,
-            gametes_to_zygote_map=gametes_to_zygote_map,
+            zygotes_to_gametes_map=zygotes_to_gametes_map,
+            gametes_to_zygotes_map=gametes_to_zygotes_map,
             offspring_tensor=offspring_tensor,
+            n_ztypes=n_g,
+            n_haploid_genotypes=n_hg,
+            n_glabs=n_gl,
         )
 
     def add_gamete_modifier(

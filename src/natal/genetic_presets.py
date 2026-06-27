@@ -29,6 +29,9 @@ from typing import (
     cast,
 )
 
+import numpy as np
+from numpy.typing import NDArray
+
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 from natal.genetic_entities import Gene, Genotype
 from natal.genetic_structures import Species
@@ -44,6 +47,9 @@ __all__ = [
     "GeneticPreset",      # Abstract base class for custom presets
     "HomingDrive",        # Built-in gene drive preset
     "ToxinAntidoteDrive", # Toxin-Antidote gene drive preset
+    "CytoplasmicPreset",   # Base class for maternal cytoplasmic inheritance
+    "Wolbachia",           # Maternally-inherited endosymbiont preset
+    "TransgenicBackground", # Transgenic background effect preset
     "apply_preset_to_population",  # Core application function
 ]
 
@@ -568,6 +574,88 @@ def _apply_zygote_viability_allele_scaling(
                 f"Invalid zygote allele config for '{allele_name}': {type(config).__name__}"
             )
 
+# ── Slab-based fitness scaling (per_slab keys) ──────────────────────────
+
+
+def _apply_viability_slab_scaling(
+    population: 'BasePopulation[Any]',
+    all_genotypes: List[Genotype],
+    patch: PresetFitnessPatch,
+) -> None:
+    """Apply per-slab viability scaling by writing to the (G×S) flat array."""
+    for slab_name, factor in patch['viability_per_slab'].items():
+        slab_idx = population.index_registry.somatic_label_index(slab_name)
+        n_slabs = population.index_registry.num_somatic_labels()
+        default_age = int(population.config.new_adult_age) - 1
+        arr = population.config.viability_fitness
+        for genotype in all_genotypes:
+            g = population.index_registry.genotype_to_index[genotype]
+            z = g * n_slabs + slab_idx
+            for sex in (0, 1):
+                current = float(arr[sex, default_age, z])
+                arr[sex, default_age, z] = current * float(factor)
+
+
+def _apply_fecundity_slab_scaling(
+    population: 'BasePopulation[Any]',
+    all_genotypes: List[Genotype],
+    patch: PresetFitnessPatch,
+) -> None:
+    """Apply per-slab fecundity scaling."""
+    for slab_name, factor in patch['fecundity_per_slab'].items():
+        slab_idx = population.index_registry.somatic_label_index(slab_name)
+        n_slabs = population.index_registry.num_somatic_labels()
+        arr = population.config.fecundity_fitness
+        for genotype in all_genotypes:
+            g = population.index_registry.genotype_to_index[genotype]
+            z = g * n_slabs + slab_idx
+            for sex in (0, 1):
+                current = float(arr[sex, z])
+                arr[sex, z] = current * float(factor)
+
+
+def _apply_sexual_selection_slab_scaling(
+    population: 'BasePopulation[Any]',
+    all_genotypes: List[Genotype],
+    patch: PresetFitnessPatch,
+) -> None:
+    """Apply per-slab sexual selection to the (G×S, G×S) matrix.
+
+    Note: only scales the female (row) side — male columns are
+    unaffected.  This models asymmetric mate preference where the
+    female genotype determines the mating success modifier.
+    """
+    for slab_name, factor in patch['sexual_selection_per_slab'].items():
+        slab_idx = population.index_registry.somatic_label_index(slab_name)
+        n_slabs = population.index_registry.num_somatic_labels()
+        arr = population.config.sexual_selection_fitness
+        for genotype in all_genotypes:
+            g = population.index_registry.genotype_to_index[genotype]
+            z = g * n_slabs + slab_idx
+            # Female side: all male ZTypes paired with this female ZType
+            for mz in range(arr.shape[1]):
+                current = float(arr[z, mz])
+                arr[z, mz] = current * float(factor)
+
+
+def _apply_zygote_slab_scaling(
+    population: 'BasePopulation[Any]',
+    all_genotypes: List[Genotype],
+    patch: PresetFitnessPatch,
+) -> None:
+    """Apply per-slab zygote viability scaling."""
+    for slab_name, factor in patch['zygote_per_slab'].items():
+        slab_idx = population.index_registry.somatic_label_index(slab_name)
+        n_slabs = population.index_registry.num_somatic_labels()
+        arr = population.config.zygote_viability_fitness
+        for genotype in all_genotypes:
+            g = population.index_registry.genotype_to_index[genotype]
+            z = g * n_slabs + slab_idx
+            for sex in (0, 1):
+                current = float(arr[sex, z])
+                arr[sex, z] = current * float(factor)
+
+
 def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
@@ -758,6 +846,16 @@ def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetF
             raise TypeError(f"Invalid zygote_per_allele config for '{allele_name}'")
         _apply_zygote_viability_allele_scaling(population, all_genotypes, allele_name, config, mode)
 
+    # 7) Slab-based fitness patches (per_slab keys — symmetric with per_allele)
+    if patch.get('viability_per_slab'):
+        _apply_viability_slab_scaling(population, all_genotypes, patch)
+    if patch.get('fecundity_per_slab'):
+        _apply_fecundity_slab_scaling(population, all_genotypes, patch)
+    if patch.get('sexual_selection_per_slab'):
+        _apply_sexual_selection_slab_scaling(population, all_genotypes, patch)
+    if patch.get('zygote_per_slab'):
+        _apply_zygote_slab_scaling(population, all_genotypes, patch)
+
 def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'GeneticPreset') -> None:
     """Apply a genetic preset to a population by registering its modifiers and fitness effects.
 
@@ -808,7 +906,6 @@ def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'Genet
     patch = preset.fitness_patch()
     if patch:
         apply_preset_fitness_patch(population, patch)
-        return
 
 class GeneticPreset(ABC):
     """Abstract base for genetic modification presets including gene drives, mutations, and allele conversions.
@@ -1551,3 +1648,144 @@ class ToxinAntidoteDrive(GeneticPreset):
                     )
 
         return rule_set.to_zygote_modifier(population) if rule_set.rules else None
+
+
+# ---------------------------------------------------------------------------
+# Slab-aware presets
+# ---------------------------------------------------------------------------
+
+
+class CytoplasmicPreset(GeneticPreset):
+    """Base class for maternally-inherited cytoplasmic elements.
+
+    Child slab = mother slab regardless of father.  The mechanism:
+    1. *Gamete tagging* happens externally during slab expansion
+       (``_expand_slab_maps`` / ``build_population_config``) — the
+       non-default glab/slab pairs are auto-detected by convention.
+       ``gamete_modifier`` returns ``None`` (no per-modifier tagging).
+    2. ``apply_zygote_redirect`` (called during zygote map expansion)
+       redirects tagged gamete pairs from slab-0 to the correct child slab.
+
+    Subclasses must provide ``_maternal_map`` — a dict mapping
+    ``{maternal_slab_name: glab_name}``.  Each maternal slab that
+    should be heritable gets a unique glab for tagging.
+
+    Example (Wolbachia):
+        _maternal_map = {"infected": "wolbachia"}
+    """
+
+    _maternal_map: dict[str, str] = {}  # {slab_name: glab_name}
+
+    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+        """Deferred — tagging handled in build_population_config expansion."""
+        return None
+
+    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+        return None  # redirection is done post-expansion
+
+    @staticmethod
+    def apply_zygote_redirect(
+        z2g_expanded: NDArray[np.float64],
+        glab_name: str,
+        slab_name: str,
+        gamete_labels: List[str],
+        somatic_labels: List[str],
+        n_slabs: int,
+        n_genotypes_raw: int,
+        n_hg: int,
+        n_glabs: int,
+    ) -> None:
+        """Redirect zygote columns: glab-tagged maternal gametes → target slab.
+
+        Looks up *glab_name* and *slab_name* in the label lists (not
+        the registry — this runs in build_population_config which has
+        no registry access).  No-op if either label is missing.
+        """
+        if glab_name not in gamete_labels or slab_name not in somatic_labels:
+            return
+        glab_idx = gamete_labels.index(glab_name)
+        slab_idx = somatic_labels.index(slab_name)
+        for g_raw in range(n_genotypes_raw):
+            z_dst = g_raw * n_slabs + slab_idx
+            z_src = g_raw * n_slabs + 0
+            for hg_f in range(n_hg):
+                hl_f = hg_f * n_glabs + glab_idx
+                for hg_m in range(n_hg):
+                    for gm in range(n_glabs):
+                        hl_m = hg_m * n_glabs + gm
+                        val = z2g_expanded[hl_f, hl_m, z_src]
+                        if val > 0:
+                            z2g_expanded[hl_f, hl_m, z_dst] += val
+                            z2g_expanded[hl_f, hl_m, z_src] = 0.0
+
+
+class Wolbachia(CytoplasmicPreset):
+    """Maternally-inherited endosymbiont.  Infected mothers pass the
+    infection to all offspring regardless of the father.
+
+    Requires Species with:
+      - gamete_labels including ``"wolbachia"``
+      - somatic_labels including ``"normal"``, ``"infected"``
+    """
+
+    def __init__(
+        self,
+        name: str,
+        infected_slab: str = "infected",
+        normal_slab: str = "normal",
+        viability_scaling: float = 1.0,
+        fecundity_scaling: Optional[float] = None,
+        species: Optional[Species] = None,
+        priority: int = 0,
+    ):
+        super().__init__(name=name, species=species, priority=priority)
+        self._maternal_map = {infected_slab: "wolbachia"}
+        self.infected_slab = infected_slab
+        self.normal_slab = normal_slab
+        self.viability_scaling = viability_scaling
+        self.fecundity_scaling = fecundity_scaling
+
+    def fitness_patch(self) -> PresetFitnessPatch:
+        patch: PresetFitnessPatch = {}
+        patch['viability_per_slab'] = {self.infected_slab: self.viability_scaling}
+        if self.fecundity_scaling is not None:
+            patch['fecundity_per_slab'] = {self.infected_slab: self.fecundity_scaling}
+        return patch
+
+
+class TransgenicBackground(GeneticPreset):
+    """Fitness scaling for a transgenic background slab.
+
+    Applies fecundity and/or viability scaling to individuals carrying
+    the *tg_slab* somatic label.  Does NOT implement outcrossing
+    clearance — that requires a separate inheritance mechanism.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        tg_slab: str,
+        wt_slab: str = "WT_bg",
+        fecundity_scaling: float = 1.0,
+        viability_scaling: Optional[float] = None,
+        species: Optional[Species] = None,
+        priority: int = 0,
+    ):
+        super().__init__(name=name, species=species, priority=priority)
+        self.tg_slab = tg_slab
+        self.wt_slab = wt_slab
+        self.fecundity_scaling = fecundity_scaling
+        self.viability_scaling = viability_scaling
+
+    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+        return None
+
+    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+        return None
+
+    def fitness_patch(self) -> PresetFitnessPatch:
+        patch: PresetFitnessPatch = {}
+        patch['fecundity_per_slab'] = {self.tg_slab: self.fecundity_scaling}
+        if self.viability_scaling is not None:
+            patch['viability_per_slab'] = {self.tg_slab: self.viability_scaling}
+        return patch

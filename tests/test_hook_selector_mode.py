@@ -257,7 +257,7 @@ def test_full_execution_aggregate_mode():
     from natal.population_state import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
-    ind[0, 0, 2] = 30  # D|W at index 2
+    ind[0, 0, 1] = 30  # W|D (unordered, covers both W|D and D|W) at index 1
     state = DiscretePopulationState(n_tick=0, individual_count=ind)
 
     @njit
@@ -272,8 +272,8 @@ def test_full_execution_aggregate_mode():
     )
     desc.njit_fn(state, pop.config, 0)
 
-    assert ind[0, 0, 3] == 0,   f"D|D should be 0, got {ind[0, 0, 3]}"
-    assert ind[0, 0, 2] == 15,  f"D|W should be 15, got {ind[0, 0, 2]}"
+    assert ind[0, 0, 2] == 0,   f"D|D should be 0, got {ind[0, 0, 2]}"
+    assert ind[0, 0, 1] == 15,  f"W|D should be 15, got {ind[0, 0, 1]}"
 
 
 @pytest.mark.numba_on
@@ -298,7 +298,7 @@ def test_full_execution_expand_mode():
     from natal.population_state import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
-    ind[0, 0, 3] = 50  # D|D
+    ind[0, 0, 2] = 50  # D|D
     ind[0, 0, 0] = 100  # W|W
     state = DiscretePopulationState(n_tick=0, individual_count=ind)
 
@@ -314,7 +314,7 @@ def test_full_execution_expand_mode():
     )
     desc.njit_fn(state, pop.config, 0)
 
-    assert ind[0, 0, 3] == 0,   f"D|D should be 0, got {ind[0, 0, 3]}"
+    assert ind[0, 0, 2] == 0,   f"D|D should be 0, got {ind[0, 0, 2]}"
     assert ind[0, 0, 0] == 50,  f"W|W should be 50, got {ind[0, 0, 0]}"
 
 
@@ -412,11 +412,10 @@ def test_full_execution_numba_multi_genotype():
     from natal.population_state import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
-    # W|W=0, W|D=1, D|W=2, D|D=3 — set them all to known values
+    # Unordered: W|W=0, W|D=1, D|D=2 — set to known values
     ind[0, 0, 0] = 100  # W|W
-    ind[0, 0, 1] = 200  # W|D
-    ind[0, 0, 2] = 300  # D|W
-    ind[0, 0, 3] = 400  # D|D
+    ind[0, 0, 1] = 200  # W|D (unordered, covers both W|D and D|W)
+    ind[0, 0, 2] = 400  # D|D
     state = DiscretePopulationState(n_tick=0, individual_count=ind)
 
     @njit
@@ -432,9 +431,8 @@ def test_full_execution_numba_multi_genotype():
     desc.njit_fn(state, pop.config, 0)
 
     assert ind[0, 0, 0] == 0,    f"W|W should be 0, got {ind[0, 0, 0]}"
-    assert ind[0, 0, 3] == 0,    f"D|D should be 0, got {ind[0, 0, 3]}"
+    assert ind[0, 0, 2] == 0,    f"D|D should be 0, got {ind[0, 0, 2]}"
     assert ind[0, 0, 1] == 200,  f"W|D should be untouched (200), got {ind[0, 0, 1]}"
-    assert ind[0, 0, 2] == 300,  f"D|W should be untouched (300), got {ind[0, 0, 2]}"
 
 
 # ============================================================================
