@@ -146,7 +146,7 @@ class TestResolveGenotypes:
         result = _resolve_genotypes(
             ["WT|WT", "Dr|Dr"], reg, reg.index_to_genotype, reg.num_genotypes()
         )
-        assert list(result) == [0, 4]
+        assert list(result) == [0, 3]  # canonical: Dr|Dr at index 3
 
     def test_int_input(self, registry_with_genotypes):
         """Bare int is not a supported selector (not iterable), so TypeError."""
@@ -246,8 +246,8 @@ class TestCompileDeclarativeHook:
         assert descriptor.plan.n_ops == 1
         assert list(descriptor.plan.op_types) == [int(OpType.SCALE)]
         assert list(descriptor.plan.params) == [0.5]
-        # "*" genotype selector → all 9 genotype indices
-        assert len(descriptor.plan.gidx_data) == 9
+        # "*" genotype selector → all 6 canonical genotype indices
+        assert len(descriptor.plan.gidx_data) == 6
         # "*" age selector → both ages
         assert len(descriptor.plan.age_data) == pop.config.n_ages
 

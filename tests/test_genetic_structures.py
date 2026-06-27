@@ -226,14 +226,14 @@ class TestSexAwareGameteMap:
         assert idx_xy is not None
 
         female_freqs = extract_gamete_frequencies(
-            genotype_to_gametes_map=gamete_map,
+            zygotes_to_gametes_map=gamete_map,
             sex_idx=int(Sex.FEMALE),
             genotype_idx=idx_xy,
             haploid_genotypes=haploid_genotypes,
             n_glabs=1,
         )
         male_freqs = extract_gamete_frequencies(
-            genotype_to_gametes_map=gamete_map,
+            zygotes_to_gametes_map=gamete_map,
             sex_idx=int(Sex.MALE),
             genotype_idx=idx_xy,
             haploid_genotypes=haploid_genotypes,

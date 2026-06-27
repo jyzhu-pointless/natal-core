@@ -24,7 +24,13 @@ def _make_simple_species() -> Species:
 class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
     def setUp(self) -> None:
         self.simple_species = _make_simple_species()
-        self.all_genotypes = self.simple_species.get_all_genotypes()
+        # Use canonical genotypes for an unordered species — the
+        # resolve_genotype_selectors function auto-promotes | to ::
+        # when species.unordered is True, and canonical genotypes
+        # are the correct matching target.
+        self.all_genotypes = self.simple_species.get_all_genotypes(
+            unordered=self.simple_species.unordered
+        )
 
     def test_resolve_genotype_selector_exact_string(self) -> None:
         self.simple_species.resolve_genotype_selectors(
@@ -59,7 +65,8 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
             context="viability",
         )
 
-        self.assertEqual(len(matched), 2)
+        # A|a and a|A canonicalize to the same genotype → dedup yields 1.
+        self.assertEqual(len(matched), 1)
 
     def test_iter_sexual_selection_entries_nested_and_flat(self) -> None:
         nested = {
@@ -177,7 +184,8 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
         self.assertIn((0, idx_a_bar_a, 0.5), fake_config.fecundity_calls)
         self.assertIn((1, idx_a_bar_a, 0.5), fake_config.fecundity_calls)
 
-        self.assertIn((idx_a_bar_a, idx_a_lower_bar_a_upper, 0.33), fake_config.sexual_selection_calls)
+        # Both A|a and a|A canonicalize to the same index.
+        self.assertIn((idx_a_bar_a, idx_a_bar_a, 0.33), fake_config.sexual_selection_calls)
 
     def test_viability_supports_age_specific_mapping(self) -> None:
         class _FakeConfig:

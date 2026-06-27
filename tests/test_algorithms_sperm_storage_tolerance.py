@@ -17,7 +17,7 @@ def test_sample_survival_with_sperm_storage_clamps_near_zero_negative_virgins() 
         sperm_store=sperm_store,
         female_survival_rates=np.ones((1, 1), dtype=np.float64),
         male_survival_rates=np.ones((1, 1), dtype=np.float64),
-        n_genotypes=1,
+        n_ztypes=1,
         n_ages=1,
         continuous_sampling=False,
     )

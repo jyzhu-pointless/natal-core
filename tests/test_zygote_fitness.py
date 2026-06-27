@@ -40,7 +40,7 @@ class TestZygoteFitness(unittest.TestCase):
         self.assertTrue(hasattr(config, 'zygote_viability_fitness'))
 
         # Check the shape is correct
-        self.assertEqual(config.zygote_viability_fitness.shape, (2, 4))  # (n_sexes, n_genotypes)
+        self.assertEqual(config.zygote_viability_fitness.shape, (2, 4))  # (n_sexes, n_ztypes)
 
         # Check default values are all 1.0
         np.testing.assert_array_equal(config.zygote_viability_fitness, np.ones((2, 4)))

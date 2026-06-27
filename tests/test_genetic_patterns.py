@@ -2,8 +2,10 @@
 
 from typing import Iterable, List
 
+import pytest
 import natal as nt
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype, Haplotype
+from natal.genetic_patterns import LabPattern, PatternParseError
 
 
 def _build_genotype(sp, mat_allele: str, pat_allele: str) -> Genotype:
@@ -523,3 +525,145 @@ class TestComprehensivePatterns:
         result = [gt.to_string() for gt in filtered]
 
         assert sorted(result) == sorted(expected), f"Expected {sorted(expected)}, got {sorted(result)}"
+
+
+# ——— LabPattern ———————————————————————————————————————————————
+
+
+class TestLabPatternParsing:
+    def test_exact_single(self):
+        lp = LabPattern.parse("cas9_high")
+        assert lp.matches("cas9_high")
+        assert not lp.matches("cas9_low")
+        assert not lp.matches("wildtype")
+
+    def test_negation(self):
+        lp = LabPattern.parse("!cas9_high")
+        assert not lp.matches("cas9_high")
+        assert lp.matches("cas9_low")
+        assert lp.matches("wildtype")
+
+    def test_set(self):
+        lp = LabPattern.parse("{cas9_high,cas9_low}")
+        assert lp.matches("cas9_high")
+        assert lp.matches("cas9_low")
+        assert not lp.matches("wildtype")
+
+    def test_negated_set(self):
+        lp = LabPattern.parse("!{cas9_high,cas9_low}")
+        assert not lp.matches("cas9_high")
+        assert not lp.matches("cas9_low")
+        assert lp.matches("wildtype")
+
+    def test_wildcard_star(self):
+        lp = LabPattern.parse("*")
+        assert lp.matches("anything")
+        assert not bool(lp)  # wildcard is falsy
+
+    def test_wildcard_empty(self):
+        lp = LabPattern.parse("")
+        assert lp.matches("anything")
+
+    def test_invalid_name_rejected(self):
+        with pytest.raises(PatternParseError, match="Invalid lab name"):
+            LabPattern.parse("bad name")
+
+    def test_empty_set_rejected(self):
+        with pytest.raises(PatternParseError, match="Empty lab set"):
+            LabPattern.parse("{}")
+
+
+class TestLabPatternOnGenotype:
+    @staticmethod
+    def _species():
+        return nt.Species.from_dict(
+            "lab_test", {"c1": {"l1": ["A", "a"]}},
+            gamete_labels=["default"],
+        )
+
+    def test_genotype_with_lab(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        p = parser.parse("A|a@cas9_high")
+        assert p.lab is not None
+        assert p.lab.matches("cas9_high")
+        assert not p.lab.matches("wildtype")
+
+    def test_genotype_without_lab_is_wildcard(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        p = parser.parse("A|a")
+        assert p.lab is None  # None means "any lab"
+
+    def test_genotype_with_negated_lab(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        p = parser.parse("A|a@!cas9_high")
+        assert p.lab is not None
+        assert not p.lab.matches("cas9_high")
+        assert p.lab.matches("cas9_low")
+
+    def test_genotype_with_lab_set(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        p = parser.parse("A|a@{high,low}")
+        assert p.lab.matches("high")
+        assert p.lab.matches("low")
+        assert not p.lab.matches("mid")
+
+    def test_cache_distinguishes_lab(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        p1 = parser.parse("A|a@cas9_high")
+        p2 = parser.parse("A|a")
+        assert p1.lab is not None
+        assert p2.lab is None  # not cached from p1
+
+
+class TestLabPatternOnHaplotype:
+    @staticmethod
+    def _species():
+        return nt.Species.from_dict(
+            "hlab_test", {"c1": {"l1": ["A", "B"]}},
+            gamete_labels=["default", "cas9_deposited"],
+        )
+
+    def test_haplotype_with_glab(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        hp = parser.parse_haplotype_pattern("A@cas9_deposited")
+        assert hp.lab is not None
+        assert hp.lab.matches("cas9_deposited")
+        assert not hp.lab.matches("default")
+
+    def test_haplotype_without_glab(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        hp = parser.parse_haplotype_pattern("A")
+        assert hp.lab is None
+
+    def test_haplotype_negated_glab(self):
+        sp = self._species()
+        parser = nt.GenotypePatternParser(sp)
+        hp = parser.parse_haplotype_pattern("A@!default")
+        assert not hp.lab.matches("default")
+        assert hp.lab.matches("cas9_deposited")
+
+
+class TestLabNameValidation:
+    def test_valid_names(self):
+        for name in ["default", "cas9_high", "toxin", "WT", "R2"]:
+            lp = LabPattern.parse(name)
+            assert lp.matches(name)
+
+    def test_invalid_names_rejected_in_genotype(self):
+        sp = nt.Species.from_dict("vtest", {"c1": {"l1": ["A"]}})
+        parser = nt.GenotypePatternParser(sp)
+        with pytest.raises(PatternParseError, match="Invalid lab name"):
+            parser.parse("A|A@bad name")
+
+    def test_invalid_names_rejected_in_haplotype(self):
+        sp = nt.Species.from_dict("vtest2", {"c1": {"l1": ["A"]}})
+        parser = nt.GenotypePatternParser(sp)
+        with pytest.raises(PatternParseError, match="Invalid lab name"):
+            parser.parse_haplotype_pattern("A@bad-name")

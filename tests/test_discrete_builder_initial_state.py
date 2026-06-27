@@ -28,7 +28,11 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
     def setUp(self) -> None:
         self.species = _make_species()
         self.gt_wt_wt = self.species.get_genotype_from_str("WT|WT")
-        self.gt_drive_wt = self.species.get_genotype_from_str("Drive|WT")
+        drive_wt_raw = self.species.get_genotype_from_str("Drive|WT")
+        # Canonicalize for registry lookup — A|a and a|A share the same index.
+        self.gt_drive_wt = self.species.unordered_genotype(
+            drive_wt_raw.maternal, drive_wt_raw.paternal,
+        )
 
     def test_build_allows_none_carrying_capacity(self) -> None:
         builder = DiscreteGenerationPopulationBuilder(self.species)
@@ -58,7 +62,7 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
         pop = DiscreteGenerationPopulation.__new__(DiscreteGenerationPopulation)
         pop._species = self.species
 
-        all_genotypes = self.species.get_all_genotypes()
+        all_genotypes = self.species.get_all_genotypes(unordered=True)
         genotype_to_index = {gt: i for i, gt in enumerate(all_genotypes)}
         pop._registry = SimpleNamespace(
             get_genotype_index=lambda gt: genotype_to_index[gt],

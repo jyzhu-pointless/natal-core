@@ -61,14 +61,14 @@ class TestBuildAndSetup:
         sp = _make_species("Age_tick0")
         pop = _minimal_pop(sp, pop_name="Age_tick0_pop")
         assert pop._tick == 0
-        # individual_count shape: (n_sexes, n_ages, n_genotypes) = (2, 4, 4)
-        assert pop.state.individual_count.shape == (2, 4, 4)
+        # individual_count shape: (n_sexes, n_ages, n_genotypes) = (2, 4, 3)
+        assert pop.state.individual_count.shape == (2, 4, 3)
 
     def test_state_is_initialized(self):
         sp = _make_species("Age_state_init")
         pop = _minimal_pop(sp, pop_name="Age_state_init_pop")
         assert pop._state is not None
-        assert pop.state.individual_count.shape == (2, 4, 4)
+        assert pop.state.individual_count.shape == (2, 4, 3)
         assert pop.state.individual_count.sum() > 0
 
     def test_registry_has_wt_wt(self):
@@ -76,7 +76,7 @@ class TestBuildAndSetup:
         pop = _minimal_pop(sp, pop_name="Age_reg_pop")
         genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
-        assert len(pop._registry.index_to_genotype) == 4
+        assert len(pop._registry.index_to_genotype) == 3
 
 
 class TestRunTicks:

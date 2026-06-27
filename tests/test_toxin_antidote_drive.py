@@ -210,10 +210,12 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
         wt_idx = self.population.index_registry.haplo_to_index[self.hg_wt]
         c_drive = compress_hg_glab(drive_idx, 0, n_glabs)
         c_wt = compress_hg_glab(wt_idx, 0, n_glabs)
+        # Canonical zygote map sorts haploid pairs by index — use sorted pair.
+        c_pair = (min(c_drive, c_wt), max(c_drive, c_wt))
 
-        self.assertIn((c_drive, c_wt), updates)
+        self.assertIn(c_pair, updates)
 
-        dist = updates[(c_drive, c_wt)]
+        dist = updates[c_pair]
         drive_disrupted_idx = self.population.index_registry.genotype_to_index[
             self.species.get_genotype_from_str("Drive|Disrupted")
         ]
@@ -290,10 +292,11 @@ class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):
         wt1_wt2_idx = self.population.index_registry.haplo_to_index[self.hg_wt1_wt2]
         c_drive_wt2 = compress_hg_glab(drive_wt2_idx, 0, n_glabs)
         c_wt1_wt2 = compress_hg_glab(wt1_wt2_idx, 0, n_glabs)
+        c_pair = (min(c_drive_wt2, c_wt1_wt2), max(c_drive_wt2, c_wt1_wt2))
 
-        self.assertIn((c_drive_wt2, c_wt1_wt2), updates)
+        self.assertIn(c_pair, updates)
 
-        dist = updates[(c_drive_wt2, c_wt1_wt2)]
+        dist = updates[c_pair]
         idx_maternal_only = self.population.index_registry.genotype_to_index[
             self.species.get_genotype_from_str("Drive/Disrupted|WT1/WT2")
         ]
@@ -376,10 +379,11 @@ class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
         wt1_wt2_idx = self.population.index_registry.haplo_to_index[self.hg_wt1_wt2]
         c_drive_wt2 = compress_hg_glab(drive_wt2_idx, 0, n_glabs)
         c_wt1_wt2 = compress_hg_glab(wt1_wt2_idx, 0, n_glabs)
+        c_pair = (min(c_drive_wt2, c_wt1_wt2), max(c_drive_wt2, c_wt1_wt2))
 
-        self.assertIn((c_drive_wt2, c_wt1_wt2), updates)
+        self.assertIn(c_pair, updates)
 
-        dist = updates[(c_drive_wt2, c_wt1_wt2)]
+        dist = updates[c_pair]
         idx_maternal_only = self.population.index_registry.genotype_to_index[
             self.species.get_genotype_from_str("Drive|WT1;Disrupted|WT2")
         ]

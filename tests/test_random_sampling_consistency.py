@@ -20,18 +20,18 @@ def test_fertilization_sampling_consistency():
     """Test that fertilization functions behave consistently across sampling modes."""
 
     # Setup test data
-    n_genotypes = 2
+    n_ztypes = 2
     n_ages = 3
     adult_start_idx = 1
 
-    sperm_store = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
+    sperm_store = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
     sperm_store[1, 0, 0] = 10.0  # Adult age 1, genotype 0-0 pair
     sperm_store[2, 0, 0] = 5.0   # Adult age 2, genotype 0-0 pair
 
-    fertility_f = np.ones(n_genotypes, dtype=np.float64)
-    fertility_m = np.ones(n_genotypes, dtype=np.float64)
+    fertility_f = np.ones(n_ztypes, dtype=np.float64)
+    fertility_m = np.ones(n_ztypes, dtype=np.float64)
 
-    offspring_probability = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
+    offspring_probability = np.zeros((n_ztypes, n_ztypes, n_ztypes), dtype=np.float64)
     offspring_probability[0, 0, 0] = 0.5
     offspring_probability[0, 0, 1] = 0.5
 
@@ -54,11 +54,11 @@ def test_fertilization_sampling_consistency():
             average_eggs_per_wt_female=25.0,
             adult_start_idx=adult_start_idx,
             n_ages=n_ages,
-            n_genotypes=n_genotypes,
-            female_genotype_compatibility=np.ones(n_genotypes),
-            male_genotype_compatibility=np.ones(n_genotypes),
-            female_only_by_sex_chrom=np.zeros(n_genotypes, dtype=np.bool_),
-            male_only_by_sex_chrom=np.zeros(n_genotypes, dtype=np.bool_),
+            n_ztypes=n_ztypes,
+            female_genotype_compatibility=np.ones(n_ztypes),
+            male_genotype_compatibility=np.ones(n_ztypes),
+            female_only_by_sex_chrom=np.zeros(n_ztypes, dtype=np.bool_),
+            male_only_by_sex_chrom=np.zeros(n_ztypes, dtype=np.bool_),
             n_glabs=1,
             age_based_reproduction_rates=np.array([0.0, 0.8, 0.5]),  # Age-specific rates
             female_age_based_fertility=np.array([0.0, 1.0, 0.8]),  # Age-specific fertility
@@ -72,8 +72,8 @@ def test_fertilization_sampling_consistency():
         results[mode_name] = (n_female.sum(), n_male.sum())
 
         # Basic consistency checks
-        assert n_female.shape == (n_genotypes,)
-        assert n_male.shape == (n_genotypes,)
+        assert n_female.shape == (n_ztypes,)
+        assert n_male.shape == (n_ztypes,)
 
         # In deterministic mode, values should be exact
         if not stochastic:
@@ -93,7 +93,7 @@ def test_fertilization_sampling_consistency():
 def test_competition_sampling_consistency():
     """Test that competition functions behave consistently across sampling modes."""
 
-    n_genotypes = 2
+    n_ztypes = 2
     juvenile_counts = (np.array([50.0, 30.0]), np.array([40.0, 20.0]))  # Female, male
     carrying_capacity = 100.0
 
@@ -109,7 +109,7 @@ def test_competition_sampling_consistency():
         female_new, male_new = recruit_juveniles_sampling(
             age_0_juvenile_counts=juvenile_counts,
             carrying_capacity=carrying_capacity,
-            n_genotypes=n_genotypes,
+            n_ztypes=n_ztypes,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling
         )
@@ -117,8 +117,8 @@ def test_competition_sampling_consistency():
         results[mode_name] = (female_new.sum(), male_new.sum())
 
         # Basic checks
-        assert female_new.shape == (n_genotypes,)
-        assert male_new.shape == (n_genotypes,)
+        assert female_new.shape == (n_ztypes,)
+        assert male_new.shape == (n_ztypes,)
 
         # Total should not exceed carrying capacity (allow small numerical error)
         total = female_new.sum() + male_new.sum()
@@ -137,7 +137,7 @@ def test_competition_sampling_consistency():
 def test_scaling_sampling_consistency():
     """Test that scaling functions behave consistently across sampling modes."""
 
-    n_genotypes = 2
+    n_ztypes = 2
     juvenile_counts = (np.array([20.0, 10.0]), np.array([15.0, 5.0]))  # Female, male
     scaling_factor = 0.8
 
@@ -153,7 +153,7 @@ def test_scaling_sampling_consistency():
         female_new, male_new = recruit_juveniles_given_scaling_factor_sampling(
             age_0_juvenile_counts=juvenile_counts,
             scaling_factor=scaling_factor,
-            n_genotypes=n_genotypes,
+            n_ztypes=n_ztypes,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling
         )
@@ -161,8 +161,8 @@ def test_scaling_sampling_consistency():
         results[mode_name] = (female_new.sum(), male_new.sum())
 
         # Basic checks
-        assert female_new.shape == (n_genotypes,)
-        assert male_new.shape == (n_genotypes,)
+        assert female_new.shape == (n_ztypes,)
+        assert male_new.shape == (n_ztypes,)
 
     # Verify scaling is consistent
     original_total = sum(juvenile_counts[0]) + sum(juvenile_counts[1])

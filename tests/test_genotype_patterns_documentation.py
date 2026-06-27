@@ -362,7 +362,7 @@ class TestGenotypePatternsComprehensive:
         assert partial_wildcard(gt2) is False  # B2 不匹配 B1
 
     def test_set_matching(self):
-        """测试集合匹配"""
+        """测试集合匹配 — uses :: for unordered canonical safety."""
         # 创建测试基因型
         gt1 = self.sp.get_genotype_from_str("A1/B1|A2/B2")
         gt2 = self.sp.get_genotype_from_str("A2/B1|A1/B2")

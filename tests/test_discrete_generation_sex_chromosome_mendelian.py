@@ -115,8 +115,8 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         low_density_growth_rate=1.0,
         juvenile_growth_mode=NO_COMPETITION,
         has_sex_chromosomes=True,
-        genotype_to_gametes_map=gamete_map,
-        gametes_to_zygote_map=zygote_map,
+        zygotes_to_gametes_map=gamete_map,
+        gametes_to_zygotes_map=zygote_map,
     )
 
     parent_count = 1000.0
@@ -176,8 +176,8 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         np.array([125.0, 250.0, 125.0], dtype=np.float64),
     )
 
-    # Keep phased heterozygotes explicit: A|a and a|A are distinct genotypes,
-    # each receiving half of the heterozygous mass under this symmetric cross.
+    # Species has sex chromosomes → canonicalization disabled for all genotypes.
+    # A|a and a|A remain distinct, each getting half of heterozygous offspring.
     np.testing.assert_allclose(female_by_phase["A|a"], 125.0)
     np.testing.assert_allclose(female_by_phase["a|A"], 125.0)
     np.testing.assert_allclose(male_by_phase["A|a"], 125.0)
@@ -274,8 +274,8 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
         low_density_growth_rate=1.0,
         juvenile_growth_mode=NO_COMPETITION,
         has_sex_chromosomes=True,
-        genotype_to_gametes_map=gamete_map,
-        gametes_to_zygote_map=zygote_map,
+        zygotes_to_gametes_map=gamete_map,
+        gametes_to_zygotes_map=zygote_map,
     )
 
     pop = DiscreteGenerationPopulation(
@@ -362,8 +362,8 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
         low_density_growth_rate=1.0,
         juvenile_growth_mode=NO_COMPETITION,
         has_sex_chromosomes=True,
-        genotype_to_gametes_map=gamete_map,
-        gametes_to_zygote_map=zygote_map,
+        zygotes_to_gametes_map=gamete_map,
+        gametes_to_zygotes_map=zygote_map,
     )
 
     pop = DiscreteGenerationPopulation(

@@ -4,15 +4,15 @@ from natal.engine.simulation.age_structured import fertilize_with_precomputed_of
 
 
 def test_fertilize_offspring_sex_is_genotype_determined_when_constrained() -> None:
-    n_genotypes = 2
-    female_counts = np.zeros((1, n_genotypes), dtype=np.float64)
-    sperm_store = np.zeros((1, n_genotypes, n_genotypes), dtype=np.float64)
+    n_ztypes = 2
+    female_counts = np.zeros((1, n_ztypes), dtype=np.float64)
+    sperm_store = np.zeros((1, n_ztypes, n_ztypes), dtype=np.float64)
     sperm_store[0, 0, 0] = 10.0
 
-    fertility_f = np.ones(n_genotypes, dtype=np.float64)
-    fertility_m = np.ones(n_genotypes, dtype=np.float64)
+    fertility_f = np.ones(n_ztypes, dtype=np.float64)
+    fertility_m = np.ones(n_ztypes, dtype=np.float64)
 
-    offspring_probability = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
+    offspring_probability = np.zeros((n_ztypes, n_ztypes, n_ztypes), dtype=np.float64)
     offspring_probability[0, 0, 0] = 0.5
     offspring_probability[0, 0, 1] = 0.5
 
@@ -30,7 +30,7 @@ def test_fertilize_offspring_sex_is_genotype_determined_when_constrained() -> No
         average_eggs_per_wt_female=1.0,
         adult_start_idx=0,
         n_ages=1,
-        n_genotypes=n_genotypes,
+        n_ztypes=n_ztypes,
         n_haplogenotypes=1,
         female_genotype_compatibility=female_compat,
         male_genotype_compatibility=male_compat,
@@ -51,19 +51,19 @@ def test_fertilize_offspring_sex_is_genotype_determined_when_constrained() -> No
 
 
 def test_fertilize_offspring_sex_uses_sex_ratio_without_constraints() -> None:
-    n_genotypes = 2
-    female_counts = np.zeros((1, n_genotypes), dtype=np.float64)
-    sperm_store = np.zeros((1, n_genotypes, n_genotypes), dtype=np.float64)
+    n_ztypes = 2
+    female_counts = np.zeros((1, n_ztypes), dtype=np.float64)
+    sperm_store = np.zeros((1, n_ztypes, n_ztypes), dtype=np.float64)
     sperm_store[0, 0, 0] = 10.0
 
-    fertility_f = np.ones(n_genotypes, dtype=np.float64)
-    fertility_m = np.ones(n_genotypes, dtype=np.float64)
+    fertility_f = np.ones(n_ztypes, dtype=np.float64)
+    fertility_m = np.ones(n_ztypes, dtype=np.float64)
 
-    offspring_probability = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
+    offspring_probability = np.zeros((n_ztypes, n_ztypes, n_ztypes), dtype=np.float64)
     offspring_probability[0, 0, 0] = 1.0
 
-    compat = np.ones(n_genotypes, dtype=np.float64)
-    none_only = np.zeros(n_genotypes, dtype=np.bool_)
+    compat = np.ones(n_ztypes, dtype=np.float64)
+    none_only = np.zeros(n_ztypes, dtype=np.bool_)
 
     n_female, n_male = fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
         female_counts=female_counts,
@@ -74,7 +74,7 @@ def test_fertilize_offspring_sex_uses_sex_ratio_without_constraints() -> None:
         average_eggs_per_wt_female=1.0,
         adult_start_idx=0,
         n_ages=1,
-        n_genotypes=n_genotypes,
+        n_ztypes=n_ztypes,
         n_haplogenotypes=1,
         female_genotype_compatibility=compat,
         male_genotype_compatibility=compat,
@@ -95,21 +95,21 @@ def test_fertilize_offspring_sex_uses_sex_ratio_without_constraints() -> None:
 
 
 def test_fertilize_offspring_sex_ignores_asymmetric_compat_when_unconstrained() -> None:
-    n_genotypes = 2
-    female_counts = np.zeros((1, n_genotypes), dtype=np.float64)
-    sperm_store = np.zeros((1, n_genotypes, n_genotypes), dtype=np.float64)
+    n_ztypes = 2
+    female_counts = np.zeros((1, n_ztypes), dtype=np.float64)
+    sperm_store = np.zeros((1, n_ztypes, n_ztypes), dtype=np.float64)
     sperm_store[0, 0, 0] = 10.0
 
-    fertility_f = np.ones(n_genotypes, dtype=np.float64)
-    fertility_m = np.ones(n_genotypes, dtype=np.float64)
+    fertility_f = np.ones(n_ztypes, dtype=np.float64)
+    fertility_m = np.ones(n_ztypes, dtype=np.float64)
 
-    offspring_probability = np.zeros((n_genotypes, n_genotypes, n_genotypes), dtype=np.float64)
+    offspring_probability = np.zeros((n_ztypes, n_ztypes, n_ztypes), dtype=np.float64)
     offspring_probability[0, 0, 0] = 0.5
     offspring_probability[0, 0, 1] = 0.5
 
     female_compat = np.array([1.0, 0.0], dtype=np.float64)
     male_compat = np.array([0.0, 1.0], dtype=np.float64)
-    none_only = np.zeros(n_genotypes, dtype=np.bool_)
+    none_only = np.zeros(n_ztypes, dtype=np.bool_)
 
     n_female, n_male = fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
         female_counts=female_counts,
@@ -120,7 +120,7 @@ def test_fertilize_offspring_sex_ignores_asymmetric_compat_when_unconstrained() 
         average_eggs_per_wt_female=1.0,
         adult_start_idx=0,
         n_ages=1,
-        n_genotypes=n_genotypes,
+        n_ztypes=n_ztypes,
         n_haplogenotypes=1,
         female_genotype_compatibility=female_compat,
         male_genotype_compatibility=male_compat,

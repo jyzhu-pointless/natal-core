@@ -19,12 +19,12 @@ def species() -> nt.Species:
 @pytest.fixture
 def minimal_config(species):
     return build_population_config(
-        n_genotypes=species.get_config_blueprint()["n_genotypes"],
+        n_genotypes=species.get_config_blueprint()["n_ztypes"],
         n_haploid_genotypes=species.get_config_blueprint()["n_haploid_genotypes"],
         n_ages=2,
         n_glabs=species.get_config_blueprint()["n_glabs"],
-        genotype_to_gametes_map=species.get_config_blueprint()["genotype_to_gametes_map"],
-        gametes_to_zygote_map=species.get_config_blueprint()["gametes_to_zygote_map"],
+        zygotes_to_gametes_map=species.get_config_blueprint()["zygotes_to_gametes_map"],
+        gametes_to_zygotes_map=species.get_config_blueprint()["gametes_to_zygotes_map"],
     )
 
 
@@ -68,7 +68,7 @@ class TestConfiguratorBuild:
     def test_from_species_minimal(self, species):
         cfg = Configurator.from_species(species)
         assert cfg._config.n_ages == 2
-        assert cfg._config.n_genotypes > 0
+        assert cfg._config.n_ztypes > 0
 
     def test_age_structure_changes_dimensions(self, species):
         cfg = Configurator.from_species(species).age_structure(n_ages=6, new_adult_age=3)
@@ -407,7 +407,7 @@ class TestSetParamErrors:
 
     def test_python_scalar_field_raises_typeerror(self, minimal_config):
         with pytest.raises(TypeError, match="immutable config"):
-            set_param(minimal_config, "n_genotypes", 2)
+            set_param(minimal_config, "n_ztypes", 2)
 
     def test_unknown_param_raises_keyerror(self, minimal_config):
         with pytest.raises(KeyError, match="Unknown parameter"):
@@ -532,16 +532,16 @@ class TestFitnessFormats:
         """{female_selector: {male_selector: value}} writes to specific cell."""
         cfg = _make_cfg(fitness_species)
         cfg.fitness(sexual_selection={"WT|WT": {"Var|WT": 0.5}})
-        arr = cfg._config.sexual_selection_fitness  # (4, 4)
-        assert arr[0, 2] == 0.5  # f=WT|WT(0) × m=Var|WT(2)
+        arr = cfg._config.sexual_selection_fitness  # (3, 3)
+        assert arr[0, 1] == 0.5  # f=WT|WT(0) × m=WT|Var(1)
 
     def test_sexual_selection_nested_multiply(self, fitness_species):
         """Nested format with mode='multiply' scales existing values."""
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.sexual_selection_fitness
-        original = arr[0, 2].copy()
-        cfg.fitness(sexual_selection={"WT|WT": {"Var|WT": 2.0}}, mode="multiply")
-        assert arr[0, 2] == original * 2.0
+        original = arr[0, 1].copy()
+        cfg.fitness(sexual_selection={"WT|WT": {"WT|Var": 2.0}}, mode="multiply")
+        assert arr[0, 1] == original * 2.0
 
     def test_sexual_selection_nested_mixed_raises(self, fitness_species):
         """Mixing scalar and nested in same sexual_selection call raises."""
@@ -558,11 +558,11 @@ class TestFitnessFormats:
         """{male_selector: value} writes entire column (all females)."""
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.sexual_selection_fitness
-        cfg.fitness(sexual_selection={"Var|WT": 0.3})
-        # Column for Var|WT (m_idx=2): all females get 0.3
-        assert arr[0, 2] == 0.3
-        assert arr[1, 2] == 0.3
-        assert arr[3, 2] == 0.3
+        cfg.fitness(sexual_selection={"WT|Var": 0.3})
+        # Column for WT|Var (m_idx=1): all females get 0.3
+        assert arr[0, 1] == 0.3
+        assert arr[1, 1] == 0.3
+        assert arr[2, 1] == 0.3
 
     # ── sexual_selection: top-level sex-keyed ────────────────────────────
 
@@ -589,21 +589,21 @@ class TestFitnessFormats:
         new_adult_age=1 → default age 0.
         """
         cfg = _make_cfg(fitness_species)
-        arr = cfg._config.viability_fitness  # (2, n_ages, 4)
-        cfg.fitness(viability={"Var|WT": {"female": 0.2}})
-        assert arr[0, 0, 2] == 0.2  # female, age0 (default juvenile age), Var|WT
-        assert arr[0, 1, 2] == 1.0  # female, age1 — not written (age1 is adult)
-        assert arr[1, 0, 2] == 1.0  # male unchanged
+        arr = cfg._config.viability_fitness  # (2, n_ages, 3)
+        cfg.fitness(viability={"WT|Var": {"female": 0.2}})
+        assert arr[0, 0, 1] == 0.2  # female, age0 (default juvenile age), WT|Var
+        assert arr[0, 1, 1] == 1.0  # female, age1 — not written (age1 is adult)
+        assert arr[1, 0, 1] == 1.0  # male unchanged
 
     # ── fecundity: per-selector sex-keyed ────────────────────────────────
 
     def test_fecundity_per_selector_sex_keyed_replace(self, fitness_species):
         """{genotype: {"female": val}} sets fecundity for one sex."""
         cfg = _make_cfg(fitness_species)
-        arr = cfg._config.fecundity_fitness  # (2, 4)
+        arr = cfg._config.fecundity_fitness  # (2, 3)
         cfg.fitness(fecundity={"Var|Var": {"female": 0.0, "male": 0.8}})
-        assert arr[0, 3] == 0.0  # female Var|Var (idx=3)
-        assert arr[1, 3] == 0.8  # male Var|Var
+        assert arr[0, 2] == 0.0  # female Var|Var (idx=2)
+        assert arr[1, 2] == 0.8  # male Var|Var
 
     def test_fecundity_mixed_scalar_and_sex_keyed(self, fitness_species):
         """Mixed: some genotypes have scalar values, some have sex-keyed."""
@@ -615,8 +615,8 @@ class TestFitnessFormats:
         })
         assert arr[0, 0] == 2.0  # female WT|WT
         assert arr[1, 0] == 2.0  # male WT|WT
-        assert arr[0, 3] == 0.0  # female Var|Var
-        assert arr[1, 3] == 1.0  # male Var|Var unchanged
+        assert arr[0, 2] == 0.0  # female Var|Var
+        assert arr[1, 2] == 1.0  # male Var|Var unchanged
 
     # ── zygote_viability: per-selector sex-keyed ─────────────────────────
 
@@ -649,19 +649,19 @@ class TestFitnessFormats:
             "female": {"Var|Var": 0.1},
             "male": {"Var|Var": 0.9},
         })
-        assert arr[0, 0, 3] == 0.1  # female age0 Var|Var (idx=3)
-        assert arr[1, 0, 3] == 0.9  # male age0 Var|Var
+        assert arr[0, 0, 2] == 0.1  # female age0 Var|Var (idx=2)
+        assert arr[1, 0, 2] == 0.9  # male age0 Var|Var
 
     def test_zygote_viability_top_level_sex_keyed(self, fitness_species):
         """Top-level sex-keyed zygote viability."""
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.zygote_viability_fitness
         cfg.fitness(zygote_viability={
-            "female": {"Var|WT": 0.2},
-            "male": {"Var|WT": 0.8},
+            "female": {"WT|Var": 0.2},
+            "male": {"WT|Var": 0.8},
         })
-        assert arr[0, 2] == 0.2  # female Var|WT (idx=2)
-        assert arr[1, 2] == 0.8  # male Var|WT
+        assert arr[0, 1] == 0.2  # female WT|Var (idx=1)
+        assert arr[1, 1] == 0.8  # male WT|Var
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -796,11 +796,11 @@ class TestReconfigurePreset:
         )
         pop.update().presets(drive)
         arr = pop.config.viability_fitness
-        orig_val = arr[0, 0, 2]  # female age0 Var|WT
+        orig_val = arr[0, 0, 1]  # female age0 WT|Var
 
         # Reconfigure with different viability scaling
         pop.update().reconfigure_preset(drive, viability_scaling=0.1)
-        new_val = arr[0, 0, 2]
+        new_val = arr[0, 0, 1]
         assert new_val != orig_val
         assert 0.0 < new_val < orig_val, f"reconfigure should lower viability, got {new_val}"
 
@@ -1097,9 +1097,9 @@ class TestFitnessEdgeCases:
         arr = cfg._config.viability_fitness
         # Set viability for ages 0=0.5, 1=None(skip), 2=0.1
         cfg.fitness(viability={"Var|Var": {0: 0.5, 1: None, 2: 0.1}})
-        assert arr[0, 0, 3] == 0.5   # age0 — written
-        assert arr[0, 1, 3] == 1.0   # age1 — skipped (None)
-        assert arr[0, 2, 3] == 0.1   # age2 — written
+        assert arr[0, 0, 2] == 0.5   # age0 — written
+        assert arr[0, 1, 2] == 1.0   # age1 — skipped (None)
+        assert arr[0, 2, 2] == 0.1   # age2 — written
 
     def test_sexual_selection_top_level_male(self, fitness_species):
         """Top-level sex-keyed: {"male": {g: v}} — male selector path."""
@@ -1127,10 +1127,10 @@ class TestFitnessEdgeCases:
         """Flat format sexual_selection with mode='multiply'."""
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.sexual_selection_fitness
-        original_col = arr[:, 2].copy()
-        cfg.fitness(sexual_selection={"Var|WT": 0.5}, mode="multiply")
-        # Column for Var|WT (idx=2) should be scaled
-        assert arr[0, 2] == pytest.approx(original_col[0] * 0.5)
+        original_col = arr[:, 1].copy()
+        cfg.fitness(sexual_selection={"WT|Var": 0.5}, mode="multiply")
+        # Column for WT|Var (idx=1) should be scaled
+        assert arr[0, 1] == pytest.approx(original_col[0] * 0.5)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1174,7 +1174,7 @@ class TestCompetitionOrdering:
 class TestSpermStorageShape:
     """Verify that initial_sperm_storage shape matches engine expectations.
 
-    Engine functions expect ``(n_ages, n_genotypes, n_genotypes)``
+    Engine functions expect ``(n_ages, n_ztypes, n_ztypes)``
     (female genotype × male genotype per age).
     """
 
@@ -1182,20 +1182,20 @@ class TestSpermStorageShape:
         """Default initial_sperm_storage must have correct shape."""
         cfg = Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=3)
         arr = cfg._config.initial_sperm_storage
-        n_genotypes = cfg._config.n_genotypes
+        n_ztypes = cfg._config.n_ztypes
         n_ages = cfg._config.n_ages
-        assert arr.shape == (n_ages, n_genotypes, n_genotypes), \
-            f"Expected {(n_ages, n_genotypes, n_genotypes)}, got {arr.shape}"
+        assert arr.shape == (n_ages, n_ztypes, n_ztypes), \
+            f"Expected {(n_ages, n_ztypes, n_ztypes)}, got {arr.shape}"
         assert np.all(arr == 0), "Default initial_sperm_storage should be all zeros"
 
     def test_sperm_storage_shape_discrete(self, species):
         """Discrete config sperm_storage should also match."""
         cfg = Configurator.for_discrete(species)
         arr = cfg._config.initial_sperm_storage
-        n_genotypes = cfg._config.n_genotypes
+        n_ztypes = cfg._config.n_ztypes
         n_ages = cfg._config.n_ages
-        assert arr.shape == (n_ages, n_genotypes, n_genotypes), \
-            f"Expected {(n_ages, n_genotypes, n_genotypes)}, got {arr.shape}"
+        assert arr.shape == (n_ages, n_ztypes, n_ztypes), \
+            f"Expected {(n_ages, n_ztypes, n_ztypes)}, got {arr.shape}"
         assert np.all(arr == 0), "Default discrete initial_sperm_storage should be all zeros"
 
     def test_sperm_storage_loads_into_population(self, species):
