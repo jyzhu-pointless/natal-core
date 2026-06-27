@@ -42,7 +42,6 @@ class PopulationState(NamedTuple):
         n_sexes: Optional[int] = None,
         n_ages: int = 2,
         n_tick: int = 0,
-        n_slabs: int = 1,
         individual_count: Optional[NDArray[np.float64]] = None,
         sperm_storage: Optional[NDArray[np.float64]] = None,
     ) -> PopulationState:
@@ -69,11 +68,7 @@ class PopulationState(NamedTuple):
         assert n_ztypes > 0, "n_ztypes must be positive"
         assert n_ages > 0, "n_ages must be positive"
         assert n_tick >= 0, "n_tick must be non-negative"
-        assert n_slabs >= 1, "n_slabs must be >= 1"
 
-        # ZType dimension = genotype × slab (defaults to genotype
-        # when n_slabs=1, leaving existing behaviour unchanged).
-        n_genotypes = n_ztypes // n_slabs
         if individual_count is None:
             ind = np.zeros((n_sexes, n_ages, n_ztypes), dtype=np.float64)
         else:
@@ -84,9 +79,9 @@ class PopulationState(NamedTuple):
             ind = individual_count.astype(np.float64)
 
         if sperm_storage is None:
-            sperm = np.zeros((n_ages, n_genotypes, n_genotypes), dtype=np.float64)
+            sperm = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
         else:
-            expected_shape = (n_ages, n_genotypes, n_genotypes)
+            expected_shape = (n_ages, n_ztypes, n_ztypes)
             assert sperm_storage.shape == expected_shape, (
                 f"Invalid shape for sperm_storage: expected {expected_shape}, got {sperm_storage.shape}"
             )
@@ -185,7 +180,6 @@ class DiscretePopulationState(NamedTuple):
         n_ages: int,
         n_ztypes: int,
         n_tick: int = 0,
-        n_slabs: int = 1,
         individual_count: Optional[NDArray[np.float64]] = None,
     ) -> DiscretePopulationState:
         """Create a DiscretePopulationState with optionally provided array.
@@ -195,7 +189,6 @@ class DiscretePopulationState(NamedTuple):
             n_ages: Number of age classes.
             n_ztypes: Number of zygote types (diploid genotypes after slab expansion).
             n_tick: Initial tick value (default 0).
-            n_slabs: Number of somatic label variants (default 1).
             individual_count: Optional array (n_sexes, n_ages, n_ztypes);
                 if None, filled with zeros.
 
@@ -209,7 +202,6 @@ class DiscretePopulationState(NamedTuple):
         assert n_ages > 0, "n_ages must be positive"
         assert n_ztypes > 0, "n_ztypes must be positive"
         assert n_tick >= 0, "n_tick must be non-negative"
-        assert n_slabs >= 1, "n_slabs must be >= 1"
 
         if individual_count is None:
             ind = np.zeros((n_sexes, n_ages, n_ztypes), dtype=np.float64)
