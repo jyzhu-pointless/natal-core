@@ -598,7 +598,8 @@ def _write_fitness_field(
             raise TypeError(
                 "sex-keyed fitness dict values must be genotype→value mappings"
             )
-        sex_patch = cast(Mapping[str, Mapping[str, float]], patch)
+        sex_patch: Mapping[str, Mapping[str | tuple[Genotype | str, str], float]]
+        sex_patch = patch  # type: ignore[assignment]  # Mapping key invariance; narrowed by branch guard
         # ---- write female slice, then male slice ----
         for sex_key, geno_dict in sex_patch.items():
             sex_idx = 0 if sex_key == "female" else 1
@@ -758,7 +759,7 @@ def _write_fitness_field(
 def _write_fitness_field_flat(
     config: PopulationConfig | DiscretePopulationConfig,
     field_name: str,
-    patch: Mapping[str, float],
+    patch: Mapping[str | tuple[Genotype | str, str], float],
     mode: str,
     *,
     sex_idx: int,
@@ -813,6 +814,70 @@ def _write_fitness_field_flat(
         # and sets (@{normal,infected}).  Parsed via LabPattern.
         slab_indices: list[int] = list(range(max(len(slab_to_idx), 1)))
         genotype_selector = selector
+
+        # ── tuple syntax: (Genotype, "slab_label") ──
+        if isinstance(selector, tuple):
+            if len(selector) != 2:
+                raise TypeError(
+                    f"fitness tuple selector must have 2 elements "
+                    f"(genotype_key, slab_label), got {len(selector)}"
+                )
+            _genotype_key, _slab = selector
+            if _slab not in slab_to_idx:
+                raise ValueError(
+                    f"Unknown slab label '{_slab}'. "
+                    f"Available slabs: {list(slab_to_idx)}"
+                )
+            si = slab_to_idx[_slab]
+
+            if isinstance(_genotype_key, Genotype):
+                matched = [_genotype_key]
+            else:
+                matched = species.resolve_genotype_selectors(
+                    selector=_genotype_key,
+                    all_genotypes=all_genotypes,
+                    context=f"fitness.{field_name}",
+                )
+
+            n_slabs = max(len(slab_to_idx), 1)
+            for genotype in matched:
+                gidx = registry.genotype_to_index[genotype]
+                age_slice = slice(resolved_age, resolved_age + 1)
+                zidx = gidx * n_slabs + si
+
+                if field_name == "viability":
+                    arr = config.viability_fitness
+                    if mode == "replace":
+                        arr[sex_idx, age_slice, zidx] = float(value)
+                    else:
+                        arr[sex_idx, age_slice, zidx] *= float(value)
+                elif field_name == "fecundity":
+                    arr = config.fecundity_fitness
+                    if mode == "replace":
+                        arr[sex_idx, zidx] = float(value)
+                    else:
+                        arr[sex_idx, zidx] *= float(value)
+                elif field_name == "sexual_selection":
+                    arr = config.sexual_selection_fitness
+                    if mode == "replace":
+                        if sex_idx == 0:
+                            arr[zidx, :] = float(value)
+                        else:
+                            arr[:, zidx] = float(value)
+                    else:
+                        if sex_idx == 0:
+                            arr[zidx, :] *= float(value)
+                        else:
+                            arr[:, zidx] *= float(value)
+                elif field_name == "zygote_viability":
+                    arr = config.zygote_viability_fitness
+                    if mode == "replace":
+                        arr[sex_idx, zidx] = float(value)
+                    else:
+                        arr[sex_idx, zidx] *= float(value)
+            continue
+        # ── end tuple branch ──
+
         if "@" in str(selector):
             g_str, s_str = str(selector).rsplit("@", 1)
             genotype_selector = g_str

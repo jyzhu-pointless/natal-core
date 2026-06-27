@@ -3352,24 +3352,25 @@ class Species(GeneticStructure['HaploidGenome']):
                 for maternal, paternal in itertools.product(all_haploid_genotypes, repeat=2):
                     yield Genotype(species=self, maternal=maternal, paternal=paternal)
         elif valid_sex_gts:
-            # Validate pairings against the explicitly valid chromosome pairs.
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
             paternal_hgs = list(self.iter_paternal_haploid_genotypes())
 
-            # Build a set for fast valid-pair lookup.
             valid_chrom_pairs: Set[Tuple[Chromosome, Chromosome]] = set(valid_sex_gts)
 
+            seen: set[tuple[HaploidGenotype, HaploidGenotype]] = set()
             for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
-                # Resolve selected maternal and paternal sex chromosomes.
                 mat_sex_chrom = self._get_sex_chromosome(maternal, sex_chr_groups)
                 pat_sex_chrom = self._get_sex_chromosome(paternal, sex_chr_groups)
 
-                # Keep only valid pairings.
                 if (mat_sex_chrom, pat_sex_chrom) in valid_chrom_pairs:
-                    # unordered=True: sex chromosomes have fixed maternal/paternal
-                    # roles, so we don't swap them. The unordered flag only
-                    # affects non-sex-chromosome systems.
-                    yield Genotype(species=self, maternal=maternal, paternal=paternal)
+                    if unordered:
+                        gt = self.unordered_genotype(maternal, paternal)
+                        key = (gt.maternal, gt.paternal)
+                        if key not in seen:
+                            seen.add(key)
+                            yield gt
+                    else:
+                        yield Genotype(species=self, maternal=maternal, paternal=paternal)
         else:
             # With no explicit constraints, all pairings are valid.
             maternal_hgs = list(self.iter_maternal_haploid_genotypes())
@@ -3615,6 +3616,10 @@ def _canonical_haploid_pair(
     swapped between the two haploid genomes, new Haplotype/HaploidGenotype
     objects are assembled.  Does NOT construct Genotype objects — safe
     to call from Genotype.__new__ without recursion.
+
+    Sex chromosomes with different types (X|Y, Z|W) preserve their
+    maternal/paternal ordering.  Same-type sex chromosomes (X|X, Z|Z)
+    are canonicalized per-locus like autosomes.
     """
     from natal.genetic_entities import HaploidGenotype, Haplotype
 
@@ -3623,9 +3628,31 @@ def _canonical_haploid_pair(
     needs_reassembly = False
 
     for chromosome in species.chromosomes:
-        hap1 = hg1.get_haplotype_for_chromosome(chromosome)
-        hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+        try:
+            hap1 = hg1.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            hap1 = None
+        try:
+            hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            hap2 = None
 
+        # Different-type sex chromosomes (X|Y, Z|W) — one parent lacks
+        # this chromosome, or the chromosomes are different objects.
+        # Preserve maternal/paternal ordering.
+        if chromosome.is_sex_chromosome and (
+            hap1 is None or hap2 is None or hap1.chromosome is not hap2.chromosome
+        ):
+            if hap1 is not None:
+                maternal_haps.append(hap1)
+            if hap2 is not None:
+                paternal_haps.append(hap2)
+            continue
+
+        if hap1 is None or hap2 is None:
+            continue
+
+        # Autosome or same-type sex chromosome — canonicalize per-locus.
         mat_genes: list[Gene] = []
         pat_genes: list[Gene] = []
         for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
@@ -3652,8 +3679,16 @@ def _canonical_haploid_pair(
         return (new_maternal, new_paternal)
 
     for chromosome in species.chromosomes:
-        hap1 = hg1.get_haplotype_for_chromosome(chromosome)
-        hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+        try:
+            hap1 = hg1.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            continue
+        try:
+            hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+        except ValueError:
+            continue
+        if chromosome.is_sex_chromosome and hap1.chromosome is not hap2.chromosome:
+            continue
         for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
             idx1 = locus.allele_index(g1.name)
             idx2 = locus.allele_index(g2.name)
