@@ -18,12 +18,10 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 
 from natal.genetic_entities import Gene, Genotype, HaploidGenotype
 from natal.helpers import resolve_sex_label
-from natal.index_registry import compress_hg_glab
 from natal.modifiers import (
     GameteModifier,
     GenotypeFilter,
     evaluate_genotype_filter,
-    resolve_optional_glab_index,
 )
 from natal.population_config import extract_gamete_frequencies_by_glab
 from natal.type_def import Sex
@@ -451,9 +449,9 @@ class GameteConversionRuleSet:
                         # Convert (HaploidGenotype, glab_idx) -> compressed index
                         compressed_freqs: Dict[int, float] = {}
                         for (hg, glab_idx), freq in converted_freqs.items():
-                            hg_idx = population.registry.haplo_to_index.get(hg)
-                            if hg_idx is not None and freq > 0:
-                                cidx = compress_hg_glab(hg_idx, glab_idx, n_glabs)
+                            if freq > 0:
+                                glab_label_str = population.registry.glab_labels[glab_idx]
+                                cidx = population.registry.gtype_index(hg, glab_label_str)
                                 compressed_freqs[cidx] = compressed_freqs.get(cidx, 0.0) + freq
 
                         if compressed_freqs:
@@ -488,11 +486,21 @@ def _resolve_rule_glabs(
     Returns:
         List of ``(rule, resolved_source_glab_idx, resolved_target_glab_idx)``.
     """
-    glab_map = population.index_registry.glab_to_index
+    glab_labels = population.index_registry.glab_labels
     resolved: List[_ResolvedGameteRule] = []
     for rule in rules:
-        src_idx = resolve_optional_glab_index(rule.source_glab, glab_map)
-        tgt_idx = resolve_optional_glab_index(rule.target_glab, glab_map)
+        src_idx: Optional[int] = None
+        if rule.source_glab is not None:
+            if isinstance(rule.source_glab, int):
+                src_idx = rule.source_glab
+            else:
+                src_idx = glab_labels.index(rule.source_glab)
+        tgt_idx: Optional[int] = None
+        if rule.target_glab is not None:
+            if isinstance(rule.target_glab, int):
+                tgt_idx = rule.target_glab
+            else:
+                tgt_idx = glab_labels.index(rule.target_glab)
         resolved.append((rule, src_idx, tgt_idx))
     return resolved
 

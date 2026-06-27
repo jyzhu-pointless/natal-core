@@ -994,7 +994,7 @@ class SpatialDashboard:
             for glab_idx in range(n_glabs):
                 label = str(hg_obj)
                 if n_glabs > 1:
-                    label += f" [{registry.index_to_glab[glab_idx]}]"
+                    label += f" [{registry.glab_labels[glab_idx]}]"
                 col_labels.append(label)
 
         figs = []
@@ -1031,7 +1031,7 @@ class SpatialDashboard:
             for glab_idx in range(config.n_glabs):
                 label = str(hg_obj)
                 if config.n_glabs > 1:
-                    label += f" [{registry.index_to_glab[glab_idx]}]"
+                    label += f" [{registry.glab_labels[glab_idx]}]"
                 labels.append(label)
 
         z_data = np.full((n_hg_glabs, n_hg_glabs), np.nan)

@@ -384,32 +384,26 @@ class BasePopulation(ABC, Generic[T_State]):
         self._index_registry = self._create_registry()
         self._registry = self._index_registry
 
-        # Step 2: Register genotypes
+        # Set somatic (slab) labels before registering genotypes —
+        # register_genotype() auto-cross-products with slab_labels.
+        raw_slabs = cast(Optional[List[str]], getattr(self._species, "somatic_labels", None))
+        slabs = raw_slabs or ["default"]
+        self._index_registry.slab_labels = slabs
+
+        # Set gamete (glab) labels before registering haplogenotypes —
+        # register_haplogenotype() auto-cross-products with glab_labels.
+        raw_glabs = cast(Optional[List[str]], getattr(self._species, "gamete_labels", None))
+        glabs = raw_glabs or ["default"]
+        self._index_registry.glab_labels = glabs
+
         genotypes = self._get_genotypes()
         for genotype in genotypes:
             self._index_registry.register_genotype(genotype)
 
-        # Step 3: Try to register haplogenotypes if available
         haplogenotypes = self._get_haplogenotypes()
         if haplogenotypes:
             for hg in haplogenotypes:
                 self._index_registry.register_haplogenotype(hg)
-
-        # Step 4: Register gamete labels if provided
-        raw_glabs = cast(Optional[List[str]], getattr(self._species, "gamete_labels", None))
-        glabs = raw_glabs or ["default"]
-        for glab in glabs:
-            self._index_registry.register_gamete_label(glab)
-
-        # Step 5: Register somatic labels (symmetric with gamete labels)
-        raw_slabs = cast(Optional[List[str]], getattr(self._species, "somatic_labels", None))
-        slabs = raw_slabs or ["default"]
-        for slab in slabs:
-            self._index_registry.register_somatic_label(slab)
-
-        # Step 6: Set the engine-visible ZType count.  Updated later by
-        # compression (refresh_modifier_maps) if compress=True.
-        self._index_registry.n_ztypes = self._index_registry.num_genotypes()
 
     # Helpers
     def _create_registry(self) -> IndexRegistry:
@@ -920,8 +914,8 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # Register each string label if not already present
         for lab in seq:
-            if lab not in self._index_registry.glab_to_index:
-                self._index_registry.register_gamete_label(lab)
+            if lab not in self._index_registry.glab_labels:
+                self._index_registry.glab_labels.append(lab)
 
     # ========================================================================
     # Core methods

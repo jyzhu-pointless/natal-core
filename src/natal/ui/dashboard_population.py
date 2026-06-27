@@ -579,7 +579,7 @@ class Dashboard:
             for glab_idx in range(n_glabs):
                 label = str(hg_obj)
                 if n_glabs > 1:
-                    label += f" [{registry.index_to_glab[glab_idx]}]"
+                    label += f" [{registry.glab_labels[glab_idx]}]"
                 col_labels.append(label)
 
         figs = []
@@ -613,7 +613,7 @@ class Dashboard:
             for glab_idx in range(config.n_glabs):
                 label = str(hg_obj)
                 if config.n_glabs > 1:
-                    label += f" [{registry.index_to_glab[glab_idx]}]"
+                    label += f" [{registry.glab_labels[glab_idx]}]"
                 labels.append(label)
 
         # Build matrices for heatmap

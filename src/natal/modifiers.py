@@ -449,9 +449,14 @@ def _parse_zygote_key(
     part1, part2 = key_tuple
     idx_hg1, glab1 = index_registry.resolve_hg_glab_part(haploid_genotypes, part1, n_glabs)
     idx_hg2, glab2 = index_registry.resolve_hg_glab_part(haploid_genotypes, part2, n_glabs)
-    from natal.index_registry import compress_hg_glab
-    c1 = compress_hg_glab(idx_hg1, glab1, n_glabs)
-    c2 = compress_hg_glab(idx_hg2, glab2, n_glabs)
+    # Compress resolved (hg_idx, glab_idx) pairs into single int indices.
+    # The packing formula hg_idx * n_glabs + glab_idx mirrors what
+    # IndexRegistry.gtype_index() computes for registered entries, but
+    # works directly on already-resolved integer indices without requiring
+    # an object lookup — safe for all key forms (including compressed ints
+    # that decompress to out-of-range indices in test/fixture use).
+    c1 = idx_hg1 * n_glabs + glab1
+    c2 = idx_hg2 * n_glabs + glab2
     return c1, c2
 
 

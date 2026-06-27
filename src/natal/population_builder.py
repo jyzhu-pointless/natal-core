@@ -32,6 +32,7 @@ import natal.population_config as _population_config
 from natal.genetic_entities import Genotype, HaploidGenome
 from natal.genetic_structures import Species
 from natal.helpers import resolve_sex_label
+from natal.index_registry import IndexRegistry
 from natal.observation import GroupsInput
 from natal.population_config import (
     BEVERTON_HOLT,
@@ -788,12 +789,15 @@ class PopulationConfigBuilder:
         Returns:
             NDArray[np.float64]: A 3D array [sex, age, genotype].
         """
+        registry = IndexRegistry()
+        slabs = species.somatic_labels or ["default"]
+        for slab in slabs:
+            registry.register_somatic_label(slab)
         genotypes = species.get_all_genotypes(unordered=species.unordered)
-        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        n_slabs = len(species.somatic_labels or ["default"])
-        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
-        n_ztypes = len(genotypes) * n_slabs
-        out = np.zeros((2, n_ages, n_ztypes), dtype=np.float64)
+        for gt in genotypes:
+            registry.register_genotype(gt)
+        out = np.zeros((2, n_ages, registry.n_ztypes), dtype=np.float64)
+        _default_slab = registry.slab_labels[0]
 
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
@@ -801,25 +805,34 @@ class PopulationConfigBuilder:
                 # Support @slab suffix and tuple syntax:
                 #   "A|A@infected" → genotype A|A, slab infected
                 #   (genotype_obj, "infected") → genotype_obj, slab infected
-                slab_idx: int = 0
+                slab_name: str = _default_slab
                 resolved_key: object = genotype_key
                 if isinstance(genotype_key, tuple):
                     _key, _slab = cast("tuple[object, str]", genotype_key)
                     resolved_key = _key
-                    if _slab not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{_slab}'")
-                    slab_idx = slab_to_idx[_slab]
+                    slab_name = _slab
+                    if slab_name not in registry.slab_labels:
+                        raise ValueError(f"Unknown slab label '{slab_name}'")
                 elif isinstance(genotype_key, str) and "@" in genotype_key:
                     g_str, s_str = genotype_key.rsplit("@", 1)
                     resolved_key = g_str
-                    if s_str not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{s_str}' in key '{g_str}@{s_str}'")
-                    slab_idx = slab_to_idx[s_str]
+                    slab_name = s_str
+                    if slab_name not in registry.slab_labels:
+                        raise ValueError(f"Unknown slab label '{slab_name}' in key '{g_str}@{s_str}'")
 
-                genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, resolved_key, genotype_to_index
-                )
-                z_idx = genotype_idx * n_slabs + slab_idx
+                if isinstance(resolved_key, str):
+                    genotype = species.get_genotype_from_str(resolved_key)
+                elif isinstance(resolved_key, Genotype):
+                    genotype = resolved_key
+                else:
+                    raise TypeError(
+                        f"genotype_key must be a genotype or str, got {type(resolved_key)}"
+                    )
+                if genotype.species is not species:
+                    raise ValueError("Genotype must belong to this species")
+                genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
+
+                z_idx = registry.ztype_index(genotype, slab_name)
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
                 )
@@ -848,42 +861,63 @@ class PopulationConfigBuilder:
         Raises:
             TypeError: If storage value is not a dictionary.
         """
+        registry = IndexRegistry()
+        slabs = species.somatic_labels or ["default"]
+        for slab in slabs:
+            registry.register_somatic_label(slab)
         genotypes = species.get_all_genotypes(unordered=species.unordered)
-        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        n_slabs = len(species.somatic_labels or ["default"])
-        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
-        n_ztypes = len(genotypes) * n_slabs
-        out = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
+        for gt in genotypes:
+            registry.register_genotype(gt)
+        out = np.zeros((n_ages, registry.n_ztypes, registry.n_ztypes), dtype=np.float64)
+        _default_slab = registry.slab_labels[0]
 
         for female_key, male_dict in sperm_storage.items():
-            female_idx, female_slab = PopulationConfigBuilder._resolve_genotype_index(
-                species, female_key, genotype_to_index
-            ), 0
-            # Support @slab suffix on female key
+            female_slab_name: str = _default_slab
+            female_resolved: object = female_key
             if isinstance(female_key, str) and "@" in female_key:
                 g_str, s_str = female_key.rsplit("@", 1)
-                if s_str not in slab_to_idx:
+                if s_str not in registry.slab_labels:
                     raise ValueError(f"Unknown slab label '{s_str}' in key '{female_key}'")
-                female_slab = slab_to_idx[s_str]
-                female_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, g_str, genotype_to_index
+                female_slab_name = s_str
+                female_resolved = g_str
+            if isinstance(female_resolved, str):
+                female_genotype = species.get_genotype_from_str(female_resolved)
+            elif isinstance(female_resolved, Genotype):
+                female_genotype = female_resolved
+            else:
+                raise TypeError(
+                    f"female_key must be a genotype or str, got {type(female_resolved)}"
                 )
-            f_z = female_idx * n_slabs + female_slab
+            if female_genotype.species is not species:
+                raise ValueError("Genotype must belong to this species")
+            female_genotype = species.unordered_genotype(
+                female_genotype.maternal, female_genotype.paternal
+            )
+            f_z = registry.ztype_index(female_genotype, female_slab_name)
 
             for male_key, age_data in male_dict.items():
-                male_idx, male_slab = PopulationConfigBuilder._resolve_genotype_index(
-                    species, male_key, genotype_to_index
-                ), 0
-                # Support @slab suffix on male key
+                male_slab_name: str = "default"
+                male_resolved: object = male_key
                 if isinstance(male_key, str) and "@" in male_key:
                     g_str, s_str = male_key.rsplit("@", 1)
-                    if s_str not in slab_to_idx:
+                    if s_str not in registry.slab_labels:
                         raise ValueError(f"Unknown slab label '{s_str}' in key '{male_key}'")
-                    male_slab = slab_to_idx[s_str]
-                    male_idx = PopulationConfigBuilder._resolve_genotype_index(
-                        species, g_str, genotype_to_index
+                    male_slab_name = s_str
+                    male_resolved = g_str
+                if isinstance(male_resolved, str):
+                    male_genotype = species.get_genotype_from_str(male_resolved)
+                elif isinstance(male_resolved, Genotype):
+                    male_genotype = male_resolved
+                else:
+                    raise TypeError(
+                        f"male_key must be a genotype or str, got {type(male_resolved)}"
                     )
-                m_z = male_idx * n_slabs + male_slab
+                if male_genotype.species is not species:
+                    raise ValueError("Genotype must belong to this species")
+                male_genotype = species.unordered_genotype(
+                    male_genotype.maternal, male_genotype.paternal
+                )
+                m_z = registry.ztype_index(male_genotype, male_slab_name)
 
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
@@ -958,35 +992,47 @@ class PopulationConfigBuilder:
         Returns:
             NDArray[np.float64]: A 3D array [sex, age, genotype] with age max 2.
         """
+        registry = IndexRegistry()
+        slabs = species.somatic_labels or ["default"]
+        for slab in slabs:
+            registry.register_somatic_label(slab)
         genotypes = species.get_all_genotypes(unordered=species.unordered)
-        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        n_slabs = len(species.somatic_labels or ["default"])
-        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
-        n_ztypes = len(genotypes) * n_slabs
-        out = np.zeros((2, 2, n_ztypes), dtype=np.float64)
+        for gt in genotypes:
+            registry.register_genotype(gt)
+        out = np.zeros((2, 2, registry.n_ztypes), dtype=np.float64)
+        _default_slab = registry.slab_labels[0]
 
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
             for genotype_key, age_data in genotype_dist.items():
-                slab_idx: int = 0
+                slab_name: str = _default_slab
                 resolved_key: object = genotype_key
                 if isinstance(genotype_key, tuple):
                     _key, _slab = cast("tuple[object, str]", genotype_key)
                     resolved_key = _key
-                    if _slab not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{_slab}'")
-                    slab_idx = slab_to_idx[_slab]
+                    slab_name = _slab
+                    if slab_name not in registry.slab_labels:
+                        raise ValueError(f"Unknown slab label '{slab_name}'")
                 elif isinstance(genotype_key, str) and "@" in genotype_key:
                     g_str, s_str = genotype_key.rsplit("@", 1)
                     resolved_key = g_str
-                    if s_str not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{s_str}' in key '{g_str}@{s_str}'")
-                    slab_idx = slab_to_idx[s_str]
+                    slab_name = s_str
+                    if slab_name not in registry.slab_labels:
+                        raise ValueError(f"Unknown slab label '{slab_name}' in key '{g_str}@{s_str}'")
 
-                genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, resolved_key, genotype_to_index
-                )
-                z_idx = genotype_idx * n_slabs + slab_idx
+                if isinstance(resolved_key, str):
+                    genotype = species.get_genotype_from_str(resolved_key)
+                elif isinstance(resolved_key, Genotype):
+                    genotype = resolved_key
+                else:
+                    raise TypeError(
+                        f"genotype_key must be a genotype or str, got {type(resolved_key)}"
+                    )
+                if genotype.species is not species:
+                    raise ValueError("Genotype must belong to this species")
+                genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
+
+                z_idx = registry.ztype_index(genotype, slab_name)
                 age0, age1 = PopulationConfigBuilder._resolve_discrete_age_distribution(age_data)
                 out[sex_idx, 0, z_idx] += age0
                 out[sex_idx, 1, z_idx] += age1
