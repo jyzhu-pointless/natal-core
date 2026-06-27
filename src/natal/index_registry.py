@@ -13,10 +13,42 @@ are suitable for NumPy arrays and Numba‑accelerated engine.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+
+import numpy as np
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.numba_utils import njit_switch
+
+
+class _CanonicalGenotypeDict(dict[Genotype, int]):
+    """Dict that auto-canonicalizes Genotype keys on lookup.
+
+    Both ``A|a`` and ``a|A`` resolve to the same value because the key
+    is passed through ``Species.unordered_genotype()`` before dict access.
+
+    This is an internal helper so that callers can use
+    ``registry.genotype_to_index[any_form]`` without manual canonicalization.
+    """
+
+    def _canonicalize(self, key: Genotype) -> Genotype:
+        if key.species.unordered:
+            key = key.species.unordered_genotype(key.maternal, key.paternal)
+        return key
+
+    def __getitem__(self, key: Genotype) -> int:
+        return super().__getitem__(self._canonicalize(key))
+
+    def __contains__(self, key: object) -> bool:
+        if isinstance(key, Genotype):
+            key = self._canonicalize(key)
+        return super().__contains__(key)
+
+    def __setitem__(self, key: Genotype, value: int) -> None:
+        super().__setitem__(self._canonicalize(key), value)
 
 
 class IndexRegistry:
@@ -45,32 +77,49 @@ class IndexRegistry:
 
     def __init__(self) -> None:
         # entity mappings
-        self.genotype_to_index: Dict[Genotype, int] = {}
+        # genotype_to_index auto-canonicalizes Genotype keys on lookup
+        # so that A|a and a|A both resolve to the same index.
+        self.genotype_to_index: Dict[Genotype, int] = _CanonicalGenotypeDict()
         self.index_to_genotype: List[Genotype] = []
 
         self.haplo_to_index: Dict[HaploidGenotype, int] = {}
         self.index_to_haplo: List[HaploidGenotype] = []
 
         self.glab_to_index: Dict[str, int] = {}
+
+        # n_ztypes tracks the engine-visible G-axis count.  It starts at
+        # num_genotypes() (the registered canonical count) and is updated
+        # by compression.  Hooks and pattern resolvers read this, not
+        # num_genotypes().
+        self.n_ztypes: int = 0
         self.index_to_glab: List[str] = []
+
+        self.slab_to_index: Dict[str, int] = {}
+        self.index_to_slab: List[str] = []
 
         # axis sizes for compatibility (not used for numeric flattening)
         self.axis_sizes: Dict[str, int] = {}
 
     # ---------- registration API ----------
-    def register_genotype(self, genotype_id: Any) -> int:
+    def register_genotype(self, genotype_id: Genotype) -> int:
         """Register a genotype and return its stable integer index.
 
-        If the genotype key is already present the existing index is returned.
+        The genotype is canonicalized via ``Species.unordered_genotype()``
+        so that ``A|a`` and ``a|A`` share the same index.
 
         Args:
-            genotype_id: A genotype instance or an opaque identifier. The
-                provided object is used as the canonical registry key.
+            genotype_id: A ``Genotype`` instance to register.
 
         Returns:
-            int: The assigned integer index for the genotype. Indices remain
-            stable until :meth:`compact` is called.
+            int: The assigned integer index.  Indices remain stable
+            until the registry is compacted.
         """
+        # Only canonicalize unordered species — sex chromosomes
+        # require maternal/paternal ordering (X|Y ≠ Y|X).
+        if genotype_id.species.unordered:
+            genotype_id = genotype_id.species.unordered_genotype(
+                genotype_id.maternal, genotype_id.paternal,
+            )
         if genotype_id in self.genotype_to_index:
             return self.genotype_to_index[genotype_id]
         idx = len(self.index_to_genotype)
@@ -120,6 +169,91 @@ class IndexRegistry:
         """
         return len(self.index_to_genotype)
 
+    def compress(
+        self,
+        ztype_mask: NDArray[np.int32],
+        gtype_mask: NDArray[np.int32],
+        n_slabs: int = 1,
+    ) -> None:
+        """Permanently remove pruned genotypes and haplotypes from the registry.
+
+        After compression, lookups for pruned entries raise ``KeyError``
+        naturally — no special guard code needed.  Both masks use -1 for
+        pruned entries.
+
+        Args:
+            ztype_mask: ``(G_orig * n_slabs,)`` int32 array — ZType-level
+                compression mask (-1 = pruned).  When *n_slabs* > 1 each
+                genotype has *n_slabs* entries; all slab variants of a
+                genotype share the same fate so we check slab 0.
+            gtype_mask: ``(HL,)`` int32 array — haplotype-level
+                compression mask (-1 = pruned).
+            n_slabs: Number of somatic labels (default 1).
+        """
+        n_z = self._compress_genotypes(ztype_mask, n_slabs)
+        self._compress_haplotypes(gtype_mask)
+        self.n_ztypes = n_z
+
+    def _compress_genotypes(
+        self, ztype_mask: NDArray[np.int32], n_slabs: int
+    ) -> int:
+        _z_full = ztype_mask >= 0
+        _z_active = _z_full[::n_slabs] if n_slabs > 1 else _z_full
+        n_z = int(_z_active.sum())
+
+        old_to_new: dict[int, int] = {
+            int(old): new
+            for new, old in enumerate(np.where(_z_active)[0])
+        }
+
+        self.index_to_genotype = [
+            gt
+            for i, gt in enumerate(self.index_to_genotype)
+            if i < len(_z_active) and _z_active[i]
+        ]
+
+        new_dict: dict[Genotype, int] = _CanonicalGenotypeDict()
+        for genotype, old_idx in list(self.genotype_to_index.items()):
+            new_idx = old_to_new.get(old_idx)
+            if new_idx is not None:
+                new_dict[genotype] = new_idx
+        self.genotype_to_index = new_dict
+        return n_z
+
+    def _compress_haplotypes(self, gtype_mask: NDArray[np.int32]) -> None:
+        _g_active = gtype_mask >= 0
+
+        old_to_new: dict[int, int] = {
+            int(old): new
+            for new, old in enumerate(np.where(_g_active)[0])
+        }
+
+        self.index_to_haplo = [
+            hg
+            for i, hg in enumerate(self.index_to_haplo)
+            if i < len(_g_active) and _g_active[i]
+        ]
+
+        new_dict: dict[HaploidGenotype, int] = {}
+        for haplo, old_idx in list(self.haplo_to_index.items()):
+            new_idx = old_to_new.get(old_idx)
+            if new_idx is not None:
+                new_dict[haplo] = new_idx
+        self.haplo_to_index = new_dict
+
+    def update_n_ztypes(self, n: int) -> None:  # pragma: no cover
+        """Deprecated: use :meth:`compress` instead.
+
+        Only kept for backward compatibility during migration.
+        """
+        import warnings
+        warnings.warn(
+            "update_n_ztypes is deprecated — use registry.compress(ztype_mask, gtype_mask)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.n_ztypes = n
+
     def num_haplogenotypes(self) -> int:
         """Return the number of registered haploid genotypes.
 
@@ -139,6 +273,9 @@ class IndexRegistry:
     def genotype_index(self, genotype_id: Any) -> int:
         """Return the index for a registered genotype key.
 
+        Genotype instances are canonicalized before lookup so that ``A|a``
+        and ``a|A`` resolve to the same index.
+
         Args:
             genotype_id: Registered genotype instance or identifier.
 
@@ -148,6 +285,13 @@ class IndexRegistry:
         Raises:
             KeyError: If the genotype_id is not registered.
         """
+        if isinstance(genotype_id, Genotype):
+            # Only canonicalize unordered species — sex chromosomes
+            # require maternal/paternal ordering (X|Y ≠ Y|X).
+            if genotype_id.species.unordered:
+                genotype_id = genotype_id.species.unordered_genotype(
+                    genotype_id.maternal, genotype_id.paternal,
+                )
         return self.genotype_to_index[genotype_id]
 
     def haplo_index(self, haplo_id: Any) -> int:
@@ -178,22 +322,44 @@ class IndexRegistry:
         """
         return self.glab_to_index[gamete_label]
 
-    # ---------- helpers ----------
-    def _ensure_genotype_index(self, genotype_or_index: Union[Any, int]) -> int:
-        """Convert a genotype selector to an integer index.
+    def register_somatic_label(self, somatic_label: str) -> int:
+        """Register a somatic label (slab) and return its index.
 
-        If the input is an integer within the current valid range it is
-        returned. Otherwise the input is registered as a new genotype key and
-        its newly assigned index is returned.
+        Symmetric with :meth:`register_gamete_label`.
 
         Args:
-            genotype_or_index: Either an int index or a genotype key.
+            somatic_label: String label for somatic state.
 
         Returns:
-            int: A valid genotype index.
+            int: Assigned integer index for the somatic label.
         """
-        if isinstance(genotype_or_index, int) and 0 <= genotype_or_index < len(self.index_to_genotype):
-            return int(genotype_or_index)
+        if somatic_label in self.slab_to_index:
+            return self.slab_to_index[somatic_label]
+        idx = len(self.index_to_slab)
+        self.slab_to_index[somatic_label] = idx
+        self.index_to_slab.append(somatic_label)
+        return idx
+
+    def num_somatic_labels(self) -> int:
+        """Return the number of registered somatic labels."""
+        return len(self.index_to_slab)
+
+    def somatic_label_index(self, somatic_label: str) -> int:
+        """Return the index for a registered somatic label key.
+
+        Raises:
+            KeyError: If the somatic label is not registered.
+        """
+        return self.slab_to_index[somatic_label]
+
+    # ---------- helpers ----------
+    def _ensure_genotype_index(self, genotype_or_index: Genotype | int) -> int:
+        """Convert a genotype or integer index to a valid registry index."""
+        if isinstance(genotype_or_index, int):
+            if 0 <= genotype_or_index < len(self.index_to_genotype):
+                return int(genotype_or_index)
+            raise IndexError(f"Genotype index {genotype_or_index} out of range")
+        assert not isinstance(genotype_or_index, int)
         return self.register_genotype(genotype_or_index)
 
     def _ensure_haplo_index(self, haplo_or_index: Union[Any, int]) -> int:
@@ -314,12 +480,25 @@ class IndexRegistry:
         except Exception:
             pass
 
-        # string match via to_string()
+        # string match via to_string() — try canonical form first,
+        # then the reversed maternal/paternal form (since genotypes
+        # are canonicalized, a user writing "a|A" should still match
+        # the canonical "A|a").
         if isinstance(gk, str):
             for i, g in enumerate(diploid_genotypes):
                 try:
                     if hasattr(g, "to_string") and g.to_string() == gk:
                         return i
+                except Exception:
+                    continue
+            # Try reversed form: swap maternal/paternal in each stored
+            # genotype's string representation.
+            for i, g in enumerate(diploid_genotypes):
+                try:
+                    if hasattr(g, "to_string") and hasattr(g, "maternal") and hasattr(g, "paternal"):
+                        rev = f"{g.paternal.to_string()}|{g.maternal.to_string()}"
+                        if rev == gk:
+                            return i
                 except Exception:
                     continue
 
@@ -542,22 +721,6 @@ def _as_pair(value: object) -> Optional[Tuple[object, object]]:
         return None
     return tuple_value[0], tuple_value[1]
 
-    # ---------- maintenance ----------
-    def compact(self) -> Dict[int, int]:
-        """Reassign genotype indices densely and return an old->new map.
-
-        This operation may change previously-assigned stable indices. Callers
-        that keep external references to genotype indices must apply the
-        returned mapping to update those references.
-
-        Returns:
-            Dict[int, int]: Mapping from old genotype index to new index.
-        """
-        # compact genotypes
-        old_to_new_g = {old: new for new, old in enumerate(range(self.num_genotypes()))}
-        # currently genotypes are dense so mapping is identity; placeholder
-        return old_to_new_g
-
 
 @njit_switch(cache=True)
 def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
@@ -592,3 +755,113 @@ def decompress_hg_glab(compressed_idx: int, n_glabs: int) -> Tuple[int, int]:
     hg_idx = int(compressed_idx) // int(n_glabs)
     glab_idx = int(compressed_idx) % int(n_glabs)
     return hg_idx, glab_idx
+
+
+# ---------------------------------------------------------------------------
+# Genotype index helpers — symmetric with compress_hg_glab / decompress_hg_glab
+# ---------------------------------------------------------------------------
+# Both axes use pure stride arithmetic.
+#
+#   gamete:   hg × glab       →  hg * n_glabs + glab          (pure stride)
+#   genotype: g_orig × slab   →  g_orig * n_slabs + slab      (pure stride)
+#
+# Compression (BFS reachability pruning) produces masks that map original
+# indices → compressed indices (or -1 for pruned).  These masks are cached
+# on IndexRegistry (per-config, not per-species) rather than on any config
+# type, because they are index metadata — not population parameters.  See
+# cache_compression_masks / get_cached_compression_masks below.
+
+
+@njit_switch(cache=True)
+def compress_genotype_index(
+    g_orig: int,
+    slab: int,
+    n_slabs: int,
+) -> int:
+    """Flatten ``(g_orig, slab)`` → integer index via pure stride arithmetic.
+
+    Symmetric to ``compress_hg_glab(hg, glab, n_glabs)``.
+    Compression (maternal/paternal symmetry, unreachable pairs) is applied
+    separately via ``genotype_compression_mask`` on PopulationConfig.
+    """
+    return g_orig * n_slabs + slab
+
+
+@njit_switch(cache=True)
+def decompress_genotype_index(
+    flat_idx: int,
+    n_slabs: int,
+) -> tuple[int, int]:
+    """Decompose a flat index → ``(g_comp, slab)``.
+
+    Symmetric to ``decompress_hg_glab(idx, n_glabs)``.
+    """
+    return flat_idx // n_slabs, flat_idx % n_slabs
+
+
+# ---------------------------------------------------------------------------
+# Compression mask cache
+# ---------------------------------------------------------------------------
+# Compression masks map original indices → compressed indices (-1 = pruned).
+# They are computed by build_gamete_compression_mask() (BFS reachability)
+# and cached here — NOT on PopulationConfig nor DiscretePopulationConfig —
+# because they are index metadata, not population parameters.
+#
+# Why store them at all?  BFS is O(G² × HL²) worst-case.  Re-running on
+# every modifier change is wasteful when the modifier only changes
+# probability values (not reachability).  However, a modifier that drives
+# a probability to zero can make previously reachable genotypes
+# unreachable, invalidating cached masks.
+#
+# Default policy: refresh_modifier_maps() re-runs BFS unconditionally
+# (guaranteed correctness).  Pass skip_compression_bfs=True to reuse
+# cached masks when reachability is known to be stable.
+#
+# Stored per-Species (keyed by id(species)) because masks vary by initial
+# state, not just genotype space — different Population objects for the
+# same Species can produce different reachable sets.  Use
+# clear_compression_masks(species) if building a new config for the same
+# Species with a different initial state.
+
+_compression_cache: dict[int, tuple[NDArray[np.int32], NDArray[np.int32]]] = {}
+
+
+def cache_compression_masks(
+    species: object,
+    gtype_mask: NDArray[np.int32],
+    ztype_mask: NDArray[np.int32],
+) -> None:
+    """Cache BFS-derived compression masks keyed by Species identity.
+
+    Called by ``_rebuild_config_maps`` and ``refresh_modifier_maps``
+    after computing fresh masks.  The caller is responsible for ensuring
+    the masks are still valid before reusing them.
+
+    Args:
+        species: The Species whose genotype space was compressed.
+        gtype_mask: (HL,) int32 array — -1 = pruned, else compressed index.
+        ztype_mask: (G_orig × n_slabs,) int32 — -1 = pruned.
+    """
+    _compression_cache[id(species)] = (gtype_mask, ztype_mask)
+
+
+def get_cached_compression_masks(
+    species: object,
+) -> Optional[tuple[NDArray[np.int32], NDArray[np.int32]]]:
+    """Return cached masks for *species*, or None if never computed.
+
+    The caller should validate that the masks are still current for the
+    maps being compressed.  By default ``refresh_modifier_maps`` re-runs
+    BFS and refreshes the cache rather than trusting stale masks.
+    """
+    return _compression_cache.get(id(species))
+
+
+def clear_compression_masks(species: object) -> None:
+    """Discard cached masks — call when reachability may have changed.
+
+    For example, after building a new config with a different initial
+    state for the same Species, or after a modifier change that is known
+    to alter reachability.
+    """
+    _compression_cache.pop(id(species), None)
