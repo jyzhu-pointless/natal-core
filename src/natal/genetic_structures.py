@@ -2839,7 +2839,11 @@ class Species(GeneticStructure['HaploidGenome']):
         pattern_obj = parser.parse(pattern)
 
         count = 0
+        seen: set[int] = set()
         for genotype in self.iter_genotypes():
+            if id(genotype) in seen:
+                continue
+            seen.add(id(genotype))
             if pattern_obj.matches(genotype):
                 if max_count is not None and count >= max_count:
                     return
@@ -3491,56 +3495,9 @@ class Species(GeneticStructure['HaploidGenome']):
         Used by :meth:`iter_genotypes` (unordered mode), ``initialize_zygote_map``,
         and :class:`IndexRegistry` to deduplicate symmetric genotype pairs.
         """
-        from natal.genetic_entities import Genotype, HaploidGenotype, Haplotype
-
-        # Per-locus allele-index comparison + reassembly when needed.
-        maternal_haps: list[Haplotype] = []
-        paternal_haps: list[Haplotype] = []
-        needs_reassembly = False
-
-        for chromosome in self.chromosomes:
-            hap1 = hg1.get_haplotype_for_chromosome(chromosome)
-            hap2 = hg2.get_haplotype_for_chromosome(chromosome)
-
-            mat_genes: list[Gene] = []
-            pat_genes: list[Gene] = []
-            for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
-                idx1 = locus.allele_index(g1.name)
-                idx2 = locus.allele_index(g2.name)
-                if idx1 <= idx2:
-                    mat_genes.append(g1)
-                    pat_genes.append(g2)
-                else:
-                    mat_genes.append(g2)
-                    pat_genes.append(g1)
-                    needs_reassembly = True
-
-            if needs_reassembly:
-                maternal_haps.append(Haplotype(chromosome=chromosome, genes=mat_genes))
-                paternal_haps.append(Haplotype(chromosome=chromosome, genes=pat_genes))
-            else:
-                maternal_haps.append(hap1)
-                paternal_haps.append(hap2)
-
-        if needs_reassembly:
-            new_maternal = HaploidGenotype(species=self, haplotypes=maternal_haps)
-            new_paternal = HaploidGenotype(species=self, haplotypes=paternal_haps)
-            return Genotype(species=self, maternal=new_maternal, paternal=new_paternal)
-
-        # No per-locus allele swap needed — binary genome-order decision.
-        # Compare per-locus (lexicographic) instead of list.index for robustness.
-        for chromosome in self.chromosomes:
-            hap1 = hg1.get_haplotype_for_chromosome(chromosome)
-            hap2 = hg2.get_haplotype_for_chromosome(chromosome)
-            for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
-                idx1 = locus.allele_index(g1.name)
-                idx2 = locus.allele_index(g2.name)
-                if idx1 < idx2:
-                    return Genotype(species=self, maternal=hg1, paternal=hg2)
-                elif idx1 > idx2:
-                    return Genotype(species=self, maternal=hg2, paternal=hg1)
-        # All alleles equal (fully homozygous).
-        return Genotype(species=self, maternal=hg1, paternal=hg2)
+        from natal.genetic_entities import Genotype
+        mat, pat = _canonical_haploid_pair(self, hg1, hg2)
+        return Genotype(species=self, maternal=mat, paternal=pat)
 
     def build_gamete_map(
         self,
@@ -3645,6 +3602,66 @@ class Species(GeneticStructure['HaploidGenome']):
             "male_genotype_compatibility": m_compat,
         }
         return self._config_blueprint
+
+
+def _canonical_haploid_pair(
+    species: Species,
+    hg1: HaploidGenotype,
+    hg2: HaploidGenotype,
+) -> tuple[HaploidGenotype, HaploidGenotype]:
+    """Return the canonical (maternal, paternal) pair for unordered species.
+
+    Per-locus allele-index comparison.  When alleles at a locus must be
+    swapped between the two haploid genomes, new Haplotype/HaploidGenotype
+    objects are assembled.  Does NOT construct Genotype objects — safe
+    to call from Genotype.__new__ without recursion.
+    """
+    from natal.genetic_entities import HaploidGenotype, Haplotype
+
+    maternal_haps: list[Haplotype] = []
+    paternal_haps: list[Haplotype] = []
+    needs_reassembly = False
+
+    for chromosome in species.chromosomes:
+        hap1 = hg1.get_haplotype_for_chromosome(chromosome)
+        hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+
+        mat_genes: list[Gene] = []
+        pat_genes: list[Gene] = []
+        for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
+            idx1 = locus.allele_index(g1.name)
+            idx2 = locus.allele_index(g2.name)
+            if idx1 <= idx2:
+                mat_genes.append(g1)
+                pat_genes.append(g2)
+            else:
+                mat_genes.append(g2)
+                pat_genes.append(g1)
+                needs_reassembly = True
+
+        if needs_reassembly:
+            maternal_haps.append(Haplotype(chromosome=chromosome, genes=mat_genes))
+            paternal_haps.append(Haplotype(chromosome=chromosome, genes=pat_genes))
+        else:
+            maternal_haps.append(hap1)
+            paternal_haps.append(hap2)
+
+    if needs_reassembly:
+        new_maternal = HaploidGenotype(species=species, haplotypes=maternal_haps)
+        new_paternal = HaploidGenotype(species=species, haplotypes=paternal_haps)
+        return (new_maternal, new_paternal)
+
+    for chromosome in species.chromosomes:
+        hap1 = hg1.get_haplotype_for_chromosome(chromosome)
+        hap2 = hg2.get_haplotype_for_chromosome(chromosome)
+        for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
+            idx1 = locus.allele_index(g1.name)
+            idx2 = locus.allele_index(g2.name)
+            if idx1 < idx2:
+                return (hg1, hg2)
+            elif idx1 > idx2:
+                return (hg2, hg1)
+    return (hg1, hg2)
 
 
 # ---------------------------------------------------------------------------

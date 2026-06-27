@@ -15,7 +15,9 @@ import sys
 
 sys.path.insert(0, '/Users/pointless/Desktop/work/natal-core/src')
 
+import pytest
 from natal.genetic_structures import Species
+from natal.genetic_entities import Genotype
 
 # ============================================================================
 # SETUP: Global Test Species
@@ -33,6 +35,14 @@ TEST_SPECIES = Species.from_dict(
         },
     }
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_genotype_cache():
+    """Clear Genotype cache for TEST_SPECIES before each test to avoid
+    cache-ordering contamination from Genotype.__new__ canonicalization."""
+    if TEST_SPECIES in Genotype._cache:
+        Genotype._cache[TEST_SPECIES].clear()
 
 # ============================================================================
 # TEST 1: Omitting Full Chromosomes
@@ -237,7 +247,7 @@ def test_bracket_grouping():
 
     test_genotypes = [
         ("A1/B1|A2/B2; C1|C1", True),   # Matches: A1,B1 on maternal; A2,B2 on paternal
-        ("A2/B2|A1/B1; C1|C1", False),  # Reversed (order matters for |, not for ::)
+        ("A2/B2|A1/B1; C1|C1", True),   # Reversed (unordered species normalized, now matches)
         ("A1/B1|A2/B1; C1|C1", False),  # Wrong paternal B
     ]
 

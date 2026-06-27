@@ -383,11 +383,6 @@ class ZygoteConversionRuleSet:
             genotype_index: Dict[Genotype, int] = {}
             for idx, gt in enumerate(diploid_genotypes):
                 genotype_index[gt] = idx
-                # Also register the reversed (ordered) form.
-                sp = gt.species
-                rev = Genotype(species=sp, maternal=gt.paternal, paternal=gt.maternal)
-                if rev not in genotype_index:
-                    genotype_index[rev] = idx
 
             hg_glab_to_genotype = _build_hg_glab_genotype_map(
                 haploid_genotypes, diploid_genotypes, n_glabs, population,
@@ -469,6 +464,13 @@ class ZygoteConversionRuleSet:
                 for gt, prob in current_freqs.items():
                     if prob > 1e-12:
                         idx = genotype_index.get(gt)
+                        if idx is None and gt.species.unordered:
+                            from natal.genetic_structures import (
+                                _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
+                            )
+                            mat, pat = _canonical_haploid_pair(gt.species, gt.maternal, gt.paternal)
+                            canonical_gt = Genotype(gt.species, mat, pat)
+                            idx = genotype_index.get(canonical_gt)
                         if idx is not None:
                             final_dist[idx] = final_dist.get(idx, 0.0) + prob
 

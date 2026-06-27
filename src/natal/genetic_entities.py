@@ -614,6 +614,21 @@ class Genotype:
             genotype_name,
         )
 
+        if species.unordered:
+            from natal.genetic_structures import (
+                _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
+            )
+            mat, pat = _canonical_haploid_pair(species, maternal, paternal)
+            # Build canonical genotype_name from the canonical pair.
+            canon_parts: list[str] = []
+            for chrom in species.chromosomes:
+                m = mat.get_haplotype_for_chromosome(chrom)
+                p = pat.get_haplotype_for_chromosome(chrom)
+                def gs(h: Haplotype | None) -> str: return "/".join(g.name for g in h.genes) if h else ""
+                canon_parts.append(f"{gs(m)}|{gs(p)}")
+            canon_name = ";".join(canon_parts)
+            cache_key = (id(mat), id(pat), canon_name)
+
         # Check if this genotype is already cached
         if cache_key in cls._cache[species]:
             return cls._cache[species][cache_key]
