@@ -133,6 +133,9 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
             def __init__(self, genotypes) -> None:
                 self.genotype_to_index = {gt: i for i, gt in enumerate(genotypes)}
 
+            def ztype_indices_for(self, genotype):
+                return [self.genotype_to_index[genotype]]
+
         class _FakePopulation:
             def __init__(self, species, population_config, name=None, initial_individual_count=None, initial_sperm_storage=None, hooks=None) -> None:
                 self.species = species
@@ -212,6 +215,9 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
         class _FakeIndexCore:
             def __init__(self, genotypes) -> None:
                 self.genotype_to_index = {gt: i for i, gt in enumerate(genotypes)}
+
+            def ztype_indices_for(self, genotype):
+                return [self.genotype_to_index[genotype]]
 
         class _FakePopulation:
             def __init__(self, species, population_config, name=None, initial_individual_count=None, initial_sperm_storage=None, hooks=None) -> None:

@@ -1744,19 +1744,19 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
                         target_age = pop.new_adult_age - 1
                         viability_updates = self._iter_viability_updates(
                             values=values,
                             n_ages=self.n_ages,
                             default_age=target_age,
                         )
-                        for sex_idx, age_idx, raw_val in viability_updates:
-                            val = raw_val
-                            if is_multiply:
-                                current = pop.config.viability_fitness[sex_idx, age_idx, genotype_idx]
-                                val *= current
-                            pop.config.set_viability_fitness(sex_idx, genotype_idx, val, age=age_idx)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            for sex_idx, age_idx, raw_val in viability_updates:
+                                val = raw_val
+                                if is_multiply:
+                                    current = pop.config.viability_fitness[sex_idx, age_idx, z_idx]
+                                    val *= current
+                                pop.config.set_viability_fitness(sex_idx, z_idx, val, age=age_idx)
 
             elif method_name == 'fecundity':
                 fecundity_map = cast(FecundityMap, args[0])
@@ -1767,23 +1767,22 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
+                            else:
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
 
             elif method_name == 'sexual_selection':
                 preferences = cast(SexualSelectionMap, args[0])
@@ -1799,13 +1798,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
                     for f_genotype in matched_f_genotypes:
                         for m_genotype in matched_m_genotypes:
-                            f_idx = pop.index_registry.genotype_to_index[f_genotype]
-                            m_idx = pop.index_registry.genotype_to_index[m_genotype]
-                            val = float(preference)
-                            if is_multiply:
-                                current = pop.config.sexual_selection_fitness[f_idx, m_idx]
-                                val *= current
-                            pop.config.set_sexual_selection_fitness(f_idx, m_idx, val)
+                            for f_z in pop.index_registry.ztype_indices_for(f_genotype):
+                                for m_z in pop.index_registry.ztype_indices_for(m_genotype):
+                                    val = float(preference)
+                                    if is_multiply:
+                                        current = pop.config.sexual_selection_fitness[f_z, m_z]
+                                        val *= current
+                                    pop.config.set_sexual_selection_fitness(f_z, m_z, val)
 
             elif method_name == 'zygote_viability':
                 zygote_viability_map = cast(ZygoteViabilityMap, args[0])
@@ -1816,28 +1815,27 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                # For zygote viability fitness, we don't support age-specific values
-                                # value should be a float, not AgeScalarMap
-                                if isinstance(value, dict):
-                                    raise TypeError("Zygote viability fitness does not support age-specific values. Use a float value instead.")
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            # values is a float, not AgeScalarMap for zygote fitness
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    # For zygote viability fitness, we don't support age-specific values
+                                    # value should be a float, not AgeScalarMap
+                                    if isinstance(value, dict):
+                                        raise TypeError("Zygote viability fitness does not support age-specific values. Use a float value instead.")
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
+                            else:
+                                # values is a float, not AgeScalarMap for zygote fitness
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
 
         # 8️⃣ Apply observation groups if set
         if self._observation_groups is not None:
@@ -2221,7 +2219,6 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
                         new_adult_age = 1
                         target_age = new_adult_age - 1
                         viability_updates = self._iter_viability_updates(
@@ -2229,12 +2226,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                             n_ages=2,
                             default_age=target_age,
                         )
-                        for sex_idx, age_idx, raw_val in viability_updates:
-                            val = raw_val
-                            if is_multiply:
-                                current = pop.config.viability_fitness[sex_idx, age_idx, genotype_idx]
-                                val *= current
-                            pop.config.set_viability_fitness(sex_idx, genotype_idx, val, age=age_idx)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            for sex_idx, age_idx, raw_val in viability_updates:
+                                val = raw_val
+                                if is_multiply:
+                                    current = pop.config.viability_fitness[sex_idx, age_idx, z_idx]
+                                    val *= current
+                                pop.config.set_viability_fitness(sex_idx, z_idx, val, age=age_idx)
 
             elif method_name == 'fecundity':
                 fecundity_map = cast(FecundityMap, args[0])
@@ -2245,22 +2243,22 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
+                            else:
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
 
             elif method_name == 'sexual_selection':
                 preferences = cast(SexualSelectionMap, args[0])
@@ -2276,13 +2274,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
                     for f_genotype in matched_f_genotypes:
                         for m_genotype in matched_m_genotypes:
-                            f_idx = pop.index_registry.genotype_to_index[f_genotype]
-                            m_idx = pop.index_registry.genotype_to_index[m_genotype]
-                            val = float(preference)
-                            if is_multiply:
-                                current = pop.config.sexual_selection_fitness[f_idx, m_idx]
-                                val *= current
-                            pop.config.set_sexual_selection_fitness(f_idx, m_idx, val)
+                            for f_z in pop.index_registry.ztype_indices_for(f_genotype):
+                                for m_z in pop.index_registry.ztype_indices_for(m_genotype):
+                                    val = float(preference)
+                                    if is_multiply:
+                                        current = pop.config.sexual_selection_fitness[f_z, m_z]
+                                        val *= current
+                                    pop.config.set_sexual_selection_fitness(f_z, m_z, val)
 
             elif method_name == 'zygote_viability':
                 zygote_viability_map = cast(ZygoteViabilityMap, args[0])
@@ -2293,28 +2291,27 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                # For zygote fitness, we don't support age-specific values
-                                # value should be a float, not AgeScalarMap
-                                if isinstance(value, dict):
-                                    raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            # values is a float, not AgeScalarMap for zygote fitness
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    # For zygote fitness, we don't support age-specific values
+                                    # value should be a float, not AgeScalarMap
+                                    if isinstance(value, dict):
+                                        raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
+                            else:
+                                # values is a float, not AgeScalarMap for zygote fitness
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
 
         # Apply observation groups if set
         if self._observation_groups is not None:

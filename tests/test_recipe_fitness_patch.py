@@ -34,7 +34,18 @@ class _FakeConfig:
 
 class _FakeIndexCore:
     def __init__(self, genotypes) -> None:
-        self.genotype_to_index = {gt: i for i, gt in enumerate(genotypes)}
+        self._genotypes = list(genotypes)
+        self.genotype_to_index = {gt: i for i, gt in enumerate(self._genotypes)}
+
+    @property
+    def index_to_genotype(self) -> list:
+        # Match real IndexRegistry: unique genotypes in registration order
+        return list(self.genotype_to_index.keys())
+
+    def ztype_indices_for(self, genotype) -> list[int]:
+        # In the single-slab case, genotype index = ZType index
+        idx = self.genotype_to_index.get(genotype)
+        return [idx] if idx is not None else []
 
 
 class _FakePopulation:

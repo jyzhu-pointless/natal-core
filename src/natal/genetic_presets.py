@@ -356,62 +356,63 @@ def _apply_viability_allele_scaling(
         target_genes.append(gene)
 
     for genotype in all_genotypes:
-        genotype_idx = population.index_registry.genotype_to_index[genotype]
         copies = _count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             # No target allele copies in this genotype: no effect.
             continue
 
-        if isinstance(config, (int, float, tuple, list)):
-            # Scalar/custom tuple branch:
-            # apply same factor to both sexes at default viability age.
-            factor = _calculate_allele_effect(config, copies, mode)
-            for sex_idx in (0, 1):
-                current = float(viability_arr[sex_idx, default_age, genotype_idx])
-                population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
-            continue
-
-        config_map = cast(Mapping[object, object], config)
-
-        if _is_viability_age_map(config_map):
-            # Age-map branch: config treated as {age: scale} for both sexes.
-            for age, scale in config_map.items():
-                factor = _calculate_allele_effect(scale, copies, mode)
+        z_indices = population.index_registry.ztype_indices_for(genotype)
+        for z_idx in z_indices:
+            if isinstance(config, (int, float, tuple, list)):
+                # Scalar/custom tuple branch:
+                # apply same factor to both sexes at default viability age.
+                factor = _calculate_allele_effect(config, copies, mode)
                 for sex_idx in (0, 1):
-                    current = float(viability_arr[sex_idx, age, genotype_idx])
-                    population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, age)
-            continue
+                    current = float(viability_arr[sex_idx, default_age, z_idx])
+                    population.config.set_viability_fitness(sex_idx, z_idx, current * factor, default_age)
+                continue
 
-        for sex_key, sex_config in config_map.items():
-            # Sex-map branch:
-            # sex_config can be either:
-            #   - direct scale for default age
-            #   - nested {age: scale}
-            sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
-            if _is_effect_scale(sex_config):
-                factor = _calculate_allele_effect(sex_config, copies, mode)
-                current = float(viability_arr[sex_idx, default_age, genotype_idx])
-                population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, default_age)
-            elif isinstance(sex_config, Mapping):
-                sex_age_map = cast(Mapping[object, object], sex_config)
-                for age, scale in sex_age_map.items():
-                    if not isinstance(age, int):
-                        raise TypeError(
-                            f"Invalid viability sex-age key for '{allele_name}', sex '{sex_key}': {type(age).__name__}"
-                        )
-                    if not _is_effect_scale(scale):
-                        raise TypeError(
-                            f"Invalid viability sex-age scale for '{allele_name}', sex '{sex_key}', age {age}: "
-                            f"{type(scale).__name__}"
-                        )
+            config_map = cast(Mapping[object, object], config)
+
+            if _is_viability_age_map(config_map):
+                # Age-map branch: config treated as {age: scale} for both sexes.
+                for age, scale in config_map.items():
                     factor = _calculate_allele_effect(scale, copies, mode)
-                    current = float(viability_arr[sex_idx, int(age), genotype_idx])
-                    population.config.set_viability_fitness(sex_idx, genotype_idx, current * factor, int(age))
-            else:
-                raise TypeError(
-                    f"Invalid viability allele sex config for '{allele_name}', sex '{sex_key}': "
-                    f"{type(sex_config).__name__}"
-                )
+                    for sex_idx in (0, 1):
+                        current = float(viability_arr[sex_idx, age, z_idx])
+                        population.config.set_viability_fitness(sex_idx, z_idx, current * factor, age)
+                continue
+
+            for sex_key, sex_config in config_map.items():
+                # Sex-map branch:
+                # sex_config can be either:
+                #   - direct scale for default age
+                #   - nested {age: scale}
+                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                if _is_effect_scale(sex_config):
+                    factor = _calculate_allele_effect(sex_config, copies, mode)
+                    current = float(viability_arr[sex_idx, default_age, z_idx])
+                    population.config.set_viability_fitness(sex_idx, z_idx, current * factor, default_age)
+                elif isinstance(sex_config, Mapping):
+                    sex_age_map = cast(Mapping[object, object], sex_config)
+                    for age, scale in sex_age_map.items():
+                        if not isinstance(age, int):
+                            raise TypeError(
+                                f"Invalid viability sex-age key for '{allele_name}', sex '{sex_key}': {type(age).__name__}"
+                            )
+                        if not _is_effect_scale(scale):
+                            raise TypeError(
+                                f"Invalid viability sex-age scale for '{allele_name}', sex '{sex_key}', age {age}: "
+                                f"{type(scale).__name__}"
+                            )
+                        factor = _calculate_allele_effect(scale, copies, mode)
+                        current = float(viability_arr[sex_idx, int(age), z_idx])
+                        population.config.set_viability_fitness(sex_idx, z_idx, current * factor, int(age))
+                else:
+                    raise TypeError(
+                        f"Invalid viability allele sex config for '{allele_name}', sex '{sex_key}': "
+                        f"{type(sex_config).__name__}"
+                    )
 
 def _apply_fecundity_allele_scaling(
     population: 'BasePopulation[Any]',
@@ -437,30 +438,31 @@ def _apply_fecundity_allele_scaling(
         target_genes.append(gene)
 
     for genotype in all_genotypes:
-        genotype_idx = population.index_registry.genotype_to_index[genotype]
         copies = _count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             continue
 
-        if isinstance(config, (int, float, tuple, list)):
-            # Global branch (both sexes).
-            factor = _calculate_allele_effect(config, copies, mode)
-            for sex_idx in (0, 1):
-                current = float(fecundity_arr[sex_idx, genotype_idx])
-                population.config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
-            continue
+        z_indices = population.index_registry.ztype_indices_for(genotype)
+        for z_idx in z_indices:
+            if isinstance(config, (int, float, tuple, list)):
+                # Global branch (both sexes).
+                factor = _calculate_allele_effect(config, copies, mode)
+                for sex_idx in (0, 1):
+                    current = float(fecundity_arr[sex_idx, z_idx])
+                    population.config.set_fecundity_fitness(sex_idx, z_idx, current * factor)
+                continue
 
-        config_map = cast(Mapping[object, object], config)
-        for sex_key, scale in config_map.items():
-            # Sex-specific branch.
-            sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
-            if not _is_effect_scale(scale):
-                raise TypeError(
-                    f"Invalid fecundity sex scale for '{allele_name}', sex '{sex_key}': {type(scale).__name__}"
-                )
-            factor = _calculate_allele_effect(scale, copies, mode)
-            current = float(fecundity_arr[sex_idx, genotype_idx])
-            population.config.set_fecundity_fitness(sex_idx, genotype_idx, current * factor)
+            config_map = cast(Mapping[object, object], config)
+            for sex_key, scale in config_map.items():
+                # Sex-specific branch.
+                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                if not _is_effect_scale(scale):
+                    raise TypeError(
+                        f"Invalid fecundity sex scale for '{allele_name}', sex '{sex_key}': {type(scale).__name__}"
+                    )
+                factor = _calculate_allele_effect(scale, copies, mode)
+                current = float(fecundity_arr[sex_idx, z_idx])
+                population.config.set_fecundity_fitness(sex_idx, z_idx, current * factor)
 
 def _apply_sexual_selection_allele_scaling(
     population: 'BasePopulation[Any]',
@@ -490,9 +492,9 @@ def _apply_sexual_selection_allele_scaling(
         target_genes.append(gene)
 
     for f_genotype in all_genotypes:
-        f_idx = population.index_registry.genotype_to_index[f_genotype]
+        f_z_indices = population.index_registry.ztype_indices_for(f_genotype)
         for m_genotype in all_genotypes:
-            m_idx = population.index_registry.genotype_to_index[m_genotype]
+            m_z_indices = population.index_registry.ztype_indices_for(m_genotype)
             copies = _count_combined_allele_copies(m_genotype, target_genes)
 
             if isinstance(config, tuple):
@@ -507,8 +509,10 @@ def _apply_sexual_selection_allele_scaling(
                 # Copy-number-based logic via mode.
                 factor = _calculate_allele_effect(config, copies, mode)
 
-            current = float(sex_sel_arr[f_idx, m_idx])
-            population.config.set_sexual_selection_fitness(f_idx, m_idx, current * factor)
+            for f_z in f_z_indices:
+                for m_z in m_z_indices:
+                    current = float(sex_sel_arr[f_z, m_z])
+                    population.config.set_sexual_selection_fitness(f_z, m_z, current * factor)
 
 def _apply_zygote_viability_allele_scaling(
     population: 'BasePopulation[Any]',
@@ -536,43 +540,44 @@ def _apply_zygote_viability_allele_scaling(
 
     # Compute scaling factors for each genotype
     for genotype in all_genotypes:
-        genotype_idx = population.index_registry.genotype_to_index[genotype]
         copy_count: int = _count_combined_allele_copies(genotype, target_genes)
 
         # Apply scaling based on copy count
         if copy_count == 0:
             continue  # No effect for zero copies
 
-        # Get scaling factor for this copy count
-        if _is_effect_scale(config):
-            # Scalar/custom tuple branch for both sexes.
-            total_scale = _calculate_allele_effect(config, copy_count, mode)
-            for sex_idx in range(2):
-                current = float(zygote_arr[sex_idx, genotype_idx])
-                population.config.set_zygote_viability_fitness(sex_idx, genotype_idx, current * total_scale)
-        elif isinstance(config, Mapping):
-            # Sex-specific config.
-            config_map = cast(Mapping[object, object], config)
-            for sex_key, sex_config in config_map.items():
-                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
-                if _is_effect_scale(sex_config):
-                    total_scale = _calculate_allele_effect(sex_config, copy_count, mode)
-                    current = float(zygote_arr[sex_idx, genotype_idx])
-                    population.config.set_zygote_viability_fitness(sex_idx, genotype_idx, current * total_scale)
-                elif isinstance(sex_config, Mapping):
-                    # Age-specific config (not applicable to zygote fitness)
-                    raise TypeError(
-                        f"Age-specific config not supported for zygote_allele: {sex_config}"
-                    )
-                else:
-                    raise TypeError(
-                        f"Invalid zygote allele sex config for '{allele_name}', sex '{sex_key}': "
-                        f"{type(sex_config).__name__}"
-                    )
-        else:
-            raise TypeError(
-                f"Invalid zygote allele config for '{allele_name}': {type(config).__name__}"
-            )
+        z_indices = population.index_registry.ztype_indices_for(genotype)
+        for z_idx in z_indices:
+            # Get scaling factor for this copy count
+            if _is_effect_scale(config):
+                # Scalar/custom tuple branch for both sexes.
+                total_scale = _calculate_allele_effect(config, copy_count, mode)
+                for sex_idx in range(2):
+                    current = float(zygote_arr[sex_idx, z_idx])
+                    population.config.set_zygote_viability_fitness(sex_idx, z_idx, current * total_scale)
+            elif isinstance(config, Mapping):
+                # Sex-specific config.
+                config_map = cast(Mapping[object, object], config)
+                for sex_key, sex_config in config_map.items():
+                    sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                    if _is_effect_scale(sex_config):
+                        total_scale = _calculate_allele_effect(sex_config, copy_count, mode)
+                        current = float(zygote_arr[sex_idx, z_idx])
+                        population.config.set_zygote_viability_fitness(sex_idx, z_idx, current * total_scale)
+                    elif isinstance(sex_config, Mapping):
+                        # Age-specific config (not applicable to zygote fitness)
+                        raise TypeError(
+                            f"Age-specific config not supported for zygote_allele: {sex_config}"
+                        )
+                    else:
+                        raise TypeError(
+                            f"Invalid zygote allele sex config for '{allele_name}', sex '{sex_key}': "
+                            f"{type(sex_config).__name__}"
+                        )
+            else:
+                raise TypeError(
+                    f"Invalid zygote allele config for '{allele_name}': {type(config).__name__}"
+                )
 
 # ── Slab-based fitness scaling (per_slab keys) ──────────────────────────
 
@@ -655,7 +660,7 @@ def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetF
     if not patch:
         return
 
-    all_genotypes = list(population.index_registry.genotype_to_index.keys())
+    all_genotypes = population.index_registry.index_to_genotype
 
     # ----------------------------------------------------------------------
     # 1) Selector-based viability patch
@@ -673,35 +678,39 @@ def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetF
             context='preset.viability',
         )
         for genotype in matched:
-            genotype_idx = population.index_registry.genotype_to_index[genotype]
+            z_indices = population.index_registry.ztype_indices_for(genotype)
 
             # scalar: both sexes at default viability age
             if isinstance(config, (int, float)):
-                population.config.set_viability_fitness(0, genotype_idx, float(config))
-                population.config.set_viability_fitness(1, genotype_idx, float(config))
+                for z_idx in z_indices:
+                    population.config.set_viability_fitness(0, z_idx, float(config))
+                    population.config.set_viability_fitness(1, z_idx, float(config))
                 continue
 
             # age-specific for both sexes: {age: scale}
             config_map = cast(Mapping[object, object], config)
             if _is_simple_age_scale_map(config_map):
-                for age, scale in config_map.items():
-                    population.config.set_viability_fitness(0, genotype_idx, float(scale), int(age))
-                    population.config.set_viability_fitness(1, genotype_idx, float(scale), int(age))
+                for z_idx in z_indices:
+                    for age, scale in config_map.items():
+                        population.config.set_viability_fitness(0, z_idx, float(scale), int(age))
+                        population.config.set_viability_fitness(1, z_idx, float(scale), int(age))
                 continue
 
             # sex-specific: {sex: float | {age: scale}}
             for sex_key, sex_config in config_map.items():
                 sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
                 if isinstance(sex_config, (int, float)):
-                    population.config.set_viability_fitness(sex_idx, genotype_idx, float(sex_config))
+                    for z_idx in z_indices:
+                        population.config.set_viability_fitness(sex_idx, z_idx, float(sex_config))
                 elif isinstance(sex_config, Mapping):
                     sex_age_map = cast(Mapping[object, object], sex_config)
-                    for age, scale in sex_age_map.items():
-                        if not isinstance(age, int) or not isinstance(scale, (int, float)):
-                            raise TypeError(
-                                f"Invalid viability sex-age config for selector '{selector}', sex '{sex_key}'"
-                            )
-                        population.config.set_viability_fitness(sex_idx, genotype_idx, float(scale), int(age))
+                    for z_idx in z_indices:
+                        for age, scale in sex_age_map.items():
+                            if not isinstance(age, int) or not isinstance(scale, (int, float)):
+                                raise TypeError(
+                                    f"Invalid viability sex-age config for selector '{selector}', sex '{sex_key}'"
+                                )
+                            population.config.set_viability_fitness(sex_idx, z_idx, float(scale), int(age))
                 else:
                     raise TypeError(
                         f"Invalid viability sex config for selector '{selector}', sex '{sex_key}': "
@@ -723,11 +732,12 @@ def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetF
             context='preset.fecundity',
         )
         for genotype in matched:
-            genotype_idx = population.index_registry.genotype_to_index[genotype]
+            z_indices = population.index_registry.ztype_indices_for(genotype)
 
             if isinstance(config, (int, float)):
-                population.config.set_fecundity_fitness(0, genotype_idx, float(config))
-                population.config.set_fecundity_fitness(1, genotype_idx, float(config))
+                for z_idx in z_indices:
+                    population.config.set_fecundity_fitness(0, z_idx, float(config))
+                    population.config.set_fecundity_fitness(1, z_idx, float(config))
                 continue
 
             config_map = cast(Mapping[object, object], config)
@@ -737,7 +747,8 @@ def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetF
                     raise TypeError(
                         f"Invalid fecundity sex scale for selector '{selector}', sex '{sex_key}'"
                     )
-                population.config.set_fecundity_fitness(sex_idx, genotype_idx, float(scale))
+                for z_idx in z_indices:
+                    population.config.set_fecundity_fitness(sex_idx, z_idx, float(scale))
 
     # ----------------------------------------------------------------------
     # 3) Selector-based sexual-selection patch
@@ -771,10 +782,12 @@ def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetF
                 context='preset.sexual_selection(male)',
             )
             for f_genotype in female_matched:
-                f_idx = population.index_registry.genotype_to_index[f_genotype]
+                f_z_indices = population.index_registry.ztype_indices_for(f_genotype)
                 for m_genotype in male_matched:
-                    m_idx = population.index_registry.genotype_to_index[m_genotype]
-                    population.config.set_sexual_selection_fitness(f_idx, m_idx, float(scale))
+                    m_z_indices = population.index_registry.ztype_indices_for(m_genotype)
+                    for f_z in f_z_indices:
+                        for m_z in m_z_indices:
+                            population.config.set_sexual_selection_fitness(f_z, m_z, float(scale))
 
     # ----------------------------------------------------------------------
     # 4) Allele-based patches
@@ -815,16 +828,18 @@ def apply_preset_fitness_patch(population: 'BasePopulation[Any]', patch: PresetF
             context='preset.zygote',
         )
         for genotype in matched:
-            genotype_idx = population.index_registry.genotype_to_index[genotype]
+            z_indices = population.index_registry.ztype_indices_for(genotype)
             if isinstance(config, (int, float)):
-                population.config.set_zygote_viability_fitness(0, genotype_idx, float(config))
-                population.config.set_zygote_viability_fitness(1, genotype_idx, float(config))
+                for z_idx in z_indices:
+                    population.config.set_zygote_viability_fitness(0, z_idx, float(config))
+                    population.config.set_zygote_viability_fitness(1, z_idx, float(config))
             elif isinstance(config, Mapping):
                 config_map = cast(Mapping[object, object], config)
                 for sex_key, sex_config in config_map.items():
                     sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
                     if isinstance(sex_config, (int, float)):
-                        population.config.set_zygote_viability_fitness(sex_idx, genotype_idx, float(sex_config))
+                        for z_idx in z_indices:
+                            population.config.set_zygote_viability_fitness(sex_idx, z_idx, float(sex_config))
 
     # 6) Zygote allele-based fitness patch
     zygote_per_allele_patch = patch.get('zygote_per_allele', {})

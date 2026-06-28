@@ -652,14 +652,14 @@ def _write_fitness_field(
                     )
                     # ---- write every female×male combination ----
                     for f_geno in matched_f:
-                        f_idx = registry.genotype_to_index[f_geno]
-                        for m_geno in matched_m:
-                            m_idx = registry.genotype_to_index[m_geno]
-                            val = float(value)
-                            if mode == "replace":
-                                arr[f_idx, m_idx] = val
-                            else:
-                                arr[f_idx, m_idx] *= val
+                        for f_z in registry.ztype_indices_for(f_geno):
+                            for m_geno in matched_m:
+                                for m_z in registry.ztype_indices_for(m_geno):
+                                    val = float(value)
+                                    if mode == "replace":
+                                        arr[f_z, m_z] = val
+                                    else:
+                                        arr[f_z, m_z] *= val
             return
 
         # ═══════════════════════════════════════════════════════════════
@@ -684,12 +684,12 @@ def _write_fitness_field(
                 context="sexual_selection (male)",
             )
             for m_geno in matched_m:
-                m_idx = registry.genotype_to_index[m_geno]
-                val = float(value)
-                if mode == "replace":
-                    arr[:, m_idx] = val        # broadcast: all females × this male
-                else:
-                    arr[:, m_idx] *= val
+                for m_z in registry.ztype_indices_for(m_geno):
+                    val = float(value)
+                    if mode == "replace":
+                        arr[:, m_z] = val        # broadcast: all females × this male
+                    else:
+                        arr[:, m_z] *= val
         return
 
     # ══════════════════════════════════════════════════════════════════════
@@ -817,12 +817,6 @@ def _write_fitness_field_flat(
         slab_to_idx = {s: i for i, s in enumerate(raw_slabs)}
 
     for selector, value in patch.items():
-        # ---- extract @slab suffix for ZType indexing ----
-        # Supports plain names (@infected), negation (@!infected),
-        # and sets (@{normal,infected}).  Parsed via LabPattern.
-        slab_indices: list[int] = list(range(max(len(slab_to_idx), 1)))
-        genotype_selector = selector
-
         # ── tuple syntax: (Genotype, "slab_label") ──
         if isinstance(selector, tuple):
             if len(selector) != 2:
@@ -884,60 +878,48 @@ def _write_fitness_field_flat(
             continue
         # ── end tuple branch ──
 
-        if "@" in str(selector):
-            g_str, s_str = str(selector).rsplit("@", 1)
-            genotype_selector = g_str
-            from natal.genetic_patterns import LabPattern
-            lab = LabPattern.parse(s_str)
-            raw_slabs = list(slab_to_idx.keys())
-            slab_indices = [i for i, s in enumerate(raw_slabs) if lab.matches(s)]
-            if not slab_indices:
-                raise ValueError(
-                    f"No slab matches '{s_str}' in fitness.{field_name} "
-                    f"selector '{selector}'.  Available: {raw_slabs}"
-                )
+        from natal.genetic_patterns import ZygoteTypePattern
+        pattern = ZygoteTypePattern.parse(str(selector), species)
+        z_indices = registry.resolve_ztype_indices(pattern)
 
-        matched = species.resolve_genotype_selectors(
-            selector=genotype_selector,
-            all_genotypes=all_genotypes,
-            context=f"fitness.{field_name}",
-        )
-        for genotype in matched:
-            age_slice = slice(resolved_age, resolved_age + 1)
+        if not z_indices:
+            raise ValueError(
+                f"No zygote type matches '{selector}' in fitness.{field_name}"
+            )
 
-            for si in slab_indices:
-                zidx = registry.ztype_index(genotype, registry.slab_labels[si])
+        age_slice = slice(resolved_age, resolved_age + 1)
 
-                if field_name == "viability":
-                    arr = config.viability_fitness
-                    if mode == "replace":
-                        arr[sex_idx, age_slice, zidx] = float(value)
+        for zidx in z_indices:
+            if field_name == "viability":
+                arr = config.viability_fitness
+                if mode == "replace":
+                    arr[sex_idx, age_slice, zidx] = float(value)
+                else:
+                    arr[sex_idx, age_slice, zidx] *= float(value)
+            elif field_name == "fecundity":
+                arr = config.fecundity_fitness
+                if mode == "replace":
+                    arr[sex_idx, zidx] = float(value)
+                else:
+                    arr[sex_idx, zidx] *= float(value)
+            elif field_name == "sexual_selection":
+                arr = config.sexual_selection_fitness
+                if mode == "replace":
+                    if sex_idx == 0:
+                        arr[zidx, :] = float(value)
                     else:
-                        arr[sex_idx, age_slice, zidx] *= float(value)
-                elif field_name == "fecundity":
-                    arr = config.fecundity_fitness
-                    if mode == "replace":
-                        arr[sex_idx, zidx] = float(value)
+                        arr[:, zidx] = float(value)
+                else:
+                    if sex_idx == 0:
+                        arr[zidx, :] *= float(value)
                     else:
-                        arr[sex_idx, zidx] *= float(value)
-                elif field_name == "sexual_selection":
-                    arr = config.sexual_selection_fitness
-                    if mode == "replace":
-                        if sex_idx == 0:
-                            arr[zidx, :] = float(value)
-                        else:
-                            arr[:, zidx] = float(value)
-                    else:
-                        if sex_idx == 0:
-                            arr[zidx, :] *= float(value)
-                        else:
-                            arr[:, zidx] *= float(value)
-                elif field_name == "zygote_viability":
-                    arr = config.zygote_viability_fitness
-                    if mode == "replace":
-                        arr[sex_idx, zidx] = float(value)
-                    else:
-                        arr[sex_idx, zidx] *= float(value)
+                        arr[:, zidx] *= float(value)
+            elif field_name == "zygote_viability":
+                arr = config.zygote_viability_fitness
+                if mode == "replace":
+                    arr[sex_idx, zidx] = float(value)
+                else:
+                    arr[sex_idx, zidx] *= float(value)
 
 
 # ── Configurator ───────────────────────────────────────────────────────────────
