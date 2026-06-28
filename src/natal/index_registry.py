@@ -179,6 +179,20 @@ class IndexRegistry:
         pass
 
     @property
+    def index_to_gtype(self) -> List[Tuple[HaploidGenotype, str]]:
+        """Computed list of (haplogenotype, glab_label) pairs from GType space.
+
+        The index in this list is the GType index — the same index returned
+        by ``gtype_index()`` and consumed by the engine's compressed arrays.
+        """
+        return self._index_to_gtype.copy()
+
+    @index_to_gtype.setter
+    def index_to_gtype(self, value: object) -> None:
+        """Backward-compat no-op setter."""
+        pass
+
+    @property
     def glab_to_index(self) -> Dict[str, int]:
         """Computed dict mapping gamete label strings to their index in ``glab_labels``."""
         return {label: i for i, label in enumerate(self.glab_labels)}
