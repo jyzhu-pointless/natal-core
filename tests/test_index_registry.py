@@ -79,15 +79,15 @@ class TestGenotype:
         gt1 = _gt(sp, "A|a")
         reg.register_genotype(gt0)
         reg.register_genotype(gt1)
-        assert reg.genotype_index(gt0) == 0
-        assert reg.genotype_index(gt1) == 1
+        assert reg.ztype_index(gt0, "default") == 0
+        assert reg.ztype_index(gt1, "default") == 1
 
     def test_genotype_index_missing_raises(self):
         reg = IndexRegistry()
         sp = _simple_species()
         gt = _gt(sp, "A|A")
         with pytest.raises((KeyError, ValueError)):
-            reg.genotype_index(gt)
+            reg.ztype_index(gt, "default")
 
 
 class TestHaplogenotype:
@@ -172,7 +172,7 @@ class TestIndependentRegistries:
         reg.register_genotype(gt)
         reg.register_haplogenotype(hg)
         # Both start at 0 in their own space
-        assert reg.genotype_index(gt) == 0
+        assert reg.ztype_index(gt, "default") == 0
         assert reg.haplo_index(hg) == 0
         assert reg.num_genotypes() == 1
         assert reg.num_haplogenotypes() == 1
@@ -196,10 +196,10 @@ class TestCompress:
 
         assert reg.n_ztypes == 2
         assert reg.num_genotypes() == 2
-        assert reg.genotype_index(gt0) == 0
-        assert reg.genotype_index(gt2) == 1
+        assert reg.ztype_index(gt0, "default") == 0
+        assert reg.ztype_index(gt2, "default") == 1
         with pytest.raises(KeyError):
-            reg.genotype_index(gt1)
+            reg.ztype_index(gt1, "default")
 
     def test_compress_rebuilds_index_to_genotype(self):
         reg = IndexRegistry()
@@ -251,9 +251,9 @@ class TestCompress:
         reg.compress(ztype_mask, gtype_mask)
 
         assert reg.n_ztypes == 3
-        assert reg.genotype_index(gt0) == 0
-        assert reg.genotype_index(gt1) == 1
-        assert reg.genotype_index(gt2) == 2
+        assert reg.ztype_index(gt0, "default") == 0
+        assert reg.ztype_index(gt1, "default") == 1
+        assert reg.ztype_index(gt2, "default") == 2
 
 
 class TestZTypeRegistration:
@@ -485,7 +485,7 @@ class TestComputedProperties:
         gt = _gt(sp, "A|A")
         reg.register_ztype(gt, "default")
         reg.register_ztype(gt, "infected")
-        assert reg.genotype_to_index[gt] == 0
+        assert reg.ztype_index(gt, "default") == 0
 
     def test_index_to_genotype_computed(self):
         reg = IndexRegistry()

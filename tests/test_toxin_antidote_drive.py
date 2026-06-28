@@ -170,9 +170,9 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
 
         updates = modifier()
 
-        gt_idx = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive|WT")
-        ]
+        gt_idx = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive|WT"), "default",
+        )
         self.assertIn((0, gt_idx), updates)
 
         converted = updates[(0, gt_idx)]
@@ -216,9 +216,9 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
         self.assertIn(c_pair, updates)
 
         dist = updates[c_pair]
-        drive_disrupted_idx = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive|Disrupted")
-        ]
+        drive_disrupted_idx = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive|Disrupted"), "default",
+        )
 
         self.assertEqual(len(dist), 1)
         self.assertAlmostEqual(dist.get(drive_disrupted_idx, 0.0), 1.0)
@@ -250,9 +250,9 @@ class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):
             self.fail("Expected non-empty gamete modifier")
 
         updates = modifier()
-        gt_idx = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive/WT2|WT1/WT2")
-        ]
+        gt_idx = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive/WT2|WT1/WT2"), "default",
+        )
         self.assertIn((0, gt_idx), updates)
 
         converted = updates[(0, gt_idx)]
@@ -297,15 +297,15 @@ class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):
         self.assertIn(c_pair, updates)
 
         dist = updates[c_pair]
-        idx_maternal_only = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive/Disrupted|WT1/WT2")
-        ]
-        idx_paternal_only = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive/WT2|WT1/Disrupted")
-        ]
-        idx_both = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive/Disrupted|WT1/Disrupted")
-        ]
+        idx_maternal_only = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive/Disrupted|WT1/WT2"), "default",
+        )
+        idx_paternal_only = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive/WT2|WT1/Disrupted"), "default",
+        )
+        idx_both = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive/Disrupted|WT1/Disrupted"), "default",
+        )
 
         self.assertGreater(dist.get(idx_maternal_only, 0.0), 0.0)
         self.assertGreater(dist.get(idx_paternal_only, 0.0), 0.0)
@@ -338,9 +338,9 @@ class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
             self.fail("Expected non-empty gamete modifier")
 
         updates = modifier()
-        gt_idx = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive|WT1;WT2|WT2")
-        ]
+        gt_idx = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive|WT1;WT2|WT2"), "default",
+        )
         self.assertIn((0, gt_idx), updates)
 
         converted = updates[(0, gt_idx)]
@@ -384,15 +384,15 @@ class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
         self.assertIn(c_pair, updates)
 
         dist = updates[c_pair]
-        idx_maternal_only = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive|WT1;Disrupted|WT2")
-        ]
-        idx_paternal_only = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive|WT1;WT2|Disrupted")
-        ]
-        idx_both = self.population.index_registry.genotype_to_index[
-            self.species.get_genotype_from_str("Drive|WT1;Disrupted|Disrupted")
-        ]
+        idx_maternal_only = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive|WT1;Disrupted|WT2"), "default",
+        )
+        idx_paternal_only = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive|WT1;WT2|Disrupted"), "default",
+        )
+        idx_both = self.population.index_registry.ztype_index(
+            self.species.get_genotype_from_str("Drive|WT1;Disrupted|Disrupted"), "default",
+        )
 
         self.assertGreater(dist.get(idx_maternal_only, 0.0), 0.0)
         self.assertGreater(dist.get(idx_paternal_only, 0.0), 0.0)

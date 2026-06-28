@@ -27,31 +27,6 @@ from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.numba_utils import njit_switch
 
 
-class _UnorderedGenotypeDict(dict[Genotype, int]):
-    """Dict that auto-canonicalizes Genotype keys on lookup.
-
-    Both ``A|a`` and ``a|A`` resolve to the same value because the key
-    is passed through ``Species.unordered_genotype()`` before dict access.
-
-    This is an internal helper so that callers can use
-    ``registry.genotype_to_index[any_form]`` without manual canonicalization.
-    """
-
-    def _canonicalize(self, key: Genotype) -> Genotype:
-        return key.species.unordered_genotype(key.maternal, key.paternal)
-
-    def __getitem__(self, key: Genotype) -> int:
-        return super().__getitem__(self._canonicalize(key))
-
-    def __contains__(self, key: object) -> bool:
-        if isinstance(key, Genotype):
-            key = self._canonicalize(key)
-        return super().__contains__(key)
-
-    def __setitem__(self, key: Genotype, value: int) -> None:
-        super().__setitem__(self._canonicalize(key), value)
-
-
 class IndexRegistry:
     """Registry providing stable integer indices for population entities.
 
@@ -106,26 +81,6 @@ class IndexRegistry:
     @n_gtypes.setter
     def n_gtypes(self, value: int) -> None:
         """Backward-compat no-op setter — n_gtypes is always computed."""
-        pass
-
-    @property
-    def genotype_to_index(self) -> Dict[Genotype, int]:
-        """Computed dict of unique genotypes from the ZType space.
-
-        Derived from ``_index_to_ztype`` so that after compression only
-        surviving genotypes appear.
-        """
-        result: dict[Genotype, int] = _UnorderedGenotypeDict()
-        seen: set[Genotype] = set()
-        for gt, _slab in self._index_to_ztype:
-            if gt not in seen:
-                result[gt] = len(seen)
-                seen.add(gt)
-        return result
-
-    @genotype_to_index.setter
-    def genotype_to_index(self, value: object) -> None:
-        """Backward-compat no-op setter."""
         pass
 
     @property
@@ -249,27 +204,8 @@ class IndexRegistry:
         pass
 
     # ==================================================================
-    # Internal helpers — ensure a genotype/haplo is tracked in flat lists
+    # Internal helpers — ensure a haplo is tracked in flat lists
     # ==================================================================
-
-    def _ensure_genotype_registered(self, genotype: Genotype) -> int:
-        """Register a genotype in the computed dicts if not already present.
-
-        This is a no-op if the genotype already appears in ``_index_to_ztype``
-        (via a prior ``register_ztype`` call).  Otherwise it registers the
-        genotype with the first slab label (or ``"default"``).
-
-        Returns:
-            The genotype's index in the computed ``genotype_to_index`` dict.
-        """
-        # Check if already present via ZType space
-        for gt, _slab in self._index_to_ztype:
-            if gt == genotype:
-                return self.genotype_to_index[genotype]
-        # Register with first available slab (or "default")
-        slab = self.slab_labels[0] if self.slab_labels else "default"
-        self.register_ztype(genotype, slab)
-        return self.genotype_to_index[genotype]
 
     def _ensure_haplo_registered(self, haplo: HaploidGenotype) -> int:
         """Register a haplotype in the computed dicts if not already present.
@@ -435,23 +371,6 @@ class IndexRegistry:
     def num_somatic_labels(self) -> int:
         """Return the number of registered somatic labels."""
         return len(self.slab_labels)
-
-    def genotype_index(self, genotype_id: Any) -> int:
-        """Return the index for a registered genotype key.
-
-        Genotype instances are canonicalized before lookup so that ``A|a``
-        and ``a|A`` resolve to the same index.
-
-        Args:
-            genotype_id: Registered genotype instance or identifier.
-
-        Returns:
-            int: The genotype index.
-
-        Raises:
-            KeyError: If the genotype_id is not registered.
-        """
-        return self.genotype_to_index[genotype_id]
 
     def haplo_index(self, haplo_id: Any) -> int:
         """Return the index for a registered haplogenotype key.

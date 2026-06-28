@@ -1482,7 +1482,7 @@ class Configurator:
             self._registry = _build_registry(self._species)
 
         registry = self._registry
-        all_genotypes = list(registry.genotype_to_index.keys())
+        all_genotypes = registry.index_to_genotype
         for patch_name, patch_dict in [
             ("viability", viability),
             ("fecundity", fecundity),
