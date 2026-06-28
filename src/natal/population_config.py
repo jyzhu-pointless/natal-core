@@ -155,40 +155,40 @@ class PopulationConfig(NamedTuple):
     # -- custom fields (structured numpy scalar, set via Configurator.custom()) --
     custom: NDArray[Any]  # typed structured array when custom fields registered; float64 placeholder otherwise
 
-    def set_viability_fitness(self, sex: int, genotype_idx: int, value: float, age: int = -1) -> None:
+    def set_viability_fitness(self, sex: int, ztype_idx: int, value: float, age: int = -1) -> None:
         """Set viability fitness for a specific (sex, genotype, age) combination.
 
         Args:
             sex: Sex index.
-            genotype_idx: Diploid genotype index.
+            ztype_idx: ZType (genotype) index.
             value: Fitness value.
             age: Age class; if negative, defaults to new_adult_age - 1.
         """
         if age < 0:
             age = self.new_adult_age - 1
-        self.viability_fitness[sex, age, genotype_idx] = value
+        self.viability_fitness[sex, age, ztype_idx] = value
 
-    def set_fecundity_fitness(self, sex: int, genotype_idx: int, value: float) -> None:
+    def set_fecundity_fitness(self, sex: int, ztype_idx: int, value: float) -> None:
         """Set fecundity fitness for a specific (sex, genotype).
 
         Args:
             sex: Sex index.
-            genotype_idx: Diploid genotype index.
+            ztype_idx: ZType (genotype) index.
             value: Fitness value.
         """
-        self.fecundity_fitness[sex, genotype_idx] = value
+        self.fecundity_fitness[sex, ztype_idx] = value
 
-    def set_sexual_selection_fitness(self, female_geno_idx: int, male_geno_idx: int, value: float) -> None:
+    def set_sexual_selection_fitness(self, female_ztype_idx: int, male_ztype_idx: int, value: float) -> None:
         """Set sexual selection fitness for a female‑male genotype pair.
 
         Args:
-            female_geno_idx: Female genotype index.
-            male_geno_idx: Male genotype index.
+            female_ztype_idx: Female ZType (genotype) index.
+            male_ztype_idx: Male ZType (genotype) index.
             value: Fitness value.
         """
-        self.sexual_selection_fitness[female_geno_idx, male_geno_idx] = value
+        self.sexual_selection_fitness[female_ztype_idx, male_ztype_idx] = value
 
-    def set_zygote_viability_fitness(self, sex: int, genotype_idx: int, value: float) -> None:
+    def set_zygote_viability_fitness(self, sex: int, ztype_idx: int, value: float) -> None:
         """Set zygote fitness for a specific (sex, genotype) combination.
 
         Zygote fitness represents the probability that a zygote survives to become
@@ -197,10 +197,10 @@ class PopulationConfig(NamedTuple):
 
         Args:
             sex: Sex index.
-            genotype_idx: Diploid genotype index.
+            ztype_idx: ZType (genotype) index.
             value: Fitness value (0.0 to 1.0).
         """
-        self.zygote_viability_fitness[sex, genotype_idx] = value
+        self.zygote_viability_fitness[sex, ztype_idx] = value
 
     def compute_generation_time(self) -> float:
         """Compute the mean generation time from the current configuration.
@@ -1406,26 +1406,26 @@ class DiscretePopulationConfig(NamedTuple):
     custom: NDArray[Any]  # placeholder float64; replaced by build_custom_array when registered
 
     def set_viability_fitness(
-        self, sex: int, genotype_idx: int, value: float, age: int = -1
+        self, sex: int, ztype_idx: int, value: float, age: int = -1
     ) -> None:
         if age < 0:
             age = self.new_adult_age - 1
-        self.viability_fitness[sex, age, genotype_idx] = value
+        self.viability_fitness[sex, age, ztype_idx] = value
 
     def set_fecundity_fitness(
-        self, sex: int, genotype_idx: int, value: float
+        self, sex: int, ztype_idx: int, value: float
     ) -> None:
-        self.fecundity_fitness[sex, genotype_idx] = value
+        self.fecundity_fitness[sex, ztype_idx] = value
 
     def set_sexual_selection_fitness(
-        self, female_geno_idx: int, male_geno_idx: int, value: float
+        self, female_ztype_idx: int, male_ztype_idx: int, value: float
     ) -> None:
-        self.sexual_selection_fitness[female_geno_idx, male_geno_idx] = value
+        self.sexual_selection_fitness[female_ztype_idx, male_ztype_idx] = value
 
     def set_zygote_viability_fitness(
-        self, sex: int, genotype_idx: int, value: float
+        self, sex: int, ztype_idx: int, value: float
     ) -> None:
-        self.zygote_viability_fitness[sex, genotype_idx] = value
+        self.zygote_viability_fitness[sex, ztype_idx] = value
 
 
 

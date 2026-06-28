@@ -145,6 +145,20 @@ class IndexRegistry:
         pass
 
     @property
+    def index_to_ztype(self) -> List[Tuple[Genotype, str]]:
+        """Computed list of (genotype, slab_label) pairs from ZType space.
+
+        The index in this list is the ZType index — the same index consumed
+        by the engine's ``individual_count`` arrays on the last axis.
+        """
+        return self._index_to_ztype.copy()
+
+    @index_to_ztype.setter
+    def index_to_ztype(self, value: object) -> None:
+        """Backward-compat no-op setter."""
+        pass
+
+    @property
     def haplo_to_index(self) -> Dict[HaploidGenotype, int]:
         """Computed dict of unique haplotypes from the GType space.
 

@@ -175,8 +175,8 @@ def build_observation_row_panmictic(
     """Build a flat observation row for a single panmictic population.
 
     Args:
-        individual_count: Count array of shape ``(n_sexes, n_ages, n_genotypes)``
-            or ``(n_sexes, n_genotypes)`` for non-age-structured.
+        individual_count: Count array of shape ``(n_sexes, n_ages, n_ztypes)``
+            or ``(n_sexes, n_ztypes)`` for non-age-structured.
         observation_mask: 4-D or 3-D binary mask matching *individual_count*.
 
     Returns:
@@ -204,8 +204,8 @@ def build_observation_row_spatial(
 
     Args:
         individual_count: Stacked count array of shape
-            ``(n_demes, n_sexes, n_ages, n_genotypes)``.
-        observation_mask: 4-D binary mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+            ``(n_demes, n_sexes, n_ages, n_ztypes)``.
+        observation_mask: 4-D binary mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
         compact: Precomputed ``CompactMeta`` for this population.
 
     Returns:

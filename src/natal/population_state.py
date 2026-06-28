@@ -25,8 +25,8 @@ class PopulationState(NamedTuple):
 
     Attributes:
         n_tick: Current simulation time step.
-        individual_count: Array of shape (n_sexes, n_ages, n_genotypes) – counts
-            of individuals per sex, age, and genotype.
+        individual_count: Array of shape (n_sexes, n_ages, n_ztypes) – counts
+            of individuals per sex, age, and zygote type.
         sperm_storage: Array of shape (n_ages, n_genotypes, n_genotypes) – stored
             sperm counts per female age, female genotype, and male genotype.
     """
@@ -89,64 +89,64 @@ class PopulationState(NamedTuple):
 
         return cls(n_tick=int(n_tick), individual_count=ind, sperm_storage=sperm)
 
-    def get_count(self, sex: int, age: int, genotype_index: int) -> float:
+    def get_count(self, sex: int, age: int, ztype_idx: int) -> float:
         """Retrieve the count of individuals for a specific category.
 
         Args:
             sex: Sex index.
             age: Age class index.
-            genotype_index: Diploid genotype index.
+            ztype_idx: ZType (genotype) index.
 
         Returns:
             The count (float).
         """
-        return self.individual_count[sex, age, genotype_index]
+        return self.individual_count[sex, age, ztype_idx]
 
-    def add_count(self, sex: int, age: int, genotype_index: int, count: float) -> None:
+    def add_count(self, sex: int, age: int, ztype_idx: int, count: float) -> None:
         """Add to the count of individuals for a specific category.
 
         Args:
             sex: Sex index.
             age: Age class index.
-            genotype_index: Diploid genotype index.
+            ztype_idx: ZType (genotype) index.
             count: Amount to add (can be negative).
         """
-        self.individual_count[sex, age, genotype_index] += count
+        self.individual_count[sex, age, ztype_idx] += count
 
-    def set_count(self, sex: int, age: int, genotype_index: int, count: float) -> None:
+    def set_count(self, sex: int, age: int, ztype_idx: int, count: float) -> None:
         """Set the count of individuals for a specific category.
 
         Args:
             sex: Sex index.
             age: Age class index.
-            genotype_index: Diploid genotype index.
+            ztype_idx: ZType (genotype) index.
             count: New count.
         """
-        self.individual_count[sex, age, genotype_index] = count
+        self.individual_count[sex, age, ztype_idx] = count
 
-    def get_stored_sperm(self, age: int, female_genotype_index: int, male_genotype_index: int) -> float:
+    def get_stored_sperm(self, age: int, female_ztype_idx: int, male_ztype_idx: int) -> float:
         """Retrieve stored sperm count for a given combination.
 
         Args:
             age: Age class of the female.
-            female_genotype_index: Female genotype index.
-            male_genotype_index: Male genotype index.
+            female_ztype_idx: Female ZType (genotype) index.
+            male_ztype_idx: Male ZType (genotype) index.
 
         Returns:
             Stored sperm count.
         """
-        return self.sperm_storage[age, female_genotype_index, male_genotype_index]
+        return self.sperm_storage[age, female_ztype_idx, male_ztype_idx]
 
-    def set_stored_sperm(self, age: int, female_genotype_index: int, male_genotype_index: int, count: float) -> None:
+    def set_stored_sperm(self, age: int, female_ztype_idx: int, male_ztype_idx: int, count: float) -> None:
         """Add to stored sperm count (in‑place addition).
 
         Args:
             age: Age class of the female.
-            female_genotype_index: Female genotype index.
-            male_genotype_index: Male genotype index.
+            female_ztype_idx: Female ZType (genotype) index.
+            male_ztype_idx: Male ZType (genotype) index.
             count: Amount to add (can be negative).
         """
-        self.sperm_storage[age, female_genotype_index, male_genotype_index] += count
+        self.sperm_storage[age, female_ztype_idx, male_ztype_idx] += count
 
     def flatten_all(self) -> NDArray[np.float64]:
         """Flatten the entire state into a single 1D array.
@@ -166,8 +166,8 @@ class DiscretePopulationState(NamedTuple):
 
     Attributes:
         n_tick: Current simulation time step.
-        individual_count: Array of shape (n_sexes, n_ages, n_genotypes) – counts
-            of individuals per sex, age, and genotype.
+        individual_count: Array of shape (n_sexes, n_ages, n_ztypes) – counts
+            of individuals per sex, age, and zygote type.
     """
 
     n_tick: int

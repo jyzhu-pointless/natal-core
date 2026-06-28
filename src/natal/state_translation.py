@@ -120,8 +120,8 @@ def _build_individual_count_payload(
         for age_idx in range(n_ages):
             age_key = f"age_{age_idx}"
             geno_block: Dict[str, float] = {}
-            for genotype_idx, genotype_name in enumerate(genotype_labels):
-                value = float(individual_count[sex_idx, age_idx, genotype_idx])
+            for ztype_idx, genotype_name in enumerate(genotype_labels):
+                value = float(individual_count[sex_idx, age_idx, ztype_idx])
                 if include_zero_counts or value != 0.0:
                     geno_block[genotype_name] = value
             if include_zero_counts or geno_block:

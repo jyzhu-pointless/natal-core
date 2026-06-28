@@ -135,7 +135,7 @@ def RUN_FN_NAME(
         registry: HookProgram for CSR event programs.
         n_ticks: Number of ticks to execute.
         record_interval: Recording interval (0 means no recording).
-        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
             When provided, history stores observation-reduced snapshots instead
             of the full flattened state.
         n_obs_groups: Number of observation groups (first axis of mask).

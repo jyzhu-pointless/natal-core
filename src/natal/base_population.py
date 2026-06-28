@@ -361,7 +361,7 @@ class BasePopulation(ABC, Generic[T_State]):
         return obs.build_mask(
             n_sexes=ind.shape[0],
             n_ages=ind.shape[1] if ind.ndim == 3 else 1,
-            n_genotypes=ind.shape[-1],
+            n_ztypes=ind.shape[-1],
         )
 
     # ========================================================================

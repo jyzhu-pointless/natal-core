@@ -524,7 +524,7 @@ def run_with_hooks(
         late_hook: Combined njit function for ``late`` event.
         n_ticks: Number of ticks to execute.
         record_interval: History recording interval (0 = no recording).
-        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
             When set, history records observation-aggregated rows.  Panmictic
             does not need ``CompactMeta`` — the row layout is uniform
             ``(n_groups, n_sexes, n_ages)`` with no deme axis.

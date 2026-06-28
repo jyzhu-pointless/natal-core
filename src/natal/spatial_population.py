@@ -915,7 +915,7 @@ class SpatialPopulation:
             self._observation_mask = obs.build_mask(
                 n_sexes=state.individual_count.shape[0],
                 n_ages=state.individual_count.shape[1] if state.individual_count.ndim == 3 else 1,
-                n_genotypes=state.individual_count.shape[-1],
+                n_ztypes=state.individual_count.shape[-1],
             )
             self._rebuild_compact_meta()
 
@@ -949,7 +949,7 @@ class SpatialPopulation:
         self._observation_mask = self._observation.build_mask(
             n_sexes=ind.shape[0],
             n_ages=ind.shape[1] if ind.ndim == 3 else 1,
-            n_genotypes=ind.shape[-1],
+            n_ztypes=ind.shape[-1],
         )
         self._rebuild_compact_meta()
 
