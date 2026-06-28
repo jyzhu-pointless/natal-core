@@ -265,9 +265,9 @@ def _resolve_genotypes(
     selector: Union[str, List[str], Literal["*"]],
     index_registry: IndexRegistry,
     diploid_genotypes: List[Any],
-    n_genotypes: int,
+    n_ztypes: int,
 ) -> np.ndarray:
-    """Resolve genotype selector syntax into concrete genotype indices.
+    """Resolve genotype selector syntax into concrete ZType indices.
 
     Supported input forms:
     - ``"*"``
@@ -278,16 +278,16 @@ def _resolve_genotypes(
         selector: Genotype selector expression
         index_registry: Registry for genotype name resolution
         diploid_genotypes: List of all diploid genotypes in the population
-        n_genotypes: Total number of genotypes
+        n_ztypes: Total number of ZType indices
 
     Returns:
-        np.ndarray: Array of genotype indices (int32)
+        np.ndarray: Array of ZType indices (int32)
 
     Raises:
         ValueError: If genotype cannot be resolved
     """
     if selector == "*":
-        return np.arange(n_genotypes, dtype=np.int32)
+        return np.arange(n_ztypes, dtype=np.int32)
 
     if isinstance(selector, str):
         selector = [selector]
@@ -301,7 +301,8 @@ def _resolve_genotypes(
         idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
         if idx is None:
             raise ValueError(f"Cannot resolve genotype: {item}")
-        indices.append(idx)
+        # Expand to all ZType indices (one per surviving slab)
+        indices.extend(index_registry.genotype_to_ztype_indices(idx))
 
     return np.array(indices, dtype=np.int32)
 
@@ -603,7 +604,7 @@ def compile_declarative_hook(
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry
     diploid_genotypes = index_registry.index_to_genotype
-    n_genotypes = index_registry.num_genotypes()
+    n_ztypes = index_registry.n_ztypes
     n_ages = pop.config.n_ages
 
     # Initialize data structures for storing compiled hook operations
@@ -645,7 +646,7 @@ def compile_declarative_hook(
 
         # 2) Genotype span - resolve genotype selectors to actual genotype indices
         # Examples: "A1|A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
-        gidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_genotypes)
+        gidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_ztypes)
         gidx_data_list.extend(gidx_array.tolist())
         gidx_offsets.append(len(gidx_data_list))  # Record end offset for this operation
 

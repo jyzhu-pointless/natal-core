@@ -66,11 +66,11 @@ def _resolve_selector_to_array(
 
     if isinstance(spec, str):
         if spec == "*":
-            return np.arange(len(diploid_genotypes), dtype=np.int32)
+            return np.arange(index_registry.n_ztypes, dtype=np.int32)
         idx = index_registry.resolve_genotype_index(diploid_genotypes, spec, strict=True)
         if idx is None:
             raise ValueError(f"Cannot resolve genotype: {spec}")
-        return np.array([idx], dtype=np.int32)
+        return np.array(index_registry.genotype_to_ztype_indices(idx), dtype=np.int32)
 
     if isinstance(spec, (list, tuple)):
         indices: List[int] = []
@@ -81,17 +81,18 @@ def _resolve_selector_to_array(
                 idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
                 if idx is None:
                     raise ValueError(f"Cannot resolve genotype: {item}")
-                indices.append(idx)
+                indices.extend(index_registry.genotype_to_ztype_indices(idx))
             else:
+                # Genotype or other object
                 idx = index_registry.genotype_to_index.get(item)
                 if idx is None:
                     raise ValueError(f"Cannot resolve selector item: {item}")
-                indices.append(idx)
+                indices.extend(index_registry.genotype_to_ztype_indices(idx))
         return np.array(indices, dtype=np.int32)
 
     idx = index_registry.genotype_to_index.get(spec)
     if idx is not None:
-        return np.array([idx], dtype=np.int32)
+        return np.array(index_registry.genotype_to_ztype_indices(idx), dtype=np.int32)
 
     raise ValueError(f"Cannot resolve selector spec: {spec}")
 
