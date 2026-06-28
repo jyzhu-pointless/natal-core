@@ -36,7 +36,16 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip tests whose Numba requirement doesn't match the current state."""
+    """Skip tests whose Numba requirement doesn't match the current state.
+    
+    Also reorder spatial builder tests to run before discrete population tests,
+    avoiding a Numba JIT cache conflict (NRT_adapt_ndarray_to_python 'descr' is NULL).
+    """
+    # Move spatial builder coverage tests to the front to avoid Numba cache conflict
+    spatial = [i for i in items if "test_spatial_builder_coverage" in i.nodeid]
+    others = [i for i in items if "test_spatial_builder_coverage" not in i.nodeid]
+    items[:] = spatial + others
+    
     if nt.is_numba_enabled():
         skip_numba_off = pytest.mark.skip(
             reason="requires Numba disabled — run with NATAL_DISABLE_NUMBA=1"
