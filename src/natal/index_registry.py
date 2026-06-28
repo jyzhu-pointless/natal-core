@@ -332,9 +332,6 @@ class IndexRegistry:
         Returns:
             list[int]: ZType indices for this genotype (one per slab label).
         """
-        genotype_id = genotype_id.species.unordered_genotype(
-            genotype_id.maternal, genotype_id.paternal,
-        )
         if not self.slab_labels:
             self.slab_labels = ["default"]
         indices: list[int] = []
@@ -463,10 +460,6 @@ class IndexRegistry:
         Raises:
             KeyError: If the genotype_id is not registered.
         """
-        if isinstance(genotype_id, Genotype):
-            genotype_id = genotype_id.species.unordered_genotype(
-                genotype_id.maternal, genotype_id.paternal,
-            )
         return self.genotype_to_index[genotype_id]
 
     def haplo_index(self, haplo_id: Any) -> int:
