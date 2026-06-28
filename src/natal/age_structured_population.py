@@ -526,9 +526,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: The fecundity fitness value.
         """
-        genotype_idx = self.registry.genotype_to_index[genotype]
-        sex_idx = int(sex.value)
-        return self.config.fecundity_fitness[sex_idx, genotype_idx]
+        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
+        return self.config.fecundity_fitness[int(sex.value), genotype_idx]
 
     def _get_sexual_preference(self, female_genotype: Genotype, male_genotype: Genotype) -> float:
         """Internal helper: return sexual preference value for a genotype pair.
@@ -540,8 +539,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: The sexual selection fitness weight.
         """
-        f_idx = self.registry.genotype_to_index[female_genotype]
-        m_idx = self.registry.genotype_to_index[male_genotype]
+        f_idx = self.registry.ztype_index(female_genotype, self.registry.slab_labels[0])
+        m_idx = self.registry.ztype_index(male_genotype, self.registry.slab_labels[0])
         return self.config.sexual_selection_fitness[f_idx, m_idx]
 
     @property
@@ -959,7 +958,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             Tuple[int,int]: ``(female_count, male_count)`` across all ages.
         """
-        genotype_idx = self.registry.genotype_to_index[genotype]
+        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
         female_count = self.state.individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
         male_count = self.state.individual_count[Sex.MALE.value, :, genotype_idx].sum()
         return (female_count, male_count)

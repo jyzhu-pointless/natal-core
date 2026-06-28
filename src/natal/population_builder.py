@@ -690,17 +690,19 @@ class PopulationConfigBuilder:
     def _resolve_genotype_index(
         species: Species,
         genotype_key: object,
-        genotype_to_index: Dict[Genotype, int],
+        index_registry: IndexRegistry,
+        slab_label: str = "",
     ) -> int:
-        """Resolve a genotype key into its registered integer index.
+        """Resolve a genotype key into its registered ZType index.
 
         Args:
             species (Species): The species to resolve against.
             genotype_key (Union[Genotype, str]): The genotype instance or string label.
-            genotype_to_index (Dict[Genotype, int]): Index mapping.
+            index_registry (IndexRegistry): Registry to look up ZType indices.
+            slab_label (str): Somatic slab label (default: first registered slab).
 
         Returns:
-            int: The index of the genotype.
+            int: The ZType index of the genotype for the given slab.
 
         Raises:
             TypeError: If genotype_key is invalid type.
@@ -715,7 +717,8 @@ class PopulationConfigBuilder:
         if genotype.species is not species:
             raise ValueError("Genotype must belong to this species")
         genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
-        return int(genotype_to_index[genotype])
+        resolved_slab = slab_label or (index_registry.slab_labels[0] if index_registry.slab_labels else "default")
+        return int(index_registry.ztype_index(genotype, resolved_slab))
 
     @staticmethod
     def _resolve_age_counts_age_structured(
