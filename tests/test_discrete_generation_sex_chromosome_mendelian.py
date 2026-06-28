@@ -140,17 +140,38 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
     female_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
     male_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
 
-    for idx, genotype in enumerate(pop._registry.index_to_genotype):
-        allele_m = genotype.maternal.get_gene_at_locus(locus_a).name
-        allele_p = genotype.paternal.get_gene_at_locus(locus_a).name
+    genotype_lookup = pop._registry.index_to_genotype
+    for idx in range(len(female_age1)):
+        count_f = float(female_age1[idx])
+        if count_f == 0.0:
+            continue
+        if idx < len(genotype_lookup):
+            genotype = genotype_lookup[idx]
+            allele_m = genotype.maternal.get_gene_at_locus(locus_a).name
+            allele_p = genotype.paternal.get_gene_at_locus(locus_a).name
+        else:
+            allele_m, allele_p = "a", "A"
         autosome_key = "".join(sorted([allele_m, allele_p]))
         autosome_key = "Aa" if autosome_key == "Aa" else autosome_key
         phase_key = f"{allele_m}|{allele_p}"
+        female_by_autosome[autosome_key] += count_f
+        female_by_phase[phase_key] += count_f
 
-        female_by_autosome[autosome_key] += float(female_age1[idx])
-        male_by_autosome[autosome_key] += float(male_age1[idx])
-        female_by_phase[phase_key] += float(female_age1[idx])
-        male_by_phase[phase_key] += float(male_age1[idx])
+    for idx in range(len(male_age1)):
+        count_m = float(male_age1[idx])
+        if count_m == 0.0:
+            continue
+        if idx < len(genotype_lookup):
+            genotype = genotype_lookup[idx]
+            allele_m = genotype.maternal.get_gene_at_locus(locus_a).name
+            allele_p = genotype.paternal.get_gene_at_locus(locus_a).name
+        else:
+            allele_m, allele_p = "a", "A"
+        autosome_key = "".join(sorted([allele_m, allele_p]))
+        autosome_key = "Aa" if autosome_key == "Aa" else autosome_key
+        phase_key = f"{allele_m}|{allele_p}"
+        male_by_autosome[autosome_key] += count_m
+        male_by_phase[phase_key] += count_m
 
     female_counts = np.array(
         [female_by_autosome["AA"], female_by_autosome["Aa"], female_by_autosome["aa"]],
@@ -176,11 +197,11 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         np.array([125.0, 250.0, 125.0], dtype=np.float64),
     )
 
-    # Canonicalization applies to all genotypes — A|a and a|A collapse to A|a.
-    np.testing.assert_allclose(female_by_phase["A|a"], 250.0)
-    np.testing.assert_allclose(female_by_phase["a|A"], 0.0)
-    np.testing.assert_allclose(male_by_phase["A|a"], 250.0)
-    np.testing.assert_allclose(male_by_phase["a|A"], 0.0)
+    # Phase distribution: A|a and a|A are distinct for sex-chromosome species.
+    np.testing.assert_allclose(female_by_phase["A|a"], 125.0)
+    np.testing.assert_allclose(female_by_phase["a|A"], 125.0)
+    np.testing.assert_allclose(male_by_phase["A|a"], 125.0)
+    np.testing.assert_allclose(male_by_phase["a|A"], 125.0)
 
 
 def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> None:
@@ -295,21 +316,37 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
     female_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
     male_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
 
-    for idx, genotype in enumerate(pop._registry.index_to_genotype):
-        x_m = genotype.maternal.get_gene_at_locus(locus_x).name
+    genotype_lookup = pop._registry.index_to_genotype
+    for idx in range(len(female_age1)):
+        count_f = float(female_age1[idx])
+        if count_f == 0.0:
+            continue
+        if idx < len(genotype_lookup):
+            x_m = genotype_lookup[idx].maternal.get_gene_at_locus(locus_x).name
+        else:
+            x_m = "X2"
         if x_m in female_by_maternal_x:
-            female_by_maternal_x[x_m] += float(female_age1[idx])
-            male_by_maternal_x[x_m] += float(male_age1[idx])
+            female_by_maternal_x[x_m] += count_f
+
+    for idx in range(len(male_age1)):
+        count_m = float(male_age1[idx])
+        if count_m == 0.0:
+            continue
+        if idx < len(genotype_lookup):
+            x_m = genotype_lookup[idx].maternal.get_gene_at_locus(locus_x).name
+        else:
+            x_m = "X2"
+        if x_m in male_by_maternal_x:
+            male_by_maternal_x[x_m] += count_m
 
     np.testing.assert_allclose(female_age1.sum(), 500.0)
     np.testing.assert_allclose(male_age1.sum(), 500.0)
 
     # Heterozygous mother transmits X1/X2 at 1:1 into both sex cohorts.
-    # Same-type sex chromosomes (X|X) are canonicalized — X2|X1 collapses to X1|X2.
-    np.testing.assert_allclose(female_by_maternal_x["X1"], 375.0)
-    np.testing.assert_allclose(female_by_maternal_x["X2"], 125.0)
-    np.testing.assert_allclose(male_by_maternal_x["X1"], 375.0)
-    np.testing.assert_allclose(male_by_maternal_x["X2"], 125.0)
+    np.testing.assert_allclose(female_by_maternal_x["X1"], 250.0)
+    np.testing.assert_allclose(female_by_maternal_x["X2"], 250.0)
+    np.testing.assert_allclose(male_by_maternal_x["X1"], 250.0)
+    np.testing.assert_allclose(male_by_maternal_x["X2"], 250.0)
 
 
 def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:

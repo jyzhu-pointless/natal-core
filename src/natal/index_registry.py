@@ -21,6 +21,8 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+    from natal.genetic_patterns import ZygoteTypePattern
+
 from natal.genetic_entities import Genotype, HaploidGenotype
 from natal.numba_utils import njit_switch
 
@@ -279,15 +281,12 @@ class IndexRegistry:
         Automatically tracks ``slab_labels``.
 
         Args:
-            genotype: A ``Genotype`` instance (canonicalized internally).
+            genotype: A ``Genotype`` instance.
             slab_label: Somatic label string for this ZType variant.
 
         Returns:
             int: The assigned ZType index.  Stable until compression.
         """
-        genotype = genotype.species.unordered_genotype(
-            genotype.maternal, genotype.paternal,
-        )
         key = (genotype, slab_label)
         if key in self._ztype_to_index:
             return self._ztype_to_index[key]
@@ -512,7 +511,7 @@ class IndexRegistry:
         Replaces the formula ``g * n_slabs + slab``.
 
         Args:
-            genotype: A ``Genotype`` instance (canonicalized internally).
+            genotype: A ``Genotype`` instance.
             slab_label: Somatic label string.
 
         Returns:
@@ -521,10 +520,40 @@ class IndexRegistry:
         Raises:
             KeyError: If the (genotype, slab_label) pair is not registered.
         """
-        genotype = genotype.species.unordered_genotype(
-            genotype.maternal, genotype.paternal,
-        )
         return self._ztype_to_index[(genotype, slab_label)]
+
+    def resolve_ztype_indices(self, pattern: ZygoteTypePattern) -> list[int]:
+        """Return all ZType indices matching a ZygoteTypePattern.
+
+        Iterates ``_index_to_ztype`` and tests each (genotype, slab_label)
+        pair against *pattern*.  When *pattern* has no slab constraint
+        (``slab is None``), all slab variants of matching genotypes match.
+        """
+        indices: list[int] = []
+        for i, (gt, slab) in enumerate(self._index_to_ztype):
+            if pattern.matches(gt, slab):
+                indices.append(i)
+        return indices
+
+    def resolve_default_ztype_index(self, pattern: ZygoteTypePattern) -> int:
+        """Return the first ZType index matching a ZygoteTypePattern.
+
+        Used by ``initial_state`` which places individuals in the first
+        (default) slab when no ``@slab`` is specified.
+        """
+        for i, (gt, slab) in enumerate(self._index_to_ztype):
+            if pattern.matches(gt, slab):
+                return i
+        raise KeyError(f"No ZType matches pattern {pattern}")
+
+    def ztype_indices_for(self, genotype: Genotype) -> list[int]:
+        """Return all ZType indices for a given Genotype object.
+
+        Scans ``_index_to_ztype`` — does NOT require ``species.unordered_genotype()``
+        because both the stored and input genotypes are already canonicalized
+        via ``Genotype.__new__`` cache key normalization.
+        """
+        return [i for i, (gt, _) in enumerate(self._index_to_ztype) if gt == genotype]
 
     def gtype_index(self, haplo: HaploidGenotype, glab_label: str) -> int:
         """O(1) dict lookup for a GType index.

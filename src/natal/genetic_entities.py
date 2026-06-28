@@ -614,10 +614,13 @@ class Genotype:
             genotype_name,
         )
 
-        from natal.genetic_structures import (
-            _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
-        )
-        mat, pat = _canonical_haploid_pair(species, maternal, paternal)
+        if species.unordered:
+            from natal.genetic_structures import (
+                _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
+            )
+            mat, pat = _canonical_haploid_pair(species, maternal, paternal)
+        else:
+            mat, pat = maternal, paternal
         canon_parts: list[str] = []
         for chrom in species.chromosomes:
             try:

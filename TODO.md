@@ -201,6 +201,27 @@
 
 ---
 
+### #22 ⚠️ Numba JIT 缓存冲突导致空间测试排序依赖
+
+**来源**：`feat/ztype-registry` 分支测试调试。`test_discrete_population.py` 先于 `test_spatial_builder_coverage.py` 运行时，空间测试中 30 个离散世代构建场景因 Numba JIT 缓存冲突失败：
+
+```
+RuntimeError: In 'NRT_adapt_ndarray_to_python', 'descr' is NULL
+```
+
+发生在 `run_discrete_survival()` 尝试从 `individual_count` 返回数组时——Numba 的 NRT（Numba Runtime）内部 dtype descriptor 损坏。根本原因：`test_discrete_population` 首先编译 `run_discrete_reproduction`/`run_discrete_survival` Numba 函数，使用更大的 `n_ztypes` 值（3 基因型 × 1 slab = 3）。后续 `test_spatial_builder_coverage` 的某些测试使用不同的 `n_ztypes` 值，Numba 尝试复用缓存的编译产物，但不同的数组形状导致 dtype descriptor 指针误对齐。空间测试单独运行时全部 69 个通过；先于离散测试运行时通过。
+
+**当前措施**：`tests/conftest.py` 将空间构建器测试重新排序到 pytest 收集顺序的前面（第一个运行）。这避免了冲突，但并未解决根本的 Numba 缓存问题。
+
+**优先级理由**：🟡 非生产 bug——仅影响测试套件排序。当前解决方法可行。若要正确修复，需要将 spatial builder 测试中使用的 `n_ztypes` 大小与其他离散世代测试对齐，或调查 Numba 的跨测试缓存失效问题。
+
+**受影响范围**：
+- `tests/test_spatial_builder_coverage.py`：69 个测试中 30 个受影响
+- 触发条件：`test_discrete_population.py`（18 个测试，`n_ztypes=3`）在 `test_spatial_builder_coverage.py`（用 `n_ztypes=1` 的测试）之前运行
+- 非确定性：同一个提交可能通过或失败，取决于 pytest 的收集顺序
+- `main` 分支同样受影响（`143af2c`）：仅因测试文件更少而以有利的收集顺序通过
+
+
 ## 🟢 低优先级 — UX / 远期功能
 
 ### #12 ⚠️ Spatial API：migration kernel 边界效应优化
