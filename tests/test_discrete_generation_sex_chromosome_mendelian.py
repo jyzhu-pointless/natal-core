@@ -140,17 +140,14 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
     female_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
     male_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
 
-    genotype_lookup = pop._registry.index_to_genotype
+    ztype_lookup = pop._registry.index_to_ztype
     for idx in range(len(female_age1)):
         count_f = float(female_age1[idx])
         if count_f == 0.0:
             continue
-        if idx < len(genotype_lookup):
-            genotype = genotype_lookup[idx]
-            allele_m = genotype.maternal.get_gene_at_locus(locus_a).name
-            allele_p = genotype.paternal.get_gene_at_locus(locus_a).name
-        else:
-            allele_m, allele_p = "a", "A"
+        genotype, _slab = ztype_lookup[idx]
+        allele_m = genotype.maternal.get_gene_at_locus(locus_a).name
+        allele_p = genotype.paternal.get_gene_at_locus(locus_a).name
         autosome_key = "".join(sorted([allele_m, allele_p]))
         autosome_key = "Aa" if autosome_key == "Aa" else autosome_key
         phase_key = f"{allele_m}|{allele_p}"
@@ -161,12 +158,9 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         count_m = float(male_age1[idx])
         if count_m == 0.0:
             continue
-        if idx < len(genotype_lookup):
-            genotype = genotype_lookup[idx]
-            allele_m = genotype.maternal.get_gene_at_locus(locus_a).name
-            allele_p = genotype.paternal.get_gene_at_locus(locus_a).name
-        else:
-            allele_m, allele_p = "a", "A"
+        genotype, _slab = ztype_lookup[idx]
+        allele_m = genotype.maternal.get_gene_at_locus(locus_a).name
+        allele_p = genotype.paternal.get_gene_at_locus(locus_a).name
         autosome_key = "".join(sorted([allele_m, allele_p]))
         autosome_key = "Aa" if autosome_key == "Aa" else autosome_key
         phase_key = f"{allele_m}|{allele_p}"
@@ -316,15 +310,13 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
     female_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
     male_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
 
-    genotype_lookup = pop._registry.index_to_genotype
+    ztype_lookup = pop._registry.index_to_ztype
     for idx in range(len(female_age1)):
         count_f = float(female_age1[idx])
         if count_f == 0.0:
             continue
-        if idx < len(genotype_lookup):
-            x_m = genotype_lookup[idx].maternal.get_gene_at_locus(locus_x).name
-        else:
-            x_m = "X2"
+        genotype, _slab = ztype_lookup[idx]
+        x_m = genotype.maternal.get_gene_at_locus(locus_x).name
         if x_m in female_by_maternal_x:
             female_by_maternal_x[x_m] += count_f
 
@@ -332,10 +324,8 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
         count_m = float(male_age1[idx])
         if count_m == 0.0:
             continue
-        if idx < len(genotype_lookup):
-            x_m = genotype_lookup[idx].maternal.get_gene_at_locus(locus_x).name
-        else:
-            x_m = "X2"
+        genotype, _slab = ztype_lookup[idx]
+        x_m = genotype.maternal.get_gene_at_locus(locus_x).name
         if x_m in male_by_maternal_x:
             male_by_maternal_x[x_m] += count_m
 

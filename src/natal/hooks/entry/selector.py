@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.genetic_patterns import resolve_zygote_type as _resolve_zygote_type
+
 from ..types import (
     CompiledHookDescriptor,
     DemeSelector,
@@ -43,45 +45,11 @@ if TYPE_CHECKING:
     from natal.population_state import PopulationState
 
 
-
 SelectorItem: TypeAlias = Union[int, str, "Genotype"]
 SelectorSpec: TypeAlias = Union[SelectorItem, range, List[SelectorItem], tuple[SelectorItem, ...]]
 
 
-def _resolve_zygote_type(
-    spec: str,
-    species: Any,
-    index_registry: IndexRegistry,
-) -> List[int]:
-    """Resolve a genotype string to ZType indices, with unordered fallback.
-
-    If ``ZygoteTypePattern.parse(spec)`` returns no matches, the function
-    retries by replacing the first ``|`` with ``::`` to allow unordered
-    maternal/paternal matching (e.g. ``"D|W"`` matching stored ``W|D``).
-    """
-    from natal.genetic_patterns import ZygoteTypePattern
-
-    pattern = ZygoteTypePattern.parse(spec, species)
-    result = index_registry.resolve_ztype_indices(pattern)
-    if not result and "|" in spec and "::" not in spec:
-        # Retry with :: for unordered matching
-        try:
-            fallback = spec.replace("|", "::", 1)
-            fallback_pattern = ZygoteTypePattern.parse(fallback, species)
-            result = index_registry.resolve_ztype_indices(fallback_pattern)
-        except Exception:
-            pass
-        # Retry with reversed maternal/paternal (e.g. "a|A" → "A|a")
-        if not result:
-            try:
-                parts = spec.split("|", 1)
-                if len(parts) == 2:
-                    reversed_str = f"{parts[1].strip()}|{parts[0].strip()}"
-                    reversed_pattern = ZygoteTypePattern.parse(reversed_str, species)
-                    result = index_registry.resolve_ztype_indices(reversed_pattern)
-            except Exception:
-                pass
-    return result
+# _resolve_zygote_type is imported from natal.genetic_patterns
 
 
 def _resolve_selector_to_array(

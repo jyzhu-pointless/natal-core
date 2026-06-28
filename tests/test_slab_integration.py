@@ -262,8 +262,8 @@ class TestNSlabsFullRepair:
             .competition(juvenile_growth_mode=0)
             .build()
         )
-        # Set viability per-ztype directly to bypass Configurator.fitness()
-        # which currently has a bug accessing registry.genotype_to_index.
+        # Set viability per-ztype directly for isolation —
+        # each ZType index is independently verified below.
         reg = pop.index_registry
         gm = pop.config.viability_fitness
         for z in reg.ztype_indices_for(sp.get_genotype_from_str("A|A")):

@@ -830,7 +830,7 @@ def _write_fitness_field_flat(
                     f"Unknown slab label '{_slab}'. "
                     f"Available slabs: {list(slab_to_idx)}"
                 )
-            si = slab_to_idx[_slab]
+            _ = slab_to_idx[_slab]
 
             if isinstance(_genotype_key, Genotype):
                 matched = [_genotype_key]
@@ -886,7 +886,9 @@ def _write_fitness_field_flat(
 
         # For | patterns (not ::), also try :: for unordered matching.
         # Ordered | may only partially match (e.g. *|A → AA but not Aa).
-        if "|" in selector_str and "::" not in selector_str:
+        # Only promote for unordered species (consistent with
+        # genetic_structures.Species._resolve_single_genotype_selector).
+        if species.unordered and "|" in selector_str and "::" not in selector_str:
             try:
                 unordered_str = selector_str.replace("|", "::", 1)
                 unordered_pattern = ZygoteTypePattern.parse(unordered_str, species)
