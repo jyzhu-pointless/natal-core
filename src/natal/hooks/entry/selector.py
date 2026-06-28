@@ -48,6 +48,42 @@ SelectorItem: TypeAlias = Union[int, str, "Genotype"]
 SelectorSpec: TypeAlias = Union[SelectorItem, range, List[SelectorItem], tuple[SelectorItem, ...]]
 
 
+def _resolve_zygote_type(
+    spec: str,
+    species: Any,
+    index_registry: IndexRegistry,
+) -> List[int]:
+    """Resolve a genotype string to ZType indices, with unordered fallback.
+
+    If ``ZygoteTypePattern.parse(spec)`` returns no matches, the function
+    retries by replacing the first ``|`` with ``::`` to allow unordered
+    maternal/paternal matching (e.g. ``"D|W"`` matching stored ``W|D``).
+    """
+    from natal.genetic_patterns import ZygoteTypePattern
+
+    pattern = ZygoteTypePattern.parse(spec, species)
+    result = index_registry.resolve_ztype_indices(pattern)
+    if not result and "|" in spec and "::" not in spec:
+        # Retry with :: for unordered matching
+        try:
+            fallback = spec.replace("|", "::", 1)
+            fallback_pattern = ZygoteTypePattern.parse(fallback, species)
+            result = index_registry.resolve_ztype_indices(fallback_pattern)
+        except Exception:
+            pass
+        # Retry with reversed maternal/paternal (e.g. "a|A" → "A|a")
+        if not result:
+            try:
+                parts = spec.split("|", 1)
+                if len(parts) == 2:
+                    reversed_str = f"{parts[1].strip()}|{parts[0].strip()}"
+                    reversed_pattern = ZygoteTypePattern.parse(reversed_str, species)
+                    result = index_registry.resolve_ztype_indices(reversed_pattern)
+            except Exception:
+                pass
+    return result
+
+
 def _resolve_selector_to_array(
     spec: SelectorSpec,
     index_registry: IndexRegistry,
@@ -67,34 +103,41 @@ def _resolve_selector_to_array(
     if isinstance(spec, str):
         if spec == "*":
             return np.arange(index_registry.n_ztypes, dtype=np.int32)
-        idx = index_registry.resolve_genotype_index(diploid_genotypes, spec, strict=True)
-        if idx is None:
+        if not diploid_genotypes:
+            raise ValueError("Cannot resolve genotype selector without diploid_genotypes")
+        species = diploid_genotypes[0].species
+        result = _resolve_zygote_type(spec, species, index_registry)
+        if not result:
             raise ValueError(f"Cannot resolve genotype: {spec}")
-        return np.array(index_registry.genotype_to_ztype_indices(idx), dtype=np.int32)
+        return np.array(result, dtype=np.int32)
 
     if isinstance(spec, (list, tuple)):
+        if not diploid_genotypes:
+            raise ValueError("Cannot resolve genotype selector without diploid_genotypes")
+        species = diploid_genotypes[0].species
+
         indices: List[int] = []
         for item in spec:
             if isinstance(item, int):
                 indices.append(item)
             elif isinstance(item, str):
-                idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
-                if idx is None:
+                result = _resolve_zygote_type(item, species, index_registry)
+                if not result:
                     raise ValueError(f"Cannot resolve genotype: {item}")
-                indices.extend(index_registry.genotype_to_ztype_indices(idx))
+                indices.extend(result)
             else:
-                # Genotype or other object
-                idx = index_registry.genotype_to_index.get(item)
-                if idx is None:
+                # Genotype object
+                result = index_registry.ztype_indices_for(item)
+                if not result:
                     raise ValueError(f"Cannot resolve selector item: {item}")
-                indices.extend(index_registry.genotype_to_ztype_indices(idx))
+                indices.extend(result)
         return np.array(indices, dtype=np.int32)
 
-    idx = index_registry.genotype_to_index.get(spec)
-    if idx is not None:
-        return np.array(index_registry.genotype_to_ztype_indices(idx), dtype=np.int32)
-
-    raise ValueError(f"Cannot resolve selector spec: {spec}")
+    # spec is a Genotype object
+    result = index_registry.ztype_indices_for(spec)
+    if not result:
+        raise ValueError(f"Cannot resolve selector spec: {spec}")
+    return np.array(result, dtype=np.int32)
 
 
 def compile_selector_hook(

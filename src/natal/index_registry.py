@@ -422,29 +422,6 @@ class IndexRegistry:
         """Return the number of registered somatic labels."""
         return len(self.slab_labels)
 
-    def genotype_to_ztype_indices(self, g_idx: int) -> list[int]:
-        """Return all ZType indices for a genotype index.
-
-        For a population with n_slabs somatic labels, genotype index g
-        maps to ZType indices [g * n_slabs, ..., g * n_slabs + n_slabs - 1]
-        before compression. After compression, indices are remapped but
-        each surviving genotype still maps to its surviving slab variants.
-        This method scans _index_to_ztype to find the actual indices,
-        making it robust against compression reordering.
-
-        Args:
-            g_idx: Genotype index (0..num_genotypes()-1).
-
-        Returns:
-            list[int]: ZType indices for this genotype (one per surviving slab).
-        """
-        target = self.index_to_genotype[g_idx]
-        indices: list[int] = []
-        for zt_idx, (gt, _slab) in enumerate(self._index_to_ztype):
-            if gt == target:
-                indices.append(zt_idx)
-        return indices
-
     def genotype_index(self, genotype_id: Any) -> int:
         """Return the index for a registered genotype key.
 

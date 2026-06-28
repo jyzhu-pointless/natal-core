@@ -324,11 +324,34 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             else:
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
             for genotype_key, age_data in genotype_dist.items():
-                genotype = self._resolve_genotype_key(genotype_key)
-                genotype_idx = self.registry.genotype_to_index[genotype]
+                from natal.genetic_patterns import (
+                    GenotypePatternParser,
+                    ZygoteTypePattern,
+                )
+
+                if isinstance(genotype_key, str):
+                    if self.species.unordered:
+                        if "@" in genotype_key:
+                            idx = genotype_key.rindex("@")
+                            gt_part = genotype_key[:idx]
+                            slab_part = genotype_key[idx:]
+                        else:
+                            gt_part = genotype_key
+                            slab_part = ""
+                        gt = self.species.get_genotype_from_str(gt_part)
+                        gt = self.species.unordered_genotype(gt.maternal, gt.paternal)
+                        genotype_key = str(gt) + slab_part
+                    pattern = ZygoteTypePattern.parse(genotype_key, self.species)
+                else:
+                    parser = GenotypePatternParser(self.species)
+                    pattern = ZygoteTypePattern(
+                        parser.parse(str(genotype_key)), slab=None
+                    )
+
+                z_idx = self.registry.resolve_default_ztype_index(pattern)
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
-                self.state.individual_count[sex_idx, 0, genotype_idx] = age0_count
-                self.state.individual_count[sex_idx, 1, genotype_idx] = age1_count
+                self.state.individual_count[sex_idx, 0, z_idx] = age0_count
+                self.state.individual_count[sex_idx, 1, z_idx] = age1_count
 
     def run(
         self,

@@ -156,7 +156,8 @@ class TestResolveGenotypes:
 
     def test_unknown_string_raises(self, registry_with_genotypes):
         reg = registry_with_genotypes
-        with pytest.raises((KeyError, ValueError)):
+        from natal.genetic_patterns import PatternParseError
+        with pytest.raises(PatternParseError):
             _resolve_genotypes("UNKNOWN", reg, reg.index_to_genotype, reg.num_genotypes())
 
 

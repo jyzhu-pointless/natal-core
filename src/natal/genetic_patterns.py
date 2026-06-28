@@ -462,7 +462,7 @@ class GenotypePattern:
             try:
                 mat_hap = genotype.maternal.get_haplotype_for_chromosome(chromosome)
                 pat_hap = genotype.paternal.get_haplotype_for_chromosome(chromosome)
-            except (AttributeError, KeyError, IndexError):
+            except (AttributeError, KeyError, IndexError, ValueError):
                 return False
 
             if not chr_pattern.matches((mat_hap, pat_hap)):

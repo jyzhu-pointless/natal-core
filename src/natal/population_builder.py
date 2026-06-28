@@ -797,42 +797,56 @@ class PopulationConfigBuilder:
         for gt in genotypes:
             registry.register_genotype(gt)
         out = np.zeros((2, n_ages, registry.n_ztypes), dtype=np.float64)
-        _default_slab = registry.slab_labels[0]
-
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
             for genotype_key, age_data in genotype_dist.items():
-                # Support @slab suffix and tuple syntax:
+                # Support @slab suffix via ZygoteTypePattern:
                 #   "A|A@infected" → genotype A|A, slab infected
-                #   (genotype_obj, "infected") → genotype_obj, slab infected
-                slab_name: str = _default_slab
-                resolved_key: object = genotype_key
+                #   "A|A" → genotype A|A, default slab via resolve_default_ztype_index
+                from natal.genetic_patterns import (
+                    GenotypePatternParser,
+                    ZygoteTypePattern,
+                )
+
                 if isinstance(genotype_key, tuple):
                     _key, _slab = cast("tuple[object, str]", genotype_key)
-                    resolved_key = _key
-                    slab_name = _slab
-                    if slab_name not in registry.slab_labels:
-                        raise ValueError(f"Unknown slab label '{slab_name}'")
-                elif isinstance(genotype_key, str) and "@" in genotype_key:
-                    g_str, s_str = genotype_key.rsplit("@", 1)
-                    resolved_key = g_str
-                    slab_name = s_str
-                    if slab_name not in registry.slab_labels:
-                        raise ValueError(f"Unknown slab label '{slab_name}' in key '{g_str}@{s_str}'")
-
-                if isinstance(resolved_key, str):
-                    genotype = species.get_genotype_from_str(resolved_key)
-                elif isinstance(resolved_key, Genotype):
-                    genotype = resolved_key
+                    if isinstance(_key, Genotype):
+                        pattern = ZygoteTypePattern.from_pair(_key, _slab, species)
+                    elif isinstance(_key, str):
+                        if species.unordered:
+                            _gt = species.get_genotype_from_str(_key)
+                            _gt = species.unordered_genotype(_gt.maternal, _gt.paternal)
+                            _key = str(_gt)
+                        pattern = ZygoteTypePattern.parse(f"{_key}@{_slab}", species)
+                    else:
+                        raise TypeError(
+                            f"Tuple first element must be Genotype or str, got {type(_key)}"
+                        )
+                elif isinstance(genotype_key, str):
+                    if species.unordered:
+                        # Normalize to unordered canonical form for pattern matching
+                        if "@" in genotype_key:
+                            idx = genotype_key.rindex("@")
+                            gt_part = genotype_key[:idx]
+                            slab_part = genotype_key[idx:]
+                        else:
+                            gt_part = genotype_key
+                            slab_part = ""
+                        gt = species.get_genotype_from_str(gt_part)
+                        gt = species.unordered_genotype(gt.maternal, gt.paternal)
+                        genotype_key = str(gt) + slab_part
+                    pattern = ZygoteTypePattern.parse(genotype_key, species)
+                elif isinstance(genotype_key, Genotype):
+                    parser = GenotypePatternParser(species)
+                    pattern = ZygoteTypePattern(
+                        parser.parse(str(genotype_key)), slab=None
+                    )
                 else:
                     raise TypeError(
-                        f"genotype_key must be a genotype or str, got {type(resolved_key)}"
+                        f"genotype_key must be Genotype, str, or tuple, got {type(genotype_key)}"
                     )
-                if genotype.species is not species:
-                    raise ValueError("Genotype must belong to this species")
-                genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
 
-                z_idx = registry.ztype_index(genotype, slab_name)
+                z_idx = registry.resolve_default_ztype_index(pattern)
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
                 )
@@ -869,55 +883,58 @@ class PopulationConfigBuilder:
         for gt in genotypes:
             registry.register_genotype(gt)
         out = np.zeros((n_ages, registry.n_ztypes, registry.n_ztypes), dtype=np.float64)
-        _default_slab = registry.slab_labels[0]
 
         for female_key, male_dict in sperm_storage.items():
-            female_slab_name: str = _default_slab
-            female_resolved: object = female_key
-            if isinstance(female_key, str) and "@" in female_key:
-                g_str, s_str = female_key.rsplit("@", 1)
-                if s_str not in registry.slab_labels:
-                    raise ValueError(f"Unknown slab label '{s_str}' in key '{female_key}'")
-                female_slab_name = s_str
-                female_resolved = g_str
-            if isinstance(female_resolved, str):
-                female_genotype = species.get_genotype_from_str(female_resolved)
-            elif isinstance(female_resolved, Genotype):
-                female_genotype = female_resolved
+            from natal.genetic_patterns import GenotypePatternParser, ZygoteTypePattern
+
+            if isinstance(female_key, str):
+                if species.unordered:
+                    if "@" in female_key:
+                        idx = female_key.rindex("@")
+                        gt_part = female_key[:idx]
+                        slab_part = female_key[idx:]
+                    else:
+                        gt_part = female_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    gt = species.unordered_genotype(gt.maternal, gt.paternal)
+                    female_key = str(gt) + slab_part
+                female_pattern = ZygoteTypePattern.parse(female_key, species)
+            elif isinstance(female_key, Genotype):
+                parser = GenotypePatternParser(species)
+                female_pattern = ZygoteTypePattern(
+                    parser.parse(str(female_key)), slab=None
+                )
             else:
                 raise TypeError(
-                    f"female_key must be a genotype or str, got {type(female_resolved)}"
+                    f"female_key must be Genotype or str, got {type(female_key)}"
                 )
-            if female_genotype.species is not species:
-                raise ValueError("Genotype must belong to this species")
-            female_genotype = species.unordered_genotype(
-                female_genotype.maternal, female_genotype.paternal
-            )
-            f_z = registry.ztype_index(female_genotype, female_slab_name)
+            f_z = registry.resolve_default_ztype_index(female_pattern)
 
             for male_key, age_data in male_dict.items():
-                male_slab_name: str = "default"
-                male_resolved: object = male_key
-                if isinstance(male_key, str) and "@" in male_key:
-                    g_str, s_str = male_key.rsplit("@", 1)
-                    if s_str not in registry.slab_labels:
-                        raise ValueError(f"Unknown slab label '{s_str}' in key '{male_key}'")
-                    male_slab_name = s_str
-                    male_resolved = g_str
-                if isinstance(male_resolved, str):
-                    male_genotype = species.get_genotype_from_str(male_resolved)
-                elif isinstance(male_resolved, Genotype):
-                    male_genotype = male_resolved
+                if isinstance(male_key, str):
+                    if species.unordered:
+                        if "@" in male_key:
+                            idx = male_key.rindex("@")
+                            gt_part = male_key[:idx]
+                            slab_part = male_key[idx:]
+                        else:
+                            gt_part = male_key
+                            slab_part = ""
+                        gt = species.get_genotype_from_str(gt_part)
+                        gt = species.unordered_genotype(gt.maternal, gt.paternal)
+                        male_key = str(gt) + slab_part
+                    male_pattern = ZygoteTypePattern.parse(male_key, species)
+                elif isinstance(male_key, Genotype):
+                    parser = GenotypePatternParser(species)
+                    male_pattern = ZygoteTypePattern(
+                        parser.parse(str(male_key)), slab=None
+                    )
                 else:
                     raise TypeError(
-                        f"male_key must be a genotype or str, got {type(male_resolved)}"
+                        f"male_key must be Genotype or str, got {type(male_key)}"
                     )
-                if male_genotype.species is not species:
-                    raise ValueError("Genotype must belong to this species")
-                male_genotype = species.unordered_genotype(
-                    male_genotype.maternal, male_genotype.paternal
-                )
-                m_z = registry.ztype_index(male_genotype, male_slab_name)
+                m_z = registry.resolve_default_ztype_index(male_pattern)
 
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
@@ -1000,39 +1017,56 @@ class PopulationConfigBuilder:
         for gt in genotypes:
             registry.register_genotype(gt)
         out = np.zeros((2, 2, registry.n_ztypes), dtype=np.float64)
-        _default_slab = registry.slab_labels[0]
 
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
             for genotype_key, age_data in genotype_dist.items():
-                slab_name: str = _default_slab
-                resolved_key: object = genotype_key
+                # Support @slab suffix via ZygoteTypePattern:
+                #   "A|A@infected" → genotype A|A, slab infected
+                #   "A|A" → genotype A|A, default slab via resolve_default_ztype_index
+                from natal.genetic_patterns import (
+                    GenotypePatternParser,
+                    ZygoteTypePattern,
+                )
+
                 if isinstance(genotype_key, tuple):
                     _key, _slab = cast("tuple[object, str]", genotype_key)
-                    resolved_key = _key
-                    slab_name = _slab
-                    if slab_name not in registry.slab_labels:
-                        raise ValueError(f"Unknown slab label '{slab_name}'")
-                elif isinstance(genotype_key, str) and "@" in genotype_key:
-                    g_str, s_str = genotype_key.rsplit("@", 1)
-                    resolved_key = g_str
-                    slab_name = s_str
-                    if slab_name not in registry.slab_labels:
-                        raise ValueError(f"Unknown slab label '{slab_name}' in key '{g_str}@{s_str}'")
-
-                if isinstance(resolved_key, str):
-                    genotype = species.get_genotype_from_str(resolved_key)
-                elif isinstance(resolved_key, Genotype):
-                    genotype = resolved_key
+                    if isinstance(_key, Genotype):
+                        pattern = ZygoteTypePattern.from_pair(_key, _slab, species)
+                    elif isinstance(_key, str):
+                        if species.unordered:
+                            _gt = species.get_genotype_from_str(_key)
+                            _gt = species.unordered_genotype(_gt.maternal, _gt.paternal)
+                            _key = str(_gt)
+                        pattern = ZygoteTypePattern.parse(f"{_key}@{_slab}", species)
+                    else:
+                        raise TypeError(
+                            f"Tuple first element must be Genotype or str, got {type(_key)}"
+                        )
+                elif isinstance(genotype_key, str):
+                    if species.unordered:
+                        if "@" in genotype_key:
+                            idx = genotype_key.rindex("@")
+                            gt_part = genotype_key[:idx]
+                            slab_part = genotype_key[idx:]
+                        else:
+                            gt_part = genotype_key
+                            slab_part = ""
+                        gt = species.get_genotype_from_str(gt_part)
+                        gt = species.unordered_genotype(gt.maternal, gt.paternal)
+                        genotype_key = str(gt) + slab_part
+                    pattern = ZygoteTypePattern.parse(genotype_key, species)
+                elif isinstance(genotype_key, Genotype):
+                    parser = GenotypePatternParser(species)
+                    pattern = ZygoteTypePattern(
+                        parser.parse(str(genotype_key)), slab=None
+                    )
                 else:
                     raise TypeError(
-                        f"genotype_key must be a genotype or str, got {type(resolved_key)}"
+                        f"genotype_key must be Genotype, str, or tuple, got {type(genotype_key)}"
                     )
-                if genotype.species is not species:
-                    raise ValueError("Genotype must belong to this species")
-                genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
 
-                z_idx = registry.ztype_index(genotype, slab_name)
+                z_idx = registry.resolve_default_ztype_index(pattern)
                 age0, age1 = PopulationConfigBuilder._resolve_discrete_age_distribution(age_data)
                 out[sex_idx, 0, z_idx] += age0
                 out[sex_idx, 1, z_idx] += age1

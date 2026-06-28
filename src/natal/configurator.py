@@ -878,13 +878,40 @@ def _write_fitness_field_flat(
             continue
         # ── end tuple branch ──
 
-        from natal.genetic_patterns import ZygoteTypePattern
-        pattern = ZygoteTypePattern.parse(str(selector), species)
+        from natal.genetic_patterns import LabPattern, ZygoteTypePattern
+
+        selector_str = str(selector)
+        pattern = ZygoteTypePattern.parse(selector_str, species)
         z_indices = registry.resolve_ztype_indices(pattern)
+
+        # For | patterns (not ::), also try :: for unordered matching.
+        # Ordered | may only partially match (e.g. *|A → AA but not Aa).
+        if "|" in selector_str and "::" not in selector_str:
+            try:
+                unordered_str = selector_str.replace("|", "::", 1)
+                unordered_pattern = ZygoteTypePattern.parse(unordered_str, species)
+                unordered_indices = registry.resolve_ztype_indices(unordered_pattern)
+                if len(unordered_indices) >= len(z_indices):
+                    z_indices = unordered_indices
+            except Exception:
+                pass
+
+        if not z_indices:
+            # Check for invalid slab first — give a specific error
+            if "@" in selector_str:
+                _, s_str = selector_str.rsplit("@", 1)
+                lab = LabPattern.parse(s_str)
+                raw_slabs = list(slab_to_idx.keys())
+                matching_slabs = [s for s in raw_slabs if lab.matches(s)]
+                if not matching_slabs:
+                    raise ValueError(
+                        f"No slab matches '{s_str}' in fitness.{field_name} "
+                        f"selector '{selector_str}'.  Available: {raw_slabs}"
+                    )
 
         if not z_indices:
             raise ValueError(
-                f"No zygote type matches '{selector}' in fitness.{field_name}"
+                f"No zygote type matches '{selector_str}' in fitness.{field_name}"
             )
 
         age_slice = slice(resolved_age, resolved_age + 1)

@@ -270,8 +270,9 @@ def _resolve_genotypes(
     """Resolve genotype selector syntax into concrete ZType indices.
 
     Supported input forms:
-    - ``"*"``
-    - one label (``"AA"``) or a label list
+    - ``"*"`` — all ZTypes
+    - genotype label (``"AA"``) or label list — resolved via ZygoteTypePattern
+    - ``@slab`` syntax (``"AA@infected"``) — genotype with slab constraint
     - raw integer index or index list
 
     Args:
@@ -292,19 +293,58 @@ def _resolve_genotypes(
     if isinstance(selector, str):
         selector = [selector]
 
+    if not diploid_genotypes:
+        raise ValueError("Cannot resolve genotype selector without diploid_genotypes")
+    species = diploid_genotypes[0].species
+
     indices: List[int] = []
     for item in selector:
         if isinstance(item, int):
             indices.append(item)
             continue
 
-        idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
-        if idx is None:
+        z_indices = _resolve_zygote_type(item, species, index_registry)
+        if not z_indices:
             raise ValueError(f"Cannot resolve genotype: {item}")
-        # Expand to all ZType indices (one per surviving slab)
-        indices.extend(index_registry.genotype_to_ztype_indices(idx))
+        indices.extend(z_indices)
 
     return np.array(indices, dtype=np.int32)
+
+
+def _resolve_zygote_type(
+    spec: str,
+    species: Any,
+    index_registry: IndexRegistry,
+) -> List[int]:
+    """Resolve a genotype string to ZType indices, with unordered fallback.
+
+    If ``ZygoteTypePattern.parse(spec)`` returns no matches, the function
+    retries by replacing the first ``|`` with ``::`` to allow unordered
+    maternal/paternal matching (e.g. ``"D|W"`` matching stored ``W|D``).
+    """
+    from natal.genetic_patterns import ZygoteTypePattern
+
+    pattern = ZygoteTypePattern.parse(spec, species)
+    result = index_registry.resolve_ztype_indices(pattern)
+    if not result and "|" in spec and "::" not in spec:
+        # Retry with :: for unordered matching
+        try:
+            fallback = spec.replace("|", "::", 1)
+            fallback_pattern = ZygoteTypePattern.parse(fallback, species)
+            result = index_registry.resolve_ztype_indices(fallback_pattern)
+        except Exception:
+            pass
+        # Retry with reversed maternal/paternal (e.g. "a|A" → "A|a")
+        if not result:
+            try:
+                parts = spec.split("|", 1)
+                if len(parts) == 2:
+                    reversed_str = f"{parts[1].strip()}|{parts[0].strip()}"
+                    reversed_pattern = ZygoteTypePattern.parse(reversed_str, species)
+                    result = index_registry.resolve_ztype_indices(reversed_pattern)
+            except Exception:
+                pass
+    return result
 
 
 def _resolve_ages(selector: Union[int, List[int], range, Literal["*"]], n_ages: int) -> np.ndarray:
