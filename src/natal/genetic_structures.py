@@ -3503,10 +3503,16 @@ class Species(GeneticStructure['HaploidGenome']):
     def build_gamete_map(
         self,
         gamete_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+        n_slabs: int = 1,
     ) -> NDArray[np.float64]:
         """Build the genotype → gamete map for this species.
 
         When *gamete_modifiers* is None, returns the Mendelian baseline.
+
+        Args:
+            gamete_modifiers: Optional modifier callables to apply.
+            n_slabs: Number of somatic slabs.  When > 1 the genotype axis is
+                tiled so that each base genotype appears once per slab.
         """
         from natal.population_config import initialize_gamete_map as _impl
 
@@ -3515,15 +3521,22 @@ class Species(GeneticStructure['HaploidGenome']):
             haploid_genotypes=self.get_all_haploid_genotypes(),
             n_glabs=len(self.gamete_labels or ["default"]),
             gamete_modifiers=gamete_modifiers,
+            n_slabs=n_slabs,
         )
 
     def build_zygote_map(
         self,
         zygote_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+        n_slabs: int = 1,
     ) -> NDArray[np.float64]:
         """Build the gamete pair → diploid genotype map for this species.
 
         When *zygote_modifiers* is None, returns the Mendelian baseline.
+
+        Args:
+            zygote_modifiers: Optional modifier callables to apply.
+            n_slabs: Number of somatic slabs.  When > 1 the genotype axis is
+                tiled so that each base genotype appears once per slab.
         """
         from natal.population_config import initialize_zygote_map as _impl
 
@@ -3533,6 +3546,7 @@ class Species(GeneticStructure['HaploidGenome']):
             n_glabs=len(self.gamete_labels or ["default"]),
             zygote_modifiers=zygote_modifiers,
             unordered=True,  # unordered genotype space
+            n_slabs=n_slabs,
         )
 
     # -- lazy-loaded config blueprint ---------------------------------------------
@@ -3792,14 +3806,14 @@ def build_gamete_compression_mask(
             i += 1
 
     # Build GType mask
-    from natal.index_registry import compress_hg_glab, decompress_hg_glab
+    from natal.population_config import _compress_hl, _decompress_hl
 
     gtype_mask = np.full(HL, -1, dtype=np.int32)
     sorted_pairs = sorted(
-        decompress_hg_glab(hl, n_glabs) for hl in reachable_hl
+        _decompress_hl(hl, n_glabs) for hl in reachable_hl
     )
     for j, (hg, glab) in enumerate(sorted_pairs):
-        hl = compress_hg_glab(hg, glab, n_glabs)
+        hl = _compress_hl(hg, glab, n_glabs)
         gtype_mask[hl] = j
 
     # Build ZType mask — for n_slabs=1 this is just (G_orig,).

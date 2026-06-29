@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.index_registry import IndexRegistry, compress_hg_glab
+from natal.index_registry import IndexRegistry
 from natal.modifiers import (
     _normalize_zygote_val,
     _parse_zygote_key,
@@ -43,8 +43,8 @@ class TestParseZygoteKey:
         key = ((hgs[0], "default"), (hgs[1], "default"))
         c1, c2 = _parse_zygote_key(key, registry, hgs, n_glabs)
 
-        expected_c1 = compress_hg_glab(0, 0, n_glabs)  # hg0 -> idx 0
-        expected_c2 = compress_hg_glab(1, 0, n_glabs)  # hg1 -> idx 1
+        expected_c1 = 0 * n_glabs + 0  # hg0 -> idx 0
+        expected_c2 = 1 * n_glabs + 0  # hg1 -> idx 1
         assert (c1, c2) == (expected_c1, expected_c2)
 
     def test_compressed_int_element(self, simple_species):

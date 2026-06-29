@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from natal.genetic_patterns import ZygoteTypePattern
 
 from natal.genetic_entities import Genotype, HaploidGenotype
-from natal.numba_utils import njit_switch
 
 
 class IndexRegistry:
@@ -728,10 +727,12 @@ class IndexRegistry:
             except ValueError:
                 raise KeyError(f"Unknown haploid object: {part}") from ValueError
 
-        # compressed integer
+        # compressed integer — decompress via formula
         if isinstance(part, int):
             try:
-                return decompress_hg_glab(part, n_glabs)
+                hg_idx = int(part) // int(n_glabs)
+                glab_idx = int(part) % int(n_glabs)
+                return (hg_idx, glab_idx)
             except Exception:
                 raise KeyError(f"Unknown compressed index: {part}") from Exception
 
@@ -824,7 +825,7 @@ class IndexRegistry:
             assert isinstance(idx_hg, int) and isinstance(glab_idx, int), (
                 "Resolved indices must be integers"
             )
-            return compress_hg_glab(idx_hg, glab_idx, n_glabs)
+            return int(idx_hg) * int(n_glabs) + int(glab_idx)
 
         # HaploidGenotype -> default glab 0
         if isinstance(comp_key, HaploidGenotype):
@@ -834,14 +835,14 @@ class IndexRegistry:
                 if strict:
                     raise KeyError(f"Unknown haploid object: {comp_key}") from ValueError
                 return None
-            return compress_hg_glab(idx_hg, 0, n_glabs)
+            return int(idx_hg) * int(n_glabs)
 
         # string -> match to_string
         if isinstance(comp_key, str):
             for i, hg in enumerate(haploid_genotypes):
                 try:
-                    if hasattr(hg, "to_string") and hg.to_string() == comp_key:
-                        return compress_hg_glab(i, 0, n_glabs)
+                        if hasattr(hg, "to_string") and hg.to_string() == comp_key:
+                            return int(i) * int(n_glabs)
                 except Exception:
                     continue
             if strict:
@@ -862,42 +863,7 @@ def _as_pair(value: object) -> Optional[Tuple[object, object]]:
     return tuple_value[0], tuple_value[1]
 
 
-# ==================================================================
-# Module-level formula helpers — kept for BFS reachability computation
-# These are private (_ prefix) as they're an implementation detail.
-# ==================================================================
-
-
-@njit_switch(cache=True)
-def compress_hg_glab(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
-    """Compress a (haplogenotype, glab) pair into a single integer.
-
-    The compressed representation is ``hg_idx * n_glabs + glab_idx`` and is
-    commonly used to index flattened tensors that combine haplogenotype and
-    gamete-label axes.
-
-    Args:
-        hg_idx: Haplogenotype index.
-        glab_idx: Gamete-label index.
-        n_glabs: Number of distinct gamete labels.
-
-    Returns:
-        int: The compressed combined index.
-    """
-    return int(hg_idx) * int(n_glabs) + int(glab_idx)
-
-
-@njit_switch(cache=True)
-def decompress_hg_glab(compressed_idx: int, n_glabs: int) -> Tuple[int, int]:
-    """Decompress a combined hg+glab index back into its components.
-
-    Args:
-        compressed_idx: The compressed integer index.
-        n_glabs: Number of distinct gamete labels used during compression.
-
-    Returns:
-        Tuple[int, int]: ``(hg_idx, glab_idx)`` unpacked from ``compressed_idx``.
-    """
-    hg_idx = int(compressed_idx) // int(n_glabs)
-    glab_idx = int(compressed_idx) % int(n_glabs)
-    return hg_idx, glab_idx
+# compress_hg_glab / decompress_hg_glab have been moved to
+# natal.population_config as _compress_hl / _decompress_hl.
+# They are only needed during species blueprint construction
+# (before IndexRegistry exists).  For runtime use gtype_index().

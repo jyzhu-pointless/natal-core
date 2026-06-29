@@ -1081,6 +1081,46 @@ def initialize_gamete_map(
     return zygotes_to_gametes_map
 
 
+# ==================================================================
+# Haplotype compression helpers — used by gamete-map construction
+# during species blueprint build (before IndexRegistry exists).
+# These are private; use IndexRegistry.gtype_index() for runtime
+# dict-based lookups once the registry is established.
+# ==================================================================
+
+
+def _compress_hl(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
+    """Compress a (haplogenotype, glab) pair into a flat index.
+
+    The compressed representation is *hg_idx × n_glabs + glab_idx*,
+    used to index the ``HL = n_hap × n_glabs`` axis of gamete maps.
+
+    Args:
+        hg_idx: Haplogenotype index.
+        glab_idx: Gamete-label index.
+        n_glabs: Number of distinct gamete labels.
+
+    Returns:
+        int: The flat combined index.
+    """
+    return int(hg_idx) * int(n_glabs) + int(glab_idx)
+
+
+def _decompress_hl(compressed_idx: int, n_glabs: int) -> tuple[int, int]:
+    """Decompress a flat HL index back into (hg_idx, glab_idx).
+
+    Args:
+        compressed_idx: The flat integer index.
+        n_glabs: Number of gamete labels used during compression.
+
+    Returns:
+        tuple[int, int]: ``(hg_idx, glab_idx)``.
+    """
+    hg_idx = int(compressed_idx) // int(n_glabs)
+    glab_idx = int(compressed_idx) % int(n_glabs)
+    return hg_idx, glab_idx
+
+
 def _expand_slab_maps(
     z2g: NDArray[np.float64],
     g2z: NDArray[np.float64],

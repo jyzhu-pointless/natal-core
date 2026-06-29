@@ -5,7 +5,6 @@ import uuid
 
 from natal.genetic_presets import ToxinAntidoteDrive
 from natal.genetic_structures import Species
-from natal.index_registry import compress_hg_glab
 from natal.population_builder import DiscreteGenerationPopulationBuilder
 
 
@@ -208,8 +207,8 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
         n_glabs = int(self.population.config.n_glabs)
         drive_idx = self.population.index_registry.haplo_to_index[self.hg_drive]
         wt_idx = self.population.index_registry.haplo_to_index[self.hg_wt]
-        c_drive = compress_hg_glab(drive_idx, 0, n_glabs)
-        c_wt = compress_hg_glab(wt_idx, 0, n_glabs)
+        c_drive = drive_idx * n_glabs
+        c_wt = wt_idx * n_glabs
         # Unordered zygote map sorts haploid pairs by index — use sorted pair.
         c_pair = (min(c_drive, c_wt), max(c_drive, c_wt))
 
@@ -290,8 +289,8 @@ class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):
         n_glabs = int(self.population.config.n_glabs)
         drive_wt2_idx = self.population.index_registry.haplo_to_index[self.hg_drive_wt2]
         wt1_wt2_idx = self.population.index_registry.haplo_to_index[self.hg_wt1_wt2]
-        c_drive_wt2 = compress_hg_glab(drive_wt2_idx, 0, n_glabs)
-        c_wt1_wt2 = compress_hg_glab(wt1_wt2_idx, 0, n_glabs)
+        c_drive_wt2 = drive_wt2_idx * n_glabs
+        c_wt1_wt2 = wt1_wt2_idx * n_glabs
         c_pair = (min(c_drive_wt2, c_wt1_wt2), max(c_drive_wt2, c_wt1_wt2))
 
         self.assertIn(c_pair, updates)
@@ -377,8 +376,8 @@ class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
         n_glabs = int(self.population.config.n_glabs)
         drive_wt2_idx = self.population.index_registry.haplo_to_index[self.hg_drive_wt2]
         wt1_wt2_idx = self.population.index_registry.haplo_to_index[self.hg_wt1_wt2]
-        c_drive_wt2 = compress_hg_glab(drive_wt2_idx, 0, n_glabs)
-        c_wt1_wt2 = compress_hg_glab(wt1_wt2_idx, 0, n_glabs)
+        c_drive_wt2 = drive_wt2_idx * n_glabs
+        c_wt1_wt2 = wt1_wt2_idx * n_glabs
         c_pair = (min(c_drive_wt2, c_wt1_wt2), max(c_drive_wt2, c_wt1_wt2))
 
         self.assertIn(c_pair, updates)

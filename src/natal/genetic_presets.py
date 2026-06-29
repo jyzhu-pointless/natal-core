@@ -1663,7 +1663,7 @@ class CytoplasmicPreset(GeneticPreset):
 
     Child slab = mother slab regardless of father.  The mechanism:
     1. *Gamete tagging* happens externally during slab expansion
-       (``_expand_slab_maps`` / ``build_population_config``) — the
+       (via ``build_population_config``) — the
        non-default glab/slab pairs are auto-detected by convention.
        ``gamete_modifier`` returns ``None`` (no per-modifier tagging).
     2. ``apply_zygote_redirect`` (called during zygote map expansion)
