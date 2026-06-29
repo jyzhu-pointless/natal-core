@@ -24,7 +24,8 @@ class TestOrderedDefault:
         """Config blueprint uses unordered count, but ordered is still accessible."""
         sp = nt.Species.from_dict("nc_bp", {"c1": {"l1": ["A", "a"]}})
         bp = sp.get_config_blueprint()
-        assert bp["n_ztypes"] == 3  # unordered in blueprint
+        assert bp["n_genotypes"] == 3  # unordered genotype count
+        assert bp["n_ztypes"] == 3  # G × S = 3 × 1
         # But ordered is still available
         ordered = sp.get_all_genotypes(unordered=False)
         assert len(ordered) == 4
@@ -197,7 +198,8 @@ class TestUnorderedConfigBlueprint:
     def test_blueprint_uses_unordered_count(self):
         sp = nt.Species.from_dict("canon_bp", {"c1": {"l1": ["A", "a"]}})
         bp = sp.get_config_blueprint()
-        assert bp["n_ztypes"] == 3
+        assert bp["n_genotypes"] == 3
+        assert bp["n_ztypes"] == 3  # G × S = 3 × 1
 
     def test_shape_consistency(self):
         sp = nt.Species.from_dict("canon_shape", {"c1": {"l1": ["A", "a"]}})

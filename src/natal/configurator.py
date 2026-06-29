@@ -258,6 +258,7 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         haploid_genotypes=haploid_genotypes,
         diploid_genotypes=diploid_genotypes,
         n_glabs=n_glabs,
+        expand_to_ztypes=int(ctx.config.n_slabs) > 1,
     )
 
     # ---- fetch the Mendelian baseline from the species cache ----
@@ -271,27 +272,12 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
     # ---- chain modifier callables on top of the baseline ----
     # Each callable accepts and returns a tensor of the same shape,
     # allowing modifiers to be composed in registration order.
+    # Blueprint maps are pre-expanded (G×S), so modifier wrappers
+    # expand genotype indices to ZType indices internally.
     for fn in gamete_funcs:
         zygotes_to_gametes_map = fn(zygotes_to_gametes_map)
     for fn in zygote_funcs:
         gametes_to_zygotes_map = fn(gametes_to_zygotes_map)
-
-    # ---- slab expansion (applied after modifiers, before compression) ----
-    n_slabs = int(ctx.config.n_slabs)
-    if n_slabs > 1:
-        from natal.population_config import (
-            _expand_slab_maps,  # pyright: ignore[reportPrivateUsage]
-        )
-        zygotes_to_gametes_map, gametes_to_zygotes_map, _ = _expand_slab_maps(
-            z2g=zygotes_to_gametes_map,
-            g2z=gametes_to_zygotes_map,
-            n_slabs=n_slabs,
-            n_genotypes=int(zygotes_to_gametes_map.shape[1]),
-            gamete_labels=ctx.species.gamete_labels if ctx.species else None,
-            somatic_labels=ctx.species.somatic_labels if ctx.species else None,
-            n_haploid_genotypes=int(ctx.config.n_haploid_genotypes),
-            n_glabs=n_glabs,
-        )
 
     # ---- index compression (optional) ----
     n_g_compressed = int(ctx.config.n_ztypes)
@@ -1101,7 +1087,7 @@ class Configurator:
             ready for further chaining.
         """
         bp = species.get_config_blueprint()
-        n_g = bp["n_ztypes"]
+        n_g = bp["n_genotypes"]
         n_hg = bp["n_haploid_genotypes"]
         n_gl = bp["n_glabs"]
         n_sl = bp.get("n_slabs", 1)
@@ -2171,7 +2157,7 @@ class AgeStructuredConfigurator(Configurator):
         # build_population_config applies slab expansion exactly once.
         if self._species is not None:
             bp = self._species.get_config_blueprint()
-            n_g_orig = bp["n_ztypes"]
+            n_g_orig = bp["n_genotypes"]
             n_hg_orig = bp["n_haploid_genotypes"]
             z2g_bp = bp["zygotes_to_gametes_map"]
             g2z_bp = bp["gametes_to_zygotes_map"]

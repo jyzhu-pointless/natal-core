@@ -1828,7 +1828,8 @@ class SpeciesConfigBlueprint(TypedDict):
     consumed by ``Configurator`` / ``PopulationBuilder``.
     """
 
-    n_ztypes: int
+    n_genotypes: int  # unique genotype count (G)
+    n_ztypes: int     # G × S (genotypes × slabs)
     n_haploid_genotypes: int
     n_glabs: int
     n_slabs: int
@@ -3584,17 +3585,21 @@ class Species(GeneticStructure['HaploidGenome']):
         n_g = len(genotypes)
         n_hg = len(haplotypes)
 
-        z2g = self.build_gamete_map()
-        g2z = self.build_zygote_map()
+        # Build maps with slab expansion so the genotype axis is G × S.
+        # This eliminates duplicate _expand_slab_maps calls downstream.
+        z2g = self.build_gamete_map(n_slabs=n_slabs)
+        g2z = self.build_zygote_map(n_slabs=n_slabs)
 
         meiosis_f = cast(NDArray[np.float64], z2g[0])
         meiosis_m = cast(NDArray[np.float64], z2g[1])
+
+        n_ztypes = n_g * n_slabs
 
         offspring = compute_offspring_probability_tensor(
             meiosis_f=meiosis_f,
             meiosis_m=meiosis_m,
             haplo_to_genotype_map=g2z,
-            n_ztypes=n_g,
+            n_ztypes=n_ztypes,
             n_haplogenotypes=n_hg,
             n_glabs=n_glabs,
         )
@@ -3606,7 +3611,8 @@ class Species(GeneticStructure['HaploidGenome']):
         m_compat = meiosis_m.sum(axis=1)  # male side
 
         self._config_blueprint = {
-            "n_ztypes": n_g,
+            "n_genotypes": n_g,
+            "n_ztypes": n_ztypes,
             "n_haploid_genotypes": n_hg,
             "n_glabs": n_glabs,
             "n_slabs": n_slabs,

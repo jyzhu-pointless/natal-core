@@ -415,6 +415,7 @@ def _build_config_maps(
     infer_capacity_from_initial_state: bool,
     equilibrium_individual_distribution: Optional[NDArray[np.float64]],
     external_expected_eggs: Optional[float],
+    pre_expanded: bool = False,
 ) -> _ComputedMaps:
     """Shared computation engine for config building.
 
@@ -437,7 +438,10 @@ def _build_config_maps(
     n_haploid_genotypes_i = int(n_haploid_genotypes)
     n_glabs_i = int(n_glabs)
     n_slabs_i = int(n_slabs)
-    n_ztypes_i = n_genotypes_i * n_slabs_i
+    if pre_expanded and zygotes_to_gametes_map is not None:
+        n_ztypes_i = int(zygotes_to_gametes_map.shape[1])
+    else:
+        n_ztypes_i = n_genotypes_i * n_slabs_i
     new_adult_age_i = int(new_adult_age)
     adult_ages = np.arange(new_adult_age_i, n_ages_i, dtype=np.int64)
 
@@ -512,12 +516,14 @@ def _build_config_maps(
     competition = _validate_or_default_array(
         age_based_relative_competition_strength, (n_ages_i,), "age_based_relative_competition_strength",
     )
+    # Use n_ztypes_i for the genotype axis when maps are pre-expanded.
+    _n_g_axis = n_ztypes_i if pre_expanded else n_genotypes_i
     z2g = _validate_or_default_array(
-        zygotes_to_gametes_map, (n_sexes_i, n_genotypes_i, n_hg_glabs), "zygotes_to_gametes_map",
+        zygotes_to_gametes_map, (n_sexes_i, _n_g_axis, n_hg_glabs), "zygotes_to_gametes_map",
         default_value=np.zeros,
     )
     g2z = _validate_or_default_array(
-        gametes_to_zygotes_map, (n_hg_glabs, n_hg_glabs, n_genotypes_i), "gametes_to_zygotes_map",
+        gametes_to_zygotes_map, (n_hg_glabs, n_hg_glabs, _n_g_axis), "gametes_to_zygotes_map",
         default_value=np.zeros,
     )
     expected_competition_strength, expected_survival_rate = alg.compute_equilibrium_metrics(
@@ -541,7 +547,7 @@ def _build_config_maps(
     n_glabs_effective = n_glabs_i
 
     # Slab expansion (skip if maps are already expanded by the caller).
-    if z2g.shape[1] == n_genotypes_i:
+    if not pre_expanded and z2g.shape[1] == n_genotypes_i:
         z2g_expanded, _z2g, n_g_compressed = _expand_slab_maps(
             z2g=z2g, g2z=g2z,
             n_slabs=n_slabs_i, n_genotypes=n_genotypes_i,
@@ -776,6 +782,7 @@ def build_population_config(
         infer_capacity_from_initial_state=infer_capacity_from_initial_state,
         equilibrium_individual_distribution=equilibrium_individual_distribution,
         external_expected_eggs=external_expected_eggs,
+        pre_expanded=zygotes_to_gametes_map is not None and zygotes_to_gametes_map.shape[1] > n_genotypes,
     )
 
     if generation_time is None:
@@ -1549,6 +1556,7 @@ def build_discrete_engine_config(
         infer_capacity_from_initial_state=bool(kwargs.pop("infer_capacity_from_initial_state", True)),
         equilibrium_individual_distribution=kwargs.pop("equilibrium_individual_distribution", None),
         external_expected_eggs=kwargs.pop("external_expected_eggs", None),
+        pre_expanded=zygotes_to_gametes_map.shape[1] > n_genotypes,
     )
 
     return DiscretePopulationConfig(

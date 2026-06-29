@@ -19,7 +19,7 @@ def species() -> nt.Species:
 @pytest.fixture
 def minimal_config(species):
     return build_population_config(
-        n_genotypes=species.get_config_blueprint()["n_ztypes"],
+        n_genotypes=species.get_config_blueprint()["n_genotypes"],
         n_haploid_genotypes=species.get_config_blueprint()["n_haploid_genotypes"],
         n_ages=2,
         n_glabs=species.get_config_blueprint()["n_glabs"],

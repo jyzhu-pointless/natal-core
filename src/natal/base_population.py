@@ -730,8 +730,10 @@ class BasePopulation(ABC, Generic[T_State]):
         # Step 3.3: Apply slab expansion if n_slabs > 1.  This must run
         # after modifier callables (which operate in unexpanded genotype
         # space) and before index compression (which expects expanded maps).
+        # Skip if maps are already pre-expanded (e.g., from config blueprint).
         n_slabs = int(self._config.n_slabs)
-        if n_slabs > 1:
+        n_g_pre = int(zygotes_to_gametes_map.shape[1])
+        if n_slabs > 1 and n_g_pre == len(diploid_genotypes):
             from natal.population_config import (
                 _expand_slab_maps,  # pyright: ignore[reportPrivateUsage]
             )

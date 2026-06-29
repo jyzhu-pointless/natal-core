@@ -204,6 +204,7 @@ def wrap_gamete_modifier(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
+    expand_to_ztypes: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level GameteModifier into a tensor-level callable.
 
@@ -217,6 +218,9 @@ def wrap_gamete_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
+        expand_to_ztypes: If True, expand resolved genotype indices to all
+            ZType (genotype×slab) indices before writing.  Required when the
+            tensor's genotype axis is pre-expanded (G×S).
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
@@ -231,6 +235,15 @@ def wrap_gamete_modifier(
             raise TypeError("Gamete modifier must return a mapping from keys to compressed-index->freq mappings")
         bulk = cast(Mapping[object, object], bulk_obj)
 
+        def _expand_gidx(gidx: int) -> list[int]:
+            """Expand a genotype index to all ZType indices if pre-expanded."""
+            if expand_to_ztypes:
+                gt = diploid_genotypes[gidx]
+                ztypes = index_registry.ztype_indices_for(gt)
+                if ztypes:
+                    return ztypes
+            return [gidx]
+
         for key, val in bulk.items():
             # Case A: top-level sex-name ('male'/'female')
             sex_idx = _resolve_sex_name(key) if isinstance(key, str) else None
@@ -241,19 +254,21 @@ def wrap_gamete_modifier(
                         gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
                     except KeyError:
                         continue
-                    if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
+                    if not (0 <= sex_idx < n_sexes and 0 <= gidx < len(diploid_genotypes)):
                         continue
                     if isinstance(comp_map, Mapping):
-                        _apply_comp_map(
-                            modified,
-                            sex_idx,
-                            gidx,
-                            cast(Mapping[object, object], comp_map),
-                            index_registry,
-                            haploid_genotypes,
-                            n_glabs,
-                            n_hg_glabs,
-                        )
+                        for zidx in _expand_gidx(gidx):
+                            if 0 <= zidx < n_genotypes:
+                                _apply_comp_map(
+                                    modified,
+                                    sex_idx,
+                                    zidx,
+                                    cast(Mapping[object, object], comp_map),
+                                    index_registry,
+                                    haploid_genotypes,
+                                    n_glabs,
+                                    n_hg_glabs,
+                                )
                 continue
 
             # Case B: explicit (sex_idx, genotype_key) tuple
@@ -264,18 +279,20 @@ def wrap_gamete_modifier(
                     continue
                 sex_idx = sex_obj
                 gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
-                if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
+                if not (0 <= sex_idx < n_sexes and 0 <= gidx < len(diploid_genotypes)):
                     continue
-                _apply_comp_map(
-                    modified,
-                    sex_idx,
-                    gidx,
-                    cast(Mapping[object, object], val),
-                    index_registry,
-                    haploid_genotypes,
-                    n_glabs,
-                    n_hg_glabs,
-                )
+                for zidx in _expand_gidx(gidx):
+                    if 0 <= zidx < n_genotypes:
+                        _apply_comp_map(
+                            modified,
+                            sex_idx,
+                            zidx,
+                            cast(Mapping[object, object], val),
+                            index_registry,
+                            haploid_genotypes,
+                            n_glabs,
+                            n_hg_glabs,
+                        )
                 continue
 
             # Case C: key is genotype_key applied to all sexes
@@ -286,16 +303,18 @@ def wrap_gamete_modifier(
             if not isinstance(val, Mapping):
                 continue
             for sex_idx in range(n_sexes):
-                _apply_comp_map(
-                    modified,
-                    sex_idx,
-                    gidx,
-                    cast(Mapping[object, object], val),
-                    index_registry,
-                    haploid_genotypes,
-                    n_glabs,
-                    n_hg_glabs,
-                )
+                for zidx in _expand_gidx(gidx):
+                    if 0 <= zidx < n_genotypes:
+                        _apply_comp_map(
+                            modified,
+                            sex_idx,
+                            zidx,
+                            cast(Mapping[object, object], val),
+                            index_registry,
+                            haploid_genotypes,
+                            n_glabs,
+                            n_hg_glabs,
+                        )
 
         return modified
     return tensor_modifier
@@ -308,6 +327,7 @@ def wrap_zygote_modifier(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
+    expand_to_ztypes: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level ZygoteModifier into a tensor-level callable.
 
@@ -321,6 +341,9 @@ def wrap_zygote_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
+        expand_to_ztypes: If True, expand resolved genotype indices to all
+            ZType (genotype×slab) indices before writing.  Required when the
+            tensor's genotype axis is pre-expanded (G×S).
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
@@ -337,7 +360,15 @@ def wrap_zygote_modifier(
         for key, val in bulk.items():
             c1, c2 = _parse_zygote_key(key, index_registry, haploid_genotypes, n_glabs)
             mapping = _normalize_zygote_val(val, index_registry, diploid_genotypes)
-            _write_zygote_mapping(modified, c1, c2, mapping)
+            if expand_to_ztypes:
+                expanded: Dict[int, float] = {}
+                for gidx, prob in mapping.items():
+                    gt = diploid_genotypes[gidx]
+                    for zidx in index_registry.ztype_indices_for(gt):
+                        expanded[zidx] = prob
+                _write_zygote_mapping(modified, c1, c2, expanded)
+            else:
+                _write_zygote_mapping(modified, c1, c2, mapping)
 
         return modified
     return tensor_modifier
@@ -351,6 +382,7 @@ def build_modifier_wrappers(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
+    expand_to_ztypes: bool = False,
 ) -> Tuple[List[Callable[[np.ndarray], np.ndarray]], List[Callable[[np.ndarray], np.ndarray]]]:
     """Wrap high-level gamete/zygote modifiers into tensor-level callables.
 
@@ -365,6 +397,9 @@ def build_modifier_wrappers(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
+        expand_to_ztypes: If True, expand genotype indices to ZType indices
+            in both gamete and zygote wrappers.  Use when the tensor's
+            genotype axis is pre-expanded (G×S).
 
     Returns:
         Tuple of (gamete_modifier_funcs, zygote_modifier_funcs), each a list
@@ -375,12 +410,12 @@ def build_modifier_wrappers(
 
     for _, _, mod in zygote_modifiers:
         zygote_modifier_funcs.append(
-            wrap_zygote_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
+            wrap_zygote_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs, expand_to_ztypes=expand_to_ztypes)
         )
 
     for _, _, mod in gamete_modifiers:
         gamete_modifier_funcs.append(
-            wrap_gamete_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
+            wrap_gamete_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs, expand_to_ztypes=expand_to_ztypes)
         )
 
     return gamete_modifier_funcs, zygote_modifier_funcs
