@@ -339,7 +339,7 @@ def _apply_viability_allele_scaling(
 ) -> None:
     """Apply allele-driven viability scaling using multiplicative copy-number effect."""
     # viability tensor layout:
-    #   viability_fitness[sex_idx, age_idx, genotype_idx]
+    #   viability_fitness[sex_idx, age_idx, ztype_idx]
     # This function multiplies existing values in-place via setter calls,
     # so multiple presets/patches compose multiplicatively.
     viability_arr = population.config.viability_fitness
@@ -423,7 +423,7 @@ def _apply_fecundity_allele_scaling(
 ) -> None:
     """Apply allele-driven fecundity scaling using multiplicative copy-number effect."""
     # fecundity tensor layout:
-    #   fecundity_fitness[sex_idx, genotype_idx]
+    #   fecundity_fitness[sex_idx, ztype_idx]
     # As with viability, this function multiplies current values.
     fecundity_arr = population.config.fecundity_fitness
 
@@ -477,7 +477,7 @@ def _apply_sexual_selection_allele_scaling(
     - tuple(default, carrier): binary by male carrier status (copy > 0).
     """
     # sexual-selection tensor layout:
-    #   sexual_selection_fitness[female_genotype_idx, male_genotype_idx]
+    #   sexual_selection_fitness[female_ztype_idx, male_ztype_idx]
     # Effect is computed from male allele copies, then applied per pair.
     sex_sel_arr = population.config.sexual_selection_fitness
 
@@ -523,7 +523,7 @@ def _apply_zygote_viability_allele_scaling(
 ) -> None:
     """Apply allele-driven zygote viability scaling using copy-number and scaling mode."""
     # zygote tensor layout:
-    #   zygote_viability_fitness[sex_idx, genotype_idx]
+    #   zygote_viability_fitness[sex_idx, ztype_idx]
     # This function multiplies existing values in-place via setter calls,
     # so multiple presets/patches compose multiplicatively.
     zygote_arr = population.config.zygote_viability_fitness
@@ -999,7 +999,7 @@ class GeneticPreset(ABC):
 
         The modifier should return:
 
-            Dict[(sex_idx, genotype_idx) -> Dict[compressed_hg_glab_idx -> freq]]
+            Dict[(sex_idx, ztype_idx) -> Dict[compressed_hg_glab_idx -> freq]]
 
         where compressed_hg_glab_idx is an integer index into the compressed
         haploid genotype space.

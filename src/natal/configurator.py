@@ -762,14 +762,14 @@ def _write_fitness_field_flat(
     all_genotypes: list[Genotype],
     age_idx: int | None = None,
 ) -> None:
-    """Write a flat (per-genotype) fitness patch into the correct config array.
+    """Write a flat (per-ZType) fitness patch into the correct config array.
 
     The target array shape depends on *field_name*:
 
-    - ``"viability"`` → ``(n_sexes, n_ages, n_genotypes)`` — writes ``[sex_idx, default_age, gidx]``
-    - ``"fecundity"`` → ``(n_sexes, n_genotypes)`` — no age axis
-    - ``"sexual_selection"`` → ``(n_genotypes, n_genotypes)`` — no age axis
-    - ``"zygote_viability"`` → ``(n_sexes, n_genotypes)`` — no age axis
+    - ``"viability"`` → ``(n_sexes, n_ages, n_ztypes)`` — writes ``[sex_idx, default_age, zidx]``
+    - ``"fecundity"`` → ``(n_sexes, n_ztypes)`` — no age axis
+    - ``"sexual_selection"`` → ``(n_ztypes, n_ztypes)`` — no age axis
+    - ``"zygote_viability"`` → ``(n_sexes, n_ztypes)`` — no age axis
 
     When *age_idx* is ``None`` (the default), the write targets the
     last juvenile age (``new_adult_age - 1``) — viability fitness

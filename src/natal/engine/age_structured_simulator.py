@@ -77,7 +77,7 @@ def run_reproduction_with_precomputed_offspring_probability(
     # Modify ind_count in-place; callers do not expect original to be preserved.
 
     n_ages = config.n_ages
-    n_gen = config.n_ztypes
+    n_ztypes = config.n_ztypes
     adult_ages = config.adult_ages
     adult_start_age = adult_ages[0] if len(adult_ages) > 0 else 0
     stochastic = config.stochastic
@@ -85,7 +85,7 @@ def run_reproduction_with_precomputed_offspring_probability(
 
     # 1. Extract effective adult male counts (weighted by age-specific mating rates).
     # effective_male_counts = Σ (male_counts[age] * male_mating_rate[age])
-    effective_male_counts = np.zeros(n_gen, dtype=np.float64)
+    effective_male_counts = np.zeros(n_ztypes, dtype=np.float64)
     for age in adult_ages:
         if age < n_ages:
             male_mating_rate_at_age = config.age_based_mating_rates[1, age]  # sex=1 is MALE
@@ -99,7 +99,7 @@ def run_reproduction_with_precomputed_offspring_probability(
     mating_prob = alg.compute_mating_probability_matrix(
         config.sexual_selection_fitness,
         effective_male_counts,
-        n_gen
+        n_ztypes
     )
 
     # 3. Update sperm-store state (the mating process).
@@ -114,7 +114,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.sperm_displacement_rate[()],  # pyright: ignore[reportArgumentType]
         adult_start_age,
         n_ages,
-        n_gen,
+        n_ztypes,
         stochastic=stochastic,
         continuous_sampling=continuous_sampling
     )
@@ -135,7 +135,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.eggs_per_female[()],  # pyright: ignore[reportArgumentType]
         adult_start_age,
         n_ages,
-        n_gen,
+        n_ztypes,
         config.n_haploid_genotypes,
         female_genotype_compatibility,
         male_genotype_compatibility,
@@ -164,7 +164,7 @@ def run_reproduction_with_precomputed_offspring_probability(
             male_offspring = ind_count[1, 0, :].copy()
 
             # Apply zygote fitness using binomial sampling
-            for g in range(n_gen):
+            for g in range(n_ztypes):
                 if continuous_sampling:
                     # Continuous sampling: use continuous_binomial function
                     if female_offspring[g] > 0:
@@ -243,7 +243,7 @@ def run_survival(
     ind_count = ind_count.copy()
     sperm_store = sperm_store.copy()
     n_ages = config.n_ages
-    n_gen = config.n_ztypes
+    n_ztypes = config.n_ztypes
     stochastic = config.stochastic
     continuous_sampling = config.continuous_sampling
 
@@ -300,7 +300,7 @@ def run_survival(
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         age_0_counts,
         scaling_factor,
-        n_gen,
+        n_ztypes,
         stochastic=stochastic,
         continuous_sampling=continuous_sampling
     )
@@ -324,7 +324,7 @@ def run_survival(
     s_via_f, s_via_m = alg.compute_viability_survival_rates(
         config.viability_fitness[0, target_viability_age, :],
         config.viability_fitness[1, target_viability_age, :],
-        n_gen,
+        n_ztypes,
         target_viability_age,
         n_ages
     )
@@ -342,10 +342,10 @@ def run_survival(
             (ind_count[0], ind_count[1]),
             sperm_store,
             s_combined_f,  # shape (n_ages, n_genotypes)
-            s_combined_m,
-            n_gen,
-            n_ages,
-            continuous_sampling=continuous_sampling
+        s_combined_m,
+        n_ztypes,
+        n_ages,
+        continuous_sampling=continuous_sampling
         )
         ind_count[0], ind_count[1] = f_surv, m_surv
     else:
@@ -354,10 +354,10 @@ def run_survival(
             (ind_count[0], ind_count[1]),
             sperm_store,
             s_combined_f,
-            s_combined_m,
-            n_gen,
-            n_ages
-        )
+        s_combined_m,
+        n_ztypes,
+        n_ages
+    )
 
     return ind_count, sperm_store
 

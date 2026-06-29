@@ -217,10 +217,10 @@ class Dashboard:
         allele_counts = {}
         locus_totals = {}
 
-        for g_idx, count in enumerate(genotype_counts):
+        for z_idx, (gt, _slab) in enumerate(registry.index_to_ztype):
+            count = genotype_counts[z_idx]
             if count <= 0:
                 continue
-            gt = registry.index_to_genotype[g_idx]
 
             # We need to access alleles.
             # This implies object access.
@@ -486,10 +486,15 @@ class Dashboard:
         target_age_fit = max(0, int(conf.new_adult_age) - 1)
 
         with self.genotype_container:
-            for i, gt in enumerate(genotypes):
-                # Compute total for card summary
-                total_f = self._fmt_count(ind_count[0, :, i].sum())
-                total_m = self._fmt_count(ind_count[1, :, i].sum())
+            for _g_idx, gt in enumerate(genotypes):
+                # Aggregate counts across all ZType (slab) indices for this genotype
+                z_indices = registry.ztype_indices_for(gt)
+                total_f = self._fmt_count(
+                    sum(float(ind_count[0, :, z].sum()) for z in z_indices)
+                )
+                total_m = self._fmt_count(
+                    sum(float(ind_count[1, :, z].sum()) for z in z_indices)
+                )
 
                 with ui.card().classes('items-center p-2 border rounded shadow-sm w-40'):
                     # SVG
@@ -498,8 +503,8 @@ class Dashboard:
                     # Name
                     ui.label(str(gt)).classes('text-base font-bold mt-1 text-center leading-tight text-gray-800')
 
-                    # Fitness
-                    fit_info = self._get_genotype_fitness(i, target_age_fit)
+                    # Fitness (use first ZType index for this genotype)
+                    fit_info = self._get_genotype_fitness(z_indices[0], target_age_fit)
                     if fit_info:
                         with ui.column().classes('w-full items-center gap-0 my-1 bg-gray-50 rounded p-1'):
                             if 'via' in fit_info:
@@ -518,10 +523,10 @@ class Dashboard:
                     # Detailed age breakdown (skipping Age 0)
                     if self._is_age_structured_population:
                         with ui.column().classes('w-full gap-0 mt-1'):
-                            # Iterate ages starting from 1
+                            # Iterate ages starting from 1, aggregating across ZType slabs
                             for age in range(1, n_ages):
-                                af = int(ind_count[0, age, i])
-                                am = int(ind_count[1, age, i])
+                                af = sum(int(ind_count[0, age, z]) for z in z_indices)
+                                am = sum(int(ind_count[1, age, z]) for z in z_indices)
                                 if af > 0 or am > 0:
                                     with ui.row().classes('w-full justify-between text-sm text-gray-500 leading-tight'):
                                         ui.label(f"A{age}")
@@ -530,17 +535,19 @@ class Dashboard:
     def _get_viability_data(self):
         config = self.pop.export_config()
         registry = self.pop.registry
-        genotypes = registry.index_to_genotype
         # Typically viability selection happens at new_adult_age - 1 (late juvenile)
         target_age = max(0, int(config.new_adult_age) - 1)
 
         data = []
-        for g_idx, g_obj in enumerate(genotypes):
-            f_val = config.viability_fitness[0, target_age, g_idx]
-            m_val = config.viability_fitness[1, target_age, g_idx]
-            if f_val != 1.0 or m_val != 1.0 or "Dr" in str(g_obj) or "Drive" in str(g_obj):
+        for z_idx, (gt, slab) in enumerate(registry.index_to_ztype):
+            # Show only first slab per genotype to avoid duplicate rows
+            if slab != registry.slab_labels[0]:
+                continue
+            f_val = config.viability_fitness[0, target_age, z_idx]
+            m_val = config.viability_fitness[1, target_age, z_idx]
+            if f_val != 1.0 or m_val != 1.0 or "Dr" in str(gt) or "Drive" in str(gt):
                 data.append({
-                    "Genotype": str(g_obj),
+                    "Genotype": str(gt),
                     "Age": float(target_age),
                     "Female": float(f_val),
                     "Male": float(m_val),
@@ -550,15 +557,17 @@ class Dashboard:
     def _get_fecundity_data(self):
         config = self.pop.export_config()
         registry = self.pop.registry
-        genotypes = registry.index_to_genotype
 
         data = []
-        for g_idx, g_obj in enumerate(genotypes):
-            f_val = config.fecundity_fitness[0, g_idx]
-            m_val = config.fecundity_fitness[1, g_idx]
-            if f_val != 1.0 or m_val != 1.0 or "Dr" in str(g_obj) or "Drive" in str(g_obj):
+        for z_idx, (gt, slab) in enumerate(registry.index_to_ztype):
+            # Show only first slab per genotype to avoid duplicate rows
+            if slab != registry.slab_labels[0]:
+                continue
+            f_val = config.fecundity_fitness[0, z_idx]
+            m_val = config.fecundity_fitness[1, z_idx]
+            if f_val != 1.0 or m_val != 1.0 or "Dr" in str(gt) or "Drive" in str(gt):
                 data.append({
-                    "Genotype": str(g_obj),
+                    "Genotype": str(gt),
                     "Female": float(f_val),
                     "Male": float(m_val),
                 })
@@ -574,13 +583,11 @@ class Dashboard:
 
         row_labels = [str(g) for g in genotypes]
         col_labels = []
-        for hg_idx in range(config.n_haploid_genotypes):
-            hg_obj = registry.index_to_haplo[hg_idx]
-            for glab_idx in range(n_glabs):
-                label = str(hg_obj)
-                if n_glabs > 1:
-                    label += f" [{registry.glab_labels[glab_idx]}]"
-                col_labels.append(label)
+        for _gt_idx, (hg_obj, glab_str) in enumerate(registry.index_to_gtype):
+            label = str(hg_obj)
+            if n_glabs > 1:
+                label += f" [{glab_str}]"
+            col_labels.append(label)
 
         figs = []
         for sex_idx in range(config.n_sexes):
@@ -608,13 +615,11 @@ class Dashboard:
 
         # Prepare labels for gametes (axes)
         labels = []
-        for hg_idx in range(config.n_haploid_genotypes):
-            hg_obj = registry.index_to_haplo[hg_idx]
-            for glab_idx in range(config.n_glabs):
-                label = str(hg_obj)
-                if config.n_glabs > 1:
-                    label += f" [{registry.glab_labels[glab_idx]}]"
-                labels.append(label)
+        for _gt_idx, (hg_obj, glab_str) in enumerate(registry.index_to_gtype):
+            label = str(hg_obj)
+            if config.n_glabs > 1:
+                label += f" [{glab_str}]"
+            labels.append(label)
 
         # Build matrices for heatmap
         # z_data: numeric index of the primary zygote (for coloring)

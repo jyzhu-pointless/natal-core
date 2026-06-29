@@ -277,23 +277,6 @@ class ObservationFilter:
                     mask[gi, s, zidx] = 1.0 if any_selected else 0.0
         return mask
 
-    def _resolve_genotype_index(
-        self, diploid_genotypes: Sequence[Any], sel: Any
-    ) -> Optional[int]:
-        """Resolve a genotype selector to an index.
-
-        Args:
-            diploid_genotypes: Sequence of possible diploid genotypes.
-            sel: Genotype selector (int, str, or Genotype object).
-
-        Returns:
-            Resolved genotype index, or None if resolution fails.
-        """
-        try:
-            return self.registry.resolve_genotype_index(diploid_genotypes, sel, strict=True)
-        except Exception:
-            return None
-
     @staticmethod
     def _make_age_predicate(age_spec: AgeSpec) -> Callable[[int], bool]:
         """Build an age predicate supporting several shorthand forms.
@@ -345,67 +328,6 @@ class ObservationFilter:
             res.extend(ObservationFilter._resolve_sexes(x, n_sexes))
         return sorted(set(res))
 
-    def _resolve_genotype_list(
-        self,
-        gen_spec: Optional[Iterable[Any]],
-        diploid_genotypes: Optional[Sequence[Any]],
-    ) -> List[int]:
-        """Resolve genotype selectors into a list of indices.
-
-        Uses the new GenotypeSelector class from genetic_patterns module.
-
-        Args:
-            gen_spec: Genotype selector specification.
-            diploid_genotypes: Sequence of diploid genotypes.
-
-        Returns:
-            List of resolved genotype indices.
-
-        Raises:
-            ValueError: If diploid_genotypes is required but missing.
-        """
-        # Import here to avoid circular imports
-        from natal.genetic_patterns import GenotypeSelector
-
-        # Get species from diploid_genotypes if available
-        species = None
-        if diploid_genotypes and len(diploid_genotypes) > 0:
-            first_genotype = diploid_genotypes[0]
-            if hasattr(first_genotype, 'species'):
-                species = first_genotype.species
-
-        if species is None:
-            # Fallback to original implementation if species not available
-            if gen_spec is None:
-                if diploid_genotypes is None:
-                    raise ValueError("diploid_genotypes required to enumerate genotypes")
-                return list(range(len(diploid_genotypes)))
-
-            if diploid_genotypes is None:
-                raise ValueError("diploid_genotypes required to resolve genotype selectors")
-
-            out: List[int] = []
-            for sel in gen_spec:
-                if isinstance(sel, int):
-                    out.append(sel)
-                    continue
-                idx = self._resolve_genotype_index(diploid_genotypes, sel)
-                if idx is not None:
-                    out.append(idx)
-                    continue
-                for i, g in enumerate(diploid_genotypes):
-                    try:
-                        if hasattr(g, "to_string") and g.to_string() == str(sel):
-                            out.append(i)
-                            break
-                    except Exception:
-                        pass
-            return sorted(set(out))
-        else:
-            # Use the new GenotypeSelector for better pattern matching
-            selector = GenotypeSelector(species)
-            return selector.resolve_genotype_indices(gen_spec, diploid_genotypes)
-
     def _resolve_ztype_indices_from_spec(
         self,
         gen_spec: Optional[Iterable[Any]],
@@ -432,7 +354,7 @@ class ObservationFilter:
 
         # Resolve species from registry for pattern parsing.
         species: Optional[Species] = None
-        if self.registry.num_genotypes() > 0:
+        if self.registry.n_ztypes > 0:
             species = self.registry.index_to_genotype[0].species
 
         out: List[int] = []

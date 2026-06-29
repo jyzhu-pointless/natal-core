@@ -215,8 +215,8 @@ class CompiledHookPlan:
 
     n_ops: int
     op_types: np.ndarray
-    gidx_offsets: np.ndarray
-    gidx_data: np.ndarray
+    zidx_offsets: np.ndarray
+    zidx_data: np.ndarray
     age_offsets: np.ndarray
     age_data: np.ndarray
     sex_masks: np.ndarray
@@ -229,8 +229,8 @@ class CompiledHookPlan:
         return (
             self.n_ops,
             self.op_types,
-            self.gidx_offsets,
-            self.gidx_data,
+            self.zidx_offsets,
+            self.zidx_data,
             self.age_offsets,
             self.age_data,
             self.sex_masks,
@@ -279,8 +279,8 @@ class HookProgram(NamedTuple):
     n_ops_list: np.ndarray
     op_offsets: np.ndarray
     op_types_data: np.ndarray
-    gidx_offsets_data: np.ndarray
-    gidx_data: np.ndarray
+    zidx_offsets_data: np.ndarray
+    zidx_data: np.ndarray
     age_offsets_data: np.ndarray
     age_data: np.ndarray
     sex_masks_data: np.ndarray

@@ -623,10 +623,10 @@ def compile_declarative_hook(
     op_types_list: List[int] = []
 
     # 2. Genotype selection data (CSR format)
-    # gidx_offsets: CSR offsets defining genotype index ranges for each operation
-    # gidx_data: Flattened list of all genotype indices across all operations
-    gidx_offsets: List[int] = [0]  # Start with offset 0 for the first operation
-    gidx_data_list: List[int] = []
+    # zidx_offsets: CSR offsets defining genotype index ranges for each operation
+    # zidx_data: Flattened list of all genotype indices across all operations
+    zidx_offsets: List[int] = [0]  # Start with offset 0 for the first operation
+    zidx_data_list: List[int] = []
 
     # 3. Age selection data (CSR format)
     # age_offsets: CSR offsets defining age index ranges for each operation
@@ -655,9 +655,9 @@ def compile_declarative_hook(
 
         # 2) Genotype span - resolve genotype selectors to actual genotype indices
         # Examples: "A1|A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
-        gidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_ztypes)
-        gidx_data_list.extend(gidx_array.tolist())
-        gidx_offsets.append(len(gidx_data_list))  # Record end offset for this operation
+        zidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_ztypes)
+        zidx_data_list.extend(zidx_array.tolist())
+        zidx_offsets.append(len(zidx_data_list))  # Record end offset for this operation
 
         # 3) Age span - resolve age selectors to actual age indices
         # Examples: "0-5" -> [0, 1, 2, 3, 4, 5], "*" -> [0, 1, ..., n_ages-1]
@@ -685,9 +685,9 @@ def compile_declarative_hook(
         op_types=np.array(op_types_list, dtype=np.int32),
 
         # Genotype selection data in CSR format
-        # gidx_offsets[i] to gidx_offsets[i+1] defines genotype indices for operation i
-        gidx_offsets=np.array(gidx_offsets, dtype=np.int32),
-        gidx_data=np.array(gidx_data_list, dtype=np.int32) if gidx_data_list else np.array([], dtype=np.int32),
+        # zidx_offsets[i] to zidx_offsets[i+1] defines genotype indices for operation i
+        zidx_offsets=np.array(zidx_offsets, dtype=np.int32),
+        zidx_data=np.array(zidx_data_list, dtype=np.int32) if zidx_data_list else np.array([], dtype=np.int32),
 
         # Age selection data in CSR format
         # age_offsets[i] to age_offsets[i+1] defines age indices for operation i

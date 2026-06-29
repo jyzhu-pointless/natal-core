@@ -1,7 +1,7 @@
 """Integration tests: hook genotype resolution correctly expands to
 ZType indices for n_slabs > 1.
 
-The CSR kernel uses gidx to index individual_count[sex_idx, age, gidx],
+The CSR kernel uses zidx to index individual_count[sex_idx, age, zidx],
 whose third dimension is n_ztypes (not num_genotypes). Before the fix,
 hook selectors resolved to genotype indices, which only covered the first
 slab variant of each genotype. After the fix, each genotype index is
@@ -98,7 +98,7 @@ class TestPhaseB_FitnessAndCompression:
         )
         desc = compile_declarative_hook([Op.scale(factor=0.5)], pop, event="early")
         # 3 unordered genotypes × 2 slabs = 6 ZTypes
-        assert len(desc.plan.gidx_data) == 6
+        assert len(desc.plan.zidx_data) == 6
 
     def test_selector_resolve_star_two_slabs(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
@@ -137,7 +137,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
 
         desc = scale_all.register(pop)
         # Verify the compiled plan targets all 6 ztypes (not just 1 slab)
-        assert set(desc.plan.gidx_data.tolist()) == set(range(6))
+        assert set(desc.plan.zidx_data.tolist()) == set(range(6))
         pop.run(1)
         assert pop.state.individual_count.sum() > 0
 
@@ -206,7 +206,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
 
         desc = sample_hook.register(pop)
         # Verify the compiled plan targets both slab variants of A|A
-        assert set(desc.plan.gidx_data.tolist()) == {0, 1}
+        assert set(desc.plan.zidx_data.tolist()) == {0, 1}
         pop.run(1)
         assert pop.state.individual_count.sum() > 0
 

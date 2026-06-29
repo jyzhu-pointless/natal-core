@@ -486,7 +486,7 @@ def _resolve_rule_glabs(
     Returns:
         List of ``(rule, resolved_source_glab_idx, resolved_target_glab_idx)``.
     """
-    glab_labels = population.index_registry.glab_labels
+    glab_to_idx = population.index_registry.glab_to_index
     resolved: List[_ResolvedGameteRule] = []
     for rule in rules:
         src_idx: Optional[int] = None
@@ -494,13 +494,13 @@ def _resolve_rule_glabs(
             if isinstance(rule.source_glab, int):
                 src_idx = rule.source_glab
             else:
-                src_idx = glab_labels.index(rule.source_glab)
+                src_idx = glab_to_idx[rule.source_glab]
         tgt_idx: Optional[int] = None
         if rule.target_glab is not None:
             if isinstance(rule.target_glab, int):
                 tgt_idx = rule.target_glab
             else:
-                tgt_idx = glab_labels.index(rule.target_glab)
+                tgt_idx = glab_to_idx[rule.target_glab]
         resolved.append((rule, src_idx, tgt_idx))
     return resolved
 

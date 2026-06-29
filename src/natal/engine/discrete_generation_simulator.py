@@ -37,7 +37,7 @@ def run_discrete_reproduction(
 ) -> NDArray[np.float64]:
     """One tick of discrete reproduction: mate → fertilize → offspring in age 0."""
     ind_count = ind_count.copy()
-    g = cfg.n_ztypes
+    n_ztypes = cfg.n_ztypes
     stochastic = cfg.stochastic
     continuous = cfg.continuous_sampling
 
@@ -48,7 +48,7 @@ def run_discrete_reproduction(
         return ind_count
 
     mating_prob = alg.compute_mating_probability_matrix(
-        cfg.sexual_selection_fitness, effective_males, g,
+        cfg.sexual_selection_fitness, effective_males, n_ztypes,
     )
 
     sperm = mate_discrete(
@@ -86,7 +86,7 @@ def run_discrete_survival(
 ) -> NDArray[np.float64]:
     """Juvenile density regulation then genotype viability selection."""
     ind_count = ind_count.copy()
-    g = cfg.n_ztypes
+    n_ztypes = cfg.n_ztypes
     stochastic = cfg.stochastic
     continuous = cfg.continuous_sampling
     mode = cfg.juvenile_growth_mode[()]  # pyright: ignore[reportArgumentType]
@@ -115,7 +115,7 @@ def run_discrete_survival(
 
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
         (ind_count[0, 0, :], ind_count[1, 0, :]),
-        scaling, g,
+        scaling, n_ztypes,
         stochastic=stochastic, continuous_sampling=continuous,
     )
 
@@ -124,11 +124,11 @@ def run_discrete_survival(
 
     if stochastic:
         if continuous:
-            for k in range(g):
+            for k in range(n_ztypes):
                 ind_count[0, 0, k] = nbc.continuous_binomial(f_rec[k], s_f[k])
                 ind_count[1, 0, k] = nbc.continuous_binomial(m_rec[k], s_m[k])
         else:
-            for k in range(g):
+            for k in range(n_ztypes):
                 nf = int(round(f_rec[k]))
                 nm = int(round(m_rec[k]))
                 ind_count[0, 0, k] = float(nbc.binomial(nf, s_f[k])) if nf > 0 else 0.0  # pyright: ignore[reportUnknownArgumentType]

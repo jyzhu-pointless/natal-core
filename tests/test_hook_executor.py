@@ -75,8 +75,8 @@ def _empty_program() -> HookProgram:
         n_ops_list=np.zeros(0, dtype=np.int32),
         op_offsets=np.zeros(1, dtype=np.int32),
         op_types_data=np.zeros(0, dtype=np.int32),
-        gidx_offsets_data=np.zeros(0, dtype=np.int32),
-        gidx_data=np.zeros(0, dtype=np.int32),
+        zidx_offsets_data=np.zeros(0, dtype=np.int32),
+        zidx_data=np.zeros(0, dtype=np.int32),
         age_offsets_data=np.zeros(0, dtype=np.int32),
         age_data=np.zeros(0, dtype=np.int32),
         sex_masks_data=np.zeros(0, dtype=np.bool_),
@@ -100,7 +100,7 @@ def _dummy_index_registry(n_genotypes: int = 2):
         def num_ages(self) -> int:
             return 2
 
-        def get_gidx_range(self, selector: object) -> tuple[int, int]:
+        def get_zidx_range(self, selector: object) -> tuple[int, int]:
             return (0, n_genotypes)
 
         def get_age_range(self, selector: object) -> tuple[int, int]:

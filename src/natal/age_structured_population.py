@@ -967,8 +967,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def genotypes_present(self) -> Set[Genotype]:
         """Set[Genotype]: Returns the set of genotypes with count > 0."""
         present: Set[Genotype] = set()
-        for genotype_idx, genotype in enumerate(self.registry.index_to_genotype):
-            total_count = self.state.individual_count[:, :, genotype_idx].sum()
+        for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
+            total_count = self.state.individual_count[:, :, z_idx].sum()
             if total_count > 0:
                 present.add(genotype)
         return present

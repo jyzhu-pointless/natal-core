@@ -165,29 +165,6 @@ def evaluate_genotype_filter(
     raise TypeError("genotype_filter must be a callable, pattern string, or None")
 
 
-def resolve_optional_glab_index(
-    value: GlabSelector,
-    glab_to_index: Mapping[str, int],
-) -> Optional[int]:
-    """Resolve an optional glab selector to an integer index.
-
-    Args:
-        value: Glab selector as ``None``, integer index, or string label.
-        glab_to_index: Mapping from glab labels to integer indices.
-
-    Returns:
-        The resolved glab index. Returns ``None`` when ``value`` is ``None``.
-
-    Raises:
-        KeyError: If ``value`` is a string label not present in ``glab_to_index``.
-    """
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    return int(glab_to_index[value])
-
-
 # ============================================================================
 # TENSOR-LEVEL WRAPPER FACTORIES
 # ============================================================================

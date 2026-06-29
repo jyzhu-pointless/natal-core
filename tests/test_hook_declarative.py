@@ -248,7 +248,7 @@ class TestCompileDeclarativeHook:
         assert list(descriptor.plan.op_types) == [int(OpType.SCALE)]
         assert list(descriptor.plan.params) == [0.5]
         # "*" genotype selector → all 6 unordered genotype indices
-        assert len(descriptor.plan.gidx_data) == 6
+        assert len(descriptor.plan.zidx_data) == 6
         # "*" age selector → both ages
         assert len(descriptor.plan.age_data) == pop.config.n_ages
 

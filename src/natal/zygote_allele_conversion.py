@@ -503,7 +503,7 @@ def _resolve_zygote_rule_glabs(
     Returns:
         List of ``(rule, resolved_maternal_glab_idx, resolved_paternal_glab_idx)``.
     """
-    glab_labels = population.index_registry.glab_labels
+    glab_to_idx = population.index_registry.glab_to_index
     resolved: List[_ResolvedRule] = []
     for rule in rules:
         mat_idx: Optional[int] = None
@@ -511,13 +511,13 @@ def _resolve_zygote_rule_glabs(
             if isinstance(rule.maternal_glab, int):
                 mat_idx = rule.maternal_glab
             else:
-                mat_idx = glab_labels.index(rule.maternal_glab)
+                mat_idx = glab_to_idx[rule.maternal_glab]
         pat_idx: Optional[int] = None
         if rule.paternal_glab is not None:
             if isinstance(rule.paternal_glab, int):
                 pat_idx = rule.paternal_glab
             else:
-                pat_idx = glab_labels.index(rule.paternal_glab)
+                pat_idx = glab_to_idx[rule.paternal_glab]
         resolved.append((rule, mat_idx, pat_idx))
     return resolved
 

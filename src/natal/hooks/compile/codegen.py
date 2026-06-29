@@ -165,8 +165,8 @@ def compile_combined_hook(
 _CSR_HOOK_ARRAY_NAMES: Tuple[str, ...] = (
     "op_offsets",
     "op_types_data",
-    "gidx_offsets_data",
-    "gidx_data",
+    "zidx_offsets_data",
+    "zidx_data",
     "age_offsets_data",
     "age_data",
     "sex_masks_data",
@@ -391,8 +391,8 @@ def build_filtered_hook_program(
 
     # 2. Pack operation data, skipping CSR hooks that belong to mixed events.
     all_op_types: List[int] = []
-    all_gidx_offsets: List[int] = [0]
-    all_gidx_data: List[int] = []
+    all_zidx_offsets: List[int] = [0]
+    all_zidx_data: List[int] = []
     all_age_offsets: List[int] = [0]
     all_age_data: List[int] = []
     all_sex_masks: List[bool] = []
@@ -451,14 +451,14 @@ def build_filtered_hook_program(
             all_op_types.extend(plan.op_types.tolist())
 
             # Genotype indices (adjust offsets for concatenation).
-            gidx_offset_base = len(all_gidx_data)
+            zidx_offset_base = len(all_zidx_data)
             for i in range(plan.n_ops):
-                all_gidx_offsets.append(
-                    gidx_offset_base
-                    + plan.gidx_offsets[i + 1]
-                    - plan.gidx_offsets[0]
+                all_zidx_offsets.append(
+                    zidx_offset_base
+                    + plan.zidx_offsets[i + 1]
+                    - plan.zidx_offsets[0]
                 )
-            all_gidx_data.extend(plan.gidx_data.tolist())
+            all_zidx_data.extend(plan.zidx_data.tolist())
 
             # Age indices.
             age_offset_base = len(all_age_data)
@@ -496,8 +496,8 @@ def build_filtered_hook_program(
         n_ops_list=np.array(n_ops_list, dtype=np.int32),
         op_offsets=np.array(op_offsets, dtype=np.int32),
         op_types_data=np.array(all_op_types, dtype=np.int32),
-        gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
-        gidx_data=np.array(all_gidx_data, dtype=np.int32),
+        zidx_offsets_data=np.array(all_zidx_offsets, dtype=np.int32),
+        zidx_data=np.array(all_zidx_data, dtype=np.int32),
         age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
         age_data=np.array(all_age_data, dtype=np.int32),
         sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),

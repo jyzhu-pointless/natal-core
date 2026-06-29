@@ -1170,11 +1170,11 @@ class BasePopulation(ABC, Generic[T_State]):
         genotype_counts = self._state.individual_count.sum(axis=(0, 1))
 
         registry = self._registry
-        for g_idx, count in enumerate(genotype_counts):
+        for z_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):
+            count = genotype_counts[z_idx]
             if count <= 0:
                 continue
 
-            genotype = registry.index_to_genotype[g_idx]
             for chrom in self.species.chromosomes:
                 for locus in chrom.loci:
                     mat, pat = genotype.get_alleles_at_locus(locus)
@@ -1556,8 +1556,8 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # 2. Pack all operation data
         all_op_types: List[int] = []
-        all_gidx_offsets: List[int] = [0]
-        all_gidx_data: List[int] = []
+        all_zidx_offsets: List[int] = [0]
+        all_zidx_data: List[int] = []
         all_age_offsets: List[int] = [0]
         all_age_data: List[int] = []
         all_sex_masks: List[bool] = []
@@ -1586,13 +1586,13 @@ class BasePopulation(ABC, Generic[T_State]):
                 # Pack operation data
                 all_op_types.extend(plan.op_types.tolist())
 
-                # Handle gidx (adjust offsets for concatenation)
-                gidx_offset_base = len(all_gidx_data)
+                # Handle zidx (adjust offsets for concatenation)
+                zidx_offset_base = len(all_zidx_data)
                 for i in range(plan.n_ops):
-                    all_gidx_offsets.append(
-                        gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0]
+                    all_zidx_offsets.append(
+                        zidx_offset_base + plan.zidx_offsets[i + 1] - plan.zidx_offsets[0]
                     )
-                all_gidx_data.extend(plan.gidx_data.tolist())
+                all_zidx_data.extend(plan.zidx_data.tolist())
 
                 # Handle age
                 age_offset_base = len(all_age_data)
@@ -1641,8 +1641,8 @@ class BasePopulation(ABC, Generic[T_State]):
             n_ops_list=np.array(n_ops_list, dtype=np.int32),
             op_offsets=np.array(op_offsets, dtype=np.int32),
             op_types_data=np.array(all_op_types, dtype=np.int32),
-            gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
-            gidx_data=np.array(all_gidx_data, dtype=np.int32),
+            zidx_offsets_data=np.array(all_zidx_offsets, dtype=np.int32),
+            zidx_data=np.array(all_zidx_data, dtype=np.int32),
             age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
             age_data=np.array(all_age_data, dtype=np.int32),
             sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
@@ -1707,8 +1707,8 @@ class BasePopulation(ABC, Generic[T_State]):
             n_ops_list=np.array([], dtype=np.int32),
             op_offsets=op_offsets,
             op_types_data=np.array([], dtype=np.int32),
-            gidx_offsets_data=np.array([0], dtype=np.int32),
-            gidx_data=np.array([], dtype=np.int32),
+            zidx_offsets_data=np.array([0], dtype=np.int32),
+            zidx_data=np.array([], dtype=np.int32),
             age_offsets_data=np.array([0], dtype=np.int32),
             age_data=np.array([], dtype=np.int32),
             sex_masks_data=np.array([], dtype=np.bool_),
