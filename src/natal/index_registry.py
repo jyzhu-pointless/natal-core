@@ -617,10 +617,6 @@ class IndexRegistry:
         except Exception:
             pass
 
-            # string match via to_string() — try unordered form first,
-        # then the reversed maternal/paternal form (since genotypes
-        # are canonicalized, a user writing "a|A" should still match
-                # the unordered "A|a").
         if isinstance(gk, str):
             for i, g in enumerate(diploid_genotypes):
                 try:
@@ -628,16 +624,18 @@ class IndexRegistry:
                         return i
                 except Exception:
                     continue
-            # Try reversed form: swap maternal/paternal in each stored
-            # genotype's string representation.
-            for i, g in enumerate(diploid_genotypes):
-                try:
-                    if hasattr(g, "to_string") and hasattr(g, "maternal") and hasattr(g, "paternal"):
-                        rev = f"{g.paternal.to_string()}|{g.maternal.to_string()}"
-                        if rev == gk:
-                            return i
-                except Exception:
-                    continue
+            # Try reversed form only for unordered species (A|a ≡ a|A).
+            # For ordered species (sex chromosomes), A|a and a|A are
+            # distinct and should not be silently swapped.
+            if _is_unordered(diploid_genotypes):
+                for i, g in enumerate(diploid_genotypes):
+                    try:
+                        if hasattr(g, "to_string") and hasattr(g, "maternal") and hasattr(g, "paternal"):
+                            rev = f"{g.paternal.to_string()}|{g.maternal.to_string()}"
+                            if rev == gk:
+                                return i
+                    except Exception:
+                        continue
 
         if strict:
             raise KeyError(f"Cannot resolve genotype key: {gk} in {diploid_genotypes}")
@@ -861,6 +859,15 @@ def _as_pair(value: object) -> Optional[Tuple[object, object]]:
     if len(tuple_value) != 2:
         return None
     return tuple_value[0], tuple_value[1]
+
+
+def _is_unordered(diploid_genotypes: Sequence[Any]) -> bool:
+    """Return True if the diploid genotype space is unordered (autosomal)."""
+    if not diploid_genotypes:
+        return True
+    first = diploid_genotypes[0]
+    species = getattr(first, "species", None)
+    return bool(getattr(species, "unordered", True))
 
 
 # compress_hg_glab / decompress_hg_glab have been moved to

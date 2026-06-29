@@ -428,26 +428,26 @@ def build_modifier_wrappers(
 def _apply_comp_map(
     modified: np.ndarray,
     sex_idx: int,
-    gidx: int,
+    zidx: int,
     comp_map: Mapping[object, object],
     index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     n_glabs: int,
     n_hg_glabs: int,
 ) -> None:
-    """Apply a comp_map (comp_key->freq) into the tensor slice [sex_idx, gidx].
+    """Apply a comp_map (comp_key->freq) into the tensor slice [sex_idx, zidx].
 
     Args:
-        modified: The target tensor (n_sexes, n_genotypes, n_hg_glabs).
+        modified: The target tensor (n_sexes, n_ztypes, n_hg_glabs).
         sex_idx: Sex index.
-        gidx: Genotype index.
+        zidx: ZType index (genotype × slab position).
         comp_map: Mapping from compressed‑key to frequency.
         index_registry: IndexRegistry for resolving keys.
         haploid_genotypes: List of all haploid genotypes.
         n_glabs: Number of gamete‑label variants.
         n_hg_glabs: Total number of compressed haploid entries.
     """
-    modified[sex_idx, gidx, :] = 0.0
+    modified[sex_idx, zidx, :] = 0.0
     for comp_key, freq in comp_map.items():
         if not isinstance(freq, (int, float)):
             continue
@@ -456,7 +456,7 @@ def _apply_comp_map(
             continue
         if not (0 <= comp_idx < n_hg_glabs):
             continue
-        modified[sex_idx, gidx, comp_idx] = float(freq)
+        modified[sex_idx, zidx, comp_idx] = float(freq)
 
 
 def _parse_zygote_key(
