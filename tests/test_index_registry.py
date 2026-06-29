@@ -514,3 +514,34 @@ class TestComputedProperties:
         reg.register_gtype(hg1, "default")
         reg.register_gtype(hg0, "cas9")
         assert reg.index_to_haplo == [hg0, hg1]
+
+
+class TestGTypeIndicesFor:
+    """Symmetry: gtype_indices_for mirrors ztype_indices_for for the GType side."""
+
+    def test_single_label_returns_all_gtypes(self):
+        reg = IndexRegistry()
+        sp = _simple_species()
+        hg = _hg(sp, "A")
+        reg.register_gtype(hg, "default")
+        reg.register_gtype(hg, "cas9")
+        assert reg.gtype_indices_for(hg) == [0, 1]
+
+    def test_multiple_haplotypes(self):
+        reg = IndexRegistry()
+        sp = _simple_species()
+        hg_a = _hg(sp, "A")
+        hg_b = _hg(sp, "a")
+        reg.register_gtype(hg_a, "default")
+        reg.register_gtype(hg_b, "default")
+        reg.register_gtype(hg_a, "cas9")
+        assert reg.gtype_indices_for(hg_a) == [0, 2]
+        assert reg.gtype_indices_for(hg_b) == [1]
+
+    def test_unregistered_returns_empty(self):
+        reg = IndexRegistry()
+        sp = _simple_species()
+        hg_a = _hg(sp, "A")
+        hg_b = _hg(sp, "a")
+        reg.register_gtype(hg_a, "default")
+        assert reg.gtype_indices_for(hg_b) == []
