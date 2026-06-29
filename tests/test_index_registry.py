@@ -122,8 +122,8 @@ class TestHaplogenotype:
         reg = IndexRegistry()
         reg.register_haplogenotype("h0")
         reg.register_haplogenotype("h1")
-        assert reg.haplo_index("h0") == 0
-        assert reg.haplo_index("h1") == 1
+        assert reg.haplo_to_index["h0"] == 0
+        assert reg.haplo_to_index["h1"] == 1
 
 
 class TestGameteLabel:
@@ -139,13 +139,13 @@ class TestGameteLabel:
 
     def test_num_gamete_labels_empty(self):
         reg = IndexRegistry()
-        assert reg.num_gamete_labels() == 0
+        assert len(reg.glab_labels) == 0
 
     def test_num_gamete_labels_after_registration(self):
         reg = IndexRegistry()
         reg.register_gamete_label("default")
         reg.register_gamete_label("cas9")
-        assert reg.num_gamete_labels() == 2
+        assert len(reg.glab_labels) == 2
 
     def test_index_to_glab_order(self):
         reg = IndexRegistry()
@@ -158,8 +158,8 @@ class TestGameteLabel:
         reg = IndexRegistry()
         reg.register_gamete_label("default")
         reg.register_gamete_label("cas9")
-        assert reg.gamete_label_index("default") == 0
-        assert reg.gamete_label_index("cas9") == 1
+        assert reg.glab_to_index["default"] == 0
+        assert reg.glab_to_index["cas9"] == 1
 
 
 class TestIndependentRegistries:
@@ -173,7 +173,7 @@ class TestIndependentRegistries:
         reg.register_haplogenotype(hg)
         # Both start at 0 in their own space
         assert reg.ztype_index(gt, "default") == 0
-        assert reg.haplo_index(hg) == 0
+        assert reg.haplo_to_index[hg] == 0
         assert reg.num_genotypes() == 1
         assert reg.num_haplogenotypes() == 1
 
@@ -231,9 +231,9 @@ class TestCompress:
         reg.compress(ztype_mask, gtype_mask)
 
         assert reg.num_haplogenotypes() == 1
-        assert reg.haplo_index(hg0) == 0
+        assert reg.haplo_to_index[hg0] == 0
         with pytest.raises(KeyError):
-            reg.haplo_index(hg1)
+            reg.haplo_to_index[hg1]
 
     def test_compress_all_survive_is_noop(self):
         reg = IndexRegistry()

@@ -417,13 +417,6 @@ class BasePopulation(ABC, Generic[T_State]):
         return self.species.get_all_haploid_genotypes()
         # return self._registry.index_to_haplo
 
-    def _resolve_genotype_key(self, genotype_key: Union[Genotype, str]) -> Genotype:
-        if isinstance(genotype_key, Genotype):
-            gt = genotype_key
-        else:
-            gt = self.species.get_genotype_from_str(genotype_key)
-        return self.species.unordered_genotype(gt.maternal, gt.paternal)
-
     @staticmethod
     def _derive_hook_slot(name: str) -> int:
         """Derive a stable non-negative hook slot from population name."""

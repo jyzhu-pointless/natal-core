@@ -185,7 +185,7 @@ def wrap_gamete_modifier(
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level GameteModifier into a tensor-level callable.
 
-    The returned callable accepts a tensor of shape (n_sexes, n_genotypes, n_hg_glabs)
+    The returned callable accepts a tensor of shape (n_sexes, n_ztypes, n_hg_glabs)
     and returns a modified copy.
 
     Args:
@@ -204,7 +204,7 @@ def wrap_gamete_modifier(
     """
     def tensor_modifier(tensor: np.ndarray) -> np.ndarray:
         modified = tensor.copy()
-        n_sexes, n_genotypes, n_hg_glabs = modified.shape
+        n_sexes, n_ztypes, n_hg_glabs = modified.shape
 
         bulk_obj = _invoke_modifier(mod, population)
 
@@ -235,7 +235,7 @@ def wrap_gamete_modifier(
                         continue
                     if isinstance(comp_map, Mapping):
                         for zidx in _expand_gidx(gidx):
-                            if 0 <= zidx < n_genotypes:
+                            if 0 <= zidx < n_ztypes:
                                 _apply_comp_map(
                                     modified,
                                     sex_idx,
@@ -259,7 +259,7 @@ def wrap_gamete_modifier(
                 if not (0 <= sex_idx < n_sexes and 0 <= gidx < len(diploid_genotypes)):
                     continue
                 for zidx in _expand_gidx(gidx):
-                    if 0 <= zidx < n_genotypes:
+                    if 0 <= zidx < n_ztypes:
                         _apply_comp_map(
                             modified,
                             sex_idx,
@@ -281,7 +281,7 @@ def wrap_gamete_modifier(
                 continue
             for sex_idx in range(n_sexes):
                 for zidx in _expand_gidx(gidx):
-                    if 0 <= zidx < n_genotypes:
+                    if 0 <= zidx < n_ztypes:
                         _apply_comp_map(
                             modified,
                             sex_idx,
@@ -308,7 +308,7 @@ def wrap_zygote_modifier(
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level ZygoteModifier into a tensor-level callable.
 
-    The returned callable accepts a tensor of shape (n_hg_glabs, n_hg_glabs, n_genotypes)
+    The returned callable accepts a tensor of shape (n_hg_glabs, n_hg_glabs, n_ztypes)
     and returns a modified copy.
 
     Args:
@@ -526,7 +526,7 @@ def _write_zygote_mapping(
     """Apply mapping (idx->prob) to the compressed zygote slice.
 
     Args:
-        modified: The target tensor (n_hg_glabs, n_hg_glabs, n_genotypes).
+        modified: The target tensor (n_hg_glabs, n_hg_glabs, n_ztypes).
         c1: Compressed index of first gamete.
         c2: Compressed index of second gamete.
         mapping: Dictionary mapping genotype index to probability.

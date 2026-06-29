@@ -27,8 +27,8 @@ class PopulationState(NamedTuple):
         n_tick: Current simulation time step.
         individual_count: Array of shape (n_sexes, n_ages, n_ztypes) – counts
             of individuals per sex, age, and zygote type.
-        sperm_storage: Array of shape (n_ages, n_genotypes, n_genotypes) – stored
-            sperm counts per female age, female genotype, and male genotype.
+        sperm_storage: Array of shape (n_ages, n_ztypes, n_ztypes) – stored
+            sperm counts per female age, female zygote type, and male zygote type.
     """
 
     n_tick: int

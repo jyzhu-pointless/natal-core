@@ -80,16 +80,16 @@ def _resolve_labels(
 
 def _genotype_labels_from_registry(
     registry: Optional[IndexRegistry],
-    n_genotypes: int,
+    n_ztypes: int,
 ) -> List[str]:
     """Pull genotype strings from a registry or fall back to ``genotype_<idx>``."""
     if registry is None:
-        return _resolve_labels(n_genotypes, None, "genotype")
+        return _resolve_labels(n_ztypes, None, "genotype")
 
-    if len(registry.index_to_genotype) != n_genotypes:
+    if len(registry.index_to_genotype) != n_ztypes:
         raise ValueError(
             "Registry genotype count does not match state shape: "
-            f"{len(registry.index_to_genotype)} != {n_genotypes}"
+            f"{len(registry.index_to_genotype)} != {n_ztypes}"
         )
     return [str(item) for item in registry.index_to_genotype]
 
@@ -103,7 +103,7 @@ def _build_individual_count_payload(
     """Convert a 3-D count array into nested sex/age/genotype dictionaries.
 
     Args:
-        individual_count: Count array of shape ``(n_sexes, n_ages, n_genotypes)``.
+        individual_count: Count array of shape ``(n_sexes, n_ages, n_ztypes)``.
         sex_labels: Labels for the sex axis.
         genotype_labels: Labels for the genotype axis.
         include_zero_counts: Whether to keep zero-valued entries in the output.
@@ -139,7 +139,7 @@ def _build_sperm_storage_payload(
     """Convert a 3-D sperm storage array into nested age/genotype dictionaries.
 
     Args:
-        sperm_storage: Array of shape ``(n_ages, n_genotypes, n_genotypes)``.
+        sperm_storage: Array of shape ``(n_ages, n_ztypes, n_ztypes)``.
         genotype_labels: Labels for the genotype axis (used for both female
             and male dimensions).
         include_zero_counts: Whether to keep zero-valued entries in the output.
@@ -187,8 +187,8 @@ def population_state_to_dict(
         A nested dictionary containing tick, dimensions, individual counts, and
         sperm storage.
     """
-    n_sexes, n_ages, n_genotypes = state.individual_count.shape
-    labels_genotype = _resolve_labels(n_genotypes, genotype_labels, "genotype")
+    n_sexes, n_ages, n_ztypes = state.individual_count.shape
+    labels_genotype = _resolve_labels(n_ztypes, genotype_labels, "genotype")
     labels_sex = _resolve_labels(n_sexes, sex_labels or _default_sex_labels(n_sexes), "sex")
 
     result: Dict[str, Any] = {
@@ -197,7 +197,7 @@ def population_state_to_dict(
         "dimensions": {
             "n_sexes": int(n_sexes),
             "n_ages": int(n_ages),
-            "n_ztypes": int(n_genotypes),
+            "n_ztypes": int(n_ztypes),
         },
         "individual_count": _build_individual_count_payload(
             state.individual_count,
@@ -262,8 +262,8 @@ def discrete_population_state_to_dict(
     Returns:
         A nested dictionary containing tick, dimensions, and individual counts.
     """
-    n_sexes, n_ages, n_genotypes = state.individual_count.shape
-    labels_genotype = _resolve_labels(n_genotypes, genotype_labels, "genotype")
+    n_sexes, n_ages, n_ztypes = state.individual_count.shape
+    labels_genotype = _resolve_labels(n_ztypes, genotype_labels, "genotype")
     labels_sex = _resolve_labels(n_sexes, sex_labels or _default_sex_labels(n_sexes), "sex")
 
     result: Dict[str, Any] = {
@@ -272,7 +272,7 @@ def discrete_population_state_to_dict(
         "dimensions": {
             "n_sexes": int(n_sexes),
             "n_ages": int(n_ages),
-            "n_ztypes": int(n_genotypes),
+            "n_ztypes": int(n_ztypes),
         },
         "individual_count": _build_individual_count_payload(
             state.individual_count,
@@ -334,8 +334,8 @@ def population_to_readable_dict(
         TypeError: If the population state type is unsupported.
     """
     state = population.state
-    n_genotypes = int(state.individual_count.shape[2])
-    genotype_labels = _genotype_labels_from_registry(population.index_registry, n_genotypes)
+    n_ztypes = int(state.individual_count.shape[2])
+    genotype_labels = _genotype_labels_from_registry(population.index_registry, n_ztypes)
 
     if isinstance(state, PopulationState):
         return population_state_to_dict(
@@ -398,8 +398,8 @@ def population_history_to_readable_dict(
         ValueError: If ``history`` is not a 2D array.
     """
     state = population.state
-    n_sexes, n_ages, n_genotypes = state.individual_count.shape
-    genotype_labels = _genotype_labels_from_registry(population.index_registry, int(n_genotypes))
+    n_sexes, n_ages, n_ztypes = state.individual_count.shape
+    genotype_labels = _genotype_labels_from_registry(population.index_registry, int(n_ztypes))
 
     history_array: np.ndarray
     if history is None:
@@ -427,7 +427,7 @@ def population_history_to_readable_dict(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_ztypes=n_genotypes,
+                n_ztypes=n_ztypes,
                 copy=True,
             )
             snapshots.append(
@@ -444,7 +444,7 @@ def population_history_to_readable_dict(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_ztypes=n_genotypes,
+                n_ztypes=n_ztypes,
                 copy=True,
             )
             snapshots.append(
@@ -653,7 +653,7 @@ def _build_history_observation_payload(
         A dict with observation metadata and a list of per-snapshot entries.
     """
     state = population.state
-    n_sexes, n_ages, n_genotypes = state.individual_count.shape
+    n_sexes, n_ages, n_ztypes = state.individual_count.shape
     sex_labels = _default_sex_labels(n_sexes)
 
     history_array = _get_history_array(population, history)
@@ -673,7 +673,7 @@ def _build_history_observation_payload(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_ztypes=n_genotypes,
+                n_ztypes=n_ztypes,
                 copy=True,
             )
         elif isinstance(state, DiscretePopulationState):
@@ -681,7 +681,7 @@ def _build_history_observation_payload(
                 row,
                 n_sexes=n_sexes,
                 n_ages=n_ages,
-                n_ztypes=n_genotypes,
+                n_ztypes=n_ztypes,
                 copy=True,
             )
         else:
@@ -978,10 +978,10 @@ def spatial_population_to_readable_dict(
         Dictionary containing per-deme readable payloads and one aggregate state.
     """
     aggregate_state = spatial_population.aggregate_state()
-    n_genotypes = int(aggregate_state.individual_count.shape[2])
+    n_ztypes = int(aggregate_state.individual_count.shape[2])
     genotype_labels = _genotype_labels_from_registry(
         spatial_population.deme(0).index_registry,
-        n_genotypes,
+        n_ztypes,
     )
 
     demes_payload: Dict[str, Any] = {}
@@ -1141,10 +1141,10 @@ def spatial_population_history_to_readable_dict(
     n_demes = spatial_population.n_demes
     first_deme = spatial_population.deme(0)
     state = first_deme.state
-    n_sexes, n_ages, n_genotypes = state.individual_count.shape
+    n_sexes, n_ages, n_ztypes = state.individual_count.shape
     genotype_labels = _genotype_labels_from_registry(
         first_deme.index_registry,
-        n_genotypes,
+        n_ztypes,
     )
 
     # Resolve history array
@@ -1160,8 +1160,8 @@ def spatial_population_history_to_readable_dict(
         )
 
     # Row layout: [tick, ind_d0..., ind_d1..., ..., sperm_d0..., sperm_d1..., ...]
-    ind_per_deme = n_sexes * n_ages * n_genotypes
-    sperm_per_deme = n_ages * n_genotypes * n_genotypes
+    ind_per_deme = n_sexes * n_ages * n_ztypes
+    sperm_per_deme = n_ages * n_ztypes * n_ztypes
 
     is_discrete = isinstance(state, DiscretePopulationState)
 
@@ -1175,7 +1175,7 @@ def spatial_population_history_to_readable_dict(
             d_ind_start = 1 + d * ind_per_deme
             d_ind_end = 1 + (d + 1) * ind_per_deme
             deme_ind = row[d_ind_start:d_ind_end].reshape(
-                n_sexes, n_ages, n_genotypes
+                n_sexes, n_ages, n_ztypes
             )
 
             if is_discrete:
@@ -1192,7 +1192,7 @@ def spatial_population_history_to_readable_dict(
                 d_sp_start = 1 + n_demes * ind_per_deme + d * sperm_per_deme
                 d_sp_end = 1 + n_demes * ind_per_deme + (d + 1) * sperm_per_deme
                 deme_sperm = row[d_sp_start:d_sp_end].reshape(
-                    n_ages, n_genotypes, n_genotypes
+                    n_ages, n_ztypes, n_ztypes
                 )
                 deme_state = PopulationState(
                     n_tick=tick,

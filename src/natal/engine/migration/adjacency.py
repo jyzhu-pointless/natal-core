@@ -64,7 +64,7 @@ def _apply_spatial_adjacency_migration_internal(
     n_demes = ind_count_all.shape[0]
     n_sexes = ind_count_all.shape[1]
     n_ages = ind_count_all.shape[2]
-    n_genotypes = ind_count_all.shape[3]
+    n_ztypes = ind_count_all.shape[3]
     max_nnz = row_dst_idx.shape[1]
 
     # Resolve rate array to age count: scalar broadcast to all ages.
@@ -88,13 +88,13 @@ def _apply_spatial_adjacency_migration_internal(
 
         # Handle female virgin + sperm-coupled buckets.
         for age in range(n_ages):
-            for female_genotype in range(n_genotypes):
+            for female_ztype in range(n_ztypes):
                 # Recompute stored sperm total so virgin females can be separated.
                 stored_total = 0.0
-                for male_genotype in range(n_genotypes):
-                    stored_total += sperm_store_all[src, age, female_genotype, male_genotype]
+                for male_ztype in range(n_ztypes):
+                    stored_total += sperm_store_all[src, age, female_ztype, male_ztype]
 
-                female_total = ind_count_all[src, 0, age, female_genotype]
+                female_total = ind_count_all[src, 0, age, female_ztype]
                 virgin_count = female_total - stored_total
                 if virgin_count < 0.0 and abs(virgin_count) < 1e-9:
                     virgin_count = 0.0
@@ -113,23 +113,23 @@ def _apply_spatial_adjacency_migration_internal(
                         source_idx=src,
                         sex_idx=0,
                         age_idx=age,
-                        genotype_idx=female_genotype,
+                        genotype_idx=female_ztype,
                     )
                 else:
                     # Deterministic calculation
                     if src_nnz > 0:
                         outbound = virgin_count * rate_arr[age]
                         stay = virgin_count - outbound
-                        out_ind[src, 0, age, female_genotype] += stay
+                        out_ind[src, 0, age, female_ztype] += stay
                         for nnz_idx in range(src_nnz):
                             dst = int(row_dst_idx[src, nnz_idx])
                             prob = row_dst_prob[src, nnz_idx]
-                            out_ind[dst, 0, age, female_genotype] += outbound * prob
+                            out_ind[dst, 0, age, female_ztype] += outbound * prob
                     else:
-                        out_ind[src, 0, age, female_genotype] += virgin_count
+                        out_ind[src, 0, age, female_ztype] += virgin_count
 
-                for male_genotype in range(n_genotypes):
-                    sperm_value = sperm_store_all[src, age, female_genotype, male_genotype]
+                for male_ztype in range(n_ztypes):
+                    sperm_value = sperm_store_all[src, age, female_ztype, male_ztype]
 
                     if stochastic:
                         _migrate_sperm_bucket(
@@ -145,31 +145,31 @@ def _apply_spatial_adjacency_migration_internal(
                             out_sperm=out_sperm,
                             source_idx=src,
                             age_idx=age,
-                            female_genotype_idx=female_genotype,
-                            male_genotype_idx=male_genotype,
+                            female_genotype_idx=female_ztype,
+                            male_genotype_idx=male_ztype,
                         )
                     else:
                         # Deterministic calculation
                         if src_nnz > 0:
                             outbound_sperm = sperm_value * rate_arr[age]
                             stay_sperm = sperm_value - outbound_sperm
-                            out_sperm[src, age, female_genotype, male_genotype] += stay_sperm
-                            out_ind[src, 0, age, female_genotype] += stay_sperm
+                            out_sperm[src, age, female_ztype, male_ztype] += stay_sperm
+                            out_ind[src, 0, age, female_ztype] += stay_sperm
                             for nnz_idx in range(src_nnz):
                                 dst = int(row_dst_idx[src, nnz_idx])
                                 prob = row_dst_prob[src, nnz_idx]
                                 moved_sperm = outbound_sperm * prob
-                                out_sperm[dst, age, female_genotype, male_genotype] += moved_sperm
-                                out_ind[dst, 0, age, female_genotype] += moved_sperm
+                                out_sperm[dst, age, female_ztype, male_ztype] += moved_sperm
+                                out_ind[dst, 0, age, female_ztype] += moved_sperm
                         else:
-                            out_sperm[src, age, female_genotype, male_genotype] += sperm_value
-                            out_ind[src, 0, age, female_genotype] += sperm_value
+                            out_sperm[src, age, female_ztype, male_ztype] += sperm_value
+                            out_ind[src, 0, age, female_ztype] += sperm_value
 
         # Handle remaining individual buckets (male and other sexes).
         for sex in range(1, n_sexes):
             for age in range(n_ages):
-                for genotype in range(n_genotypes):
-                    value = ind_count_all[src, sex, age, genotype]
+                for ztype in range(n_ztypes):
+                    value = ind_count_all[src, sex, age, ztype]
 
                     if stochastic:
                         _migrate_scalar_bucket(
@@ -185,20 +185,20 @@ def _apply_spatial_adjacency_migration_internal(
                             source_idx=src,
                             sex_idx=sex,
                             age_idx=age,
-                            genotype_idx=genotype,
+                            genotype_idx=ztype,
                         )
                     else:
                         # Deterministic calculation
                         if src_nnz > 0:
                             outbound = value * rate_arr[age]
                             stay = value - outbound
-                            out_ind[src, sex, age, genotype] += stay
+                            out_ind[src, sex, age, ztype] += stay
                             for nnz_idx in range(src_nnz):
                                 dst = int(row_dst_idx[src, nnz_idx])
                                 prob = row_dst_prob[src, nnz_idx]
-                                out_ind[dst, sex, age, genotype] += outbound * prob
+                                out_ind[dst, sex, age, ztype] += outbound * prob
                         else:
-                            out_ind[src, sex, age, genotype] += value
+                            out_ind[src, sex, age, ztype] += value
 
     # Merge thread-local partial sums to final state.
     out_ind = np.zeros_like(ind_count_all)

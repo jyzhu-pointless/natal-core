@@ -782,28 +782,23 @@ class PopulationConfigBuilder:
                     if isinstance(_key, Genotype):
                         pattern = ZygoteTypePattern.from_pair(_key, _slab, species)
                     elif isinstance(_key, str):
-                        if species.unordered:
-                            _gt = species.get_genotype_from_str(_key)
-                            _gt = species.unordered_genotype(_gt.maternal, _gt.paternal)
-                            _key = str(_gt)
+                        _gt = species.get_genotype_from_str(_key)
+                        _key = str(_gt)
                         pattern = ZygoteTypePattern.parse(f"{_key}@{_slab}", species)
                     else:
                         raise TypeError(
                             f"Tuple first element must be Genotype or str, got {type(_key)}"
                         )
                 elif isinstance(genotype_key, str):
-                    if species.unordered:
-                        # Normalize to unordered canonical form for pattern matching
-                        if "@" in genotype_key:
-                            idx = genotype_key.rindex("@")
-                            gt_part = genotype_key[:idx]
-                            slab_part = genotype_key[idx:]
-                        else:
-                            gt_part = genotype_key
-                            slab_part = ""
-                        gt = species.get_genotype_from_str(gt_part)
-                        gt = species.unordered_genotype(gt.maternal, gt.paternal)
-                        genotype_key = str(gt) + slab_part
+                    if "@" in genotype_key:
+                        idx = genotype_key.rindex("@")
+                        gt_part = genotype_key[:idx]
+                        slab_part = genotype_key[idx:]
+                    else:
+                        gt_part = genotype_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    genotype_key = str(gt) + slab_part
                     pattern = ZygoteTypePattern.parse(genotype_key, species)
                 elif isinstance(genotype_key, Genotype):
                     parser = GenotypePatternParser(species)
@@ -857,17 +852,15 @@ class PopulationConfigBuilder:
             from natal.genetic_patterns import GenotypePatternParser, ZygoteTypePattern
 
             if isinstance(female_key, str):
-                if species.unordered:
-                    if "@" in female_key:
-                        idx = female_key.rindex("@")
-                        gt_part = female_key[:idx]
-                        slab_part = female_key[idx:]
-                    else:
-                        gt_part = female_key
-                        slab_part = ""
-                    gt = species.get_genotype_from_str(gt_part)
-                    gt = species.unordered_genotype(gt.maternal, gt.paternal)
-                    female_key = str(gt) + slab_part
+                if "@" in female_key:
+                    idx = female_key.rindex("@")
+                    gt_part = female_key[:idx]
+                    slab_part = female_key[idx:]
+                else:
+                    gt_part = female_key
+                    slab_part = ""
+                gt = species.get_genotype_from_str(gt_part)
+                female_key = str(gt) + slab_part
                 female_pattern = ZygoteTypePattern.parse(female_key, species)
             elif isinstance(female_key, Genotype):
                 parser = GenotypePatternParser(species)
@@ -882,17 +875,15 @@ class PopulationConfigBuilder:
 
             for male_key, age_data in male_dict.items():
                 if isinstance(male_key, str):
-                    if species.unordered:
-                        if "@" in male_key:
-                            idx = male_key.rindex("@")
-                            gt_part = male_key[:idx]
-                            slab_part = male_key[idx:]
-                        else:
-                            gt_part = male_key
-                            slab_part = ""
-                        gt = species.get_genotype_from_str(gt_part)
-                        gt = species.unordered_genotype(gt.maternal, gt.paternal)
-                        male_key = str(gt) + slab_part
+                    if "@" in male_key:
+                        idx = male_key.rindex("@")
+                        gt_part = male_key[:idx]
+                        slab_part = male_key[idx:]
+                    else:
+                        gt_part = male_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    male_key = str(gt) + slab_part
                     male_pattern = ZygoteTypePattern.parse(male_key, species)
                 elif isinstance(male_key, Genotype):
                     parser = GenotypePatternParser(species)
@@ -1003,27 +994,23 @@ class PopulationConfigBuilder:
                     if isinstance(_key, Genotype):
                         pattern = ZygoteTypePattern.from_pair(_key, _slab, species)
                     elif isinstance(_key, str):
-                        if species.unordered:
-                            _gt = species.get_genotype_from_str(_key)
-                            _gt = species.unordered_genotype(_gt.maternal, _gt.paternal)
-                            _key = str(_gt)
+                        _gt = species.get_genotype_from_str(_key)
+                        _key = str(_gt)
                         pattern = ZygoteTypePattern.parse(f"{_key}@{_slab}", species)
                     else:
                         raise TypeError(
                             f"Tuple first element must be Genotype or str, got {type(_key)}"
                         )
                 elif isinstance(genotype_key, str):
-                    if species.unordered:
-                        if "@" in genotype_key:
-                            idx = genotype_key.rindex("@")
-                            gt_part = genotype_key[:idx]
-                            slab_part = genotype_key[idx:]
-                        else:
-                            gt_part = genotype_key
-                            slab_part = ""
-                        gt = species.get_genotype_from_str(gt_part)
-                        gt = species.unordered_genotype(gt.maternal, gt.paternal)
-                        genotype_key = str(gt) + slab_part
+                    if "@" in genotype_key:
+                        idx = genotype_key.rindex("@")
+                        gt_part = genotype_key[:idx]
+                        slab_part = genotype_key[idx:]
+                    else:
+                        gt_part = genotype_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    genotype_key = str(gt) + slab_part
                     pattern = ZygoteTypePattern.parse(genotype_key, species)
                 elif isinstance(genotype_key, Genotype):
                     parser = GenotypePatternParser(species)

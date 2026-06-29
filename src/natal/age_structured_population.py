@@ -258,17 +258,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 )
 
                 if isinstance(genotype_key, str):
-                    if self.species.unordered:
-                        if "@" in genotype_key:
-                            idx = genotype_key.rindex("@")
-                            gt_part = genotype_key[:idx]
-                            slab_part = genotype_key[idx:]
-                        else:
-                            gt_part = genotype_key
-                            slab_part = ""
-                        gt = self.species.get_genotype_from_str(gt_part)
-                        gt = self.species.unordered_genotype(gt.maternal, gt.paternal)
-                        genotype_key = str(gt) + slab_part
+                    if "@" in genotype_key:
+                        idx = genotype_key.rindex("@")
+                        gt_part = genotype_key[:idx]
+                        slab_part = genotype_key[idx:]
+                    else:
+                        gt_part = genotype_key
+                        slab_part = ""
+                    gt = self.species.get_genotype_from_str(gt_part)
+                    genotype_key = str(gt) + slab_part
                     pattern = ZygoteTypePattern.parse(genotype_key, self.species)
                 else:
                     parser = GenotypePatternParser(self.species)
@@ -330,17 +328,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 f"Female genotype key must be Genotype or str, got {type(female_key)}"
 
             if isinstance(female_key, str):
-                if species.unordered:
-                    if "@" in female_key:
-                        idx = female_key.rindex("@")
-                        gt_part = female_key[:idx]
-                        slab_part = female_key[idx:]
-                    else:
-                        gt_part = female_key
-                        slab_part = ""
-                    gt = species.get_genotype_from_str(gt_part)
-                    gt = species.unordered_genotype(gt.maternal, gt.paternal)
-                    female_key = str(gt) + slab_part
+                if "@" in female_key:
+                    idx = female_key.rindex("@")
+                    gt_part = female_key[:idx]
+                    slab_part = female_key[idx:]
+                else:
+                    gt_part = female_key
+                    slab_part = ""
+                gt = species.get_genotype_from_str(gt_part)
+                female_key = str(gt) + slab_part
                 female_pattern = ZygoteTypePattern.parse(female_key, species)
             else:
                 parser = GenotypePatternParser(species)
@@ -355,17 +351,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     f"Male genotype key must be Genotype or str, got {type(male_key)}"
 
                 if isinstance(male_key, str):
-                    if species.unordered:
-                        if "@" in male_key:
-                            idx = male_key.rindex("@")
-                            gt_part = male_key[:idx]
-                            slab_part = male_key[idx:]
-                        else:
-                            gt_part = male_key
-                            slab_part = ""
-                        gt = species.get_genotype_from_str(gt_part)
-                        gt = species.unordered_genotype(gt.maternal, gt.paternal)
-                        male_key = str(gt) + slab_part
+                    if "@" in male_key:
+                        idx = male_key.rindex("@")
+                        gt_part = male_key[:idx]
+                        slab_part = male_key[idx:]
+                    else:
+                        gt_part = male_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    male_key = str(gt) + slab_part
                     male_pattern = ZygoteTypePattern.parse(male_key, species)
                 else:
                     parser = GenotypePatternParser(species)

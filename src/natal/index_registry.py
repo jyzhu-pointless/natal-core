@@ -77,11 +77,6 @@ class IndexRegistry:
         """Number of active GType entries (computed from flat index list)."""
         return len(self._index_to_gtype)
 
-    @n_gtypes.setter
-    def n_gtypes(self, value: int) -> None:
-        """Backward-compat no-op setter — n_gtypes is always computed."""
-        pass
-
     @property
     def index_to_genotype(self) -> List[Genotype]:
         """Computed list of unique genotypes (in registration order) from ZType space."""
@@ -107,11 +102,6 @@ class IndexRegistry:
         """
         return self._index_to_ztype.copy()
 
-    @index_to_ztype.setter
-    def index_to_ztype(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
-
     @property
     def haplo_to_index(self) -> Dict[HaploidGenotype, int]:
         """Computed dict of unique haplotypes from the GType space.
@@ -127,11 +117,6 @@ class IndexRegistry:
                 seen.add(hg)
         return result
 
-    @haplo_to_index.setter
-    def haplo_to_index(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
-
     @property
     def index_to_haplo(self) -> List[HaploidGenotype]:
         """Computed list of unique haplotypes (in registration order) from GType space."""
@@ -143,11 +128,6 @@ class IndexRegistry:
                 seen.add(hg)
         return result
 
-    @index_to_haplo.setter
-    def index_to_haplo(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
-
     @property
     def index_to_gtype(self) -> List[Tuple[HaploidGenotype, str]]:
         """Computed list of (haplogenotype, glab_label) pairs from GType space.
@@ -157,67 +137,25 @@ class IndexRegistry:
         """
         return self._index_to_gtype.copy()
 
-    @index_to_gtype.setter
-    def index_to_gtype(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
-
     @property
     def glab_to_index(self) -> Dict[str, int]:
         """Computed dict mapping gamete label strings to their index in ``glab_labels``."""
         return {label: i for i, label in enumerate(self.glab_labels)}
-
-    @glab_to_index.setter
-    def glab_to_index(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
 
     @property
     def index_to_glab(self) -> List[str]:
         """Alias for ``glab_labels`` (backward compat)."""
         return self.glab_labels
 
-    @index_to_glab.setter
-    def index_to_glab(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
-
     @property
     def slab_to_index(self) -> Dict[str, int]:
         """Computed dict mapping somatic label strings to their index in ``slab_labels``."""
         return {label: i for i, label in enumerate(self.slab_labels)}
 
-    @slab_to_index.setter
-    def slab_to_index(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
-
     @property
     def index_to_slab(self) -> List[str]:
         """Alias for ``slab_labels`` (backward compat)."""
         return self.slab_labels
-
-    @index_to_slab.setter
-    def index_to_slab(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
-
-    # ==================================================================
-    # Internal helpers — ensure a haplo is tracked in flat lists
-    # ==================================================================
-
-    def _ensure_haplo_registered(self, haplo: HaploidGenotype) -> int:
-        """Register a haplotype in the computed dicts if not already present.
-
-        Returns:
-            The haplotype's index in the computed ``haplo_to_index`` dict.
-        """
-        for hg, _glab in self._index_to_gtype:
-            if hg == haplo:
-                return self.haplo_to_index[haplo]
-        glab = self.glab_labels[0] if self.glab_labels else "default"
-        self.register_gtype(haplo, glab)
-        return self.haplo_to_index[haplo]
 
     # ==================================================================
     # Flat dict-based registration API
@@ -359,54 +297,6 @@ class IndexRegistry:
         """
         return len(self.index_to_haplo)
 
-    def num_gamete_labels(self) -> int:
-        """Return the number of registered gamete labels.
-
-        Returns:
-            int: Count of registered gamete labels.
-        """
-        return len(self.glab_labels)
-
-    def num_somatic_labels(self) -> int:
-        """Return the number of registered somatic labels."""
-        return len(self.slab_labels)
-
-    def haplo_index(self, haplo_id: Any) -> int:
-        """Return the index for a registered haplogenotype key.
-
-        Args:
-            haplo_id: Registered haplogenotype instance or identifier.
-
-        Returns:
-            int: The haplogenotype index.
-
-        Raises:
-            KeyError: If the haplogenotype is not registered.
-        """
-        return self.haplo_to_index[haplo_id]
-
-    def gamete_label_index(self, gamete_label: str) -> int:
-        """Return the index for a registered gamete label key.
-
-        Args:
-            gamete_label: Registered gamete label string.
-
-        Returns:
-            int: The gamete label index.
-
-        Raises:
-            KeyError: If the gamete label is not registered.
-        """
-        return self.glab_to_index[gamete_label]
-
-    def somatic_label_index(self, somatic_label: str) -> int:
-        """Return the index for a registered somatic label key.
-
-        Raises:
-            KeyError: If the somatic label is not registered.
-        """
-        return self.slab_to_index[somatic_label]
-
     def ztype_index(self, genotype: Genotype, slab_label: str) -> int:
         """O(1) dict lookup for a ZType index.
 
@@ -456,6 +346,10 @@ class IndexRegistry:
         via ``Genotype.__new__`` cache key normalization.
         """
         return [i for i, (gt, _) in enumerate(self._index_to_ztype) if gt == genotype]
+
+    def gtype_indices_for(self, haplo: Any) -> list[int]:
+        """Return all GType indices for a given HaploidGenotype object."""
+        return [i for i, (hg, _) in enumerate(self._index_to_gtype) if hg == haplo]
 
     def gtype_index(self, haplo: HaploidGenotype, glab_label: str) -> int:
         """O(1) dict lookup for a GType index.
@@ -520,62 +414,6 @@ class IndexRegistry:
         ]
         self._index_to_gtype = new_index_to_gtype
         self._gtype_to_index = {gt: i for i, gt in enumerate(new_index_to_gtype)}
-
-    # ==================================================================
-    # Internal helpers — convert selectors to valid indices
-    # ==================================================================
-
-    def _ensure_genotype_index(self, genotype_or_index: Union[Genotype, int]) -> int:
-        """Convert a genotype or integer index to a valid registry index."""
-        if isinstance(genotype_or_index, int):
-            num_g = self.num_genotypes()
-            if 0 <= genotype_or_index < num_g:
-                return int(genotype_or_index)
-            raise IndexError(f"Genotype index {genotype_or_index} out of range")
-        assert not isinstance(genotype_or_index, int)
-        slab = self.slab_labels[0] if self.slab_labels else "default"
-        return self.register_ztype(genotype_or_index, slab)
-
-    def _ensure_haplo_index(self, haplo_or_index: Union[Any, int]) -> int:
-        """Convert a haplogenotype selector to an integer index.
-
-        Behaves similarly to :meth:`_ensure_genotype_index`.
-
-        Args:
-            haplo_or_index: Either an int index or a haplogenotype key.
-
-        Returns:
-            int: A valid haplogenotype index.
-        """
-        num_h = self.num_haplogenotypes()
-        if isinstance(haplo_or_index, int) and 0 <= haplo_or_index < num_h:
-            return int(haplo_or_index)
-        glab = self.glab_labels[0] if self.glab_labels else "default"
-        # At this point haplo_or_index is not int (caught above), so cast to
-        # HaploidGenotype for the type checker.  Runtime behaviour matches
-        # the old register_haplogenotype which accepted Any.
-        return self.register_gtype(cast(HaploidGenotype, haplo_or_index), glab)
-
-    def _ensure_glab_index(self, glab_or_index: Union[str, int]) -> int:
-        """Convert a gamete-label selector to an integer index.
-
-        Behaves similarly to :meth:`_ensure_genotype_index`.
-
-        Args:
-            glab_or_index: Either an int index or a gamete-label key.
-
-        Returns:
-            int: A valid gamete-label index.
-
-        Raises:
-            AssertionError: If the input is not a string nor a valid integer index.
-        """
-        if isinstance(glab_or_index, int) and 0 <= glab_or_index < len(self.glab_labels):
-            return int(glab_or_index)
-        assert isinstance(glab_or_index, str), (
-            f"Gamete label must be a string or int index, got {type(glab_or_index)}"
-        )
-        return self.register_gamete_label(glab_or_index)
 
     # ==================================================================
     # Resolver helpers (centralized key parsing)
