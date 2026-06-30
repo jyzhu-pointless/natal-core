@@ -38,8 +38,6 @@ from natal.population_config import (
     DiscretePopulationConfig,
     PopulationConfig,
     compress_config,
-    compress_gamete_map,
-    compress_zygote_map,
 )
 
 if TYPE_CHECKING:
@@ -343,35 +341,28 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         if not has_reachable:
             return
 
-    # GType (gamete-axis) + ZType (genotype-axis) compression.
-    # Both masks are produced by a single BFS and must be applied together.
+    # GType (gamete-axis) compression.
     n_hg_effective = int(ctx.config.n_gtypes) // n_glabs
     n_glabs_effective = n_glabs
     gtype_compressed = False
     if gtype_mask.size > 0:
-        n_hl_compressed = int((gtype_mask >= 0).sum())
+        _hl_active = gtype_mask >= 0
+        n_hl_compressed = int(_hl_active.sum())
         if n_hl_compressed < zygotes_to_gametes_map.shape[2]:
-            zygotes_to_gametes_map = compress_gamete_map(
-                zygotes_to_gametes_map, gtype_mask,
-            )
-            gametes_to_zygotes_map = compress_zygote_map(
-                gametes_to_zygotes_map, gtype_mask,
-            )
-            # GType compression collapses the (haplogenotype × glab) axis
-            # into a flat list — n_gtypes becomes the surviving entry count.
-            # n_glabs is preserved at its original value (symmetric with
-            # ZType compression which preserves n_slabs).
+            zygotes_to_gametes_map = zygotes_to_gametes_map[:, :, _hl_active]
+            gametes_to_zygotes_map = gametes_to_zygotes_map[_hl_active, :, :][:, _hl_active, :]
             n_hg_effective = n_hl_compressed
             gtype_compressed = True
 
-        if ztype_mask.size > 0:
-            _z_active = ztype_mask >= 0
-            zygotes_to_gametes_map = zygotes_to_gametes_map[:, _z_active, :]
-            gametes_to_zygotes_map = gametes_to_zygotes_map[:, :, _z_active]
+    # ZType (genotype-axis) compression.
+    if ztype_mask.size > 0:
+        _z_active = ztype_mask >= 0
+        zygotes_to_gametes_map = zygotes_to_gametes_map[:, _z_active, :]
+        gametes_to_zygotes_map = gametes_to_zygotes_map[:, :, _z_active]
 
-            ctx.config = compress_config(ctx.config, ztype_mask)
-            n_g_compressed = int(ctx.config.n_ztypes)
-            ctx.registry.compress(ztype_mask, gtype_mask)
+        ctx.config = compress_config(ctx.config, ztype_mask)
+        n_g_compressed = int(ctx.config.n_ztypes)
+        ctx.registry.compress(ztype_mask, gtype_mask)
 
     # ---- recompute offspring probability tensor from the updated maps ----
     offspring_tensor = compute_offspring_probability_tensor(
