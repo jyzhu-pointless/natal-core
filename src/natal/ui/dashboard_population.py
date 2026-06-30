@@ -607,7 +607,7 @@ class Dashboard:
         config = self.pop.export_config()
         registry = self.pop.registry
         g2z = config.gametes_to_zygotes_map
-        n_hg_glabs = int(config.n_haploid_genotypes * config.n_glabs)
+        n_hg_glabs = int(config.n_gtypes)
         genotypes = registry.index_to_genotype
 
         if n_hg_glabs > 40:
@@ -865,7 +865,7 @@ class Dashboard:
             "n_sexes": int(conf.n_sexes),
             "n_ages": int(conf.n_ages),
             "n_genotypes": int(conf.n_ztypes),
-            "n_haploid_genotypes": int(conf.n_haploid_genotypes),
+            "n_gtypes": int(conf.n_gtypes),
             "n_glabs": int(conf.n_glabs),
             "new_adult_age": int(conf.new_adult_age),
             "sperm_displacement_rate": float(conf.sperm_displacement_rate),

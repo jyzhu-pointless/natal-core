@@ -34,7 +34,7 @@ class TestZygoteFitness(unittest.TestCase):
 
     def test_population_config_zygote_viability_fitness_field(self) -> None:
         """Test that PopulationConfig has zygote_viability_fitness field."""
-        config = build_population_config(n_genotypes=4, n_haploid_genotypes=2)
+        config = build_population_config(n_genotypes=4, n_gtypes=2)
 
         # Check that zygote_viability_fitness field exists
         self.assertTrue(hasattr(config, 'zygote_viability_fitness'))
@@ -47,7 +47,7 @@ class TestZygoteFitness(unittest.TestCase):
 
     def test_set_zygote_viability_fitness_method(self) -> None:
         """Test set_zygote_viability_fitness method."""
-        config = build_population_config(n_genotypes=4, n_haploid_genotypes=2)
+        config = build_population_config(n_genotypes=4, n_gtypes=2)
 
         # Set zygote fitness for female genotype 0
         config.set_zygote_viability_fitness(0, 0, 0.5)

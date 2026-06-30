@@ -8,7 +8,7 @@
   {"domain": "age_structure", "name": "n_ages", "config_field": "n_ages", "config_path": [], "dtype": "int", "bounds": [1, 200]},
   {"domain": "age_structure", "name": "n_sexes", "config_field": "n_sexes", "config_path": [], "dtype": "int", "bounds": [1, 10]},
   {"domain": "age_structure", "name": "n_ztypes", "config_field": "n_ztypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
-  {"domain": "age_structure", "name": "n_haploid_genotypes", "config_field": "n_haploid_genotypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
+  {"domain": "age_structure", "name": "n_gtypes", "config_field": "n_gtypes", "config_path": [], "dtype": "int", "bounds": [1, 100000]},
   {"domain": "age_structure", "name": "n_glabs", "config_field": "n_glabs", "config_path": [], "dtype": "int", "bounds": [1, 100]},
   {"domain": "age_structure", "name": "new_adult_age", "config_field": "new_adult_age", "config_path": [], "dtype": "int", "bounds": [1, 100]},
   {"domain": "age_structure", "name": "generation_time", "config_field": "generation_time", "config_path": [], "dtype": "float", "bounds": [0.01, 100], "is_0d": true},
@@ -44,8 +44,8 @@
   {"domain": "fitness", "name": "fecundity", "config_field": "fecundity_fitness", "config_path": [], "dtype": "float", "bounds": [0, 100], "doc": "(n_sexes, n_genotypes) fecundity fitness", "is_tensor": true},
   {"domain": "fitness", "name": "sexual_selection", "config_field": "sexual_selection_fitness", "config_path": [], "dtype": "float", "bounds": [0, 100], "doc": "(n_genotypes, n_genotypes) sexual selection matrix", "is_tensor": true},
   {"domain": "fitness", "name": "zygote_viability", "config_field": "zygote_viability_fitness", "config_path": [], "dtype": "float", "bounds": [0, 100], "doc": "(n_sexes, n_genotypes) zygote viability fitness", "is_tensor": true},
-  {"domain": "fitness", "name": "female_genotype_compatibility", "config_field": "female_genotype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_genotypes,) female-side compatibility weights", "is_tensor": true},
-  {"domain": "fitness", "name": "male_genotype_compatibility", "config_field": "male_genotype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_genotypes,) male-side compatibility weights", "is_tensor": true},
+  {"domain": "fitness", "name": "female_ztype_compatibility", "config_field": "female_ztype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_genotypes,) female-side compatibility weights", "is_tensor": true},
+  {"domain": "fitness", "name": "male_ztype_compatibility", "config_field": "male_ztype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "doc": "(n_genotypes,) male-side compatibility weights", "is_tensor": true},
   // HOOK
   {"domain": "hook", "name": "hook_slot", "config_field": "hook_slot", "config_path": [], "dtype": "int", "bounds": [0, 100]},
   // MIGRATION

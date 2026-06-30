@@ -120,8 +120,8 @@ def run_reproduction_with_precomputed_offspring_probability(
     )
 
     # 4. Generate offspring (fertilization).
-    female_genotype_compatibility = config.female_genotype_compatibility
-    male_genotype_compatibility = config.male_genotype_compatibility
+    female_ztype_compatibility = config.female_ztype_compatibility
+    male_ztype_compatibility = config.male_ztype_compatibility
     female_only_by_sex_chrom = config.female_only_by_sex_chrom
     male_only_by_sex_chrom = config.male_only_by_sex_chrom
     has_sex_chromosomes = config.has_sex_chromosomes
@@ -136,9 +136,9 @@ def run_reproduction_with_precomputed_offspring_probability(
         adult_start_age,
         n_ages,
         n_ztypes,
-        config.n_haploid_genotypes,
-        female_genotype_compatibility,
-        male_genotype_compatibility,
+        config.n_gtypes,
+        female_ztype_compatibility,
+        male_ztype_compatibility,
         female_only_by_sex_chrom,
         male_only_by_sex_chrom,
         config.n_glabs,

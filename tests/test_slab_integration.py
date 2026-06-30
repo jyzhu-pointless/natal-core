@@ -153,7 +153,7 @@ class TestCompressionIntegration:
             "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
         }).competition(juvenile_growth_mode=0).build()
         # Only A gametes reachable → HL compressed from 2 to 1
-        assert pop.config.n_haploid_genotypes == 1
+        assert pop.config.n_gtypes == 1
         assert pop.config.n_glabs == 1
 
     def test_double_compression_runs(self):
@@ -238,7 +238,7 @@ class TestCompressionIntegration:
         # stays at 2 (no gametes pruned).  The test verifies the build
         # succeeds — compression + preset doesn't crash.
         assert pop.config.n_ztypes > 0
-        assert pop.config.n_haploid_genotypes > 0
+        assert pop.config.n_gtypes > 0
         pop.run(2)
         assert pop.get_history().shape[0] >= 2
 
@@ -450,8 +450,8 @@ class TestRegressionFixes:
             f"zygotes_to_gametes_map G-axis {z2g_shape[1]} != n_ztypes {n_g_declared}"
         )
         # C7: compatibility arrays must also match
-        assert cfg.female_genotype_compatibility.shape[0] == n_g_declared
-        assert cfg.male_genotype_compatibility.shape[0] == n_g_declared
+        assert cfg.female_ztype_compatibility.shape[0] == n_g_declared
+        assert cfg.male_ztype_compatibility.shape[0] == n_g_declared
 
     def test_config_maps_match_n_ztypes_when_n_slabs_eq_1(self):
         """C2 zero-regression: n_slabs=1 should still store correct maps."""

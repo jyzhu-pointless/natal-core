@@ -74,9 +74,9 @@ t_build_no = time.perf_counter() - t0
 
 cfg_no = pop_no.config
 print(f"  n_ztypes    = {cfg_no.n_ztypes}")
-print(f"  n_haploid   = {cfg_no.n_haploid_genotypes}")
+print(f"  n_haploid   = {cfg_no.n_gtypes}")
 print(f"  n_glabs     = {cfg_no.n_glabs}")
-print(f"  HL (gamete) = {cfg_no.n_haploid_genotypes * cfg_no.n_glabs}")
+print(f"  HL (gamete) = {cfg_no.n_gtypes * cfg_no.n_glabs}")
 print(f"  zygotes_to_gametes_map shape = {cfg_no.zygotes_to_gametes_map.shape}")
 print(f"  gametes_to_zygotes_map shape = {cfg_no.gametes_to_zygotes_map.shape}")
 print(f"  Build time: {t_build_no:.3f}s")
@@ -122,9 +122,9 @@ t_build_yes = time.perf_counter() - t0
 
 cfg_yes = pop_yes.config
 print(f"  n_ztypes    = {cfg_yes.n_ztypes}")
-print(f"  n_haploid   = {cfg_yes.n_haploid_genotypes}")
+print(f"  n_haploid   = {cfg_yes.n_gtypes}")
 print(f"  n_glabs     = {cfg_yes.n_glabs}")
-print(f"  HL (gamete) = {cfg_yes.n_haploid_genotypes * cfg_yes.n_glabs}")
+print(f"  HL (gamete) = {cfg_yes.n_gtypes * cfg_yes.n_glabs}")
 print(f"  zygotes_to_gametes_map shape = {cfg_yes.zygotes_to_gametes_map.shape}")
 print(f"  gametes_to_zygotes_map shape = {cfg_yes.gametes_to_zygotes_map.shape}")
 print(f"  Build time: {t_build_yes:.3f}s")
@@ -175,8 +175,8 @@ print(f"  Build: {t_build_no:.3f}s → {t_build_yes:.3f}s  ({t_build_no/t_build_
 print(f"  Run:   {t_run_no:.3f}s → {t_run_yes:.3f}s  ({t_run_no/t_run_yes:.2f}x)")
 
 # ── Dimension reduction ──
-hl_no = cfg_no.n_haploid_genotypes * cfg_no.n_glabs
-hl_yes = cfg_yes.n_haploid_genotypes * cfg_yes.n_glabs
+hl_no = cfg_no.n_gtypes * cfg_no.n_glabs
+hl_yes = cfg_yes.n_gtypes * cfg_yes.n_glabs
 g_no = cfg_no.n_ztypes
 g_yes = cfg_yes.n_ztypes
 print(f"  ZTypes (G):  {g_no} → {g_yes}  ({g_no - g_yes} pruned, {(1 - g_yes/g_no)*100:.0f}% reduction)")

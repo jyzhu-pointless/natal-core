@@ -117,8 +117,8 @@ class TestParameterFieldMapping:
             "fitness.fecundity",
             "fitness.sexual_selection",
             "fitness.zygote_viability",
-            "fitness.female_genotype_compatibility",
-            "fitness.male_genotype_compatibility",
+            "fitness.female_ztype_compatibility",
+            "fitness.male_ztype_compatibility",
         ],
     )
     def test_fitness_is_tensor(self, key: str):

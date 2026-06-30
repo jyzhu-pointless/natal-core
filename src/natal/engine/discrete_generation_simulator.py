@@ -66,7 +66,7 @@ def run_discrete_reproduction(
         cfg.reproduction_rate,
         cfg.sex_ratio[()],  # pyright: ignore[reportArgumentType]
         cfg.has_sex_chromosomes,
-        cfg.female_genotype_compatibility, cfg.male_genotype_compatibility,
+        cfg.female_ztype_compatibility, cfg.male_ztype_compatibility,
         cfg.female_only_by_sex_chrom, cfg.male_only_by_sex_chrom,
         stochastic, continuous,
     )

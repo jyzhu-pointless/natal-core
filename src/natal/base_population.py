@@ -739,7 +739,7 @@ class BasePopulation(ABC, Generic[T_State]):
                     n_genotypes=int(zygotes_to_gametes_map.shape[1]),
                     gamete_labels=species.gamete_labels if species else None,
                     somatic_labels=species.somatic_labels if species else None,
-                    n_haploid_genotypes=int(self._config.n_haploid_genotypes),
+                    n_gtypes=int(self._config.n_gtypes) // n_glabs,
                     n_glabs=n_glabs,
                 )
             )
@@ -754,14 +754,14 @@ class BasePopulation(ABC, Generic[T_State]):
         # the fusion map.  The result is a 4-D array indexed by
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
         n_g = int(self._config.n_ztypes)
-        n_hg = int(self._config.n_haploid_genotypes)
+        n_hg = int(self._config.n_gtypes)
         n_gl = n_glabs
         offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=zygotes_to_gametes_map[0],
             meiosis_m=zygotes_to_gametes_map[1],
             haplo_to_genotype_map=gametes_to_zygotes_map,
             n_ztypes=n_g,
-            n_haplogenotypes=n_hg,
+            n_haplogenotypes=n_hg // n_gl,
             n_glabs=n_gl,
         )
 
@@ -771,7 +771,7 @@ class BasePopulation(ABC, Generic[T_State]):
             gametes_to_zygotes_map=gametes_to_zygotes_map,
             offspring_tensor=offspring_tensor,
             n_ztypes=n_g,
-            n_haploid_genotypes=n_hg,
+            n_gtypes=n_hg,
             n_glabs=n_gl,
         )
 

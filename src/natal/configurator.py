@@ -281,7 +281,7 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
 
     # ---- index compression (optional) ----
     n_g_compressed = int(ctx.config.n_ztypes)
-    n_hg_effective = int(ctx.config.n_haploid_genotypes)
+    n_hg_effective = int(ctx.config.n_gtypes) // n_glabs
     n_glabs_effective = n_glabs
     gtype_mask = np.array([], dtype=np.int32)
     ztype_mask = np.array([], dtype=np.int32)
@@ -347,7 +347,7 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
 
         # GType (gamete-axis) + ZType (genotype-axis) compression.
         # Both masks are produced by a single BFS and must be applied together.
-        n_hg_effective = int(ctx.config.n_haploid_genotypes)
+        n_hg_effective = int(ctx.config.n_gtypes) // n_glabs
         n_glabs_effective = n_glabs
         if gtype_mask.size > 0:
             n_hl_compressed = int((gtype_mask >= 0).sum())
@@ -389,7 +389,7 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         "gametes_to_zygotes_map": gametes_to_zygotes_map,
         "offspring_tensor": offspring_tensor,
         "n_ztypes": n_g_compressed,
-        "n_haploid_genotypes": n_hg_effective,
+        "n_gtypes": n_hg_effective * n_glabs_effective,
         "n_glabs": n_glabs_effective,
     }
     if isinstance(ctx.config, DiscretePopulationConfig):
@@ -1088,7 +1088,7 @@ class Configurator:
         """
         bp = species.get_config_blueprint()
         n_g = bp["n_genotypes"]
-        n_hg = bp["n_haploid_genotypes"]
+        n_hg = bp["n_gtypes"]
         n_gl = bp["n_glabs"]
         n_sl = bp.get("n_slabs", 1)
         z2g = bp["zygotes_to_gametes_map"]
@@ -1099,7 +1099,7 @@ class Configurator:
             from natal.population_config import build_discrete_engine_config
 
             config = build_discrete_engine_config(
-                n_genotypes=n_g, n_haploid_genotypes=n_hg, n_glabs=n_gl,
+                n_genotypes=n_g, n_gtypes=n_hg, n_glabs=n_gl,
                 n_slabs=n_sl,
                 gamete_labels=species.gamete_labels or ["default"],
                 somatic_labels=species.somatic_labels or ["default"],
@@ -1112,7 +1112,7 @@ class Configurator:
             from natal.population_config import build_population_config
 
             config = build_population_config(
-                n_genotypes=n_g, n_haploid_genotypes=n_hg, n_glabs=n_gl,
+                n_genotypes=n_g, n_gtypes=n_hg, n_glabs=n_gl,
                 n_slabs=n_sl,
                 gamete_labels=species.gamete_labels or ["default"],
                 somatic_labels=species.somatic_labels or ["default"],
@@ -2158,18 +2158,18 @@ class AgeStructuredConfigurator(Configurator):
         if self._species is not None:
             bp = self._species.get_config_blueprint()
             n_g_orig = bp["n_genotypes"]
-            n_hg_orig = bp["n_haploid_genotypes"]
+            n_hg_orig = bp["n_gtypes"]
             z2g_bp = bp["zygotes_to_gametes_map"]
             g2z_bp = bp["gametes_to_zygotes_map"]
         else:
             n_g_orig = old.n_ztypes
-            n_hg_orig = old.n_haploid_genotypes
+            n_hg_orig = old.n_gtypes
             z2g_bp = old.zygotes_to_gametes_map
             g2z_bp = old.gametes_to_zygotes_map
 
         self._config = build_population_config(
             n_genotypes=n_g_orig,
-            n_haploid_genotypes=n_hg_orig,
+            n_gtypes=n_hg_orig,
             n_ages=n_ages,
             n_glabs=old.n_glabs,
             n_slabs=old.n_slabs,

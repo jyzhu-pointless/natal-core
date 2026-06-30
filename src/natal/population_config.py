@@ -49,7 +49,7 @@ class PopulationConfig(NamedTuple):
         n_sexes: Number of sexes (usually 2).
         n_ages: Number of age classes.
         n_ztypes: Number of zygote types (diploid genotype types after slab expansion).
-        n_haploid_genotypes: Number of haploid genotype types.
+        n_gtypes: Total number of gamete types (haploid genotype count × gamete label count).
         n_glabs: Number of gamete‑label variants per haplotype.
         age_based_mating_rates: Shape (n_sexes, n_ages) – mating rates per sex/age.
         age_based_reproduction_rates: Shape (n_ages,) – female reproduction
@@ -88,9 +88,9 @@ class PopulationConfig(NamedTuple):
             (e.g., XY or ZW systems). Used to determine if offspring sex is
             genotype-determined (True) or ratio-determined (False). This flag
             is independent of gamete modifier effects or temporary lethality.
-        female_genotype_compatibility: Shape (n_ztypes,) – female-side
+        female_ztype_compatibility: Shape (n_ztypes,) – female-side
             compatibility weight per genotype.
-        male_genotype_compatibility: Shape (n_ztypes,) – male-side
+        male_ztype_compatibility: Shape (n_ztypes,) – male-side
             compatibility weight per genotype.
         female_only_by_sex_chrom: Shape (n_ztypes,) – True where genotype
             is female-only under sex-chromosome constraints.
@@ -113,7 +113,7 @@ class PopulationConfig(NamedTuple):
     n_sexes: int
     n_ages: int
     n_ztypes: int
-    n_haploid_genotypes: int
+    n_gtypes: int
     n_glabs: int
     n_slabs: int
     age_based_mating_rates: NDArray[np.float64]
@@ -138,8 +138,8 @@ class PopulationConfig(NamedTuple):
     new_adult_age: int
     hook_slot: int
     has_sex_chromosomes: bool
-    female_genotype_compatibility: NDArray[np.float64]
-    male_genotype_compatibility: NDArray[np.float64]
+    female_ztype_compatibility: NDArray[np.float64]
+    male_ztype_compatibility: NDArray[np.float64]
     female_only_by_sex_chrom: NDArray[np.bool_]
     male_only_by_sex_chrom: NDArray[np.bool_]
     # NumPy arrays are still mutable in-place.
@@ -260,7 +260,7 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         n_sexes=int(config.n_sexes),
         n_ages=int(config.n_ages),
         n_ztypes=int(config.n_ztypes),
-        n_haploid_genotypes=int(config.n_haploid_genotypes),
+        n_gtypes=int(config.n_gtypes),
         n_glabs=int(config.n_glabs),
         n_slabs=int(config.n_slabs),
         age_based_mating_rates=_maybe_copy_array(config.age_based_mating_rates, copy),
@@ -285,8 +285,8 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         new_adult_age=int(config.new_adult_age),
         hook_slot=int(config.hook_slot),
         has_sex_chromosomes=bool(config.has_sex_chromosomes),
-        female_genotype_compatibility=_maybe_copy_array(config.female_genotype_compatibility, copy),
-        male_genotype_compatibility=_maybe_copy_array(config.male_genotype_compatibility, copy),
+        female_ztype_compatibility=_maybe_copy_array(config.female_ztype_compatibility, copy),
+        male_ztype_compatibility=_maybe_copy_array(config.male_ztype_compatibility, copy),
         female_only_by_sex_chrom=_maybe_copy_array(config.female_only_by_sex_chrom, copy),
         male_only_by_sex_chrom=_maybe_copy_array(config.male_only_by_sex_chrom, copy),
         adult_ages=config.adult_ages.copy() if copy else config.adult_ages,
@@ -323,7 +323,7 @@ class _ComputedMaps(NamedTuple):
     n_sexes: int
     n_ages: int
     n_genotypes_orig: int   # G_orig (pre-expansion)
-    n_haploid_genotypes: int
+    n_gtypes: int
     n_glabs: int
     n_slabs: int
     n_ztypes: int           # engine-visible G = G_orig × n_slabs
@@ -352,8 +352,8 @@ class _ComputedMaps(NamedTuple):
     zygote_map: NDArray[np.float64]      # (HL, HL, G×S)
 
     # -- Compatibility --
-    female_genotype_compatibility: NDArray[np.float64]
-    male_genotype_compatibility: NDArray[np.float64]
+    female_ztype_compatibility: NDArray[np.float64]
+    male_ztype_compatibility: NDArray[np.float64]
     female_only_by_sex_chrom: NDArray[np.bool_]
     male_only_by_sex_chrom: NDArray[np.bool_]
 
@@ -379,7 +379,7 @@ class _ComputedMaps(NamedTuple):
 
 def _build_config_maps(
     n_genotypes: int,
-    n_haploid_genotypes: int,
+    n_gtypes: int,
     n_sexes: int,
     n_ages: int,
     n_glabs: int,
@@ -428,14 +428,14 @@ def _build_config_maps(
     """
     import natal.engine.simulation.age_structured as alg
 
-    assert n_genotypes > 0 and n_haploid_genotypes > 0 and n_glabs > 0, "invalid dimensions"
+    assert n_genotypes > 0 and n_gtypes > 0 and n_glabs > 0, "invalid dimensions"
     assert n_ages > 0, "n_ages must be positive"
 
-    n_hg_glabs = n_haploid_genotypes * n_glabs
+    n_hg_glabs = n_gtypes
     n_sexes_i = int(n_sexes)
     n_ages_i = int(n_ages)
     n_genotypes_i = int(n_genotypes)
-    n_haploid_genotypes_i = int(n_haploid_genotypes)
+    n_gtypes_i = int(n_gtypes)
     n_glabs_i = int(n_glabs)
     n_slabs_i = int(n_slabs)
     if pre_expanded and zygotes_to_gametes_map is not None:
@@ -543,7 +543,7 @@ def _build_config_maps(
 
     # Index compression mask placeholders (compression is applied externally).
     n_g_compressed = n_genotypes_i
-    n_hg_effective = n_haploid_genotypes_i
+    n_hg_effective = n_gtypes_i // n_glabs_i
     n_glabs_effective = n_glabs_i
 
     # Slab expansion (skip if maps are already expanded by the caller).
@@ -552,7 +552,7 @@ def _build_config_maps(
             z2g=z2g, g2z=g2z,
             n_slabs=n_slabs_i, n_genotypes=n_genotypes_i,
             gamete_labels=gamete_labels, somatic_labels=somatic_labels,
-            n_haploid_genotypes=n_haploid_genotypes_i, n_glabs=n_glabs_i,
+            n_gtypes=n_gtypes_i // n_glabs_i, n_glabs=n_glabs_i,
         )
     else:
         # Maps already slab-expanded — use as-is.
@@ -563,8 +563,8 @@ def _build_config_maps(
     _m_m = z2g_expanded[1]
 
     # Genotype compatibility (computed from expanded maps).
-    female_genotype_compatibility = _m_f.sum(axis=1)
-    male_genotype_compatibility = _m_m.sum(axis=1)
+    female_ztype_compatibility = _m_f.sum(axis=1)
+    male_ztype_compatibility = _m_m.sum(axis=1)
     female_only_by_sex_chrom = np.zeros(n_g_compressed, dtype=np.bool_)
     male_only_by_sex_chrom = np.zeros(n_g_compressed, dtype=np.bool_)
     if has_sex_chromosomes:
@@ -573,8 +573,8 @@ def _build_config_maps(
             for g in range(n_genotypes_i) for s in range(n_slabs_i)
         }
         for g_off in range(n_genotypes_i):
-            f_ok = female_genotype_compatibility[g_off] > alg.EPS
-            m_ok = male_genotype_compatibility[g_off] > alg.EPS
+            f_ok = female_ztype_compatibility[g_off] > alg.EPS
+            m_ok = male_ztype_compatibility[g_off] > alg.EPS
             if n_slabs_i > 1:
                 for s in range(n_slabs_i):
                     z = _ztype_index[(g_off, s)]
@@ -597,7 +597,7 @@ def _build_config_maps(
         n_sexes=n_sexes_i,
         n_ages=n_ages_i,
         n_genotypes_orig=n_genotypes_i,
-        n_haploid_genotypes=n_haploid_genotypes_i,
+        n_gtypes=n_gtypes_i,
         n_glabs=n_glabs_i,
         n_slabs=n_slabs_i,
         n_ztypes=n_ztypes_i,
@@ -618,8 +618,8 @@ def _build_config_maps(
         meiosis_f=_m_f,
         meiosis_m=_m_m,
         zygote_map=_z2g,
-        female_genotype_compatibility=female_genotype_compatibility,
-        male_genotype_compatibility=male_genotype_compatibility,
+        female_ztype_compatibility=female_ztype_compatibility,
+        male_ztype_compatibility=male_ztype_compatibility,
         female_only_by_sex_chrom=female_only_by_sex_chrom,
         male_only_by_sex_chrom=male_only_by_sex_chrom,
         offspring_tensor=offspring_tensor,
@@ -640,7 +640,7 @@ def _build_config_maps(
 
 def build_population_config(
     n_genotypes: int = 0,
-    n_haploid_genotypes: int = 0,
+    n_gtypes: int = 0,
     n_sexes: Optional[int] = None,
     n_ages: int = 2,
     n_glabs: int = 1,
@@ -690,7 +690,7 @@ def build_population_config(
             (G_orig).  The engine-visible axis size is ``n_ztypes = n_genotypes *
             n_slabs``, so fitness and initial-state arrays must use the expanded
             shape.
-        n_haploid_genotypes: Number of haploid genotype types.
+        n_gtypes: Total number of gamete types (haploid genotype count × gamete label count).
         n_sexes: Number of sexes (default 2).
         n_ages: Number of age classes (default 2).
         n_glabs: Number of gamete‑label variants per haplotype (default 1).
@@ -746,7 +746,7 @@ def build_population_config(
     """
     m = _build_config_maps(
         n_genotypes=n_genotypes,
-        n_haploid_genotypes=n_haploid_genotypes,
+        n_gtypes=n_gtypes,
         n_sexes=2 if n_sexes is None else int(n_sexes),
         n_ages=int(n_ages),
         n_glabs=int(n_glabs),
@@ -792,7 +792,7 @@ def build_population_config(
             n_sexes=m.n_sexes,
             n_ages=m.n_ages,
             n_ztypes=m.n_ztypes,
-            n_haploid_genotypes=m.n_haploid_genotypes,
+            n_gtypes=m.n_gtypes,
             n_glabs=m.n_glabs,
             n_slabs=m.n_slabs,
             age_based_mating_rates=m.mating,
@@ -817,8 +817,8 @@ def build_population_config(
             new_adult_age=m.new_adult_age,
             hook_slot=int(hook_slot),
             has_sex_chromosomes=m.has_sex_chromosomes,
-            female_genotype_compatibility=m.female_genotype_compatibility,
-            male_genotype_compatibility=m.male_genotype_compatibility,
+            female_ztype_compatibility=m.female_ztype_compatibility,
+            male_ztype_compatibility=m.male_ztype_compatibility,
             female_only_by_sex_chrom=m.female_only_by_sex_chrom,
             male_only_by_sex_chrom=m.male_only_by_sex_chrom,
             adult_ages=m.adult_ages,
@@ -839,7 +839,7 @@ def build_population_config(
         n_sexes=m.n_sexes,
         n_ages=m.n_ages,
         n_ztypes=m.n_ztypes,
-        n_haploid_genotypes=m.n_haploid_genotypes,
+        n_gtypes=m.n_gtypes,
         n_glabs=m.n_glabs,
         n_slabs=m.n_slabs,
         age_based_mating_rates=m.mating,
@@ -864,8 +864,8 @@ def build_population_config(
         new_adult_age=m.new_adult_age,
         hook_slot=int(hook_slot),
         has_sex_chromosomes=m.has_sex_chromosomes,
-        female_genotype_compatibility=m.female_genotype_compatibility,
-        male_genotype_compatibility=m.male_genotype_compatibility,
+        female_ztype_compatibility=m.female_ztype_compatibility,
+        male_ztype_compatibility=m.male_ztype_compatibility,
         female_only_by_sex_chrom=m.female_only_by_sex_chrom,
         male_only_by_sex_chrom=m.male_only_by_sex_chrom,
         adult_ages=m.adult_ages,
@@ -1135,7 +1135,7 @@ def _expand_slab_maps(
     n_genotypes: int,
     gamete_labels: Optional[list[str]] = None,
     somatic_labels: Optional[list[str]] = None,
-    n_haploid_genotypes: int = 0,
+    n_gtypes: int = 0,
     n_glabs: int = 1,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], int]:
     """Expand genotype-to-gamete and gametes-to-zygote maps for n_slabs > 1.
@@ -1154,7 +1154,7 @@ def _expand_slab_maps(
         n_genotypes: Original G_orig (pre-expansion).
         gamete_labels: Ordered gamete label names (for Wolbachia tagging).
         somatic_labels: Ordered somatic label names (for Wolbachia tagging).
-        n_haploid_genotypes: Number of haploid genotype types.
+        n_gtypes: Number of haploid genotype types.
         n_glabs: Number of gamete label types.
 
     Returns:
@@ -1173,7 +1173,7 @@ def _expand_slab_maps(
     }
     _gtype_index: dict[tuple[int, int], int] = {
         (hi, gi): hi * n_glabs + gi
-        for hi in range(n_haploid_genotypes) for gi in range(n_glabs)
+        for hi in range(n_gtypes) for gi in range(n_glabs)
     }
 
     # Meiosis: tile each genotype row S times (identity — slab does not
@@ -1194,7 +1194,7 @@ def _expand_slab_maps(
                 continue
             for g_raw in range(n_genotypes):
                 z_target = _ztype_index[(g_raw, idx)]
-                for hg_idx in range(n_haploid_genotypes):
+                for hg_idx in range(n_gtypes):
                     src = _gtype_index[(hg_idx, 0)]   # default glab
                     dst = _gtype_index[(hg_idx, idx)]
                     _m_f[z_target, dst] = _m_f[z_target, src]
@@ -1219,7 +1219,7 @@ def _expand_slab_maps(
                 _z2g, gamete_labels[idx], somatic_labels[idx],
                 gamete_labels, somatic_labels,
                 n_slabs, n_genotypes,
-                n_haploid_genotypes, n_glabs,
+                n_gtypes, n_glabs,
             )
 
     z2g_expanded = np.stack([_m_f, _m_m], axis=0)
@@ -1381,7 +1381,7 @@ class DiscretePopulationConfig(NamedTuple):
     n_sexes: int                    # always 2
     n_ages: int                     # always 2
     n_ztypes: int
-    n_haploid_genotypes: int
+    n_gtypes: int
     n_glabs: int
     n_slabs: int
 
@@ -1424,8 +1424,8 @@ class DiscretePopulationConfig(NamedTuple):
 
     # -- Sex chromosomes --
     has_sex_chromosomes: bool
-    female_genotype_compatibility: NDArray[np.float64]    # (g,)
-    male_genotype_compatibility: NDArray[np.float64]      # (g,)
+    female_ztype_compatibility: NDArray[np.float64]    # (g,)
+    male_ztype_compatibility: NDArray[np.float64]      # (g,)
     female_only_by_sex_chrom: NDArray[np.bool_]           # (g,)
     male_only_by_sex_chrom: NDArray[np.bool_]             # (g,)
 
@@ -1479,7 +1479,7 @@ class DiscretePopulationConfig(NamedTuple):
 def build_discrete_engine_config(
     *,
     n_genotypes: int,
-    n_haploid_genotypes: int,
+    n_gtypes: int,
     n_glabs: int,
     n_slabs: int = 1,
     gamete_labels: Optional[list[str]] = None,
@@ -1520,7 +1520,7 @@ def build_discrete_engine_config(
 
     m = _build_config_maps(
         n_genotypes=n_genotypes,
-        n_haploid_genotypes=n_haploid_genotypes,
+        n_gtypes=n_gtypes,
         n_sexes=2,
         n_ages=n_ages,
         n_glabs=n_glabs,
@@ -1565,7 +1565,7 @@ def build_discrete_engine_config(
         n_sexes=m.n_sexes,
         n_ages=m.n_ages,
         n_ztypes=m.n_g_compressed,
-        n_haploid_genotypes=m.n_haploid_genotypes,
+        n_gtypes=m.n_gtypes,
         n_glabs=m.n_glabs,
         n_slabs=m.n_slabs,
         female_age_based_fertility=m.female_fertility,
@@ -1594,8 +1594,8 @@ def build_discrete_engine_config(
         viability_f=m.viability[0, 0, :],
         viability_m=m.viability[1, 0, :],
         has_sex_chromosomes=m.has_sex_chromosomes,
-        female_genotype_compatibility=m.female_genotype_compatibility,
-        male_genotype_compatibility=m.male_genotype_compatibility,
+        female_ztype_compatibility=m.female_ztype_compatibility,
+        male_ztype_compatibility=m.male_ztype_compatibility,
         female_only_by_sex_chrom=m.female_only_by_sex_chrom,
         male_only_by_sex_chrom=m.male_only_by_sex_chrom,
         juvenile_growth_mode=np.array(m.juvenile_growth_mode, dtype=np.int64),
@@ -1816,8 +1816,8 @@ def compress_config(
         "fecundity_fitness": config.fecundity_fitness[:, _z_active],
         "sexual_selection_fitness": config.sexual_selection_fitness[_z_active, :][:, _z_active],
         "zygote_viability_fitness": config.zygote_viability_fitness[:, _z_active],
-        "female_genotype_compatibility": config.female_genotype_compatibility[_z_active],
-        "male_genotype_compatibility": config.male_genotype_compatibility[_z_active],
+        "female_ztype_compatibility": config.female_ztype_compatibility[_z_active],
+        "male_ztype_compatibility": config.male_ztype_compatibility[_z_active],
         "female_only_by_sex_chrom": config.female_only_by_sex_chrom[_z_active],
         "male_only_by_sex_chrom": config.male_only_by_sex_chrom[_z_active],
         "initial_sperm_storage": config.initial_sperm_storage[:, _z_active, :][:, :, _z_active],

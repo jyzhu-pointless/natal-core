@@ -184,8 +184,7 @@ def _resolve_gidx(
     Accepted key forms:
         - int: genotype index (0-based)
         - Genotype object: matched by identity in ``diploid_genotypes``
-        - str: compared against ``genotype.to_string()`` via
-          ``index_registry.resolve_genotype_index``
+        - str: compared against ``genotype.to_string()``
 
     Returns all ZType (genotype × slab) indices for the resolved genotype.
 
@@ -199,9 +198,12 @@ def _resolve_gidx(
     elif not isinstance(gk, (str,)):
         gidx = list(diploid_genotypes).index(cast(Genotype, gk))
     else:
-        resolved = index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
-        assert resolved is not None  # strict=True guarantees it
-        gidx = resolved
+        for i, g in enumerate(diploid_genotypes):
+            if hasattr(g, "to_string") and g.to_string() == gk:
+                gidx = i
+                break
+        else:
+            raise KeyError(f"Cannot resolve genotype key: {gk}")
     gt = diploid_genotypes[gidx]
     return index_registry.ztype_indices_for(gt)
 
@@ -362,15 +364,7 @@ def wrap_zygote_modifier(
         for key, val in bulk.items():
             c1, c2 = _parse_zygote_key(key, index_registry, haploid_genotypes, n_glabs)
             mapping = _normalize_zygote_val(val, index_registry, diploid_genotypes)
-            if expand_to_ztypes:
-                expanded: Dict[int, float] = {}
-                for gidx, prob in mapping.items():
-                    gt = diploid_genotypes[gidx]
-                    for zidx in index_registry.ztype_indices_for(gt):
-                        expanded[zidx] = prob
-                _write_zygote_mapping(modified, c1, c2, expanded)
-            else:
-                _write_zygote_mapping(modified, c1, c2, mapping)
+            _write_zygote_mapping(modified, c1, c2, mapping)
 
         return modified
     return tensor_modifier
@@ -621,12 +615,42 @@ def _parse_zygote_key(
     return c1, c2
 
 
+def _resolve_genotype(candidate: object, diploid_genotypes: List[Genotype]) -> Genotype:
+    """Resolve a flexible genotype selector to a Genotype object.
+
+    Accepted selector types:
+        - int: genotype index (0-based)
+        - Genotype object: matched by identity/equality
+        - str: compared against genotype.to_string()
+
+    Raises:
+        IndexError: integer index out of range
+        ValueError: object not found in list
+        KeyError: string key cannot be resolved
+    """
+    if isinstance(candidate, int):
+        return diploid_genotypes[int(candidate)]
+    if not isinstance(candidate, str):
+        idx = list(diploid_genotypes).index(cast(Genotype, candidate))
+        return diploid_genotypes[idx]
+    # String match via to_string()
+    for g in diploid_genotypes:
+        if hasattr(g, "to_string") and g.to_string() == candidate:
+            return g
+    raise KeyError(f"Cannot resolve genotype key: {candidate}")
+
+
 def _normalize_zygote_val(
     val: Any,
     index_registry: Any,
     diploid_genotypes: List[Genotype],
 ) -> Dict[int, float]:
-    """Normalize zygote replacement value into a mapping idx->prob.
+    """Normalize zygote replacement value into a mapping ztype_idx->prob.
+
+    Integer selectors are used directly as ZType indices (the caller is
+    expected to already know the correct index).  Non‑integer selectors
+    (object / string) are resolved to a Genotype and then expanded to all
+    its ZType (genotype × slab) indices.
 
     Args:
         val: The value from the modifier mapping.
@@ -634,7 +658,7 @@ def _normalize_zygote_val(
         diploid_genotypes: List of all diploid genotypes.
 
     Returns:
-        Dictionary mapping genotype index to probability.
+        Dictionary mapping ZType index to probability.
     """
     mapping: Dict[int, float] = {}
 
@@ -643,10 +667,11 @@ def _normalize_zygote_val(
     if pair_val is not None:
         idx_candidate, prob = pair_val
         if isinstance(idx_candidate, int):
-            idx = int(idx_candidate)
+            mapping[int(idx_candidate)] = float(prob)
         else:
-            idx = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
-        mapping[int(idx)] = float(prob)
+            gt = _resolve_genotype(idx_candidate, diploid_genotypes)
+            for zidx in index_registry.ztype_indices_for(gt):
+                mapping[int(zidx)] = float(prob)
         return mapping
 
     # distribution dict
@@ -655,14 +680,21 @@ def _normalize_zygote_val(
         for idx_candidate, prob in val_map.items():
             if not isinstance(prob, (int, float)):
                 raise TypeError("Zygote replacement probabilities must be numeric")
-            if not isinstance(idx_candidate, int):
-                idx_candidate = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
-            mapping[int(idx_candidate)] = float(prob)
+            if isinstance(idx_candidate, int):
+                mapping[int(idx_candidate)] = float(prob)
+            else:
+                gt = _resolve_genotype(idx_candidate, diploid_genotypes)
+                for zidx in index_registry.ztype_indices_for(gt):
+                    mapping[int(zidx)] = float(prob)
         return mapping
 
     # single genotype replacement
-    idx = index_registry.resolve_genotype_index(diploid_genotypes, val, strict=True)
-    mapping[int(idx)] = 1.0
+    if isinstance(val, int):
+        mapping[int(val)] = 1.0
+    else:
+        gt = _resolve_genotype(val, diploid_genotypes)
+        for zidx in index_registry.ztype_indices_for(gt):
+            mapping[int(zidx)] = 1.0
     return mapping
 
 

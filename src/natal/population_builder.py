@@ -316,7 +316,7 @@ class PopulationConfigBuilder:
         # ===== Create and return PopulationConfig =====
         cfg = build_population_config(
             n_genotypes=n_genotypes,
-            n_haploid_genotypes=n_haplogenotypes,
+            n_gtypes=n_haplogenotypes * n_glabs,
             n_sexes=2,
             n_ages=n_ages,
             n_glabs=n_glabs,

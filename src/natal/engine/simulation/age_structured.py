@@ -291,8 +291,8 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
     adult_start_idx: int,
     n_ages: int,
     n_ztypes: int,
-    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    female_ztype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    male_ztype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
     female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     n_glabs: int = 1,
@@ -318,8 +318,8 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
         adult_start_idx: First age class that reproduces.
         n_ages: Total number of age classes.
         n_ztypes: Number of diploid genotypes.
-        female_genotype_compatibility: Female sex-compatibility weights.
-        male_genotype_compatibility: Male sex-compatibility weights.
+        female_ztype_compatibility: Female sex-compatibility weights.
+        male_ztype_compatibility: Male sex-compatibility weights.
         female_only_by_sex_chrom: Female-only genotype mask.
         male_only_by_sex_chrom: Male-only genotype mask.
         n_glabs: Unused parameter for API compatibility.
@@ -449,8 +449,8 @@ def _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduct
         if n_g <= EPS:
             continue
 
-        f_w = female_genotype_compatibility[go]
-        m_w = male_genotype_compatibility[go]
+        f_w = female_ztype_compatibility[go]
+        m_w = male_ztype_compatibility[go]
 
         if has_sex_chromosomes and female_only_by_sex_chrom[go]:
             n_f[go] = n_g
@@ -487,8 +487,8 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
     n_ages: int,
     n_ztypes: int,
     n_haplogenotypes: int,
-    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    female_ztype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    male_ztype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
     female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     n_glabs: int = 1,
@@ -516,8 +516,8 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
         n_ages: Total number of age classes.
         n_ztypes: Number of diploid genotypes.
         n_haplogenotypes: Unused parameter for API compatibility.
-        female_genotype_compatibility: Female sex-compatibility weights.
-        male_genotype_compatibility: Male sex-compatibility weights.
+        female_ztype_compatibility: Female sex-compatibility weights.
+        male_ztype_compatibility: Male sex-compatibility weights.
         female_only_by_sex_chrom: Female-only genotype mask.
         male_only_by_sex_chrom: Male-only genotype mask.
         n_glabs: Unused parameter for API compatibility.
@@ -545,8 +545,8 @@ def fertilize_with_precomputed_offspring_probability_and_age_specific_reproducti
         adult_start_idx=adult_start_idx,
         n_ages=n_ages,
         n_ztypes=n_ztypes,
-        female_genotype_compatibility=female_genotype_compatibility,
-        male_genotype_compatibility=male_genotype_compatibility,
+        female_ztype_compatibility=female_ztype_compatibility,
+        male_ztype_compatibility=male_ztype_compatibility,
         female_only_by_sex_chrom=female_only_by_sex_chrom,
         male_only_by_sex_chrom=male_only_by_sex_chrom,
         age_based_reproduction_rates=age_based_reproduction_rates,
@@ -1280,8 +1280,8 @@ def fertilize_with_precomputed_offspring_probability(
     n_ages: int,
     n_ztypes: int,
     n_haplogenotypes: int,
-    female_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
-    male_genotype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    female_ztype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
+    male_ztype_compatibility: Annotated[NDArray[np.float64], "shape=(g,)"],
     female_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     male_only_by_sex_chrom: Annotated[NDArray[np.bool_], "shape=(g,)"],
     n_glabs: int = 1,
@@ -1308,8 +1308,8 @@ def fertilize_with_precomputed_offspring_probability(
         adult_start_idx=adult_start_idx,
         n_ages=n_ages,
         n_ztypes=n_ztypes,
-        female_genotype_compatibility=female_genotype_compatibility,
-        male_genotype_compatibility=male_genotype_compatibility,
+        female_ztype_compatibility=female_ztype_compatibility,
+        male_ztype_compatibility=male_ztype_compatibility,
         female_only_by_sex_chrom=female_only_by_sex_chrom,
         male_only_by_sex_chrom=male_only_by_sex_chrom,
         n_glabs=n_glabs,

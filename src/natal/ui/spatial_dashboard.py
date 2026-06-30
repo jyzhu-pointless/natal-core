@@ -1017,7 +1017,7 @@ class SpatialDashboard:
         config = self.pop.deme(0).export_config()
         registry = self.pop.deme(0).registry
         g2z = config.gametes_to_zygotes_map
-        n_hg_glabs = int(config.n_haploid_genotypes * config.n_glabs)
+        n_hg_glabs = int(config.n_gtypes)
         genotypes = registry.index_to_genotype
 
         if n_hg_glabs > 40:

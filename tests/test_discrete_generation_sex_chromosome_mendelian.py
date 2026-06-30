@@ -94,7 +94,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
 
     config = build_population_config(
         n_genotypes=len(diploid_genotypes),
-        n_haploid_genotypes=len(haploid_genotypes),
+        n_gtypes=len(haploid_genotypes),
         n_sexes=2,
         n_ages=2,
         n_glabs=1,
@@ -267,7 +267,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
 
     config = build_population_config(
         n_genotypes=len(diploid_genotypes),
-        n_haploid_genotypes=len(haploid_genotypes),
+        n_gtypes=len(haploid_genotypes),
         n_sexes=2,
         n_ages=2,
         n_glabs=1,
@@ -368,7 +368,7 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
 
     config = build_population_config(
         n_genotypes=len(diploid_genotypes),
-        n_haploid_genotypes=len(haploid_genotypes),
+        n_gtypes=len(haploid_genotypes),
         n_sexes=2,
         n_ages=2,
         n_glabs=1,

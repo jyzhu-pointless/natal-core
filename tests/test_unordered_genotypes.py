@@ -147,16 +147,6 @@ class TestUnorderedRegistry:
         gt_AA = sp.get_genotype_from_str("A|A")
         assert reg.ztype_index(gt_AA, "default") == 0
 
-    def test_resolve_genotype_index_both_forms(self):
-        sp = nt.Species.from_dict("canon_reg3", {"c1": {"l1": ["A", "a"]}})
-        reg = IndexRegistry()
-        for g in sp.get_all_genotypes(unordered=True):
-            reg.register_genotype(g)
-        idx1 = reg.resolve_genotype_index(reg.index_to_genotype, "A|a")
-        idx2 = reg.resolve_genotype_index(reg.index_to_genotype, "a|A")
-        assert idx1 == idx2
-        assert idx1 is not None
-
     def test_dict_lookup_both_forms(self):
         """Both genotype forms resolve to same index via ztype_index."""
         sp = nt.Species.from_dict("canon_reg4", {"c1": {"l1": ["A", "a"]}})
@@ -211,7 +201,7 @@ class TestUnorderedConfigBlueprint:
         cfg = pop.config
         ng = cfg.n_ztypes
         assert ng == 3
-        assert cfg.zygotes_to_gametes_map.shape == (2, ng, cfg.n_haploid_genotypes * cfg.n_glabs)
+        assert cfg.zygotes_to_gametes_map.shape == (2, ng, cfg.n_gtypes * cfg.n_glabs)
         assert cfg.offspring_tensor.shape == (ng, ng, ng)
         assert cfg.sexual_selection_fitness.shape == (ng, ng)
         assert cfg.initial_individual_count.shape == (2, cfg.n_ages, ng)

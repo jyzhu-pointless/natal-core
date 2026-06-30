@@ -1830,14 +1830,14 @@ class SpeciesConfigBlueprint(TypedDict):
 
     n_genotypes: int  # unique genotype count (G)
     n_ztypes: int     # G × S (genotypes × slabs)
-    n_haploid_genotypes: int
+    n_gtypes: int
     n_glabs: int
     n_slabs: int
     zygotes_to_gametes_map: NDArray[np.float64]
     gametes_to_zygotes_map: NDArray[np.float64]
     offspring_tensor: NDArray[np.float64]
-    female_genotype_compatibility: NDArray[np.float64]
-    male_genotype_compatibility: NDArray[np.float64]
+    female_ztype_compatibility: NDArray[np.float64]
+    male_ztype_compatibility: NDArray[np.float64]
 
 
 # Species (structure-level) -> HaploidGenome (entity-level)
@@ -3565,7 +3565,7 @@ class Species(GeneticStructure['HaploidGenome']):
         recomputing species-level arrays on every construction.
 
         Returns:
-            Dict with keys ``n_ztypes`` (int), ``n_haploid_genotypes``
+            Dict with keys ``n_ztypes`` (int), ``n_gtypes``
             (int), ``n_glabs`` (int), ``zygotes_to_gametes_map``
             (ndarray), ``gametes_to_zygotes_map`` (ndarray),
             ``offspring_tensor`` (ndarray), and compatibility arrays
@@ -3613,14 +3613,14 @@ class Species(GeneticStructure['HaploidGenome']):
         self._config_blueprint = {
             "n_genotypes": n_g,
             "n_ztypes": n_ztypes,
-            "n_haploid_genotypes": n_hg,
+            "n_gtypes": n_hg * n_glabs,
             "n_glabs": n_glabs,
             "n_slabs": n_slabs,
             "zygotes_to_gametes_map": z2g,
             "gametes_to_zygotes_map": g2z,
             "offspring_tensor": offspring,
-            "female_genotype_compatibility": f_compat,
-            "male_genotype_compatibility": m_compat,
+            "female_ztype_compatibility": f_compat,
+            "male_ztype_compatibility": m_compat,
         }
         return self._config_blueprint
 

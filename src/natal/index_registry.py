@@ -13,8 +13,7 @@ are suitable for NumPy arrays and Numba‑accelerated engine.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
 import numpy as np
 
@@ -414,80 +413,6 @@ class IndexRegistry:
         ]
         self._index_to_gtype = new_index_to_gtype
         self._gtype_to_index = {gt: i for i, gt in enumerate(new_index_to_gtype)}
-
-    # ==================================================================
-    # Resolver helpers (centralized key parsing)
-    # ==================================================================
-
-    def resolve_genotype_index(
-        self, diploid_genotypes: Sequence[Any], gk: Any, strict: bool = True
-    ) -> Optional[int]:
-        """Resolve a flexible genotype selector to a diploid genotype index.
-
-        Accepted selector types:
-            - int: returned if within range
-            - genotype object: matched by identity/equality in ``diploid_genotypes``
-            - str: compared against ``genotype.to_string()`` where available
-
-        Args:
-            diploid_genotypes: Sequence of diploid genotype objects.
-            gk: Selector (int, object or str) to resolve.
-            strict: If True raise KeyError on failure, otherwise return None.
-
-        Returns:
-            Optional[int]: Resolved genotype index, or None if not found and
-            ``strict`` is False.
-
-        Raises:
-            KeyError: If resolution fails and ``strict`` is True.
-        """
-        if isinstance(gk, int):
-            if 0 <= gk < len(diploid_genotypes):
-                return int(gk)
-            if strict:
-                raise KeyError(f"genotype index out of range: {gk}")
-            return None
-
-        # direct object match
-        try:
-            if gk in diploid_genotypes:
-                return int(diploid_genotypes.index(gk))
-        except Exception:
-            pass
-
-        if isinstance(gk, str):
-            for i, g in enumerate(diploid_genotypes):
-                try:
-                    if hasattr(g, "to_string") and g.to_string() == gk:
-                        return i
-                except Exception:
-                    continue
-            # Try reversed form only for unordered species (A|a ≡ a|A).
-            # For ordered species (sex chromosomes), A|a and a|A are
-            # distinct and should not be silently swapped.
-            if _is_unordered(diploid_genotypes):
-                for i, g in enumerate(diploid_genotypes):
-                    try:
-                        if hasattr(g, "to_string") and hasattr(g, "maternal") and hasattr(g, "paternal"):
-                            rev = f"{g.paternal.to_string()}|{g.maternal.to_string()}"
-                            if rev == gk:
-                                return i
-                    except Exception:
-                        continue
-
-        if strict:
-            raise KeyError(f"Cannot resolve genotype key: {gk} in {diploid_genotypes}")
-        return None
-
-
-def _is_unordered(diploid_genotypes: Sequence[Any]) -> bool:
-    """Return True if the diploid genotype space is unordered (autosomal)."""
-    if not diploid_genotypes:
-        return True
-    first = diploid_genotypes[0]
-    species = getattr(first, "species", None)
-    return bool(getattr(species, "unordered", True))
-
 
 # compress_hg_glab / decompress_hg_glab have been moved to
 # natal.population_config as _compress_hl / _decompress_hl.
