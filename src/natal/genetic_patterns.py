@@ -1397,7 +1397,7 @@ class GenotypeSelector:
 
 def resolve_zygote_type(
     spec: str,
-    species: Any,
+    species: Species,
     index_registry: IndexRegistry,
 ) -> list[int]:
     """Resolve a genotype string to ZType indices, with species-appropriate matching.

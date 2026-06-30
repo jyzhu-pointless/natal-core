@@ -11,7 +11,6 @@ symbols once at registration time and then provides two execution paths:
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
 
@@ -40,6 +39,7 @@ def _read_template(name: str) -> str:
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
     from natal.genetic_entities import Genotype
+    from natal.genetic_structures import Species
     from natal.index_registry import IndexRegistry
     from natal.population_config import PopulationConfig
     from natal.population_state import PopulationState
@@ -55,7 +55,7 @@ SelectorSpec: TypeAlias = Union[SelectorItem, range, List[SelectorItem], tuple[S
 def _resolve_selector_to_array(
     spec: SelectorSpec,
     index_registry: IndexRegistry,
-    diploid_genotypes: Sequence[Genotype],
+    species: Species,
 ) -> NDArray[np.int32]:
     """Resolve one selector spec into an int32 index array.
 
@@ -71,19 +71,12 @@ def _resolve_selector_to_array(
     if isinstance(spec, str):
         if spec == "*":
             return np.arange(index_registry.n_ztypes, dtype=np.int32)
-        if not diploid_genotypes:
-            raise ValueError("Cannot resolve genotype selector without diploid_genotypes")
-        species = diploid_genotypes[0].species
         result = _resolve_zygote_type(spec, species, index_registry)
         if not result:
             raise ValueError(f"Cannot resolve genotype: {spec}")
         return np.array(result, dtype=np.int32)
 
     if isinstance(spec, (list, tuple)):
-        if not diploid_genotypes:
-            raise ValueError("Cannot resolve genotype selector without diploid_genotypes")
-        species = diploid_genotypes[0].species
-
         indices: List[int] = []
         for item in spec:
             if isinstance(item, int):
@@ -127,10 +120,10 @@ def compile_selector_hook(
     - Otherwise, use global NUMBA_ENABLED setting (auto-wrap if enabled)
     """
     index_registry = pop.registry
-    diploid_genotypes = index_registry.index_to_genotype
+    species = index_registry.index_to_genotype[0].species
 
     resolved = {
-        name: _resolve_selector_to_array(spec, index_registry, diploid_genotypes)
+        name: _resolve_selector_to_array(spec, index_registry, species)
         for name, spec in selectors_spec.items()
     }
 

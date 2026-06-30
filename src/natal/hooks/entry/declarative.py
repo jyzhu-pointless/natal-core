@@ -40,6 +40,7 @@ from ..types import (
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
+    from natal.genetic_structures import Species
     from natal.index_registry import IndexRegistry
 
 class Op:
@@ -266,7 +267,7 @@ class Op:
 def _resolve_genotypes(
     selector: Union[str, List[str], Literal["*"]],
     index_registry: IndexRegistry,
-    diploid_genotypes: List[Any],
+    species: Species,
     n_ztypes: int,
 ) -> np.ndarray:
     """Resolve genotype selector syntax into concrete ZType indices.
@@ -280,7 +281,7 @@ def _resolve_genotypes(
     Args:
         selector: Genotype selector expression
         index_registry: Registry for genotype name resolution
-        diploid_genotypes: List of all diploid genotypes in the population
+        species: Species for genotype pattern resolution
         n_ztypes: Total number of ZType indices
 
     Returns:
@@ -294,10 +295,6 @@ def _resolve_genotypes(
 
     if isinstance(selector, str):
         selector = [selector]
-
-    if not diploid_genotypes:
-        raise ValueError("Cannot resolve genotype selector without diploid_genotypes")
-    species = diploid_genotypes[0].species
 
     indices: List[int] = []
     for item in selector:
@@ -612,7 +609,7 @@ def compile_declarative_hook(
     """
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry
-    diploid_genotypes = index_registry.index_to_genotype
+    species = index_registry.index_to_genotype[0].species if index_registry.index_to_genotype else pop.species
     n_ztypes = index_registry.n_ztypes
     n_ages = pop.config.n_ages
 
@@ -655,7 +652,7 @@ def compile_declarative_hook(
 
         # 2) Genotype span - resolve genotype selectors to actual genotype indices
         # Examples: "A1|A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
-        zidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_ztypes)
+        zidx_array = _resolve_genotypes(op.genotypes, index_registry, species, n_ztypes)
         zidx_data_list.extend(zidx_array.tolist())
         zidx_offsets.append(len(zidx_data_list))  # Record end offset for this operation
 

@@ -244,7 +244,6 @@ class TestCompress:
         reg.register_genotype(gt0)
         reg.register_genotype(gt1)
         reg.register_genotype(gt2)
-        reg.n_ztypes = 3
 
         ztype_mask = np.array([0, 1, 2], dtype=np.int32)
         gtype_mask = np.array([0, 1], dtype=np.int32)

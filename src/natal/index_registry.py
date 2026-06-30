@@ -66,11 +66,6 @@ class IndexRegistry:
         """Number of active ZType entries (computed from flat index list)."""
         return len(self._index_to_ztype)
 
-    @n_ztypes.setter
-    def n_ztypes(self, value: int) -> None:
-        """Backward-compat no-op setter — n_ztypes is always computed."""
-        pass
-
     @property
     def n_gtypes(self) -> int:
         """Number of active GType entries (computed from flat index list)."""
@@ -86,11 +81,6 @@ class IndexRegistry:
                 result.append(gt)
                 seen.add(gt)
         return result
-
-    @index_to_genotype.setter
-    def index_to_genotype(self, value: object) -> None:
-        """Backward-compat no-op setter."""
-        pass
 
     @property
     def index_to_ztype(self) -> List[Tuple[Genotype, str]]:

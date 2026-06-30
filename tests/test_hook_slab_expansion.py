@@ -49,21 +49,21 @@ class TestPhaseA_NSlabsOneRegression:
     def test_star_returns_all_ztypes(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes("*", reg, reg.index_to_genotype, reg.n_ztypes)
+        result = _resolve_genotypes("*", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         expected = np.arange(reg.n_ztypes, dtype=np.int32)
         assert np.array_equal(result, expected)
 
     def test_string_label_resolves_first_ztype(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes("A|A", reg, reg.index_to_genotype, reg.n_ztypes)
+        result = _resolve_genotypes("A|A", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         assert list(result) == [0]
 
     def test_list_of_strings(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
         result = _resolve_genotypes(
-            ["A|A", "a|a"], reg, reg.index_to_genotype, reg.n_ztypes,
+            ["A|A", "a|a"], reg, reg.index_to_genotype[0].species, reg.n_ztypes,
         )
         # 3 unordered: A|A=0, A|a=1, a|a=2
         assert list(result) == [0, 2]
@@ -71,13 +71,13 @@ class TestPhaseA_NSlabsOneRegression:
     def test_int_input_passthrough(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes([0, 2], reg, reg.index_to_genotype, reg.n_ztypes)
+        result = _resolve_genotypes([0, 2], reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         assert list(result) == [0, 2]
 
     def test_selector_star_returns_all(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_selector_to_array("*", reg, reg.index_to_genotype)
+        result = _resolve_selector_to_array("*", reg, reg.index_to_genotype[0].species)
         assert list(result) == list(range(reg.n_ztypes))
 
 
@@ -103,14 +103,14 @@ class TestPhaseB_FitnessAndCompression:
     def test_selector_resolve_star_two_slabs(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
         reg = _registry_for_species(sp)
-        result = _resolve_selector_to_array("*", reg, reg.index_to_genotype)
+        result = _resolve_selector_to_array("*", reg, reg.index_to_genotype[0].species)
         assert list(result) == list(range(6))
 
     def test_selector_resolve_specific_genotype_two_slabs(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
         reg = _registry_for_species(sp)
         # A|A is genotype 0 → ZTypes 0,1
-        result = _resolve_selector_to_array("A|A", reg, reg.index_to_genotype)
+        result = _resolve_selector_to_array("A|A", reg, reg.index_to_genotype[0].species)
         assert list(result) == [0, 1]
 
 
@@ -223,7 +223,7 @@ class TestPhaseD_MultiLocusSlab:
             somatic_labels=["normal", "exposed"],
         )
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes("*", reg, reg.index_to_genotype, reg.n_ztypes)
+        result = _resolve_genotypes("*", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         assert len(result) == reg.n_ztypes
         # 9 unordered genotypes (alleles-at-locus only) × 2 slabs = 18
         assert reg.n_ztypes == 18
@@ -236,7 +236,7 @@ class TestPhaseD_MultiLocusSlab:
         )
         reg = _registry_for_species(sp)
         result = _resolve_genotypes(
-            "A1/B1|A1/B1", reg, reg.index_to_genotype, reg.n_ztypes,
+            "A1/B1|A1/B1", reg, reg.index_to_genotype[0].species, reg.n_ztypes,
         )
         assert len(result) == 2  # 2 slabs
 

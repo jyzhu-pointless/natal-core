@@ -1609,9 +1609,8 @@ def build_custom_array(specs: Mapping[str, object]) -> NDArray[np.void]:
 
 
 # ---------------------------------------------------------------------------
-# Gamete-axis compression helpers
+# Config compression helper
 # ---------------------------------------------------------------------------
-
 
 
 def compress_config(
