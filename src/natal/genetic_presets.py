@@ -1721,6 +1721,94 @@ class CytoplasmicPreset(GeneticPreset):
                             z2g_expanded[hl_f, hl_m, z_dst] += val
                             z2g_expanded[hl_f, hl_m, z_src] = 0.0
 
+    @staticmethod
+    def tag_maternal_gametes(
+        z2g_expanded: NDArray[np.float64],
+        gamete_labels: List[str],
+        somatic_labels: List[str],
+        n_genotypes: int,
+        n_gtypes: int,
+        n_glabs: int,
+        n_slabs: int,
+    ) -> None:
+        """Tag maternal gametes so non-default glabs are inherited maternally.
+
+        Operates on the **slab-expanded** z2g map (post-expansion, shape
+        ``(2, G×S, HL)``).  For each matching glab/slab index pair
+        (glab[i] ↔ slab[i] for i >= 1), copies the default-glab female
+        gamete probabilities to the non-default glab column — and zeros
+        out the original — so that only mothers carrying the matching
+        slab produce gametes with the non-default glab.
+
+        This method should be called **after** slab expansion and **before**
+        redirect_zygotes.
+
+        Args:
+            z2g_expanded: Slab-expanded genotype-to-gamete map, shape
+                ``(2, G×S, HL)``.  Modified in-place.
+            gamete_labels: Ordered gamete label names.
+            somatic_labels: Ordered somatic label names.
+            n_genotypes: Pre-expansion genotype count ``G``.
+            n_gtypes: Number of haploid genotype types (HL / n_glabs).
+            n_glabs: Number of gamete label types.
+            n_slabs: Number of somatic label types.
+        """
+        if not gamete_labels or not somatic_labels or n_glabs < 2 or n_slabs < 2:
+            return
+        for idx in range(1, min(n_slabs, n_glabs)):
+            if idx >= len(gamete_labels) or idx >= len(somatic_labels):
+                continue
+            for g_raw in range(n_genotypes):
+                z_target = g_raw * n_slabs + idx
+                for hg_idx in range(n_gtypes):
+                    src = hg_idx * n_glabs + 0   # default glab
+                    dst = hg_idx * n_glabs + idx
+                    z2g_expanded[0, z_target, dst] = z2g_expanded[0, z_target, src]
+                    z2g_expanded[0, z_target, src] = 0.0
+
+    @staticmethod
+    def redirect_zygotes(
+        g2z_expanded: NDArray[np.float64],
+        gamete_labels: List[str],
+        somatic_labels: List[str],
+        n_genotypes: int,
+        n_gtypes: int,
+        n_glabs: int,
+        n_slabs: int,
+    ) -> None:
+        """Redirect zygote columns: glab-tagged gamete pairs → matching child slab.
+
+        Iterates matching glab/slab index pairs (glab[i] ↔ slab[i] for
+        i >= 1) and calls :meth:`apply_zygote_redirect` for each pair.
+        That method moves zygote probabilities from the default slab-0
+        column to the matching child slab column when the maternal gamete
+        carries the glab tag — enforcing strict maternal inheritance.
+
+        This method should be called **after** slab expansion and
+        ``tag_maternal_gametes``.
+
+        Args:
+            g2z_expanded: Slab-expanded gametes-to-zygote map, shape
+                ``(HL, HL, G×S)``.  Modified in-place.
+            gamete_labels: Ordered gamete label names.
+            somatic_labels: Ordered somatic label names.
+            n_genotypes: Pre-expansion genotype count ``G``.
+            n_gtypes: Number of haploid genotype types (HL / n_glabs).
+            n_glabs: Number of gamete label types.
+            n_slabs: Number of somatic label types.
+        """
+        if not gamete_labels or not somatic_labels or n_glabs < 2 or n_slabs < 2:
+            return
+        for idx in range(1, min(n_slabs, n_glabs)):
+            if idx >= len(gamete_labels) or idx >= len(somatic_labels):
+                continue
+            CytoplasmicPreset.apply_zygote_redirect(
+                g2z_expanded, gamete_labels[idx], somatic_labels[idx],
+                gamete_labels, somatic_labels,
+                n_slabs, n_genotypes,
+                n_gtypes, n_glabs,
+            )
+
 
 class Wolbachia(CytoplasmicPreset):
     """Maternally-inherited endosymbiont.  Infected mothers pass the

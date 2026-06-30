@@ -546,19 +546,11 @@ def _build_config_maps(
     n_hg_effective = n_gtypes_i // n_glabs_i
     n_glabs_effective = n_glabs_i
 
-    # Slab expansion (skip if maps are already expanded by the caller).
-    if not pre_expanded and z2g.shape[1] == n_genotypes_i:
-        z2g_expanded, _z2g, n_g_compressed = expand_slab_maps(
-            z2g=z2g, g2z=g2z,
-            n_slabs=n_slabs_i, n_genotypes=n_genotypes_i,
-            gamete_labels=gamete_labels, somatic_labels=somatic_labels,
-            n_gtypes=n_gtypes_i // n_glabs_i, n_glabs=n_glabs_i,
-        )
-    else:
-        # Maps already slab-expanded — use as-is.
-        z2g_expanded = z2g
-        _z2g = g2z
-        n_g_compressed = z2g.shape[1]
+    # Slab expansion is now baked into the blueprint maps (G × n_slabs).
+    # Maps are always pre-expanded — use as-is.
+    z2g_expanded = z2g
+    _z2g = g2z
+    n_g_compressed = z2g.shape[1]
     _m_f = z2g_expanded[0]
     _m_m = z2g_expanded[1]
 
@@ -1125,104 +1117,6 @@ def decompress_hl(compressed_idx: int, n_glabs: int) -> tuple[int, int]:
     hg_idx = int(compressed_idx) // int(n_glabs)
     glab_idx = int(compressed_idx) % int(n_glabs)
     return hg_idx, glab_idx
-
-
-def expand_slab_maps(
-    z2g: NDArray[np.float64],
-    g2z: NDArray[np.float64],
-    n_slabs: int,
-    n_genotypes: int,
-    gamete_labels: Optional[list[str]] = None,
-    somatic_labels: Optional[list[str]] = None,
-    n_gtypes: int = 0,
-    n_glabs: int = 1,
-) -> tuple[NDArray[np.float64], NDArray[np.float64], int]:
-    """Expand genotype-to-gamete and gametes-to-zygote maps for n_slabs > 1.
-
-    When ``n_slabs <= 1``, returns the originals unchanged (identity).
-
-    When ``n_slabs > 1``, the genotype axis of both maps is expanded from
-    ``G_orig`` to ``G_orig * n_slabs`` via tiling (meiosis maps) and slab-0
-    default expansion (zygote map).  Cytoplasmic gamete tagging (Wolbachia)
-    and zygote redirect are applied if the relevant label sets are provided.
-
-    Args:
-        z2g: Genotype-to-gamete map, shape ``(2, G, HL)``.
-        g2z: Gametes-to-zygote map, shape ``(HL, HL, G)``.
-        n_slabs: Number of somatic labels (>= 1).
-        n_genotypes: Original G_orig (pre-expansion).
-        gamete_labels: Ordered gamete label names (for Wolbachia tagging).
-        somatic_labels: Ordered somatic label names (for Wolbachia tagging).
-        n_gtypes: Number of haploid genotype types.
-        n_glabs: Number of gamete label types.
-
-    Returns:
-        ``(z2g_expanded, g2z_expanded, n_ztypes)`` where ``z2g_expanded`` has
-        shape ``(2, G_orig * n_slabs, HL)`` and ``g2z_expanded`` has shape
-        ``(HL, HL, G_orig * n_slabs)``.  ``n_ztypes == G_orig * n_slabs``.
-    """
-    if n_slabs <= 1:
-        return z2g, g2z, n_genotypes
-
-    n_ztypes = n_genotypes * n_slabs
-
-    _ztype_index: dict[tuple[int, int], int] = {
-        (g, s): g * n_slabs + s
-        for g in range(n_genotypes) for s in range(n_slabs)
-    }
-    _gtype_index: dict[tuple[int, int], int] = {
-        (hi, gi): hi * n_glabs + gi
-        for hi in range(n_gtypes) for gi in range(n_glabs)
-    }
-
-    # Meiosis: tile each genotype row S times (identity — slab does not
-    # affect gamete production in the baseline).
-    _m_f = np.repeat(z2g[0].copy(), n_slabs, axis=0)
-    _m_m = np.repeat(z2g[1].copy(), n_slabs, axis=0)
-
-    # Cytoplasmic gamete tagging: non-default glabs tag maternal gametes
-    # from the corresponding non-default slab.  For example, glab "wolbachia"
-    # tags gametes from "infected" mothers, enabling maternal inheritance.
-    # The mapping is convention-based: glab[i] ↔ slab[i] for i >= 1.
-    # We iterate matching index pairs — glab 1 ↔ slab 1, glab 2 ↔ slab 2,
-    # etc. — NOT the Cartesian product, because each glab belongs to exactly
-    # one slab.
-    if gamete_labels and somatic_labels and n_glabs > 1 and n_slabs > 1:
-        for idx in range(1, min(n_slabs, n_glabs)):
-            if idx >= len(gamete_labels) or idx >= len(somatic_labels):
-                continue
-            for g_raw in range(n_genotypes):
-                z_target = _ztype_index[(g_raw, idx)]
-                for hg_idx in range(n_gtypes):
-                    src = _gtype_index[(hg_idx, 0)]   # default glab
-                    dst = _gtype_index[(hg_idx, idx)]
-                    _m_f[z_target, dst] = _m_f[z_target, src]
-                    _m_f[z_target, src] = 0.0
-
-    # Zygote map: expand from G_orig → G_orig * n_slabs, filling only
-    # slab 0 (default) — symmetric with glab default behaviour.
-    _z2g = np.zeros((g2z.shape[0], g2z.shape[1], n_ztypes), dtype=np.float64)
-    for g_raw in range(n_genotypes):
-        _z2g[:, :, _ztype_index[(g_raw, 0)]] = g2z[:, :, g_raw]
-
-    # Cytoplasmic zygote redirect: for each non-default glab/slab pair,
-    # redirect tagged gamete pairs from slab-0 to the matching child slab.
-    # Convention: glab[i] ↔ slab[i] for i >= 1 — same matching-index
-    # iteration as the gamete tagging block above.
-    if gamete_labels and somatic_labels and n_glabs > 1 and n_slabs > 1:
-        from natal.genetic_presets import CytoplasmicPreset
-        for idx in range(1, min(n_slabs, n_glabs)):
-            if idx >= len(gamete_labels) or idx >= len(somatic_labels):
-                continue
-            CytoplasmicPreset.apply_zygote_redirect(
-                _z2g, gamete_labels[idx], somatic_labels[idx],
-                gamete_labels, somatic_labels,
-                n_slabs, n_genotypes,
-                n_gtypes, n_glabs,
-            )
-
-    z2g_expanded = np.stack([_m_f, _m_m], axis=0)
-    return z2g_expanded, _z2g, n_ztypes
 
 
 def extract_gamete_frequencies(

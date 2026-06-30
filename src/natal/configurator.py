@@ -29,6 +29,7 @@ import numpy as np
 from numba import objmode  # pyright: ignore[reportMissingTypeStubs]
 from numpy.typing import NDArray
 
+from natal.genetic_presets import CytoplasmicPreset
 from natal.genetic_structures import Species, build_compression_mask
 from natal.index_registry import IndexRegistry
 from natal.numba_utils import njit_switch
@@ -147,6 +148,7 @@ class _ConfigContext:
         self.declared_zygote_types: set[str] | set[int] | None = None
         self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
+        self.presets: list[GeneticPreset] = []  # for cytoplasmic preset post-processing
 
     # -- modifier registration (mimics BasePopulation) ----------------------
 
@@ -379,6 +381,24 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         n_ztypes=n_g_compressed,
         n_gtypes=n_hg_effective if gtype_compressed else n_hg_effective * n_glabs_effective,
     )
+
+    # ---- apply cytoplasmic preset effects (post-expansion) ----
+    for preset in ctx.presets:
+        if isinstance(preset, CytoplasmicPreset):
+            n_genotypes = len(ctx.registry.index_to_genotype)
+            n_gtypes = len(ctx.registry.index_to_haplo)
+            n_glabs = int(ctx.config.n_glabs)
+            n_slabs = int(ctx.config.n_slabs)
+            CytoplasmicPreset.tag_maternal_gametes(
+                zygotes_to_gametes_map, ctx.species.gamete_labels,
+                ctx.species.somatic_labels,
+                n_genotypes, n_gtypes, n_glabs, n_slabs,
+            )
+            CytoplasmicPreset.redirect_zygotes(
+                gametes_to_zygotes_map, ctx.species.gamete_labels,
+                ctx.species.somatic_labels,
+                n_genotypes, n_gtypes, n_glabs, n_slabs,
+            )
 
     # ---- write everything back into the config via _replace ----
     overrides: dict[str, Any] = {
@@ -1368,8 +1388,14 @@ class Configurator:
         from natal.genetic_presets import apply_preset_to_population
 
         ctx = self._make_ctx()
+        ctx.presets = list(presets)
         for preset in presets:
             apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType]
+        # Trigger map rebuild for cytoplasmic presets (which have no
+        # gamete/zygote modifiers and thus do not auto-trigger rebuilds).
+        has_cytoplasmic = any(isinstance(p, CytoplasmicPreset) for p in presets)
+        if has_cytoplasmic:
+            _rebuild_config_maps(ctx)
         self._sync_from_ctx(ctx)
         return self
 

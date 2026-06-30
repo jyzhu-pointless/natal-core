@@ -40,6 +40,7 @@ from natal.engine.lifecycle_wrappers import (
 )
 from natal.engine.simulation.age_structured import compute_offspring_probability_tensor
 from natal.genetic_entities import Genotype, HaploidGenotype
+from natal.genetic_presets import CytoplasmicPreset
 from natal.genetic_structures import Species
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
@@ -685,6 +686,7 @@ class BasePopulation(ABC, Generic[T_State]):
             return
 
         n_glabs = int(self._config.n_glabs)
+        n_slabs = int(self._config.n_slabs)
 
         # Step 1: Build wrapper callables from the combined modifier
         # lists (preset-derived + manually added).  Each wrapper is a
@@ -708,6 +710,7 @@ class BasePopulation(ABC, Generic[T_State]):
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             gamete_modifiers=gamete_funcs,
+            n_slabs=n_slabs,
         )
 
         # Step 3: Build the fusion map.  For each pair of haploid gametes
@@ -718,34 +721,8 @@ class BasePopulation(ABC, Generic[T_State]):
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             zygote_modifiers=zygote_funcs,
+            n_slabs=n_slabs,
         )
-
-        # Step 3.3: Apply slab expansion if n_slabs > 1.  This must run
-        # after modifier callables (which operate in unexpanded genotype
-        # space) and before index compression (which expects expanded maps).
-        # Skip if maps are already pre-expanded (e.g., from config blueprint).
-        n_slabs = int(self._config.n_slabs)
-        n_g_pre = int(zygotes_to_gametes_map.shape[1])
-        if n_slabs > 1 and n_g_pre == len(diploid_genotypes):
-            from natal.population_config import expand_slab_maps
-            species = getattr(self, "_species", None)
-            zygotes_to_gametes_map, gametes_to_zygotes_map, _n_g_exp = (
-                expand_slab_maps(
-                    z2g=zygotes_to_gametes_map,
-                    g2z=gametes_to_zygotes_map,
-                    n_slabs=n_slabs,
-                    n_genotypes=int(zygotes_to_gametes_map.shape[1]),
-                    gamete_labels=species.gamete_labels if species else None,
-                    somatic_labels=species.somatic_labels if species else None,
-                    n_gtypes=int(self._config.n_gtypes) // n_glabs,
-                    n_glabs=n_glabs,
-                )
-            )
-            # After expansion, n_g must match the config's declared value.
-            assert _n_g_exp == int(self._config.n_ztypes), (
-                f"Slab expansion mismatch: {_n_g_exp} vs "
-                f"{int(self._config.n_ztypes)}"
-            )
 
         # Step 4: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
@@ -760,6 +737,24 @@ class BasePopulation(ABC, Generic[T_State]):
             n_ztypes=n_g,
             n_gtypes=n_hg,
         )
+
+        # Apply cytoplasmic preset effects if presets are configured.
+        for preset in self._presets:
+            if isinstance(preset, CytoplasmicPreset):
+                n_genotypes = len(diploid_genotypes)
+                n_gtypes = len(haploid_genotypes)
+                species = getattr(self, "_species", None)
+                if species is not None:
+                    CytoplasmicPreset.tag_maternal_gametes(
+                        zygotes_to_gametes_map, species.gamete_labels,
+                        species.somatic_labels,
+                        n_genotypes, n_gtypes, n_glabs, n_slabs,
+                    )
+                    CytoplasmicPreset.redirect_zygotes(
+                        gametes_to_zygotes_map, species.gamete_labels,
+                        species.somatic_labels,
+                        n_genotypes, n_gtypes, n_glabs, n_slabs,
+                    )
 
         # Step 5: Persist all three maps into the config via shallow copy.
         self._config = self._config._replace(
