@@ -422,6 +422,134 @@ class TestNSlabsFullRepair:
 
 # ── Regression: bug fixes ─────────────────────────────────────────────
 
+# ── Regression: modifier ordering & probability bugs ────────────────────
+
+class TestModifierRegression:
+    """Regression: cytoplasmic preset ordering + zygote modifier overflow."""
+
+    def test_wolbachia_maps_reflect_maternal_inheritance(self):
+        """P1-A: cytoplasmic maps show maternal gamete-tagging."""
+        sp = nt.Species.from_dict(
+            "wolb", {"c1": {"l1": ["A", "a"]}},
+            gamete_labels=["default", "wolbachia"],
+            somatic_labels=["normal", "infected"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A@infected": {1: 50}},
+                "male": {"A|A@normal": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
+            .build()
+        )
+        cfg = pop.config
+        reg = pop.index_registry
+        z_inf = reg.ztype_index(sp.get_genotype_from_str("A|A"), "infected")
+        z_norm = reg.ztype_index(sp.get_genotype_from_str("A|A"), "normal")
+        # Infected mothers produce wolbachia-tagged gametes (GType=1), not default (GType=0)
+        assert cfg.zygotes_to_gametes_map[0, z_inf, 1] > 0.0, (
+            "Infected mother should produce wolbachia gametes"
+        )
+        assert cfg.zygotes_to_gametes_map[0, z_inf, 0] == 0.0, (
+            "Infected mother should NOT produce default gametes"
+        )
+        # Normal mothers produce default gametes (unchanged)
+        assert cfg.zygotes_to_gametes_map[0, z_norm, 0] > 0.0
+        # offspring_tensor should NOT be zero (Wolbachia viability=1.0 so offspring survive)
+        assert cfg.offspring_tensor.sum() > 0, (
+            "offspring_tensor should reflect cytoplasmic effects"
+        )
+
+    def test_offspring_tensor_matches_maps(self):
+        """P1-A: offspring_tensor equals recomputation from modified maps."""
+        sp = nt.Species.from_dict(
+            "otest", {"c1": {"l1": ["A", "a"]}},
+            gamete_labels=["default", "wolbachia"],
+            somatic_labels=["normal", "infected"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A@infected": {1: 50}},
+                "male": {"A|A@normal": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
+            .build()
+        )
+        from natal.engine.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        cfg = pop.config
+        n_gtypes = cfg.zygotes_to_gametes_map.shape[2]
+        recomputed = compute_offspring_probability_tensor(
+            meiosis_f=cfg.zygotes_to_gametes_map[0],
+            meiosis_m=cfg.zygotes_to_gametes_map[1],
+            haplo_to_genotype_map=cfg.gametes_to_zygotes_map,
+            n_ztypes=cfg.n_ztypes,
+            n_gtypes=n_gtypes,
+        )
+        np.testing.assert_allclose(cfg.offspring_tensor, recomputed, atol=1e-10)
+
+    def test_zygote_modifier_probability_sum_is_one(self):
+        """P1-B: every gamete-pair column in gametes_to_zygotes_map sums to 1.0."""
+        sp = nt.Species.from_dict(
+            "ztest", {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        # Zygote modifier that remaps (A, A) gamete pair → A|A genotype
+        def redirect_zygote():
+            return {(0, 0): "A|A"}
+
+        pop.add_zygote_modifier(redirect_zygote, refresh=True)
+        g2z = pop.config.gametes_to_zygotes_map
+        # Every gamete-pair column should sum to exactly 1.0
+        for hl1 in range(g2z.shape[0]):
+            for hl2 in range(g2z.shape[1]):
+                total = float(g2z[hl1, hl2, :].sum())
+                assert abs(total - 1.0) < 1e-8, (
+                    f"gamete pair ({hl1},{hl2}) sums to {total}"
+                )
+
+    def test_gamete_modifier_glab_consistency(self):
+        """Gamete map shape and values are sane with gamete labels."""
+        sp = nt.Species.from_dict(
+            "gtest", {"c1": {"l1": ["WT", "Dr"]}},
+            gamete_labels=["default", "cas9"],
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"WT|Dr": {1: 100}}, "male": {"WT|WT": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        z2g = pop.config.zygotes_to_gametes_map
+        assert z2g.shape[0] == 2  # female + male
+        # unordered species: n_ztypes = unordered_G × n_slabs
+        n_slabs = pop.config.n_slabs
+        n_ordered = sp.get_all_genotypes(unordered=sp.unordered).__len__()
+        assert z2g.shape[1] == n_ordered * n_slabs, (
+            f"z2g G-axis {z2g.shape[1]} != {n_ordered} × {n_slabs}"
+        )
+        # Each sex slice should produce some gametes
+        assert z2g[0, :, :].sum() > 0
+        assert z2g[1, :, :].sum() > 0
+
+
 class TestRegressionFixes:
     """Regression tests for slab-expansion bugs found during code review."""
 
