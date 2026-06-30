@@ -755,14 +755,12 @@ class BasePopulation(ABC, Generic[T_State]):
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
         n_g = int(self._config.n_ztypes)
         n_hg = int(self._config.n_gtypes)
-        n_gl = n_glabs
         offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=zygotes_to_gametes_map[0],
             meiosis_m=zygotes_to_gametes_map[1],
             haplo_to_genotype_map=gametes_to_zygotes_map,
             n_ztypes=n_g,
-            n_haplogenotypes=n_hg // n_gl,
-            n_glabs=n_gl,
+            n_gtypes=n_hg,
         )
 
         # Step 5: Persist all three maps into the config via shallow copy.
@@ -772,7 +770,7 @@ class BasePopulation(ABC, Generic[T_State]):
             offspring_tensor=offspring_tensor,
             n_ztypes=n_g,
             n_gtypes=n_hg,
-            n_glabs=n_gl,
+            n_glabs=n_glabs,
         )
 
     def add_gamete_modifier(

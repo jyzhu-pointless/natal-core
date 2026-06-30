@@ -589,8 +589,7 @@ def _build_config_maps(
         meiosis_f=_m_f, meiosis_m=_m_m,
         haplo_to_genotype_map=_z2g,
         n_ztypes=n_g_compressed,
-        n_haplogenotypes=n_hg_effective,
-        n_glabs=n_glabs_effective,
+        n_gtypes=n_hg_effective * n_glabs_effective,
     )
 
     return _ComputedMaps(

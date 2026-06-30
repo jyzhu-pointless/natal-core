@@ -222,8 +222,7 @@ def compute_offspring_probability_tensor(
     meiosis_m: Annotated[NDArray[np.float64], "shape=(g,hl)"],
     haplo_to_genotype_map: Annotated[NDArray[np.float64], "shape=(hl,hl,g)"],
     n_ztypes: int,
-    n_haplogenotypes: int,
-    n_glabs: int = 1,
+    n_gtypes: int,
 ) -> Annotated[NDArray[np.float64], "shape=(g,g,g)"]:
     """Precompute offspring genotype probabilities for all (gf, gm) pairs.
 
@@ -242,9 +241,7 @@ def compute_offspring_probability_tensor(
             shape (hl, hl, g). Entry [h1, h2, g] = 1 if haplotypes h1, h2
             combine to form genotype g, else 0.
         n_ztypes: Number of diploid genotypes.
-        n_haplogenotypes: Number of haploid genotypes.
-        n_glabs: Number of gamete-label variants per haplotype (default 1).
-            If > 1, the total haplotype space is hl = n_haplogenotypes * n_glabs.
+        n_gtypes: Total number of gamete types (haploid genotype count × gamete label count).
 
     Returns:
         Offspring probability tensor with shape (g, g, g), where
@@ -254,7 +251,7 @@ def compute_offspring_probability_tensor(
     meio_m = np.asarray(meiosis_m, dtype=np.float64)
     zygote_map = np.asarray(haplo_to_genotype_map, dtype=np.float64)
 
-    hl = n_haplogenotypes * n_glabs
+    hl = n_gtypes
     zygote_flat = np.ascontiguousarray(zygote_map).reshape(hl * hl, n_ztypes)
 
     # Scalar-loop tensor product: P[gf, gm, go] = Σ_{hf,hm}

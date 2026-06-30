@@ -614,7 +614,7 @@ class TestComputeOffspringProbabilityTensor:
 
     def test_basic(self) -> None:
         n_ztypes = 2
-        n_haplogenotypes = 2
+        n_gtypes = 2
         meiosis_f = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float64)
         meiosis_m = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float64)
         h2g = np.zeros((2, 2, 2), dtype=np.float64)
@@ -624,7 +624,7 @@ class TestComputeOffspringProbabilityTensor:
 
         tensor = compute_offspring_probability_tensor(
             meiosis_f, meiosis_m, h2g,
-            n_ztypes=n_ztypes, n_haplogenotypes=n_haplogenotypes,
+            n_ztypes=n_ztypes, n_gtypes=n_gtypes,
         )
         assert tensor.shape == (2, 2, 2)
         assert tensor[0, 0, 0] == pytest.approx(1.0)

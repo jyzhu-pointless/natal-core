@@ -3594,14 +3594,14 @@ class Species(GeneticStructure['HaploidGenome']):
         meiosis_m = cast(NDArray[np.float64], z2g[1])
 
         n_ztypes = n_g * n_slabs
+        n_gtypes = n_hg * n_glabs
 
         offspring = compute_offspring_probability_tensor(
             meiosis_f=meiosis_f,
             meiosis_m=meiosis_m,
             haplo_to_genotype_map=g2z,
             n_ztypes=n_ztypes,
-            n_haplogenotypes=n_hg,
-            n_glabs=n_glabs,
+            n_gtypes=n_gtypes,
         )
 
         # Genotype compatibility: sum of gamete production per sex per genotype.
@@ -3613,7 +3613,7 @@ class Species(GeneticStructure['HaploidGenome']):
         self._config_blueprint = {
             "n_genotypes": n_g,
             "n_ztypes": n_ztypes,
-            "n_gtypes": n_hg * n_glabs,
+            "n_gtypes": n_gtypes,
             "n_glabs": n_glabs,
             "n_slabs": n_slabs,
             "zygotes_to_gametes_map": z2g,
