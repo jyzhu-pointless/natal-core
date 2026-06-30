@@ -448,18 +448,34 @@ class TestModifierRegression:
         reg = pop.index_registry
         z_inf = reg.ztype_index(sp.get_genotype_from_str("A|A"), "infected")
         z_norm = reg.ztype_index(sp.get_genotype_from_str("A|A"), "normal")
-        # Infected mothers produce wolbachia-tagged gametes (GType=1), not default (GType=0)
-        assert cfg.zygotes_to_gametes_map[0, z_inf, 1] > 0.0, (
-            "Infected mother should produce wolbachia gametes"
-        )
-        assert cfg.zygotes_to_gametes_map[0, z_inf, 0] == 0.0, (
-            "Infected mother should NOT produce default gametes"
-        )
-        # Normal mothers produce default gametes (unchanged)
-        assert cfg.zygotes_to_gametes_map[0, z_norm, 0] > 0.0
-        # offspring_tensor should NOT be zero (Wolbachia viability=1.0 so offspring survive)
-        assert cfg.offspring_tensor.sum() > 0, (
-            "offspring_tensor should reflect cytoplasmic effects"
+
+        # GType indices: haplotypes registered in order [A, a]
+        haplos = sp.get_all_haploid_genotypes()
+        g_A_default = reg.gtype_index(haplos[0], "default")
+        g_A_wolb = reg.gtype_index(haplos[0], "wolbachia")
+        g_a_default = reg.gtype_index(haplos[1], "default")
+        g_a_wolb = reg.gtype_index(haplos[1], "wolbachia")
+
+        z2g = cfg.zygotes_to_gametes_map
+        g2z = cfg.gametes_to_zygotes_map
+
+        # A|A@infected female: produces only A@wolbachia gametes (maternal tagging)
+        np.testing.assert_allclose(z2g[0, z_inf, g_A_default], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_inf, g_A_wolb], 1.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_inf, g_a_default], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_inf, g_a_wolb], 0.0, atol=1e-10)
+
+        # A|A@infected male: produces A@default gametes (males not tagged)
+        np.testing.assert_allclose(z2g[1, z_inf, g_A_default], 1.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_inf, g_A_wolb], 0.0, atol=1e-10)
+
+        # Zygote map: (A@wolbachia, A@default) → A|A@infected
+        np.testing.assert_allclose(g2z[g_A_wolb, g_A_default, z_inf], 1.0, atol=1e-10)
+        np.testing.assert_allclose(g2z[g_A_wolb, g_A_default, z_norm], 0.0, atol=1e-10)
+
+        # Offspring tensor: infected female × normal male → infected offspring
+        np.testing.assert_allclose(
+            cfg.offspring_tensor[z_inf, z_norm, z_inf], 1.0, atol=1e-10,
         )
 
     def test_offspring_tensor_matches_maps(self):
@@ -537,17 +553,42 @@ class TestModifierRegression:
             .competition(juvenile_growth_mode=0)
             .build()
         )
-        z2g = pop.config.zygotes_to_gametes_map
+        cfg = pop.config
+        reg = pop.index_registry
+        z2g = cfg.zygotes_to_gametes_map
         assert z2g.shape[0] == 2  # female + male
         # unordered species: n_ztypes = unordered_G × n_slabs
-        n_slabs = pop.config.n_slabs
-        n_ordered = sp.get_all_genotypes(unordered=sp.unordered).__len__()
-        assert z2g.shape[1] == n_ordered * n_slabs, (
-            f"z2g G-axis {z2g.shape[1]} != {n_ordered} × {n_slabs}"
+        n_slabs = cfg.n_slabs
+        n_g_unordered = sp.get_all_genotypes(unordered=sp.unordered).__len__()
+        assert z2g.shape[1] == n_g_unordered * n_slabs, (
+            f"z2g G-axis {z2g.shape[1]} != {n_g_unordered} × {n_slabs}"
         )
-        # Each sex slice should produce some gametes
-        assert z2g[0, :, :].sum() > 0
-        assert z2g[1, :, :].sum() > 0
+
+        # GType indices: haplotypes registered in order [WT, Dr]
+        haplos = sp.get_all_haploid_genotypes()
+        g_WT_default = reg.gtype_index(haplos[0], "default")
+        g_WT_cas9 = reg.gtype_index(haplos[0], "cas9")
+        g_Dr_default = reg.gtype_index(haplos[1], "default")
+        g_Dr_cas9 = reg.gtype_index(haplos[1], "cas9")
+
+        # Female WT|Dr@normal: 50% WT@default, 50% Dr@default (Mendelian)
+        z_wtdr = reg.ztype_index(sp.get_genotype_from_str("WT|Dr"), "normal")
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_WT_default], 0.5, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_Dr_default], 0.5, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_WT_cas9], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_Dr_cas9], 0.0, atol=1e-10)
+
+        # Female WT|Dr@exposed: same as normal slab (no cytoplasmic preset)
+        z_wtdr_exp = reg.ztype_index(sp.get_genotype_from_str("WT|Dr"), "exposed")
+        np.testing.assert_allclose(z2g[0, z_wtdr_exp, g_WT_default], 0.5, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr_exp, g_Dr_default], 0.5, atol=1e-10)
+
+        # Male WT|WT@normal: 100% WT@default
+        z_wtwt = reg.ztype_index(sp.get_genotype_from_str("WT|WT"), "normal")
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_WT_default], 1.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_WT_cas9], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_Dr_default], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_Dr_cas9], 0.0, atol=1e-10)
 
 
 class TestRegressionFixes:
