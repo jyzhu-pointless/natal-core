@@ -29,13 +29,16 @@ import numpy as np
 from numba import objmode  # pyright: ignore[reportMissingTypeStubs]
 from numpy.typing import NDArray
 
-from natal.genetic_structures import Species
+from natal.genetic_structures import Species, build_compression_mask
 from natal.index_registry import IndexRegistry
 from natal.numba_utils import njit_switch
 from natal.parameters import ALL_PARAMETERS, ParamDescriptor
 from natal.population_config import (
     DiscretePopulationConfig,
     PopulationConfig,
+    compress_config,
+    compress_gamete_map,
+    compress_zygote_map,
 )
 
 if TYPE_CHECKING:
@@ -287,13 +290,6 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
     ztype_mask = np.array([], dtype=np.int32)
 
     if ctx.compress:
-        from natal.genetic_structures import build_gamete_compression_mask
-        from natal.population_config import (
-            compress_config,
-            compress_gamete_map,
-            compress_zygote_map,
-        )
-
         ctx.compression_applied = True
 
         # Resolve declared_zygote_types to integer indices for the BFS.
@@ -325,7 +321,7 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
                         )
 
         _gt_mask, _, _zt_mask, _ = (
-            build_gamete_compression_mask(
+            build_compression_mask(
                 zygotes_to_gametes_map,
                 gametes_to_zygotes_map,
                 ctx.config.initial_individual_count,

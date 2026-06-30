@@ -3586,7 +3586,7 @@ class Species(GeneticStructure['HaploidGenome']):
         n_hg = len(haplotypes)
 
         # Build maps with slab expansion so the genotype axis is G × S.
-        # This eliminates duplicate _expand_slab_maps calls downstream.
+        # This eliminates duplicate expand_slab_maps calls downstream.
         z2g = self.build_gamete_map(n_slabs=n_slabs)
         g2z = self.build_zygote_map(n_slabs=n_slabs)
 
@@ -3720,11 +3720,10 @@ def _canonical_haploid_pair(
 
 
 # ---------------------------------------------------------------------------
-# Gamete-axis index compression
+# Helper function for index compression
 # ---------------------------------------------------------------------------
 
-
-def build_gamete_compression_mask(
+def build_compression_mask(
     z2g_map: NDArray[np.float64],
     g2z_map: NDArray[np.float64],
     initial_individual_count: NDArray[np.float64],
@@ -3732,7 +3731,8 @@ def build_gamete_compression_mask(
     n_glabs: int = 1,
     n_slabs: int = 1,
 ) -> tuple[NDArray[np.int32], int, NDArray[np.int32], int]:
-    """Build compression masks for both the GType (gamete) and ZType axes.
+    """Build compression masks for both the GType (gamete) and ZType
+    (zygote) axes.
 
     Uses a unified gamete-set fixed-point BFS that simultaneously tracks
     reachable GTypes and ZTypes.  For n_slabs=1 the ZType mask reduces
@@ -3812,14 +3812,17 @@ def build_gamete_compression_mask(
             i += 1
 
     # Build GType mask
-    from natal.population_config import _compress_hl, _decompress_hl
+    from natal.population_config import (
+        compress_hl,
+        decompress_hl,
+    )
 
     gtype_mask = np.full(HL, -1, dtype=np.int32)
     sorted_pairs = sorted(
-        _decompress_hl(hl, n_glabs) for hl in reachable_hl
+        decompress_hl(hl, n_glabs) for hl in reachable_hl
     )
     for j, (hg, glab) in enumerate(sorted_pairs):
-        hl = _compress_hl(hg, glab, n_glabs)
+        hl = compress_hl(hg, glab, n_glabs)
         gtype_mask[hl] = j
 
     # Build ZType mask — for n_slabs=1 this is just (G_orig,).

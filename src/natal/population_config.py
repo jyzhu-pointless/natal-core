@@ -548,7 +548,7 @@ def _build_config_maps(
 
     # Slab expansion (skip if maps are already expanded by the caller).
     if not pre_expanded and z2g.shape[1] == n_genotypes_i:
-        z2g_expanded, _z2g, n_g_compressed = _expand_slab_maps(
+        z2g_expanded, _z2g, n_g_compressed = expand_slab_maps(
             z2g=z2g, g2z=g2z,
             n_slabs=n_slabs_i, n_genotypes=n_genotypes_i,
             gamete_labels=gamete_labels, somatic_labels=somatic_labels,
@@ -1090,12 +1090,12 @@ def initialize_gamete_map(
 # ==================================================================
 # Haplotype compression helpers — used by gamete-map construction
 # during species blueprint build (before IndexRegistry exists).
-# These are private; use IndexRegistry.gtype_index() for runtime
-# dict-based lookups once the registry is established.
+# Use IndexRegistry.gtype_index() for runtime dict-based lookups once
+# the registry is established.
 # ==================================================================
 
 
-def _compress_hl(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
+def compress_hl(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     """Compress a (haplogenotype, glab) pair into a flat index.
 
     The compressed representation is *hg_idx × n_glabs + glab_idx*,
@@ -1112,7 +1112,7 @@ def _compress_hl(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     return int(hg_idx) * int(n_glabs) + int(glab_idx)
 
 
-def _decompress_hl(compressed_idx: int, n_glabs: int) -> tuple[int, int]:
+def decompress_hl(compressed_idx: int, n_glabs: int) -> tuple[int, int]:
     """Decompress a flat HL index back into (hg_idx, glab_idx).
 
     Args:
@@ -1127,7 +1127,7 @@ def _decompress_hl(compressed_idx: int, n_glabs: int) -> tuple[int, int]:
     return hg_idx, glab_idx
 
 
-def _expand_slab_maps(
+def expand_slab_maps(
     z2g: NDArray[np.float64],
     g2z: NDArray[np.float64],
     n_slabs: int,

@@ -727,12 +727,10 @@ class BasePopulation(ABC, Generic[T_State]):
         n_slabs = int(self._config.n_slabs)
         n_g_pre = int(zygotes_to_gametes_map.shape[1])
         if n_slabs > 1 and n_g_pre == len(diploid_genotypes):
-            from natal.population_config import (
-                _expand_slab_maps,  # pyright: ignore[reportPrivateUsage]
-            )
+            from natal.population_config import expand_slab_maps
             species = getattr(self, "_species", None)
             zygotes_to_gametes_map, gametes_to_zygotes_map, _n_g_exp = (
-                _expand_slab_maps(
+                expand_slab_maps(
                     z2g=zygotes_to_gametes_map,
                     g2z=gametes_to_zygotes_map,
                     n_slabs=n_slabs,
