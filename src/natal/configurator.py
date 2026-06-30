@@ -364,16 +364,7 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
         n_g_compressed = int(ctx.config.n_ztypes)
         ctx.registry.compress(ztype_mask, gtype_mask)
 
-    # ---- recompute offspring probability tensor from the updated maps ----
-    offspring_tensor = compute_offspring_probability_tensor(
-        meiosis_f=zygotes_to_gametes_map[0],
-        meiosis_m=zygotes_to_gametes_map[1],
-        haplo_to_genotype_map=gametes_to_zygotes_map,
-        n_ztypes=n_g_compressed,
-        n_gtypes=n_hg_effective if gtype_compressed else n_hg_effective * n_glabs_effective,
-    )
-
-    # ---- apply cytoplasmic preset effects (post-expansion) ----
+    # ---- apply cytoplasmic preset effects (pre-tensor) ----
     for preset in ctx.presets:
         if isinstance(preset, CytoplasmicPreset):
             n_genotypes = len(ctx.registry.index_to_genotype)
@@ -390,6 +381,15 @@ def _rebuild_config_maps(ctx: _ConfigContext) -> None:
                 ctx.species.somatic_labels,
                 n_genotypes, n_gtypes, n_glabs, n_slabs,
             )
+
+    # ---- recompute offspring probability tensor from the updated maps ----
+    offspring_tensor = compute_offspring_probability_tensor(
+        meiosis_f=zygotes_to_gametes_map[0],
+        meiosis_m=zygotes_to_gametes_map[1],
+        haplo_to_genotype_map=gametes_to_zygotes_map,
+        n_ztypes=n_g_compressed,
+        n_gtypes=n_hg_effective if gtype_compressed else n_hg_effective * n_glabs_effective,
+    )
 
     # ---- write everything back into the config via _replace ----
     overrides: dict[str, Any] = {

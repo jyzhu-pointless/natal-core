@@ -724,21 +724,9 @@ class BasePopulation(ABC, Generic[T_State]):
             n_slabs=n_slabs,
         )
 
-        # Step 4: Compute the full offspring probability tensor by
-        # convolving the maternal and paternal gametogenesis maps through
-        # the fusion map.  The result is a 4-D array indexed by
-        # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
-        n_g = int(self._config.n_ztypes)
-        n_hg = int(self._config.n_gtypes)
-        offspring_tensor = compute_offspring_probability_tensor(
-            meiosis_f=zygotes_to_gametes_map[0],
-            meiosis_m=zygotes_to_gametes_map[1],
-            haplo_to_genotype_map=gametes_to_zygotes_map,
-            n_ztypes=n_g,
-            n_gtypes=n_hg,
-        )
-
-        # Apply cytoplasmic preset effects if presets are configured.
+        # Step 4: Apply cytoplasmic preset effects if presets are configured.
+        # This must happen BEFORE the offspring tensor is computed, so the
+        # tensor reflects the modified maps.
         for preset in self._presets:
             if isinstance(preset, CytoplasmicPreset):
                 n_genotypes = len(diploid_genotypes)
@@ -756,7 +744,21 @@ class BasePopulation(ABC, Generic[T_State]):
                         n_genotypes, n_gtypes, n_glabs, n_slabs,
                     )
 
-        # Step 5: Persist all three maps into the config via shallow copy.
+        # Step 5: Compute the full offspring probability tensor by
+        # convolving the maternal and paternal gametogenesis maps through
+        # the fusion map.  The result is a 4-D array indexed by
+        # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
+        n_g = int(self._config.n_ztypes)
+        n_hg = int(self._config.n_gtypes)
+        offspring_tensor = compute_offspring_probability_tensor(
+            meiosis_f=zygotes_to_gametes_map[0],
+            meiosis_m=zygotes_to_gametes_map[1],
+            haplo_to_genotype_map=gametes_to_zygotes_map,
+            n_ztypes=n_g,
+            n_gtypes=n_hg,
+        )
+
+        # Step 6: Persist all three maps into the config via shallow copy.
         self._config = self._config._replace(
             zygotes_to_gametes_map=zygotes_to_gametes_map,
             gametes_to_zygotes_map=gametes_to_zygotes_map,

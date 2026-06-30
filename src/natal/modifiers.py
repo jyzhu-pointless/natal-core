@@ -670,8 +670,10 @@ def _normalize_zygote_val(
             mapping[int(idx_candidate)] = float(prob)
         else:
             gt = _resolve_genotype(idx_candidate, diploid_genotypes)
-            for zidx in index_registry.ztype_indices_for(gt):
-                mapping[int(zidx)] = float(prob)
+            z_indices = index_registry.ztype_indices_for(gt)
+            n_zs = len(z_indices)
+            for zidx in z_indices:
+                mapping[int(zidx)] = float(prob) / n_zs
         return mapping
 
     # distribution dict
@@ -684,8 +686,10 @@ def _normalize_zygote_val(
                 mapping[int(idx_candidate)] = float(prob)
             else:
                 gt = _resolve_genotype(idx_candidate, diploid_genotypes)
-                for zidx in index_registry.ztype_indices_for(gt):
-                    mapping[int(zidx)] = float(prob)
+                z_indices = index_registry.ztype_indices_for(gt)
+                n_zs = len(z_indices)
+                for zidx in z_indices:
+                    mapping[int(zidx)] = float(prob) / n_zs
         return mapping
 
     # single genotype replacement
@@ -693,8 +697,10 @@ def _normalize_zygote_val(
         mapping[int(val)] = 1.0
     else:
         gt = _resolve_genotype(val, diploid_genotypes)
-        for zidx in index_registry.ztype_indices_for(gt):
-            mapping[int(zidx)] = 1.0
+        z_indices = index_registry.ztype_indices_for(gt)
+        n_zs = len(z_indices)
+        for zidx in z_indices:
+            mapping[int(zidx)] = 1.0 / n_zs
     return mapping
 
 
