@@ -679,5 +679,6 @@ class TestRegressionFixes:
         pop.run(2)
         h = pop.get_history()
         assert h.shape[0] == 3  # tick 0, 1, 2
+        assert not np.any(np.isnan(h[:, 1:])), "no NaN in population counts"
         assert h[1, 1:].sum() > 0  # population survived
 

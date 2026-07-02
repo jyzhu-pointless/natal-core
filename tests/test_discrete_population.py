@@ -1,6 +1,7 @@
 """Unit tests for DiscreteGenerationPopulation."""
 
 import numpy as np
+import pytest
 
 import natal as nt
 from natal.population_state import DiscretePopulationState
@@ -66,9 +67,7 @@ class TestBuildAndSetup:
         # Before running, check state was initialized
         state = pop._state
         assert state is not None
-        assert pop.state.individual_count.sum() > 0, (
-            "population should have positive counts after initialization"
-        )
+        assert pop.state.individual_count.sum() == 1000.0
 
 
 class TestRunTicks:
@@ -77,9 +76,7 @@ class TestRunTicks:
         pop = _minimal_pop(sp, pop_name="Disc_run_tick_pop")
         pop.run(5)
         assert pop._tick == 5
-        assert pop.state.individual_count.sum() > 0, (
-            "population should not be empty after 5 ticks"
-        )
+        assert pop.state.individual_count.sum() == pytest.approx(3125000.0)
 
     def test_run_zero_ticks(self):
         sp = _make_species("Disc_run0")
@@ -98,8 +95,8 @@ class TestRunTicks:
         initial_total = pop.state.individual_count.sum()
         pop.run(1)
         assert pop._tick == 1
-        assert pop.state.individual_count.sum() != initial_total, (
-            "population counts should change after one tick"
+        assert pop.state.individual_count.sum() > initial_total, (
+            "population should grow after one tick (eggs_per_female=10)"
         )
 
     def test_run_is_additive(self):
@@ -348,6 +345,9 @@ class TestHomingDriveIntegration:
         pop, _ = self._build_drive_pop(stochastic=True)
         pop.run(10)
         assert pop._tick == 10
+        assert not np.any(np.isnan(pop._state.individual_count)), (
+            "stochastic run should not produce NaN"
+        )
         assert pop._state.individual_count.sum() > 0, (
             "stochastic population should not be empty after 10 ticks"
         )

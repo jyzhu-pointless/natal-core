@@ -69,7 +69,7 @@ class TestBuildAndSetup:
         pop = _minimal_pop(sp, pop_name="Age_state_init_pop")
         assert pop._state is not None
         assert pop.state.individual_count.shape == (2, 4, 3)
-        assert pop.state.individual_count.sum() > 0
+        assert pop.state.individual_count.sum() == 900.0
 
     def test_registry_has_wt_wt(self):
         sp = _make_species("Age_reg")
@@ -166,6 +166,9 @@ class TestAgeStructure:
         # (age 0 is cleared to 0 each tick by aging, so check age 1 instead)
         pop.run(1)
         assert pop.state.individual_count[0][1].sum() > 0
+        # Initial age-1 adults (200) survive 0.9 and age to age 2 → 180 per sex
+        assert pop.state.individual_count[0][2].sum() == pytest.approx(200 * 0.9)
+        assert pop.state.individual_count[1][2].sum() == pytest.approx(200 * 0.9)
 
     def test_adults_survive_after_one_tick(self):
         """After one tick, age-1 adults (initial count 200) survive with rate 0.9 → age 2 ≈ 180."""

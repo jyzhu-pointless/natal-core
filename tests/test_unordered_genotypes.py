@@ -40,7 +40,7 @@ class TestOrderedDefault:
         ).reproduction(eggs_per_female=50).competition(carrying_capacity=500).build()
         # Unordered genotype count in config
         assert pop.config.n_ztypes == 3
-        assert pop.state.individual_count.sum() > 0
+        assert pop.state.individual_count.sum() == 200.0
 
     def test_ordered_initial_state_accepts_both_forms(self):
         """Both 'A|a' and 'a|A' in initial state are accepted and placed."""
@@ -355,7 +355,7 @@ class TestDeclaredZygoteTypes:
         ).initial_state(individual_count={
             "female": {"A|A": {1: 100}}, "male": {"A|A": {1: 100}},
         }).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
-        assert pop.config.n_ztypes >= 3  # AA, Aa, aa all survive
+        assert pop.config.n_ztypes == 3  # AA, Aa, aa all survive
 
     def test_declared_deprecated_alias_still_works(self):
         sp = nt.Species.from_dict(
@@ -368,7 +368,7 @@ class TestDeclaredZygoteTypes:
         ).initial_state(individual_count={
             "female": {"A|A": {1: 100}}, "male": {"A|A": {1: 100}},
         }).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
-        assert pop.config.n_ztypes >= 3
+        assert pop.config.n_ztypes == 3
 
 
 # ============================================================================
@@ -429,7 +429,7 @@ class TestUnorderedFullLifecycle:
         ).build()
         pop.run(1)
         assert pop.tick == 1
-        assert pop.state.individual_count.sum() > 0
+        assert pop.state.individual_count.sum() == 25000.0
 
     def test_discrete_population_run(self):
         """Discrete generation with unordered genotypes runs correctly."""
@@ -441,6 +441,7 @@ class TestUnorderedFullLifecycle:
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
         pop.run(2)
         assert pop.tick == 2
+        assert pop.state.individual_count.sum() == 1250000.0
 
     def test_observation_output_has_unordered_labels(self):
         """Observation uses unordered genotype count."""
@@ -487,6 +488,7 @@ class TestUnorderedWithDrive:
         assert pop.config.n_ztypes == 6
         pop.run(2)
         assert pop.tick == 2
+        assert pop.state.individual_count.sum() == 2500000.0
 
     def test_wolbachia_with_unordered(self):
         """Wolbachia preset works with unordered genotypes."""
@@ -506,6 +508,7 @@ class TestUnorderedWithDrive:
         assert pop.config.n_ztypes == 6
         pop.run(2)
         assert pop.tick == 2
+        assert pop.state.individual_count.sum() == 405000.0
 
 
 class TestCompressionDeclared:
