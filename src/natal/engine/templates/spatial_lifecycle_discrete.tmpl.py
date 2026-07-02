@@ -58,7 +58,7 @@ def TICK_FN_NAME(
     individuals between demes according to the migration topology.
 
     Args:
-        ind_count_all: ``(n_demes, n_sexes, n_genotypes)`` stacked individual
+        ind_count_all: ``(n_demes, n_sexes, n_ztypes)`` stacked individual
             count arrays.
         sperm_store_all: Stacked sperm-storage arrays (unused for discrete
             generation; kept for signature compatibility).
@@ -138,7 +138,7 @@ def RUN_FN_NAME(
         n_steps: Number of ticks to execute.
         record_interval: Recording interval (``0`` means no recording).
         observation_mask: Optional 4-D binary mask
-            ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+            ``(n_groups, n_sexes, n_ages, n_ztypes)``.
         compact_meta: Optional ``CompactMeta`` with *offsets*, *deme_map*,
             *n_demes_per_group*, *selected_n*, *mode_aggregate*, *row_size*.
             ``None`` when recording raw state.

@@ -28,6 +28,7 @@ from .genetic_patterns import (
     GenotypeSelector,
     LabPattern,
     ZygoteTypePattern,
+    resolve_zygote_type,
 )
 from .genetic_presets import (
     CytoplasmicPreset,
@@ -307,6 +308,7 @@ __all__ = [
     "population_to_readable_dict",
     "population_to_readable_json",
     "render_cell_svg",
+    "resolve_zygote_type",
     "set_numba_seed",
     "spatial_population_history_to_readable_dict",
     "spatial_population_history_to_readable_json",

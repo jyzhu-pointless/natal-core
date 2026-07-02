@@ -34,8 +34,9 @@ if TYPE_CHECKING:
     import natal as nt
     from natal.genetic_entities import Gene, Genotype, HaploidGenome, Haplotype
     from natal.genetic_structures import Species
+    from natal.index_registry import IndexRegistry
 
-__all__ = ["GenotypePatternParser", "GenotypeSelector", "LabPattern", "GameteTypePattern", "ZygoteTypePattern"]
+__all__ = ["GenotypePatternParser", "GenotypeSelector", "LabPattern", "GameteTypePattern", "ZygoteTypePattern", "resolve_zygote_type"]
 
 
 class PatternParseError(Exception):
@@ -462,7 +463,7 @@ class GenotypePattern:
             try:
                 mat_hap = genotype.maternal.get_haplotype_for_chromosome(chromosome)
                 pat_hap = genotype.paternal.get_haplotype_for_chromosome(chromosome)
-            except (AttributeError, KeyError, IndexError):
+            except (AttributeError, KeyError, IndexError, ValueError):
                 return False
 
             if not chr_pattern.matches((mat_hap, pat_hap)):
@@ -1280,6 +1281,12 @@ class GenotypeSelector:
     ) -> bool:
         """Check if two genotypes are equal, with optional unordered matching.
 
+        NOTE: This method and its callers (``resolve_genotype_indices``,
+        ``create_filter_function``) are **legacy/dead code** as of 2026-06.
+        The active code path uses ``ZygoteTypePattern.parse()`` + ``::`` syntax
+        directly. ``unordered=True`` is never passed from any caller, so the
+        ``|`` → ``::`` fallback below never triggers. Keep for reference.
+
         Args:
             gen1: First genotype.
             gen2: Second genotype.
@@ -1325,6 +1332,10 @@ class GenotypeSelector:
         unordered: bool = False
     ) -> Callable[[Any], bool]:
         """Create a filter function for genotype selection.
+
+        NOTE: **Dead code** as of 2026-06 — zero callers in the codebase.
+        The active path uses ``ZygoteTypePattern`` and ``resolve_zygote_type``
+        directly. Keep for reference.
 
         Args:
             gen_spec: Genotype selector specification.
@@ -1382,3 +1393,41 @@ class GenotypeSelector:
             return selector
         else:
             return None
+
+
+def resolve_zygote_type(
+    spec: str,
+    species: Species,
+    index_registry: IndexRegistry,
+) -> list[int]:
+    """Resolve a genotype string to ZType indices, with species-appropriate matching.
+
+    For unordered species, auto-promotes ``|`` to ``::`` so that ``"A|a"``
+    matches both ordered and unordered (canonicalized) registrations.  This
+    mirrors the canonicalization logic in
+    :meth:`genetic_structures.Species.resolve_genotype_selectors`.
+
+    For ordered species (e.g. sex chromosomes), ``|`` is treated strictly —
+    ``"a|A"`` and ``"A|a"`` are distinct genotypes and will each only match
+    their exact ordering.
+
+    Does NOT perform the reversed-maternal/paternal fallback (that would be
+    a bug for ordered species).
+
+    Args:
+        spec: Genotype selector string (e.g. ``"A|A"``, ``"Drive|WT"``,
+            ``"*"``, ``"A@exposed"``).
+        species: Species for genotype-resolution context.
+        index_registry: Registry for ZType index resolution.
+
+    Returns:
+        List of matching ZType indices (may be empty if nothing matches).
+    """
+    # Canonicalize | → :: for unordered species only (same pattern as
+    # Species._resolve_single_genotype_selector in genetic_structures.py).
+    # The \x00 trick preserves any :: the user already wrote.
+    if species.unordered:
+        spec = spec.replace("::", "\x00").replace("|", "::").replace("\x00", "::")
+
+    pattern = ZygoteTypePattern.parse(spec, species)
+    return index_registry.resolve_ztype_indices(pattern)

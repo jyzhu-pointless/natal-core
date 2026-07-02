@@ -90,15 +90,13 @@ class Observation:
 
         n_sexes = int(individual_count.shape[0])
         n_ages = int(individual_count.shape[1]) if individual_count.ndim == 3 else 1
-        n_genotypes = int(individual_count.shape[-1])
+        n_ztypes = int(individual_count.shape[-1])
         collapse_age = self.collapse_age or individual_count.ndim == 2
-        resolved_diploid = self.filter.resolve_diploid_genotypes(self.diploid_genotypes)
 
         rule = self.filter.build_mask_from_specs(
             n_sexes=n_sexes,
             n_ages=n_ages,
-            n_genotypes=n_genotypes,
-            diploid_genotypes=resolved_diploid,
+            n_ztypes=n_ztypes,
             specs=self.specs,
             collapse_age=collapse_age,
         )
@@ -108,29 +106,27 @@ class Observation:
         self,
         n_sexes: int,
         n_ages: int,
-        n_genotypes: int,
+        n_ztypes: int,
     ) -> NDArray[np.float64]:
-        """Build a 4-D binary mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        """Build a 4-D binary mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
 
         The mask can be used inside Numba engine via broadcast multiplication
-        and genotype-axis summation:
+        and ZType-axis summation:
 
         ``observed = np.sum(mask[None, ...] * ind[:, None, ...], axis=-1)``
 
         Args:
             n_sexes: Number of sexes in the target population.
             n_ages: Number of age classes.
-            n_genotypes: Number of diploid genotypes.
+            n_ztypes: Number of zygote types (genotypes × slab variants).
 
         Returns:
-            Float64 mask with shape ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+            Float64 mask with shape ``(n_groups, n_sexes, n_ages, n_ztypes)``.
         """
-        resolved_diploid = self.filter.resolve_diploid_genotypes(self.diploid_genotypes)
         return self.filter.build_mask_from_specs(
             n_sexes=n_sexes,
             n_ages=n_ages,
-            n_genotypes=n_genotypes,
-            diploid_genotypes=resolved_diploid,
+            n_ztypes=n_ztypes,
             specs=self.specs,
             collapse_age=False,  # kernel always uses full 4-D mask
         )
@@ -239,27 +235,18 @@ class ObservationFilter:
         *,
         n_sexes: int,
         n_ages: int,
-        n_genotypes: int,
-        diploid_genotypes: Optional[Sequence[Any]],
+        n_ztypes: int,
         specs: Tuple[Tuple[str, Dict[str, Any]], ...],
         collapse_age: bool,
     ) -> NDArray[np.float64]:
-        resolved_diploid = diploid_genotypes
-
-        if resolved_diploid is not None and len(resolved_diploid) != n_genotypes:
-            raise ValueError(
-                "diploid_genotypes count does not match individual_count shape: "
-                f"{len(resolved_diploid)} != {n_genotypes}"
-            )
-
-        per_genotypes: List[List[int]] = []
+        per_ztypes: List[List[int]] = []
         per_sexes: List[List[int]] = []
         per_age_preds: List[Callable[[int], bool]] = []
 
         for _, spec in specs:
             gen_spec = self._get_gen_spec(spec)
-            gen_list = self._resolve_genotype_list(gen_spec, resolved_diploid)  # type: ignore[arg-type]
-            per_genotypes.append(gen_list)
+            z_list = self._resolve_ztype_indices_from_spec(gen_spec, n_ztypes)
+            per_ztypes.append(z_list)
 
             sex_spec = self._get_sex_spec(spec)
             per_sexes.append(self._resolve_sexes(sex_spec, n_sexes))
@@ -269,43 +256,26 @@ class ObservationFilter:
 
         n_groups = len(specs)
         if not collapse_age:
-            mask = np.zeros((n_groups, n_sexes, n_ages, n_genotypes), dtype=np.float64)
+            mask = np.zeros((n_groups, n_sexes, n_ages, n_ztypes), dtype=np.float64)
             for gi in range(n_groups):
-                for gidx in per_genotypes[gi]:
+                for zidx in per_ztypes[gi]:
                     for s in per_sexes[gi]:
                         for a in range(n_ages):
                             if per_age_preds[gi](a):
-                                mask[gi, s, a, gidx] = 1.0
+                                mask[gi, s, a, zidx] = 1.0
             return mask
 
-        mask = np.zeros((n_groups, n_sexes, n_genotypes), dtype=np.float64)
+        mask = np.zeros((n_groups, n_sexes, n_ztypes), dtype=np.float64)
         for gi in range(n_groups):
-            for gidx in per_genotypes[gi]:
+            for zidx in per_ztypes[gi]:
                 for s in per_sexes[gi]:
                     any_selected = False
                     for a in range(n_ages):
                         if per_age_preds[gi](a):
                             any_selected = True
                             break
-                    mask[gi, s, gidx] = 1.0 if any_selected else 0.0
+                    mask[gi, s, zidx] = 1.0 if any_selected else 0.0
         return mask
-
-    def _resolve_genotype_index(
-        self, diploid_genotypes: Sequence[Any], sel: Any
-    ) -> Optional[int]:
-        """Resolve a genotype selector to an index.
-
-        Args:
-            diploid_genotypes: Sequence of possible diploid genotypes.
-            sel: Genotype selector (int, str, or Genotype object).
-
-        Returns:
-            Resolved genotype index, or None if resolution fails.
-        """
-        try:
-            return self.registry.resolve_genotype_index(diploid_genotypes, sel, strict=True)
-        except Exception:
-            return None
 
     @staticmethod
     def _make_age_predicate(age_spec: AgeSpec) -> Callable[[int], bool]:
@@ -358,66 +328,50 @@ class ObservationFilter:
             res.extend(ObservationFilter._resolve_sexes(x, n_sexes))
         return sorted(set(res))
 
-    def _resolve_genotype_list(
+    def _resolve_ztype_indices_from_spec(
         self,
         gen_spec: Optional[Iterable[Any]],
-        diploid_genotypes: Optional[Sequence[Any]],
+        n_ztypes: int,
     ) -> List[int]:
-        """Resolve genotype selectors into a list of indices.
+        """Resolve genotype selectors to ZType indices (slab-aware).
 
-        Uses the new GenotypeSelector class from genetic_patterns module.
+        When a selector does not include a slab suffix (e.g., ``"A|a"``),
+        ALL ZType indices for matching genotypes (all slab variants) are
+        included. Integer selectors are expanded to all ZType indices for
+        that genotype index. ``None`` or ``"*"`` selects all ZType indices.
 
         Args:
             gen_spec: Genotype selector specification.
-            diploid_genotypes: Sequence of diploid genotypes.
+            n_ztypes: Total number of ZType indices.
 
         Returns:
-            List of resolved genotype indices.
-
-        Raises:
-            ValueError: If diploid_genotypes is required but missing.
+            List of resolved ZType indices.
         """
-        # Import here to avoid circular imports
-        from natal.genetic_patterns import GenotypeSelector
+        if gen_spec is None:
+            return list(range(n_ztypes))
 
-        # Get species from diploid_genotypes if available
-        species = None
-        if diploid_genotypes and len(diploid_genotypes) > 0:
-            first_genotype = diploid_genotypes[0]
-            if hasattr(first_genotype, 'species'):
-                species = first_genotype.species
+        from natal.genetic_patterns import ZygoteTypePattern
 
-        if species is None:
-            # Fallback to original implementation if species not available
-            if gen_spec is None:
-                if diploid_genotypes is None:
-                    raise ValueError("diploid_genotypes required to enumerate genotypes")
-                return list(range(len(diploid_genotypes)))
+        # Resolve species from registry for pattern parsing.
+        species: Optional[Species] = None
+        if self.registry.n_ztypes > 0:
+            species = self.registry.index_to_genotype[0].species
 
-            if diploid_genotypes is None:
-                raise ValueError("diploid_genotypes required to resolve genotype selectors")
+        out: List[int] = []
+        for sel in gen_spec:
+            if isinstance(sel, str) and sel == "*":
+                return list(range(n_ztypes))
+            if isinstance(sel, int):
+                # Integer: expand to all ZType indices for this genotype.
+                genotype = self.registry.index_to_genotype[sel]
+                for i, (gt, _slab) in enumerate(self.registry.index_to_ztype):
+                    if gt == genotype:
+                        out.append(i)
+            elif species is not None:
+                pattern = ZygoteTypePattern.parse(str(sel), species)
+                out.extend(self.registry.resolve_ztype_indices(pattern))
 
-            out: List[int] = []
-            for sel in gen_spec:
-                if isinstance(sel, int):
-                    out.append(sel)
-                    continue
-                idx = self._resolve_genotype_index(diploid_genotypes, sel)
-                if idx is not None:
-                    out.append(idx)
-                    continue
-                for i, g in enumerate(diploid_genotypes):
-                    try:
-                        if hasattr(g, "to_string") and g.to_string() == str(sel):
-                            out.append(i)
-                            break
-                    except Exception:
-                        pass
-            return sorted(set(out))
-        else:
-            # Use the new GenotypeSelector for better pattern matching
-            selector = GenotypeSelector(species)
-            return selector.resolve_genotype_indices(gen_spec, diploid_genotypes)
+        return sorted(set(out))
 
     def _get_gen_spec(self, spec: Dict[str, Any]) -> Optional[Iterable[Any]]:
         """Extract genotype specification from a spec item.
@@ -512,18 +466,18 @@ class ObservationFilter:
 def apply_rule(
     individual_count: NDArray[np.float64], rule: NDArray[np.float64]
 ) -> NDArray[np.float64]:
-    """Apply `rule` to `individual_count` and sum over genotype axis.
+    """Apply `rule` to `individual_count` and sum over ZType axis.
 
     Supported shapes:
-      - individual_count: (n_sexes, n_ages, n_genotypes) or (n_sexes, n_genotypes)
-      - rule: (n_groups, n_sexes, n_ages, n_genotypes)
-              (n_groups, n_sexes, n_genotypes)   (collapsed ages or non-age)
+      - individual_count: (n_sexes, n_ages, n_ztypes) or (n_sexes, n_ztypes)
+      - rule: (n_groups, n_sexes, n_ages, n_ztypes)
+              (n_groups, n_sexes, n_ztypes)   (collapsed ages or non-age)
 
     Args:
-        individual_count: Count array with shape (n_sexes, n_ages, n_genotypes)
-            or (n_sexes, n_genotypes).
-        rule: Rule mask with shape (n_groups, n_sexes, n_ages, n_genotypes) or
-            (n_groups, n_sexes, n_genotypes).
+        individual_count: Count array with shape (n_sexes, n_ages, n_ztypes)
+            or (n_sexes, n_ztypes).
+        rule: Rule mask with shape (n_groups, n_sexes, n_ages, n_ztypes) or
+            (n_groups, n_sexes, n_ztypes).
 
     Returns:
         Observed counts with shape (n_groups, n_sexes, n_ages) or (n_groups, n_sexes).

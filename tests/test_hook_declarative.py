@@ -132,19 +132,19 @@ class TestResolveGenotypes:
 
     def test_star_returns_all(self, registry_with_genotypes):
         reg = registry_with_genotypes
-        result = _resolve_genotypes("*", reg, reg.index_to_genotype, reg.num_genotypes())
+        result = _resolve_genotypes("*", reg, reg.index_to_genotype[0].species, reg.num_genotypes())
         expected = np.arange(reg.num_genotypes(), dtype=np.int32)
         assert np.array_equal(result, expected)
 
     def test_string_label(self, registry_with_genotypes):
         reg = registry_with_genotypes
-        result = _resolve_genotypes("WT|WT", reg, reg.index_to_genotype, reg.num_genotypes())
+        result = _resolve_genotypes("WT|WT", reg, reg.index_to_genotype[0].species, reg.num_genotypes())
         assert list(result) == [0]
 
     def test_list_of_strings(self, registry_with_genotypes):
         reg = registry_with_genotypes
         result = _resolve_genotypes(
-            ["WT|WT", "Dr|Dr"], reg, reg.index_to_genotype, reg.num_genotypes()
+            ["WT|WT", "Dr|Dr"], reg, reg.index_to_genotype[0].species, reg.num_genotypes()
         )
         assert list(result) == [0, 3]  # unordered: Dr|Dr at index 3
 
@@ -152,12 +152,13 @@ class TestResolveGenotypes:
         """Bare int is not a supported selector (not iterable), so TypeError."""
         reg = registry_with_genotypes
         with pytest.raises(TypeError):
-            _resolve_genotypes(2, reg, reg.index_to_genotype, reg.num_genotypes())
+            _resolve_genotypes(2, reg, reg.index_to_genotype[0].species, reg.num_genotypes())
 
     def test_unknown_string_raises(self, registry_with_genotypes):
         reg = registry_with_genotypes
-        with pytest.raises((KeyError, ValueError)):
-            _resolve_genotypes("UNKNOWN", reg, reg.index_to_genotype, reg.num_genotypes())
+        from natal.genetic_patterns import PatternParseError
+        with pytest.raises(PatternParseError):
+            _resolve_genotypes("UNKNOWN", reg, reg.index_to_genotype[0].species, reg.num_genotypes())
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -247,7 +248,7 @@ class TestCompileDeclarativeHook:
         assert list(descriptor.plan.op_types) == [int(OpType.SCALE)]
         assert list(descriptor.plan.params) == [0.5]
         # "*" genotype selector → all 6 unordered genotype indices
-        assert len(descriptor.plan.gidx_data) == 6
+        assert len(descriptor.plan.zidx_data) == 6
         # "*" age selector → both ages
         assert len(descriptor.plan.age_data) == pop.config.n_ages
 

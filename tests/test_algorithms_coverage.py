@@ -614,7 +614,7 @@ class TestComputeOffspringProbabilityTensor:
 
     def test_basic(self) -> None:
         n_ztypes = 2
-        n_haplogenotypes = 2
+        n_gtypes = 2
         meiosis_f = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float64)
         meiosis_m = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float64)
         h2g = np.zeros((2, 2, 2), dtype=np.float64)
@@ -624,7 +624,7 @@ class TestComputeOffspringProbabilityTensor:
 
         tensor = compute_offspring_probability_tensor(
             meiosis_f, meiosis_m, h2g,
-            n_ztypes=n_ztypes, n_haplogenotypes=n_haplogenotypes,
+            n_ztypes=n_ztypes, n_gtypes=n_gtypes,
         )
         assert tensor.shape == (2, 2, 2)
         assert tensor[0, 0, 0] == pytest.approx(1.0)
@@ -965,8 +965,8 @@ class TestSampleSurvivalWithSpermStorageContinuous:
             offspring_probability=offspring_prob,
             average_eggs_per_wt_female=10.0,
             adult_start_idx=1, n_ages=n_ages, n_ztypes=n_ztypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
+            female_ztype_compatibility=compat,
+            male_ztype_compatibility=compat,
             female_only_by_sex_chrom=female_only,
             male_only_by_sex_chrom=male_only,
             n_glabs=1, age_based_reproduction_rates=None, female_age_based_fertility=None,
@@ -997,8 +997,8 @@ class TestSampleSurvivalWithSpermStorageContinuous:
             offspring_probability=offspring_prob,
             average_eggs_per_wt_female=10.0,
             adult_start_idx=1, n_ages=n_ages, n_ztypes=n_ztypes,
-            female_genotype_compatibility=f_compat,
-            male_genotype_compatibility=m_compat,
+            female_ztype_compatibility=f_compat,
+            male_ztype_compatibility=m_compat,
             female_only_by_sex_chrom=none_only,
             male_only_by_sex_chrom=none_only,
             stochastic=False, has_sex_chromosomes=True,
@@ -1027,8 +1027,8 @@ class TestSampleSurvivalWithSpermStorageContinuous:
             offspring_probability=offspring_prob,
             average_eggs_per_wt_female=10.0,
             adult_start_idx=1, n_ages=n_ages, n_ztypes=n_ztypes,
-            female_genotype_compatibility=compat,
-            male_genotype_compatibility=compat,
+            female_ztype_compatibility=compat,
+            male_ztype_compatibility=compat,
             female_only_by_sex_chrom=none_only,
             male_only_by_sex_chrom=none_only,
             stochastic=False,

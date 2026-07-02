@@ -232,7 +232,7 @@ def _apply_kernel_migration_core(
     n_demes = ind_count_all.shape[0]
     n_sexes = ind_count_all.shape[1]
     n_ages = ind_count_all.shape[2]
-    n_genotypes = ind_count_all.shape[3]
+    n_ztypes = ind_count_all.shape[3]
 
     # Resolve rate array to age count: scalar broadcast to all ages.
     rate_arr = rate
@@ -280,13 +280,13 @@ def _apply_kernel_migration_core(
 
         # Female buckets are split into virgin + sperm-coupled parts.
         for age in range(n_ages):
-            for female_genotype in range(n_genotypes):
+            for female_ztype in range(n_ztypes):
                 # Aggregate stored sperm to recover virgin female mass.
                 stored_total = 0.0
-                for male_genotype in range(n_genotypes):
-                    stored_total += sperm_store_all[src, age, female_genotype, male_genotype]
+                for male_ztype in range(n_ztypes):
+                    stored_total += sperm_store_all[src, age, female_ztype, male_ztype]
 
-                female_total = ind_count_all[src, 0, age, female_genotype]
+                female_total = ind_count_all[src, 0, age, female_ztype]
                 virgin_count = female_total - stored_total
                 if virgin_count < 0.0 and abs(virgin_count) < 1e-10:
                     # Clamp tiny numerical drift.
@@ -306,13 +306,13 @@ def _apply_kernel_migration_core(
                     source_idx=src,
                     sex_idx=0,
                     age_idx=age,
-                    genotype_idx=female_genotype,
+                    genotype_idx=female_ztype,
                 )
 
-                for male_genotype in range(n_genotypes):
+                for male_ztype in range(n_ztypes):
                     # Migrate sperm bucket and synchronized mated-female mass.
                     migrate_sperm_bucket(
-                        value=sperm_store_all[src, age, female_genotype, male_genotype],
+                        value=sperm_store_all[src, age, female_ztype, male_ztype],
                         row_dst_idx=row_dst_idx,
                         row_dst_prob=row_dst_prob,
                         row_dst_count=src_nnz,
@@ -324,16 +324,16 @@ def _apply_kernel_migration_core(
                         out_sperm=out_sperm,
                         source_idx=src,
                         age_idx=age,
-                        female_genotype_idx=female_genotype,
-                        male_genotype_idx=male_genotype,
+                        female_genotype_idx=female_ztype,
+                        male_genotype_idx=male_ztype,
                     )
 
         # Migrate remaining individual buckets (male and other sexes).
         for sex in range(1, n_sexes):
             for age in range(n_ages):
-                for genotype in range(n_genotypes):
+                for ztype in range(n_ztypes):
                     migrate_scalar_bucket(
-                        value=ind_count_all[src, sex, age, genotype],
+                        value=ind_count_all[src, sex, age, ztype],
                         row_dst_idx=row_dst_idx,
                         row_dst_prob=row_dst_prob,
                         row_dst_count=src_nnz,
@@ -345,7 +345,7 @@ def _apply_kernel_migration_core(
                         source_idx=src,
                         sex_idx=sex,
                         age_idx=age,
-                        genotype_idx=genotype,
+                        genotype_idx=ztype,
                     )
 
     # Deterministically merge thread-local partial tensors.

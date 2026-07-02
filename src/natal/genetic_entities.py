@@ -614,10 +614,13 @@ class Genotype:
             genotype_name,
         )
 
-        from natal.genetic_structures import (
-            _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
-        )
-        mat, pat = _canonical_haploid_pair(species, maternal, paternal)
+        if species.unordered:
+            from natal.genetic_structures import (
+                _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
+            )
+            mat, pat = _canonical_haploid_pair(species, maternal, paternal)
+        else:
+            mat, pat = maternal, paternal
         canon_parts: list[str] = []
         for chrom in species.chromosomes:
             try:
@@ -691,7 +694,10 @@ class Genotype:
             self.name = getattr(self, 'name', None)
 
     def __str__(self) -> str:
-        return getattr(self, 'name', self.to_string())
+        name = getattr(self, 'name', None)
+        if name is not None:
+            return name
+        return self.to_string()
 
     def get_alleles_at_locus(self, locus: Locus) -> Tuple[Optional[Gene], Optional[Gene]]:
         """
@@ -882,14 +888,18 @@ class Genotype:
         Format: "<maternal_hap_str>|<paternal_hap_str>"
         where each hap_str is a semicolon-separated list of chromosome haplotype
         allele lists, and alleles on a chromosome are joined with '/'.
+        Chromosomes not present in both haploid genotypes are omitted.
         """
         species = self.species
 
         # For each chromosome produce "maternal_part|paternal_part"
         chrom_pairs: List[str] = []
         for chrom in species.chromosomes:
-            mat_hap = self.maternal.get_haplotype_for_chromosome(chrom)
-            pat_hap = self.paternal.get_haplotype_for_chromosome(chrom)
+            try:
+                mat_hap = self.maternal.get_haplotype_for_chromosome(chrom)
+                pat_hap = self.paternal.get_haplotype_for_chromosome(chrom)
+            except ValueError:
+                continue  # Chromosome not present — skip (e.g. sex chromosomes)
 
             def hap_allele_str(
                 hap: Optional[Haplotype],

@@ -40,6 +40,7 @@ from natal.engine.lifecycle_wrappers import (
 )
 from natal.engine.simulation.age_structured import compute_offspring_probability_tensor
 from natal.genetic_entities import Genotype, HaploidGenotype
+from natal.genetic_presets import CytoplasmicPreset
 from natal.genetic_structures import Species
 from natal.index_registry import IndexRegistry
 from natal.modifiers import GameteModifier, ZygoteModifier
@@ -361,7 +362,7 @@ class BasePopulation(ABC, Generic[T_State]):
         return obs.build_mask(
             n_sexes=ind.shape[0],
             n_ages=ind.shape[1] if ind.ndim == 3 else 1,
-            n_genotypes=ind.shape[-1],
+            n_ztypes=ind.shape[-1],
         )
 
     # ========================================================================
@@ -384,32 +385,26 @@ class BasePopulation(ABC, Generic[T_State]):
         self._index_registry = self._create_registry()
         self._registry = self._index_registry
 
-        # Step 2: Register genotypes
+        # Set somatic (slab) labels before registering genotypes —
+        # register_genotype() auto-cross-products with slab_labels.
+        raw_slabs = cast(Optional[List[str]], getattr(self._species, "somatic_labels", None))
+        slabs = raw_slabs or ["default"]
+        self._index_registry.slab_labels = slabs
+
+        # Set gamete (glab) labels before registering haplogenotypes —
+        # register_haplogenotype() auto-cross-products with glab_labels.
+        raw_glabs = cast(Optional[List[str]], getattr(self._species, "gamete_labels", None))
+        glabs = raw_glabs or ["default"]
+        self._index_registry.glab_labels = glabs
+
         genotypes = self._get_genotypes()
         for genotype in genotypes:
             self._index_registry.register_genotype(genotype)
 
-        # Step 3: Try to register haplogenotypes if available
         haplogenotypes = self._get_haplogenotypes()
         if haplogenotypes:
             for hg in haplogenotypes:
                 self._index_registry.register_haplogenotype(hg)
-
-        # Step 4: Register gamete labels if provided
-        raw_glabs = cast(Optional[List[str]], getattr(self._species, "gamete_labels", None))
-        glabs = raw_glabs or ["default"]
-        for glab in glabs:
-            self._index_registry.register_gamete_label(glab)
-
-        # Step 5: Register somatic labels (symmetric with gamete labels)
-        raw_slabs = cast(Optional[List[str]], getattr(self._species, "somatic_labels", None))
-        slabs = raw_slabs or ["default"]
-        for slab in slabs:
-            self._index_registry.register_somatic_label(slab)
-
-        # Step 6: Set the engine-visible ZType count.  Updated later by
-        # compression (refresh_modifier_maps) if compress=True.
-        self._index_registry.n_ztypes = self._index_registry.num_genotypes()
 
     # Helpers
     def _create_registry(self) -> IndexRegistry:
@@ -422,13 +417,6 @@ class BasePopulation(ABC, Generic[T_State]):
     def _get_haplogenotypes(self) -> Optional[List[HaploidGenotype]]:
         return self.species.get_all_haploid_genotypes()
         # return self._registry.index_to_haplo
-
-    def _resolve_genotype_key(self, genotype_key: Union[Genotype, str]) -> Genotype:
-        if isinstance(genotype_key, Genotype):
-            gt = genotype_key
-        else:
-            gt = self.species.get_genotype_from_str(genotype_key)
-        return self.species.unordered_genotype(gt.maternal, gt.paternal)
 
     @staticmethod
     def _derive_hook_slot(name: str) -> int:
@@ -698,6 +686,7 @@ class BasePopulation(ABC, Generic[T_State]):
             return
 
         n_glabs = int(self._config.n_glabs)
+        n_slabs = int(self._config.n_slabs)
 
         # Step 1: Build wrapper callables from the combined modifier
         # lists (preset-derived + manually added).  Each wrapper is a
@@ -721,6 +710,7 @@ class BasePopulation(ABC, Generic[T_State]):
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             gamete_modifiers=gamete_funcs,
+            n_slabs=n_slabs,
         )
 
         # Step 3: Build the fusion map.  For each pair of haploid gametes
@@ -731,59 +721,51 @@ class BasePopulation(ABC, Generic[T_State]):
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             zygote_modifiers=zygote_funcs,
+            n_slabs=n_slabs,
         )
 
-        # Step 3.3: Apply slab expansion if n_slabs > 1.  This must run
-        # after modifier callables (which operate in unexpanded genotype
-        # space) and before index compression (which expects expanded maps).
-        n_slabs = int(self._config.n_slabs)
-        if n_slabs > 1:
-            from natal.population_config import (
-                _expand_slab_maps,  # pyright: ignore[reportPrivateUsage]
-            )
-            species = getattr(self, "_species", None)
-            zygotes_to_gametes_map, gametes_to_zygotes_map, _n_g_exp = (
-                _expand_slab_maps(
-                    z2g=zygotes_to_gametes_map,
-                    g2z=gametes_to_zygotes_map,
-                    n_slabs=n_slabs,
-                    n_genotypes=int(zygotes_to_gametes_map.shape[1]),
-                    gamete_labels=species.gamete_labels if species else None,
-                    somatic_labels=species.somatic_labels if species else None,
-                    n_haploid_genotypes=int(self._config.n_haploid_genotypes),
-                    n_glabs=n_glabs,
-                )
-            )
-            # After expansion, n_g must match the config's declared value.
-            assert _n_g_exp == int(self._config.n_ztypes), (
-                f"Slab expansion mismatch: {_n_g_exp} vs "
-                f"{int(self._config.n_ztypes)}"
-            )
+        # Step 4: Apply cytoplasmic preset effects if presets are configured.
+        # This must happen BEFORE the offspring tensor is computed, so the
+        # tensor reflects the modified maps.
+        for preset in self._presets:
+            if isinstance(preset, CytoplasmicPreset):
+                n_genotypes = len(diploid_genotypes)
+                n_gtypes = len(haploid_genotypes)
+                species = getattr(self, "_species", None)
+                if species is not None:
+                    CytoplasmicPreset.tag_maternal_gametes(
+                        zygotes_to_gametes_map, species.gamete_labels,
+                        species.somatic_labels,
+                        n_genotypes, n_gtypes, n_glabs, n_slabs,
+                    )
+                    CytoplasmicPreset.redirect_zygotes(
+                        gametes_to_zygotes_map, species.gamete_labels,
+                        species.somatic_labels,
+                        n_genotypes, n_gtypes, n_glabs, n_slabs,
+                    )
 
-        # Step 4: Compute the full offspring probability tensor by
+        # Step 5: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
         # the fusion map.  The result is a 4-D array indexed by
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
         n_g = int(self._config.n_ztypes)
-        n_hg = int(self._config.n_haploid_genotypes)
-        n_gl = n_glabs
+        n_hg = int(self._config.n_gtypes)
         offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=zygotes_to_gametes_map[0],
             meiosis_m=zygotes_to_gametes_map[1],
             haplo_to_genotype_map=gametes_to_zygotes_map,
             n_ztypes=n_g,
-            n_haplogenotypes=n_hg,
-            n_glabs=n_gl,
+            n_gtypes=n_hg,
         )
 
-        # Step 5: Persist all three maps into the config via shallow copy.
+        # Step 6: Persist all three maps into the config via shallow copy.
         self._config = self._config._replace(
             zygotes_to_gametes_map=zygotes_to_gametes_map,
             gametes_to_zygotes_map=gametes_to_zygotes_map,
             offspring_tensor=offspring_tensor,
             n_ztypes=n_g,
-            n_haploid_genotypes=n_hg,
-            n_glabs=n_gl,
+            n_gtypes=n_hg,
+            n_glabs=n_glabs,
         )
 
     def add_gamete_modifier(
@@ -920,8 +902,8 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # Register each string label if not already present
         for lab in seq:
-            if lab not in self._index_registry.glab_to_index:
-                self._index_registry.register_gamete_label(lab)
+            if lab not in self._index_registry.glab_labels:
+                self._index_registry.glab_labels.append(lab)
 
     # ========================================================================
     # Core methods
@@ -1174,11 +1156,11 @@ class BasePopulation(ABC, Generic[T_State]):
         genotype_counts = self._state.individual_count.sum(axis=(0, 1))
 
         registry = self._registry
-        for g_idx, count in enumerate(genotype_counts):
+        for z_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):
+            count = genotype_counts[z_idx]
             if count <= 0:
                 continue
 
-            genotype = registry.index_to_genotype[g_idx]
             for chrom in self.species.chromosomes:
                 for locus in chrom.loci:
                     mat, pat = genotype.get_alleles_at_locus(locus)
@@ -1560,8 +1542,8 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # 2. Pack all operation data
         all_op_types: List[int] = []
-        all_gidx_offsets: List[int] = [0]
-        all_gidx_data: List[int] = []
+        all_zidx_offsets: List[int] = [0]
+        all_zidx_data: List[int] = []
         all_age_offsets: List[int] = [0]
         all_age_data: List[int] = []
         all_sex_masks: List[bool] = []
@@ -1590,13 +1572,13 @@ class BasePopulation(ABC, Generic[T_State]):
                 # Pack operation data
                 all_op_types.extend(plan.op_types.tolist())
 
-                # Handle gidx (adjust offsets for concatenation)
-                gidx_offset_base = len(all_gidx_data)
+                # Handle zidx (adjust offsets for concatenation)
+                zidx_offset_base = len(all_zidx_data)
                 for i in range(plan.n_ops):
-                    all_gidx_offsets.append(
-                        gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0]
+                    all_zidx_offsets.append(
+                        zidx_offset_base + plan.zidx_offsets[i + 1] - plan.zidx_offsets[0]
                     )
-                all_gidx_data.extend(plan.gidx_data.tolist())
+                all_zidx_data.extend(plan.zidx_data.tolist())
 
                 # Handle age
                 age_offset_base = len(all_age_data)
@@ -1645,8 +1627,8 @@ class BasePopulation(ABC, Generic[T_State]):
             n_ops_list=np.array(n_ops_list, dtype=np.int32),
             op_offsets=np.array(op_offsets, dtype=np.int32),
             op_types_data=np.array(all_op_types, dtype=np.int32),
-            gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
-            gidx_data=np.array(all_gidx_data, dtype=np.int32),
+            zidx_offsets_data=np.array(all_zidx_offsets, dtype=np.int32),
+            zidx_data=np.array(all_zidx_data, dtype=np.int32),
             age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
             age_data=np.array(all_age_data, dtype=np.int32),
             sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
@@ -1711,8 +1693,8 @@ class BasePopulation(ABC, Generic[T_State]):
             n_ops_list=np.array([], dtype=np.int32),
             op_offsets=op_offsets,
             op_types_data=np.array([], dtype=np.int32),
-            gidx_offsets_data=np.array([0], dtype=np.int32),
-            gidx_data=np.array([], dtype=np.int32),
+            zidx_offsets_data=np.array([0], dtype=np.int32),
+            zidx_data=np.array([], dtype=np.int32),
             age_offsets_data=np.array([0], dtype=np.int32),
             age_data=np.array([], dtype=np.int32),
             sex_masks_data=np.array([], dtype=np.bool_),

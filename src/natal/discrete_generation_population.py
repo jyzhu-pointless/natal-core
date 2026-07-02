@@ -80,7 +80,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 n_sexes=int(cfg.n_sexes),
                 n_ages=int(cfg.n_ages),
                 n_ztypes=cfg.n_ztypes,
-                n_haploid_genotypes=cfg.n_haploid_genotypes,
+                n_gtypes=cfg.n_gtypes,
                 n_glabs=cfg.n_glabs,
                 n_slabs=cfg.n_slabs,
                 female_age_based_fertility=cfg.female_age_based_fertility,
@@ -109,8 +109,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 viability_f=cfg.viability_fitness[0, 0, :],
                 viability_m=cfg.viability_fitness[1, 0, :],
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
-                female_genotype_compatibility=cfg.female_genotype_compatibility,
-                male_genotype_compatibility=cfg.male_genotype_compatibility,
+                female_ztype_compatibility=cfg.female_ztype_compatibility,
+                male_ztype_compatibility=cfg.male_ztype_compatibility,
                 female_only_by_sex_chrom=cfg.female_only_by_sex_chrom,
                 male_only_by_sex_chrom=cfg.male_only_by_sex_chrom,
                 juvenile_growth_mode=cfg.juvenile_growth_mode,
@@ -154,7 +154,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if index_registry is not None:
             self._index_registry = index_registry
 
-        self._config = self._to_discrete_config(population_config)  # type: ignore[assignment]
+        self._config = self._to_discrete_config(population_config)  # type: ignore[assignment]  # covariant narrow: DiscretePopulationConfig is a subtype of PopulationConfig
 
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
@@ -198,9 +198,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._finalize_hooks()
 
     def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
-        clone = super()._clone(name, config=config)  # type: ignore[arg-type]
+        clone = super()._clone(name, config=config)  # type: ignore[arg-type]  # subclass accepts DiscretePopulationConfig, super expects PopulationConfig
         if config is not None:
-            object.__setattr__(clone, "_config", self._to_discrete_config(config))  # type: ignore[assignment]
+            object.__setattr__(clone, "_config", self._to_discrete_config(config))  # type: ignore[assignment]  # bypasses type check for covariant _config override
         return clone
 
     @classmethod
@@ -324,11 +324,32 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             else:
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
             for genotype_key, age_data in genotype_dist.items():
-                genotype = self._resolve_genotype_key(genotype_key)
-                genotype_idx = self.registry.genotype_to_index[genotype]
+                from natal.genetic_patterns import (
+                    GenotypePatternParser,
+                    ZygoteTypePattern,
+                )
+
+                if isinstance(genotype_key, str):
+                    if "@" in genotype_key:
+                        idx = genotype_key.rindex("@")
+                        gt_part = genotype_key[:idx]
+                        slab_part = genotype_key[idx:]
+                    else:
+                        gt_part = genotype_key
+                        slab_part = ""
+                    gt = self.species.get_genotype_from_str(gt_part)
+                    genotype_key = str(gt) + slab_part
+                    pattern = ZygoteTypePattern.parse(genotype_key, self.species)
+                else:
+                    parser = GenotypePatternParser(self.species)
+                    pattern = ZygoteTypePattern(
+                        parser.parse(str(genotype_key)), slab=None
+                    )
+
+                z_idx = self.registry.resolve_default_ztype_index(pattern)
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
-                self.state.individual_count[sex_idx, 0, genotype_idx] = age0_count
-                self.state.individual_count[sex_idx, 1, genotype_idx] = age1_count
+                self.state.individual_count[sex_idx, 0, z_idx] = age0_count
+                self.state.individual_count[sex_idx, 1, z_idx] = age1_count
 
     def run(
         self,
@@ -522,8 +543,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 viability_m=cfg.viability_m,
                 eggs_per_female=float(cfg.eggs_per_female[()]),
                 sex_ratio=float(cfg.sex_ratio[()]),
-                female_compat=cfg.female_genotype_compatibility,
-                male_compat=cfg.male_genotype_compatibility,
+                female_compat=cfg.female_ztype_compatibility,
+                male_compat=cfg.male_ztype_compatibility,
                 female_only=cfg.female_only_by_sex_chrom,
                 male_only=cfg.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
@@ -714,7 +735,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def import_config(self, config: object) -> None:
         """Replace the current configuration with *config*."""
-        self._config = self._to_discrete_config(config)  # type: ignore[assignment]
+        self._config = self._to_discrete_config(config)  # type: ignore[assignment]  # covariant narrow: DiscretePopulationConfig is a subtype of PopulationConfig
 
     def import_state(
         self,

@@ -252,8 +252,29 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
 
             for genotype_key, age_data in genotype_dist.items():
-                genotype = self._resolve_genotype_key(genotype_key)
-                genotype_idx = self.registry.genotype_to_index[genotype]
+                from natal.genetic_patterns import (
+                    GenotypePatternParser,
+                    ZygoteTypePattern,
+                )
+
+                if isinstance(genotype_key, str):
+                    if "@" in genotype_key:
+                        idx = genotype_key.rindex("@")
+                        gt_part = genotype_key[:idx]
+                        slab_part = genotype_key[idx:]
+                    else:
+                        gt_part = genotype_key
+                        slab_part = ""
+                    gt = self.species.get_genotype_from_str(gt_part)
+                    genotype_key = str(gt) + slab_part
+                    pattern = ZygoteTypePattern.parse(genotype_key, self.species)
+                else:
+                    parser = GenotypePatternParser(self.species)
+                    pattern = ZygoteTypePattern(
+                        parser.parse(str(genotype_key)), slab=None
+                    )
+
+                z_idx = self.registry.resolve_default_ztype_index(pattern)
 
                 if isinstance(age_data, list):
                     for age, raw_count in enumerate(cast(List[object], age_data)):
@@ -261,7 +282,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             raise TypeError(f"Age count must be numeric, got {type(raw_count)}")
                         count = float(raw_count)
                         if age < self.config.n_ages and count > 0:
-                            self.state.individual_count[sex_idx, age, genotype_idx] = count
+                            self.state.individual_count[sex_idx, age, z_idx] = count
                 elif isinstance(age_data, dict):
                     for age_raw, raw_count in cast(Dict[object, object], age_data).items():
                         if not isinstance(age_raw, int):
@@ -271,7 +292,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         age = age_raw
                         count = float(raw_count)
                         if age < self.config.n_ages and count > 0:
-                            self.state.individual_count[sex_idx, age, genotype_idx] = count
+                            self.state.individual_count[sex_idx, age, z_idx] = count
                 else:
                     raise TypeError(f"age_data must be a list or dict, got {type(age_data)}")
 
@@ -300,27 +321,53 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             ValueError: If sperm counts or ages are out of range.
         """
         self.state.sperm_storage.fill(0.0)
+        from natal.genetic_patterns import GenotypePatternParser, ZygoteTypePattern
+
         for female_key, male_dict in sperm_storage_dist.items():
             assert isinstance(female_key, (str, Genotype)), \
                 f"Female genotype key must be Genotype or str, got {type(female_key)}"
 
             if isinstance(female_key, str):
-                female_genotype = species.get_genotype_from_str(female_key)
+                if "@" in female_key:
+                    idx = female_key.rindex("@")
+                    gt_part = female_key[:idx]
+                    slab_part = female_key[idx:]
+                else:
+                    gt_part = female_key
+                    slab_part = ""
+                gt = species.get_genotype_from_str(gt_part)
+                female_key = str(gt) + slab_part
+                female_pattern = ZygoteTypePattern.parse(female_key, species)
             else:
-                female_genotype = female_key
+                parser = GenotypePatternParser(species)
+                female_pattern = ZygoteTypePattern(
+                    parser.parse(str(female_key)), slab=None
+                )
 
-            female_idx = self.registry.genotype_to_index[female_genotype]
+            f_z = self.registry.resolve_default_ztype_index(female_pattern)
 
             for male_key, age_data in male_dict.items():
                 assert isinstance(male_key, (str, Genotype)), \
                     f"Male genotype key must be Genotype or str, got {type(male_key)}"
 
                 if isinstance(male_key, str):
-                    male_genotype = species.get_genotype_from_str(male_key)
+                    if "@" in male_key:
+                        idx = male_key.rindex("@")
+                        gt_part = male_key[:idx]
+                        slab_part = male_key[idx:]
+                    else:
+                        gt_part = male_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    male_key = str(gt) + slab_part
+                    male_pattern = ZygoteTypePattern.parse(male_key, species)
                 else:
-                    male_genotype = male_key
+                    parser = GenotypePatternParser(species)
+                    male_pattern = ZygoteTypePattern(
+                        parser.parse(str(male_key)), slab=None
+                    )
 
-                male_idx = self.registry.genotype_to_index[male_genotype]
+                m_z = self.registry.resolve_default_ztype_index(male_pattern)
 
                 assert isinstance(age_data, (dict, list, tuple, int, float)), \
                     f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
@@ -340,7 +387,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
                         if count > 0:
-                            self.state.sperm_storage[age, female_idx, male_idx] = count
+                            self.state.sperm_storage[age, f_z, m_z] = count
 
                 elif isinstance(age_data, list):
                     # List format: [count_age0, count_age1, ...]
@@ -353,7 +400,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
                         if count > 0:
-                            self.state.sperm_storage[age, female_idx, male_idx] = count
+                            self.state.sperm_storage[age, f_z, m_z] = count
 
                 elif isinstance(age_data, tuple):
                     # Tuple format: (count_age0, count_age1, ...)
@@ -366,7 +413,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
                         if count > 0:
-                            self.state.sperm_storage[age, female_idx, male_idx] = count
+                            self.state.sperm_storage[age, f_z, m_z] = count
 
                 else:
                     # Scalar format: apply to all adult ages
@@ -374,7 +421,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         raise ValueError(f"Sperm count must be non-negative, got {age_data}")
                     if age_data > 0:
                         for age in range(self.new_adult_age, self.n_ages):
-                            self.state.sperm_storage[age, female_idx, male_idx] = float(age_data)
+                            self.state.sperm_storage[age, f_z, m_z] = float(age_data)
 
     @property
     def state(self) -> PopulationState:
@@ -473,9 +520,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: The fecundity fitness value.
         """
-        genotype_idx = self.registry.genotype_to_index[genotype]
-        sex_idx = int(sex.value)
-        return self.config.fecundity_fitness[sex_idx, genotype_idx]
+        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
+        return self.config.fecundity_fitness[int(sex.value), genotype_idx]
 
     def _get_sexual_preference(self, female_genotype: Genotype, male_genotype: Genotype) -> float:
         """Internal helper: return sexual preference value for a genotype pair.
@@ -487,8 +533,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: The sexual selection fitness weight.
         """
-        f_idx = self.registry.genotype_to_index[female_genotype]
-        m_idx = self.registry.genotype_to_index[male_genotype]
+        f_idx = self.registry.ztype_index(female_genotype, self.registry.slab_labels[0])
+        m_idx = self.registry.ztype_index(male_genotype, self.registry.slab_labels[0])
         return self.config.sexual_selection_fitness[f_idx, m_idx]
 
     @property
@@ -906,7 +952,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             Tuple[int,int]: ``(female_count, male_count)`` across all ages.
         """
-        genotype_idx = self.registry.genotype_to_index[genotype]
+        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
         female_count = self.state.individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
         male_count = self.state.individual_count[Sex.MALE.value, :, genotype_idx].sum()
         return (female_count, male_count)
@@ -915,8 +961,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def genotypes_present(self) -> Set[Genotype]:
         """Set[Genotype]: Returns the set of genotypes with count > 0."""
         present: Set[Genotype] = set()
-        for genotype_idx, genotype in enumerate(self.registry.index_to_genotype):
-            total_count = self.state.individual_count[:, :, genotype_idx].sum()
+        for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
+            total_count = self.state.individual_count[:, :, z_idx].sum()
             if total_count > 0:
                 present.add(genotype)
         return present

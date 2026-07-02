@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.index_registry import IndexRegistry, compress_hg_glab
+from natal.index_registry import IndexRegistry
 from natal.modifiers import (
     _normalize_zygote_val,
     _parse_zygote_key,
@@ -36,6 +36,8 @@ class TestParseZygoteKey:
         n_glabs = len(simple_species.gamete_labels or ["default"])
         registry = IndexRegistry()
         registry.register_gamete_label("default")
+        registry.register_haplogenotype(hgs[0])
+        registry.register_haplogenotype(hgs[1])
 
         # key = ((hg0, "default"), (hg1, "default")) -- each inner tuple is
         # (HaploidGenotype, gamete_label_string).  resolve_hg_glab_part
@@ -43,8 +45,8 @@ class TestParseZygoteKey:
         key = ((hgs[0], "default"), (hgs[1], "default"))
         c1, c2 = _parse_zygote_key(key, registry, hgs, n_glabs)
 
-        expected_c1 = compress_hg_glab(0, 0, n_glabs)  # hg0 -> idx 0
-        expected_c2 = compress_hg_glab(1, 0, n_glabs)  # hg1 -> idx 1
+        expected_c1 = 0 * n_glabs + 0  # hg0 -> idx 0
+        expected_c2 = 1 * n_glabs + 0  # hg1 -> idx 1
         assert (c1, c2) == (expected_c1, expected_c2)
 
     def test_compressed_int_element(self, simple_species):
@@ -52,15 +54,14 @@ class TestParseZygoteKey:
         hgs = simple_species.get_all_haploid_genotypes()
         n_glabs = len(simple_species.gamete_labels or ["default"])
         registry = IndexRegistry()
+        registry.register_haplogenotype(hgs[0])
 
-        # part1 = 7 is a compressed index (decompressed inside
-        # resolve_hg_glab_part), part2 = hgs[0] resolves via the
-        # HaploidGenotype-object branch.
+        # part1 = 7 is a compressed index (passed through as-is),
+        # part2 = hgs[0] resolves via gtype_index(part, "default").
         c1, c2 = _parse_zygote_key((7, hgs[0]), registry, hgs, n_glabs)
 
-        # Round-trip through decompress/compress preserves the value
-        # for n_glabs=1: decompress(7,1) = (7,0), compress(7,0,1) = 7.
-        # hgs[0] -> (0, 0) -> compress(0,0,1) = 0.
+        # part1=7 (int) passes through as 7.
+        # hgs[0] -> gtype_index(hgs[0], "default") -> 0.
         assert c1 == 7
         assert c2 == 0
 

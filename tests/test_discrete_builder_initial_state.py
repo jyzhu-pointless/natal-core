@@ -64,10 +64,18 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
 
         all_genotypes = self.species.get_all_genotypes(unordered=True)
         genotype_to_index = {gt: i for i, gt in enumerate(all_genotypes)}
+
+        def _resolve_default_ztype_index(pattern) -> int:
+            for gt, idx in genotype_to_index.items():
+                if pattern.genotype.matches(gt):
+                    return idx
+            raise KeyError(f"No ZType matches pattern {pattern}")
+
         pop._registry = SimpleNamespace(
             get_genotype_index=lambda gt: genotype_to_index[gt],
             genotype_to_index=genotype_to_index,
-        ) # type: ignore
+            resolve_default_ztype_index=_resolve_default_ztype_index,
+        )  # type: ignore
 
         pop._state = SimpleNamespace(
             individual_count=np.zeros((2, 2, len(all_genotypes)), dtype=np.float64)

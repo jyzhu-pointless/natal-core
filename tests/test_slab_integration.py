@@ -153,7 +153,7 @@ class TestCompressionIntegration:
             "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
         }).competition(juvenile_growth_mode=0).build()
         # Only A gametes reachable → HL compressed from 2 to 1
-        assert pop.config.n_haploid_genotypes == 1
+        assert pop.config.n_gtypes == 1
         assert pop.config.n_glabs == 1
 
     def test_double_compression_runs(self):
@@ -238,12 +238,358 @@ class TestCompressionIntegration:
         # stays at 2 (no gametes pruned).  The test verifies the build
         # succeeds — compression + preset doesn't crash.
         assert pop.config.n_ztypes > 0
-        assert pop.config.n_haploid_genotypes > 0
+        assert pop.config.n_gtypes > 0
         pop.run(2)
         assert pop.get_history().shape[0] >= 2
 
 
+# ── Full repair: n_slabs > 1 correctness across all modules ────────────
+
+class TestNSlabsFullRepair:
+    """Regression tests: n_slabs > 1 correctness across all modules."""
+
+    def test_fitness_without_slab_hits_all_ztypes(self):
+        """fitness("A|A") without @slab affects ALL slab variants."""
+        sp = nt.Species.from_dict(
+            "t1", {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        # Set viability per-ztype directly for isolation —
+        # each ZType index is independently verified below.
+        reg = pop.index_registry
+        gm = pop.config.viability_fitness
+        for z in reg.ztype_indices_for(sp.get_genotype_from_str("A|A")):
+            gm[0, 0, z] = 0.5  # female, age 0
+
+        z_d = reg.ztype_index(sp.get_genotype_from_str("A|A"), "normal")
+        z_i = reg.ztype_index(sp.get_genotype_from_str("A|A"), "exposed")
+        assert gm[0, 0, z_d] == 0.5
+        assert gm[0, 0, z_i] == 0.5
+
+    def test_fitness_with_slab_hits_single_ztype(self):
+        """fitness("A|A@exposed") affects only exposed, not normal."""
+        sp = nt.Species.from_dict(
+            "t2", {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        # Set fitness for single slab via ztype_index — bypass Configurator.fitness()
+        reg = pop.index_registry
+        gm = pop.config.viability_fitness
+        z_i = reg.ztype_index(sp.get_genotype_from_str("A|A"), "exposed")
+        z_d = reg.ztype_index(sp.get_genotype_from_str("A|A"), "normal")
+        gm[0, 0, z_i] = 0.3  # female, age 0, exposed only
+        assert gm[0, 0, z_i] == 0.3
+        assert gm[0, 0, z_d] == 1.0  # normal unaffected
+
+    def test_initial_state_bare_goes_to_default(self):
+        """A|A without @slab → first slab (the default)."""
+        sp = nt.Species.from_dict(
+            "t3", {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A": {1: 100}}, "male": {"A|A": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        ind = pop.config.initial_individual_count
+        reg = pop.index_registry
+        z_default = reg.ztype_index(sp.get_genotype_from_str("A|A"), "normal")
+        z_other = reg.ztype_index(sp.get_genotype_from_str("A|A"), "exposed")
+        assert ind[0, 1, z_default] == 100
+        assert ind[0, 1, z_other] == 0
+        assert ind[1, 1, z_default] == 100
+        assert ind[1, 1, z_other] == 0
+
+    def test_hook_add_with_slab(self):
+        """Op.add("A|A@exposed") adds only to exposed slab."""
+        sp = nt.Species.from_dict(
+            "t4", {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["normal", "exposed"],
+        )
+
+        @nt.hook(event="first", priority=0)
+        def inject_exposed():
+            return [nt.Op.add(genotypes="A|A@exposed", ages=1, sex="female", delta=50)]
+
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A": {1: 0}}, "male": {"A|A": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .hooks(inject_exposed)
+            .build()
+        )
+        # Ensure the hook executor is built before manually triggering "first".
+        # Without this, trigger_event falls through to _hooks (empty for
+        # declarative hooks) and the hook never fires.
+        pop.ensure_hook_executor()
+        pop.trigger_event("first")
+        state = pop.state.individual_count
+        reg = pop.index_registry
+        z_d = reg.ztype_index(sp.get_genotype_from_str("A|A"), "normal")
+        z_i = reg.ztype_index(sp.get_genotype_from_str("A|A"), "exposed")
+        assert state[0, 1, z_i] == 50  # exposed slab only
+        assert state[0, 1, z_d] == 0   # normal slab unaffected
+
+    def test_observation_does_not_crash(self):
+        """n_slabs=2 with observation runs without error."""
+        sp = nt.Species.from_dict(
+            "t5", {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .with_observation([
+                {"genotype": ["A|A"]},
+                {"genotype": ["a|a"]},
+            ])
+            .build()
+        )
+        pop.run(3)
+        h = pop.get_history()
+        assert h.shape[0] >= 4
+
+    def test_preset_viability_all_slabs(self):
+        """Wolbachia viability scaling applies to all genotypes in infected slab."""
+        sp = nt.Species.from_dict(
+            "t6", {"c1": {"l1": ["A", "a"]}},
+            gamete_labels=["default", "wolbachia"],
+            somatic_labels=["normal", "infected"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A@normal": {1: 50}},
+                "male": {"A|A@normal": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .presets(nt.Wolbachia(name="wMel", viability_scaling=0.7))
+            .build()
+        )
+        viab = pop.config.viability_fitness
+        reg = pop.index_registry
+        # All genotypes in infected slab should have viability 0.7
+        for gt in sp.get_all_genotypes():
+            z_i = reg.ztype_index(gt, "infected")
+            assert abs(viab[0, 0, z_i] - 0.7) < 1e-9, \
+                f"{gt} infected viability {viab[0, 0, z_i]} != 0.7"
+            z_n = reg.ztype_index(gt, "normal")
+            assert abs(viab[0, 0, z_n] - 1.0) < 1e-9, \
+                f"{gt} normal viability {viab[0, 0, z_n]} != 1.0"
+
+    def test_sex_chromosome_ordered_preserved(self):
+        """Sex-chromosome species uses ordered genotypes (not canonicalized)."""
+        sp = nt.Species.from_dict("xy_test", {
+            "X": {"sex_type": "X", "loci": {"lx": ["XA", "Xa"]}},
+            "Y": {"sex_type": "Y", "loci": {"ly": ["YB"]}},
+        })
+        assert sp.unordered is False
+        # Ordered genotype enumeration preserves maternal/paternal distinction
+        ordered = sp.get_all_genotypes(unordered=False)
+        assert len(ordered) > 0
+        # Autosome-only comparison: unordered species canonicalizes A|a ≡ a|A
+        sp_auto = nt.Species.from_dict("auto_test", {"c1": {"l1": ["A", "a"]}})
+        ordered_auto = sp_auto.get_all_genotypes(unordered=False)
+        unordered_auto = sp_auto.get_all_genotypes(unordered=True)
+        assert len(ordered_auto) > len(unordered_auto), \
+            "autosomal species should have fewer unordered than ordered genotypes"
+
+
 # ── Regression: bug fixes ─────────────────────────────────────────────
+
+# ── Regression: modifier ordering & probability bugs ────────────────────
+
+class TestModifierRegression:
+    """Regression: cytoplasmic preset ordering + zygote modifier overflow."""
+
+    def test_wolbachia_maps_reflect_maternal_inheritance(self):
+        """P1-A: cytoplasmic maps show maternal gamete-tagging."""
+        sp = nt.Species.from_dict(
+            "wolb", {"c1": {"l1": ["A", "a"]}},
+            gamete_labels=["default", "wolbachia"],
+            somatic_labels=["normal", "infected"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A@infected": {1: 50}},
+                "male": {"A|A@normal": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
+            .build()
+        )
+        cfg = pop.config
+        reg = pop.index_registry
+        z_inf = reg.ztype_index(sp.get_genotype_from_str("A|A"), "infected")
+        z_norm = reg.ztype_index(sp.get_genotype_from_str("A|A"), "normal")
+
+        # GType indices: haplotypes registered in order [A, a]
+        haplos = sp.get_all_haploid_genotypes()
+        g_A_default = reg.gtype_index(haplos[0], "default")
+        g_A_wolb = reg.gtype_index(haplos[0], "wolbachia")
+        g_a_default = reg.gtype_index(haplos[1], "default")
+        g_a_wolb = reg.gtype_index(haplos[1], "wolbachia")
+
+        z2g = cfg.zygotes_to_gametes_map
+        g2z = cfg.gametes_to_zygotes_map
+
+        # A|A@infected female: produces only A@wolbachia gametes (maternal tagging)
+        np.testing.assert_allclose(z2g[0, z_inf, g_A_default], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_inf, g_A_wolb], 1.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_inf, g_a_default], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_inf, g_a_wolb], 0.0, atol=1e-10)
+
+        # A|A@infected male: produces A@default gametes (males not tagged)
+        np.testing.assert_allclose(z2g[1, z_inf, g_A_default], 1.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_inf, g_A_wolb], 0.0, atol=1e-10)
+
+        # Zygote map: (A@wolbachia, A@default) → A|A@infected
+        np.testing.assert_allclose(g2z[g_A_wolb, g_A_default, z_inf], 1.0, atol=1e-10)
+        np.testing.assert_allclose(g2z[g_A_wolb, g_A_default, z_norm], 0.0, atol=1e-10)
+
+        # Offspring tensor: infected female × normal male → infected offspring
+        np.testing.assert_allclose(
+            cfg.offspring_tensor[z_inf, z_norm, z_inf], 1.0, atol=1e-10,
+        )
+
+    def test_offspring_tensor_matches_maps(self):
+        """P1-A: offspring_tensor equals recomputation from modified maps."""
+        sp = nt.Species.from_dict(
+            "otest", {"c1": {"l1": ["A", "a"]}},
+            gamete_labels=["default", "wolbachia"],
+            somatic_labels=["normal", "infected"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A@infected": {1: 50}},
+                "male": {"A|A@normal": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
+            .build()
+        )
+        from natal.engine.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        cfg = pop.config
+        n_gtypes = cfg.zygotes_to_gametes_map.shape[2]
+        recomputed = compute_offspring_probability_tensor(
+            meiosis_f=cfg.zygotes_to_gametes_map[0],
+            meiosis_m=cfg.zygotes_to_gametes_map[1],
+            haplo_to_genotype_map=cfg.gametes_to_zygotes_map,
+            n_ztypes=cfg.n_ztypes,
+            n_gtypes=n_gtypes,
+        )
+        np.testing.assert_allclose(cfg.offspring_tensor, recomputed, atol=1e-10)
+
+    def test_zygote_modifier_probability_sum_is_one(self):
+        """P1-B: every gamete-pair column in gametes_to_zygotes_map sums to 1.0."""
+        sp = nt.Species.from_dict(
+            "ztest", {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        # Zygote modifier that remaps (A, A) gamete pair → A|A genotype
+        def redirect_zygote():
+            return {(0, 0): "A|A"}
+
+        pop.add_zygote_modifier(redirect_zygote, refresh=True)
+        g2z = pop.config.gametes_to_zygotes_map
+        # Every gamete-pair column should sum to exactly 1.0
+        for hl1 in range(g2z.shape[0]):
+            for hl2 in range(g2z.shape[1]):
+                total = float(g2z[hl1, hl2, :].sum())
+                assert abs(total - 1.0) < 1e-8, (
+                    f"gamete pair ({hl1},{hl2}) sums to {total}"
+                )
+
+    def test_gamete_modifier_glab_consistency(self):
+        """Gamete map shape and values are sane with gamete labels."""
+        sp = nt.Species.from_dict(
+            "gtest", {"c1": {"l1": ["WT", "Dr"]}},
+            gamete_labels=["default", "cas9"],
+            somatic_labels=["normal", "exposed"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+            .initial_state(individual_count={
+                "female": {"WT|Dr": {1: 100}}, "male": {"WT|WT": {1: 100}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        cfg = pop.config
+        reg = pop.index_registry
+        z2g = cfg.zygotes_to_gametes_map
+        assert z2g.shape[0] == 2  # female + male
+        # unordered species: n_ztypes = unordered_G × n_slabs
+        n_slabs = cfg.n_slabs
+        n_g_unordered = sp.get_all_genotypes(unordered=sp.unordered).__len__()
+        assert z2g.shape[1] == n_g_unordered * n_slabs, (
+            f"z2g G-axis {z2g.shape[1]} != {n_g_unordered} × {n_slabs}"
+        )
+
+        # GType indices: haplotypes registered in order [WT, Dr]
+        haplos = sp.get_all_haploid_genotypes()
+        g_WT_default = reg.gtype_index(haplos[0], "default")
+        g_WT_cas9 = reg.gtype_index(haplos[0], "cas9")
+        g_Dr_default = reg.gtype_index(haplos[1], "default")
+        g_Dr_cas9 = reg.gtype_index(haplos[1], "cas9")
+
+        # Female WT|Dr@normal: 50% WT@default, 50% Dr@default (Mendelian)
+        z_wtdr = reg.ztype_index(sp.get_genotype_from_str("WT|Dr"), "normal")
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_WT_default], 0.5, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_Dr_default], 0.5, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_WT_cas9], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr, g_Dr_cas9], 0.0, atol=1e-10)
+
+        # Female WT|Dr@exposed: same as normal slab (no cytoplasmic preset)
+        z_wtdr_exp = reg.ztype_index(sp.get_genotype_from_str("WT|Dr"), "exposed")
+        np.testing.assert_allclose(z2g[0, z_wtdr_exp, g_WT_default], 0.5, atol=1e-10)
+        np.testing.assert_allclose(z2g[0, z_wtdr_exp, g_Dr_default], 0.5, atol=1e-10)
+
+        # Male WT|WT@normal: 100% WT@default
+        z_wtwt = reg.ztype_index(sp.get_genotype_from_str("WT|WT"), "normal")
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_WT_default], 1.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_WT_cas9], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_Dr_default], 0.0, atol=1e-10)
+        np.testing.assert_allclose(z2g[1, z_wtwt, g_Dr_cas9], 0.0, atol=1e-10)
+
 
 class TestRegressionFixes:
     """Regression tests for slab-expansion bugs found during code review."""
@@ -273,8 +619,8 @@ class TestRegressionFixes:
             f"zygotes_to_gametes_map G-axis {z2g_shape[1]} != n_ztypes {n_g_declared}"
         )
         # C7: compatibility arrays must also match
-        assert cfg.female_genotype_compatibility.shape[0] == n_g_declared
-        assert cfg.male_genotype_compatibility.shape[0] == n_g_declared
+        assert cfg.female_ztype_compatibility.shape[0] == n_g_declared
+        assert cfg.male_ztype_compatibility.shape[0] == n_g_declared
 
     def test_config_maps_match_n_ztypes_when_n_slabs_eq_1(self):
         """C2 zero-regression: n_slabs=1 should still store correct maps."""

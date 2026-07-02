@@ -165,29 +165,6 @@ def evaluate_genotype_filter(
     raise TypeError("genotype_filter must be a callable, pattern string, or None")
 
 
-def resolve_optional_glab_index(
-    value: GlabSelector,
-    glab_to_index: Mapping[str, int],
-) -> Optional[int]:
-    """Resolve an optional glab selector to an integer index.
-
-    Args:
-        value: Glab selector as ``None``, integer index, or string label.
-        glab_to_index: Mapping from glab labels to integer indices.
-
-    Returns:
-        The resolved glab index. Returns ``None`` when ``value`` is ``None``.
-
-    Raises:
-        KeyError: If ``value`` is a string label not present in ``glab_to_index``.
-    """
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    return int(glab_to_index[value])
-
-
 # ============================================================================
 # TENSOR-LEVEL WRAPPER FACTORIES
 # ============================================================================
@@ -197,6 +174,40 @@ def resolve_optional_glab_index(
 # external modifier systems (e.g. gamete_allele_conversion) can reuse them.
 
 
+def _resolve_gidx(
+    gk: object,
+    diploid_genotypes: List[Genotype],
+    index_registry: Any,
+) -> List[int]:
+    """Resolve a flexible genotype key directly to ZType indices.
+
+    Accepted key forms:
+        - int: genotype index (0-based)
+        - Genotype object: matched by identity in ``diploid_genotypes``
+        - str: compared against ``genotype.to_string()``
+
+    Returns all ZType (genotype × slab) indices for the resolved genotype.
+
+    Raises:
+        IndexError: integer key is out of range.
+        ValueError: object key is not found in the list.
+        KeyError: string key cannot be resolved.
+    """
+    if isinstance(gk, int):
+        gidx: int = int(gk)
+    elif not isinstance(gk, (str,)):
+        gidx = list(diploid_genotypes).index(cast(Genotype, gk))
+    else:
+        for i, g in enumerate(diploid_genotypes):
+            if hasattr(g, "to_string") and g.to_string() == gk:
+                gidx = i
+                break
+        else:
+            raise KeyError(f"Cannot resolve genotype key: {gk}")
+    gt = diploid_genotypes[gidx]
+    return index_registry.ztype_indices_for(gt)
+
+
 def wrap_gamete_modifier(
     mod: GameteModifier,
     population: Any,
@@ -204,10 +215,11 @@ def wrap_gamete_modifier(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
+    expand_to_ztypes: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level GameteModifier into a tensor-level callable.
 
-    The returned callable accepts a tensor of shape (n_sexes, n_genotypes, n_hg_glabs)
+    The returned callable accepts a tensor of shape (n_sexes, n_ztypes, n_hg_glabs)
     and returns a modified copy.
 
     Args:
@@ -217,13 +229,16 @@ def wrap_gamete_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
+        expand_to_ztypes: If True, expand resolved genotype indices to all
+            ZType (genotype×slab) indices before writing.  Required when the
+            tensor's genotype axis is pre-expanded (G×S).
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
     """
     def tensor_modifier(tensor: np.ndarray) -> np.ndarray:
         modified = tensor.copy()
-        n_sexes, n_genotypes, n_hg_glabs = modified.shape
+        n_sexes, n_ztypes, n_hg_glabs = modified.shape
 
         bulk_obj = _invoke_modifier(mod, population)
 
@@ -238,22 +253,24 @@ def wrap_gamete_modifier(
                 sex_val = cast(Mapping[object, object], val)
                 for gk, comp_map in sex_val.items():
                     try:
-                        gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
-                    except KeyError:
+                        ztype_indices = _resolve_gidx(gk, diploid_genotypes, index_registry)
+                    except (KeyError, IndexError, ValueError):
                         continue
-                    if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
+                    if not (0 <= sex_idx < n_sexes):
                         continue
                     if isinstance(comp_map, Mapping):
-                        _apply_comp_map(
-                            modified,
-                            sex_idx,
-                            gidx,
-                            cast(Mapping[object, object], comp_map),
-                            index_registry,
-                            haploid_genotypes,
-                            n_glabs,
-                            n_hg_glabs,
-                        )
+                        for zidx in ztype_indices:
+                            if 0 <= zidx < n_ztypes:
+                                _apply_comp_map(
+                                    modified,
+                                    sex_idx,
+                                    zidx,
+                                    cast(Mapping[object, object], comp_map),
+                                    index_registry,
+                                    haploid_genotypes,
+                                    n_glabs,
+                                    n_hg_glabs,
+                                )
                 continue
 
             # Case B: explicit (sex_idx, genotype_key) tuple
@@ -263,39 +280,45 @@ def wrap_gamete_modifier(
                 if not isinstance(sex_obj, int):
                     continue
                 sex_idx = sex_obj
-                gidx = gk if isinstance(gk, int) else index_registry.resolve_genotype_index(diploid_genotypes, gk, strict=True)
-                if not (0 <= sex_idx < n_sexes and 0 <= gidx < n_genotypes):
+                if not (0 <= sex_idx < n_sexes):
                     continue
-                _apply_comp_map(
-                    modified,
-                    sex_idx,
-                    gidx,
-                    cast(Mapping[object, object], val),
-                    index_registry,
-                    haploid_genotypes,
-                    n_glabs,
-                    n_hg_glabs,
-                )
+                try:
+                    for zidx in _resolve_gidx(gk, diploid_genotypes, index_registry):
+                        if 0 <= zidx < n_ztypes:
+                            _apply_comp_map(
+                                modified,
+                                sex_idx,
+                                zidx,
+                                cast(Mapping[object, object], val),
+                                index_registry,
+                                haploid_genotypes,
+                                n_glabs,
+                                n_hg_glabs,
+                            )
+                except (KeyError, IndexError, ValueError):
+                    continue
                 continue
 
             # Case C: key is genotype_key applied to all sexes
             try:
-                gidx = key if isinstance(key, int) else index_registry.resolve_genotype_index(diploid_genotypes, key, strict=True)
-            except KeyError:
+                ztype_indices = _resolve_gidx(key, diploid_genotypes, index_registry)
+            except (KeyError, IndexError, ValueError):
                 continue
             if not isinstance(val, Mapping):
                 continue
             for sex_idx in range(n_sexes):
-                _apply_comp_map(
-                    modified,
-                    sex_idx,
-                    gidx,
-                    cast(Mapping[object, object], val),
-                    index_registry,
-                    haploid_genotypes,
-                    n_glabs,
-                    n_hg_glabs,
-                )
+                for zidx in ztype_indices:
+                    if 0 <= zidx < n_ztypes:
+                        _apply_comp_map(
+                            modified,
+                            sex_idx,
+                            zidx,
+                            cast(Mapping[object, object], val),
+                            index_registry,
+                            haploid_genotypes,
+                            n_glabs,
+                            n_hg_glabs,
+                        )
 
         return modified
     return tensor_modifier
@@ -308,10 +331,11 @@ def wrap_zygote_modifier(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
+    expand_to_ztypes: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level ZygoteModifier into a tensor-level callable.
 
-    The returned callable accepts a tensor of shape (n_hg_glabs, n_hg_glabs, n_genotypes)
+    The returned callable accepts a tensor of shape (n_hg_glabs, n_hg_glabs, n_ztypes)
     and returns a modified copy.
 
     Args:
@@ -321,6 +345,9 @@ def wrap_zygote_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
+        expand_to_ztypes: If True, expand resolved genotype indices to all
+            ZType (genotype×slab) indices before writing.  Required when the
+            tensor's genotype axis is pre-expanded (G×S).
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
@@ -351,6 +378,7 @@ def build_modifier_wrappers(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
+    expand_to_ztypes: bool = False,
 ) -> Tuple[List[Callable[[np.ndarray], np.ndarray]], List[Callable[[np.ndarray], np.ndarray]]]:
     """Wrap high-level gamete/zygote modifiers into tensor-level callables.
 
@@ -365,6 +393,9 @@ def build_modifier_wrappers(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
+        expand_to_ztypes: If True, expand genotype indices to ZType indices
+            in both gamete and zygote wrappers.  Use when the tensor's
+            genotype axis is pre-expanded (G×S).
 
     Returns:
         Tuple of (gamete_modifier_funcs, zygote_modifier_funcs), each a list
@@ -375,12 +406,12 @@ def build_modifier_wrappers(
 
     for _, _, mod in zygote_modifiers:
         zygote_modifier_funcs.append(
-            wrap_zygote_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
+            wrap_zygote_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs, expand_to_ztypes=expand_to_ztypes)
         )
 
     for _, _, mod in gamete_modifiers:
         gamete_modifier_funcs.append(
-            wrap_gamete_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
+            wrap_gamete_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs, expand_to_ztypes=expand_to_ztypes)
         )
 
     return gamete_modifier_funcs, zygote_modifier_funcs
@@ -393,35 +424,167 @@ def build_modifier_wrappers(
 def _apply_comp_map(
     modified: np.ndarray,
     sex_idx: int,
-    gidx: int,
+    zidx: int,
     comp_map: Mapping[object, object],
     index_registry: Any,
     haploid_genotypes: List[HaploidGenotype],
     n_glabs: int,
     n_hg_glabs: int,
 ) -> None:
-    """Apply a comp_map (comp_key->freq) into the tensor slice [sex_idx, gidx].
+    """Apply a comp_map (comp_key->freq) into the tensor slice [sex_idx, zidx].
 
     Args:
-        modified: The target tensor (n_sexes, n_genotypes, n_hg_glabs).
+        modified: The target tensor (n_sexes, n_ztypes, n_hg_glabs).
         sex_idx: Sex index.
-        gidx: Genotype index.
+        zidx: ZType index (genotype × slab position).
         comp_map: Mapping from compressed‑key to frequency.
         index_registry: IndexRegistry for resolving keys.
         haploid_genotypes: List of all haploid genotypes.
         n_glabs: Number of gamete‑label variants.
         n_hg_glabs: Total number of compressed haploid entries.
     """
-    modified[sex_idx, gidx, :] = 0.0
+    modified[sex_idx, zidx, :] = 0.0
     for comp_key, freq in comp_map.items():
         if not isinstance(freq, (int, float)):
             continue
-        comp_idx = index_registry.resolve_comp_idx(haploid_genotypes, n_glabs, comp_key, strict=False)
-        if comp_idx is None:
-            continue
+        # Resolve comp_key to a compressed GType index using gtype_index.
+        if isinstance(comp_key, int):
+            comp_idx = int(comp_key)
+        else:
+            pair = _as_pair(comp_key)
+            if pair is not None:
+                hg_part: object = pair[0]
+                glab_part: object = pair[1]
+                # resolve hg_part → HaploidGenotype object
+                if isinstance(hg_part, int):
+                    hg_obj: HaploidGenotype = haploid_genotypes[hg_part]
+                elif isinstance(hg_part, HaploidGenotype):
+                    hg_obj = hg_part
+                elif isinstance(hg_part, str):
+                    found: Optional[HaploidGenotype] = None
+                    for hg in haploid_genotypes:
+                        if hasattr(hg, "to_string") and hg.to_string() == hg_part:
+                            found = hg
+                            break
+                        try:
+                            if str(hg) == hg_part:
+                                found = hg
+                                break
+                        except Exception:
+                            continue
+                    if found is None:
+                        continue
+                    hg_obj = found
+                else:
+                    continue
+                # resolve glab_part → string label
+                if isinstance(glab_part, int):
+                    glab_str = index_registry.glab_labels[glab_part]
+                else:
+                    glab_str = str(glab_part)
+                try:
+                    comp_idx = index_registry.gtype_index(hg_obj, glab_str)
+                except KeyError:
+                    continue
+            elif isinstance(comp_key, HaploidGenotype):
+                try:
+                    comp_idx = index_registry.gtype_index(comp_key, "default")
+                except KeyError:
+                    continue
+            elif isinstance(comp_key, str):
+                found = None
+                for hg in haploid_genotypes:
+                    if hasattr(hg, "to_string") and hg.to_string() == comp_key:
+                        found = hg
+                        break
+                    try:
+                        if str(hg) == comp_key:
+                            found = hg
+                            break
+                    except Exception:
+                        continue
+                if found is None:
+                    continue
+                try:
+                    comp_idx = index_registry.gtype_index(found, "default")
+                except KeyError:
+                    continue
+            else:
+                continue
         if not (0 <= comp_idx < n_hg_glabs):
             continue
-        modified[sex_idx, gidx, comp_idx] = float(freq)
+        modified[sex_idx, zidx, comp_idx] = float(freq)
+
+
+def _find_haploid_by_name(
+    name: str,
+    haploid_genotypes: List[HaploidGenotype],
+) -> HaploidGenotype:
+    """Find a HaploidGenotype by to_string() or str() match.
+
+    Raises:
+        KeyError: If no haploid genotype matches the name.
+    """
+    for hg in haploid_genotypes:
+        if hasattr(hg, "to_string") and hg.to_string() == name:
+            return hg
+        try:
+            if str(hg) == name:
+                return hg
+        except Exception:
+            continue
+    raise KeyError(f"Unknown haploid string: {name}")
+
+
+def _resolve_part_to_compressed(
+    part: object,
+    index_registry: Any,
+    haploid_genotypes: List[HaploidGenotype],
+    n_glabs: int,
+) -> int:
+    """Resolve a single zygote-key part to a compressed GType index.
+
+    Accepted part forms:
+        - int: returned as-is (already a compressed index)
+        - (int, int): (hg_idx, glab_idx) pair, compressed via formula
+        - (HaploidGenotype, int/str): resolved via gtype_index
+        - (str, int/str): hg found by to_string(), then gtype_index
+        - HaploidGenotype: gtype_index(hg, "default")
+        - str: hg found by to_string(), then gtype_index(hg, "default")
+
+    Raises:
+        KeyError: If the part cannot be resolved.
+    """
+    if isinstance(part, int):
+        return int(part)
+
+    pair = _as_pair(part)
+    if pair is not None:
+        hg_part, glab_part = pair
+        if isinstance(hg_part, int) and isinstance(glab_part, int):
+            return int(hg_part) * n_glabs + int(glab_part)
+        if isinstance(hg_part, int):
+            hg_obj: HaploidGenotype = haploid_genotypes[hg_part]
+        elif isinstance(hg_part, HaploidGenotype):
+            hg_obj = hg_part
+        elif isinstance(hg_part, str):
+            hg_obj = _find_haploid_by_name(hg_part, haploid_genotypes)
+        else:
+            raise KeyError(f"Cannot resolve haploid part: {hg_part!r}")
+        if isinstance(glab_part, int):
+            glab_str = index_registry.glab_labels[glab_part]
+        else:
+            glab_str = str(glab_part)
+        return index_registry.gtype_index(hg_obj, glab_str)
+
+    if isinstance(part, HaploidGenotype):
+        return index_registry.gtype_index(part, "default")
+
+    if isinstance(part, str):
+        hg_obj = _find_haploid_by_name(part, haploid_genotypes)
+        return index_registry.gtype_index(hg_obj, "default")
+
+    raise KeyError(f"Cannot resolve part: {part!r}")
 
 
 def _parse_zygote_key(
@@ -447,12 +610,34 @@ def _parse_zygote_key(
     if key_tuple is None:
         raise TypeError("Zygote modifier key must be a 2-tuple")
     part1, part2 = key_tuple
-    idx_hg1, glab1 = index_registry.resolve_hg_glab_part(haploid_genotypes, part1, n_glabs)
-    idx_hg2, glab2 = index_registry.resolve_hg_glab_part(haploid_genotypes, part2, n_glabs)
-    from natal.index_registry import compress_hg_glab
-    c1 = compress_hg_glab(idx_hg1, glab1, n_glabs)
-    c2 = compress_hg_glab(idx_hg2, glab2, n_glabs)
+    c1 = _resolve_part_to_compressed(part1, index_registry, haploid_genotypes, n_glabs)
+    c2 = _resolve_part_to_compressed(part2, index_registry, haploid_genotypes, n_glabs)
     return c1, c2
+
+
+def _resolve_genotype(candidate: object, diploid_genotypes: List[Genotype]) -> Genotype:
+    """Resolve a flexible genotype selector to a Genotype object.
+
+    Accepted selector types:
+        - int: genotype index (0-based)
+        - Genotype object: matched by identity/equality
+        - str: compared against genotype.to_string()
+
+    Raises:
+        IndexError: integer index out of range
+        ValueError: object not found in list
+        KeyError: string key cannot be resolved
+    """
+    if isinstance(candidate, int):
+        return diploid_genotypes[int(candidate)]
+    if not isinstance(candidate, str):
+        idx = list(diploid_genotypes).index(cast(Genotype, candidate))
+        return diploid_genotypes[idx]
+    # String match via to_string()
+    for g in diploid_genotypes:
+        if hasattr(g, "to_string") and g.to_string() == candidate:
+            return g
+    raise KeyError(f"Cannot resolve genotype key: {candidate}")
 
 
 def _normalize_zygote_val(
@@ -460,7 +645,12 @@ def _normalize_zygote_val(
     index_registry: Any,
     diploid_genotypes: List[Genotype],
 ) -> Dict[int, float]:
-    """Normalize zygote replacement value into a mapping idx->prob.
+    """Normalize zygote replacement value into a mapping ztype_idx->prob.
+
+    Integer selectors are used directly as ZType indices (the caller is
+    expected to already know the correct index).  Non‑integer selectors
+    (object / string) are resolved to a Genotype and then expanded to all
+    its ZType (genotype × slab) indices.
 
     Args:
         val: The value from the modifier mapping.
@@ -468,7 +658,7 @@ def _normalize_zygote_val(
         diploid_genotypes: List of all diploid genotypes.
 
     Returns:
-        Dictionary mapping genotype index to probability.
+        Dictionary mapping ZType index to probability.
     """
     mapping: Dict[int, float] = {}
 
@@ -477,10 +667,13 @@ def _normalize_zygote_val(
     if pair_val is not None:
         idx_candidate, prob = pair_val
         if isinstance(idx_candidate, int):
-            idx = int(idx_candidate)
+            mapping[int(idx_candidate)] = float(prob)
         else:
-            idx = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
-        mapping[int(idx)] = float(prob)
+            gt = _resolve_genotype(idx_candidate, diploid_genotypes)
+            z_indices = index_registry.ztype_indices_for(gt)
+            n_zs = len(z_indices)
+            for zidx in z_indices:
+                mapping[int(zidx)] = float(prob) / n_zs
         return mapping
 
     # distribution dict
@@ -489,14 +682,25 @@ def _normalize_zygote_val(
         for idx_candidate, prob in val_map.items():
             if not isinstance(prob, (int, float)):
                 raise TypeError("Zygote replacement probabilities must be numeric")
-            if not isinstance(idx_candidate, int):
-                idx_candidate = index_registry.resolve_genotype_index(diploid_genotypes, idx_candidate, strict=True)
-            mapping[int(idx_candidate)] = float(prob)
+            if isinstance(idx_candidate, int):
+                mapping[int(idx_candidate)] = float(prob)
+            else:
+                gt = _resolve_genotype(idx_candidate, diploid_genotypes)
+                z_indices = index_registry.ztype_indices_for(gt)
+                n_zs = len(z_indices)
+                for zidx in z_indices:
+                    mapping[int(zidx)] = float(prob) / n_zs
         return mapping
 
     # single genotype replacement
-    idx = index_registry.resolve_genotype_index(diploid_genotypes, val, strict=True)
-    mapping[int(idx)] = 1.0
+    if isinstance(val, int):
+        mapping[int(val)] = 1.0
+    else:
+        gt = _resolve_genotype(val, diploid_genotypes)
+        z_indices = index_registry.ztype_indices_for(gt)
+        n_zs = len(z_indices)
+        for zidx in z_indices:
+            mapping[int(zidx)] = 1.0 / n_zs
     return mapping
 
 
@@ -509,7 +713,7 @@ def _write_zygote_mapping(
     """Apply mapping (idx->prob) to the compressed zygote slice.
 
     Args:
-        modified: The target tensor (n_hg_glabs, n_hg_glabs, n_genotypes).
+        modified: The target tensor (n_hg_glabs, n_hg_glabs, n_ztypes).
         c1: Compressed index of first gamete.
         c2: Compressed index of second gamete.
         mapping: Dictionary mapping genotype index to probability.

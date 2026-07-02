@@ -34,7 +34,7 @@ class TestZygoteFitness(unittest.TestCase):
 
     def test_population_config_zygote_viability_fitness_field(self) -> None:
         """Test that PopulationConfig has zygote_viability_fitness field."""
-        config = build_population_config(n_genotypes=4, n_haploid_genotypes=2)
+        config = build_population_config(n_genotypes=4, n_gtypes=2)
 
         # Check that zygote_viability_fitness field exists
         self.assertTrue(hasattr(config, 'zygote_viability_fitness'))
@@ -47,7 +47,7 @@ class TestZygoteFitness(unittest.TestCase):
 
     def test_set_zygote_viability_fitness_method(self) -> None:
         """Test set_zygote_viability_fitness method."""
-        config = build_population_config(n_genotypes=4, n_haploid_genotypes=2)
+        config = build_population_config(n_genotypes=4, n_gtypes=2)
 
         # Set zygote fitness for female genotype 0
         config.set_zygote_viability_fitness(0, 0, 0.5)
@@ -86,9 +86,9 @@ class TestZygoteFitness(unittest.TestCase):
         self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
 
         # Get genotype indices
-        aa_idx = population.index_registry.genotype_to_index[self.simple_species.get_genotype_from_str("A|A")]
-        aa_idx = population.index_registry.genotype_to_index[self.simple_species.get_genotype_from_str("a|a")]
-        aa_idx = population.index_registry.genotype_to_index[self.simple_species.get_genotype_from_str("A|a")]
+        aa_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("A|A"), "default")
+        aa_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("a|a"), "default")
+        aa_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("A|a"), "default")
 
         # Note: Actual values would be set during population build process
         # This test mainly verifies that the API accepts the parameter
@@ -157,7 +157,7 @@ class TestZygoteFitness(unittest.TestCase):
         self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
 
         # Verify the zygote fitness value is set correctly
-        genotype_idx = population.index_registry.genotype_to_index[self.simple_species.get_genotype_from_str("A|A")]
+        genotype_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("A|A"), "default")
         self.assertEqual(population.config.zygote_viability_fitness[0, genotype_idx], 0.5)  # Female
         self.assertEqual(population.config.zygote_viability_fitness[1, genotype_idx], 0.5)  # Male
 

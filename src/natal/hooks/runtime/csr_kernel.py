@@ -320,7 +320,7 @@ def _apply_target_with_sperm(
     Args:
         current_count: Total female count before the operation.
         target_count: Desired female count after the operation.
-        sperm_row: ``sperm_storage[age, gidx, :]`` — per-genotype-male sperm
+        sperm_row: ``sperm_storage[age, zidx, :]`` — per-genotype-male sperm
             counts for this (age, female-genotype) cell.  Mutated in-place.
         stochastic_flag: If False, use deterministic proportional scaling.
         dirichlet_flag: If True, use continuous sampling (no integer rounding).
@@ -418,8 +418,8 @@ def _execute_single_csr_hook(
     n_hooks: int | np.integer[Any],
     op_offsets: np.ndarray,
     op_types_data: np.ndarray,
-    gidx_offsets_data: np.ndarray,
-    gidx_data: np.ndarray,
+    zidx_offsets_data: np.ndarray,
+    zidx_data: np.ndarray,
     age_offsets_data: np.ndarray,
     age_data: np.ndarray,
     sex_masks_data: np.ndarray,
@@ -505,8 +505,8 @@ def _execute_single_csr_hook(
         param = params_data[op_idx]
 
         # ---- Genotype / age / sex selectors (CSR ranges) ----
-        gidx_start = gidx_offsets_data[op_idx]
-        gidx_end = gidx_offsets_data[op_idx + 1]
+        zidx_start = zidx_offsets_data[op_idx]
+        zidx_end = zidx_offsets_data[op_idx + 1]
         age_start = age_offsets_data[op_idx]
         age_end = age_offsets_data[op_idx + 1]
 
@@ -516,8 +516,8 @@ def _execute_single_csr_hook(
         sex_male = sex_masks_data[sex_mask_idx + 1]
 
         # Mutation ops (0..5): iterate sex × age × genotype, with prange
-        # on the innermost gidx loop.  Each (sex, age, gidx) cell is
-        # independent — different gidx values write to distinct rows of
+        # on the innermost zidx loop.  Each (sex, age, zidx) cell is
+        # independent — different zidx values write to distinct rows of
         # individual_count and sperm_storage, so no data races.
         #
         # Stop ops (6..9) are handled separately below with a serial
@@ -532,9 +532,9 @@ def _execute_single_csr_hook(
                 for age_idx_ptr in range(age_start, age_end):
                     age = age_data[age_idx_ptr]
 
-                    for gidx_ptr in prange(gidx_start, gidx_end):
-                        gidx = gidx_data[gidx_ptr]
-                        current = individual_count[sex_idx, age, gidx]
+                    for zidx_ptr in prange(zidx_start, zidx_end):
+                        zidx = zidx_data[zidx_ptr]
+                        current = individual_count[sex_idx, age, zidx]
 
                         # Compute target count from operation type.
                         if op_type == _OP_SCALE:
@@ -553,15 +553,15 @@ def _execute_single_csr_hook(
                             target = current
 
                         if sex_idx == 0 and has_sperm_storage:
-                            individual_count[sex_idx, age, gidx] = _apply_target_with_sperm(
+                            individual_count[sex_idx, age, zidx] = _apply_target_with_sperm(
                                 current,
                                 target,
-                                sperm_storage[age, gidx, :],
+                                sperm_storage[age, zidx, :],
                                 stochastic,
                                 continuous_sampling,
                             )
                         else:
-                            individual_count[sex_idx, age, gidx] = _apply_target_without_sperm(
+                            individual_count[sex_idx, age, zidx] = _apply_target_without_sperm(
                                 current,
                                 target,
                                 stochastic,
@@ -578,9 +578,9 @@ def _execute_single_csr_hook(
                     continue
                 for age_idx_ptr in range(age_start, age_end):
                     age = age_data[age_idx_ptr]
-                    for gidx_ptr in range(gidx_start, gidx_end):
-                        gidx = gidx_data[gidx_ptr]
-                        selected_total += individual_count[sex_idx, age, gidx]
+                    for zidx_ptr in range(zidx_start, zidx_end):
+                        zidx = zidx_data[zidx_ptr]
+                        selected_total += individual_count[sex_idx, age, zidx]
 
             if op_type == _OP_STOP_IF_ZERO and selected_total <= 0.0:
                 return RESULT_STOP
@@ -607,8 +607,8 @@ def execute_csr_event_arrays(
     n_ops_list: np.ndarray,  # pyright: ignore[reportUnusedParameter] — positional caller compatibility
     op_offsets: np.ndarray,
     op_types_data: np.ndarray,
-    gidx_offsets_data: np.ndarray,
-    gidx_data: np.ndarray,
+    zidx_offsets_data: np.ndarray,
+    zidx_data: np.ndarray,
     age_offsets_data: np.ndarray,
     age_data: np.ndarray,
     sex_masks_data: np.ndarray,
@@ -639,7 +639,7 @@ def execute_csr_event_arrays(
 
         event_id  →  hook_offsets[event_id]  →  hook range
         hook_idx  →  op_offsets[hook_idx]    →  op range
-        op_idx    →  gidx/age/cond offsets   →  cell range
+        op_idx    →  zidx/age/cond offsets   →  cell range
 
     Returns:
         ``RESULT_CONTINUE`` (0) — all hooks executed normally.
@@ -659,8 +659,8 @@ def execute_csr_event_arrays(
             n_hooks=n_hooks,
             op_offsets=op_offsets,
             op_types_data=op_types_data,
-            gidx_offsets_data=gidx_offsets_data,
-            gidx_data=gidx_data,
+            zidx_offsets_data=zidx_offsets_data,
+            zidx_data=zidx_data,
             age_offsets_data=age_offsets_data,
             age_data=age_data,
             sex_masks_data=sex_masks_data,
@@ -734,8 +734,8 @@ def execute_csr_event_program_with_state(
         n_ops_list=program.n_ops_list,
         op_offsets=program.op_offsets,
         op_types_data=program.op_types_data,
-        gidx_offsets_data=program.gidx_offsets_data,
-        gidx_data=program.gidx_data,
+        zidx_offsets_data=program.zidx_offsets_data,
+        zidx_data=program.zidx_data,
         age_offsets_data=program.age_offsets_data,
         age_data=program.age_data,
         sex_masks_data=program.sex_masks_data,

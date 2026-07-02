@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.genetic_patterns import resolve_zygote_type as _resolve_zygote_type
+
 from ..types import (
     COND_ALWAYS,
     COND_OP_AND,
@@ -38,6 +40,7 @@ from ..types import (
 
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
+    from natal.genetic_structures import Species
     from natal.index_registry import IndexRegistry
 
 class Op:
@@ -264,30 +267,31 @@ class Op:
 def _resolve_genotypes(
     selector: Union[str, List[str], Literal["*"]],
     index_registry: IndexRegistry,
-    diploid_genotypes: List[Any],
-    n_genotypes: int,
+    species: Species,
+    n_ztypes: int,
 ) -> np.ndarray:
-    """Resolve genotype selector syntax into concrete genotype indices.
+    """Resolve genotype selector syntax into concrete ZType indices.
 
     Supported input forms:
-    - ``"*"``
-    - one label (``"AA"``) or a label list
+    - ``"*"`` — all ZTypes
+    - genotype label (``"AA"``) or label list — resolved via ZygoteTypePattern
+    - ``@slab`` syntax (``"AA@infected"``) — genotype with slab constraint
     - raw integer index or index list
 
     Args:
         selector: Genotype selector expression
         index_registry: Registry for genotype name resolution
-        diploid_genotypes: List of all diploid genotypes in the population
-        n_genotypes: Total number of genotypes
+        species: Species for genotype pattern resolution
+        n_ztypes: Total number of ZType indices
 
     Returns:
-        np.ndarray: Array of genotype indices (int32)
+        np.ndarray: Array of ZType indices (int32)
 
     Raises:
         ValueError: If genotype cannot be resolved
     """
     if selector == "*":
-        return np.arange(n_genotypes, dtype=np.int32)
+        return np.arange(n_ztypes, dtype=np.int32)
 
     if isinstance(selector, str):
         selector = [selector]
@@ -298,12 +302,15 @@ def _resolve_genotypes(
             indices.append(item)
             continue
 
-        idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
-        if idx is None:
+        z_indices = _resolve_zygote_type(item, species, index_registry)
+        if not z_indices:
             raise ValueError(f"Cannot resolve genotype: {item}")
-        indices.append(idx)
+        indices.extend(z_indices)
 
     return np.array(indices, dtype=np.int32)
+
+
+# _resolve_zygote_type is imported from natal.genetic_patterns
 
 
 def _resolve_ages(selector: Union[int, List[int], range, Literal["*"]], n_ages: int) -> np.ndarray:
@@ -602,8 +609,8 @@ def compile_declarative_hook(
     """
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry
-    diploid_genotypes = index_registry.index_to_genotype
-    n_genotypes = index_registry.n_ztypes
+    species = index_registry.index_to_genotype[0].species if index_registry.index_to_genotype else pop.species
+    n_ztypes = index_registry.n_ztypes
     n_ages = pop.config.n_ages
 
     # Initialize data structures for storing compiled hook operations
@@ -613,10 +620,10 @@ def compile_declarative_hook(
     op_types_list: List[int] = []
 
     # 2. Genotype selection data (CSR format)
-    # gidx_offsets: CSR offsets defining genotype index ranges for each operation
-    # gidx_data: Flattened list of all genotype indices across all operations
-    gidx_offsets: List[int] = [0]  # Start with offset 0 for the first operation
-    gidx_data_list: List[int] = []
+    # zidx_offsets: CSR offsets defining genotype index ranges for each operation
+    # zidx_data: Flattened list of all genotype indices across all operations
+    zidx_offsets: List[int] = [0]  # Start with offset 0 for the first operation
+    zidx_data_list: List[int] = []
 
     # 3. Age selection data (CSR format)
     # age_offsets: CSR offsets defining age index ranges for each operation
@@ -645,9 +652,9 @@ def compile_declarative_hook(
 
         # 2) Genotype span - resolve genotype selectors to actual genotype indices
         # Examples: "A1|A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
-        gidx_array = _resolve_genotypes(op.genotypes, index_registry, diploid_genotypes, n_genotypes)
-        gidx_data_list.extend(gidx_array.tolist())
-        gidx_offsets.append(len(gidx_data_list))  # Record end offset for this operation
+        zidx_array = _resolve_genotypes(op.genotypes, index_registry, species, n_ztypes)
+        zidx_data_list.extend(zidx_array.tolist())
+        zidx_offsets.append(len(zidx_data_list))  # Record end offset for this operation
 
         # 3) Age span - resolve age selectors to actual age indices
         # Examples: "0-5" -> [0, 1, 2, 3, 4, 5], "*" -> [0, 1, ..., n_ages-1]
@@ -675,9 +682,9 @@ def compile_declarative_hook(
         op_types=np.array(op_types_list, dtype=np.int32),
 
         # Genotype selection data in CSR format
-        # gidx_offsets[i] to gidx_offsets[i+1] defines genotype indices for operation i
-        gidx_offsets=np.array(gidx_offsets, dtype=np.int32),
-        gidx_data=np.array(gidx_data_list, dtype=np.int32) if gidx_data_list else np.array([], dtype=np.int32),
+        # zidx_offsets[i] to zidx_offsets[i+1] defines genotype indices for operation i
+        zidx_offsets=np.array(zidx_offsets, dtype=np.int32),
+        zidx_data=np.array(zidx_data_list, dtype=np.int32) if zidx_data_list else np.array([], dtype=np.int32),
 
         # Age selection data in CSR format
         # age_offsets[i] to age_offsets[i+1] defines age indices for operation i
@@ -705,6 +712,6 @@ def compile_declarative_hook(
         priority=priority,            # Execution priority (higher = earlier)
         deme_selector=deme_selector, # Which demes this hook applies to
         plan=plan,                    # Compiled execution plan
-        meta={"n_ztypes": n_genotypes, "n_ages": n_ages},  # Population metadata
+        meta={"n_ztypes": index_registry.n_ztypes, "n_ages": n_ages},  # Population metadata
         ops=ops,                     # Original operations for reference/debugging
     )

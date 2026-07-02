@@ -11,12 +11,13 @@ symbols once at registration time and then provides two execution paths:
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
 
 import numpy as np
 from numpy.typing import NDArray
+
+from natal.genetic_patterns import resolve_zygote_type as _resolve_zygote_type
 
 from ..types import (
     CompiledHookDescriptor,
@@ -38,20 +39,23 @@ def _read_template(name: str) -> str:
 if TYPE_CHECKING:
     from natal.base_population import BasePopulation
     from natal.genetic_entities import Genotype
+    from natal.genetic_structures import Species
     from natal.index_registry import IndexRegistry
     from natal.population_config import PopulationConfig
     from natal.population_state import PopulationState
-
 
 
 SelectorItem: TypeAlias = Union[int, str, "Genotype"]
 SelectorSpec: TypeAlias = Union[SelectorItem, range, List[SelectorItem], tuple[SelectorItem, ...]]
 
 
+# _resolve_zygote_type is imported from natal.genetic_patterns
+
+
 def _resolve_selector_to_array(
     spec: SelectorSpec,
     index_registry: IndexRegistry,
-    diploid_genotypes: Sequence[Genotype],
+    species: Species,
 ) -> NDArray[np.int32]:
     """Resolve one selector spec into an int32 index array.
 
@@ -66,11 +70,11 @@ def _resolve_selector_to_array(
 
     if isinstance(spec, str):
         if spec == "*":
-            return np.arange(len(diploid_genotypes), dtype=np.int32)
-        idx = index_registry.resolve_genotype_index(diploid_genotypes, spec, strict=True)
-        if idx is None:
+            return np.arange(index_registry.n_ztypes, dtype=np.int32)
+        result = _resolve_zygote_type(spec, species, index_registry)
+        if not result:
             raise ValueError(f"Cannot resolve genotype: {spec}")
-        return np.array([idx], dtype=np.int32)
+        return np.array(result, dtype=np.int32)
 
     if isinstance(spec, (list, tuple)):
         indices: List[int] = []
@@ -78,22 +82,23 @@ def _resolve_selector_to_array(
             if isinstance(item, int):
                 indices.append(item)
             elif isinstance(item, str):
-                idx = index_registry.resolve_genotype_index(diploid_genotypes, item, strict=True)
-                if idx is None:
+                result = _resolve_zygote_type(item, species, index_registry)
+                if not result:
                     raise ValueError(f"Cannot resolve genotype: {item}")
-                indices.append(idx)
+                indices.extend(result)
             else:
-                idx = index_registry.genotype_to_index.get(item)
-                if idx is None:
+                # Genotype object
+                result = index_registry.ztype_indices_for(item)
+                if not result:
                     raise ValueError(f"Cannot resolve selector item: {item}")
-                indices.append(idx)
+                indices.extend(result)
         return np.array(indices, dtype=np.int32)
 
-    idx = index_registry.genotype_to_index.get(spec)
-    if idx is not None:
-        return np.array([idx], dtype=np.int32)
-
-    raise ValueError(f"Cannot resolve selector spec: {spec}")
+    # spec is a Genotype object
+    result = index_registry.ztype_indices_for(spec)
+    if not result:
+        raise ValueError(f"Cannot resolve selector spec: {spec}")
+    return np.array(result, dtype=np.int32)
 
 
 def compile_selector_hook(
@@ -115,10 +120,10 @@ def compile_selector_hook(
     - Otherwise, use global NUMBA_ENABLED setting (auto-wrap if enabled)
     """
     index_registry = pop.registry
-    diploid_genotypes = index_registry.index_to_genotype
+    species = index_registry.index_to_genotype[0].species
 
     resolved = {
-        name: _resolve_selector_to_array(spec, index_registry, diploid_genotypes)
+        name: _resolve_selector_to_array(spec, index_registry, species)
         for name, spec in selectors_spec.items()
     }
 

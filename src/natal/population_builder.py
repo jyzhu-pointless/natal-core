@@ -32,6 +32,7 @@ import natal.population_config as _population_config
 from natal.genetic_entities import Genotype, HaploidGenome
 from natal.genetic_structures import Species
 from natal.helpers import resolve_sex_label
+from natal.index_registry import IndexRegistry
 from natal.observation import GroupsInput
 from natal.population_config import (
     BEVERTON_HOLT,
@@ -315,7 +316,7 @@ class PopulationConfigBuilder:
         # ===== Create and return PopulationConfig =====
         cfg = build_population_config(
             n_genotypes=n_genotypes,
-            n_haploid_genotypes=n_haplogenotypes,
+            n_gtypes=n_haplogenotypes * n_glabs,
             n_sexes=2,
             n_ages=n_ages,
             n_glabs=n_glabs,
@@ -686,37 +687,6 @@ class PopulationConfigBuilder:
         return resolve_sex_label(sex_key)
 
     @staticmethod
-    def _resolve_genotype_index(
-        species: Species,
-        genotype_key: object,
-        genotype_to_index: Dict[Genotype, int],
-    ) -> int:
-        """Resolve a genotype key into its registered integer index.
-
-        Args:
-            species (Species): The species to resolve against.
-            genotype_key (Union[Genotype, str]): The genotype instance or string label.
-            genotype_to_index (Dict[Genotype, int]): Index mapping.
-
-        Returns:
-            int: The index of the genotype.
-
-        Raises:
-            TypeError: If genotype_key is invalid type.
-            ValueError: If genotype does not belong to the species.
-        """
-        if isinstance(genotype_key, str):
-            genotype = species.get_genotype_from_str(genotype_key)
-        elif isinstance(genotype_key, Genotype):
-            genotype = genotype_key
-        else:
-            raise TypeError(f"genotype_key must be a genotype or str, got {type(genotype_key)}")
-        if genotype.species is not species:
-            raise ValueError("Genotype must belong to this species")
-        genotype = species.unordered_genotype(genotype.maternal, genotype.paternal)
-        return int(genotype_to_index[genotype])
-
-    @staticmethod
     def _resolve_age_counts_age_structured(
         age_data: InitialAgeCountValue,
         n_ages: int,
@@ -788,38 +758,59 @@ class PopulationConfigBuilder:
         Returns:
             NDArray[np.float64]: A 3D array [sex, age, genotype].
         """
+        registry = IndexRegistry()
+        slabs = species.somatic_labels or ["default"]
+        for slab in slabs:
+            registry.register_somatic_label(slab)
         genotypes = species.get_all_genotypes(unordered=species.unordered)
-        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        n_slabs = len(species.somatic_labels or ["default"])
-        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
-        n_ztypes = len(genotypes) * n_slabs
-        out = np.zeros((2, n_ages, n_ztypes), dtype=np.float64)
-
+        for gt in genotypes:
+            registry.register_genotype(gt)
+        out = np.zeros((2, n_ages, registry.n_ztypes), dtype=np.float64)
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
             for genotype_key, age_data in genotype_dist.items():
-                # Support @slab suffix and tuple syntax:
+                # Support @slab suffix via ZygoteTypePattern:
                 #   "A|A@infected" → genotype A|A, slab infected
-                #   (genotype_obj, "infected") → genotype_obj, slab infected
-                slab_idx: int = 0
-                resolved_key: object = genotype_key
+                #   "A|A" → genotype A|A, default slab via resolve_default_ztype_index
+                from natal.genetic_patterns import (
+                    GenotypePatternParser,
+                    ZygoteTypePattern,
+                )
+
                 if isinstance(genotype_key, tuple):
                     _key, _slab = cast("tuple[object, str]", genotype_key)
-                    resolved_key = _key
-                    if _slab not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{_slab}'")
-                    slab_idx = slab_to_idx[_slab]
-                elif isinstance(genotype_key, str) and "@" in genotype_key:
-                    g_str, s_str = genotype_key.rsplit("@", 1)
-                    resolved_key = g_str
-                    if s_str not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{s_str}' in key '{g_str}@{s_str}'")
-                    slab_idx = slab_to_idx[s_str]
+                    if isinstance(_key, Genotype):
+                        pattern = ZygoteTypePattern.from_pair(_key, _slab, species)
+                    elif isinstance(_key, str):
+                        _gt = species.get_genotype_from_str(_key)
+                        _key = str(_gt)
+                        pattern = ZygoteTypePattern.parse(f"{_key}@{_slab}", species)
+                    else:
+                        raise TypeError(
+                            f"Tuple first element must be Genotype or str, got {type(_key)}"
+                        )
+                elif isinstance(genotype_key, str):
+                    if "@" in genotype_key:
+                        idx = genotype_key.rindex("@")
+                        gt_part = genotype_key[:idx]
+                        slab_part = genotype_key[idx:]
+                    else:
+                        gt_part = genotype_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    genotype_key = str(gt) + slab_part
+                    pattern = ZygoteTypePattern.parse(genotype_key, species)
+                elif isinstance(genotype_key, Genotype):
+                    parser = GenotypePatternParser(species)
+                    pattern = ZygoteTypePattern(
+                        parser.parse(str(genotype_key)), slab=None
+                    )
+                else:
+                    raise TypeError(
+                        f"genotype_key must be Genotype, str, or tuple, got {type(genotype_key)}"
+                    )
 
-                genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, resolved_key, genotype_to_index
-                )
-                z_idx = genotype_idx * n_slabs + slab_idx
+                z_idx = registry.resolve_default_ztype_index(pattern)
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
                 )
@@ -848,42 +839,62 @@ class PopulationConfigBuilder:
         Raises:
             TypeError: If storage value is not a dictionary.
         """
+        registry = IndexRegistry()
+        slabs = species.somatic_labels or ["default"]
+        for slab in slabs:
+            registry.register_somatic_label(slab)
         genotypes = species.get_all_genotypes(unordered=species.unordered)
-        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        n_slabs = len(species.somatic_labels or ["default"])
-        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
-        n_ztypes = len(genotypes) * n_slabs
-        out = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
+        for gt in genotypes:
+            registry.register_genotype(gt)
+        out = np.zeros((n_ages, registry.n_ztypes, registry.n_ztypes), dtype=np.float64)
 
         for female_key, male_dict in sperm_storage.items():
-            female_idx, female_slab = PopulationConfigBuilder._resolve_genotype_index(
-                species, female_key, genotype_to_index
-            ), 0
-            # Support @slab suffix on female key
-            if isinstance(female_key, str) and "@" in female_key:
-                g_str, s_str = female_key.rsplit("@", 1)
-                if s_str not in slab_to_idx:
-                    raise ValueError(f"Unknown slab label '{s_str}' in key '{female_key}'")
-                female_slab = slab_to_idx[s_str]
-                female_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, g_str, genotype_to_index
+            from natal.genetic_patterns import GenotypePatternParser, ZygoteTypePattern
+
+            if isinstance(female_key, str):
+                if "@" in female_key:
+                    idx = female_key.rindex("@")
+                    gt_part = female_key[:idx]
+                    slab_part = female_key[idx:]
+                else:
+                    gt_part = female_key
+                    slab_part = ""
+                gt = species.get_genotype_from_str(gt_part)
+                female_key = str(gt) + slab_part
+                female_pattern = ZygoteTypePattern.parse(female_key, species)
+            elif isinstance(female_key, Genotype):
+                parser = GenotypePatternParser(species)
+                female_pattern = ZygoteTypePattern(
+                    parser.parse(str(female_key)), slab=None
                 )
-            f_z = female_idx * n_slabs + female_slab
+            else:
+                raise TypeError(
+                    f"female_key must be Genotype or str, got {type(female_key)}"
+                )
+            f_z = registry.resolve_default_ztype_index(female_pattern)
 
             for male_key, age_data in male_dict.items():
-                male_idx, male_slab = PopulationConfigBuilder._resolve_genotype_index(
-                    species, male_key, genotype_to_index
-                ), 0
-                # Support @slab suffix on male key
-                if isinstance(male_key, str) and "@" in male_key:
-                    g_str, s_str = male_key.rsplit("@", 1)
-                    if s_str not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{s_str}' in key '{male_key}'")
-                    male_slab = slab_to_idx[s_str]
-                    male_idx = PopulationConfigBuilder._resolve_genotype_index(
-                        species, g_str, genotype_to_index
+                if isinstance(male_key, str):
+                    if "@" in male_key:
+                        idx = male_key.rindex("@")
+                        gt_part = male_key[:idx]
+                        slab_part = male_key[idx:]
+                    else:
+                        gt_part = male_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    male_key = str(gt) + slab_part
+                    male_pattern = ZygoteTypePattern.parse(male_key, species)
+                elif isinstance(male_key, Genotype):
+                    parser = GenotypePatternParser(species)
+                    male_pattern = ZygoteTypePattern(
+                        parser.parse(str(male_key)), slab=None
                     )
-                m_z = male_idx * n_slabs + male_slab
+                else:
+                    raise TypeError(
+                        f"male_key must be Genotype or str, got {type(male_key)}"
+                    )
+                m_z = registry.resolve_default_ztype_index(male_pattern)
 
                 age_counts = PopulationConfigBuilder._resolve_age_counts_age_structured(
                     age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
@@ -958,35 +969,60 @@ class PopulationConfigBuilder:
         Returns:
             NDArray[np.float64]: A 3D array [sex, age, genotype] with age max 2.
         """
+        registry = IndexRegistry()
+        slabs = species.somatic_labels or ["default"]
+        for slab in slabs:
+            registry.register_somatic_label(slab)
         genotypes = species.get_all_genotypes(unordered=species.unordered)
-        genotype_to_index = {gt: idx for idx, gt in enumerate(genotypes)}
-        n_slabs = len(species.somatic_labels or ["default"])
-        slab_to_idx = {s: i for i, s in enumerate(species.somatic_labels or ["default"])}
-        n_ztypes = len(genotypes) * n_slabs
-        out = np.zeros((2, 2, n_ztypes), dtype=np.float64)
+        for gt in genotypes:
+            registry.register_genotype(gt)
+        out = np.zeros((2, 2, registry.n_ztypes), dtype=np.float64)
 
         for sex_key, genotype_dist in distribution.items():
             sex_idx = PopulationConfigBuilder._resolve_sex_index(sex_key)
             for genotype_key, age_data in genotype_dist.items():
-                slab_idx: int = 0
-                resolved_key: object = genotype_key
+                # Support @slab suffix via ZygoteTypePattern:
+                #   "A|A@infected" → genotype A|A, slab infected
+                #   "A|A" → genotype A|A, default slab via resolve_default_ztype_index
+                from natal.genetic_patterns import (
+                    GenotypePatternParser,
+                    ZygoteTypePattern,
+                )
+
                 if isinstance(genotype_key, tuple):
                     _key, _slab = cast("tuple[object, str]", genotype_key)
-                    resolved_key = _key
-                    if _slab not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{_slab}'")
-                    slab_idx = slab_to_idx[_slab]
-                elif isinstance(genotype_key, str) and "@" in genotype_key:
-                    g_str, s_str = genotype_key.rsplit("@", 1)
-                    resolved_key = g_str
-                    if s_str not in slab_to_idx:
-                        raise ValueError(f"Unknown slab label '{s_str}' in key '{g_str}@{s_str}'")
-                    slab_idx = slab_to_idx[s_str]
+                    if isinstance(_key, Genotype):
+                        pattern = ZygoteTypePattern.from_pair(_key, _slab, species)
+                    elif isinstance(_key, str):
+                        _gt = species.get_genotype_from_str(_key)
+                        _key = str(_gt)
+                        pattern = ZygoteTypePattern.parse(f"{_key}@{_slab}", species)
+                    else:
+                        raise TypeError(
+                            f"Tuple first element must be Genotype or str, got {type(_key)}"
+                        )
+                elif isinstance(genotype_key, str):
+                    if "@" in genotype_key:
+                        idx = genotype_key.rindex("@")
+                        gt_part = genotype_key[:idx]
+                        slab_part = genotype_key[idx:]
+                    else:
+                        gt_part = genotype_key
+                        slab_part = ""
+                    gt = species.get_genotype_from_str(gt_part)
+                    genotype_key = str(gt) + slab_part
+                    pattern = ZygoteTypePattern.parse(genotype_key, species)
+                elif isinstance(genotype_key, Genotype):
+                    parser = GenotypePatternParser(species)
+                    pattern = ZygoteTypePattern(
+                        parser.parse(str(genotype_key)), slab=None
+                    )
+                else:
+                    raise TypeError(
+                        f"genotype_key must be Genotype, str, or tuple, got {type(genotype_key)}"
+                    )
 
-                genotype_idx = PopulationConfigBuilder._resolve_genotype_index(
-                    species, resolved_key, genotype_to_index
-                )
-                z_idx = genotype_idx * n_slabs + slab_idx
+                z_idx = registry.resolve_default_ztype_index(pattern)
                 age0, age1 = PopulationConfigBuilder._resolve_discrete_age_distribution(age_data)
                 out[sex_idx, 0, z_idx] += age0
                 out[sex_idx, 1, z_idx] += age1
@@ -1679,9 +1715,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         )
 
         # 3️⃣ Apply all presets in order
-        pop_any = cast(Any, pop)
         for preset in self._presets:
-            pop_any.apply_preset(preset)
+            pop.apply_preset(preset)
 
         # 4️⃣ Apply fitness settings directly to PopulationConfig (after presets)
         for operation in self._fitness_operations:
@@ -1698,19 +1733,19 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
                         target_age = pop.new_adult_age - 1
                         viability_updates = self._iter_viability_updates(
                             values=values,
                             n_ages=self.n_ages,
                             default_age=target_age,
                         )
-                        for sex_idx, age_idx, raw_val in viability_updates:
-                            val = raw_val
-                            if is_multiply:
-                                current = pop.config.viability_fitness[sex_idx, age_idx, genotype_idx]
-                                val *= current
-                            pop.config.set_viability_fitness(sex_idx, genotype_idx, val, age=age_idx)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            for sex_idx, age_idx, raw_val in viability_updates:
+                                val = raw_val
+                                if is_multiply:
+                                    current = pop.config.viability_fitness[sex_idx, age_idx, z_idx]
+                                    val *= current
+                                pop.config.set_viability_fitness(sex_idx, z_idx, val, age=age_idx)
 
             elif method_name == 'fecundity':
                 fecundity_map = cast(FecundityMap, args[0])
@@ -1721,23 +1756,22 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
+                            else:
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
 
             elif method_name == 'sexual_selection':
                 preferences = cast(SexualSelectionMap, args[0])
@@ -1753,13 +1787,13 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
 
                     for f_genotype in matched_f_genotypes:
                         for m_genotype in matched_m_genotypes:
-                            f_idx = pop.index_registry.genotype_to_index[f_genotype]
-                            m_idx = pop.index_registry.genotype_to_index[m_genotype]
-                            val = float(preference)
-                            if is_multiply:
-                                current = pop.config.sexual_selection_fitness[f_idx, m_idx]
-                                val *= current
-                            pop.config.set_sexual_selection_fitness(f_idx, m_idx, val)
+                            for f_z in pop.index_registry.ztype_indices_for(f_genotype):
+                                for m_z in pop.index_registry.ztype_indices_for(m_genotype):
+                                    val = float(preference)
+                                    if is_multiply:
+                                        current = pop.config.sexual_selection_fitness[f_z, m_z]
+                                        val *= current
+                                    pop.config.set_sexual_selection_fitness(f_z, m_z, val)
 
             elif method_name == 'zygote_viability':
                 zygote_viability_map = cast(ZygoteViabilityMap, args[0])
@@ -1770,28 +1804,27 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                # For zygote viability fitness, we don't support age-specific values
-                                # value should be a float, not AgeScalarMap
-                                if isinstance(value, dict):
-                                    raise TypeError("Zygote viability fitness does not support age-specific values. Use a float value instead.")
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            # values is a float, not AgeScalarMap for zygote fitness
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    # For zygote viability fitness, we don't support age-specific values
+                                    # value should be a float, not AgeScalarMap
+                                    if isinstance(value, dict):
+                                        raise TypeError("Zygote viability fitness does not support age-specific values. Use a float value instead.")
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
+                            else:
+                                # values is a float, not AgeScalarMap for zygote fitness
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
 
         # 8️⃣ Apply observation groups if set
         if self._observation_groups is not None:
@@ -2157,9 +2190,8 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             hooks=self._hooks,
         )
 
-        pop_any = cast(Any, pop)
         for preset in self._presets:
-            pop_any.apply_preset(preset)
+            pop.apply_preset(preset)
 
         for operation in self._fitness_operations:
             method_name, args, kwargs = operation
@@ -2175,7 +2207,6 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
                         new_adult_age = 1
                         target_age = new_adult_age - 1
                         viability_updates = self._iter_viability_updates(
@@ -2183,12 +2214,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                             n_ages=2,
                             default_age=target_age,
                         )
-                        for sex_idx, age_idx, raw_val in viability_updates:
-                            val = raw_val
-                            if is_multiply:
-                                current = pop.config.viability_fitness[sex_idx, age_idx, genotype_idx]
-                                val *= current
-                            pop.config.set_viability_fitness(sex_idx, genotype_idx, val, age=age_idx)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            for sex_idx, age_idx, raw_val in viability_updates:
+                                val = raw_val
+                                if is_multiply:
+                                    current = pop.config.viability_fitness[sex_idx, age_idx, z_idx]
+                                    val *= current
+                                pop.config.set_viability_fitness(sex_idx, z_idx, val, age=age_idx)
 
             elif method_name == 'fecundity':
                 fecundity_map = cast(FecundityMap, args[0])
@@ -2199,22 +2231,22 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.fecundity_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_fecundity_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
+                            else:
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.fecundity_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_fecundity_fitness(sex_idx, z_idx, val)
 
             elif method_name == 'sexual_selection':
                 preferences = cast(SexualSelectionMap, args[0])
@@ -2230,13 +2262,13 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
 
                     for f_genotype in matched_f_genotypes:
                         for m_genotype in matched_m_genotypes:
-                            f_idx = pop.index_registry.genotype_to_index[f_genotype]
-                            m_idx = pop.index_registry.genotype_to_index[m_genotype]
-                            val = float(preference)
-                            if is_multiply:
-                                current = pop.config.sexual_selection_fitness[f_idx, m_idx]
-                                val *= current
-                            pop.config.set_sexual_selection_fitness(f_idx, m_idx, val)
+                            for f_z in pop.index_registry.ztype_indices_for(f_genotype):
+                                for m_z in pop.index_registry.ztype_indices_for(m_genotype):
+                                    val = float(preference)
+                                    if is_multiply:
+                                        current = pop.config.sexual_selection_fitness[f_z, m_z]
+                                        val *= current
+                                    pop.config.set_sexual_selection_fitness(f_z, m_z, val)
 
             elif method_name == 'zygote_viability':
                 zygote_viability_map = cast(ZygoteViabilityMap, args[0])
@@ -2247,28 +2279,27 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
                     )
 
                     for genotype in matched_genotypes:
-                        genotype_idx = pop.index_registry.genotype_to_index[genotype]
-
-                        if isinstance(values, dict):
-                            for sex_label, value in values.items():
-                                sex_idx = resolve_sex_label(sex_label)
-                                # For zygote fitness, we don't support age-specific values
-                                # value should be a float, not AgeScalarMap
-                                if isinstance(value, dict):
-                                    raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
-                                val = float(value)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
-                        else:
-                            # values is a float, not AgeScalarMap for zygote fitness
-                            for sex_idx in (0, 1):
-                                val = float(values)
-                                if is_multiply:
-                                    current = pop.config.zygote_viability_fitness[sex_idx, genotype_idx]
-                                    val *= current
-                                pop.config.set_zygote_viability_fitness(sex_idx, genotype_idx, val)
+                        for z_idx in pop.index_registry.ztype_indices_for(genotype):
+                            if isinstance(values, dict):
+                                for sex_label, value in values.items():
+                                    sex_idx = resolve_sex_label(sex_label)
+                                    # For zygote fitness, we don't support age-specific values
+                                    # value should be a float, not AgeScalarMap
+                                    if isinstance(value, dict):
+                                        raise TypeError("Zygote fitness does not support age-specific values. Use a float value instead.")
+                                    val = float(value)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
+                            else:
+                                # values is a float, not AgeScalarMap for zygote fitness
+                                for sex_idx in (0, 1):
+                                    val = float(values)
+                                    if is_multiply:
+                                        current = pop.config.zygote_viability_fitness[sex_idx, z_idx]
+                                        val *= current
+                                    pop.config.set_zygote_viability_fitness(sex_idx, z_idx, val)
 
         # Apply observation groups if set
         if self._observation_groups is not None:

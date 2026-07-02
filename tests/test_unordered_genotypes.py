@@ -24,7 +24,8 @@ class TestOrderedDefault:
         """Config blueprint uses unordered count, but ordered is still accessible."""
         sp = nt.Species.from_dict("nc_bp", {"c1": {"l1": ["A", "a"]}})
         bp = sp.get_config_blueprint()
-        assert bp["n_ztypes"] == 3  # unordered in blueprint
+        assert bp["n_genotypes"] == 3  # unordered genotype count
+        assert bp["n_ztypes"] == 3  # G × S = 3 × 1
         # But ordered is still available
         ordered = sp.get_all_genotypes(unordered=False)
         assert len(ordered) == 4
@@ -136,7 +137,7 @@ class TestUnorderedRegistry:
         assert reg.num_genotypes() == 3
         gt_Aa = sp.get_genotype_from_str("A|a")
         gt_aA = sp.get_genotype_from_str("a|A")
-        assert reg.genotype_index(gt_Aa) == reg.genotype_index(gt_aA)
+        assert reg.ztype_index(gt_Aa, "default") == reg.ztype_index(gt_aA, "default")
 
     def test_homozygous_unchanged(self):
         sp = nt.Species.from_dict("canon_reg2", {"c1": {"l1": ["A", "a"]}})
@@ -144,37 +145,28 @@ class TestUnorderedRegistry:
         for g in sp.get_all_genotypes(unordered=False):
             reg.register_genotype(g)
         gt_AA = sp.get_genotype_from_str("A|A")
-        assert reg.genotype_index(gt_AA) == 0
-
-    def test_resolve_genotype_index_both_forms(self):
-        sp = nt.Species.from_dict("canon_reg3", {"c1": {"l1": ["A", "a"]}})
-        reg = IndexRegistry()
-        for g in sp.get_all_genotypes(unordered=True):
-            reg.register_genotype(g)
-        idx1 = reg.resolve_genotype_index(reg.index_to_genotype, "A|a")
-        idx2 = reg.resolve_genotype_index(reg.index_to_genotype, "a|A")
-        assert idx1 == idx2
-        assert idx1 is not None
+        assert reg.ztype_index(gt_AA, "default") == 0
 
     def test_dict_lookup_both_forms(self):
-        """genotype_to_index dict auto-canonicalizes on lookup."""
+        """Both genotype forms resolve to same index via ztype_index."""
         sp = nt.Species.from_dict("canon_reg4", {"c1": {"l1": ["A", "a"]}})
         reg = IndexRegistry()
         for g in sp.get_all_genotypes(unordered=True):
             reg.register_genotype(g)
         gt_Aa = sp.get_genotype_from_str("A|a")
         gt_aA = sp.get_genotype_from_str("a|A")
-        # Direct dict access should work for both forms
-        assert reg.genotype_to_index[gt_Aa] == reg.genotype_to_index[gt_aA]
+        # ztype_index auto-canonicalizes: both forms return same index
+        assert reg.ztype_index(gt_Aa, "default") == reg.ztype_index(gt_aA, "default")
 
     def test_dict_contains_both_forms(self):
-        """'in' check on genotype_to_index works for both forms."""
+        """Both genotype forms are found via ztype_index (no KeyError)."""
         sp = nt.Species.from_dict("canon_reg5", {"c1": {"l1": ["A", "a"]}})
         reg = IndexRegistry()
         for g in sp.get_all_genotypes(unordered=True):
             reg.register_genotype(g)
-        assert sp.get_genotype_from_str("A|a") in reg.genotype_to_index
-        assert sp.get_genotype_from_str("a|A") in reg.genotype_to_index
+        # ztype_index raises KeyError if not found; both should resolve
+        reg.ztype_index(sp.get_genotype_from_str("A|a"), "default")
+        reg.ztype_index(sp.get_genotype_from_str("a|A"), "default")
 
     def test_three_allele_unordered_count(self):
         """3 alleles × 1 locus: 9 ordered → 6 unordered in registry."""
@@ -196,7 +188,8 @@ class TestUnorderedConfigBlueprint:
     def test_blueprint_uses_unordered_count(self):
         sp = nt.Species.from_dict("canon_bp", {"c1": {"l1": ["A", "a"]}})
         bp = sp.get_config_blueprint()
-        assert bp["n_ztypes"] == 3
+        assert bp["n_genotypes"] == 3
+        assert bp["n_ztypes"] == 3  # G × S = 3 × 1
 
     def test_shape_consistency(self):
         sp = nt.Species.from_dict("canon_shape", {"c1": {"l1": ["A", "a"]}})
@@ -208,7 +201,7 @@ class TestUnorderedConfigBlueprint:
         cfg = pop.config
         ng = cfg.n_ztypes
         assert ng == 3
-        assert cfg.zygotes_to_gametes_map.shape == (2, ng, cfg.n_haploid_genotypes * cfg.n_glabs)
+        assert cfg.zygotes_to_gametes_map.shape == (2, ng, cfg.n_gtypes * cfg.n_glabs)
         assert cfg.offspring_tensor.shape == (ng, ng, ng)
         assert cfg.sexual_selection_fitness.shape == (ng, ng)
         assert cfg.initial_individual_count.shape == (2, cfg.n_ages, ng)
@@ -535,7 +528,7 @@ class TestCompressionDeclared:
         registry = pop.index_registry
         assert registry.n_ztypes == 3
         aa = sp.get_genotype_from_str("a|a")
-        assert registry.genotype_index(aa) == 2
+        assert registry.ztype_index(aa, "default") == 2
 
     def test_no_declared_prunes_unreachable_genotype(self):
         """Without declared, unreachable genotype raises KeyError."""
@@ -554,4 +547,4 @@ class TestCompressionDeclared:
         assert registry.n_ztypes == 2
         aa = sp.get_genotype_from_str("a|a")
         with pytest.raises(KeyError):
-            registry.genotype_index(aa)
+            registry.ztype_index(aa, "default")

@@ -201,6 +201,27 @@
 
 ---
 
+### #22 ⚠️ Numba JIT 缓存冲突导致空间测试排序依赖
+
+**来源**：`feat/ztype-registry` 分支测试调试。`test_discrete_population.py` 先于 `test_spatial_builder_coverage.py` 运行时，空间测试中 30 个离散世代构建场景因 Numba JIT 缓存冲突失败：
+
+```
+RuntimeError: In 'NRT_adapt_ndarray_to_python', 'descr' is NULL
+```
+
+发生在 `run_discrete_survival()` 尝试从 `individual_count` 返回数组时——Numba 的 NRT（Numba Runtime）内部 dtype descriptor 损坏。根本原因：`test_discrete_population` 首先编译 `run_discrete_reproduction`/`run_discrete_survival` Numba 函数，使用更大的 `n_ztypes` 值（3 基因型 × 1 slab = 3）。后续 `test_spatial_builder_coverage` 的某些测试使用不同的 `n_ztypes` 值，Numba 尝试复用缓存的编译产物，但不同的数组形状导致 dtype descriptor 指针误对齐。空间测试单独运行时全部 69 个通过；先于离散测试运行时通过。
+
+**当前措施**：`tests/conftest.py` 将空间构建器测试重新排序到 pytest 收集顺序的前面（第一个运行）。这避免了冲突，但并未解决根本的 Numba 缓存问题。
+
+**优先级理由**：🟡 非生产 bug——仅影响测试套件排序。当前解决方法可行。若要正确修复，需要将 spatial builder 测试中使用的 `n_ztypes` 大小与其他离散世代测试对齐，或调查 Numba 的跨测试缓存失效问题。
+
+**受影响范围**：
+- `tests/test_spatial_builder_coverage.py`：69 个测试中 30 个受影响
+- 触发条件：`test_discrete_population.py`（18 个测试，`n_ztypes=3`）在 `test_spatial_builder_coverage.py`（用 `n_ztypes=1` 的测试）之前运行
+- 非确定性：同一个提交可能通过或失败，取决于 pytest 的收集顺序
+- `main` 分支同样受影响（`143af2c`）：仅因测试文件更少而以有利的收集顺序通过
+
+
 ## 🟢 低优先级 — UX / 远期功能
 
 ### #12 ⚠️ Spatial API：migration kernel 边界效应优化
@@ -466,6 +487,9 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
 > 以下条目已实现，从活跃 TODO 中移除。按完成来源分组。
 
 ### 本分支完成
+
+- **ZType 注册表重构（第一阶段）** — `feat/ztype-registry` 分支。将分散在 15 个文件、60+ 处的 `g·n_slabs + slab` 算术公式替换为扁平字典 ZType/GType 索引空间。新增 `_ztype_to_index`、`_gtype_to_index` 字典，`ztype_index()`、`gtype_index()` 方法，计算属性（`genotype_to_index`、`index_to_genotype` 等），扁平掩码压缩（`compress(ztype_mask, gtype_mask)` 无 `n_slabs` 参数）。删除 `compress_hg_glab`、`compress_genotype_index`、`decompress_genotype_index`、`axis_sizes`、`update_n_ztypes`。Hook `_resolve_genotypes` 修复为使用 ZType 索引展开。Oracle 验证通过。
+- **ZType 全量修复（第二阶段）** — 系统性修复 `genotype_to_index` 在使用 n_slabs>1 时的 50+ 处静默错误。所有 pattern 字符串解析统一走 `ZygoteTypePattern`。删除 `genotype_to_index`、`genotype_index()`、`_ensure_genotype_registered()`、`_UnorderedGenotypeDict`。修复观察系统在 n_slabs>1 时的崩溃（mask 维度 `n_genotypes` → `n_ztypes`）。7 个 n_slabs>1 回归测试。参数重命名 `genotype_idx` → `ztype_idx`。状态：997 passed，pyright 0，ruff clean。
 
 - **refresh 系统重构** — `rebuild_from_presets()` 拆为 `refresh_modifiers()`（public，仅 modifier 重建）+ `_reapply_preset_fitness()`（private，fitness 重置和重应用）。删除了 `refresh_modifier_maps()` public wrapper。`add_gamete_modifier` / `add_zygote_modifier` 的 `refresh` 参数现在只控制是否立即重建 maps，派生列表写入无条件发生。修复了 `rebuild_from_presets` 静默覆盖手动 fitness 的问题——`refresh_modifiers()` 不碰 fitness，只有 `apply_preset()` / `presets()` / `reconfigure_preset()` 会调用 `_reapply_preset_fitness()`。
 - **#2** `expected_num_adult_females` — 旧机制（`base_expected_num_adult_females` + `get_effective_expected_adult_females()`）已全部移除。新机制通过 `Configurator.competition()` 接收参数，流经 `_compute_carrying_capacity_params()` 转换为 `external_expected_eggs`。两个专用测试验证。

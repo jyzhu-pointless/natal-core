@@ -271,7 +271,7 @@ def run_spatial_steps_with_migration(
         kernel_include_center: Whether kernel center is an outbound target.
         migration_rate: Fraction of each deme that migrates each tick.
         record_interval: History recording interval (0 = no recording).
-        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_genotypes)``.
+        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
         group_offsets: Start position per group in compact row, from
             ``build_compact_metadata``.
         group_deme_map: ``(n_groups, max_demes)`` lookup, -1 padded.

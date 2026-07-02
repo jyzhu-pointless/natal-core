@@ -915,7 +915,7 @@ class SpatialPopulation:
             self._observation_mask = obs.build_mask(
                 n_sexes=state.individual_count.shape[0],
                 n_ages=state.individual_count.shape[1] if state.individual_count.ndim == 3 else 1,
-                n_genotypes=state.individual_count.shape[-1],
+                n_ztypes=state.individual_count.shape[-1],
             )
             self._rebuild_compact_meta()
 
@@ -949,7 +949,7 @@ class SpatialPopulation:
         self._observation_mask = self._observation.build_mask(
             n_sexes=ind.shape[0],
             n_ages=ind.shape[1] if ind.ndim == 3 else 1,
-            n_genotypes=ind.shape[-1],
+            n_ztypes=ind.shape[-1],
         )
         self._rebuild_compact_meta()
 
@@ -1218,8 +1218,8 @@ class SpatialPopulation:
 
         n_hooks = hook_offsets[-1]
         all_op_types: list[int] = []
-        all_gidx_offsets: list[int] = [0]
-        all_gidx_data: list[int] = []
+        all_zidx_offsets: list[int] = [0]
+        all_zidx_data: list[int] = []
         all_age_offsets: list[int] = [0]
         all_age_data: list[int] = []
         all_sex_masks: list[bool] = []
@@ -1248,10 +1248,10 @@ class SpatialPopulation:
 
                 # Offsets are rebased to flattened buffers as each hook's plan
                 # payload is appended.
-                gidx_offset_base = len(all_gidx_data)
+                zidx_offset_base = len(all_zidx_data)
                 for i in range(plan.n_ops):
-                    all_gidx_offsets.append(gidx_offset_base + plan.gidx_offsets[i + 1] - plan.gidx_offsets[0])
-                all_gidx_data.extend(plan.gidx_data.tolist())
+                    all_zidx_offsets.append(zidx_offset_base + plan.zidx_offsets[i + 1] - plan.zidx_offsets[0])
+                all_zidx_data.extend(plan.zidx_data.tolist())
 
                 age_offset_base = len(all_age_data)
                 for i in range(plan.n_ops):
@@ -1294,8 +1294,8 @@ class SpatialPopulation:
             n_ops_list=np.array(n_ops_list, dtype=np.int32),
             op_offsets=np.array(op_offsets, dtype=np.int32),
             op_types_data=np.array(all_op_types, dtype=np.int32),
-            gidx_offsets_data=np.array(all_gidx_offsets, dtype=np.int32),
-            gidx_data=np.array(all_gidx_data, dtype=np.int32),
+            zidx_offsets_data=np.array(all_zidx_offsets, dtype=np.int32),
+            zidx_data=np.array(all_zidx_data, dtype=np.int32),
             age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
             age_data=np.array(all_age_data, dtype=np.int32),
             sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
@@ -1394,10 +1394,10 @@ class SpatialPopulation:
                 for gene in locus.alleles:
                     allele_counts[gene.name] = 0.0
 
-        for genotype_idx, count in enumerate(genotype_counts):
+        for z_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):
+            count = genotype_counts[z_idx]
             if count <= 0:
                 continue
-            genotype = registry.index_to_genotype[genotype_idx]
             for chromosome in self.species.chromosomes:
                 for locus in chromosome.loci:
                     mat, pat = genotype.get_alleles_at_locus(locus)

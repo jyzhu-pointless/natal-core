@@ -929,10 +929,10 @@ class SpatialDashboard:
             # Compute allele frequencies from aggregate counts
             allele_counts: dict[str, float] = {}
             locus_totals: dict[str, float] = {}
-            for g_idx, count in enumerate(agg_genotype):
+            for z_idx, (gt, _slab) in enumerate(registry.index_to_ztype):
+                count = agg_genotype[z_idx]
                 if count <= 0:
                     continue
-                gt = registry.index_to_genotype[g_idx]
                 for chrom in self.pop.species.chromosomes:
                     for locus in chrom.loci:
                         locus_totals.setdefault(locus.name, 0.0)
@@ -989,13 +989,11 @@ class SpatialDashboard:
 
         row_labels = [str(g) for g in genotypes]
         col_labels = []
-        for hg_idx in range(config.n_haploid_genotypes):
-            hg_obj = registry.index_to_haplo[hg_idx]
-            for glab_idx in range(n_glabs):
-                label = str(hg_obj)
-                if n_glabs > 1:
-                    label += f" [{registry.index_to_glab[glab_idx]}]"
-                col_labels.append(label)
+        for _gt_idx, (hg_obj, glab_str) in enumerate(registry.index_to_gtype):
+            label = str(hg_obj)
+            if n_glabs > 1:
+                label += f" [{glab_str}]"
+            col_labels.append(label)
 
         figs = []
         for sex_idx in range(config.n_sexes):
@@ -1019,20 +1017,18 @@ class SpatialDashboard:
         config = self.pop.deme(0).export_config()
         registry = self.pop.deme(0).registry
         g2z = config.gametes_to_zygotes_map
-        n_hg_glabs = int(config.n_haploid_genotypes * config.n_glabs)
+        n_hg_glabs = int(config.n_gtypes)
         genotypes = registry.index_to_genotype
 
         if n_hg_glabs > 40:
             return None
 
         labels = []
-        for hg_idx in range(config.n_haploid_genotypes):
-            hg_obj = registry.index_to_haplo[hg_idx]
-            for glab_idx in range(config.n_glabs):
-                label = str(hg_obj)
-                if config.n_glabs > 1:
-                    label += f" [{registry.index_to_glab[glab_idx]}]"
-                labels.append(label)
+        for _gt_idx, (hg_obj, glab_str) in enumerate(registry.index_to_gtype):
+            label = str(hg_obj)
+            if config.n_glabs > 1:
+                label += f" [{glab_str}]"
+            labels.append(label)
 
         z_data = np.full((n_hg_glabs, n_hg_glabs), np.nan)
         text_data = np.full((n_hg_glabs, n_hg_glabs), "", dtype=object)

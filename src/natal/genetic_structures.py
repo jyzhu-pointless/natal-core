@@ -1828,15 +1828,16 @@ class SpeciesConfigBlueprint(TypedDict):
     consumed by ``Configurator`` / ``PopulationBuilder``.
     """
 
-    n_ztypes: int
-    n_haploid_genotypes: int
+    n_genotypes: int  # unique genotype count (G)
+    n_ztypes: int     # G × S (genotypes × slabs)
+    n_gtypes: int
     n_glabs: int
     n_slabs: int
     zygotes_to_gametes_map: NDArray[np.float64]
     gametes_to_zygotes_map: NDArray[np.float64]
     offspring_tensor: NDArray[np.float64]
-    female_genotype_compatibility: NDArray[np.float64]
-    male_genotype_compatibility: NDArray[np.float64]
+    female_ztype_compatibility: NDArray[np.float64]
+    male_ztype_compatibility: NDArray[np.float64]
 
 
 # Species (structure-level) -> HaploidGenome (entity-level)
@@ -3503,10 +3504,16 @@ class Species(GeneticStructure['HaploidGenome']):
     def build_gamete_map(
         self,
         gamete_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+        n_slabs: int = 1,
     ) -> NDArray[np.float64]:
         """Build the genotype → gamete map for this species.
 
         When *gamete_modifiers* is None, returns the Mendelian baseline.
+
+        Args:
+            gamete_modifiers: Optional modifier callables to apply.
+            n_slabs: Number of somatic slabs.  When > 1 the genotype axis is
+                tiled so that each base genotype appears once per slab.
         """
         from natal.population_config import initialize_gamete_map as _impl
 
@@ -3515,15 +3522,22 @@ class Species(GeneticStructure['HaploidGenome']):
             haploid_genotypes=self.get_all_haploid_genotypes(),
             n_glabs=len(self.gamete_labels or ["default"]),
             gamete_modifiers=gamete_modifiers,
+            n_slabs=n_slabs,
         )
 
     def build_zygote_map(
         self,
         zygote_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+        n_slabs: int = 1,
     ) -> NDArray[np.float64]:
         """Build the gamete pair → diploid genotype map for this species.
 
         When *zygote_modifiers* is None, returns the Mendelian baseline.
+
+        Args:
+            zygote_modifiers: Optional modifier callables to apply.
+            n_slabs: Number of somatic slabs.  When > 1 the genotype axis is
+                tiled so that each base genotype appears once per slab.
         """
         from natal.population_config import initialize_zygote_map as _impl
 
@@ -3533,6 +3547,7 @@ class Species(GeneticStructure['HaploidGenome']):
             n_glabs=len(self.gamete_labels or ["default"]),
             zygote_modifiers=zygote_modifiers,
             unordered=True,  # unordered genotype space
+            n_slabs=n_slabs,
         )
 
     # -- lazy-loaded config blueprint ---------------------------------------------
@@ -3550,7 +3565,7 @@ class Species(GeneticStructure['HaploidGenome']):
         recomputing species-level arrays on every construction.
 
         Returns:
-            Dict with keys ``n_ztypes`` (int), ``n_haploid_genotypes``
+            Dict with keys ``n_ztypes`` (int), ``n_gtypes``
             (int), ``n_glabs`` (int), ``zygotes_to_gametes_map``
             (ndarray), ``gametes_to_zygotes_map`` (ndarray),
             ``offspring_tensor`` (ndarray), and compatibility arrays
@@ -3570,19 +3585,23 @@ class Species(GeneticStructure['HaploidGenome']):
         n_g = len(genotypes)
         n_hg = len(haplotypes)
 
-        z2g = self.build_gamete_map()
-        g2z = self.build_zygote_map()
+        # Build maps with slab expansion so the genotype axis is G × S.
+        # This eliminates duplicate expand_slab_maps calls downstream.
+        z2g = self.build_gamete_map(n_slabs=n_slabs)
+        g2z = self.build_zygote_map(n_slabs=n_slabs)
 
         meiosis_f = cast(NDArray[np.float64], z2g[0])
         meiosis_m = cast(NDArray[np.float64], z2g[1])
+
+        n_ztypes = n_g * n_slabs
+        n_gtypes = n_hg * n_glabs
 
         offspring = compute_offspring_probability_tensor(
             meiosis_f=meiosis_f,
             meiosis_m=meiosis_m,
             haplo_to_genotype_map=g2z,
-            n_ztypes=n_g,
-            n_haplogenotypes=n_hg,
-            n_glabs=n_glabs,
+            n_ztypes=n_ztypes,
+            n_gtypes=n_gtypes,
         )
 
         # Genotype compatibility: sum of gamete production per sex per genotype.
@@ -3592,15 +3611,16 @@ class Species(GeneticStructure['HaploidGenome']):
         m_compat = meiosis_m.sum(axis=1)  # male side
 
         self._config_blueprint = {
-            "n_ztypes": n_g,
-            "n_haploid_genotypes": n_hg,
+            "n_genotypes": n_g,
+            "n_ztypes": n_ztypes,
+            "n_gtypes": n_gtypes,
             "n_glabs": n_glabs,
             "n_slabs": n_slabs,
             "zygotes_to_gametes_map": z2g,
             "gametes_to_zygotes_map": g2z,
             "offspring_tensor": offspring,
-            "female_genotype_compatibility": f_compat,
-            "male_genotype_compatibility": m_compat,
+            "female_ztype_compatibility": f_compat,
+            "male_ztype_compatibility": m_compat,
         }
         return self._config_blueprint
 
@@ -3700,11 +3720,10 @@ def _canonical_haploid_pair(
 
 
 # ---------------------------------------------------------------------------
-# Gamete-axis index compression
+# Helper function for index compression
 # ---------------------------------------------------------------------------
 
-
-def build_gamete_compression_mask(
+def build_compression_mask(
     z2g_map: NDArray[np.float64],
     g2z_map: NDArray[np.float64],
     initial_individual_count: NDArray[np.float64],
@@ -3712,7 +3731,8 @@ def build_gamete_compression_mask(
     n_glabs: int = 1,
     n_slabs: int = 1,
 ) -> tuple[NDArray[np.int32], int, NDArray[np.int32], int]:
-    """Build compression masks for both the GType (gamete) and ZType axes.
+    """Build compression masks for both the GType (gamete) and ZType
+    (zygote) axes.
 
     Uses a unified gamete-set fixed-point BFS that simultaneously tracks
     reachable GTypes and ZTypes.  For n_slabs=1 the ZType mask reduces
@@ -3792,14 +3812,17 @@ def build_gamete_compression_mask(
             i += 1
 
     # Build GType mask
-    from natal.index_registry import compress_hg_glab, decompress_hg_glab
+    from natal.population_config import (
+        compress_hl,
+        decompress_hl,
+    )
 
     gtype_mask = np.full(HL, -1, dtype=np.int32)
     sorted_pairs = sorted(
-        decompress_hg_glab(hl, n_glabs) for hl in reachable_hl
+        decompress_hl(hl, n_glabs) for hl in reachable_hl
     )
     for j, (hg, glab) in enumerate(sorted_pairs):
-        hl = compress_hg_glab(hg, glab, n_glabs)
+        hl = compress_hl(hg, glab, n_glabs)
         gtype_mask[hl] = j
 
     # Build ZType mask — for n_slabs=1 this is just (G_orig,).

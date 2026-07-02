@@ -37,7 +37,6 @@ from natal.modifiers import (
     GenotypeFilter,
     ZygoteModifier,
     evaluate_genotype_filter,
-    resolve_optional_glab_index,
 )
 
 if TYPE_CHECKING:
@@ -372,7 +371,6 @@ class ZygoteConversionRuleSet:
         def zygote_modifier_func(*_args: object, **_kwargs: object) -> Dict[
             Tuple[int, int], Dict[int, float]
         ]:
-            n_glabs = int(population.config.n_glabs)
             diploid_genotypes = population.registry.index_to_genotype
 
             # Build genotype index lookup for the registered diploid set.
@@ -388,8 +386,6 @@ class ZygoteConversionRuleSet:
 
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
 
-            from natal.index_registry import decompress_hg_glab
-
             for c1 in range(n_c):
                 for c2 in range(n_c):
                     row = baseline_g2z[c1, c2]
@@ -398,8 +394,12 @@ class ZygoteConversionRuleSet:
                     g = int(row.argmax())
                     base_gt = diploid_genotypes[g]
 
-                    _, mat_glab = decompress_hg_glab(c1, n_glabs)
-                    _, pat_glab = decompress_hg_glab(c2, n_glabs)
+                    mat_glab = population.registry.glab_labels.index(
+                        population.registry.index_to_gtype[c1][1]
+                    )
+                    pat_glab = population.registry.glab_labels.index(
+                        population.registry.index_to_gtype[c2][1]
+                    )
 
                     # current_freqs holds the distribution of genotypes derived from this (c1,c2) pairing.
                     # Initially, 100% of the zygotes form the `base_gt` (the normal Mendelian union).
@@ -503,11 +503,21 @@ def _resolve_zygote_rule_glabs(
     Returns:
         List of ``(rule, resolved_maternal_glab_idx, resolved_paternal_glab_idx)``.
     """
-    glab_map = population.index_registry.glab_to_index
+    glab_to_idx = population.index_registry.glab_to_index
     resolved: List[_ResolvedRule] = []
     for rule in rules:
-        mat_idx = resolve_optional_glab_index(rule.maternal_glab, glab_map)
-        pat_idx = resolve_optional_glab_index(rule.paternal_glab, glab_map)
+        mat_idx: Optional[int] = None
+        if rule.maternal_glab is not None:
+            if isinstance(rule.maternal_glab, int):
+                mat_idx = rule.maternal_glab
+            else:
+                mat_idx = glab_to_idx[rule.maternal_glab]
+        pat_idx: Optional[int] = None
+        if rule.paternal_glab is not None:
+            if isinstance(rule.paternal_glab, int):
+                pat_idx = rule.paternal_glab
+            else:
+                pat_idx = glab_to_idx[rule.paternal_glab]
         resolved.append((rule, mat_idx, pat_idx))
     return resolved
 
