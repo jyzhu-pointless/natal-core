@@ -394,12 +394,12 @@ class ZygoteConversionRuleSet:
                     g = int(row.argmax())
                     base_gt = diploid_genotypes[g]
 
-                    mat_glab = population.registry.glab_labels.index(
+                    mat_glab = population.registry.glab_to_index[
                         population.registry.index_to_gtype[c1][1]
-                    )
-                    pat_glab = population.registry.glab_labels.index(
+                    ]
+                    pat_glab = population.registry.glab_to_index[
                         population.registry.index_to_gtype[c2][1]
-                    )
+                    ]
 
                     # current_freqs holds the distribution of genotypes derived from this (c1,c2) pairing.
                     # Initially, 100% of the zygotes form the `base_gt` (the normal Mendelian union).

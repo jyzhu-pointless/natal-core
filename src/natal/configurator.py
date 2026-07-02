@@ -803,11 +803,8 @@ def _write_fitness_field_flat(
         getattr(config, "new_adult_age", 1) - 1
     )
 
-    # Resolve slab index mapping once (used when selectors have @slab suffix).
-    slab_to_idx: dict[str, int] = {}
-    if hasattr(config, "n_slabs"):
-        raw_slabs = getattr(species, "somatic_labels", None) or ["default"]
-        slab_to_idx = {s: i for i, s in enumerate(raw_slabs)}
+    # Resolve valid slab labels for tuple selectors with @slab suffix.
+    raw_slabs: list[str] = getattr(species, "somatic_labels", None) or ["default"]
 
     for selector, value in patch.items():
         # ── tuple syntax: (Genotype, "slab_label") ──
@@ -818,12 +815,11 @@ def _write_fitness_field_flat(
                     f"(genotype_key, slab_label), got {len(selector)}"
                 )
             _genotype_key, _slab = selector
-            if _slab not in slab_to_idx:
+            if _slab not in raw_slabs:
                 raise ValueError(
                     f"Unknown slab label '{_slab}'. "
-                    f"Available slabs: {list(slab_to_idx)}"
+                    f"Available slabs: {raw_slabs}"
                 )
-            _ = slab_to_idx[_slab]
 
             if isinstance(_genotype_key, Genotype):
                 matched = [_genotype_key]
@@ -896,7 +892,6 @@ def _write_fitness_field_flat(
             if "@" in selector_str:
                 _, s_str = selector_str.rsplit("@", 1)
                 lab = LabPattern.parse(s_str)
-                raw_slabs = list(slab_to_idx.keys())
                 matching_slabs = [s for s in raw_slabs if lab.matches(s)]
                 if not matching_slabs:
                     raise ValueError(

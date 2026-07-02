@@ -461,20 +461,10 @@ def _apply_comp_map(
                 elif isinstance(hg_part, HaploidGenotype):
                     hg_obj = hg_part
                 elif isinstance(hg_part, str):
-                    found: Optional[HaploidGenotype] = None
-                    for hg in haploid_genotypes:
-                        if hasattr(hg, "to_string") and hg.to_string() == hg_part:
-                            found = hg
-                            break
-                        try:
-                            if str(hg) == hg_part:
-                                found = hg
-                                break
-                        except Exception:
-                            continue
-                    if found is None:
+                    try:
+                        hg_obj = _find_haploid_by_name(hg_part, haploid_genotypes)
+                    except KeyError:
                         continue
-                    hg_obj = found
                 else:
                     continue
                 # resolve glab_part → string label
