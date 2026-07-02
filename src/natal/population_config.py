@@ -149,6 +149,7 @@ class PopulationConfig(NamedTuple):
     offspring_tensor: NDArray[np.float64]    # (g, g, g) — precomputed from meiosis × zygote maps
     initial_individual_count: NDArray[np.float64]
     initial_sperm_storage: NDArray[np.float64]
+    equilibrium_individual_distribution: Optional[NDArray[np.float64]]  # pre-computed equilibrium age distribution
 
     # -- slab inheritance (set by presets) --
 
@@ -375,6 +376,7 @@ class _ComputedMaps(NamedTuple):
     low_density_growth_rate: float
     juvenile_growth_mode: int
     has_sex_chromosomes: bool
+    equilibrium_individual_distribution: Optional[NDArray[np.float64]]
 
 
 def _build_config_maps(
@@ -626,6 +628,7 @@ def _build_config_maps(
         low_density_growth_rate=float(low_density_growth_rate),
         juvenile_growth_mode=int(juvenile_growth_mode),
         has_sex_chromosomes=bool(has_sex_chromosomes),
+        equilibrium_individual_distribution=equilibrium_individual_distribution,
     )
 
 
@@ -818,6 +821,7 @@ def build_population_config(
             offspring_tensor=m.offspring_tensor,
             initial_individual_count=m.initial_individual_count,
             initial_sperm_storage=m.initial_sperm_storage,
+            equilibrium_individual_distribution=m.equilibrium_individual_distribution,
             custom=np.zeros(0, dtype=np.float64),
         )
         generation_time_f = np.array(float(temp_cfg.compute_generation_time()))
@@ -865,6 +869,7 @@ def build_population_config(
         offspring_tensor=m.offspring_tensor,
         initial_individual_count=m.initial_individual_count,
         initial_sperm_storage=m.initial_sperm_storage,
+        equilibrium_individual_distribution=m.equilibrium_individual_distribution,
         custom=np.zeros(0, dtype=np.float64),
     )
 
