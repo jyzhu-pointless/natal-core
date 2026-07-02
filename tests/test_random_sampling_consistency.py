@@ -75,10 +75,11 @@ def test_fertilization_sampling_consistency():
         assert n_female.shape == (n_ztypes,)
         assert n_male.shape == (n_ztypes,)
 
-        # In deterministic mode, values should be exact
-        if not stochastic:
-            assert np.all(n_female >= 0)
-            assert np.all(n_male >= 0)
+        # Basic consistency checks for all modes
+        assert np.all(np.isfinite(n_female))
+        assert np.all(np.isfinite(n_male))
+        assert np.all(n_female >= 0)
+        assert np.all(n_male >= 0)
 
     # Verify that results are reasonable across modes
     deterministic_total = results["deterministic"][0] + results["deterministic"][1]
@@ -131,6 +132,7 @@ def test_competition_sampling_consistency():
         stochastic_total = results[mode_name][0] + results[mode_name][1]
         # Stochastic results should be reasonable
         assert stochastic_total >= 0
+        assert np.isfinite(stochastic_total)
         assert stochastic_total <= carrying_capacity + EPS_ERROR  # continuous Dirichlet may overshoot by epsilon
 
 
@@ -173,6 +175,8 @@ def test_scaling_sampling_consistency():
 
     for mode_name in ["discrete_stochastic", "continuous_stochastic"]:
         stochastic_total = results[mode_name][0] + results[mode_name][1]
+        assert stochastic_total >= 0
+        assert np.isfinite(stochastic_total)
         # Allow tolerance for stochastic rounding
         assert abs(stochastic_total - expected_total) / expected_total < 0.1
 

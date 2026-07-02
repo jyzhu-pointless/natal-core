@@ -86,3 +86,5 @@ def test_apply_spatial_adjacency_migration_stochastic_preserves_totals() -> None
     assert np.isclose(sperm_next.sum(), sperm.sum())
     assert np.all(ind_next >= 0.0)
     assert np.all(sperm_next >= 0.0)
+    assert np.all(np.isfinite(ind_next))
+    assert np.all(np.isfinite(sperm_next))

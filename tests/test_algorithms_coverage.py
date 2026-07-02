@@ -83,6 +83,10 @@ class TestComputeEquilibriumMetrics:
 
         assert comp > 0.0
         assert surv > 0.0
+        assert np.isfinite(comp)
+        assert np.isfinite(surv)
+        assert comp < 1e6  # reasonable upper bound
+        assert surv <= 1.0
 
     def test_custom_equilibrium_distribution(self) -> None:
         """Use user-provided equilibrium distribution."""
@@ -117,6 +121,10 @@ class TestComputeEquilibriumMetrics:
 
         assert comp > 0.0
         assert surv > 0.0
+        assert np.isfinite(comp)
+        assert np.isfinite(surv)
+        assert comp < 1e6
+        assert surv <= 1.0
 
     def test_external_expected_eggs(self) -> None:
         """Use external_expected_eggs to override egg production for survival rate."""
@@ -151,6 +159,10 @@ class TestComputeEquilibriumMetrics:
 
         assert comp > 0.0
         assert surv > 0.0
+        assert np.isfinite(comp)
+        assert np.isfinite(surv)
+        assert comp < 1e6
+        assert surv <= 1.0
 
     def test_zero_eggs(self) -> None:
         """Zero eggs_per_female should not cause division errors."""
@@ -201,6 +213,8 @@ class TestComputeEquilibriumMetrics:
 
         assert comp >= 0.0
         assert surv >= 0.0
+        assert np.isfinite(comp)
+        assert np.isfinite(surv)
 
 
 # ===========================================================================
@@ -586,6 +600,7 @@ class TestSampleMating:
         )
         assert S.shape == (1, 2, 2)
         assert S.sum() > 0
+        assert np.isfinite(S).all()
 
     def test_no_adults(self) -> None:
         n_ages = 2
@@ -976,6 +991,10 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         # Genotype 1 is male-only -> all offspring of that genotype should be male
         assert n_f[1] == 0
         assert n_m[1] > 0
+        assert np.isfinite(n_f).all()
+        assert np.isfinite(n_m).all()
+        assert n_f[1] >= 0
+        assert n_m[1] >= 0
 
     def test_sex_chromosome_ambiguous_genotypes(self) -> None:
         """has_sex_chromosomes with both sexes possible (covers lines 531-535)."""

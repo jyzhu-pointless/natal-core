@@ -63,6 +63,7 @@ class TestWolbachiaMaternalTransmission:
         # Population should grow (neutral, no competition)
         totals = h[:, 1:].sum(axis=1)
         assert totals[-1] > totals[0]
+        assert np.all(np.isfinite(totals))
 
 
 # ── CytoplasmicPreset unit ─────────────────────────────────────────────

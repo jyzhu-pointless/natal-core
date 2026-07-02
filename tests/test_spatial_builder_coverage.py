@@ -337,6 +337,8 @@ class TestHeterogeneousBuild:
 
         assert spatial.tick == 2
         assert spatial.n_demes == 4
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_batch_eggs_per_female(self) -> None:
         species = _simple_species("HetEggs")
@@ -358,6 +360,8 @@ class TestHeterogeneousBuild:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_batch_low_density_growth_rate(self) -> None:
         species = _simple_species("HetGrowth")
@@ -382,6 +386,8 @@ class TestHeterogeneousBuild:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_batch_juvenile_growth_mode(self) -> None:
         species = _simple_species("HetMode")
@@ -406,6 +412,8 @@ class TestHeterogeneousBuild:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -523,6 +531,8 @@ class TestHexGridTopology:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -667,6 +677,8 @@ class TestMigrationKernelBank:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
         assert spatial.kernel_bank is not None
         assert spatial.deme_kernel_ids is not None
         assert spatial.migration_mode == "kernel"
@@ -731,6 +743,8 @@ class TestMigrationBatchKernel:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
         assert spatial.migration_mode == "adjacency"
 
     def test_kernel_strategy_migration(self) -> None:
@@ -759,6 +773,8 @@ class TestMigrationBatchKernel:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
         assert spatial.migration_mode == "kernel"
 
     def test_adjust_migration_on_edge(self) -> None:
@@ -788,6 +804,8 @@ class TestMigrationBatchKernel:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
         assert spatial.adjust_migration_on_edge is True
 
     def test_hybrid_strategy(self) -> None:
@@ -812,6 +830,8 @@ class TestMigrationBatchKernel:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -845,6 +865,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_fitness_method(self) -> None:
         species = _simple_species("FitSpec")
@@ -867,6 +889,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_modifiers_method(self) -> None:
         species = _simple_species("ModSpec")
@@ -889,6 +913,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_survival_age_structured(self) -> None:
         species = _simple_species("SurvAgeSpec")
@@ -915,6 +941,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_old_juvenile_carrying_capacity_alias(self) -> None:
         species = _simple_species("OldJuvCC")
@@ -941,6 +969,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_hooks_method(self) -> None:
         species = _simple_species("HookSpec")
@@ -963,6 +993,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_presets_method(self) -> None:
         species = _simple_species("PresetSpec")
@@ -985,6 +1017,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_presets_with_batch_setting(self) -> None:
         """Cover presets with BatchSetting positional arg (lines 797-803)."""
@@ -1008,6 +1042,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_presets_with_batch_setting_non_none(self) -> None:
         """Cover presets BatchSetting with non-None first_value (lines 801, 1392, 1396)."""
@@ -1037,6 +1073,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
     def test_presets_with_mixed_args(self) -> None:
         """Cover non-BatchSetting preset alongside BatchSetting (lines 802-803, 1397-1398)."""
@@ -1096,6 +1134,8 @@ class TestBuilderMethodChaining:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -1210,6 +1250,8 @@ class TestDetectAndDelegateWithArgs:
             )
             spatial.run(2)
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -1251,6 +1293,8 @@ class TestInitialStateWithSpermStorage:
             spatial.run(2)
 
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -1296,6 +1340,8 @@ class TestMigrationAdjacency:
             )
             spatial.run(2)
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -1324,6 +1370,8 @@ class TestHeterogeneousIndividualCount:
             )
             spatial.run(2)
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
 
 
 # ===========================================================================
@@ -1350,6 +1398,8 @@ class TestObservationOnHeterogeneous:
             )
             spatial.run(2)
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())
         assert spatial.record_observation is not None
 
 
@@ -1393,3 +1443,5 @@ class TestHeterogeneousAgeStructuredState:
             )
             spatial.run(2)
         assert spatial.tick == 2
+        assert spatial.get_total_count() > 0
+        assert np.isfinite(spatial.get_total_count())

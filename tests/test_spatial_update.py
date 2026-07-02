@@ -325,9 +325,11 @@ class TestSpatialUpdateRunCycle:
         pop.run(5)
         # With K=50, the population should be significantly reduced
         total = pop.get_total_count()
-        # Population should be below original K=2000 (4 demes × 500)
+        # Population should be close to new K=50, not the original K=2000
         assert total < 2000, \
             f"Population {total} should be reduced after K dropped to 50"
+        assert total < 400, \
+            f"Population {total} should be near K=200 (4 demes × 50) after K was dropped"
 
     def test_single_deme_update_affects_only_that_deme(self, homogeneous_pop):
         """After updating a single deme's K, that deme should shrink."""
@@ -338,3 +340,6 @@ class TestSpatialUpdateRunCycle:
         # Deme 0 (unchanged, K=500) should be larger than deme 1 (K=10)
         assert pop.deme(0).get_total_count() > pop.deme(1).get_total_count(), \
             "Deme 0 (K=500) should have more individuals than Deme 1 (K=10)"
+        # The difference should be substantial (K ratio is 50x)
+        assert pop.deme(0).get_total_count() > 5 * pop.deme(1).get_total_count(), \
+            "Deme 0 should be substantially larger than Deme 1"
