@@ -330,16 +330,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 )
 
                 if isinstance(genotype_key, str):
-                    if "@" in genotype_key:
-                        idx = genotype_key.rindex("@")
-                        gt_part = genotype_key[:idx]
-                        slab_part = genotype_key[idx:]
-                    else:
-                        gt_part = genotype_key
-                        slab_part = ""
-                    gt = self.species.get_genotype_from_str(gt_part)
-                    genotype_key = str(gt) + slab_part
-                    pattern = ZygoteTypePattern.parse(genotype_key, self.species)
+                    pattern = ZygoteTypePattern.from_slab_key(genotype_key, self.species)
                 else:
                     parser = GenotypePatternParser(self.species)
                     pattern = ZygoteTypePattern(

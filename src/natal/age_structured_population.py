@@ -258,16 +258,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 )
 
                 if isinstance(genotype_key, str):
-                    if "@" in genotype_key:
-                        idx = genotype_key.rindex("@")
-                        gt_part = genotype_key[:idx]
-                        slab_part = genotype_key[idx:]
-                    else:
-                        gt_part = genotype_key
-                        slab_part = ""
-                    gt = self.species.get_genotype_from_str(gt_part)
-                    genotype_key = str(gt) + slab_part
-                    pattern = ZygoteTypePattern.parse(genotype_key, self.species)
+                    pattern = ZygoteTypePattern.from_slab_key(genotype_key, self.species)
                 else:
                     parser = GenotypePatternParser(self.species)
                     pattern = ZygoteTypePattern(
@@ -328,16 +319,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 f"Female genotype key must be Genotype or str, got {type(female_key)}"
 
             if isinstance(female_key, str):
-                if "@" in female_key:
-                    idx = female_key.rindex("@")
-                    gt_part = female_key[:idx]
-                    slab_part = female_key[idx:]
-                else:
-                    gt_part = female_key
-                    slab_part = ""
-                gt = species.get_genotype_from_str(gt_part)
-                female_key = str(gt) + slab_part
-                female_pattern = ZygoteTypePattern.parse(female_key, species)
+                female_pattern = ZygoteTypePattern.from_slab_key(female_key, species)
             else:
                 parser = GenotypePatternParser(species)
                 female_pattern = ZygoteTypePattern(
@@ -351,16 +333,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     f"Male genotype key must be Genotype or str, got {type(male_key)}"
 
                 if isinstance(male_key, str):
-                    if "@" in male_key:
-                        idx = male_key.rindex("@")
-                        gt_part = male_key[:idx]
-                        slab_part = male_key[idx:]
-                    else:
-                        gt_part = male_key
-                        slab_part = ""
-                    gt = species.get_genotype_from_str(gt_part)
-                    male_key = str(gt) + slab_part
-                    male_pattern = ZygoteTypePattern.parse(male_key, species)
+                    male_pattern = ZygoteTypePattern.from_slab_key(male_key, species)
                 else:
                     parser = GenotypePatternParser(species)
                     male_pattern = ZygoteTypePattern(

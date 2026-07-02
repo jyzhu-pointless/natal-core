@@ -538,6 +538,31 @@ class ZygoteTypePattern:
         pattern = parser.parse(str(genotype))
         return ZygoteTypePattern(pattern, LabPattern(lab=slab))
 
+    @staticmethod
+    def from_slab_key(key: str, species: Species) -> "ZygoteTypePattern":
+        """Parse a genotype key that may include an ``@slab`` suffix.
+
+        Splits at ``@``, canonicalizes the genotype part via
+        ``species.get_genotype_from_str``, and creates a ZygoteTypePattern
+        with the resolved slab suffix.
+
+        Args:
+            key: Genotype key like ``"A|a"`` or ``"A|a@infected"``.
+            species: Species definition for genotype resolution.
+
+        Returns:
+            A ZygoteTypePattern with the canonical genotype and slab.
+        """
+        if "@" in key:
+            idx = key.rindex("@")
+            gt_part = key[:idx]
+            slab_part = key[idx:]
+        else:
+            gt_part = key
+            slab_part = ""
+        gt = species.get_genotype_from_str(gt_part)
+        return ZygoteTypePattern.parse(str(gt) + slab_part, species)
+
     def matches(self, genotype: Genotype, slab_label: str = "default") -> bool:
         """Check if this pattern matches a (genotype, slab_label) pair."""
         if not self.genotype.matches(genotype):
