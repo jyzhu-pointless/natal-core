@@ -161,7 +161,7 @@ class TestConfiguratorUpdate:
 
         assert pop.tick == 0, "test_update_changes_config: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_update_changes_config: population should be runnable after update"
+        assert pop.tick == 1, "test_update_changes_config: population should run 1 tick"
 
     def test_update_chains(self, species):
         pop = (
@@ -181,7 +181,7 @@ class TestConfiguratorUpdate:
 
         assert pop.tick == 0, "test_update_chains: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_update_chains: population should be runnable after update"
+        assert pop.tick == 1, "test_update_chains: population should run 1 tick"
 
     def test_update_auto_sync(self, species):
         pop = (
@@ -201,7 +201,7 @@ class TestConfiguratorUpdate:
 
         assert pop.tick == 0, "test_update_auto_sync: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_update_auto_sync: population should be runnable after update"
+        assert pop.tick == 1, "test_update_auto_sync: population should run 1 tick"
 
     def test_update_does_not_require_build(self, species):
         """update() writes immediately, no apply() needed."""
@@ -220,7 +220,7 @@ class TestConfiguratorUpdate:
 
         assert pop.tick == 0, "test_update_does_not_require_build: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_update_does_not_require_build: population should be runnable after update"
+        assert pop.tick == 1, "test_update_does_not_require_build: population should run 1 tick"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -258,7 +258,7 @@ class TestUpdateWriteBack:
 
         assert pop.tick == 0, "test_presets_mutation_persists: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_presets_mutation_persists: population should be runnable after update"
+        assert pop.tick == 1, "test_presets_mutation_persists: population should run 1 tick"
 
     def test_modifiers_mutation_persists(self, species):
         """pop.update().modifiers(gamete_modifiers=[fn]) does not crash and
@@ -306,7 +306,7 @@ class TestCustomFields:
 
         assert pop.tick == 0, "test_update_custom_scalar: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_update_custom_scalar: population should be runnable after update"
+        assert pop.tick == 1, "test_update_custom_scalar: population should run 1 tick"
 
     def test_update_custom_multiple_fields(self, species):
         """pop.update().custom() with multiple fields."""
@@ -326,7 +326,7 @@ class TestCustomFields:
 
         assert pop.tick == 0, "test_update_custom_multiple_fields: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_update_custom_multiple_fields: population should be runnable after update"
+        assert pop.tick == 1, "test_update_custom_multiple_fields: population should run 1 tick"
 
     def test_custom_mutable(self, species):
         """Custom field can be mutated multiple times."""
@@ -346,7 +346,7 @@ class TestCustomFields:
 
         assert pop.tick == 0, "test_custom_mutable: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_custom_mutable: population should be runnable after update"
+        assert pop.tick == 1, "test_custom_mutable: population should run 1 tick"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -388,7 +388,7 @@ class TestLegacyBuilder:
 
         assert pop.tick == 0, "test_legacy_builder_update_works: initial tick should be 0"
         pop.run(1)
-        assert pop.tick > 0, "test_legacy_builder_update_works: population should be runnable after update"
+        assert pop.tick == 1, "test_legacy_builder_update_works: population should run 1 tick"
 
 
 # ══════════════════════════════════════════════════════════════════════════
