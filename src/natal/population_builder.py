@@ -1715,9 +1715,8 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         )
 
         # 3️⃣ Apply all presets in order
-        pop_any = cast(Any, pop)
         for preset in self._presets:
-            pop_any.apply_preset(preset)
+            pop.apply_preset(preset)
 
         # 4️⃣ Apply fitness settings directly to PopulationConfig (after presets)
         for operation in self._fitness_operations:
@@ -2191,9 +2190,8 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
             hooks=self._hooks,
         )
 
-        pop_any = cast(Any, pop)
         for preset in self._presets:
-            pop_any.apply_preset(preset)
+            pop.apply_preset(preset)
 
         for operation in self._fitness_operations:
             method_name, args, kwargs = operation

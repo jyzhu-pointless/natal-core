@@ -154,7 +154,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if index_registry is not None:
             self._index_registry = index_registry
 
-        self._config = self._to_discrete_config(population_config)  # type: ignore[assignment]
+        self._config = self._to_discrete_config(population_config)  # type: ignore[assignment]  # covariant narrow: DiscretePopulationConfig is a subtype of PopulationConfig
 
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
@@ -198,9 +198,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._finalize_hooks()
 
     def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
-        clone = super()._clone(name, config=config)  # type: ignore[arg-type]
+        clone = super()._clone(name, config=config)  # type: ignore[arg-type]  # subclass accepts DiscretePopulationConfig, super expects PopulationConfig
         if config is not None:
-            object.__setattr__(clone, "_config", self._to_discrete_config(config))  # type: ignore[assignment]
+            object.__setattr__(clone, "_config", self._to_discrete_config(config))  # type: ignore[assignment]  # bypasses type check for covariant _config override
         return clone
 
     @classmethod
@@ -735,7 +735,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def import_config(self, config: object) -> None:
         """Replace the current configuration with *config*."""
-        self._config = self._to_discrete_config(config)  # type: ignore[assignment]
+        self._config = self._to_discrete_config(config)  # type: ignore[assignment]  # covariant narrow: DiscretePopulationConfig is a subtype of PopulationConfig
 
     def import_state(
         self,
