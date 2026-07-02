@@ -296,6 +296,7 @@ def to_plain_population_config(config: PopulationConfig, copy: bool = True) -> P
         offspring_tensor=_maybe_copy_array(config.offspring_tensor, copy),
         initial_individual_count=_maybe_copy_array(config.initial_individual_count, copy),
         initial_sperm_storage=_maybe_copy_array(config.initial_sperm_storage, copy),
+        equilibrium_individual_distribution=config.equilibrium_individual_distribution,
         custom=config.custom.copy() if copy else config.custom,
     )
 

@@ -539,7 +539,7 @@ class ZygoteTypePattern:
         return ZygoteTypePattern(pattern, LabPattern(lab=slab))
 
     @staticmethod
-    def from_slab_key(key: str, species: Species) -> "ZygoteTypePattern":
+    def from_slab_key(key: str, species: Species) -> ZygoteTypePattern:
         """Parse a genotype key that may include an ``@slab`` suffix.
 
         Splits at ``@``, canonicalizes the genotype part via
