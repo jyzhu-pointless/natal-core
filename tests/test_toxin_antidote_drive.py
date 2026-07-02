@@ -309,6 +309,8 @@ class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):
         self.assertGreater(dist.get(idx_maternal_only, 0.0), 0.0)
         self.assertGreater(dist.get(idx_paternal_only, 0.0), 0.0)
         self.assertGreater(dist.get(idx_both, 0.0), 0.0)
+        # Invariant: all conversion outcomes plus unmodified genotype sum to 1.0
+        self.assertAlmostEqual(sum(dist.values()), 1.0, delta=1e-8)
 
 
 class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
@@ -396,6 +398,8 @@ class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
         self.assertGreater(dist.get(idx_maternal_only, 0.0), 0.0)
         self.assertGreater(dist.get(idx_paternal_only, 0.0), 0.0)
         self.assertGreater(dist.get(idx_both, 0.0), 0.0)
+        # Invariant: all conversion outcomes plus unmodified genotype sum to 1.0
+        self.assertAlmostEqual(sum(dist.values()), 1.0, delta=1e-8)
 
 
 if __name__ == "__main__":

@@ -82,16 +82,11 @@ class TestZygoteFitness(unittest.TestCase):
             .build()
         )
 
-        # Verify zygote fitness is configured
+        # Verify zygote fitness is configured with the actual builder value
         self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
-
-        # Get genotype indices
-        aa_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("A|A"), "default")
-        aa_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("a|a"), "default")
-        aa_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("A|a"), "default")
-
-        # Note: Actual values would be set during population build process
-        # This test mainly verifies that the API accepts the parameter
+        Aa_idx = population.index_registry.ztype_index(self.simple_species.get_genotype_from_str("A|a"), "default")
+        self.assertEqual(population.config.zygote_viability_fitness[0, Aa_idx], 0.8)
+        self.assertEqual(population.config.zygote_viability_fitness[1, Aa_idx], 0.8)
 
     def test_zygote_viability_fitness_preset_configuration(self) -> None:
         """Test zygote fitness configuration through presets."""
@@ -111,8 +106,11 @@ class TestZygoteFitness(unittest.TestCase):
             .build()
         )
 
-        # Verify population has zygote fitness configuration
+        # Verify population has zygote fitness set to lethal (0.0)
         self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
+        genotype_idx = population.index_registry.ztype_index(
+            self.simple_species.get_genotype_from_str("A|A"), "default")
+        self.assertEqual(population.config.zygote_viability_fitness[0, genotype_idx], 0.0)
 
     def test_zygote_viability_fitness_combined_with_viability(self) -> None:
         """Test that zygote and viability fitness can be combined."""
@@ -131,9 +129,16 @@ class TestZygoteFitness(unittest.TestCase):
             .build()
         )
 
-        # Both fitness types should be configured
+        # Both fitness types should be configured with correct values
         self.assertTrue(hasattr(population.config, 'zygote_viability_fitness'))
         self.assertTrue(hasattr(population.config, 'viability_fitness'))
+        genotype_idx = population.index_registry.ztype_index(
+            self.simple_species.get_genotype_from_str("A|A"), "default")
+        # Zygote viability set to 0.5 for A|A (applies to both sexes)
+        self.assertEqual(population.config.zygote_viability_fitness[0, genotype_idx], 0.5)
+        # Viability fitness is age-shaped; verify non-default value exists for adult age
+        adult_age = population.config.new_adult_age - 1
+        self.assertEqual(population.config.viability_fitness[0, adult_age, genotype_idx], 0.8)
 
     def test_zygote_viability_fitness_simulation_integration(self) -> None:
         """Test that zygote fitness is applied during reproduction stage."""

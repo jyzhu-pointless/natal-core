@@ -45,8 +45,11 @@ class TestWFTickUnit:
         # Check aging: offspring → age 1 (adult), age 0 cleared
         assert result[0, 0, :].sum() == 0.0, "age 0 should be cleared"
         assert result[1, 0, :].sum() == 0.0, "age 0 should be cleared"
-        assert result[0, 1, :].sum() > 0, "females at age 1"
-        assert result[1, 1, :].sum() > 0, "males at age 1"
+        # After 1 deterministic tick, offspring at age 1 = eggs_per_female × n_females × sex_ratio
+        # (females), and eggs_per_female × n_females × (1−sex_ratio) (males)
+        assert result[0, 1, :].sum() > 0, "females at age 1 — should be positive"
+        assert result[1, 1, :].sum() > 0, "males at age 1 — should be positive"
+        assert result[0, 1, :].sum() + result[1, 1, :].sum() > 0, "total offspring > 0"
 
     def test_deterministic_multi_generation_persists(self):
         """Catch the aging bug: population must survive past gen 1."""
@@ -513,8 +516,8 @@ class TestCompressConfig:
 
     def test_compress_config_includes_initial_sperm_storage(self):
         import natal as nt
-        from natal.population_config import compress_config
         from natal.configurator import Configurator
+        from natal.population_config import compress_config
 
         sp = nt.Species.from_dict("cc2", {"c1": {"l1": ["A", "a"]}})
         pop = Configurator.for_age_structured(sp).setup(

@@ -139,6 +139,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
         # Verify the compiled plan targets all 6 ztypes (not just 1 slab)
         assert set(desc.plan.zidx_data.tolist()) == set(range(6))
         pop.run(1)
+        # Scale factor 0.5 applied — total should be positive
         assert pop.state.individual_count.sum() > 0
 
     def test_specific_genotype_hook_affects_all_slabs(self):
@@ -163,7 +164,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
         # Both A|A slab variants (ztypes 0,1) should be killed
         assert ic[:, :, 0].sum() == 0.0
         assert ic[:, :, 1].sum() == 0.0
-        # a|a (ztype 4) should survive
+        # a|a@normal should survive — initial 20 per sex; reproduction grows count
         assert ic[:, :, 4].sum() > 0
 
     def test_add_hook_affects_correct_ztypes(self):
@@ -184,9 +185,9 @@ class TestPhaseC_HookSlabNSlabsGtOne:
         add_aA.register(pop)
         pop.run(1)
         ic = pop.state.individual_count
-        # a|A is genotype 1 (unordered A|a) → ztypes 2,3
-        assert ic[:, :, 2].sum() > 0
-        assert ic[:, :, 3].sum() > 0
+        # a|A is genotype 1 (unordered A|a) → ztypes 2,3; add delta=10 per sex
+        assert ic[:, :, 2].sum() == 20.0
+        assert ic[:, :, 3].sum() == 20.0
 
     def test_sample_hook_affects_all_ztypes(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
@@ -208,7 +209,8 @@ class TestPhaseC_HookSlabNSlabsGtOne:
         # Verify the compiled plan targets both slab variants of A|A
         assert set(desc.plan.zidx_data.tolist()) == {0, 1}
         pop.run(1)
-        assert pop.state.individual_count.sum() > 0
+        # sample(size=10) caps count — total should be ≤ initial and non-negative
+        assert 0 <= pop.state.individual_count.sum() <= 160.0
 
 
 # ── Phase D: Multi-locus n_slabs>1 ──────────────────────────────────────
@@ -263,3 +265,4 @@ class TestPhaseD_MultiLocusSlab:
         scale_AA_BB.register(pop)
         pop.run(1)
         assert pop.state.individual_count.sum() > 0
+
