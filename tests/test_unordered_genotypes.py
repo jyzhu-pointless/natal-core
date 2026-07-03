@@ -326,6 +326,7 @@ class TestSexChromosomeOrdered:
                 "X": {"sex_type": "X", "loci": {"lx": ["XA", "Xa"]}},
                 "Y": {"sex_type": "Y", "loci": {"ly": ["YB"]}},
             },
+            unordered=False,
         )
         assert sp.unordered is False
 
@@ -336,6 +337,7 @@ class TestSexChromosomeOrdered:
                 "X": {"sex_type": "X", "loci": {"lx": ["XA", "Xa"]}},
                 "Y": {"sex_type": "Y", "loci": {"ly": ["YB"]}},
             },
+            unordered=False,
         )
         assert sp.unordered is False
         gts = sp.get_all_genotypes()

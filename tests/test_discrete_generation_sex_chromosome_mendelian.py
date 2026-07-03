@@ -74,6 +74,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
             "chrX": {"sex_type": "X", "loci": {"sx": ["X"]}},
             "chrY": {"sex_type": "Y", "loci": {"sy": ["Y"]}},
         },
+        unordered=False,
     )
 
     female_parent, male_parent, locus_a = _pick_xy_parents(species)
@@ -206,6 +207,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
             "chrX": {"sex_type": "X", "loci": {"sx": ["X1", "X2"]}},
             "chrY": {"sex_type": "Y", "loci": {"sy": ["Y"]}},
         },
+        unordered=False,
     )
 
     chrom_x = species.get_chromosome("chrX")
@@ -347,6 +349,7 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
             "chrX": {"sex_type": "X", "loci": {"sx": ["X"]}},
             "chrY": {"sex_type": "Y", "loci": {}},
         },
+        unordered=False,
     )
 
     diploid_genotypes = species.get_all_genotypes()

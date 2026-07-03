@@ -52,7 +52,7 @@ class SpeciesConfigBlueprint(TypedDict):
 
 
 # Species (structure-level) -> HaploidGenome (entity-level)
-class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndefinedVariable]
+class Species(GeneticStructure['HaploidGenome']):
     """
     Represents the complete genetic architecture defined by chromosomes.
 
@@ -78,11 +78,13 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
         chromosomes: Optional[List[Chromosome]] = None,
         gamete_labels: Optional[list[str]] = None,
         somatic_labels: Optional[list[str]] = None,
+        unordered: bool = True,
     ):
         # Initialize structure caches for this Species
         # Format: {structure_type: {name: instance}}
         self._structure_cache: Dict[type, Dict[str, GeneticStructure[Any]]] = {}
         self._gene_index_cache: Optional[Dict[str, Gene]] = None
+        self._unordered = unordered
 
         super().__init__(name, parent=None, species=None)  # Species is top-level, no parent
 
@@ -201,14 +203,13 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
 
     @property
     def unordered(self) -> bool:
-        """True for autosomal species (maternal/paternal ordering irrelevant).
+        """True means maternal/paternal chromosome ordering is irrelevant.
 
-        False when sex chromosomes exist (X|Y ≠ Y|X biologically).
-        Controls whether genotype enumeration uses canonical (unordered)
-        or ordered genotype space.  Defaults to the inverse of
-        ``bool(self.sex_chromosomes)``.
+        When True (default), genotype enumeration uses canonical unordered
+        genotype space.  Set ``unordered=False`` to track chromosome
+        parentage explicitly.
         """
-        return not bool(self.sex_chromosomes)
+        return self._unordered
 
     @property
     def autosomes(self) -> List[Chromosome]:

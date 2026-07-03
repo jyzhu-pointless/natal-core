@@ -34,6 +34,7 @@ def _species_from_dict(
     structure: Dict[str, Union[List[str], Dict[str, List[str]], Dict[str, Any]]],
     gamete_labels: Optional[List[str]] = None,
     somatic_labels: Optional[List[str]] = None,
+    unordered: bool = True,
 ) -> Species:
     """Create a Species with complete hierarchy from a dictionary specification.
 
@@ -79,7 +80,7 @@ def _species_from_dict(
     """
     from ..entities.gene import Gene
 
-    species = cast(Species, cls(name, gamete_labels=gamete_labels, somatic_labels=somatic_labels))
+    species = cast(Species, cls(name, gamete_labels=gamete_labels, somatic_labels=somatic_labels, unordered=unordered))
 
     for chrom_name, loci_spec in structure.items():
         sex_type: Optional[Union[SexChromosomeType, str]] = None
