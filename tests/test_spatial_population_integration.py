@@ -7,8 +7,8 @@ import pytest  # type: ignore
 import natal as nt
 import numpy as np
 import pytest
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import HexGrid, SquareGrid, build_adjacency_matrix
+from natal.spatial.population import SpatialPopulation
+from natal.spatial.topology import HexGrid, SquareGrid, build_adjacency_matrix
 
 
 def _make_deme(species: nt.Species, name: str, adult_count: float) -> nt.AgeStructuredPopulation:

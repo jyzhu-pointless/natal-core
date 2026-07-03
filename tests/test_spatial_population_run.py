@@ -8,15 +8,15 @@ import numpy as np
 import pytest  # type: ignore
 
 import natal as nt
-from natal import numba_compat as nbc
-from natal.base_population import BasePopulation
+from natal.numba import compat as nbc
+from natal.population.base import BasePopulation
 from natal.engine.lifecycle_wrappers import LifecycleWrappers
-from natal.genetic_structures import Species
+from natal.genetics import Species
 from natal.hooks import Op, hook
-from natal.numba_utils import numba_disabled
-from natal.population_config import PopulationConfig
-from natal.population_state import DiscretePopulationState, PopulationState
-from natal.spatial_population import SpatialPopulation
+from natal.numba.utils import numba_disabled
+from natal.data import PopulationConfig
+from natal.data import DiscretePopulationState, PopulationState
+from natal.spatial.population import SpatialPopulation
 
 
 class _RunDemePopulation(BasePopulation):

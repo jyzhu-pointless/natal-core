@@ -14,7 +14,7 @@ from natal.engine.lifecycle_wrappers import compile_lifecycle_wrappers  # noqa: 
 from natal.hooks.compile.container import noop_hook
 from natal.hooks.entry.decorator import hook  # noqa: E402
 from natal.hooks.types import CompiledHookDescriptor  # noqa: E402
-from natal.numba_utils import numba_enabled  # noqa: E402
+from natal.numba.utils import numba_enabled  # noqa: E402
 
 
 class _FakeIndexCore:

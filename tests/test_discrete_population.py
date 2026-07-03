@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.population_state import DiscretePopulationState
+from natal.data import DiscretePopulationState
 
 
 def _make_species(name: str = "DiscSp"):
@@ -288,7 +288,7 @@ class TestHomingDriveIntegration:
         expected_drive = [0.10000, 0.18000, 0.29664, 0.45772, 0.63992]
         expected_r2 = [0.00000, 0.01000, 0.02458, 0.04472, 0.06749]
 
-        from natal.genetic_presets import count_allele_copies
+        from natal.presets import count_allele_copies
 
         for i, row in enumerate(history[:5]):
             tick = int(row[0])

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.index_registry import IndexRegistry
+from natal.registry.index import IndexRegistry
 
 # ============================================================================
 # Ordered (ordered) — default path must be preserved
@@ -382,7 +382,7 @@ class TestUnorderedZygoteMap:
     def test_unordered_zygote_map_symmetric(self):
         """(hg_a, hg_b) and (hg_b, hg_a) map to same unordered genotype."""
         sp = nt.Species.from_dict("canon_zyg1", {"c1": {"l1": ["A", "a"]}})
-        from natal.population_config import initialize_zygote_map
+        from natal.data import initialize_zygote_map
         hgs = sp.get_all_haploid_genotypes()
         gts = sp.get_all_genotypes(unordered=True)
         z2g = initialize_zygote_map(hgs, gts, n_glabs=1, unordered=True)
@@ -392,7 +392,7 @@ class TestUnorderedZygoteMap:
     def test_ordered_zygote_map_preserves_order(self):
         """unordered=False keeps ordered mapping (for backward compat)."""
         sp = nt.Species.from_dict("canon_zyg2", {"c1": {"l1": ["A", "a"]}})
-        from natal.population_config import initialize_zygote_map
+        from natal.data import initialize_zygote_map
         hgs = sp.get_all_haploid_genotypes()
         gts = sp.get_all_genotypes(unordered=False)  # ordered
         z2g = initialize_zygote_map(hgs, gts, n_glabs=1, unordered=False)
@@ -402,7 +402,7 @@ class TestUnorderedZygoteMap:
     def test_unordered_zygote_map_with_three_alleles(self):
         """Unordered zygote map for 3 alleles has correct shape."""
         sp = nt.Species.from_dict("canon_zyg3", {"c1": {"l1": ["A", "B", "C"]}})
-        from natal.population_config import initialize_zygote_map
+        from natal.data import initialize_zygote_map
         hgs = sp.get_all_haploid_genotypes()
         gts = sp.get_all_genotypes(unordered=True)
         z2g = initialize_zygote_map(hgs, gts, n_glabs=1, unordered=True)

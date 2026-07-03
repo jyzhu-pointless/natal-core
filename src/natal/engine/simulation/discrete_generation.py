@@ -12,7 +12,6 @@ from typing import Annotated, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-from natal import numba_compat as nbc
 from natal.engine.simulation.age_structured import (
     BEVERTON_HOLT,
     FIXED,
@@ -21,7 +20,8 @@ from natal.engine.simulation.age_structured import (
     compute_scaling_factor_fixed,
     compute_scaling_factor_logistic,
 )
-from natal.numba_utils import njit_switch
+from natal.numba import compat as nbc
+from natal.numba.utils import njit_switch
 
 __all__ = [
     "mate_discrete",

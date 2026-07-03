@@ -17,7 +17,7 @@ try:
 except ImportError:
     HAS_NICEGUI = False
 
-from natal.population_config import CONCAVE, FIXED, LINEAR, NO_COMPETITION
+from natal.data import CONCAVE, FIXED, LINEAR, NO_COMPETITION
 
 
 def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
@@ -274,7 +274,7 @@ def build_observation_from_specs(
 
     Each spec dict may contain keys: ``genotype``, ``age``, ``sex``.
     """
-    from natal.observation import ObservationFilter
+    from natal.output.observation import ObservationFilter
 
     obs_filter = ObservationFilter(population.registry)
     # Convert list of dicts to dict of dicts with group_N keys
@@ -448,7 +448,7 @@ class ObservationPanel:
     # -- apply ------------------------------------------------------------
 
     def _apply(self) -> None:
-        from natal.observation import ObservationFilter
+        from natal.output.observation import ObservationFilter
 
         if self._results_container is None:
             return

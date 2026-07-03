@@ -2,8 +2,8 @@
 
 import pytest  # type: ignore
 
-from natal.helpers import resolve_sex_label, validate_name
-from natal.type_def import Sex
+from natal.utils.helpers import resolve_sex_label, validate_name
+from natal.utils.types import Sex
 
 
 class TestValidateName:

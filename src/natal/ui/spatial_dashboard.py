@@ -27,9 +27,9 @@ try:
 except ImportError:
     plt = None  # type: ignore
 
-from natal.population_state import PopulationState
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import HexGrid
+from natal.data import PopulationState
+from natal.spatial.population import SpatialPopulation
+from natal.spatial.topology import HexGrid
 from natal.ui.dashboard_helpers import (
     ObservationPanel,
     get_hooks_data,
@@ -38,7 +38,7 @@ from natal.ui.dashboard_helpers import (
     numpy_converter,
     render_single_hook,
 )
-from natal.visualization import get_allele_color, render_cell_svg
+from natal.ui.visualization import get_allele_color, render_cell_svg
 
 
 class SpatialDashboard:
@@ -383,7 +383,7 @@ class SpatialDashboard:
         if metric == "genotype":
             registry = self.pop.deme(0).registry
             # Resolve pattern (supports :: unordered, | ordered, * wildcards)
-            from natal.genetic_patterns import GenotypeSelector
+            from natal.patterns import GenotypeSelector
 
             selector = GenotypeSelector(self.pop.species)
             matched_indices = selector.resolve_genotype_indices(
@@ -1414,7 +1414,7 @@ class SpatialDashboard:
         export_content = {"population_name": self.pop.name}
 
         if include_history:
-            from natal.state_translation import spatial_population_output_history
+            from natal.output.translation import spatial_population_output_history
 
             history_payload = spatial_population_output_history(self.pop)
             export_content["history"] = history_payload

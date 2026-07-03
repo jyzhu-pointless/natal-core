@@ -241,7 +241,7 @@ def test_full_execution_aggregate_mode():
     from numba import njit
 
     import natal as nt
-    from natal.population_builder import DiscreteGenerationPopulationBuilder
+    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
     pop = (
@@ -254,7 +254,7 @@ def test_full_execution_aggregate_mode():
         .build()
     )
 
-    from natal.population_state import DiscretePopulationState
+    from natal.data import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
     ind[0, 0, 1] = 30  # W|D (unordered, covers both W|D and D|W) at index 1
@@ -282,7 +282,7 @@ def test_full_execution_expand_mode():
     from numba import njit
 
     import natal as nt
-    from natal.population_builder import DiscreteGenerationPopulationBuilder
+    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
     pop = (
@@ -295,7 +295,7 @@ def test_full_execution_expand_mode():
         .build()
     )
 
-    from natal.population_state import DiscretePopulationState
+    from natal.data import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
     ind[0, 0, 2] = 50  # D|D
@@ -324,7 +324,7 @@ def test_backward_compat_old_style():
     from numba import njit
 
     import natal as nt
-    from natal.population_builder import DiscreteGenerationPopulationBuilder
+    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
     pop = (
@@ -336,7 +336,7 @@ def test_backward_compat_old_style():
         .build()
     )
 
-    from natal.population_state import DiscretePopulationState
+    from natal.data import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
     state = DiscretePopulationState(n_tick=0, individual_count=ind)
@@ -362,7 +362,7 @@ def test_full_execution_numba_deme_id():
     from numba import njit
 
     import natal as nt
-    from natal.population_builder import DiscreteGenerationPopulationBuilder
+    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="NumbaDeme", structure={"chr1": {"loc": ["W", "D"]}})
     pop = (
@@ -374,7 +374,7 @@ def test_full_execution_numba_deme_id():
         .build()
     )
 
-    from natal.population_state import DiscretePopulationState
+    from natal.data import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
     state = DiscretePopulationState(n_tick=0, individual_count=ind)
@@ -396,7 +396,7 @@ def test_full_execution_numba_multi_genotype():
     from numba import njit
 
     import natal as nt
-    from natal.population_builder import DiscreteGenerationPopulationBuilder
+    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="NumbaMulti", structure={"chr1": {"loc": ["W", "D"]}})
     pop = (
@@ -409,7 +409,7 @@ def test_full_execution_numba_multi_genotype():
         .build()
     )
 
-    from natal.population_state import DiscretePopulationState
+    from natal.data import DiscretePopulationState
 
     ind = pop.state.individual_count.copy()
     # Unordered: W|W=0, W|D=1, D|D=2 — set to known values

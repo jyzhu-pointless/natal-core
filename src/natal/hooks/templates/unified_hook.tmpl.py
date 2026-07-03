@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from natal.hooks.runtime.csr_kernel import execute_single_csr_hook
-from natal.numba_utils import njit_switch
+from natal.numba.utils import njit_switch
 
 # HookProgram array globals (injected via setattr).  All 15 arrays are
 # required by _execute_single_csr_hook and must be present on the module.

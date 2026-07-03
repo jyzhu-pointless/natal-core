@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 import uuid
 
-from natal.genetic_presets import ToxinAntidoteDrive
-from natal.genetic_structures import Species
-from natal.population_builder import DiscreteGenerationPopulationBuilder
+from natal.presets import ToxinAntidoteDrive
+from natal.genetics import Species
+from natal.configurator import DiscreteGenerationPopulationBuilder
 
 
 class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):

@@ -1,8 +1,8 @@
 import numpy as np
 
 import natal as nt
-from natal.discrete_generation_population import DiscreteGenerationPopulation
-from natal.population_config import (
+from natal.population.discrete_generation import DiscreteGenerationPopulation
+from natal.data import (
     NO_COMPETITION,
     build_population_config,
     initialize_gamete_map,

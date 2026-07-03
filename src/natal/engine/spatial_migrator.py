@@ -15,13 +15,13 @@ from typing import Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.data import PopulationConfig
 from natal.engine.migration.adjacency import apply_spatial_adjacency_mode
 from natal.engine.migration.kernel import (
     apply_spatial_kernel_migration,
     apply_spatial_kernel_migration_heterogeneous,
 )
-from natal.numba_utils import njit_switch
-from natal.population_config import PopulationConfig
+from natal.numba.utils import njit_switch
 
 __all__ = [
     "apply_spatial_adjacency_migration",

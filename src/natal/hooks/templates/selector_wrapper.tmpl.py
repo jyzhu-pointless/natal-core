@@ -5,7 +5,7 @@
 
 from typing import Callable
 
-from natal.numba_utils import njit_switch
+from natal.numba.utils import njit_switch
 
 # PLACEHOLDER_NAMEDTUPLE_IMPORT
 # PLACEHOLDER_NAMEDTUPLE_DEF

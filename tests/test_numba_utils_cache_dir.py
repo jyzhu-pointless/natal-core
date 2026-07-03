@@ -14,7 +14,7 @@ def test_import_does_not_mutate_numba_cache_dir_env(monkeypatch):
     """Importing numba_utils should not force-write NUMBA_CACHE_DIR in environment."""
     monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
 
-    import natal.numba_utils as numba_utils  # noqa: E402
+    import natal.numba.utils as numba_utils  # noqa: E402
 
     importlib.reload(numba_utils)
 

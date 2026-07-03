@@ -93,7 +93,7 @@ for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lam
         continue
 
     if is_package:
-        if module_name not in {"hooks", "ui"}:
+        if module_name not in {"configurator", "data", "genetics", "hooks", "modifiers", "numba", "output", "patterns", "population", "presets", "registry", "spatial", "ui", "utils"}:
             continue
         module_file = package_dir / module_name / "__init__.py"
         _lazy_packages.add(module_name)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from natal.numba_utils import njit_switch
+from natal.numba.utils import njit_switch
 
 from ..types import EVENT_NAMES, HookCallable
 

@@ -2,7 +2,7 @@
 
 import pytest  # type: ignore
 
-from natal.type_def import Sex
+from natal.utils.types import Sex
 
 
 class TestSex:

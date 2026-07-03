@@ -5,8 +5,8 @@ import uuid
 
 import numpy as np
 
-from natal.genetic_presets import apply_preset_fitness_patch
-from natal.genetic_structures import Species
+from natal.presets import apply_preset_fitness_patch
+from natal.genetics import Species
 
 
 class _FakeConfig:

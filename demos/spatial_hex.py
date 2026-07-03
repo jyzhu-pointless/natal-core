@@ -11,8 +11,8 @@ import time
 import numpy as np
 
 import natal as nt
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import HexGrid
+from natal.spatial.population import SpatialPopulation
+from natal.spatial.topology import HexGrid
 
 
 def build_hex_spatial_population() -> SpatialPopulation:

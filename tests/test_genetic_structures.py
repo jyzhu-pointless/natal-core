@@ -3,9 +3,9 @@
 import pytest  # type: ignore
 
 import natal as nt
-from natal.genetic_structures import SexChromosomeType
-from natal.population_config import extract_gamete_frequencies, initialize_gamete_map
-from natal.type_def import Sex
+from natal.genetics import SexChromosomeType
+from natal.data import extract_gamete_frequencies, initialize_gamete_map
+from natal.utils.types import Sex
 
 
 class TestSexChromosomeType:

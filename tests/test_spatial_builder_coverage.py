@@ -1,4 +1,4 @@
-"""Comprehensive tests for ``natal.spatial_configurator``.
+"""Comprehensive tests for ``natal.spatial.configurator``.
 
 Covers:
 - Homogeneous builds (discrete_generation and age_structured pop_types)
@@ -17,9 +17,9 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.numba_utils import numba_disabled
-from natal.spatial_configurator import BatchSetting, SpatialConfigurator, batch_setting
-from natal.spatial_topology import HexGrid, SquareGrid
+from natal.numba.utils import numba_disabled
+from natal.spatial.configurator import BatchSetting, SpatialConfigurator, batch_setting
+from natal.spatial.topology import HexGrid, SquareGrid
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1189,7 +1189,7 @@ class TestMakeHashableBranches:
     """Direct tests for _make_hashable covering dict/tuple/list branches."""
 
     def test_make_hashable_dict(self) -> None:
-        from natal.spatial_configurator import _make_hashable
+        from natal.spatial.configurator import _make_hashable
         d = {"b": 2, "a": 1}
         h = _make_hashable(d)
         assert isinstance(h, tuple)
@@ -1197,28 +1197,28 @@ class TestMakeHashableBranches:
         assert len(h[1]) == 2
 
     def test_make_hashable_list(self) -> None:
-        from natal.spatial_configurator import _make_hashable
+        from natal.spatial.configurator import _make_hashable
         lst = [3, 1, 2]
         h = _make_hashable(lst)
         assert isinstance(h, tuple)
         assert h == (3, 1, 2)
 
     def test_make_hashable_tuple(self) -> None:
-        from natal.spatial_configurator import _make_hashable
+        from natal.spatial.configurator import _make_hashable
         tup = (10, 20)
         h = _make_hashable(tup)
         assert isinstance(h, tuple)
         assert h == (10, 20)
 
     def test_make_hashable_ndarray(self) -> None:
-        from natal.spatial_configurator import _make_hashable
+        from natal.spatial.configurator import _make_hashable
         arr = np.array([[1.0, 2.0], [3.0, 4.0]])
         h = _make_hashable(arr)
         assert isinstance(h, tuple)
         assert h[0] == "__ndarray__"
 
     def test_make_hashable_scalar(self) -> None:
-        from natal.spatial_configurator import _make_hashable
+        from natal.spatial.configurator import _make_hashable
         assert _make_hashable(42) == 42
         assert _make_hashable("hello") == "hello"
 
@@ -1320,7 +1320,7 @@ class TestMigrationAdjacency:
     """Tests for migration with explicit adjacency (line 951)."""
 
     def test_migration_with_adjacency(self) -> None:
-        from natal.spatial_topology import build_adjacency_matrix
+        from natal.spatial.topology import build_adjacency_matrix
         species = _simple_species("MigAdj")
         topo = SquareGrid(2, 2)
         adj = build_adjacency_matrix(topo)

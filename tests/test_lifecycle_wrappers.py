@@ -25,7 +25,7 @@ from natal.hooks import (  # noqa: E402
     CompiledHookDescriptor,
     HookProgram,
 )
-from natal.numba_utils import numba_disabled  # noqa: E402
+from natal.numba.utils import numba_disabled  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures

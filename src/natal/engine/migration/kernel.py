@@ -15,7 +15,7 @@ from natal.engine.migration.adjacency import (
     migrate_scalar_bucket,
     migrate_sperm_bucket,
 )
-from natal.numba_utils import njit_switch
+from natal.numba.utils import njit_switch
 
 numba_max_threads = int(get_num_threads())
 

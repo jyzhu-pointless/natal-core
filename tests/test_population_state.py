@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.population_state import (
+from natal.data import (
     DiscretePopulationState,
     PopulationState,
     parse_flattened_discrete_state,

@@ -9,7 +9,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from natal.spatial_topology import (  # noqa: E402
+from natal.spatial.topology import (  # noqa: E402
     HexGrid,
     SquareGrid,
     apply_migration_adjacency,

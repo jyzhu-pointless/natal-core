@@ -7,10 +7,10 @@ from unittest.mock import patch
 
 import numpy as np
 
-from natal.discrete_generation_population import DiscreteGenerationPopulation
-from natal.genetic_structures import Species
-from natal.population_builder import DiscreteGenerationPopulationBuilder
-from natal.type_def import Sex
+from natal.population.discrete_generation import DiscreteGenerationPopulation
+from natal.genetics import Species
+from natal.configurator import DiscreteGenerationPopulationBuilder
+from natal.utils.types import Sex
 
 
 def _make_species() -> Species:
@@ -50,8 +50,8 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
             def __init__(self, **kwargs) -> None:
                 self.kwargs = kwargs
 
-        with patch("natal.population_builder.PopulationConfigBuilder.build", return_value=fake_config) as build_mock:
-            with patch("natal.discrete_generation_population.DiscreteGenerationPopulation", _FakePopulation):
+        with patch("natal.configurator._factory.PopulationConfigBuilder.build", return_value=fake_config) as build_mock:
+            with patch("natal.population.discrete_generation.DiscreteGenerationPopulation", _FakePopulation):
                 pop = builder.build()
 
         self.assertIsNotNone(pop)

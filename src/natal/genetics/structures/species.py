@@ -1,0 +1,581 @@
+"""Species — top-level genetic architecture structure."""
+
+from __future__ import annotations
+
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    TypedDict,
+    Union,
+)
+
+import numpy as np
+from numpy.typing import NDArray
+
+from ._base import GeneticStructure
+from ._types import SexChromosomeType
+from .chromosome import Chromosome
+from .locus import Locus
+
+if TYPE_CHECKING:
+    from ..entities.gene import Gene
+    from ..entities.genotype import Genotype
+    from ..entities.haplotype import HaploidGenome, HaploidGenotype
+    from ._registry import ChildStructureRegistry
+
+
+class SpeciesConfigBlueprint(TypedDict):
+    """Cached species-level arrays shared across population constructions.
+
+    Built once per species by :meth:`Species.get_config_blueprint` and
+    consumed by ``Configurator`` / ``PopulationBuilder``.
+    """
+
+    n_genotypes: int  # unique genotype count (G)
+    n_ztypes: int     # G × S (genotypes × slabs)
+    n_gtypes: int
+    n_glabs: int
+    n_slabs: int
+    zygotes_to_gametes_map: NDArray[np.float64]
+    gametes_to_zygotes_map: NDArray[np.float64]
+    offspring_tensor: NDArray[np.float64]
+    female_ztype_compatibility: NDArray[np.float64]
+    male_ztype_compatibility: NDArray[np.float64]
+
+
+# Species (structure-level) -> HaploidGenome (entity-level)
+class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndefinedVariable]
+    """
+    Represents the complete genetic architecture defined by chromosomes.
+
+    A Species is the top-level structure that contains multiple Chromosomes,
+    each representing a chromosome with its loci and recombination rates.
+
+    Attributes:
+        child_structures (ChildStructureRegistry[Chromosome]): Registry of chromosomes.
+        structure_cache (Dict[type, Dict[str, GeneticStructure[Any]]]): Species-scoped
+            structure cache grouped by structure type.
+        gamete_labels (List[str]): Optional labels used to identify gamete categories.
+
+    This class is also exported as GenomeTemplate for backward compatibility.
+    """
+    child_structure_type = Chromosome  # Species contains Chromosomes as children
+    child_structures: ChildStructureRegistry[Chromosome]
+    _sex_chromosome_groups: Optional[Dict[str, List[Chromosome]]]
+    _valid_sex_genotypes: Optional[List[Tuple[Chromosome, Chromosome]]]
+
+    def __init__(
+        self,
+        name: str,
+        chromosomes: Optional[List[Chromosome]] = None,
+        gamete_labels: Optional[list[str]] = None,
+        somatic_labels: Optional[list[str]] = None,
+    ):
+        # Initialize structure caches for this Species
+        # Format: {structure_type: {name: instance}}
+        self._structure_cache: Dict[type, Dict[str, GeneticStructure[Any]]] = {}
+        self._gene_index_cache: Optional[Dict[str, Gene]] = None
+
+        super().__init__(name, parent=None, species=None)  # Species is top-level, no parent
+
+        # Set self as the species
+        self._species = self
+
+        # Add initial chromosomes if provided
+        if chromosomes:
+            for chrom in chromosomes:
+                self.add_chromosome(chrom)
+
+        # Gamete labels for this species
+        if gamete_labels is not None:
+            from natal.utils.helpers import validate_name
+            for glab in gamete_labels:
+                if not validate_name(glab):
+                    raise ValueError(
+                        f"Invalid gamete label {glab!r}. "
+                        f"Labels must match [A-Za-z0-9_]+."
+                    )
+            self._gamete_labels = list(gamete_labels)
+        else:
+            self._gamete_labels: List[str] = []
+
+        # Somatic labels for this species (symmetric with gamete_labels)
+        if somatic_labels is not None:
+            from natal.utils.helpers import validate_name
+            for slab in somatic_labels:
+                if not validate_name(slab):
+                    raise ValueError(
+                        f"Invalid somatic label {slab!r}. "
+                        f"Labels must match [A-Za-z0-9_]+."
+                    )
+            self._somatic_labels = list(somatic_labels)
+        else:
+            self._somatic_labels: List[str] = []
+
+        # Cached configuration blueprint — built lazily on first access
+        self._config_blueprint: Optional[SpeciesConfigBlueprint] = None
+
+    @property
+    def gamete_labels(self) -> List[str]:
+        """Return the list of gamete labels for this species."""
+        return self._gamete_labels
+
+    @gamete_labels.setter
+    def gamete_labels(self, labels: List[str]) -> None:
+        self._gamete_labels = list(labels)
+
+    @property
+    def somatic_labels(self) -> List[str]:
+        """Return the list of somatic labels for this species."""
+        return self._somatic_labels
+
+    @somatic_labels.setter
+    def somatic_labels(self, labels: List[str]) -> None:
+        self._somatic_labels = list(labels)
+
+    @property
+    def entity_type(self):
+        """Lazy import to avoid circular dependency."""
+        from ..entities.haplotype import HaploidGenome
+        return HaploidGenome
+
+    def clear_structure_cache(self) -> None:
+        """
+        Clear all structure caches for this Species.
+        This removes all cached Structure instances (Locus, Chromosome) within this Species.
+        """
+        self._structure_cache.clear()
+        self._invalidate_gene_index_cache()
+
+    @property
+    def structure_cache(self) -> Dict[type, Dict[str, GeneticStructure[Any]]]:
+        """Public accessor for species-scoped structure caches."""
+        return self._structure_cache
+
+    def clear_entity_cache(self) -> None:
+        """
+        Clear all entity caches for this Species.
+        This removes all cached Entity instances (Gene, Haplotype, etc.) within this Species.
+        """
+        from ..entities._base import GeneticEntity
+        GeneticEntity.clear_species_cache(id(self))
+
+    def clear_all_caches(self) -> None:
+        """
+        Clear both structure and entity caches for this Species.
+        """
+        self.clear_structure_cache()
+        self.clear_entity_cache()
+
+    def _invalidate_gene_index_cache(self) -> None:
+        """Invalidate species-level gene name lookup cache."""
+        self._gene_index_cache = None
+
+    def invalidate_gene_index_cache(self) -> None:
+        """Public wrapper for invalidating the species gene-index cache."""
+        self._invalidate_gene_index_cache()
+
+    @property
+    def chromosomes(self) -> List[Chromosome]:
+        """Returns the list of chromosomes in this species."""
+        return self.child_structures.all
+
+    # Alias for backward compatibility
+    @property
+    def linkages(self) -> List[Chromosome]:
+        """Alias for chromosomes (backward compatibility)."""
+        return self.chromosomes
+
+    @property
+    def sex_chromosomes(self) -> List[Chromosome]:
+        """Returns all sex chromosomes"""
+        return [c for c in self.chromosomes if c.is_sex_chromosome]
+
+    @property
+    def unordered(self) -> bool:
+        """True for autosomal species (maternal/paternal ordering irrelevant).
+
+        False when sex chromosomes exist (X|Y ≠ Y|X biologically).
+        Controls whether genotype enumeration uses canonical (unordered)
+        or ordered genotype space.  Defaults to the inverse of
+        ``bool(self.sex_chromosomes)``.
+        """
+        return not bool(self.sex_chromosomes)
+
+    @property
+    def autosomes(self) -> List[Chromosome]:
+        """Returns all autosomes"""
+        return [c for c in self.chromosomes if c.is_autosome]
+
+    @property
+    def sex_system(self) -> Optional[str]:
+        """
+        Returns the sex determination system ('XY', 'ZW', or None).
+
+        Automatically inferred from Chromosome.sex_type. Raises an error if multiple systems are found.
+        """
+        systems: Set[str] = set()
+        for chrom in self.chromosomes:
+            if chrom.sex_system:
+                systems.add(chrom.sex_system)
+
+        if len(systems) == 0:
+            return None
+        elif len(systems) == 1:
+            return systems.pop()
+        else:
+            raise ValueError(
+                f"Multiple sex chromosome systems detected: {systems}. "
+                f"A species should only have one sex determination system."
+            )
+
+    @property
+    def gene_index(self) -> Dict[str, Gene]:
+        """Returns a mapping from gene names to gene instances."""
+        return self._build_gene_index()
+
+    def _build_sex_chromosome_groups(self) -> Dict[str, List[Chromosome]]:
+        """
+        Automatically build _sex_chromosome_groups from Chromosome.sex_type.
+
+        Returns:
+            Sex chromosome group dictionary, keys are system names like 'XY' or 'ZW'
+        """
+        groups: Dict[str, List[Chromosome]] = {}
+        for chrom in self.chromosomes:
+            system = chrom.sex_system
+            if system:
+                if system not in groups:
+                    groups[system] = []
+                groups[system].append(chrom)
+        return groups
+
+    def _build_valid_sex_genotypes(self) -> List[Tuple[Chromosome, Chromosome]]:
+        """
+        Automatically infer valid sex chromosome genotype combinations from Chromosome.sex_type.
+
+        Rules include:
+            - XY system: X can come from either parent, Y is paternal only
+                    -> Valid combinations: (X, X), (X, Y)
+            - ZW system: Z can come from either parent, W is maternal only
+                    -> Valid combinations: (Z, Z), (W, Z)
+
+        Returns:
+            List of valid (maternal_chrom, paternal_chrom) combinations
+        """
+        valid_combos: List[Tuple[Chromosome, Chromosome]] = []
+
+        # Group chromosomes by sex determination system.
+        system_chroms: Dict[str, Dict[str, Chromosome]] = {}
+        for chrom in self.chromosomes:
+            if not chrom.is_sex_chromosome:
+                continue
+            system = chrom.sex_system
+            if system is None:
+                continue
+            if system not in system_chroms:
+                system_chroms[system] = {}
+            # Use sex chromosome type name as the key.
+            system_chroms[system][chrom.sex_type.value] = chrom
+
+        for system, chroms in system_chroms.items():
+            if system == 'XY':
+                x_chrom = chroms.get('X')
+                y_chrom = chroms.get('Y')
+                if x_chrom:
+                    # XX (female) - X from both parents
+                    valid_combos.append((x_chrom, x_chrom))
+                    if y_chrom:
+                        # XY (male) - X from maternal, Y from paternal
+                        valid_combos.append((x_chrom, y_chrom))
+            elif system == 'ZW':
+                z_chrom = chroms.get('Z')
+                w_chrom = chroms.get('W')
+                if z_chrom:
+                    # ZZ (male) - Z from both parents
+                    valid_combos.append((z_chrom, z_chrom))
+                    if w_chrom:
+                        # ZW (female) - W from maternal, Z from paternal
+                        valid_combos.append((w_chrom, z_chrom))
+
+        return valid_combos
+
+    def add_chromosome(
+        self,
+        chrom_or_name: Union[Chromosome, str],
+        loci: Optional[List[Locus]] = None,
+        sex_type: Optional[Union[SexChromosomeType, str]] = None
+    ) -> Chromosome:
+        """
+        Add a chromosome to this species.
+
+        Args:
+            chrom_or_name: Either a Chromosome instance or a name to create a new one.
+            loci: Optional list of loci (only used when creating new Chromosome by name).
+            sex_type: Optional sex chromosome type (X', 'Y', 'Z', 'W', None).
+
+        Returns:
+            The added Chromosome instance.
+        """
+        assert isinstance(chrom_or_name, (Chromosome, str)), \
+            f"Expected Chromosome instance or str, got {type(chrom_or_name).__name__}"
+
+        if isinstance(chrom_or_name, str):
+            # Create new Chromosome via base class add method
+            created = self.add(chrom_or_name, loci=loci, sex_type=sex_type)
+            assert isinstance(created, Chromosome), \
+                f"Expected add() to return Chromosome, got {type(created).__name__}"
+            chrom = created
+        else:
+            chrom = chrom_or_name
+            # Update sex_type if provided
+            if sex_type is not None:
+                chrom.sex_type = sex_type
+            # Register existing Chromosome if not already in registry
+            if chrom.name not in self.child_structures:
+                self.child_structures.register(chrom)
+
+        self.invalidate_gene_index_cache()
+        return chrom
+
+    # Alias for backward compatibility
+    def add_linkage(
+        self,
+        linkage_or_name: Union[Chromosome, str],
+        loci: Optional[List[Locus]] = None
+    ) -> Chromosome:
+        """Alias for add_chromosome (backward compatibility)."""
+        return self.add_chromosome(linkage_or_name, loci=loci)
+
+    def remove_chromosome(self, chrom_or_name: Union[Chromosome, str]) -> None:
+        """
+        Remove a chromosome from this species.
+
+        Args:
+            chrom_or_name: Either a Chromosome instance or a name.
+        """
+        if isinstance(chrom_or_name, str):
+            name = chrom_or_name
+        else:
+            name = chrom_or_name.name
+
+        if name in self.child_structures:
+            self.child_structures.unregister(name)
+            self._invalidate_gene_index_cache()
+
+    # Alias for backward compatibility
+    def remove_linkage(self, linkage_or_name: Union[Chromosome, str]) -> None:
+        """Alias for remove_chromosome (backward compatibility)."""
+        return self.remove_chromosome(linkage_or_name)
+
+    def get_all_loci(self) -> List[Locus]:
+        """Returns all loci across all chromosomes."""
+        all_loci: List[Locus] = []
+        for chrom in self.chromosomes:
+            all_loci.extend(chrom.loci)
+        return all_loci
+
+    def get_locus(self, name: str) -> Optional[Locus]:
+        """
+        Get a locus by name across all chromosomes.
+
+        Args:
+            name: Name of the locus.
+
+        Returns:
+            The Locus instance or None if not found.
+        """
+        for chrom in self.chromosomes:
+            for locus in chrom.loci:
+                if locus.name == name:
+                    return locus
+        return None
+
+    def get_chromosome(self, name: str) -> Optional[Chromosome]:
+        """
+        Get a chromosome by name.
+
+        Args:
+            name: Name of the chromosome.
+
+        Returns:
+            The Chromosome instance or None if not found.
+        """
+        if name in self.child_structures:
+            return self.child_structures.get(name)
+        return None
+
+    def get_gene(self, name: str) -> Optional[Gene]:
+        """
+        Get a gene by name across all loci.
+
+        Args:
+            name: Name of the gene.
+
+        Returns:
+            The Gene instance or None if not found.
+
+        Raises:
+            ValueError: If duplicate gene names exist in the species.
+        """
+        try:
+            gene_index = self._build_gene_index()
+            return gene_index.get(name)
+        except ValueError:
+            # Re-raise the duplicate gene error
+            raise
+
+    def has_gene(self, name: str) -> bool:
+        """
+        Check if a gene with the given name exists in the species.
+
+        Args:
+            name: Name of the gene to check.
+
+        Returns:
+            True if the gene exists, False otherwise.
+
+        Raises:
+            ValueError: If duplicate gene names exist in the species.
+        """
+        try:
+            gene_index = self._build_gene_index()
+            return name in gene_index
+        except ValueError:
+            # Re-raise the duplicate gene error
+            raise
+
+    # Alias for backward compatibility
+    def get_linkage(self, name: str) -> Optional[Chromosome]:
+        """Alias for get_chromosome (backward compatibility)."""
+        return self.get_chromosome(name)
+
+    def _build_gene_index(self) -> Dict[str, Gene]:
+        """
+        Build a lookup index from gene name to Gene object.
+
+        Returns:
+            Dict mapping gene name to Gene instance.
+
+        Raises:
+            ValueError: If duplicate gene names exist in the species.
+        """
+        if self._gene_index_cache is not None:
+            return self._gene_index_cache
+
+
+        gene_index: Dict[str, Gene] = {}
+        for chrom in self.chromosomes:
+            for locus in chrom.loci:
+                for gene in locus.alleles:
+                    if gene.name in gene_index:
+                        raise ValueError(
+                            f"Duplicate gene name '{gene.name}' found in species. "
+                            f"Gene names must be unique for string-based lookups. "
+                            f"Found at locus '{gene.locus.name}' and '{gene_index[gene.name].locus.name}'."
+                        )
+                    gene_index[gene.name] = gene
+        self._gene_index_cache = gene_index
+        return gene_index
+
+    def __repr__(self):
+        chrom_strs: List[str] = []
+        for chrom in self.chromosomes:
+            loci_names = [locus.name for locus in chrom.loci]
+            chrom_strs.append(f"'{chrom.name}': {loci_names}")
+        return f"Species({self.name!r}, {{{', '.join(chrom_strs)}}})"
+
+    def __iter__(self):
+        return iter(self.chromosomes)
+
+    def __len__(self):
+        return len(self.chromosomes)
+
+    if TYPE_CHECKING:
+        # Type stubs for methods defined via monkey-patching in extension modules.
+        # These are evaluated only by static type checkers (pyright), not at runtime.
+
+        @classmethod
+        def from_dict(
+            cls,
+            name: str,
+            structure: Dict[str, Union[List[str], Dict[str, List[str]], Dict[str, Any]]],
+            gamete_labels: Optional[List[str]] = None,
+            somatic_labels: Optional[List[str]] = None,
+        ) -> Species: ...
+
+        def _parse_haplotype_segment_str(
+            self, hap_str: str, gene_index: Dict[str, Gene]
+        ) -> Tuple[Chromosome, List[Gene]]: ...
+
+        def get_haploid_genome_from_str(self, haploid_str: str) -> HaploidGenome: ...
+        def get_haploid_genotype_from_str(self, haplotype_str: str) -> HaploidGenome: ...
+        def get_genotype_from_str(self, genotype_str: str) -> Genotype: ...
+
+        def _get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]: ...
+        def get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]: ...
+        def _get_valid_sex_genotypes(self) -> Optional[List[Tuple[Chromosome, Chromosome]]]: ...
+        def count_alleles(self) -> int: ...
+        def count_haploid_genotypes(self) -> int: ...
+        def count_genotypes(self) -> int: ...
+        def _get_sex_chromosome(
+            self, haploid_genome: HaploidGenome, sex_chr_groups: Dict[str, List[Chromosome]]
+        ) -> Optional[Chromosome]: ...
+        def iter_haploid_genotypes(self) -> Iterable[HaploidGenome]: ...
+        def _iter_haploid_genotypes_for_parent(self, is_paternal: bool) -> Iterable[HaploidGenome]: ...
+        def iter_maternal_haploid_genotypes(self) -> Iterable[HaploidGenome]: ...
+        def iter_paternal_haploid_genotypes(self) -> Iterable[HaploidGenome]: ...
+        def iter_genotypes(self, unordered: bool = False) -> Iterable[Genotype]: ...
+        def get_all_haploid_genotypes(self) -> List[HaploidGenome]: ...
+        def get_maternal_haploid_genotypes(self) -> List[HaploidGenome]: ...
+        def get_paternal_haploid_genotypes(self) -> List[HaploidGenome]: ...
+        def get_haploid_genotypes(
+            self, parent: Optional[Literal["maternal", "paternal"]] = None
+        ) -> List[HaploidGenome]: ...
+        def get_all_genotypes(self, unordered: bool = False) -> List[Genotype]: ...
+
+        def _resolve_single_genotype_selector(
+            self, selector: Union[Genotype, str],
+            all_genotypes: Optional[Iterable[Genotype]] = None,
+            context: str = 'selector',
+        ) -> List[Genotype]: ...
+        def resolve_genotype_selectors(
+            self, selector: Union[Genotype, str, Tuple[Union[Genotype, str], ...]],
+            all_genotypes: Optional[Iterable[Genotype]] = None,
+            context: str = 'selector',
+        ) -> List[Genotype]: ...
+        def parse_genotype_pattern(self, pattern: str) -> Callable[[Genotype], bool]: ...
+        def filter_genotypes_by_pattern(
+            self, genotypes: Iterable[Genotype], pattern: str
+        ) -> List[Genotype]: ...
+        def enumerate_genotypes_matching_pattern(
+            self, pattern: str, max_count: Optional[int] = None
+        ) -> Iterable[Genotype]: ...
+        def parse_haploid_genome_pattern(self, pattern: str) -> Callable[[HaploidGenome], bool]: ...
+        def filter_haploid_genomes_by_pattern(
+            self, haploid_genomes: Iterable[HaploidGenome], pattern: str
+        ) -> List[HaploidGenome]: ...
+        def enumerate_haploid_genomes_matching_pattern(
+            self, pattern: str, max_count: Optional[int] = None
+        ) -> Iterable[HaploidGenome]: ...
+
+        def unordered_genotype(self, hg1: HaploidGenotype, hg2: HaploidGenotype) -> Genotype: ...
+        def build_gamete_map(
+            self,
+            gamete_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+            n_slabs: int = 1,
+        ) -> NDArray[np.float64]: ...
+        def build_zygote_map(
+            self,
+            zygote_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+            n_slabs: int = 1,
+        ) -> NDArray[np.float64]: ...
+        def get_config_blueprint(self) -> SpeciesConfigBlueprint: ...

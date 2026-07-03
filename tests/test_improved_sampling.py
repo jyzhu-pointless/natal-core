@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from natal.numba_compat import continuous_binomial
+from natal.numba.compat import continuous_binomial
 
 
 def _continuous_binomial_min_concentration(n: float, p: float) -> float:

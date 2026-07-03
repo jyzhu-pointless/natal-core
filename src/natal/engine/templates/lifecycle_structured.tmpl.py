@@ -9,6 +9,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from natal.data import PopulationConfig, PopulationState
 from natal.engine.age_structured_simulator import (
     run_aging,
     run_reproduction,
@@ -23,9 +24,7 @@ from natal.hooks.types import (
     RESULT_STOP,
     HookProgram,
 )
-from natal.numba_utils import njit_switch
-from natal.population_config import PopulationConfig
-from natal.population_state import PopulationState
+from natal.numba.utils import njit_switch
 
 
 def _default_hook(

@@ -16,7 +16,7 @@ from natal.hooks import (  # noqa: E402
     HookExecutor,
     HookProgram,
 )
-from natal.numba_utils import numba_disabled  # noqa: E402
+from natal.numba.utils import numba_disabled  # noqa: E402
 
 
 class _DummyState:

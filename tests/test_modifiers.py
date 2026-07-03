@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.index_registry import IndexRegistry
-from natal.modifiers import (
+from natal.registry.index import IndexRegistry
+from natal.modifiers.module import (
     _normalize_zygote_val,
     _parse_zygote_key,
     _write_zygote_mapping,

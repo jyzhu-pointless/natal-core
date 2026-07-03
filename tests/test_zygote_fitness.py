@@ -7,9 +7,9 @@ import uuid
 
 import numpy as np
 
-from natal.genetic_entities import Species
-from natal.population_builder import AgeStructuredPopulationBuilder
-from natal.population_config import build_population_config
+from natal.genetics import Species
+from natal.configurator import AgeStructuredPopulationBuilder
+from natal.data import build_population_config
 
 
 def _make_simple_species() -> Species:

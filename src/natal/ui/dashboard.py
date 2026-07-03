@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from natal.spatial_population import SpatialPopulation
+from natal.spatial.population import SpatialPopulation
 
 from .dashboard_population import Dashboard as PopulationDashboard
 from .dashboard_population import launch as launch_population

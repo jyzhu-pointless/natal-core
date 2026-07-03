@@ -16,8 +16,8 @@ import sys
 sys.path.insert(0, '/Users/pointless/Desktop/work/natal-core/src')
 
 import pytest
-from natal.genetic_structures import Species
-from natal.genetic_entities import Genotype
+from natal.genetics import Species
+from natal.genetics import Genotype
 
 # ============================================================================
 # SETUP: Global Test Species

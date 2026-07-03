@@ -20,12 +20,12 @@ try:
 except ImportError:
     HAS_NICEGUI = False
 
-from natal.age_structured_population import AgeStructuredPopulation
-from natal.population_state import (
+from natal.data import (
     PopulationState,
     parse_flattened_discrete_state,
     parse_flattened_state,
 )
+from natal.population.age_structured import AgeStructuredPopulation
 from natal.ui.dashboard_helpers import (
     ObservationPanel,
     get_hooks_data,
@@ -35,10 +35,10 @@ from natal.ui.dashboard_helpers import (
     numpy_converter,
     render_hooks_panel,
 )
-from natal.visualization import get_allele_color, render_cell_svg
+from natal.ui.visualization import get_allele_color, render_cell_svg
 
 if TYPE_CHECKING:
-    from natal.base_population import BasePopulation
+    from natal.population.base import BasePopulation
 
 class Dashboard:
     """

@@ -4,7 +4,7 @@ import numpy as np
 import pytest  # type: ignore
 
 import natal as nt
-from natal.genetic_entities import (
+from natal.genetics import (
     Gene,
     Genotype,
     HaploidGenotype,
