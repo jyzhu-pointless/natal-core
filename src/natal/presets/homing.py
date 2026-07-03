@@ -3,8 +3,6 @@
 Public module — provides HomingDrive for CRISPR/Cas9 gene drive simulations.
 """
 
-# pyright: reportPrivateUsage=false
-
 from typing import TYPE_CHECKING, Any, Optional
 
 from natal.genetics import Gene, Genotype
@@ -12,16 +10,18 @@ from natal.modifiers.module import GameteModifier, ZygoteModifier
 from natal.utils.types import Sex
 
 from ._base import GeneticPreset
-from ._fitness import _make_fitness_patch_given_allele_scaling
+from ._fitness import (
+    make_fitness_patch_given_allele_scaling,
+)
 from ._types import (
+    AlleleScalingMode,
+    AlleleSpecifier,
     PresetFitnessPatch,
-    _AlleleScalingMode,
-    _AlleleSpecifier,
-    _FecundityScalingConfig,
-    _SexSpecificRates,
-    _SexualSelectionScalingConfig,
-    _ViabilityScalingConfig,
-    _ZygoteViabilityScalingConfig,
+    SexSpecificRates,
+    FecundityScalingConfig,
+    SexualSelectionScalingConfig,
+    ViabilityScalingConfig,
+    ZygoteViabilityScalingConfig,
 )
 from .gamete_conversion import GameteConversionRuleSet
 from .zygote_conversion import ZygoteConversionRuleSet
@@ -68,23 +68,23 @@ class HomingDrive(GeneticPreset):
     def __init__(
         self,
         name: str,
-        drive_allele: _AlleleSpecifier,
-        target_allele: _AlleleSpecifier,
-        resistance_allele: Optional[_AlleleSpecifier] = None,
-        functional_resistance_allele: Optional[_AlleleSpecifier] = None,
-        cas9_allele: Optional[_AlleleSpecifier] = None,
-        drive_conversion_rate: _SexSpecificRates = 0.5,
-        late_germline_resistance_formation_rate: _SexSpecificRates = 0.0,
-        embryo_resistance_formation_rate: _SexSpecificRates = 0.0,
+        drive_allele: AlleleSpecifier,
+        target_allele: AlleleSpecifier,
+        resistance_allele: Optional[AlleleSpecifier] = None,
+        functional_resistance_allele: Optional[AlleleSpecifier] = None,
+        cas9_allele: Optional[AlleleSpecifier] = None,
+        drive_conversion_rate: SexSpecificRates = 0.5,
+        late_germline_resistance_formation_rate: SexSpecificRates = 0.0,
+        embryo_resistance_formation_rate: SexSpecificRates = 0.0,
         functional_resistance_ratio: float = 0.0,
-        fecundity_scaling: _FecundityScalingConfig = 1.0,
-        viability_scaling: _ViabilityScalingConfig = 1.0,
-        sexual_selection_scaling: _SexualSelectionScalingConfig = 1.0,
-        zygote_viability_scaling: _ZygoteViabilityScalingConfig = 1.0,
-        viability_mode: _AlleleScalingMode = "multiplicative",
-        fecundity_mode: _AlleleScalingMode = "multiplicative",
-        sexual_selection_mode: _AlleleScalingMode = "multiplicative",
-        zygote_viability_mode: _AlleleScalingMode = "multiplicative",
+        fecundity_scaling: FecundityScalingConfig = 1.0,
+        viability_scaling: ViabilityScalingConfig = 1.0,
+        sexual_selection_scaling: SexualSelectionScalingConfig = 1.0,
+        zygote_viability_scaling: ZygoteViabilityScalingConfig = 1.0,
+        viability_mode: AlleleScalingMode = "multiplicative",
+        fecundity_mode: AlleleScalingMode = "multiplicative",
+        sexual_selection_mode: AlleleScalingMode = "multiplicative",
+        zygote_viability_mode: AlleleScalingMode = "multiplicative",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Any] = None,
         priority: int = 0,
@@ -167,10 +167,10 @@ class HomingDrive(GeneticPreset):
         self.sexual_selection_scaling = sexual_selection_scaling
         self.zygote_viability_scaling = zygote_viability_scaling
 
-        self.viability_mode: _AlleleScalingMode = viability_mode
-        self.fecundity_mode: _AlleleScalingMode = fecundity_mode
-        self.sexual_selection_mode: _AlleleScalingMode = sexual_selection_mode
-        self.zygote_viability_mode: _AlleleScalingMode = zygote_viability_mode
+        self.viability_mode: AlleleScalingMode = viability_mode
+        self.fecundity_mode: AlleleScalingMode = fecundity_mode
+        self.sexual_selection_mode: AlleleScalingMode = sexual_selection_mode
+        self.zygote_viability_mode: AlleleScalingMode = zygote_viability_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
@@ -187,7 +187,7 @@ class HomingDrive(GeneticPreset):
         if self._str_resistance_allele:
             alleles.append(self._str_resistance_allele)
 
-        patch = _make_fitness_patch_given_allele_scaling(
+        patch = make_fitness_patch_given_allele_scaling(
             alleles,
             self.viability_scaling,
             self.fecundity_scaling,

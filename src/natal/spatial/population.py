@@ -1673,7 +1673,7 @@ class SpatialPopulation:
             ``deme_kernel_ids`` are both set; ``None`` otherwise.
         """
         from natal.engine.migration.kernel import (
-            _build_kernel_offset_table,  # pyright: ignore[reportPrivateUsage]
+            build_kernel_offset_table,
         )
 
         if self._kernel_bank is None or self._deme_kernel_ids is None:
@@ -1689,7 +1689,7 @@ class SpatialPopulation:
         kernel_total_sums = np.zeros(n_kernels, dtype=np.float64)
         max_nnz = 0
         for k in range(n_kernels):
-            d_r, d_c, w, nnz, total_sum = _build_kernel_offset_table(
+            d_r, d_c, w, nnz, total_sum = build_kernel_offset_table(
                 migration_kernel=self._kernel_bank[k],
                 kernel_include_center=bool(self._kernel_include_center),
             )

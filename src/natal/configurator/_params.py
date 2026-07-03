@@ -21,6 +21,7 @@ from natal.data import (
     LOGISTIC,
     NO_COMPETITION,
 )
+from natal.utils.parameters import ALL_PARAMETERS, ParamDescriptor
 
 __all__: list[str] = []  # internal helpers, not re-exported
 
@@ -288,3 +289,33 @@ def compute_expected_eggs_from_females(
         eggs += female_dist[age] * p_reproducing * female_age_based_fertility[age] * eggs_per_female
 
     return eggs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# From _base.py: _resolve_param
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def resolve_param(name: str) -> ParamDescriptor | None:
+    """Look up a parameter name in ``ALL_PARAMETERS`` with three fallback tiers.
+
+    Tier 1: exact match — ``"competition.carrying_capacity"``.
+    Tier 2: short-name match — ``"carrying_capacity"`` matches via
+            ``key.endswith(".carrying_capacity")``.
+    Tier 3: alias match — user-friendly names defined in each
+            ``ParamDescriptor.aliases``.
+
+    Returns the ``ParamDescriptor`` or ``None``.
+    """
+    # Tier 1: O(1) exact key lookup.
+    if name in ALL_PARAMETERS:
+        return ALL_PARAMETERS[name]
+
+    # Tier 2-3: linear scan for short-name / alias match.
+    for key, desc in ALL_PARAMETERS.items():
+        if key.endswith(f".{name}"):
+            return desc
+        if name in desc.aliases:
+            return desc
+
+    return None

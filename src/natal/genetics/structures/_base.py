@@ -18,7 +18,7 @@ from typing import (
 )
 
 from ._registry import (
-    _GLOBAL_STRUCTURE_CACHE,  # pyright: ignore[reportPrivateUsage]
+    GLOBAL_STRUCTURE_CACHE,
     ChildStructureRegistry,
     EntityRegistry,
 )
@@ -110,9 +110,9 @@ class GeneticStructure(Generic[E]):
             cache = target_species.structure_cache[cls]
         else:
             # Use global fallback cache for structures without species
-            if cls not in _GLOBAL_STRUCTURE_CACHE:
-                _GLOBAL_STRUCTURE_CACHE[cls] = {}
-            cache = _GLOBAL_STRUCTURE_CACHE[cls]
+            if cls not in GLOBAL_STRUCTURE_CACHE:
+                GLOBAL_STRUCTURE_CACHE[cls] = {}
+            cache = GLOBAL_STRUCTURE_CACHE[cls]
 
         # Check if instance already exists in cache
         if name in cache:
@@ -195,9 +195,9 @@ class GeneticStructure(Generic[E]):
                 species.structure_cache[cls] = {}
             return species.structure_cache[cls]
         else:
-            if cls not in _GLOBAL_STRUCTURE_CACHE:
-                _GLOBAL_STRUCTURE_CACHE[cls] = {}
-            return _GLOBAL_STRUCTURE_CACHE[cls]
+            if cls not in GLOBAL_STRUCTURE_CACHE:
+                GLOBAL_STRUCTURE_CACHE[cls] = {}
+            return GLOBAL_STRUCTURE_CACHE[cls]
 
     def _remove_from_cache(self, species: Optional[Species]) -> None:
         """Remove this structure from the specified species's cache (or global cache)."""
@@ -263,7 +263,7 @@ class GeneticStructure(Generic[E]):
 
         This method is primarily for testing and cleanup.
         """
-        _GLOBAL_STRUCTURE_CACHE.clear()
+        GLOBAL_STRUCTURE_CACHE.clear()
 
     def add(
         self,

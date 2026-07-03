@@ -115,7 +115,7 @@ def _species_resolve_genotype_selectors(
 
         merged: List[Genotype] = []
         for atom in selector:
-            matches = self._resolve_single_genotype_selector(
+            matches = self.resolve_single_genotype_selector(
                 selector=atom,
                 all_genotypes=all_genotypes,
                 context=context,
@@ -125,7 +125,7 @@ def _species_resolve_genotype_selectors(
                     merged.append(gt)
         return merged
 
-    return self._resolve_single_genotype_selector(
+    return self.resolve_single_genotype_selector(
         selector=selector,
         all_genotypes=all_genotypes,
         context=context,
@@ -331,7 +331,7 @@ def _species_enumerate_haploid_genomes_matching_pattern(
 
 
 # Attach methods to Species class
-Species._resolve_single_genotype_selector = _species_resolve_single_genotype_selector  # pyright: ignore[reportAttributeAccessIssue]
+Species.resolve_single_genotype_selector = _species_resolve_single_genotype_selector  # pyright: ignore[reportAttributeAccessIssue]
 Species.resolve_genotype_selectors = _species_resolve_genotype_selectors  # pyright: ignore[reportAttributeAccessIssue]
 Species.parse_genotype_pattern = _species_parse_genotype_pattern  # pyright: ignore[reportAttributeAccessIssue]
 Species.filter_genotypes_by_pattern = _species_filter_genotypes_by_pattern  # pyright: ignore[reportAttributeAccessIssue]

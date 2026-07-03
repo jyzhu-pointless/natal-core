@@ -26,42 +26,40 @@ def _species_get_sex_chromosome_groups(self: Species) -> Optional[Dict[str, List
     """
     Get sex chromosome group configuration.
 
-    Prefer explicit ``_sex_chromosome_groups`` when provided;
+    Prefer explicit ``sex_chromosome_groups`` when provided;
     otherwise infer groups from ``Chromosome.sex_type``.
 
     Returns:
         Sex chromosome group mapping, or ``None`` when absent.
     """
     # Prefer explicit user-defined configuration first.
-    if hasattr(self, '_sex_chromosome_groups') and self._sex_chromosome_groups:
-        return self._sex_chromosome_groups
+    if hasattr(self, 'sex_chromosome_groups') and self.sex_chromosome_groups:
+        return self.sex_chromosome_groups
 
     # Fall back to automatic inference from chromosome metadata.
-    groups = self._build_sex_chromosome_groups()
+    groups = self.build_sex_chromosome_groups()
     return groups if groups else None
 
 
-def _species_get_sex_chromosome_groups_public(self: Species) -> Optional[Dict[str, List[Chromosome]]]:
-    """Public accessor for sex chromosome group configuration."""
-    return self._get_sex_chromosome_groups()
+
 
 
 def _species_get_valid_sex_genotypes(self: Species) -> Optional[List[Tuple[Chromosome, Chromosome]]]:
     """
     Get valid sex chromosome genotype combinations.
 
-    Prefer explicit ``_valid_sex_genotypes`` when provided;
+    Prefer explicit ``valid_sex_genotypes`` when provided;
     otherwise infer combinations from ``Chromosome.sex_type``.
 
     Returns:
         A list of valid ``(maternal_chrom, paternal_chrom)`` pairs, or ``None``.
     """
     # Prefer explicit user-defined configuration first.
-    if hasattr(self, '_valid_sex_genotypes') and self._valid_sex_genotypes:
-        return self._valid_sex_genotypes
+    if hasattr(self, 'valid_sex_genotypes') and self.valid_sex_genotypes:
+        return self.valid_sex_genotypes
 
     # Fall back to automatic inference from chromosome metadata.
-    valid = self._build_valid_sex_genotypes()
+    valid = self.build_valid_sex_genotypes()
     return valid if valid else None
 
 
@@ -90,7 +88,7 @@ def _species_count_haploid_genotypes(self: Species) -> int:
         Total number of possible haploid genomes
     """
     # Resolve sex chromosome grouping (explicit config first, otherwise inferred).
-    sex_chr_groups = self._get_sex_chromosome_groups()
+    sex_chr_groups = self.get_sex_chromosome_groups()
 
     # Collect all chromosomes that belong to any sex chromosome group.
     sex_chroms: Set[Chromosome] = set()
@@ -130,18 +128,18 @@ def _species_count_genotypes(self: Species) -> int:
     """
     Calculate the total number of possible diploid genotypes.
 
-    If _valid_sex_genotypes is defined, only valid sex chromosome combinations are counted.
+    If valid_sex_genotypes is defined, only valid sex chromosome combinations are counted.
 
     Sex chromosome system configuration:
     - Can be automatically inferred by setting Chromosome.sex_type
-    - Can also be manually set via _sex_chromosome_groups and _valid_sex_genotypes
+    - Can also be manually set via sex_chromosome_groups and valid_sex_genotypes
 
     Returns:
         Total number of possible genotypes
     """
     # Resolve sex-system config (explicit settings first, otherwise inferred).
-    sex_chr_groups = self._get_sex_chromosome_groups()
-    valid_sex_gts = self._get_valid_sex_genotypes()
+    sex_chr_groups = self.get_sex_chromosome_groups()
+    valid_sex_gts = self.get_valid_sex_genotypes()
 
     if not sex_chr_groups:
         # No sex chromosomes: diploid count is haploid_count^2.
@@ -213,7 +211,7 @@ def _species_iter_haploid_genotypes(self: Species) -> Iterable[HaploidGenome]:
     """
     from ..entities.haplotype import HaploidGenome, Haplotype
 
-    sex_chr_groups = self._get_sex_chromosome_groups()
+    sex_chr_groups = self.get_sex_chromosome_groups()
 
     # Collect all chromosomes that belong to any sex chromosome group.
     sex_chroms: Set[Chromosome] = set()
@@ -272,7 +270,7 @@ def _species_iter_haploid_genotypes_for_parent(
     Iterate haploid genomes available to one parent role.
 
     Availability of sex chromosomes is constrained by
-    ``_valid_sex_genotypes`` when provided.
+    ``valid_sex_genotypes`` when provided.
 
     Args:
         is_paternal: ``True`` for paternal, ``False`` for maternal.
@@ -282,8 +280,8 @@ def _species_iter_haploid_genotypes_for_parent(
     """
     from ..entities.haplotype import HaploidGenome, Haplotype
 
-    sex_chr_groups = self._get_sex_chromosome_groups()
-    valid_sex_gts = self._get_valid_sex_genotypes()
+    sex_chr_groups = self.get_sex_chromosome_groups()
+    valid_sex_gts = self.get_valid_sex_genotypes()
 
     # Collect all chromosomes that belong to any sex chromosome group.
     sex_chroms: Set[Chromosome] = set()
@@ -358,7 +356,7 @@ def _species_iter_maternal_haploid_genotypes(self: Species) -> Iterable[HaploidG
     Yields:
         HaploidGenome instances.
     """
-    return self._iter_haploid_genotypes_for_parent(is_paternal=False)
+    return self.iter_haploid_genotypes_for_parent(is_paternal=False)
 
 
 def _species_iter_paternal_haploid_genotypes(self: Species) -> Iterable[HaploidGenome]:
@@ -368,7 +366,7 @@ def _species_iter_paternal_haploid_genotypes(self: Species) -> Iterable[HaploidG
     Yields:
         HaploidGenome instances.
     """
-    return self._iter_haploid_genotypes_for_parent(is_paternal=True)
+    return self.iter_haploid_genotypes_for_parent(is_paternal=True)
 
 
 def _species_iter_genotypes(self: Species, unordered: bool = False) -> Iterable[Genotype]:
@@ -380,7 +378,7 @@ def _species_iter_genotypes(self: Species, unordered: bool = False) -> Iterable[
     via ``unordered_genotype()`` — ``A|a`` and ``a|A`` map to the same canonical
     Genotype, halving the heterozygous genotype space.
 
-    When ``_valid_sex_genotypes`` or ``Chromosome.sex_type`` constraints are
+    When ``valid_sex_genotypes`` or ``Chromosome.sex_type`` constraints are
     present, only valid sex chromosome pairings are emitted.
 
     Args:
@@ -396,8 +394,8 @@ def _species_iter_genotypes(self: Species, unordered: bool = False) -> Iterable[
     """
     from ..entities.genotype import Genotype
 
-    sex_chr_groups = self._get_sex_chromosome_groups()
-    valid_sex_gts = self._get_valid_sex_genotypes()
+    sex_chr_groups = self.get_sex_chromosome_groups()
+    valid_sex_gts = self.get_valid_sex_genotypes()
 
     if not sex_chr_groups:
         # No sex chromosomes: simple Cartesian product.
@@ -426,8 +424,8 @@ def _species_iter_genotypes(self: Species, unordered: bool = False) -> Iterable[
 
         seen: set[tuple[HaploidGenotype, HaploidGenotype]] = set()
         for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
-            mat_sex_chrom = self._get_sex_chromosome(maternal, sex_chr_groups)
-            pat_sex_chrom = self._get_sex_chromosome(paternal, sex_chr_groups)
+            mat_sex_chrom = self.get_sex_chromosome(maternal, sex_chr_groups)
+            pat_sex_chrom = self.get_sex_chromosome(paternal, sex_chr_groups)
 
             if (mat_sex_chrom, pat_sex_chrom) in valid_chrom_pairs:
                 if unordered:
@@ -556,18 +554,17 @@ def _species_get_all_genotypes(self: Species, unordered: bool = False) -> List[G
 
 
 # Attach methods to Species class
-Species._get_sex_chromosome_groups = _species_get_sex_chromosome_groups  # pyright: ignore[reportAttributeAccessIssue]
-Species.get_sex_chromosome_groups = _species_get_sex_chromosome_groups_public  # pyright: ignore[reportAttributeAccessIssue]
-Species._get_valid_sex_genotypes = _species_get_valid_sex_genotypes  # pyright: ignore[reportAttributeAccessIssue]
+Species.get_sex_chromosome_groups = _species_get_sex_chromosome_groups  # pyright: ignore[reportAttributeAccessIssue]
+Species.get_valid_sex_genotypes = _species_get_valid_sex_genotypes  # pyright: ignore[reportAttributeAccessIssue]
 Species.count_alleles = _species_count_alleles  # pyright: ignore[reportAttributeAccessIssue]
 Species.count_haploid_genotypes = _species_count_haploid_genotypes  # pyright: ignore[reportAttributeAccessIssue]
 Species.count_genotypes = _species_count_genotypes  # pyright: ignore[reportAttributeAccessIssue]
 Species.iter_haploid_genotypes = _species_iter_haploid_genotypes  # pyright: ignore[reportAttributeAccessIssue]
-Species._iter_haploid_genotypes_for_parent = _species_iter_haploid_genotypes_for_parent  # pyright: ignore[reportAttributeAccessIssue]
+Species.iter_haploid_genotypes_for_parent = _species_iter_haploid_genotypes_for_parent  # pyright: ignore[reportAttributeAccessIssue]
 Species.iter_maternal_haploid_genotypes = _species_iter_maternal_haploid_genotypes  # pyright: ignore[reportAttributeAccessIssue]
 Species.iter_paternal_haploid_genotypes = _species_iter_paternal_haploid_genotypes  # pyright: ignore[reportAttributeAccessIssue]
 Species.iter_genotypes = _species_iter_genotypes  # pyright: ignore[reportAttributeAccessIssue]
-Species._get_sex_chromosome = _species_get_sex_chromosome  # pyright: ignore[reportAttributeAccessIssue]
+Species.get_sex_chromosome = _species_get_sex_chromosome  # pyright: ignore[reportAttributeAccessIssue]
 Species.get_all_haploid_genotypes = _species_get_all_haploid_genotypes  # pyright: ignore[reportAttributeAccessIssue]
 Species.get_maternal_haploid_genotypes = _species_get_maternal_haploid_genotypes  # pyright: ignore[reportAttributeAccessIssue]
 Species.get_paternal_haploid_genotypes = _species_get_paternal_haploid_genotypes  # pyright: ignore[reportAttributeAccessIssue]

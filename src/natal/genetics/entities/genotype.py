@@ -106,9 +106,9 @@ class Genotype:
 
         if species.unordered:
             from ..structures.species_maps import (  # noqa: E402
-                _canonical_haploid_pair,  # pyright: ignore[reportPrivateUsage]
+                canonical_haploid_pair,
             )
-            mat, pat = _canonical_haploid_pair(species, maternal, paternal)
+            mat, pat = canonical_haploid_pair(species, maternal, paternal)
         else:
             mat, pat = maternal, paternal
         canon_parts: list[str] = []

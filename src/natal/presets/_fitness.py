@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from natal.population.base import BasePopulation
 
 
-def _make_fitness_patch_given_allele_scaling(
+def make_fitness_patch_given_allele_scaling(
     allele_name: Union[str, List[str], Tuple[str, ...]],
     viability_scaling: Optional[_ViabilityScalingConfig] = None,
     fecundity_scaling: Optional[_FecundityScalingConfig] = None,

@@ -21,10 +21,10 @@ if TYPE_CHECKING:
     from ..entities.gene import Gene
     from ..entities.genotype import Genotype
     from ..entities.haplotype import HaploidGenome, Haplotype
-    from .chromosome import Chromosome
-    from .locus import Locus
 
 from ._types import SexChromosomeType
+from .chromosome import Chromosome
+from .locus import Locus
 from .species import Species
 
 
@@ -79,7 +79,7 @@ def _species_from_dict(
     """
     from ..entities.gene import Gene
 
-    species = cls(name, gamete_labels=gamete_labels, somatic_labels=somatic_labels)
+    species = cast(Species, cls(name, gamete_labels=gamete_labels, somatic_labels=somatic_labels))
 
     for chrom_name, loci_spec in structure.items():
         sex_type: Optional[Union[SexChromosomeType, str]] = None
@@ -258,13 +258,13 @@ def _species_get_haploid_genome_from_str(
     """
     from ..entities.haplotype import HaploidGenome, Haplotype
 
-    gene_index = self._build_gene_index()
+    gene_index = self.build_gene_index()
 
     # Split by semicolon for different chromosomes
     hap_strs = [s.strip() for s in haploid_str.split(';') if s.strip()]
 
     # Allow sex chromosome groups: exactly one chromosome per group is required
-    sex_chr_groups = getattr(self, '_sex_chromosome_groups', None)
+    sex_chr_groups = getattr(self, 'sex_chromosome_groups', None)
     if sex_chr_groups:
         # Expected segments = autosomes count + number of sex groups
         autosome_count = 0
@@ -289,7 +289,7 @@ def _species_get_haploid_genome_from_str(
     chroms_used: Set[Chromosome] = set()
 
     for hap_str in hap_strs:
-        chrom, genes = self._parse_haplotype_segment_str(hap_str, gene_index)
+        chrom, genes = self.parse_haplotype_segment_str(hap_str, gene_index)
 
         if chrom in chroms_used:
             raise ValueError(
@@ -354,7 +354,7 @@ def _species_get_genotype_from_str(self: Species, genotype_str: str) -> Genotype
     chrom_segments = [s.strip() for s in genotype_str.split(';') if s.strip()]
 
     # Allow sex chromosome groups: exactly one chromosome per group is required
-    sex_chr_groups = getattr(self, '_sex_chromosome_groups', None)
+    sex_chr_groups = getattr(self, 'sex_chromosome_groups', None)
     if sex_chr_groups:
         autosome_count = 0
         for chrom in self.chromosomes:
@@ -397,7 +397,7 @@ def _species_get_genotype_from_str(self: Species, genotype_str: str) -> Genotype
 
 # Attach methods to Species class
 Species.from_dict = classmethod(_species_from_dict)  # pyright: ignore[reportAttributeAccessIssue]
-Species._parse_haplotype_segment_str = _species_parse_haplotype_segment_str  # pyright: ignore[reportAttributeAccessIssue]
+Species.parse_haplotype_segment_str = _species_parse_haplotype_segment_str  # pyright: ignore[reportAttributeAccessIssue]
 Species.get_haploid_genome_from_str = _species_get_haploid_genome_from_str  # pyright: ignore[reportAttributeAccessIssue]
 Species.get_haploid_genotype_from_str = _species_get_haploid_genotype_from_str  # pyright: ignore[reportAttributeAccessIssue]
 Species.get_genotype_from_str = _species_get_genotype_from_str  # pyright: ignore[reportAttributeAccessIssue]

@@ -59,7 +59,7 @@ __all__ = [
 ]
 
 # Type aliases for population and builder types used throughout.
-_PopulationInstance = Union[AgeStructuredPopulation, DiscreteGenerationPopulation]
+PopulationInstance = Union[AgeStructuredPopulation, DiscreteGenerationPopulation]
 _HookItem = Union[
     Callable[..., object],
     Dict[str, List[Tuple[Callable[..., object], Optional[str], Optional[int]]]],
@@ -301,10 +301,10 @@ def _make_hashable(value: Any) -> Any:
 
 
 def _clone_deme(
-    template: _PopulationInstance,
+    template: PopulationInstance,
     config: PopulationConfig | DiscretePopulationConfig,
     name: str,
-) -> _PopulationInstance:
+) -> PopulationInstance:
     """Create a lightweight functional copy of a template deme.
 
     Delegates to the population instance's ``_clone`` method.  The clone
@@ -1064,7 +1064,7 @@ class SpatialConfigurator:
         template = self._template.build(name=self._spatial_name)
         tpl_config = template.export_config()
 
-        demes: List[_PopulationInstance] = [template]
+        demes: List[PopulationInstance] = [template]
         for i in range(1, self._n_demes):
             clone = _clone_deme(
                 template,
@@ -1152,9 +1152,9 @@ class SpatialConfigurator:
         # 4. Build one template per group.  The first group always runs the
         #    full builder pipeline.  Subsequent groups try ``_replace`` first
         #    (shares heavy ndarrays), falling back to full replay.
-        demes: List[_PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]
+        demes: List[PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]
         base_config: PopulationConfig | DiscretePopulationConfig | None = None
-        base_template: Optional[_PopulationInstance] = None   # template deme from first group — cloned via _clone_deme
+        base_template: Optional[PopulationInstance] = None   # template deme from first group — cloned via _clone_deme
 
         for _sig, indices in groups.items():
             first_idx = indices[0]
@@ -1185,7 +1185,7 @@ class SpatialConfigurator:
                 )
                 # _clone_deme copies state arrays from base_template;
                 # overwrite them with the variant group's own values.
-                state = group_template.state  # pyright: ignore[reportPrivateUsage]
+                state = group_template.state
                 if "individual_count" in sig_map:
                     state.individual_count[:] = variant_config.initial_individual_count
                 if "sperm_storage" in sig_map:
@@ -1401,7 +1401,7 @@ class SpatialConfigurator:
 
         return variant
 
-    def _build_template_for_group(self, sig_map: Dict[str, object]) -> _PopulationInstance:
+    def _build_template_for_group(self, sig_map: Dict[str, object]) -> PopulationInstance:
         """Build a single template deme for one config-signature group.
 
         Creates a fresh panmictic builder and replays every method call

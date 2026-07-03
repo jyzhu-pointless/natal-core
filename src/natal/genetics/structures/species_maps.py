@@ -41,7 +41,7 @@ def _species_unordered_genotype(
     and :class:`IndexRegistry` to deduplicate symmetric genotype pairs.
     """
     from ..entities.genotype import Genotype
-    mat, pat = _canonical_haploid_pair(self, hg1, hg2)
+    mat, pat = canonical_haploid_pair(self, hg1, hg2)
     return Genotype(species=self, maternal=mat, paternal=pat)
 
 
@@ -113,8 +113,8 @@ def _species_get_config_blueprint(self: Species) -> SpeciesConfigBlueprint:
         ``offspring_tensor`` (ndarray), and compatibility arrays
         (ndarray).
     """
-    if self._config_blueprint is not None:
-        return self._config_blueprint
+    if self.config_blueprint is not None:
+        return self.config_blueprint
 
     from natal.engine.simulation.age_structured import (
         compute_offspring_probability_tensor,
@@ -152,7 +152,7 @@ def _species_get_config_blueprint(self: Species) -> SpeciesConfigBlueprint:
     f_compat = meiosis_f.sum(axis=1)  # female side
     m_compat = meiosis_m.sum(axis=1)  # male side
 
-    self._config_blueprint = {
+    self.config_blueprint = {
         "n_genotypes": n_g,
         "n_ztypes": n_ztypes,
         "n_gtypes": n_gtypes,
@@ -164,10 +164,10 @@ def _species_get_config_blueprint(self: Species) -> SpeciesConfigBlueprint:
         "female_ztype_compatibility": f_compat,
         "male_ztype_compatibility": m_compat,
     }
-    return self._config_blueprint
+    return self.config_blueprint
 
 
-def _canonical_haploid_pair(
+def canonical_haploid_pair(
     species: Species,
     hg1: HaploidGenotype,
     hg2: HaploidGenotype,

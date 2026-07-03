@@ -3,8 +3,6 @@
 Public module — provides ToxinAntidoteDrive for TARE/TADE gene drive simulations.
 """
 
-# pyright: reportPrivateUsage=false
-
 from typing import TYPE_CHECKING, Any, Optional
 
 from natal.genetics import Gene, Genotype
@@ -12,17 +10,17 @@ from natal.modifiers.module import GameteModifier, ZygoteModifier
 from natal.utils.types import Sex
 
 from ._base import GeneticPreset
-from ._fitness import _make_fitness_patch_given_allele_scaling
+from ._fitness import make_fitness_patch_given_allele_scaling
 from ._types import (
     PresetFitnessPatch,
-    _AlleleScalingMode,
-    _AlleleSpecifier,
-    _count_allele_copies,
-    _FecundityScalingConfig,
-    _SexSpecificRates,
-    _SexualSelectionScalingConfig,
-    _ViabilityScalingConfig,
-    _ZygoteViabilityScalingConfig,
+    AlleleScalingMode,
+    AlleleSpecifier,
+    count_allele_copies,
+    FecundityScalingConfig,
+    SexSpecificRates,
+    SexualSelectionScalingConfig,
+    ViabilityScalingConfig,
+    ZygoteViabilityScalingConfig,
 )
 from .gamete_conversion import GameteConversionRuleSet
 from .zygote_conversion import ZygoteConversionRuleSet
@@ -49,26 +47,26 @@ class ToxinAntidoteDrive(GeneticPreset):
     Attributes:
         conversion_rate (Tuple[float, float]): Female/male germline disruption rates.
         embryo_disruption_rate (Tuple[float, float]): Female/male embryo disruption rates.
-        viability_mode (_AlleleScalingMode): Scaling mode for viability effects.
-        fecundity_mode (_AlleleScalingMode): Scaling mode for fecundity effects.
+        viability_mode (AlleleScalingMode): Scaling mode for viability effects.
+        fecundity_mode (AlleleScalingMode): Scaling mode for fecundity effects.
     """
 
     def __init__(
         self,
         name: str,
-        drive_allele: _AlleleSpecifier,
-        target_allele: _AlleleSpecifier,
-        disrupted_allele: _AlleleSpecifier,
-        conversion_rate: _SexSpecificRates = 0.8,
-        embryo_disruption_rate: _SexSpecificRates = 0.0,
-        viability_scaling: _ViabilityScalingConfig = 1.0,
-        fecundity_scaling: _FecundityScalingConfig = 1.0,
-        sexual_selection_scaling: Optional[_SexualSelectionScalingConfig] = None,
-        zygote_viability_scaling: _ZygoteViabilityScalingConfig = 0.0,
-        viability_mode: _AlleleScalingMode = "recessive",
-        fecundity_mode: _AlleleScalingMode = "recessive",
-        sexual_selection_mode: _AlleleScalingMode = "recessive",
-        zygote_viability_mode: _AlleleScalingMode = "recessive",
+        drive_allele: AlleleSpecifier,
+        target_allele: AlleleSpecifier,
+        disrupted_allele: AlleleSpecifier,
+        conversion_rate: SexSpecificRates = 0.8,
+        embryo_disruption_rate: SexSpecificRates = 0.0,
+        viability_scaling: ViabilityScalingConfig = 1.0,
+        fecundity_scaling: FecundityScalingConfig = 1.0,
+        sexual_selection_scaling: Optional[SexualSelectionScalingConfig] = None,
+        zygote_viability_scaling: ZygoteViabilityScalingConfig = 0.0,
+        viability_mode: AlleleScalingMode = "recessive",
+        fecundity_mode: AlleleScalingMode = "recessive",
+        sexual_selection_mode: AlleleScalingMode = "recessive",
+        zygote_viability_mode: AlleleScalingMode = "recessive",
         cas9_deposition_glab: Optional[str] = None,
         species: Optional[Any] = None,
         priority: int = 0,
@@ -111,10 +109,10 @@ class ToxinAntidoteDrive(GeneticPreset):
         self.fecundity_scaling = fecundity_scaling
         self.sexual_selection_scaling = sexual_selection_scaling
         self.zygote_viability_scaling = zygote_viability_scaling
-        self.viability_mode: _AlleleScalingMode = viability_mode
-        self.fecundity_mode: _AlleleScalingMode = fecundity_mode
-        self.sexual_selection_mode: _AlleleScalingMode = sexual_selection_mode
-        self.zygote_viability_mode: _AlleleScalingMode = zygote_viability_mode
+        self.viability_mode: AlleleScalingMode = viability_mode
+        self.fecundity_mode: AlleleScalingMode = fecundity_mode
+        self.sexual_selection_mode: AlleleScalingMode = sexual_selection_mode
+        self.zygote_viability_mode: AlleleScalingMode = zygote_viability_mode
 
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
@@ -123,7 +121,7 @@ class ToxinAntidoteDrive(GeneticPreset):
 
     def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for the disrupted allele."""
-        return _make_fitness_patch_given_allele_scaling(
+        return make_fitness_patch_given_allele_scaling(
             self._str_disrupted_allele,
             self.viability_scaling,
             self.fecundity_scaling,
@@ -150,7 +148,7 @@ class ToxinAntidoteDrive(GeneticPreset):
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Implement target disruption in the germline of drive carriers."""
         def drive_carrier_filter(gt: Genotype) -> bool:
-            return _count_allele_copies(gt, self.drive_allele) > 0
+            return count_allele_copies(gt, self.drive_allele) > 0
 
         rule_set = GameteConversionRuleSet(f"{self.name}_GermlineDisruption")
         for sex in (Sex.FEMALE, Sex.MALE):
@@ -181,7 +179,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoDisruption")
 
         def zygote_has_drive(gt: Genotype) -> bool:
-            return _count_allele_copies(gt, self.drive_allele) > 0
+            return count_allele_copies(gt, self.drive_allele) > 0
 
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = self.embryo_disruption_rate[sex]

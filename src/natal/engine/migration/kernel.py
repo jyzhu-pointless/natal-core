@@ -22,12 +22,12 @@ numba_max_threads = int(get_num_threads())
 __all__ = [
     "apply_spatial_kernel_migration",
     "apply_spatial_kernel_migration_heterogeneous",
-    "_build_kernel_offset_table",
+    "build_kernel_offset_table",
 ]
 
 
 @njit_switch(cache=True)
-def _build_kernel_offset_table(
+def build_kernel_offset_table(
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
 ) -> Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.float64], int, float]:
@@ -375,7 +375,7 @@ def apply_spatial_kernel_migration(
     """Apply one migration step with a single kernel for all demes."""
     n_demes = ind_count_all.shape[0]
 
-    d_row, d_col, w_k, kernel_nnz, kernel_total_sum = _build_kernel_offset_table(
+    d_row, d_col, w_k, kernel_nnz, kernel_total_sum = build_kernel_offset_table(
         migration_kernel=migration_kernel,
         kernel_include_center=kernel_include_center,
     )

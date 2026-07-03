@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 # Global fallback cache for structures created without a Species (backward compatibility)
 # Format: {structure_type: {name: instance}}
-_GLOBAL_STRUCTURE_CACHE: Dict[type, Dict[str, GeneticStructure[Any]]] = {}
+GLOBAL_STRUCTURE_CACHE: Dict[type, Dict[str, GeneticStructure[Any]]] = {}
 
 
 class RegistryBase(ABC, Generic[T]):
@@ -326,10 +326,10 @@ class ChildStructureRegistry(RegistryBase[S]):
         else:
             # Fallback path for backward compatibility with structures not yet
             # bound into a Species context.
-            if expected_type not in _GLOBAL_STRUCTURE_CACHE:
-                _GLOBAL_STRUCTURE_CACHE[expected_type] = {}
+            if expected_type not in GLOBAL_STRUCTURE_CACHE:
+                GLOBAL_STRUCTURE_CACHE[expected_type] = {}
 
-            cache = _GLOBAL_STRUCTURE_CACHE[expected_type]
+            cache = GLOBAL_STRUCTURE_CACHE[expected_type]
             if name in cache:
                 # Return cached instance
                 cached_child = cache[name]

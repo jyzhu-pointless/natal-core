@@ -24,9 +24,13 @@ from natal.utils.types import Age, Sex
 
 # Temporary type alias
 _AlleleSpecifier = Union[Gene, str]
+AlleleSpecifier = _AlleleSpecifier
 _SexSpecifier = Union[Sex, int, str]
+SexSpecifier = _SexSpecifier
 _SexSpecificRates = Union[float, Tuple[float, float], Dict[_SexSpecifier, float]]
+SexSpecificRates = _SexSpecificRates
 _AlleleScalingMode = Literal["multiplicative", "dominant", "recessive", "custom"]
+AlleleScalingMode = _AlleleScalingMode
 
 # Defines how a specific allele scales fitness
 # e.g., if "Dr" allele has viability_scaling = 0.8, then:
@@ -52,6 +56,8 @@ _ViabilityScalingConfig = Union[
         Union[float, Tuple[float, float], Dict[Age, Union[float, Tuple[float, float]]]],
     ],
 ]
+ViabilityScalingConfig = _ViabilityScalingConfig
+
 # Fecundity patch config for one allele key.
 # Supported shapes:
 # 1) float
@@ -62,6 +68,8 @@ _FecundityScalingConfig = Union[
     Tuple[float, float],
     Dict[_SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
 ]
+FecundityScalingConfig = _FecundityScalingConfig
+
 # Sexual-selection patch config for one allele key.
 # float: copy-number based scaling (by mode)
 # tuple(default, carrier): binary carrier rule
@@ -69,6 +77,7 @@ _SexualSelectionScalingConfig = Union[
     float,                        # applies to all female genotypes
     Tuple[float, float]           # (male selected by default, male selected by allele carriers)
 ]
+SexualSelectionScalingConfig = _SexualSelectionScalingConfig
 
 # Zygote patch config for one allele key.
 # Supported shapes:
@@ -80,6 +89,7 @@ _ZygoteViabilityScalingConfig = Union[
     Tuple[float, float],
     Dict[_SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
 ]
+ZygoteViabilityScalingConfig = _ZygoteViabilityScalingConfig
 
 PresetFitnessPatch = Dict[str, Any]
 

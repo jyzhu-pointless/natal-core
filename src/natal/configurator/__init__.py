@@ -10,9 +10,9 @@ from natal.configurator._base import (
     merge_hooks,
     set_param,
 )
+from natal.configurator._builder_age import AgeStructuredPopulationBuilder
+from natal.configurator._builder_discrete import DiscreteGenerationPopulationBuilder
 from natal.configurator._factory import (
-    AgeStructuredPopulationBuilder,
-    DiscreteGenerationPopulationBuilder,
     PopulationConfigBuilder,
 )
 from natal.configurator.age_structured import AgeStructuredConfigurator

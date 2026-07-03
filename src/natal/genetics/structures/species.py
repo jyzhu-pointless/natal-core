@@ -69,8 +69,8 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
     """
     child_structure_type = Chromosome  # Species contains Chromosomes as children
     child_structures: ChildStructureRegistry[Chromosome]
-    _sex_chromosome_groups: Optional[Dict[str, List[Chromosome]]]
-    _valid_sex_genotypes: Optional[List[Tuple[Chromosome, Chromosome]]]
+    sex_chromosome_groups: Optional[Dict[str, List[Chromosome]]]
+    valid_sex_genotypes: Optional[List[Tuple[Chromosome, Chromosome]]]
 
     def __init__(
         self,
@@ -121,7 +121,7 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
             self._somatic_labels: List[str] = []
 
         # Cached configuration blueprint — built lazily on first access
-        self._config_blueprint: Optional[SpeciesConfigBlueprint] = None
+        self.config_blueprint: Optional[SpeciesConfigBlueprint] = None
 
     @property
     def gamete_labels(self) -> List[str]:
@@ -240,11 +240,11 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
     @property
     def gene_index(self) -> Dict[str, Gene]:
         """Returns a mapping from gene names to gene instances."""
-        return self._build_gene_index()
+        return self.build_gene_index()
 
-    def _build_sex_chromosome_groups(self) -> Dict[str, List[Chromosome]]:
+    def build_sex_chromosome_groups(self) -> Dict[str, List[Chromosome]]:
         """
-        Automatically build _sex_chromosome_groups from Chromosome.sex_type.
+        Automatically build sex_chromosome_groups from Chromosome.sex_type.
 
         Returns:
             Sex chromosome group dictionary, keys are system names like 'XY' or 'ZW'
@@ -258,7 +258,7 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
                 groups[system].append(chrom)
         return groups
 
-    def _build_valid_sex_genotypes(self) -> List[Tuple[Chromosome, Chromosome]]:
+    def build_valid_sex_genotypes(self) -> List[Tuple[Chromosome, Chromosome]]:
         """
         Automatically infer valid sex chromosome genotype combinations from Chromosome.sex_type.
 
@@ -427,10 +427,9 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
             ValueError: If duplicate gene names exist in the species.
         """
         try:
-            gene_index = self._build_gene_index()
+            gene_index = self.build_gene_index()
             return gene_index.get(name)
         except ValueError:
-            # Re-raise the duplicate gene error
             raise
 
     def has_gene(self, name: str) -> bool:
@@ -447,10 +446,9 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
             ValueError: If duplicate gene names exist in the species.
         """
         try:
-            gene_index = self._build_gene_index()
+            gene_index = self.build_gene_index()
             return name in gene_index
         except ValueError:
-            # Re-raise the duplicate gene error
             raise
 
     # Alias for backward compatibility
@@ -458,7 +456,7 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
         """Alias for get_chromosome (backward compatibility)."""
         return self.get_chromosome(name)
 
-    def _build_gene_index(self) -> Dict[str, Gene]:
+    def build_gene_index(self) -> Dict[str, Gene]:
         """
         Build a lookup index from gene name to Gene object.
 
@@ -512,7 +510,7 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
             somatic_labels: Optional[List[str]] = None,
         ) -> Species: ...
 
-        def _parse_haplotype_segment_str(
+        def parse_haplotype_segment_str(
             self, hap_str: str, gene_index: Dict[str, Gene]
         ) -> Tuple[Chromosome, List[Gene]]: ...
 
@@ -520,17 +518,16 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
         def get_haploid_genotype_from_str(self, haplotype_str: str) -> HaploidGenome: ...
         def get_genotype_from_str(self, genotype_str: str) -> Genotype: ...
 
-        def _get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]: ...
         def get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]: ...
-        def _get_valid_sex_genotypes(self) -> Optional[List[Tuple[Chromosome, Chromosome]]]: ...
+        def get_valid_sex_genotypes(self) -> Optional[List[Tuple[Chromosome, Chromosome]]]: ...
         def count_alleles(self) -> int: ...
         def count_haploid_genotypes(self) -> int: ...
         def count_genotypes(self) -> int: ...
-        def _get_sex_chromosome(
+        def get_sex_chromosome(
             self, haploid_genome: HaploidGenome, sex_chr_groups: Dict[str, List[Chromosome]]
         ) -> Optional[Chromosome]: ...
         def iter_haploid_genotypes(self) -> Iterable[HaploidGenome]: ...
-        def _iter_haploid_genotypes_for_parent(self, is_paternal: bool) -> Iterable[HaploidGenome]: ...
+        def iter_haploid_genotypes_for_parent(self, is_paternal: bool) -> Iterable[HaploidGenome]: ...
         def iter_maternal_haploid_genotypes(self) -> Iterable[HaploidGenome]: ...
         def iter_paternal_haploid_genotypes(self) -> Iterable[HaploidGenome]: ...
         def iter_genotypes(self, unordered: bool = False) -> Iterable[Genotype]: ...
@@ -542,7 +539,7 @@ class Species(GeneticStructure['HaploidGenome']):  # pyright: ignore[reportUndef
         ) -> List[HaploidGenome]: ...
         def get_all_genotypes(self, unordered: bool = False) -> List[Genotype]: ...
 
-        def _resolve_single_genotype_selector(
+        def resolve_single_genotype_selector(
             self, selector: Union[Genotype, str],
             all_genotypes: Optional[Iterable[Genotype]] = None,
             context: str = 'selector',

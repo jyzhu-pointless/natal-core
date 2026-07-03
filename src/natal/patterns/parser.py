@@ -450,7 +450,7 @@ class GenotypePatternParser:
             # Split by semicolon to get loci from all chromosomes
             chr_strs = [s.strip() for s in pattern_str.split(";") if s.strip()]
 
-            all_locus_patterns: List[PatternElement] = []  # noqa: F821
+            all_locus_patterns: List[PatternElement] = []
             for chr_str in chr_strs:
                 subbandloci = chr_str.split("/")
                 for locus_str in subbandloci:
