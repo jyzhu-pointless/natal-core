@@ -105,7 +105,7 @@ class Genotype:
         )
 
         if species.unordered:
-            from ..structures.species_maps import (  # noqa: E402
+            from ..structures._helpers import (  # noqa: E402
                 canonical_haploid_pair,
             )
             mat, pat = canonical_haploid_pair(species, maternal, paternal)

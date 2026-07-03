@@ -16,20 +16,12 @@ from .entities.haplotype import (
     create_chromosome_from_allele_names,
     create_haplotype_from_allele_names,
 )
-
-# Import species extension modules to trigger monkey-patching of methods onto Species
-from .structures import (
-    species_dict,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-    species_iteration,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-    species_maps,  # noqa: F401  # pyright: ignore[reportUnusedImport] — triggers Species method attachment
-    species_pattern,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-)
+from .structures._helpers import build_compression_mask
 from .structures._types import SexChromosomeType
 from .structures.chromosome import Chromosome
 from .structures.chromosome_map import RecombinationMap
 from .structures.locus import Locus
 from .structures.species import Species, SpeciesConfigBlueprint
-from .structures.species_maps import build_compression_mask
 
 # Module-level aliases (backward compatibility)
 Allele = Gene
