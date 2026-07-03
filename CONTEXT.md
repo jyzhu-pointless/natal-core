@@ -176,7 +176,10 @@ hooks → engine → population
 
 ## 后续重构（待办）
 
-- `population/base.py` 🔴 — BasePopulation ABC 职责过多，混杂 Hook 管理、历史记录、事件派发
+- `population/base.py` 🔴 — BasePopulation ABC 需深度重构：
+  - 大量用不上的逻辑（Hook 程序构建、编译缓存管理）
+  - 与子类（AgeStructuredPopulation / DiscreteGenerationPopulation）边界模糊，很多逻辑下沉到了子类构造函数，但 ABC 仍持有不属于基类的状态
+  - Hook 管理、历史记录、事件派发均混杂在 ABC 中，建议拆分为 mixin，核心 ABC 只保留生命周期契约
 - `spatial/population.py` + `spatial/configurator.py` 🔴 — 均超 1,600 行，需拆分
 - `engine/simulation/age_structured.py` 🔴 — 1,342 行，按生命周期阶段拆分
 - `fitness/` 🔴 — 从 presets + configurator 提取适应度逻辑
