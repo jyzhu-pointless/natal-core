@@ -7,8 +7,8 @@ import json
 import numpy as np
 
 import natal as nt
-from natal.population_state import DiscretePopulationState, PopulationState
-from natal.state_translation import (
+from natal.data import DiscretePopulationState, PopulationState
+from natal.output.translation import (
     discrete_population_state_to_dict,
     discrete_population_state_to_json,
     output_current_state,
@@ -23,7 +23,7 @@ from natal.state_translation import (
     spatial_population_to_observation_dict,
     spatial_population_to_readable_dict,
 )
-from natal.spatial_population import SpatialPopulation
+from natal.spatial.population import SpatialPopulation
 
 
 def test_population_state_to_dict_includes_sperm_storage_and_drops_zeros() -> None:

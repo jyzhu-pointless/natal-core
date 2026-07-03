@@ -12,8 +12,8 @@ import time
 import numpy as np
 
 import natal as nt
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import HexGrid, build_gaussian_kernel
+from natal.spatial.population import SpatialPopulation
+from natal.spatial.topology import HexGrid, build_gaussian_kernel
 
 MAP_SIZE: int = 501
 
@@ -24,7 +24,7 @@ def build_hex_kernel(
 ) -> np.ndarray:
     """Build a normalized Gaussian migration kernel for hex grid.
 
-    Thin wrapper around :func:`natal.spatial_topology.build_gaussian_kernel`
+    Thin wrapper around :func:`natal.spatial.topology.build_gaussian_kernel`
     with a hex-grid topology. See that function for the full implementation
     and parameter details. ``sigma`` and ``mean_dispersal`` are mutually
     exclusive; defaults to ``sigma=1.0`` when neither is given.

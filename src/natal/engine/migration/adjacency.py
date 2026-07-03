@@ -19,8 +19,8 @@ except ImportError:
 
     numba_max_threads = 1
 
-from natal import numba_compat as nbc
-from natal.numba_utils import njit_switch
+from natal.numba import compat as nbc
+from natal.numba.utils import njit_switch
 
 __all__ = [
     "apply_spatial_adjacency_mode",

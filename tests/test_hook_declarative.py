@@ -15,7 +15,7 @@ from natal.hooks.entry.declarative import (
     compile_declarative_hook,
 )
 from natal.hooks.types import HookOp, OpType
-from natal.index_registry import IndexRegistry
+from natal.registry.index import IndexRegistry
 
 # ══════════════════════════════════════════════════════════════════════════
 # TestOpFactories
@@ -156,7 +156,7 @@ class TestResolveGenotypes:
 
     def test_unknown_string_raises(self, registry_with_genotypes):
         reg = registry_with_genotypes
-        from natal.genetic_patterns import PatternParseError
+        from natal.patterns import PatternParseError
         with pytest.raises(PatternParseError):
             _resolve_genotypes("UNKNOWN", reg, reg.index_to_genotype[0].species, reg.num_genotypes())
 

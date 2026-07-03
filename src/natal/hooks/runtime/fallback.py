@@ -29,7 +29,7 @@ from ..types import (
 from .csr_kernel import deme_selector_matches, execute_csr_event_arrays
 
 if TYPE_CHECKING:
-    from natal.base_population import BasePopulation
+    from natal.population.base import BasePopulation
 
 
 class HookExecutor:
@@ -115,7 +115,7 @@ class HookExecutor:
             getattr(getattr(population, "_config", None), "continuous_sampling", False)
         )
 
-        from natal.numba_utils import NUMBA_ENABLED
+        from natal.numba.utils import NUMBA_ENABLED
 
         for desc in self.hooks_by_event.get(event_id, []):
             if not deme_selector_matches(desc.deme_selector, deme_id):

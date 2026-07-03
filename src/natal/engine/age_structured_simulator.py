@@ -6,7 +6,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal.engine.simulation.age_structured as alg
-import natal.numba_compat as nbc
+from natal.data import (
+    FIXED,
+    LOGISTIC,
+    NO_COMPETITION,
+    PopulationConfig,
+    PopulationState,
+)
 from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import (
     EVENT_EARLY,
@@ -16,14 +22,13 @@ from natal.hooks.types import (
     RESULT_STOP,
     HookProgram,
 )
-from natal.numba_compat import binomial
-from natal.numba_utils import njit_switch
-from natal.observation_record import build_observation_row_panmictic
-from natal.population_config import FIXED, LOGISTIC, NO_COMPETITION, PopulationConfig
-from natal.population_state import PopulationState
+from natal.numba import compat as nbc
+from natal.numba.compat import binomial
+from natal.numba.utils import njit_switch
+from natal.output.record import build_observation_row_panmictic
 
 if TYPE_CHECKING:
-    from natal.age_structured_population import AgeStructuredPopulation
+    from natal.population.age_structured import AgeStructuredPopulation
 
 __all__ = [
     # No user-facing API for now

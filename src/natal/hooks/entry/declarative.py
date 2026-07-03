@@ -18,7 +18,9 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.genetic_patterns import resolve_zygote_type as _resolve_zygote_type
+from natal.genetics import Species
+from natal.patterns import resolve_zygote_type as _resolve_zygote_type
+from natal.registry.index import IndexRegistry
 
 from ..types import (
     COND_ALWAYS,
@@ -39,9 +41,8 @@ from ..types import (
 )
 
 if TYPE_CHECKING:
-    from natal.base_population import BasePopulation
-    from natal.genetic_structures import Species
-    from natal.index_registry import IndexRegistry
+    from natal.population.base import BasePopulation
+
 
 class Op:
     """Factory helpers for building declarative operations.
@@ -310,7 +311,7 @@ def _resolve_genotypes(
     return np.array(indices, dtype=np.int32)
 
 
-# _resolve_zygote_type is imported from natal.genetic_patterns
+# _resolve_zygote_type is imported from natal.patterns
 
 
 def _resolve_ages(selector: Union[int, List[int], range, Literal["*"]], n_ages: int) -> np.ndarray:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import natal as nt
 import pytest
 from natal.hooks import Op, hook
-from natal.spatial_population import SpatialPopulation
+from natal.spatial.population import SpatialPopulation
 
 
 def _build_discrete_pop(species: nt.Species, name: str) -> nt.DiscreteGenerationPopulation:

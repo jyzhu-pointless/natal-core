@@ -12,9 +12,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.spatial_configurator import batch_setting
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import (
+from natal.spatial.configurator import batch_setting
+from natal.spatial.population import SpatialPopulation
+from natal.spatial.topology import (
     SquareGrid,
     build_adjacency_matrix,
 )

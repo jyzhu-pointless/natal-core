@@ -14,12 +14,15 @@ from .dashboard import (
     launch_population,
     launch_spatial,
 )
+from .visualization import get_allele_color, render_cell_svg
 
 __all__ = [
     "Dashboard",
     "PopulationDashboard",
     "SpatialDashboard",
+    "get_allele_color",
     "launch",
     "launch_population",
     "launch_spatial",
+    "render_cell_svg",
 ]

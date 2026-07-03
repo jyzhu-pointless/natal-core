@@ -12,8 +12,8 @@ from typing import Annotated, Any, Optional, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-from natal import numba_compat as nbc
-from natal.numba_utils import njit_switch
+from natal.numba import compat as nbc
+from natal.numba.utils import njit_switch
 
 # ============================================================================
 # Continuous distribution helper functions (for continuous_sampling=True)
@@ -1113,7 +1113,7 @@ def sync_equilibrium_metrics(config: Any) -> None:
         config: ``PopulationConfig`` or ``DiscretePopulationConfig`` whose
             equilibrium fields will be updated in-place.
     """
-    from natal.population_config import DiscretePopulationConfig
+    from natal.data import DiscretePopulationConfig
 
     if isinstance(config, DiscretePopulationConfig):
         # Discrete config stores survival/mating/reproduction as scalars

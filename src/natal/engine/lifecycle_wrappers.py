@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
-import natal.numba_utils as _numba_utils
+import natal.numba.utils as _numba_utils
 from natal.hooks.compile.codegen import (
     build_filtered_hook_program,
     compile_combined_hook,

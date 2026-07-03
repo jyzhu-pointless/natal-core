@@ -7,9 +7,9 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from natal.base_population import BasePopulation
-from natal.genetic_structures import Species
-from natal.spatial_population import SpatialPopulation
+from natal.population.base import BasePopulation
+from natal.genetics import Species
+from natal.spatial.population import SpatialPopulation
 
 
 class _DummyDemePopulation(BasePopulation):

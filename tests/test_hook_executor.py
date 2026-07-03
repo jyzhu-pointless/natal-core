@@ -30,7 +30,7 @@ from natal.hooks import (
 )
 from natal.hooks.entry.declarative import compile_declarative_hook
 from natal.hooks.types import CompiledHookPlan
-from natal.numba_utils import numba_disabled
+from natal.numba.utils import numba_disabled
 
 
 # ---------------------------------------------------------------------------

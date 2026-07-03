@@ -19,7 +19,7 @@ from natal.hooks.entry.declarative import (
     compile_declarative_hook,
 )
 from natal.hooks.entry.selector import _resolve_selector_to_array
-from natal.index_registry import IndexRegistry
+from natal.registry.index import IndexRegistry
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 

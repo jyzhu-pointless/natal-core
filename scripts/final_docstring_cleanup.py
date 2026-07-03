@@ -167,7 +167,7 @@ def process_other_files():
         'base_population.py',
         'genetic_entities.py',
         'numba_compat.py',
-        'index_registry.py',
+        'registry/index.py',
         'modifiers.py',
         'population_builder.py',
         'population_config.py',

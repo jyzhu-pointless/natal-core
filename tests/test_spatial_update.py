@@ -3,7 +3,7 @@
 import pytest
 
 import natal as nt
-from natal.spatial_configurator import batch_setting
+from natal.spatial.configurator import batch_setting
 
 
 @pytest.fixture(scope="module")

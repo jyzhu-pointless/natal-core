@@ -90,7 +90,7 @@ class TestBuilderCustomFields:
 
     def test_custom_accessible_in_numba(self):
         """Custom fields can be read and mutated from @njit functions."""
-        from natal.numba_utils import njit_switch
+        from natal.numba.utils import njit_switch
 
         pop = _build({"temperature": 25.0, "threshold": 100.0})
 

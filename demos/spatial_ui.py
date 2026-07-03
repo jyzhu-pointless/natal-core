@@ -9,9 +9,9 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
-from natal.spatial_configurator import batch_setting
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import SquareGrid
+from natal.spatial.configurator import batch_setting
+from natal.spatial.population import SpatialPopulation
+from natal.spatial.topology import SquareGrid
 from natal.ui import launch
 
 

@@ -5,7 +5,7 @@
 
 from typing import Callable
 
-from natal.numba_utils import njit_switch
+from natal.numba.utils import njit_switch
 
 # Njit function placeholders — generated at codegen time.
 # PLACEHOLDER_FN_DECLARATIONS (replaced with _FN_0, _FN_1, ... type-stub lines)

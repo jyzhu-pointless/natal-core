@@ -28,7 +28,7 @@ from typing import (
 
 import numpy as np
 
-from natal.numba_utils import get_numba_cache_dir
+from natal.numba.utils import get_numba_cache_dir
 
 if TYPE_CHECKING:
     pass
@@ -129,14 +129,14 @@ def _is_numba_dispatcher(fn: Callable[..., object]) -> bool:
 
 
 def _validate_numba_hook_required(fn: Callable[..., object], hook_name: str, reason: str) -> None:
-    from ..numba_utils import NUMBA_ENABLED
+    from ..numba.utils import NUMBA_ENABLED
 
     if NUMBA_ENABLED and not _is_numba_dispatcher(fn):
         raise TypeError(
             f"{hook_name} must be an @njit function when Numba is enabled due to {reason}. "
             f"Got {type(fn).__name__}. "
             "Either decorate with @njit or temporarily disable Numba using: "
-            "from natal.numba_utils import numba_disabled; with numba_disabled(): ..."
+            "from natal.numba.utils import numba_disabled; with numba_disabled(): ..."
         )
 
 

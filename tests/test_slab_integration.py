@@ -408,7 +408,7 @@ class TestNSlabsFullRepair:
         sp = nt.Species.from_dict("xy_test", {
             "X": {"sex_type": "X", "loci": {"lx": ["XA", "Xa"]}},
             "Y": {"sex_type": "Y", "loci": {"ly": ["YB"]}},
-        })
+        }, unordered=False)
         assert sp.unordered is False
         # Ordered genotype enumeration preserves maternal/paternal distinction
         ordered = sp.get_all_genotypes(unordered=False)

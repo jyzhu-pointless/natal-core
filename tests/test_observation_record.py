@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.observation_record import (
+from natal.output.record import (
     CompactMeta,
     build_compact_metadata,
     build_observation_row_panmictic,

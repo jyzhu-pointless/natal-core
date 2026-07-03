@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 import pytest
 
 import natal as nt
-from natal.population_builder import PopulationConfigBuilder
+from natal.configurator import PopulationConfigBuilder
 
 
 def _make_species(name: str = "TestSp") -> nt.Species:
@@ -217,7 +217,7 @@ class TestCarryingCapacityResolution:
         )
 
         from natal.engine.simulation.age_structured import compute_equilibrium_metrics
-        from natal.population_config import build_population_config
+        from natal.data import build_population_config
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=K,

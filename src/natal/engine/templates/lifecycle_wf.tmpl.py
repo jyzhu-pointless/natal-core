@@ -19,6 +19,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from natal.data import DiscretePopulationConfig, DiscretePopulationState
 from natal.engine.simulation.discrete_generation import run_wf_tick
 from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import (
@@ -27,9 +28,7 @@ from natal.hooks.types import (
     RESULT_STOP,
     HookProgram,
 )
-from natal.numba_utils import njit_switch
-from natal.population_config import DiscretePopulationConfig
-from natal.population_state import DiscretePopulationState
+from natal.numba.utils import njit_switch
 
 
 def _default_hook(

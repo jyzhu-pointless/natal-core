@@ -5,7 +5,7 @@ import pytest
 
 import natal as nt
 from natal.configurator import Configurator, set_param
-from natal.population_config import build_population_config
+from natal.data import build_population_config
 
 
 @pytest.fixture(scope="module")
@@ -233,7 +233,7 @@ class TestUpdateWriteBack:
 
     def test_presets_mutation_persists(self, simple_species):
         """pop.update().presets(drive) must change pop.config maps."""
-        from natal.genetic_presets import HomingDrive
+        from natal.presets import HomingDrive
 
         pop = (
             Configurator.from_species(simple_species)
@@ -356,7 +356,7 @@ class TestCustomFields:
 
 class TestLegacyBuilder:
     def test_discrete_builder_unchanged(self, species):
-        from natal.population_builder import DiscreteGenerationPopulationBuilder
+        from natal.configurator import DiscreteGenerationPopulationBuilder
 
         pop = (
             DiscreteGenerationPopulationBuilder(species)
@@ -371,7 +371,7 @@ class TestLegacyBuilder:
         assert pop.config.carrying_capacity[()] == 10000.0
 
     def test_legacy_builder_update_works(self, species):
-        from natal.population_builder import DiscreteGenerationPopulationBuilder
+        from natal.configurator import DiscreteGenerationPopulationBuilder
 
         pop = (
             DiscreteGenerationPopulationBuilder(species)
@@ -460,7 +460,7 @@ class TestHooks:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# _merge_hooks warning
+# merge_hooks warning
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -468,11 +468,11 @@ class TestMergeHooks:
     def test_unsupported_type_warns(self):
         import warnings
 
-        from natal.configurator import _merge_hooks
+        from natal.configurator import merge_hooks
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            _merge_hooks(["not_a_hook"])  # type: ignore[arg-type]
+            merge_hooks(["not_a_hook"])  # type: ignore[arg-type]
         assert len(w) == 1
         assert "unsupported hook item" in str(w[0].message).lower()
         assert "str" in str(w[0].message)
@@ -672,7 +672,7 @@ class TestFitnessFormats:
 class TestFromSpeciesDiscrete:
     def test_returns_discrete_configurator(self, species):
         from natal.configurator import DiscreteConfigurator
-        from natal.population_config import DiscretePopulationConfig
+        from natal.data import DiscretePopulationConfig
 
         cfg = Configurator.from_species(species, discrete=True)
         assert isinstance(cfg, DiscreteConfigurator)
@@ -779,7 +779,7 @@ class TestModifiersCombined:
 
 class TestReconfigurePreset:
     def test_reconfigure_updates_viability(self, fitness_species):
-        from natal.genetic_presets import HomingDrive
+        from natal.presets import HomingDrive
 
         pop = (
             Configurator.from_species(fitness_species)
@@ -891,7 +891,7 @@ class TestRuntimeErrorGuards:
 
     def test_presets_without_species_raises(self, minimal_config):
         """presets() must raise RuntimeError without Species."""
-        from natal.genetic_presets import HomingDrive
+        from natal.presets import HomingDrive
 
         cfg = Configurator.for_config(minimal_config)
         drive = HomingDrive(
@@ -1001,21 +1001,21 @@ class TestHookSetParam:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# _merge_hooks — advanced paths
+# merge_hooks — advanced paths
 # ══════════════════════════════════════════════════════════════════════════
 
 
 class TestMergeHooksAdvanced:
-    """Verify _merge_hooks handles dict registrations and edge cases."""
+    """Verify merge_hooks handles dict registrations and edge cases."""
 
     def test_merge_raw_dict_items(self):
         """Merging raw {event: [(func, name, priority), ...]} dicts."""
-        from natal.configurator import _merge_hooks
+        from natal.configurator import merge_hooks
 
         def dummy_hook(state, config, _deme_id):
             return 0
 
-        hook_map = _merge_hooks([
+        hook_map = merge_hooks([
             {"early": [(dummy_hook, "my_hook", 10)]},
         ])
         assert "early" in hook_map
@@ -1023,7 +1023,7 @@ class TestMergeHooksAdvanced:
 
     def test_merge_multiple_dicts_same_event(self):
         """Multiple items registered to same event are merged (not overwritten)."""
-        from natal.configurator import _merge_hooks
+        from natal.configurator import merge_hooks
 
         def hook_a(state, config, _deme_id):
             return 0
@@ -1031,7 +1031,7 @@ class TestMergeHooksAdvanced:
         def hook_b(state, config, _deme_id):
             return 0
 
-        hook_map = _merge_hooks([
+        hook_map = merge_hooks([
             {"early": [(hook_a, "a", 5)]},
             {"early": [(hook_b, "b", 10)]},
         ])
@@ -1041,14 +1041,14 @@ class TestMergeHooksAdvanced:
         """Callable without @hook decorator triggers a warning."""
         import warnings
 
-        from natal.configurator import _merge_hooks
+        from natal.configurator import merge_hooks
 
         def unmarked_hook():
             pass
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            _merge_hooks([unmarked_hook])
+            merge_hooks([unmarked_hook])
         assert any("event metadata" in str(x.message).lower() for x in w)
 
 

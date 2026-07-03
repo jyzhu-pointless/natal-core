@@ -21,13 +21,12 @@ from natal._hook_codegen_PANMICTIC_STEM import (  # type: ignore[reportMissingIm
 )
 from numba import prange  # type: ignore[reportMissingTypeStubs]
 
+from natal.data import PopulationConfig, PopulationState
 from natal.engine.spatial_migrator import run_spatial_migration
 from natal.hooks.types import RESULT_CONTINUE, HookProgram
-from natal.numba_utils import njit_switch
-from natal.observation_record import CompactMeta, build_observation_row_spatial
-from natal.population_config import PopulationConfig
-from natal.population_state import PopulationState
-from natal.spatial_topology import (
+from natal.numba.utils import njit_switch
+from natal.output.record import CompactMeta, build_observation_row_spatial
+from natal.spatial.topology import (
     HeterogeneousKernelParams,
     MigrationParams,
     SpatialTopology,

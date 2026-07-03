@@ -16,15 +16,15 @@ try:
 except ImportError:
     prange = range  # type: ignore[assignment]
 
+from natal.data import PopulationConfig
 from natal.engine.age_structured_simulator import (
     run_aging,
     run_reproduction_with_precomputed_offspring_probability,
     run_survival,
 )
 from natal.engine.spatial_migrator import run_spatial_migration
-from natal.numba_utils import njit_switch
-from natal.observation_record import CompactMeta, build_observation_row_spatial
-from natal.population_config import PopulationConfig
+from natal.numba.utils import njit_switch
+from natal.output.record import CompactMeta, build_observation_row_spatial
 
 __all__ = [
     # No user-facing API for now

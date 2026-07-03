@@ -3,9 +3,9 @@
 import pytest  # type: ignore
 
 import natal as nt
-from natal.genetic_structures import SexChromosomeType
-from natal.population_config import extract_gamete_frequencies, initialize_gamete_map
-from natal.type_def import Sex
+from natal.genetics import SexChromosomeType
+from natal.data import extract_gamete_frequencies, initialize_gamete_map
+from natal.utils.types import Sex
 
 
 class TestSexChromosomeType:
@@ -108,7 +108,7 @@ class TestSpeciesFromDict:
         assert sp.gamete_labels == []
 
     def test_invalid_spec_type_raises(self):
-        with pytest.raises(AssertionError):  # type: ignore
+        with pytest.raises(ValueError, match="Invalid loci specification"):
             nt.Species.from_dict(
                 name="S_bad",
                 structure={"chr1": 42},  # type: ignore[arg-type]

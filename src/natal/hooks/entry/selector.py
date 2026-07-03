@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.genetic_patterns import resolve_zygote_type as _resolve_zygote_type
+from natal.data import PopulationConfig, PopulationState
+from natal.genetics import Genotype, Species
+from natal.patterns import resolve_zygote_type as _resolve_zygote_type
+from natal.registry.index import IndexRegistry
 
 from ..types import (
     CompiledHookDescriptor,
@@ -37,19 +40,13 @@ def _read_template(name: str) -> str:
     return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
 
 if TYPE_CHECKING:
-    from natal.base_population import BasePopulation
-    from natal.genetic_entities import Genotype
-    from natal.genetic_structures import Species
-    from natal.index_registry import IndexRegistry
-    from natal.population_config import PopulationConfig
-    from natal.population_state import PopulationState
-
+    from natal.population.base import BasePopulation
 
 SelectorItem: TypeAlias = Union[int, str, "Genotype"]
 SelectorSpec: TypeAlias = Union[SelectorItem, range, List[SelectorItem], tuple[SelectorItem, ...]]
 
 
-# _resolve_zygote_type is imported from natal.genetic_patterns
+# _resolve_zygote_type is imported from natal.patterns
 
 
 def _resolve_selector_to_array(
@@ -132,7 +129,7 @@ def compile_selector_hook(
         "n_ages": pop.config.n_ages,
     }
 
-    from ...numba_utils import NUMBA_ENABLED
+    from ...numba.utils import NUMBA_ENABLED
 
     is_njit_fn = is_numba_dispatcher(func)
 
@@ -159,7 +156,7 @@ def compile_selector_hook(
         nt_param_name = extra_params[0].name if use_namedtuple else "sel"
 
     # Determine state type for the generated wrapper's type annotation.
-    from natal.discrete_generation_population import DiscreteGenerationPopulation
+    from natal.population.discrete_generation import DiscreteGenerationPopulation
     if isinstance(pop, DiscreteGenerationPopulation):
         state_type_name = "DiscretePopulationState"
     else:

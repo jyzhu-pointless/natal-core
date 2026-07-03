@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from natal.spatial_topology import HexGrid, SquareGrid
+from natal.spatial.topology import HexGrid, SquareGrid
 from natal.ui.spatial_dashboard import SpatialDashboard
 
 

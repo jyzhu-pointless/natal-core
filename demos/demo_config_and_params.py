@@ -17,8 +17,7 @@ from __future__ import annotations
 
 import natal as nt
 from natal.configurator import hook_set_param, set_param
-from natal.population_config import CONCAVE, DiscretePopulationConfig
-from natal.population_state import DiscretePopulationState
+from natal.data import CONCAVE, DiscretePopulationConfig, DiscretePopulationState
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 0. 准备 Species

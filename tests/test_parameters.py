@@ -6,13 +6,13 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from natal.parameters import (
+from natal.utils.parameters import (
     ALL_PARAMETERS,
     PARAM_IDS,
     PARAMETERS_BY_DOMAIN,
     ParamDescriptor,
 )
-from natal.population_config import PopulationConfig
+from natal.data import PopulationConfig
 
 
 class TestParamDescriptor:

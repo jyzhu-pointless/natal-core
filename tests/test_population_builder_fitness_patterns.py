@@ -4,9 +4,9 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-from natal.genetic_structures import Species
-from natal.helpers import resolve_sex_label
-from natal.population_builder import AgeStructuredPopulationBuilder
+from natal.genetics import Species
+from natal.utils.helpers import resolve_sex_label
+from natal.configurator import AgeStructuredPopulationBuilder
 
 
 def _make_simple_species() -> Species:
@@ -170,8 +170,8 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
             sexual_selection={"A|a": {"a|A": 0.33}},
         )
 
-        with patch("natal.population_builder.PopulationConfigBuilder.build", return_value=fake_config):
-            with patch("natal.age_structured_population.AgeStructuredPopulation", _FakePopulation):
+        with patch("natal.configurator._factory.PopulationConfigBuilder.build", return_value=fake_config):
+            with patch("natal.population.age_structured.AgeStructuredPopulation", _FakePopulation):
                 pop = builder.build()
 
         self.assertIsNotNone(pop)
@@ -253,8 +253,8 @@ class TestPopulationBuilderFitnessPatterns(unittest.TestCase):
             }
         )
 
-        with patch("natal.population_builder.PopulationConfigBuilder.build", return_value=fake_config):
-            with patch("natal.age_structured_population.AgeStructuredPopulation", _FakePopulation):
+        with patch("natal.configurator._factory.PopulationConfigBuilder.build", return_value=fake_config):
+            with patch("natal.population.age_structured.AgeStructuredPopulation", _FakePopulation):
                 pop = builder.build()
 
         self.assertIsNotNone(pop)

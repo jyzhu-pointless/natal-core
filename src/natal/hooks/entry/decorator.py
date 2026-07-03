@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol,
 
 from natal.hooks.entry.declarative import compile_declarative_hook
 from natal.hooks.entry.selector import compile_selector_hook
-from natal.numba_utils import njit_switch
+from natal.numba.utils import njit_switch
 
 from ..types import (
     CompiledHookDescriptor,
@@ -30,9 +30,8 @@ from ..types import (
 from .declarative import HookOp
 
 if TYPE_CHECKING:
-    from natal.base_population import BasePopulation
-    from natal.population_config import PopulationConfig
-    from natal.population_state import PopulationState
+    from natal.data import PopulationConfig, PopulationState
+    from natal.population.base import BasePopulation
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +292,7 @@ def hook(
             Returns:
                 A ``CompiledHookDescriptor`` registered on *pop*.
             """
-            from ...numba_utils import NUMBA_ENABLED
+            from ...numba.utils import NUMBA_ENABLED
             from ..types import CompiledHookDescriptor
 
             actual_event = event_override or event

@@ -44,7 +44,7 @@ from natal.engine.simulation.age_structured import (
     sample_mating,
     sample_survival_with_sperm_storage,
 )
-from natal.numba_utils import numba_disabled
+from natal.numba.utils import numba_disabled
 
 # ===========================================================================
 # compute_equilibrium_metrics
