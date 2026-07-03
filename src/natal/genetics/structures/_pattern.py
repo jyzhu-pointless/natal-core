@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-# pyright: reportGeneralTypeIssues=false
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -11,19 +10,22 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    cast,
 )
 
 if TYPE_CHECKING:
     from ..entities.genotype import Genotype
     from ..entities.haplotype import HaploidGenome
     from .species import Species
+else:
+    Species = object  # runtime stand-in for cast()
 
 
 class SpeciesPatternMixin:
     """Pattern matching and resolution methods for Species."""
 
     def resolve_single_genotype_selector(
-        self: Species,
+        self,
         selector: Union[Genotype, str],
         all_genotypes: Optional[Iterable[Genotype]] = None,
         context: str = 'selector'
@@ -35,6 +37,7 @@ class SpeciesPatternMixin:
             - String exact genotype syntax
             - String genotype pattern syntax
         """
+        self = cast(Species, self)
         from ..entities.genotype import Genotype
 
         assert isinstance(selector, (Genotype, str)), \
@@ -70,7 +73,7 @@ class SpeciesPatternMixin:
         return matched
 
     def resolve_genotype_selectors(
-        self: Species,
+        self,
         selector: Union[Genotype, str, Tuple[Union[Genotype, str], ...]],
         all_genotypes: Optional[Iterable[Genotype]] = None,
         context: str = 'selector'
@@ -93,6 +96,7 @@ class SpeciesPatternMixin:
         Returns:
             A list of resolved ``Genotype`` objects.
         """
+        self = cast(Species, self)
         if all_genotypes is None:
             all_genotypes = self.get_all_genotypes(unordered=self.unordered)
 
@@ -118,7 +122,7 @@ class SpeciesPatternMixin:
             context=context,
         )
 
-    def parse_genotype_pattern(self: Species, pattern: str) -> Callable[[Genotype], bool]:
+    def parse_genotype_pattern(self, pattern: str) -> Callable[[Genotype], bool]:
         """
         Parse a genotype pattern string and return a filter function.
 
@@ -142,13 +146,14 @@ class SpeciesPatternMixin:
         Raises:
             PatternParseError: If the pattern is invalid.
         """
+        self = cast(Species, self)
         from natal.patterns import GenotypePatternParser
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse(pattern)
         return pattern_obj.to_filter()
 
     def filter_genotypes_by_pattern(
-        self: Species,
+        self,
         genotypes: Iterable[Genotype],
         pattern: str
     ) -> List[Genotype]:
@@ -162,11 +167,12 @@ class SpeciesPatternMixin:
         Returns:
             List of genotypes that match the pattern.
         """
+        self = cast(Species, self)
         pattern_filter = self.parse_genotype_pattern(pattern)
         return [gt for gt in genotypes if pattern_filter(gt)]
 
     def enumerate_genotypes_matching_pattern(
-        self: Species,
+        self,
         pattern: str,
         max_count: Optional[int] = None
     ) -> Iterable[Genotype]:
@@ -188,6 +194,7 @@ class SpeciesPatternMixin:
         Raises:
             PatternParseError: If the pattern is invalid.
         """
+        self = cast(Species, self)
         from natal.patterns import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
@@ -205,7 +212,7 @@ class SpeciesPatternMixin:
                 yield genotype
                 count += 1
 
-    def parse_haploid_genome_pattern(self: Species, pattern: str) -> Callable[[HaploidGenome], bool]:
+    def parse_haploid_genome_pattern(self, pattern: str) -> Callable[[HaploidGenome], bool]:
         """
         Parse a haploid genome pattern string and return a filter function.
 
@@ -229,13 +236,14 @@ class SpeciesPatternMixin:
         Raises:
             PatternParseError: If the pattern is invalid.
         """
+        self = cast(Species, self)
         from natal.patterns import GenotypePatternParser
         parser = GenotypePatternParser(self)
         pattern_obj = parser.parse_haploid_genome_pattern(pattern)
         return pattern_obj.to_filter()
 
     def filter_haploid_genomes_by_pattern(
-        self: Species,
+        self,
         haploid_genomes: Iterable[HaploidGenome],
         pattern: str
     ) -> List[HaploidGenome]:
@@ -249,11 +257,12 @@ class SpeciesPatternMixin:
         Returns:
             List of haploid genomes that match the pattern.
         """
+        self = cast(Species, self)
         pattern_filter = self.parse_haploid_genome_pattern(pattern)
         return [hg for hg in haploid_genomes if pattern_filter(hg)]
 
     def enumerate_haploid_genomes_matching_pattern(
-        self: Species,
+        self,
         pattern: str,
         max_count: Optional[int] = None
     ) -> Iterable[HaploidGenome]:
@@ -275,6 +284,7 @@ class SpeciesPatternMixin:
         Raises:
             PatternParseError: If the pattern is invalid.
         """
+        self = cast(Species, self)
         from natal.patterns import GenotypePatternParser
 
         parser = GenotypePatternParser(self)

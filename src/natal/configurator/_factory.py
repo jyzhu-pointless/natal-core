@@ -8,6 +8,7 @@
 """
 
 
+import warnings
 from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
@@ -90,9 +91,18 @@ initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygo
 class PopulationConfigBuilder:
     """Internal builder for constructing PopulationConfig.
 
+    .. deprecated::
+        Use ``Configurator`` instead.
+
     Handles all low-level configuration details and array initialization. It
     encapsulating the complexity of converting builder parameters.
     """
+
+    warnings.warn(
+        "PopulationConfigBuilder is deprecated. Use Configurator instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     @staticmethod
     def build(

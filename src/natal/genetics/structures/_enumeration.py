@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-# pyright: reportGeneralTypeIssues=false
 import itertools
 from typing import (
     TYPE_CHECKING,
@@ -13,6 +12,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    cast,
 )
 
 if TYPE_CHECKING:
@@ -20,12 +20,14 @@ if TYPE_CHECKING:
     from ..entities.haplotype import HaploidGenome, HaploidGenotype
     from .chromosome import Chromosome
     from .species import Species
+else:
+    Species = object  # runtime stand-in for cast()
 
 
 class SpeciesEnumerationMixin:
     """Iteration and enumeration methods for Species."""
 
-    def get_sex_chromosome_groups(self: Species) -> Optional[Dict[str, List[Chromosome]]]:
+    def get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]:
         """
         Get sex chromosome group configuration.
 
@@ -35,13 +37,14 @@ class SpeciesEnumerationMixin:
         Returns:
             Sex chromosome group mapping, or ``None`` when absent.
         """
+        self = cast(Species, self)
         if hasattr(self, 'sex_chromosome_groups') and self.sex_chromosome_groups:
             return self.sex_chromosome_groups
 
         groups = self.build_sex_chromosome_groups()
         return groups if groups else None
 
-    def get_valid_sex_genotypes(self: Species) -> Optional[List[Tuple[Chromosome, Chromosome]]]:
+    def get_valid_sex_genotypes(self) -> Optional[List[Tuple[Chromosome, Chromosome]]]:
         """
         Get valid sex chromosome genotype combinations.
 
@@ -51,6 +54,7 @@ class SpeciesEnumerationMixin:
         Returns:
             A list of valid ``(maternal_chrom, paternal_chrom)`` pairs, or ``None``.
         """
+        self = cast(Species, self)
         if hasattr(self, 'valid_sex_genotypes') and self.valid_sex_genotypes:
             return self.valid_sex_genotypes
 
@@ -58,7 +62,7 @@ class SpeciesEnumerationMixin:
         return valid if valid else None
 
     def get_sex_chromosome(
-        self: Species,
+        self,
         haploid_genome: HaploidGenome,
         sex_chr_groups: Dict[str, List[Chromosome]]
     ) -> Optional[Chromosome]:
@@ -74,6 +78,7 @@ class SpeciesEnumerationMixin:
         Returns:
             The selected sex chromosome, or ``None`` when absent.
         """
+        self = cast(Species, self)
         sex_chroms: Set[Chromosome] = set()
         for group_chroms in sex_chr_groups.values():
             sex_chroms.update(group_chroms)
@@ -83,20 +88,21 @@ class SpeciesEnumerationMixin:
                 return hap.chromosome
         return None
 
-    def count_alleles(self: Species) -> int:
+    def count_alleles(self) -> int:
         """
         Count the total number of alleles across all loci.
 
         Returns:
             Total allele count.
         """
+        self = cast(Species, self)
         total = 0
         for chrom in self.chromosomes:
             for locus in chrom.loci:
                 total += len(locus.alleles)
         return total
 
-    def count_haploid_genotypes(self: Species) -> int:
+    def count_haploid_genotypes(self) -> int:
         """
         Calculate the total number of possible haploid genomes.
 
@@ -106,6 +112,7 @@ class SpeciesEnumerationMixin:
         Returns:
             Total number of possible haploid genomes
         """
+        self = cast(Species, self)
         sex_chr_groups = self.get_sex_chromosome_groups()
 
         sex_chroms: Set[Chromosome] = set()
@@ -137,7 +144,7 @@ class SpeciesEnumerationMixin:
 
         return total
 
-    def count_genotypes(self: Species) -> int:
+    def count_genotypes(self) -> int:
         """
         Calculate the total number of possible diploid genotypes.
 
@@ -150,6 +157,7 @@ class SpeciesEnumerationMixin:
         Returns:
             Total number of possible genotypes
         """
+        self = cast(Species, self)
         sex_chr_groups = self.get_sex_chromosome_groups()
         valid_sex_gts = self.get_valid_sex_genotypes()
 
@@ -196,7 +204,7 @@ class SpeciesEnumerationMixin:
 
         return autosome_genotype_count * sex_genotype_count
 
-    def iter_haploid_genotypes(self: Species) -> Iterable[HaploidGenome]:
+    def iter_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """
         Iterate over all possible haploid genomes (HaploidGenome).
 
@@ -205,6 +213,7 @@ class SpeciesEnumerationMixin:
         Yields:
             HaploidGenome instances
         """
+        self = cast(Species, self)
         from ..entities.haplotype import HaploidGenome, Haplotype
 
         sex_chr_groups = self.get_sex_chromosome_groups()
@@ -252,7 +261,7 @@ class SpeciesEnumerationMixin:
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
 
     def iter_haploid_genotypes_for_parent(
-        self: Species,
+        self,
         is_paternal: bool
     ) -> Iterable[HaploidGenome]:
         """
@@ -267,6 +276,7 @@ class SpeciesEnumerationMixin:
         Yields:
             HaploidGenome instances.
         """
+        self = cast(Species, self)
         from ..entities.haplotype import HaploidGenome, Haplotype
 
         sex_chr_groups = self.get_sex_chromosome_groups()
@@ -328,15 +338,17 @@ class SpeciesEnumerationMixin:
         for haplotype_combo in itertools.product(*all_haplotype_options):
             yield HaploidGenome(species=self, haplotypes=list(haplotype_combo))
 
-    def iter_maternal_haploid_genotypes(self: Species) -> Iterable[HaploidGenome]:
+    def iter_maternal_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """Iterate maternal haploid genomes that can be transmitted."""
+        self = cast(Species, self)
         return self.iter_haploid_genotypes_for_parent(is_paternal=False)
 
-    def iter_paternal_haploid_genotypes(self: Species) -> Iterable[HaploidGenome]:
+    def iter_paternal_haploid_genotypes(self) -> Iterable[HaploidGenome]:
         """Iterate paternal haploid genomes that can be transmitted."""
+        self = cast(Species, self)
         return self.iter_haploid_genotypes_for_parent(is_paternal=True)
 
-    def iter_genotypes(self: Species, unordered: bool = False) -> Iterable[Genotype]:
+    def iter_genotypes(self, unordered: bool = False) -> Iterable[Genotype]:
         """
         Iterate all possible diploid genotypes.
 
@@ -355,6 +367,7 @@ class SpeciesEnumerationMixin:
         Yields:
             Genotype instances.
         """
+        self = cast(Species, self)
         from ..entities.genotype import Genotype
 
         sex_chr_groups = self.get_sex_chromosome_groups()
@@ -405,32 +418,35 @@ class SpeciesEnumerationMixin:
             for maternal, paternal in itertools.product(maternal_hgs, paternal_hgs):
                 yield Genotype(species=self, maternal=maternal, paternal=paternal)
 
-    def get_all_haploid_genotypes(self: Species) -> List[HaploidGenome]:
+    def get_all_haploid_genotypes(self) -> List[HaploidGenome]:
         """Get a list of all possible haploid genomes.
 
         Returns:
             List of all HaploidGenome instances.
         """
+        self = cast(Species, self)
         return list(self.iter_haploid_genotypes())
 
-    def get_maternal_haploid_genotypes(self: Species) -> List[HaploidGenome]:
+    def get_maternal_haploid_genotypes(self) -> List[HaploidGenome]:
         """Get all maternal-transmissible haploid genomes.
 
         Returns:
             List of maternal haploid genomes.
         """
+        self = cast(Species, self)
         return list(self.iter_maternal_haploid_genotypes())
 
-    def get_paternal_haploid_genotypes(self: Species) -> List[HaploidGenome]:
+    def get_paternal_haploid_genotypes(self) -> List[HaploidGenome]:
         """Get all paternal-transmissible haploid genomes.
 
         Returns:
             List of paternal haploid genomes.
         """
+        self = cast(Species, self)
         return list(self.iter_paternal_haploid_genotypes())
 
     def get_haploid_genotypes(
-        self: Species,
+        self,
         parent: Optional[Literal["maternal", "paternal"]] = None,
     ) -> List[HaploidGenome]:
         """Get haploid genomes, optionally constrained by parent role.
@@ -445,6 +461,7 @@ class SpeciesEnumerationMixin:
         Raises:
             ValueError: If ``parent`` is not one of supported values.
         """
+        self = cast(Species, self)
         if parent is None:
             return self.get_all_haploid_genotypes()
 
@@ -457,7 +474,7 @@ class SpeciesEnumerationMixin:
             f"Unknown parent role: {parent!r}. Expected 'maternal', 'paternal', or None."
         )
 
-    def get_all_genotypes(self: Species, unordered: bool = False) -> List[Genotype]:
+    def get_all_genotypes(self, unordered: bool = False) -> List[Genotype]:
         """
         Get a list of all possible diploid genotypes.
 
@@ -474,4 +491,5 @@ class SpeciesEnumerationMixin:
         Returns:
             List of all Genotype instances.
         """
+        self = cast(Species, self)
         return list(self.iter_genotypes(unordered=unordered))

@@ -108,7 +108,7 @@ class TestSpeciesFromDict:
         assert sp.gamete_labels == []
 
     def test_invalid_spec_type_raises(self):
-        with pytest.raises(AssertionError):  # type: ignore
+        with pytest.raises(ValueError, match="Invalid loci specification"):
             nt.Species.from_dict(
                 name="S_bad",
                 structure={"chr1": 42},  # type: ignore[arg-type]

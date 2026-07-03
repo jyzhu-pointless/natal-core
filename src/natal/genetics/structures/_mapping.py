@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-# pyright: reportGeneralTypeIssues=false
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -17,13 +16,15 @@ if TYPE_CHECKING:
     from ..entities.genotype import Genotype
     from ..entities.haplotype import HaploidGenotype
     from .species import Species, SpeciesConfigBlueprint
+else:
+    Species = object  # runtime stand-in for cast()
 
 
 class SpeciesMappingMixin:
     """Mapping methods for Species — genotype ordering, gamete/zygote maps, config blueprint."""
 
     def unordered_genotype(
-        self: Species,
+        self,
         hg1: HaploidGenotype,
         hg2: HaploidGenotype,
     ) -> Genotype:
@@ -36,13 +37,14 @@ class SpeciesMappingMixin:
         genotype with the same per-locus allele composition collapses to the
         same canonical form.
         """
+        self = cast(Species, self)
         from ..entities.genotype import Genotype
         from ._helpers import canonical_haploid_pair
         mat, pat = canonical_haploid_pair(self, hg1, hg2)
         return Genotype(species=self, maternal=mat, paternal=pat)
 
     def build_gamete_map(
-        self: Species,
+        self,
         gamete_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
         n_slabs: int = 1,
     ) -> NDArray[np.float64]:
@@ -55,6 +57,7 @@ class SpeciesMappingMixin:
             n_slabs: Number of somatic slabs.  When > 1 the genotype axis is
                 tiled so that each base genotype appears once per slab.
         """
+        self = cast(Species, self)
         from natal.data import initialize_gamete_map as _impl
 
         return _impl(
@@ -66,7 +69,7 @@ class SpeciesMappingMixin:
         )
 
     def build_zygote_map(
-        self: Species,
+        self,
         zygote_modifiers: Optional[list[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
         n_slabs: int = 1,
     ) -> NDArray[np.float64]:
@@ -79,6 +82,7 @@ class SpeciesMappingMixin:
             n_slabs: Number of somatic slabs.  When > 1 the genotype axis is
                 tiled so that each base genotype appears once per slab.
         """
+        self = cast(Species, self)
         from natal.data import initialize_zygote_map as _impl
 
         return _impl(
@@ -90,7 +94,7 @@ class SpeciesMappingMixin:
             n_slabs=n_slabs,
         )
 
-    def get_config_blueprint(self: Species) -> SpeciesConfigBlueprint:
+    def get_config_blueprint(self) -> SpeciesConfigBlueprint:
         """Return species-derived arrays cached for population construction.
 
         Built once per species and cached — genotype / gamete maps, the
@@ -107,6 +111,7 @@ class SpeciesMappingMixin:
             ``offspring_tensor`` (ndarray), and compatibility arrays
             (ndarray).
         """
+        self = cast(Species, self)
         if self.config_blueprint is not None:
             return self.config_blueprint
 

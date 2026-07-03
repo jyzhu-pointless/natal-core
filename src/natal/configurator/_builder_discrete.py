@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Mapping
 from typing import (
     TYPE_CHECKING,
@@ -52,6 +53,11 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
     """
 
     def __init__(self, species: Species):
+        warnings.warn(
+            "DiscreteGenerationPopulationBuilder is deprecated. Use Configurator instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(species)
 
         self.name: str = "DiscreteGenerationPop"

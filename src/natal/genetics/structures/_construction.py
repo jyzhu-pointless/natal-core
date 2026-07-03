@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-# pyright: reportGeneralTypeIssues=false
 from typing import (
     TYPE_CHECKING,
-    Any,
     Dict,
     List,
     Optional,
     Set,
     Tuple,
+    TypedDict,
     Union,
     cast,
 )
@@ -24,6 +23,14 @@ if TYPE_CHECKING:
     from .chromosome import Chromosome
     from .locus import Locus
     from .species import Species
+else:
+    Species = object  # runtime stand-in for cast()
+
+
+class ChromosomeDictSpec(TypedDict, total=False):
+    """Extended specification for a chromosome entry."""
+    sex_type: Union[SexChromosomeType, str]
+    loci: Union[List[str], Dict[str, List[str]]]
 
 
 class SpeciesConstructionMixin:
@@ -33,7 +40,7 @@ class SpeciesConstructionMixin:
     def from_dict(
         cls,
         name: str,
-        structure: Dict[str, Union[List[str], Dict[str, List[str]], Dict[str, Any]]],
+        structure: Dict[str, Union[List[str], Dict[str, List[str]], ChromosomeDictSpec]],
         gamete_labels: Optional[List[str]] = None,
         somatic_labels: Optional[List[str]] = None,
         unordered: bool = True,
@@ -46,6 +53,9 @@ class SpeciesConstructionMixin:
 
         Returns:
             Species instance with all Chromosomes and Loci created.
+
+        Raises:
+            ValueError: If structure specification is invalid.
         """
         from .species import Species as _Species
         species = cast(_Species, cls(name, gamete_labels=gamete_labels, somatic_labels=somatic_labels, unordered=unordered))  # pyright: ignore[reportCallIssue]
@@ -55,24 +65,17 @@ class SpeciesConstructionMixin:
             normalized_loci_spec: Union[List[str], Dict[str, List[str]]]
 
             if isinstance(loci_spec, dict) and ("loci" in loci_spec or "sex_type" in loci_spec):
-                raw_loci = loci_spec.get("loci")
-                if raw_loci is None:
-                    raw_loci = []
-                assert isinstance(raw_loci, (list, dict)), \
-                    f"Invalid loci specification for chromosome '{chrom_name}'. " \
-                    f"Expected list or dict, got {type(raw_loci).__name__}"
-                normalized_loci_spec = cast(Union[List[str], Dict[str, List[str]]], raw_loci)
+                raw_loci = loci_spec.get("loci", cast(Union[List[str], Dict[str, List[str]]], []))
+                normalized_loci_spec = raw_loci
 
-                raw_sex_type = loci_spec.get("sex_type")
-                if raw_sex_type is not None:
-                    assert isinstance(raw_sex_type, (SexChromosomeType, str)), \
-                        f"Invalid sex_type for chromosome '{chrom_name}'. " \
-                        f"Expected SexChromosomeType or str, got {type(raw_sex_type).__name__}"
-                    sex_type = raw_sex_type
+                if "sex_type" in loci_spec:
+                    sex_type = cast(Union[SexChromosomeType, str], loci_spec["sex_type"])
             else:
-                assert isinstance(loci_spec, (list, dict)), \
-                    f"Invalid loci specification for chromosome '{chrom_name}'. " \
-                    f"Expected list or dict, got {type(loci_spec).__name__}"
+                if not isinstance(loci_spec, (list, dict)):  # pyright: ignore[reportUnnecessaryIsInstance]
+                    raise ValueError(
+                        f"Invalid loci specification for chromosome '{chrom_name}'. "
+                        f"Expected list or dict, got {type(loci_spec).__name__}"
+                    )
                 normalized_loci_spec = cast(Union[List[str], Dict[str, List[str]]], loci_spec)
 
             chrom = species.add_chromosome(chrom_name, sex_type=sex_type)
@@ -89,7 +92,7 @@ class SpeciesConstructionMixin:
         return species
 
     def parse_haplotype_segment_str(
-        self: Species, hap_str: str, gene_index: Dict[str, Gene]
+        self, hap_str: str, gene_index: Dict[str, Gene]
     ) -> Tuple[Chromosome, List[Gene]]:
         """
         Parse a haplotype segment string into (Chromosome, [Genes]).
@@ -101,6 +104,7 @@ class SpeciesConstructionMixin:
         Returns:
             Tuple of (Chromosome, list of Genes)
         """
+        self = cast(Species, self)
         hap_str = hap_str.strip()
         if not hap_str:
             raise ValueError("Empty haplotype segment string")
@@ -177,7 +181,7 @@ class SpeciesConstructionMixin:
         return chrom, genes_sorted
 
     def get_haploid_genome_from_str(
-        self: Species, haploid_str: str
+        self, haploid_str: str
     ) -> HaploidGenome:
         """
         Create or retrieve a HaploidGenome from a string representation.
@@ -188,6 +192,7 @@ class SpeciesConstructionMixin:
         Returns:
             HaploidGenome instance
         """
+        self = cast(Species, self)
         from ..entities.haplotype import HaploidGenome, Haplotype
 
         gene_index = self.build_gene_index()
@@ -232,11 +237,11 @@ class SpeciesConstructionMixin:
 
         return HaploidGenome(species=self, haplotypes=haplotypes_sorted)
 
-    def get_haploid_genotype_from_str(self: Species, haplotype_str: str) -> HaploidGenome:
+    def get_haploid_genotype_from_str(self, haplotype_str: str) -> HaploidGenome:
         """Alias for get_haploid_genome_from_str."""
         return self.get_haploid_genome_from_str(haplotype_str)
 
-    def get_genotype_from_str(self: Species, genotype_str: str) -> Genotype:
+    def get_genotype_from_str(self, genotype_str: str) -> Genotype:
         """
         Create or retrieve a Genotype from a string representation.
 
@@ -255,6 +260,7 @@ class SpeciesConstructionMixin:
         Returns:
             Genotype instance
         """
+        self = cast(Species, self)
         from ..entities.genotype import Genotype
 
         genotype_str = genotype_str.strip()

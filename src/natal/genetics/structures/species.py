@@ -87,6 +87,15 @@ class Species(
         somatic_labels: Optional[list[str]] = None,
         unordered: bool = True,
     ):
+        """Initialize a Species.
+
+        Args:
+            name: Name of the species.
+            chromosomes: Optional list of Chromosome instances.
+            gamete_labels: Optional labels for gamete categories.
+            somatic_labels: Optional labels for somatic categories.
+            unordered: If True, maternal/paternal ordering is irrelevant.
+        """
         self._structure_cache: Dict[type, Dict[str, GeneticStructure[Any]]] = {}
         self._gene_index_cache: Optional[Dict[str, Gene]] = None
         self._unordered = unordered
