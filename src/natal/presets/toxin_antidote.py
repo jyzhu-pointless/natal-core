@@ -12,15 +12,15 @@ from natal.utils.types import Sex
 from ._base import GeneticPreset
 from ._fitness import make_fitness_patch_given_allele_scaling
 from ._types import (
-    PresetFitnessPatch,
     AlleleScalingMode,
     AlleleSpecifier,
-    count_allele_copies,
     FecundityScalingConfig,
+    PresetFitnessPatch,
     SexSpecificRates,
     SexualSelectionScalingConfig,
     ViabilityScalingConfig,
     ZygoteViabilityScalingConfig,
+    count_allele_copies,
 )
 from .gamete_conversion import GameteConversionRuleSet
 from .zygote_conversion import ZygoteConversionRuleSet

@@ -16,9 +16,9 @@ from ._fitness import (
 from ._types import (
     AlleleScalingMode,
     AlleleSpecifier,
+    FecundityScalingConfig,
     PresetFitnessPatch,
     SexSpecificRates,
-    FecundityScalingConfig,
     SexualSelectionScalingConfig,
     ViabilityScalingConfig,
     ZygoteViabilityScalingConfig,
