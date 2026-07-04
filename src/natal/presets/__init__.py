@@ -5,22 +5,23 @@ ToxinAntidoteDrive), cytoplasmic inheritance (Wolbachia), allele conversion
 systems, and the GeneticPreset base class.
 """
 
-from ._base import GeneticPreset, apply_preset_to_population
-from ._fitness import apply_preset_fitness_patch
-from ._types import PresetFitnessPatch, count_allele_copies
-from .cytoplasmic import CytoplasmicPreset, TransgenicBackground, Wolbachia
-from .gamete_conversion import (
+from natal.modifiers.gamete_conversion import (  # noqa: F401 (re-export, canonical location)
     GameteAlleleConversionRule,
     GameteConversionRuleSet,
     GameteHaploidGenomeConversionRule,
 )
-from .homing import HomingDrive
-from .toxin_antidote import ToxinAntidoteDrive
-from .zygote_conversion import (
+from natal.modifiers.zygote_conversion import (  # noqa: F401 (re-export, canonical location)
     ZygoteAlleleConversionRule,
     ZygoteConversionRuleSet,
     ZygoteGenotypeConversionRule,
 )
+
+from ._base import GeneticPreset, apply_preset_to_population
+from ._fitness import apply_preset_fitness_patch
+from ._types import PresetFitnessPatch, count_allele_copies
+from .cytoplasmic import CytoplasmicPreset, TransgenicBackground, Wolbachia
+from .homing import HomingDrive
+from .toxin_antidote import ToxinAntidoteDrive
 
 __all__ = [
     "GeneticPreset",

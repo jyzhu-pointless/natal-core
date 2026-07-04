@@ -6,7 +6,9 @@ Public module — provides ToxinAntidoteDrive for TARE/TADE gene drive simulatio
 from typing import TYPE_CHECKING, Any, Optional
 
 from natal.genetics import Gene, Genotype
+from natal.modifiers.gamete_conversion import GameteConversionRuleSet
 from natal.modifiers.module import GameteModifier, ZygoteModifier
+from natal.modifiers.zygote_conversion import ZygoteConversionRuleSet
 from natal.utils.types import Sex
 
 from ._base import GeneticPreset
@@ -22,8 +24,6 @@ from ._types import (
     ZygoteViabilityScalingConfig,
     count_allele_copies,
 )
-from .gamete_conversion import GameteConversionRuleSet
-from .zygote_conversion import ZygoteConversionRuleSet
 
 if TYPE_CHECKING:
     from natal.population.base import BasePopulation
