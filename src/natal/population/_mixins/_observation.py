@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     Optional,
@@ -16,16 +17,18 @@ from typing import (
 
 import numpy as np
 
-from natal.output.observation import (
-    GroupsInput,
-    Observation,
-)
 from natal.output.translation import (
     output_current_state as _output_current_state,
 )
 from natal.output.translation import (
     output_history as _output_history,
 )
+
+if TYPE_CHECKING:
+    from natal.output.observation import (
+        GroupsInput,
+        Observation,
+    )
 
 
 class ObservationMixin:
