@@ -250,5 +250,56 @@ class TestPresetFitnessPatch(unittest.TestCase):
         self.assertAlmostEqual(self.pop._config.zygote_viability_fitness[1][idx_drive_drive], 0.25)
 
 
+    def test_import_from_canonical_path(self) -> None:
+        """apply_preset_fitness_patch is importable from natal.fitness._patch."""
+        from natal.fitness._patch import apply_preset_fitness_patch as _patch_fn
+
+        patch = {
+            "viability_per_allele": {
+                "Drive": 0.8,
+            }
+        }
+        _patch_fn(self.pop, patch)
+
+        idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
+        idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
+        idx_drive_drive = self.pop._index_registry.genotype_to_index[self.gt_drive_drive]
+
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_wt_wt], 1.0)
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_wt], 0.8)
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_drive], 0.64)
+
+    def test_with_minimal_fitness_population_view(self) -> None:
+        """Works with a minimal object satisfying FitnessPopulationView protocol.
+
+        The protocol requires only three attributes (config, species,
+        index_registry) — no Population or ConfigContext needed.
+        """
+        from natal.fitness._patch import apply_preset_fitness_patch as _patch_fn
+
+        class _MinimalView:
+            __slots__ = ('config', 'species', 'index_registry')
+            def __init__(self, config, species, index_registry):
+                self.config = config
+                self.species = species
+                self.index_registry = index_registry
+
+        view = _MinimalView(self.pop._config, self.pop.species, self.pop._index_registry)
+        patch = {
+            "viability_per_allele": {
+                "Drive": 0.5,
+            }
+        }
+        _patch_fn(view, patch)
+
+        idx_wt_wt = self.pop._index_registry.genotype_to_index[self.gt_wt_wt]
+        idx_drive_wt = self.pop._index_registry.genotype_to_index[self.gt_drive_wt]
+        idx_drive_drive = self.pop._index_registry.genotype_to_index[self.gt_drive_drive]
+
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_wt_wt], 1.0)
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_wt], 0.5)
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_drive], 0.25)
+
+
 if __name__ == "__main__":
     unittest.main()

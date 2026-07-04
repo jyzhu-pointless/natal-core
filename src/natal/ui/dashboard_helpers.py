@@ -1,4 +1,3 @@
-# type: ignore
 """
 Shared UI helper functions for NATAL dashboards.
 
@@ -13,9 +12,27 @@ import numpy as np
 
 try:
     from nicegui import ui
-    HAS_NICEGUI = True
+
+    _has_nicegui = True
 except ImportError:
-    HAS_NICEGUI = False
+    _has_nicegui = False
+
+    class _DummyUI:
+        """Stub that silences pyright when nicegui is not installed."""
+
+        def __getattr__(self, _name: object) -> "_DummyUI":
+            return self
+
+        def __call__(self, *args: object, **kwargs: object) -> "_DummyUI":
+            return self
+
+        def __enter__(self) -> "_DummyUI":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+    ui = _DummyUI()  # type: ignore[assignment]
 
 from natal.data import CONCAVE, FIXED, LINEAR, NO_COMPETITION
 
@@ -63,13 +80,13 @@ def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
 def numpy_converter(obj: Any) -> Any:
     """JSON serialization helper for numpy types."""
     if isinstance(obj, np.integer):
-        return int(obj)
+        return int(obj)  # type: ignore[reportUnknownArgumentType]
     if isinstance(obj, np.floating):
-        return float(obj)
+        return float(obj)  # type: ignore[reportUnknownArgumentType]
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     if isinstance(obj, np.bool_):
-        return bool(obj)
+        return bool(obj)  # type: ignore[reportUnknownArgumentType]
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
@@ -78,17 +95,17 @@ def jsonable_config_value(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.integer):
-        return int(value)
+        return int(value)  # type: ignore[reportUnknownArgumentType]
     if isinstance(value, np.floating):
-        return float(value)
+        return float(value)  # type: ignore[reportUnknownArgumentType]
     if isinstance(value, np.bool_):
-        return bool(value)
+        return bool(value)  # type: ignore[reportUnknownArgumentType]
     if isinstance(value, tuple):
-        return [jsonable_config_value(v) for v in value]
+        return [jsonable_config_value(v) for v in value]  # type: ignore[reportUnknownVariableType]
     if isinstance(value, list):
-        return [jsonable_config_value(v) for v in value]
+        return [jsonable_config_value(v) for v in value]  # type: ignore[reportUnknownVariableType]
     if isinstance(value, dict):
-        return {k: jsonable_config_value(v) for k, v in value.items()}
+        return {k: jsonable_config_value(v) for k, v in value.items()}  # type: ignore[reportUnknownVariableType]
     return value
 
 
@@ -119,7 +136,7 @@ def format_op(op: Any) -> str:
     if op.genotypes == "*":
         parts.append("ALL genotypes")
     elif isinstance(op.genotypes, list):
-        parts.append(f"genotypes {op.genotypes}")
+        parts.append(f"genotypes {op.genotypes}")  # type: ignore[reportUnknownMemberType]
     else:
         parts.append(f"genotype {op.genotypes}")
 
@@ -146,7 +163,7 @@ def format_op(op: Any) -> str:
     return " ".join(parts)
 
 
-def get_hooks_data(population: Any) -> list[dict]:
+def get_hooks_data(population: Any) -> list[dict[str, Any]]:
     """Serialize hook information for export."""
     from natal.hooks.types import OpType
 
@@ -178,9 +195,9 @@ def get_hooks_data(population: Any) -> list[dict]:
         if isinstance(ages, range):
             return [float(a) for a in ages]
         if isinstance(ages, (list, tuple, np.ndarray)):
-            return [float(a) for a in ages]
+            return [float(a) for a in ages]  # type: ignore[reportUnknownArgumentType, reportUnknownVariableType]
         if isinstance(ages, (int, float, np.integer, np.floating)):
-            return float(ages)
+            return float(ages)  # type: ignore[reportUnknownArgumentType]
         return str(ages)
 
     hooks_data = []
@@ -202,7 +219,7 @@ def get_hooks_data(population: Any) -> list[dict]:
                     "param": op.param,
                     "condition": op.condition,
                 }
-                op_list.append(op_dict)
+                op_list.append(op_dict)  # type: ignore[reportUnknownMemberType]
             hook_info["operations"] = op_list
         else:
             hook_info["type"] = "custom"
@@ -213,13 +230,13 @@ def get_hooks_data(population: Any) -> list[dict]:
                     hook_info["signature"] = str(sig)
                 except (ValueError, TypeError):
                     hook_info["signature"] = "N/A"
-        hooks_data.append(hook_info)
-    return hooks_data
+        hooks_data.append(hook_info)  # type: ignore[reportUnknownMemberType]
+    return hooks_data  # type: ignore[reportUnknownVariableType]
 
 
 def render_single_hook(desc: Any, is_global: bool = False) -> None:
     """Render one compiled hook descriptor as an expansion panel."""
-    if not HAS_NICEGUI:
+    if not _has_nicegui:
         return
 
     label = f"{desc.name} ({desc.event})"
@@ -253,7 +270,7 @@ def render_single_hook(desc: Any, is_global: bool = False) -> None:
 
 def render_hooks_panel(population: Any) -> None:
     """Render the hooks expansion-panel list into the current NiceGUI container."""
-    if not HAS_NICEGUI:
+    if not _has_nicegui:
         return
 
     hooks = population.get_compiled_hooks()
@@ -267,7 +284,7 @@ def render_hooks_panel(population: Any) -> None:
 
 def build_observation_from_specs(
     population: Any,
-    specs: list[dict],
+    specs: list[dict[str, Any]],
     collapse_age: bool = False,
 ) -> Any:
     """Build an Observation from a list of group spec dicts.
@@ -292,7 +309,7 @@ def render_observation_results(observation: Any, state_or_observed: Any) -> None
     ``state_or_observed`` can be either a state object with ``individual_count``,
     or a pre-computed numpy array from ``observation.apply()``.
     """
-    if not HAS_NICEGUI:
+    if not _has_nicegui:
         return
 
     # Accept both state objects and pre-applied arrays
@@ -309,12 +326,12 @@ def render_observation_results(observation: Any, state_or_observed: Any) -> None
         if collapse_age or observed.ndim == 2:
             f_val = float(observed[g_idx, 0]) if observed.shape[1] > 0 else 0.0
             m_val = float(observed[g_idx, 1]) if observed.shape[1] > 1 else 0.0
-            rows.append({"Group": label, "Female": f_val, "Male": m_val, "Total": f_val + m_val})
+            rows.append({"Group": label, "Female": f_val, "Male": m_val, "Total": f_val + m_val})  # type: ignore[reportUnknownMemberType]
         else:
             for a_idx in range(observed.shape[2]):
                 f_val = float(observed[g_idx, 0, a_idx]) if observed.shape[1] > 0 else 0.0
                 m_val = float(observed[g_idx, 1, a_idx]) if observed.shape[1] > 1 else 0.0
-                rows.append({
+                rows.append({  # type: ignore[reportUnknownMemberType]
                     "Group": label,
                     "Age": a_idx,
                     "Female": f_val,
@@ -326,8 +343,8 @@ def render_observation_results(observation: Any, state_or_observed: Any) -> None
         ui.label("No observation data.").classes("text-gray-500 italic")
         return
 
-    columns = [{"name": k, "label": k, "field": k} for k in rows[0].keys()]
-    ui.table(columns=columns, rows=rows).props("dense flat").classes("w-full")
+    columns = [{"name": k, "label": k, "field": k} for k in rows[0].keys()]  # type: ignore[reportUnknownVariableType]
+    ui.table(columns=columns, rows=rows).props("dense flat").classes("w-full")  # type: ignore[reportUnknownArgumentType]
 
 
 class ObservationPanel:
@@ -350,12 +367,12 @@ class ObservationPanel:
         get_state: Any,
         get_registry: Any,
     ) -> None:
-        if not HAS_NICEGUI:
+        if not _has_nicegui:
             return
         self._genotype_labels = genotype_labels
         self._get_state = get_state
         self._get_registry = get_registry
-        self._group_specs: list[dict] = []
+        self._group_specs: list[dict[str, Any]] = []
         self._observation: Any = None
         self._collapse_age: Any = None
         self._groups_container: Any = None
@@ -363,7 +380,7 @@ class ObservationPanel:
 
     def build(self, container: Any) -> None:
         """Render the full observation UI into *container*."""
-        if not HAS_NICEGUI:
+        if not _has_nicegui:
             return
         with container:
             with ui.row().classes("w-full gap-6"):
@@ -410,7 +427,7 @@ class ObservationPanel:
             for i, spec in enumerate(self._group_specs):
                 self._render_group_row(i, spec)
 
-    def _render_group_row(self, idx: int, spec: dict) -> None:
+    def _render_group_row(self, idx: int, spec: dict[str, Any]) -> None:
         with ui.card().classes("p-2 border rounded w-full") as card:
             card.props("flat")
             with ui.row().classes("items-center gap-2 w-full"):
@@ -422,27 +439,27 @@ class ObservationPanel:
                     multiple=True,
                     new_value_mode="add",
                 ).classes("flex-grow")
-                sel.on_value_change(lambda e, i=idx: self._update_spec(i, "genotype", e.value))
+                sel.on_value_change(lambda e, i=idx: self._update_spec(i, "genotype", e.value))  # type: ignore[reportUnknownMemberType]
 
                 sex = ui.select(
                     label="Sex",
                     options={"both": "Both", "female": "Female", "male": "Male"},
                     value=spec.get("sex", "both"),
                 ).classes("w-24")
-                sex.on_value_change(lambda e, i=idx: self._update_spec(i, "sex", e.value))
+                sex.on_value_change(lambda e, i=idx: self._update_spec(i, "sex", e.value))  # type: ignore[reportUnknownMemberType]
 
                 a_start = ui.number(
                     label="Age Start", value=spec.get("age_start"), min=0, precision=0,
                 ).classes("w-20")
-                a_start.on_value_change(lambda e, i=idx: self._update_spec(i, "age_start", e.value))
+                a_start.on_value_change(lambda e, i=idx: self._update_spec(i, "age_start", e.value))  # type: ignore[reportUnknownMemberType]
 
                 a_end = ui.number(
                     label="Age End", value=spec.get("age_end"), min=0, precision=0,
                 ).classes("w-20")
-                a_end.on_value_change(lambda e, i=idx: self._update_spec(i, "age_end", e.value))
+                a_end.on_value_change(lambda e, i=idx: self._update_spec(i, "age_end", e.value))  # type: ignore[reportUnknownMemberType]
 
                 ui.button(
-                    icon="delete", on_click=lambda i=idx: self._remove_group(i),
+                    icon="delete", on_click=lambda _e, i=idx: self._remove_group(i),  # type: ignore[reportUnknownArgumentType]
                 ).props("flat round dense").classes("text-red-500")
 
     # -- apply ------------------------------------------------------------
@@ -459,9 +476,9 @@ class ObservationPanel:
                 ui.label("No observation groups defined.").classes("text-gray-500 italic")
             return
 
-        groups: dict[str, dict] = {}
+        groups: dict[str, dict[str, Any]] = {}
         for i, spec in enumerate(self._group_specs):
-            gs: dict = {}
+            gs: dict[str, Any] = {}
             gv = spec.get("genotype")
             if gv and gv != "*":
                 gs["genotype"] = gv

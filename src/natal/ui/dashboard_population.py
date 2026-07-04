@@ -1,4 +1,3 @@
-# type: ignore
 """
 NiceGUI-based Dashboard for NATAL populations.
 
@@ -7,18 +6,30 @@ from a simulation script. It runs in a separate thread (or manages the main loop
 and accesses the population object directly in memory.
 """
 
+# pyright: reportPrivateUsage=false
+# pyright: reportOptionalMemberAccess=false
+
 import bisect
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import (  # type: ignore[reportUnusedImport]
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+)
 
 import numpy as np
 
 try:
     from nicegui import run, ui
-    HAS_NICEGUI = True
+
+    _has_nicegui = True
 except ImportError:
-    HAS_NICEGUI = False
+    _has_nicegui = False
+    run = None  # type: ignore[assignment]
+    ui = None  # type: ignore[assignment]
 
 from natal.data import (
     PopulationState,
@@ -46,7 +57,7 @@ class Dashboard:
     """
 
     def __init__(self, population: 'BasePopulation[Any]'):
-        if not HAS_NICEGUI:
+        if not _has_nicegui:
             raise ImportError("NiceGUI is required. Please install it with: pip install nicegui")
 
         self.pop = population
@@ -56,8 +67,8 @@ class Dashboard:
         self._tick_timer = None
 
         # UI Elements state
-        self._chart_history: List[Dict] = []
-        self._allele_freq_history: Dict[str, List[List]] = {}
+        self._chart_history: List[List[float]] = []
+        self._allele_freq_history: Dict[str, List[List[float]]] = {}
         self.max_chart_points = 500  # Control total points for sparse display
 
         # Reconstruct chart history from existing population history (fixes data loss on reload)
@@ -81,6 +92,7 @@ class Dashboard:
 
     async def _run_step(self):
         """Execute one simulation step."""
+        assert run is not None  # type: ignore[reportOptionalMemberAccess]  # narrow for pyright
         if self.is_processing:
             return
 
@@ -143,6 +155,7 @@ class Dashboard:
 
     def _update_timer_interval(self):
         """Update timer interval based on slider value."""
+        assert self._tick_timer is not None  # set in build_layout()
         val = self.slider_speed.value
         # If 0 (Turbo), run timer frequently to drive the batch loop
         # If > 0, use value as delay
@@ -150,7 +163,7 @@ class Dashboard:
 
     def _discrete_display(self) -> bool:
         """Whether individual counts should be displayed as integers."""
-        config = self.pop._config
+        config = self.pop._config  # type: ignore[reportPrivateUsage]
         return bool(getattr(config, "stochastic", True)) and not bool(
             getattr(config, "continuous_sampling", False)
         )
@@ -170,9 +183,9 @@ class Dashboard:
             return float(rounded)
         return float(f"{value:.6g}")
 
-    def _compute_metrics_from_flat(self, tick: int, flat_state: np.ndarray) -> Tuple[float, Dict[str, float]]:
+    def _compute_metrics_from_flat(self, tick: int, flat_state: np.ndarray) -> tuple[float, dict[str, float]]:
         """Extract total population and allele frequencies from a flattened state array."""
-        config = self.pop._config
+        config = self.pop._config  # type: ignore[reportPrivateUsage]
         registry = self.pop.registry
         n_sexes = config.n_sexes
         n_ages = config.n_ages
@@ -214,8 +227,8 @@ class Dashboard:
         # BUT the user wants ZOOM. So we must compute it.
 
         # Let's map genotype_counts to allele counts
-        allele_counts = {}
-        locus_totals = {}
+        allele_counts: dict[str, float] = {}
+        locus_totals: dict[str, float] = {}
 
         for z_idx, (gt, _slab) in enumerate(registry.index_to_ztype):
             count = genotype_counts[z_idx]
@@ -226,16 +239,17 @@ class Dashboard:
             # This implies object access.
             for chrom in self.pop.species.chromosomes:
                 for locus in chrom.loci:
-                    locus_totals.setdefault(locus.name, 0.0)
+                    locus_totals.setdefault(locus.name, 0.0)  # type: ignore[reportUnknownMemberType]
 
                     mat, pat = gt.get_alleles_at_locus(locus)
                     if mat:
-                        allele_counts[mat.name] = allele_counts.get(mat.name, 0.0) + count
+                        allele_counts[mat.name] = allele_counts.get(mat.name, 0.0) + count  # type: ignore[reportUnknownMemberType]
                         locus_totals[locus.name] += count
                     if pat:
-                        allele_counts[pat.name] = allele_counts.get(pat.name, 0.0) + count
+                        allele_counts[pat.name] = allele_counts.get(pat.name, 0.0) + count  # type: ignore[reportUnknownMemberType]
                         locus_totals[locus.name] += count
 
+        freqs: dict[str, float] = {}
         for allele, count in allele_counts.items():
             # Find locus total. We need to know which locus this allele belongs to.
             # We can find it via species.
@@ -259,7 +273,7 @@ class Dashboard:
             return
 
         # Collect all known alleles from species upfront (for handling 0-frequency cases)
-        known_alleles = set()
+        known_alleles: set[str] = set()
         if hasattr(self.pop, 'species') and self.pop.species:
             for chrom in self.pop.species.chromosomes:
                 for locus in chrom.loci:
@@ -303,7 +317,7 @@ class Dashboard:
     def _update_charts(self):
         """Update chart data from current population state."""
         # Collect all known alleles from species upfront (for handling 0-frequency cases)
-        known_alleles = set()
+        known_alleles: set[str] = set()
         if hasattr(self.pop, 'species') and self.pop.species:
             for chrom in self.pop.species.chromosomes:
                 for locus in chrom.loci:
@@ -313,9 +327,9 @@ class Dashboard:
         # Initialize allele series structures if missing
         # (We do this early to ensure series order is stable)
         for allele in self._allele_freq_history.keys():
-            series = next((s for s in self.chart_allele.options['series'] if s['name'] == allele), None)
+            series = next((s for s in self.chart_allele.options['series'] if s['name'] == allele), None)  # type: ignore[reportUnknownVariableType]
             if not series:
-                self.chart_allele.options['series'].append({
+                self.chart_allele.options['series'].append({  # type: ignore[reportUnknownMemberType]
                     'name': allele, 'data': [], 'color': get_allele_color(allele)
                 })
 
@@ -328,7 +342,7 @@ class Dashboard:
         new_points = []
 
         # Access private history for speed/consistency
-        history = self.pop._history
+        history = self.pop._history  # type: ignore[reportPrivateUsage]
 
         # Optimization: start search from the end or assume append-only
         # If history was cleared/rotated (max_history), we might need to handle gaps or full refresh
@@ -337,31 +351,31 @@ class Dashboard:
         for tick, flat_state in history:
             if tick > self._last_chart_tick:
                 total_pop, freqs = self._compute_metrics_from_flat(tick, flat_state)
-                new_points.append((tick, total_pop, freqs))
+                new_points.append((tick, total_pop, freqs))  # type: ignore[reportUnknownMemberType]
                 self._last_chart_tick = tick
 
         # If current live state is newer than anything in history (e.g. record_every > 1), add it too
         if self.pop.tick > self._last_chart_tick:
             freqs = self.pop.compute_allele_frequencies()
-            new_points.append((self.pop.tick, self.pop.get_total_count(), freqs))
+            new_points.append((self.pop.tick, self.pop.get_total_count(), freqs))  # type: ignore[reportUnknownMemberType]
             self._last_chart_tick = self.pop.tick
 
         # 2. Append new points to internal full-history buffers
         if new_points:
-            for tick, total, freqs in new_points:
+            for tick, total, freqs in new_points:  # type: ignore[reportUnknownVariableType]
                 self._chart_history.append([tick, total])
-                self._history_ticks.append(tick)
+                self._history_ticks.append(tick)  # type: ignore[reportUnknownArgumentType]
 
                 # Add data for all known alleles (including those with freq=0)
                 for allele in known_alleles:
-                    freq = freqs.get(allele, None)
+                    freq = freqs.get(allele, None)  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
                     if freq is None:
                         freq = 0.0  # Use 0.0 for missing alleles
 
                     if allele not in self._allele_freq_history:
                         self._allele_freq_history[allele] = []
                         # Add series if it appeared mid-simulation
-                        self.chart_allele.options['series'].append({
+                        self.chart_allele.options['series'].append({  # type: ignore[reportUnknownMemberType]
                             'name': allele, 'data': [], 'color': get_allele_color(allele)
                         })
                     self._allele_freq_history[allele].append([tick, freq])
@@ -394,12 +408,12 @@ class Dashboard:
 
         # Update Population Chart
         # Slicing with stride: [start:end:step]
-        self.chart_pop.options['series'][0]['data'] = self._chart_history[idx_start:idx_end:stride]
+        self.chart_pop.options['series'][0]['data'] = self._chart_history[idx_start:idx_end:stride]  # type: ignore[reportUnknownMemberType]
         self.chart_pop.update()
 
         # Update Allele Freq Chart
-        for s in self.chart_allele.options['series']:
-            allele = s['name']
+        for s in self.chart_allele.options['series']:  # type: ignore[reportUnknownVariableType]
+            allele = s['name']  # type: ignore[reportUnknownVariableType]
             if allele in self._allele_freq_history:
                 # Ensure the allele history is also sliced and strided correctly
                 full_allele_data = self._allele_freq_history[allele]
@@ -409,18 +423,19 @@ class Dashboard:
                 s['data'] = full_allele_data[idx_start:idx_end:stride]
         self.chart_allele.update()
 
-    def _update_record_every(self, e):
+    def _update_record_every(self, e: Any) -> None:
         """Update population record_every setting."""
-        if e.value is not None:
-            self.pop.record_every = int(e.value)
+        if e.value is not None:  # type: ignore[reportUnknownMemberType]
+            self.pop.record_every = int(e.value)  # type: ignore[reportUnknownArgumentType]
 
-    def _update_max_history(self, e):
+    def _update_max_history(self, e: Any) -> None:
         """Update population max_history setting."""
-        if e.value is not None:
-            self.pop.max_history = int(e.value)
+        if e.value is not None:  # type: ignore[reportUnknownMemberType]
+            self.pop.max_history = int(e.value)  # type: ignore[reportUnknownArgumentType]
 
     def _update_inspection_view(self, state: 'PopulationState', tick: int, is_history: bool = False):
         """Update the Inspection tab with details from a specific state."""
+        assert ui is not None  # narrow for pyright after nicegui guard
         # Update Header Stats
         total = self._fmt_count(state.individual_count.sum())
         females = self._fmt_count(state.individual_count[0].sum())
@@ -482,7 +497,7 @@ class Dashboard:
         n_ages = ind_count.shape[1]
 
         # For fitness display
-        conf = self.pop.export_config()
+        conf = self.pop.config
         target_age_fit = max(0, int(conf.new_adult_age) - 1)
 
         with self.genotype_container:
@@ -504,13 +519,13 @@ class Dashboard:
                     ui.label(str(gt)).classes('text-base font-bold mt-1 text-center leading-tight text-gray-800')
 
                     # Fitness (use first ZType index for this genotype)
-                    fit_info = self._get_genotype_fitness(z_indices[0], target_age_fit)
+                    fit_info = self._get_genotype_fitness(z_indices[0], target_age_fit)  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
                     if fit_info:
                         with ui.column().classes('w-full items-center gap-0 my-1 bg-gray-50 rounded p-1'):
                             if 'via' in fit_info:
-                                ui.label(fit_info['via']).classes('text-sm text-gray-600')
+                                ui.label(fit_info['via']).classes('text-sm text-gray-600')  # type: ignore[reportUnknownArgumentType]
                             if 'fec' in fit_info:
-                                ui.label(fit_info['fec']).classes('text-sm text-gray-600')
+                                ui.label(fit_info['fec']).classes('text-sm text-gray-600')  # type: ignore[reportUnknownArgumentType]
 
                     # Counts
                     with ui.row().classes('w-full justify-between px-1 -mb-1'):
@@ -532,8 +547,8 @@ class Dashboard:
                                         ui.label(f"A{age}")
                                         ui.label(f"F {af} / M {am}")
 
-    def _get_viability_data(self):
-        config = self.pop.export_config()
+    def _get_viability_data(self):  # type: ignore[reportUnknownParameterType]
+        config = self.pop.config
         registry = self.pop.registry
         # Typically viability selection happens at new_adult_age - 1 (late juvenile)
         target_age = max(0, int(config.new_adult_age) - 1)
@@ -546,16 +561,16 @@ class Dashboard:
             f_val = config.viability_fitness[0, target_age, z_idx]
             m_val = config.viability_fitness[1, target_age, z_idx]
             if f_val != 1.0 or m_val != 1.0 or "Dr" in str(gt) or "Drive" in str(gt):
-                data.append({
+                data.append({  # type: ignore[reportUnknownMemberType]
                     "Genotype": str(gt),
                     "Age": float(target_age),
                     "Female": float(f_val),
                     "Male": float(m_val),
                 })
-        return data
+        return data  # type: ignore[reportUnknownVariableType]
 
-    def _get_fecundity_data(self):
-        config = self.pop.export_config()
+    def _get_fecundity_data(self):  # type: ignore[reportUnknownParameterType]
+        config = self.pop.config
         registry = self.pop.registry
 
         data = []
@@ -566,16 +581,16 @@ class Dashboard:
             f_val = config.fecundity_fitness[0, z_idx]
             m_val = config.fecundity_fitness[1, z_idx]
             if f_val != 1.0 or m_val != 1.0 or "Dr" in str(gt) or "Drive" in str(gt):
-                data.append({
+                data.append({  # type: ignore[reportUnknownMemberType]
                     "Genotype": str(gt),
                     "Female": float(f_val),
                     "Male": float(m_val),
                 })
-        return data
+        return data  # type: ignore[reportUnknownVariableType]
 
-    def _create_meiosis_plots(self):
-        import plotly.express as px
-        config = self.pop.export_config()
+    def _create_meiosis_plots(self):  # type: ignore[reportUnknownParameterType]
+        import plotly.express as px  # type: ignore[reportMissingTypeStubs]
+        config = self.pop.config
         registry = self.pop.registry
         z2g = config.zygotes_to_gametes_map
         n_glabs = config.n_glabs
@@ -587,24 +602,24 @@ class Dashboard:
             label = str(hg_obj)
             if n_glabs > 1:
                 label += f" [{glab_str}]"
-            col_labels.append(label)
+            col_labels.append(label)  # type: ignore[reportUnknownMemberType]
 
         figs = []
         for sex_idx in range(config.n_sexes):
             sex_label = "Female" if sex_idx == 0 else "Male"
             matrix = z2g[sex_idx]
-            fig = px.imshow(matrix,
+            fig = px.imshow(matrix,  # type: ignore[reportUnknownMemberType]
                             labels={"x": "Gamete", "y": "Parent", "color": "Prob"},
                             x=col_labels, y=row_labels,
                             color_continuous_scale="Viridis",
                             title=f"{sex_label} Meiosis")
-            fig.update_layout(margin={"l": 0, "r": 0, "t": 30, "b": 0}, height=300)
-            figs.append(fig)
-        return figs
+            fig.update_layout(margin={"l": 0, "r": 0, "t": 30, "b": 0}, height=300)  # type: ignore[reportUnknownMemberType]
+            figs.append(fig)  # type: ignore[reportUnknownMemberType]
+        return figs  # type: ignore[reportUnknownVariableType]
 
     def _create_fertilization_plot(self):
-        import plotly.express as px
-        config = self.pop.export_config()
+        import plotly.express as px  # type: ignore[reportMissingTypeStubs]
+        config = self.pop.config
         registry = self.pop.registry
         g2z = config.gametes_to_zygotes_map
         n_hg_glabs = int(config.n_gtypes)
@@ -619,7 +634,7 @@ class Dashboard:
             label = str(hg_obj)
             if config.n_glabs > 1:
                 label += f" [{glab_str}]"
-            labels.append(label)
+            labels.append(label)  # type: ignore[reportUnknownMemberType]
 
         # Build matrices for heatmap
         # z_data: numeric index of the primary zygote (for coloring)
@@ -638,17 +653,17 @@ class Dashboard:
                 primary_idx = indices[0]
                 z_data[r, c] = primary_idx
 
-                outcomes = []
+                outcomes: list[str] = []
                 for idx in indices:
                     p = probs[idx]
                     if p < 0.01:
                         break  # Skip <1% outcomes
-                    gt_str = str(genotypes[idx])
-                    outcomes.append(f"{gt_str}<br>({p:.0%})")
+                    gt_str = str(genotypes[idx])  # type: ignore[reportUnknownArgumentType]
+                    outcomes.append(f"{gt_str}<br>({p:.0%})")  # type: ignore[reportUnknownMemberType]
 
                 text_data[r, c] = "<br>".join(outcomes)
 
-        fig = px.imshow(
+        fig = px.imshow(  # type: ignore[reportUnknownMemberType]
             z_data,
             x=labels,
             y=labels,
@@ -657,8 +672,8 @@ class Dashboard:
             title="Fertilization Outcomes (Maternal x Paternal)"
         )
         # Show full text inside grid cells
-        fig.update_traces(text=text_data, texttemplate="%{text}")
-        fig.update_layout(
+        fig.update_traces(text=text_data, texttemplate="%{text}")  # type: ignore[reportUnknownMemberType]
+        fig.update_layout(  # type: ignore[reportUnknownMemberType]
             margin={"l": 0, "r": 0, "t": 40, "b": 0},
             height=max(500, n_hg_glabs * 50),
             xaxis_tickangle=-45
@@ -682,8 +697,8 @@ class Dashboard:
             self.status_label.text = "Ready"
 
         # Reset charts
-        self.chart_pop.options['series'][0]['data'] = []
-        self.chart_allele.options['series'] = []
+        self.chart_pop.options['series'][0]['data'] = []  # type: ignore[reportUnknownMemberType]
+        self.chart_allele.options['series'] = []  # type: ignore[reportUnknownMemberType]
         self._chart_history = []
         self._allele_freq_history = {}
         self.chart_pop.update()
@@ -718,9 +733,9 @@ class Dashboard:
         """Serialize hook information for export."""
         return get_hooks_data(self.pop)
 
-    def _get_sexual_selection_data(self):
+    def _get_sexual_selection_data(self):  # type: ignore[reportUnknownParameterType]
         """Helper to get sexual selection fitness data for export."""
-        config = self.pop.export_config()
+        config = self.pop.config
         registry = self.pop.registry
         genotypes = registry.index_to_genotype
 
@@ -729,68 +744,68 @@ class Dashboard:
             for m_idx, m_gt in enumerate(genotypes):
                 pref = config.sexual_selection_fitness[f_idx, m_idx]
                 if pref != 1.0:
-                    data.append({
+                    data.append({  # type: ignore[reportUnknownMemberType]
                         "female_genotype": str(f_gt),
                         "male_genotype": str(m_gt),
                         "preference": pref,
                     })
-        return data
+        return data  # type: ignore[reportUnknownVariableType]
 
     def _do_export_logic(self, include_config: bool, include_history: bool, include_hooks: bool):
         """The core logic for exporting data to JSON."""
 
-        def semanticize_state(state):
+        def semanticize_state(state):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
             registry = self.pop.registry
             genotypes = [str(g) for g in registry.index_to_genotype]
 
-            if state.individual_count.ndim == 3:
-                n_ages = state.individual_count.shape[1]
-                state_dict = {
-                    "tick": int(state.n_tick),
+            if state.individual_count.ndim == 3:  # type: ignore[reportUnknownMemberType]
+                n_ages = state.individual_count.shape[1]  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                state_dict = {  # type: ignore[reportUnknownVariableType]
+                    "tick": int(state.n_tick),  # type: ignore[reportUnknownMemberType]
                     "individual_count": {"female": [], "male": []},
                 }
-                for age in range(n_ages):
+                for age in range(n_ages):  # type: ignore[reportUnknownArgumentType]
                     female_counts = {}
                     male_counts = {}
                     for g_idx, g_str in enumerate(genotypes):
-                        f_count = state.individual_count[0, age, g_idx]
-                        m_count = state.individual_count[1, age, g_idx]
+                        f_count = state.individual_count[0, age, g_idx]  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                        m_count = state.individual_count[1, age, g_idx]  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
                         if f_count > 0:
                             female_counts[g_str] = f_count
                         if m_count > 0:
                             male_counts[g_str] = m_count
                     if female_counts:
-                        state_dict["individual_count"]["female"].append({
+                        state_dict["individual_count"]["female"].append({  # type: ignore[reportIndexIssue]
                             "age": float(age),
                             "counts": female_counts,
                         })
                     if male_counts:
-                        state_dict["individual_count"]["male"].append({
+                        state_dict["individual_count"]["male"].append({  # type: ignore[reportIndexIssue]
                             "age": float(age),
                             "counts": male_counts,
                         })
 
-                if hasattr(state, "sperm_storage") and state.sperm_storage is not None:
-                    sperm_data = []
-                    sperm = state.sperm_storage
-                    for age in range(sperm.shape[0]):
+                if hasattr(state, "sperm_storage") and state.sperm_storage is not None:  # type: ignore[reportUnknownMemberType]
+                    sperm_data: list[dict[str, object]] = []
+                    sperm = state.sperm_storage  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                    for age in range(sperm.shape[0]):  # type: ignore[reportUnknownMemberType]
                         entries = []
-                        nonzero_pos = np.argwhere(sperm[age] > 0)
+                        nonzero_pos = np.argwhere(sperm[age] > 0)  # type: ignore[reportUnknownArgumentType]
                         for f_idx, m_idx in nonzero_pos:
-                            entries.append({
+                            entries.append({  # type: ignore[reportUnknownMemberType]
                                 "female_genotype": genotypes[int(f_idx)],
                                 "male_genotype": genotypes[int(m_idx)],
-                                "value": float(sperm[age, f_idx, m_idx]),
+                                "value": float(sperm[age, f_idx, m_idx]),  # type: ignore[reportUnknownArgumentType]
                             })
                         if entries:
-                            sperm_data.append({
+                            sperm_data.append({  # type: ignore[reportUnknownMemberType]
                                 "age": float(age),
                                 "entries": entries,
                             })
                     if sperm_data:
-                        state_dict["sperm_storage"] = sperm_data
-                return state_dict
-            return {"tick": int(state.n_tick), "raw_shape": state.individual_count.shape}
+                        state_dict["sperm_storage"] = sperm_data  # type: ignore[reportArgumentType]
+                return state_dict  # type: ignore[reportUnknownVariableType]
+            return {"tick": int(state.n_tick), "raw_shape": state.individual_count.shape}  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
 
         export_content = {"population_name": self.pop.name}
 
@@ -806,14 +821,14 @@ class Dashboard:
                     state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
                 else:
                     state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
-                history_list.append(semanticize_state(state_obj))
+                history_list.append(semanticize_state(state_obj))  # type: ignore[reportUnknownMemberType]
 
             if not history_list or history_list[-1]["tick"] != self.pop.tick:
-                history_list.append(semanticize_state(self.pop.state))
-            export_content["history"] = history_list
+                history_list.append(semanticize_state(self.pop.state))  # type: ignore[reportUnknownMemberType]
+            export_content["history"] = history_list  # type: ignore[reportArgumentType]
 
         if include_config:
-            export_content["configuration"] = {
+            export_content["configuration"] = {  # type: ignore[reportArgumentType]
                 "parameters": self._get_config_scalars(),
                 "all_config": self._get_full_config_data(),
                 "presets_visualization": self._get_presets_visualization_data(),
@@ -825,7 +840,7 @@ class Dashboard:
             }
 
         if include_hooks:
-            export_content["hooks"] = self._get_hooks_data()
+            export_content["hooks"] = self._get_hooks_data()  # type: ignore[reportArgumentType]
 
         try:
             json_str = json.dumps(export_content, default=numpy_converter)
@@ -841,23 +856,23 @@ class Dashboard:
         """Backwards-compatible export entrypoint."""
         self._do_export_logic(include_config=True, include_history=True, include_hooks=True)
 
-    def handle_chart_click(self, e):
+    def handle_chart_click(self, e):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
         """Handle click on chart points to inspect history."""
         # e.point_x contains the tick value
-        if e.point_x is None:
+        if e.point_x is None:  # type: ignore[reportUnknownMemberType]
             return
 
-        tick = int(e.point_x)
+        tick = int(e.point_x)  # type: ignore[reportUnknownMemberType]
         self.inspect_tick(tick)
 
-    def handle_tick_input(self, e):
+    def handle_tick_input(self, e):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
         """Handle manual tick input."""
-        if e.value is None:
+        if e.value is None:  # type: ignore[reportUnknownMemberType]
             return
-        self.inspect_tick(int(e.value))
+        self.inspect_tick(int(e.value))  # type: ignore[reportUnknownMemberType]
 
     def _get_config_scalars(self):
-        conf = self.pop.export_config()
+        conf = self.pop.config
         growth_mode = int(conf.juvenile_growth_mode)
         return {
             "stochastic": bool(conf.stochastic),
@@ -869,7 +884,7 @@ class Dashboard:
             "n_glabs": int(conf.n_glabs),
             "new_adult_age": int(conf.new_adult_age),
             "sperm_displacement_rate": float(conf.sperm_displacement_rate),
-            "expected_eggs_per_female": float(conf.expected_eggs_per_female),
+            "expected_eggs_per_female": float(conf.expected_eggs_per_female),  # type: ignore[reportUnknownMemberType]
             "fixed_egg_count": bool(conf.fixed_egg_count),
             "carrying_capacity": float(conf.carrying_capacity),
             "sex_ratio": float(conf.sex_ratio),
@@ -887,53 +902,53 @@ class Dashboard:
     def _growth_mode_name(self, mode: int) -> str:
         return growth_mode_name(mode)
 
-    def _jsonable_config_value(self, value):
+    def _jsonable_config_value(self, value):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
         return jsonable_config_value(value)
 
-    def _get_full_config_data(self):
-        conf = self.pop.export_config()
+    def _get_full_config_data(self):  # type: ignore[reportUnknownParameterType]
+        conf = self.pop.config
         data = {}
         for key, value in conf._asdict().items():
-            data[key] = self._jsonable_config_value(value)
+            data[key] = self._jsonable_config_value(value)  # type: ignore[reportUnknownMemberType]
         data["juvenile_growth_mode_name"] = self._growth_mode_name(int(conf.juvenile_growth_mode))
-        return data
+        return data  # type: ignore[reportUnknownVariableType]
 
-    def _get_presets_visualization_data(self):
+    def _get_presets_visualization_data(self):  # type: ignore[reportUnknownParameterType]
         """Best-effort preset-centric summary for export visualization."""
-        preset_map: Dict[str, Dict] = {}
+        preset_map: Dict[str, Dict] = {}  # type: ignore[reportMissingTypeArgument]
 
-        def record_modifier(mod_type: str, mod_tuple):
-            mod_id, mod_name, _ = mod_tuple
-            name = mod_name or f"{mod_type}_{mod_id}"
+        def record_modifier(mod_type: str, mod_tuple):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
+            mod_id, mod_name, _ = mod_tuple  # type: ignore[reportUnknownVariableType]
+            name = mod_name or f"{mod_type}_{mod_id}"  # type: ignore[reportUnknownVariableType]
             if "/" in name:
-                preset_name, suffix = name.split("/", 1)
+                preset_name, suffix = name.split("/", 1)  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
             else:
-                preset_name, suffix = name, mod_type
+                preset_name, suffix = name, mod_type  # type: ignore[reportUnknownVariableType]
             if preset_name not in preset_map:
                 preset_map[preset_name] = {
                     "preset_name": preset_name,
                     "gamete_modifiers": [],
                     "zygote_modifiers": [],
                 }
-            item = {"id": int(mod_id), "name": name, "kind": suffix}
+            item = {"id": int(mod_id), "name": name, "kind": suffix}  # type: ignore[reportUnknownArgumentType, reportUnknownVariableType]
             if mod_type == "gamete":
-                preset_map[preset_name]["gamete_modifiers"].append(item)
+                preset_map[preset_name]["gamete_modifiers"].append(item)  # type: ignore[reportUnknownMemberType]
             else:
-                preset_map[preset_name]["zygote_modifiers"].append(item)
+                preset_map[preset_name]["zygote_modifiers"].append(item)  # type: ignore[reportUnknownMemberType]
 
         for mod in getattr(self.pop, "_gamete_modifiers", []):
             record_modifier("gamete", mod)
         for mod in getattr(self.pop, "_zygote_modifiers", []):
             record_modifier("zygote", mod)
 
-        return {
-            "preset_count": len(preset_map),
-            "presets": list(preset_map.values()),
+        return {  # type: ignore[reportUnknownVariableType]
+            "preset_count": len(preset_map),  # type: ignore[reportUnknownArgumentType]
+            "presets": list(preset_map.values()),  # type: ignore[reportUnknownArgumentType]
         }
 
-    def _get_genotype_fitness(self, g_idx: int, target_age: int) -> dict:
+    def _get_genotype_fitness(self, g_idx: int, target_age: int) -> dict:  # type: ignore[reportMissingTypeArgument, reportUnknownParameterType]
         """Helper to get formatted fitness strings for a genotype."""
-        config = self.pop.export_config()
+        config = self.pop.config
 
         v_f = config.viability_fitness[0, target_age, g_idx]
         v_m = config.viability_fitness[1, target_age, g_idx]
@@ -945,9 +960,9 @@ class Dashboard:
             res['via'] = f"Via: {v_f:.2g}(F)/{v_m:.2g}(M)"
         if f_f != 1.0 or f_m != 1.0:
             res['fec'] = f"Fec: {f_f:.2g}(F)/{f_m:.2g}(M)"
-        return res
+        return res  # type: ignore[reportUnknownVariableType]
 
-    def handle_chart_zoom(self, e):
+    def handle_chart_zoom(self, e):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
         """Handle Highcharts 'selection' event to update view window."""
         # e.args format for selection event:
         # { 'xAxis': [ {'min': float, 'max': float, ...} ], ... } if zooming
@@ -956,9 +971,9 @@ class Dashboard:
         # Highcharts on client side handles the visual zoom.
         # We update our internal view state and trigger a data refresh
         # to load higher resolution data for the selected range.
-        if e.args and 'xAxis' in e.args and e.args['xAxis']:
-            self.view_min = e.args['xAxis'][0]['min']
-            self.view_max = e.args['xAxis'][0]['max']
+        if e.args and 'xAxis' in e.args and e.args['xAxis']:  # type: ignore[reportUnknownMemberType]
+            self.view_min = e.args['xAxis'][0]['min']  # type: ignore[reportUnknownMemberType]
+            self.view_max = e.args['xAxis'][0]['max']  # type: ignore[reportUnknownMemberType]
         else:
             self.view_min = None
             self.view_max = None
@@ -999,7 +1014,7 @@ class Dashboard:
             else:
                 state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
 
-            self._update_inspection_view(state_obj, tick, is_history=True)
+            self._update_inspection_view(state_obj, tick, is_history=True)  # type: ignore[reportArgumentType]
             self.tabs_main.set_value('inspection')
             ui.notify(f"Inspecting Tick {tick}")
         else:
@@ -1007,6 +1022,8 @@ class Dashboard:
 
     def build_layout(self):
         """Construct the NiceGUI layout."""
+        assert ui is not None  # narrow for pyright after nicegui guard
+        assert run is not None  # narrow for pyright after nicegui guard
 
         # --- Header ---
         with ui.header().classes('items-center justify-between bg-slate-900 text-white'):
@@ -1057,14 +1074,14 @@ class Dashboard:
                 with ui.row().classes('w-full gap-2'):
                     ui.button('Step', on_click=self._run_step).props('icon=skip_next outline').classes('flex-grow')
 
-                    def update_play_state(e):
+                    def update_play_state(e: Any) -> None:  # type: ignore[reportUnknownParameterType]
                         self._toggle_play()
                         icon = "pause" if self.is_running else "play_arrow"
                         text = "Pause" if self.is_running else "Play"
-                        e.sender.props(f'icon={icon}')
-                        e.sender.text = text
+                        e.sender.props(f'icon={icon}')  # type: ignore[reportUnknownMemberType]
+                        e.sender.text = text  # type: ignore[reportUnknownMemberType]
 
-                    self.btn_play = ui.button('Play', on_click=update_play_state).props('icon=play_arrow').classes('flex-grow')
+                    self.btn_play = ui.button('Play', on_click=update_play_state).props('icon=play_arrow').classes('flex-grow')  # type: ignore[reportUnknownArgumentType]
 
                 with ui.row().classes('w-full gap-2 mt-2'):
                     ui.button('Reset', on_click=self.reset_simulation).props('icon=restart_alt flat color=grey').classes('flex-grow')
@@ -1082,43 +1099,49 @@ class Dashboard:
             with ui.card().classes('w-full p-0 gap-0 border-none shadow-sm'):
                 with ui.row().classes('w-full no-wrap'):
                     # Population Chart
-                    self.chart_pop = ui.highchart({
-                        'title': {'text': 'Population Size'},
-                        'chart': {'type': 'line', 'animation': False, 'height': 300, 'zoomType': 'x'},
-                        'xAxis': {'title': {'text': 'Tick'}},
-                        'yAxis': {
-                            'title': {'text': 'Count'},
-                            'allowDecimals': not self._discrete_display(),
-                        },
-                        'series': [{'name': 'TotalPop', 'data': []}],
-                        'plotOptions': {
-                            'series': {
-                                'dataGrouping': {'enabled': False},
-                                'marker': {'enabled': False},
-                                'cursor': 'pointer',
-                                'events': {'click': True} # Enable click events
+                    self.chart_pop = (
+                        ui.highchart({  # type: ignore[reportUnknownMemberType]
+                            'title': {'text': 'Population Size'},
+                            'chart': {'type': 'line', 'animation': False, 'height': 300, 'zoomType': 'x'},
+                            'xAxis': {'title': {'text': 'Tick'}},
+                            'yAxis': {
+                                'title': {'text': 'Count'},
+                                'allowDecimals': not self._discrete_display(),
+                            },
+                            'series': [{'name': 'TotalPop', 'data': []}],
+                            'plotOptions': {
+                                'series': {
+                                    'dataGrouping': {'enabled': False},
+                                    'marker': {'enabled': False},
+                                    'cursor': 'pointer',
+                                    'events': {'click': True}  # Enable click events
+                                }
                             }
-                        }
-                    }, on_point_click=self.handle_chart_click).classes('w-1/2 h-80') \
-                    .on('selection', self.handle_chart_zoom, ['xAxis'])
+                        }, on_point_click=self.handle_chart_click)  # type: ignore[reportUnknownMemberType]
+                        .classes('w-1/2 h-80')
+                        .on('selection', self.handle_chart_zoom, ['xAxis'])  # type: ignore[reportUnknownMemberType]
+                    )
 
                     # Allele Freq Chart
-                    self.chart_allele = ui.highchart({
-                        'title': {'text': 'Allele Frequencies'},
-                        'chart': {'type': 'line', 'animation': False, 'height': 300, 'zoomType': 'x'},
-                        'xAxis': {'title': {'text': 'Tick'}},
-                        'yAxis': {'title': {'text': 'Freq'}, 'max': 1.0, 'min': 0.0},
-                        'series': [],
-                        'plotOptions': {
-                            'series': {
-                                'dataGrouping': {'enabled': False},
-                                'marker': {'enabled': False},
-                                'cursor': 'pointer',
-                                'events': {'click': True}
+                    self.chart_allele = (
+                        ui.highchart({  # type: ignore[reportUnknownMemberType]
+                            'title': {'text': 'Allele Frequencies'},
+                            'chart': {'type': 'line', 'animation': False, 'height': 300, 'zoomType': 'x'},
+                            'xAxis': {'title': {'text': 'Tick'}},
+                            'yAxis': {'title': {'text': 'Freq'}, 'max': 1.0, 'min': 0.0},
+                            'series': [],
+                            'plotOptions': {
+                                'series': {
+                                    'dataGrouping': {'enabled': False},
+                                    'marker': {'enabled': False},
+                                    'cursor': 'pointer',
+                                    'events': {'click': True}
+                                }
                             }
-                        }
-                    }, on_point_click=self.handle_chart_click).classes('w-1/2 h-80') \
-                    .on('selection', self.handle_chart_zoom, ['xAxis'])
+                        }, on_point_click=self.handle_chart_click)  # type: ignore[reportUnknownMemberType]
+                        .classes('w-1/2 h-80')
+                        .on('selection', self.handle_chart_zoom, ['xAxis'])  # type: ignore[reportUnknownMemberType]
+                    )
 
             # --- Tabs Section ---
             with ui.tabs().classes('w-full justify-start border-b') as tabs:
@@ -1136,7 +1159,7 @@ class Dashboard:
                     with ui.row().classes('items-center justify-between mb-4'):
                         with ui.row().classes('items-center gap-4'):
                             ui.label('Population State Inspection').classes('text-xl font-bold text-gray-700')
-                            ui.number(label='Go to Tick', value=None, min=0, precision=0, on_change=self.handle_tick_input).props('dense outlined').classes('w-32')
+                            ui.number(label='Go to Tick', value=None, min=0, precision=0, on_change=self.handle_tick_input).props('dense outlined').classes('w-32')  # type: ignore[reportUnknownMemberType]
                         self.lbl_status_mode = ui.label('LIVE VIEW').classes('font-bold text-green-600 text-lg')
 
                     with ui.row().classes('w-full gap-12 items-start no-wrap'):
@@ -1198,10 +1221,10 @@ class Dashboard:
                 with ui.tab_panel(tab_rules):
                     with ui.column().classes('w-full gap-6'):
                         ui.label('Meiosis (Genotype -> Gametes)').classes('font-bold text-gray-700 text-xl')
-                        figs = self._create_meiosis_plots()
+                        figs = self._create_meiosis_plots()  # type: ignore[reportUnknownVariableType]
                         with ui.row().classes('w-full gap-4'):
-                            for fig in figs:
-                                ui.plotly(fig).classes('flex-1 h-[600px] border rounded')
+                            for fig in figs:  # type: ignore[reportUnknownVariableType]
+                                ui.plotly(fig).classes('flex-1 h-[600px] border rounded')  # type: ignore[reportUnknownArgumentType]
 
                         ui.label('Fertilization (Gametes -> Zygote)').classes('font-bold text-gray-700 text-xl mt-4')
                         fig_fert = self._create_fertilization_plot()
@@ -1245,7 +1268,7 @@ def launch(population: 'BasePopulation[Any]', port: int = 8080, title: str = "NA
     # Note: NiceGUI is singleton-based, so multiple launches might need care.
 
     @ui.page('/')
-    def main_page():
+    def main_page():  # type: ignore[reportUnusedFunction]
         dashboard = Dashboard(population)
         dashboard.build_layout()
 
@@ -1255,4 +1278,4 @@ def launch(population: 'BasePopulation[Any]', port: int = 8080, title: str = "NA
     print(f"🚀 Starting Dashboard at http://localhost:{port}")
     print("📖 Click Ctrl+C to stop the dashboard")
     title = f"{population.name} - NATAL Dashboard" if population.name else "NATAL Dashboard"
-    ui.run(title=title, port=port, show=False, reload=False, favicon=favicon_path)
+    ui.run(title=title, port=port, show=False, reload=False, favicon=favicon_path)  # type: ignore[reportUnknownMemberType]
