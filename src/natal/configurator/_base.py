@@ -29,9 +29,6 @@ import numpy as np
 from numba import objmode  # pyright: ignore[reportMissingTypeStubs]
 from numpy.typing import NDArray
 
-from natal.configurator._fitness import (
-    write_fitness_field,
-)
 from natal.configurator._params import (
     resolve_param,
 )
@@ -44,6 +41,7 @@ from natal.data import (
     DiscretePopulationConfig,
     PopulationConfig,
 )
+from natal.fitness._writer import write_fitness_field
 from natal.genetics import Species
 from natal.numba.utils import njit_switch
 from natal.presets import CytoplasmicPreset
