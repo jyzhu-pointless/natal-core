@@ -176,11 +176,72 @@ hooks → engine → population
 
 ## 后续重构（待办）
 
-- `population/base.py` 🔴 — BasePopulation ABC 需深度重构：
-  - 大量用不上的逻辑（Hook 程序构建、编译缓存管理）
-  - 与子类（AgeStructuredPopulation / DiscreteGenerationPopulation）边界模糊，很多逻辑下沉到了子类构造函数，但 ABC 仍持有不属于基类的状态
-  - Hook 管理、历史记录、事件派发均混杂在 ABC 中，建议拆分为 mixin，核心 ABC 只保留生命周期契约
-- `spatial/population.py` + `spatial/configurator.py` 🔴 — 均超 1,600 行，需拆分
-- `engine/simulation/age_structured.py` 🔴 — 1,342 行，按生命周期阶段拆分
-- `fitness/` 🔴 — 从 presets + configurator 提取适应度逻辑
-- `engine/` 🔴 — 整体按生命周期阶段重构
+### 🔴 高优先级
+
+#### `fitness/` — 提取适应度逻辑，与 `modifiers/` 对称
+
+当前状态：`fitness/` 是空壳子包。适应度逻辑分散在两处：
+- `presets/_fitness.py`（624 行）—— fitness patch 构造 + 缩放计算
+- `configurator/_fitness.py`（423 行）—— 数组写入
+- `presets/gamete_conversion.py`（675 行）+ `presets/zygote_conversion.py`（654 行）—— modifier 计算规则，应迁入 `modifiers/`
+
+目标架构（对标 modifiers/ 的三层设计）：
+
+```
+fitness/                       modifiers/
+├── _types.py                  ├── module.py      （Protocol + Wrapper）
+├── _writer.py  （共享写层）    ├── _rules.py      （gamete + zygote 规则）
+├── _patch.py   （构建+应用）   │
+└── _scaling.py （缩放计算）    │
+                                presets/（只留 Preset 定义）
+                                ├── _base.py       GeneticPreset ABC
+                                ├── homing.py      → 调 modifiers._rules + fitness._patch
+                                ├── toxin_antidote.py
+                                └── cytoplasmic.py
+```
+
+Configurator 保留自己的 DSL 语法糖（`cfg.fitness(viability={"WT|WT": 0.8})`），但底层委托给 `fitness/_writer.py`。两条写路径收敛为一套共享写层。
+
+#### `population/base.py` — BasePopulation ABC 深度重构
+
+- 大量用不上的逻辑（Hook 程序构建、编译缓存管理）
+- 与子类（AgeStructuredPopulation / DiscreteGenerationPopulation）边界模糊，很多逻辑下沉到了子类构造函数，但 ABC 仍持有不属于基类的状态
+- Hook 管理、历史记录、事件派发均混杂在 ABC 中
+- 建议拆分为 mixin，核心 ABC 只保留生命周期契约
+
+### 🟡 中优先级
+
+#### `spatial/population.py`（2,041 行）+ `spatial/configurator.py`（1,678 行）
+
+超大文件，需拆分为子模块。PRD 中标记为 Out of Scope。
+
+#### `engine/simulation/age_structured.py`（1,342 行）
+
+按生命周期阶段拆分。PRD 中标记为 Out of Scope。
+
+#### `engine/` 整体
+
+按生命周期阶段重构引擎架构。`njit_switch` 以后废弃——Numba 官方 `@njit` 修饰器自带开关。
+
+### 🟢 低优先级
+
+#### UI 类型检查修复
+
+`ui/` 下多个文件使用全文件 `# type: ignore`，需恢复逐行类型检查。
+
+#### 测试覆盖率提升
+
+核心模块间集成测试覆盖不足，优先补充 fitness 和 modifier 的路径测试。
+
+### ✅ 已确认不变更
+
+以下文件超过 500 行但经评估不适合拆分——类的边界即自然边界：
+
+| 文件 | 行数 | 理由 |
+|---|---|---|
+| `configurator/_base.py` | 1,164 | Configurator 是完整 DSL 类，内聚性高 |
+| `configurator/_factory.py` | 783 | PopulationConfigBuilder 是装配类 |
+| `genetics/entities/genotype.py` | 649 | 基因型构造 + 重组逻辑，单一职责 |
+| `patterns/parser.py` | 613 | GenotypePatternParser 是递归下降解析器 |
+| `numba/utils.py` | 709 | 工具函数库，以后随 njit_switch 废弃而简化 |
+| `numba/compat.py` | 616 | 同上 |
