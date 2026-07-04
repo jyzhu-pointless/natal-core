@@ -46,7 +46,7 @@ def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'Genet
         ValueError: If preset is bound to a different species than the population
         RuntimeError: If preset has no bound species
     """
-    from ._fitness import apply_preset_fitness_patch
+    from natal.fitness._patch import apply_preset_fitness_patch
 
     preset.bind_species(population.species)
 

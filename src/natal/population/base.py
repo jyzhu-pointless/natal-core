@@ -614,7 +614,7 @@ class BasePopulation(ABC, Generic[T_State]):
         overwritten, because there is currently no manual-fitness storage
         analogous to ``_manual_gamete`` / ``_manual_zygote``.
         """
-        from natal.presets import apply_preset_fitness_patch
+        from natal.fitness import apply_preset_fitness_patch
 
         if self._config is None:
             return
