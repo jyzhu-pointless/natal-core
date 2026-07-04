@@ -129,9 +129,14 @@ src/natal/
 │
 ├── modifiers/                 # 🔀 遗传修饰器 ✅
 │   ├── module.py              # GameteModifier / ZygoteModifier Protocol
+│   ├── gamete_conversion.py   # 配子转换规则（从 presets/ 迁入）
+│   ├── zygote_conversion.py   # 合子转换规则（从 presets/ 迁入）
 │   └── __init__.py
 │
-├── fitness/                   # 💪 适应度系统 🔴 已规划，待实现
+├── fitness/                   # 💪 适应度系统 ✅
+│   ├── _types.py              # FitnessPopulationView Protocol
+│   ├── _patch.py              # 唯一写入层（apply_preset_fitness_patch）
+│   ├── _writer.py             # DSL 解析层（write_fitness_field）
 │   └── __init__.py
 │
 ├── numba/                     # ⚡ Numba 基础设施 ✅
@@ -156,7 +161,7 @@ src/natal/
 
 ```
 utils → genetics → patterns → presets → modifiers
-                                    ↘ fitness (后续)
+                                    ↘ fitness
 genetics + patterns → registry → data
 data → configurator → population → spatial → output → ui
 hooks → engine → population
@@ -167,7 +172,7 @@ hooks → engine → population
 1. **`data/` 独立于 `configurator/`**：config 和 state 是面向引擎的纯数据结构，不依赖配置器自身。
 2. **`patterns/` 与 `genetics/` 平行**：patterns 被 hooks、configurator、modifiers 等多个模块依赖，不是 genetics 的子概念。
 3. **`registry/` 独立顶层**：IndexRegistry 是遗传领域到引擎整数空间的桥梁。
-4. **`fitness/` 已规划**：fitness 逻辑散落在 presets 和 configurator 中。已设计 `FitnessPopulationView` Protocol 统一接口 + `_patch.py` 唯一写层 + `_writer.py` DSL 解析层。详见「后续重构」。
+4. **`fitness/` 已激活**：fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子包，使用 `FitnessPopulationView` Protocol 作为统一接口，`_patch.py` 为唯一写入层，`_writer.py` 为 DSL 解析层。
 5. **`modifiers/` 独立**：修饰器是连接 presets 和引擎的独立抽象层。
 6. **500 行单模块上限**：每个 `.py` 文件不超过 500 行，超限需拆分。
 7. **Numba cache 位于工作目录**：`numba/utils.py` 中 `NUMBA_CACHE_DIR` 默认指向 `cwd/.numba_cache`，而非项目根目录。
@@ -176,60 +181,19 @@ hooks → engine → population
 
 ## 后续重构（待办）
 
+### ✅ 已完成
+
+#### `fitness/` — 适应度系统已激活
+
+fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子包。实现内容：
+
+- `fitness/_types.py`：`FitnessPopulationView` Protocol（`config` + `species` + `index_registry`）
+- `fitness/_patch.py`：唯一写入层，`apply_preset_fitness_patch` 及 9 个 `_apply_*_scaling` 函数
+- `fitness/_writer.py`：DSL 解析层，`write_fitness_field` 解析 pattern → 委托 `_patch.py` 统一写入
+- `modifiers/gamete_conversion.py` + `modifiers/zygote_conversion.py`：从 `presets/` 迁入，原名不变
+- `presets/__init__.py`、`configurator/_fitness.py`：保留向后兼容的 shim
+
 ### 🔴 高优先级
-
-#### `fitness/` — 提取适应度逻辑，与 `modifiers/` 对称
-
-当前状态：`fitness/` 是空壳子包。适应度逻辑分散在两处：
-- `presets/_fitness.py`（624 行）—— fitness patch 构造 + 缩放计算
-- `configurator/_fitness.py`（423 行）—— 数组写入
-- `presets/gamete_conversion.py`（675 行）+ `presets/zygote_conversion.py`（654 行）—— modifier 计算规则，应迁入 `modifiers/`
-
-##### 关键发现
-
-`_fitness.py` 对 Population 的依赖是**偶然的**——它只访问 `config`、`species`、`index_registry` 三个属性，从不调用 Population 特有的方法。`ConfigContext`（`configurator/_registry_builder.py`）早已在生产代码中证明了这一点——它用一个只有这三个属性的假对象替代 Population 运行 fitness 逻辑。
-
-##### 统一接口
-
-引入 `FitnessPopulationView` Protocol，替代 `BasePopulation` 作为 fitness 函数的参数类型：
-
-```python
-class FitnessPopulationView(Protocol):
-    config: PopulationConfig
-    species: Species
-    index_registry: IndexRegistry
-```
-
-`BasePopulation` 和 `ConfigContext` 都天然满足此 Protocol，无需修改。
-
-##### 目标架构
-
-```
-fitness/                         modifiers/
-├── _types.py                    ├── module.py            （Protocol + Wrapper）
-│   ├── FitnessPopulationView    ├── gamete_conversion.py （从 presets/ 迁入）
-│   ├── PresetFitnessPatch ──────┼── zygote_conversion.py （从 presets/ 迁入）
-│   └── _calculate_allele_effect │
-├── _patch.py  （唯一写层）       presets/
-│   ├── apply_fitness_patch()    ├── _base.py       GeneticPreset ABC
-│   └── 9 个 _apply_*_scaling    ├── homing.py      → 调 modifiers + fitness._patch
-├── _writer.py （DSL 解析层）     ├── toxin_antidote.py
-│   ├── write_fitness_field()    ├── cytoplasmic.py
-│   └── 解析 pattern → 委托      └── __init__.py    （重导出 gamete/zygote 规则，
-│       _patch.py 统一写入                                 保持向后兼容）
-└── __init__.py
-```
-
-##### 写路径收敛
-
-Configurator 保留 DSL 语法糖（`cfg.fitness(viability={"WT|WT": 0.8})`），`_writer.py` 负责解析 pattern → ztype 索引 + sex/age 解析，然后委托 `_patch.py` 统一写入适应度数组。`_patch.py` 是适应度数组的**唯一写入源**——数组写入 bug 不会分叉。
-
-##### 执行步骤
-
-1. `gamete_conversion.py` + `zygote_conversion.py` 迁入 `modifiers/`（原名不变），`presets/__init__.py` 重导出保持向后兼容
-2. `presets/_fitness.py` 核心写入逻辑 → `fitness/_patch.py`，参数类型改为 `FitnessPopulationView`
-3. `configurator/_fitness.py` 写入逻辑 → `fitness/_writer.py`，解析后委托 `_patch.py`
-4. `configurator/_fitness.py` 变为 ~5 行 shim，重导出 `fitness/_writer.write_fitness_field`——`configurator/_base.py` 零改动
 
 #### `population/base.py` — BasePopulation ABC 深度重构（fitness/ 完成后进行）
 
@@ -271,5 +235,5 @@ Configurator 保留 DSL 语法糖（`cfg.fitness(viability={"WT|WT": 0.8})`）�
 | `patterns/parser.py` | 613 | GenotypePatternParser 是递归下降解析器 |
 | `numba/utils.py` | 709 | 工具函数库，内聚性高 |
 | `numba/compat.py` | 616 | 同上 |
-| `presets/gamete_conversion.py` | 675 | 配子转换规则集，内聚性高 |
-| `presets/zygote_conversion.py` | 654 | 合子转换规则集，内聚性高 |
+| `modifiers/gamete_conversion.py` | 675 | 配子转换规则集，内聚性高（从 presets/ 迁入） |
+| `modifiers/zygote_conversion.py` | 654 | 合子转换规则集，内聚性高（从 presets/ 迁入） |
