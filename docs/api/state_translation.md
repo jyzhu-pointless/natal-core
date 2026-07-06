@@ -88,6 +88,6 @@ print(hist_json[:200])
 
 ## Complete Module Reference
 
-::: natal.state_translation
+::: natal.output.translation
     options:
       heading_level: 3

@@ -217,9 +217,27 @@ pop = (
 pop.run(n_steps=200, record_every=10)
 ```
 
-## Modifying Parameters in Hooks
+## Custom Hooks (Direct State Manipulation)
 
-See the [Advanced Hook Tutorial](3_advanced_hooks.md) section on "Runtime Parameter Modification".
+When declarative `Op.*` operations aren't flexible enough, use custom hooks
+with `custom=True` to directly access NumPy arrays:
+
+```python
+from natal.hooks import hook
+
+@hook(event="early", custom=True, priority=10)
+def my_hook(state, config, deme_id=-1):
+    # state.individual_count has shape (sex, age, genotype)
+    if state.n_tick % 10 == 0:
+        state.individual_count[1, :, :] += 100  # add 100 males
+    return 0  # RESULT_CONTINUE
+```
+
+Custom hooks use the signature `(state, config, deme_id=-1)`. `deme_id`
+defaults to `-1` for panmictic populations. Return `0` to continue or
+`RESULT_STOP` to end the simulation. For selector-based hooks, Numba
+compilation details, and runtime parameter modification inside hooks,
+see the [Advanced Hook Tutorial](3_advanced_hooks.md).
 
 ## Related Sections
 

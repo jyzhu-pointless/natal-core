@@ -86,14 +86,14 @@ parser.parse_haplotype_pattern("A@Cas9_deposited")  # gamete label
 
 ### Ordered vs Unordered Matching
 
-- **`|` (ordered)**: Strictly distinguishes maternal and paternal order
-- **`::` (unordered)**: The two homologous chromosome copies can be swapped
+- **`|` (single pipe)**: Used for exact matching in pattern syntax. Whether maternal/paternal order matters depends on the Species' `unordered` setting (default `True` — order is ignored).
+- **`::` (double colon)**: Explicitly unordered matching — the two homologous chromosome copies can be swapped, regardless of the Species setting.
 
 ```python
-# Ordered matching: Maternal|Paternal strictly distinguished
+# | syntax: order matters only when Species.unordered=False (default is True)
 pattern1 = "A1/B1|A2/B2"
 
-# Unordered matching: homologous chromosomes can be swapped
+# :: syntax: explicit unordered — homologous chromosomes can swap
 pattern2 = "A1/B1::A2/B2"
 ```
 

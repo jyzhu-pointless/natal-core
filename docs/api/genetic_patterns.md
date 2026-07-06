@@ -8,6 +8,6 @@ The `genetic_patterns` module implements the syntax and logic for matching genot
 
 ## Complete Module Reference
 
-::: natal.genetic_patterns
+::: natal.patterns
     options:
       heading_level: 3

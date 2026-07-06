@@ -10,6 +10,6 @@ zygote modifiers, and fitness patches into populations.
 
 ## Complete Module Reference
 
-::: natal.genetic_presets
+::: natal.presets
     options:
       heading_level: 3

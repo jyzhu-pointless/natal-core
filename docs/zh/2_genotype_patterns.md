@@ -90,8 +90,8 @@ parser.parse_haplotype_pattern("A@Cas9_deposited")
 
 ### 有序 vs 无序匹配
 
-- **`|`（有序）**：严格区分母本和父本顺序
-- **`::`（无序）**：同源染色体两条拷贝可交换
+- **`|`（单竖线）**：仅在 `Species.unordered=False` 时严格区分母本和父本顺序。默认 `unordered=True` 下，系统自动规范化，`A|a` 与 `a|A` 视为同一基因型。
+- **`::`（双冒号）**：显式无序匹配——无论 Species 设置如何，同源染色体两条拷贝均可交换。
 
 ```python
 # 有序匹配：Maternal|Paternal 严格区分

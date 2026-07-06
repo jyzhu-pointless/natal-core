@@ -8,6 +8,6 @@ The `base_population` module provides the foundational population model that oth
 
 ## Complete Module Reference
 
-::: natal.base_population
+::: natal.population.base
     options:
       heading_level: 3

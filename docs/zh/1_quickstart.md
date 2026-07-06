@@ -46,14 +46,14 @@ sp = nt.Species.from_dict(
 - **`Haplotype`（单倍型）**：一条染色体上所有位点选定的等位基因组合。
 - **`HaploidGenotype`（单倍基因型）**：物种每对染色体各贡献一条单倍型，共同构成一组完整的单倍体基因组。
 - **`Genotype`（二倍体基因型）**：母本和父本的两套单倍基因型组合而成，代表个体的全部遗传信息。
-  - **注意：** 基因型严格区分母本来源和父本来源的单倍基因型。在字符串表达中，遵循 `Maternal|Paternal` 的顺序。`A|a` 和 `a|A` 会被认为是不同的基因型。
+  - **注意：** 默认情况下，NATAL **不区分**母本和父本的来源——`A|a` 和 `a|A` 被视为相同的基因型（通过 `Species(unordered=True)` 自动规范化为统一顺序）。如需显式追踪亲本来历，请设置 `unordered=False`。
 
 > 实体层相当于 “装修好的房子” ——每个房间已经选定了具体的家具款式，窗户也确定了是圆是方。
 
 #### 为什么这样区分？
 
 - **结构** 是模型级的、不可变的配置（例如“这个物种有 A、B 两个位点”），可以在模拟开始前一次性定义。
-- **实体** 是种群级的、动态出现的实例（例如“当前种群中有 `WT|WT`、`WT|Drive`、`Drive|WT`、`Drive|Drive` 四种基因型”），通过遗传规则产生和传递。
+- **实体** 是种群级的、动态出现的实例（例如“当前种群中有 `WT|WT`、`WT|Drive`、`Drive|Drive` 三种基因型”——无序规范化下 `WT|Drive` 与 `Drive|WT` 为同一基因型），通过遗传规则产生和传递。
 
 这种分离使得模拟可以灵活定义复杂的遗传架构，同时在运行时保持高效的计算。
 
@@ -65,8 +65,8 @@ sp = nt.Species.from_dict(
 # 查看所有可能的基因型
 all_genotypes = sp.get_all_genotypes()
 print(f"总共有 {len(all_genotypes)} 种基因型")
-# 输出: 总共有 9 种基因型
-# (WT|WT, WT|Drive, WT|Resistance, Drive|WT, Drive|Drive, Drive|Resistance, Resistance|WT, Resistance|Drive, Resistance|Resistance)
+# 输出: 总共有 6 种基因型
+# (WT|WT, WT|Drive, WT|Resistance, Drive|Drive, Drive|Resistance, Resistance|Resistance)
 
 # 获取特定基因型
 wt_wt = sp.get_genotype_from_str("WT|WT")

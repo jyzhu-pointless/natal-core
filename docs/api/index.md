@@ -1,28 +1,73 @@
 # API Reference Overview
 
-This section provides module-level API references.
+This section provides module-level API references, organized by the package's 17 subpackages.
 
-## Core Simulation
+## Population
 
-- [base_population](base_population.md)
-- [age_structured_population](age_structured_population.md)
-- [discrete_generation_population](discrete_generation_population.md)
-- [configurator](configurator.md)
-- [population_builder](population_builder.md) *(legacy)*
-- [population_state](population_state.md)
-- [state_translation](state_translation.md)
-- [population_config](population_config.md)
-- [simulation_kernels](simulation_kernels.md)
-- [algorithms](algorithms.md)
+- [BasePopulation](base_population.md)
+- [AgeStructuredPopulation](age_structured_population.md)
+- [DiscreteGenerationPopulation](discrete_generation_population.md)
+
+## Configurator
+
+- [Configurator](configurator.md)
+- [Population Builder (legacy)](population_builder.md)
 
 ## Genetics
 
-- [genetic_structures](genetic_structures.md)
-- [genetic_entities](genetic_entities.md)
-- [genetic_patterns](genetic_patterns.md)
-- [genetic_presets](genetic_presets.md)
+- [Species, Chromosome, Locus](genetic_structures.md)
+- [Gene, Genotype, Haplotype](genetic_entities.md)
 
-## Extension System
+## Patterns
 
-- [modifiers](modifiers.md)
-- [hooks](hook_dsl.md)
+- [Genotype Patterns](genetic_patterns.md)
+
+## Presets
+
+- [Genetic Presets](genetic_presets.md)
+
+## Data
+
+- [PopulationConfig](population_config.md)
+- [PopulationState](population_state.md)
+
+## Engine
+
+- [Simulation Engine](simulation_engine.md)
+- [Algorithms](algorithms.md)
+
+## Hooks
+
+- [Hook DSL](hook_dsl.md)
+
+## Modifiers
+
+- [Modifiers](modifiers.md)
+
+## Output
+
+- [State Translation](state_translation.md)
+
+## Spatial
+
+- [Spatial Population](spatial.md)
+
+## Fitness
+
+- [Fitness System](fitness.md)
+
+## Numba
+
+- [Numba Utilities](numba.md)
+
+## Registry
+
+- [IndexRegistry](registry.md)
+
+## UI
+
+- [Dashboard & Launch](ui.md)
+
+## Utils
+
+- [Utilities](utils.md)

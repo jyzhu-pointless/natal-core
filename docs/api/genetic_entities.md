@@ -8,6 +8,6 @@ The `genetic_entities` module defines the runtime genetic entities that represen
 
 ## Complete Module Reference
 
-::: natal.genetic_entities
+::: natal.genetics.entities
     options:
       heading_level: 3

@@ -10,6 +10,6 @@ The `population_builder` module provides tools for setting up complex population
 
 ## Complete Module Reference
 
-::: natal.population_builder
+::: natal.configurator
     options:
       heading_level: 3

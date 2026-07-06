@@ -10,6 +10,6 @@ steps.
 
 ## Complete Module Reference
 
-::: natal.discrete_generation_population
+::: natal.population.discrete_generation
 		options:
 			heading_level: 3

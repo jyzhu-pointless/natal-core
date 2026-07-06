@@ -8,6 +8,6 @@ The `age_structured_population` module implements age-structured population mode
 
 ## Complete Module Reference
 
-::: natal.age_structured_population
+::: natal.population.age_structured
     options:
       heading_level: 3

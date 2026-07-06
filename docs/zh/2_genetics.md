@@ -376,14 +376,14 @@ wt_wt = sp.get_genotype_from_str("WT|WT")
 wt_drive = sp.get_genotype_from_str("WT|Drive")
 drive_drive = sp.get_genotype_from_str("Drive|Drive")
 
-print(f"基因型: {wt_drive}")  # 输出: WT|Drive（严格保留 maternal|paternal 顺序）
+print(f"基因型: {wt_drive}")  # 输出: WT|Drive（默认 unordered=True 时会规范化顺序）
 ```
 
 #### 字符串解析语法规则
 
 `Genotype` 的字符串解析语法与 `HaploidGenotype` 基本相同，增加了母本和父本的分隔：
 
-- **竖线 (|) 分隔母本和父本**：竖线左侧为母本单倍体基因型，右侧为父本单倍体基因型
+- **竖线 (|) 分隔母本和父本**：竖线左侧为母本单倍体基因型，右侧为父本单倍体基因型。**注意：** 默认 `Species.unordered=True`，系统自动规范化顺序——`A|a` 和 `a|A` 解析为同一基因型。。**注意：** 默认 `Species.unordered=True`，系统自动规范化顺序——`A|a` 和 `a|A` 解析为同一基因型。
 - **其他规则与 HaploidGenotype 相同**：包括分号分隔染色体、斜杠分隔基因、单字符基因可省略斜杠等规则
 
 ```python
@@ -411,7 +411,7 @@ gt3 = sp.get_genotype_from_str("A/WT/Drive|a/WT/Drive")
 - `{A,B,C}` 集合匹配：匹配集合中的任何等位基因
 - `!A` 排除匹配：匹配除 A 外的任何等位基因
 - `()` 分组：明确分组染色体位点
-- `::` 无序匹配：表示母本和父本顺序无关
+- `::` 无序匹配：表示不区分母本和父本顺序（用于模式匹配；字符串基因型始终使用 `|`，当 `unordered=True` 时自动规范化）
 
 详细规则及示例请参考 [基因型模式匹配](2_genotype_patterns.md)。
 

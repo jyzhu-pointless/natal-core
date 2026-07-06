@@ -8,6 +8,6 @@ The `population_state` module defines the runtime state of population simulation
 
 ## Complete Module Reference
 
-::: natal.population_state
+::: natal.data.state
     options:
       heading_level: 3

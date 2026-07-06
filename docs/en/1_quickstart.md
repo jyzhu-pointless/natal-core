@@ -46,14 +46,14 @@ Based on the blueprint, actually selecting an allele at each locus to form the g
 - **`Haplotype`**: The combination of selected alleles across all loci on one chromosome.
 - **`HaploidGenotype`**: One haplotype contributed from each homologous chromosome pair in the species, together forming a complete haploid genome.
 - **`Genotype` (Diploid Genotype)**: A combination of two haploid genomes from the maternal and paternal parents, representing the individual's complete genetic information.
-  - **Note:** Genotypes strictly distinguish between maternal and paternal haploid genomes. In string representation, the order follows `Maternal|Paternal`. `A|a` and `a|A` are considered different genotypes.
+  - **Note:** By default (`Species.unordered=True`), NATAL treats `A|a` and `a|A` as the **same genotype** — maternal/paternal order is canonicalized away. Use `Species(..., unordered=False)` only when parent-of-order tracking matters for your model.
 
 > The entity layer is like a "decorated house" -- each room has already selected specific furniture styles, and the windows have been determined as round or square.
 
 #### Why This Distinction?
 
 - **Structures** are model-level, immutable configurations (e.g., "this species has two loci, A and B"), which can be defined once before the simulation starts.
-- **Entities** are population-level, dynamically occurring instances (e.g., "the current population has four genotypes: `WT|WT`, `WT|Drive`, `Drive|WT`, `Drive|Drive`"), generated and transmitted through genetic rules.
+- **Entities** are population-level, dynamically occurring instances (e.g., "the current population has three unique genotypes: `WT|WT`, `WT|Drive`, `Drive|Drive`" — with unordered canonicalization, `WT|Drive` and `Drive|WT` are the same), generated and transmitted through genetic rules.
 
 This separation allows the simulation to flexibly define complex genetic architectures while maintaining efficient computation at runtime.
 
@@ -65,8 +65,8 @@ This separation allows the simulation to flexibly define complex genetic archite
 # View all possible genotypes
 all_genotypes = sp.get_all_genotypes()
 print(f"There are {len(all_genotypes)} genotypes in total")
-# Output: There are 9 genotypes in total
-# (WT|WT, WT|Drive, WT|Resistance, Drive|WT, Drive|Drive, Drive|Resistance, Resistance|WT, Resistance|Drive, Resistance|Resistance)
+# Output: There are 6 genotypes in total
+# (WT|WT, WT|Drive, WT|Resistance, Drive|Drive, Drive|Resistance, Resistance|Resistance)
 
 # Get specific genotypes
 wt_wt = sp.get_genotype_from_str("WT|WT")

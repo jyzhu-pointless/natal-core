@@ -360,14 +360,14 @@ wt_wt = sp.get_genotype_from_str("WT|WT")
 wt_drive = sp.get_genotype_from_str("WT|Drive")
 drive_drive = sp.get_genotype_from_str("Drive|Drive")
 
-print(f"Genotype: {wt_drive}")  # Output: WT|Drive (strictly preserves maternal|paternal order)
+print(f"Genotype: {wt_drive}")  # Output: WT|Drive (by default, maternal/paternal order is canonicalized — see Species.unordered)
 ```
 
 #### String Parsing Syntax Rules
 
 The string parsing syntax for `Genotype` is essentially the same as for `HaploidGenotype`, with the addition of maternal and paternal separation:
 
-- **Pipe (|) separates maternal and paternal**: The left side of the pipe is the maternal haploid genotype, and the right side is the paternal haploid genotype
+- **Pipe (|) separates maternal and paternal**: The left side of the pipe is the maternal haploid genotype, the right side is the paternal haploid genotype. **Note:** by default (`Species.unordered=True`), the system canonicalizes the pair so `A|a` and `a|A` resolve to the same genotype — tracking parent-of-origin explicitly requires `unordered=False`.. **Note**: by default `Species.unordered=True`, so `A|a` and `a|A` produce the same Genotype instance after canonicalization.
 - **Other rules are the same as HaploidGenotype**: Including semicolons to separate chromosomes, slashes to separate genes, and the ability to omit slashes for single-character genes
 
 ```python
@@ -395,7 +395,7 @@ Building on the precise string format, NATAL provides **Pattern matching** as a 
 - `{A,B,C}` set matching: matches any allele in the set
 - `!A` exclusion matching: matches any allele except A
 - `()` grouping: explicitly groups loci on a chromosome
-- `::` unordered matching: indicates that maternal and paternal order is irrelevant
+- `::` unordered matching: indicates that maternal and paternal order is irrelevant (for pattern matching; string genotype representation always uses `|` and canonicalizes automatically when `unordered=True`)
 
 For detailed rules and examples, please refer to [Genotype Pattern Matching](2_genotype_patterns.md).
 

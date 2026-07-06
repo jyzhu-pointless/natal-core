@@ -9,6 +9,6 @@ The `population_config` module handles population configuration, including survi
 
 ## Complete Module Reference
 
-::: natal.population_config
+::: natal.data.config
     options:
       heading_level: 3
