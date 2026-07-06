@@ -1,5 +1,5 @@
 site_name: NATAL Core Documentation
-site_description: Numba-Accelerated Toolkit for Analysis of Lifecycles
+site_description: Numerical Aggregation Toolkit for Analysis of Lifecycles
 site_author: Jinyu Zhu
 
 docs_dir: docs/en
@@ -16,8 +16,8 @@ watch:
 theme:
   name: material
   language: en
-  logo: ../natal-brand.svg
-  favicon: ../natal.svg
+  logo: natal-brand.svg
+  favicon: natal.svg
   features:
     - navigation.tabs
     - navigation.sections
