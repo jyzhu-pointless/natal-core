@@ -19,22 +19,31 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from natal.hooks.entry.decorator import hook  # noqa: E402
 from natal.hooks.entry.selector import compile_selector_hook  # noqa: E402
+from natal.genetics import Species  # noqa: E402
+from natal.registry.index import IndexRegistry  # noqa: E402
 
 # ============================================================================
 # Helpers
 # ============================================================================
 
 
-class _FakeRegistry:
-    def __init__(self):
-        self.index_to_genotype = ["AA", "Aa", "aa"]
-        self.genotype_to_index = {"AA": 0, "Aa": 1, "aa": 2}
+@pytest.fixture(scope="module")
+def _aa_species():
+    """Species with alleles A and a for selector-mode tests."""
+    return Species.from_dict(
+        name="_SelectorTest",
+        structure={"chr1": {"loc": ["A", "a"]}},
+        gamete_labels=["default"],
+    )
 
-    def num_genotypes(self):
-        return len(self.index_to_genotype)
 
-    def resolve_genotype_index(self, diploid_genotypes, spec, strict=True):
-        return self.genotype_to_index.get(spec)
+def _make_registry(species):
+    reg = IndexRegistry()
+    reg.slab_labels = ["default"]
+    reg.glab_labels = ["default"]
+    for gt in species.get_all_genotypes():
+        reg.register_genotype(gt)
+    return reg
 
 
 class _FakeConfig:
@@ -42,9 +51,14 @@ class _FakeConfig:
 
 
 class _FakePop:
-    def __init__(self):
-        self._registry = _FakeRegistry()
+    def __init__(self, species, registry):
+        self._species = species
+        self._registry = registry
         self._config = _FakeConfig()
+
+    @property
+    def species(self):
+        return self._species
 
     @property
     def registry(self):
@@ -53,6 +67,35 @@ class _FakePop:
     @property
     def config(self):
         return self._config
+
+    @property
+    def index_registry(self):
+        return self._registry
+
+    def register_compiled_hook(self, desc):
+        self._last_desc = desc
+        return desc
+
+
+# Module-level shared state (rebuild per-test via _make_fake_pop)
+_species: Species | None = None
+_registry: IndexRegistry | None = None
+
+
+def _make_fake_pop():
+    global _species, _registry
+    if _species is None:
+        _species = Species.from_dict(
+            name="_SelectorTest",
+            structure={"chr1": {"loc": ["A", "a"]}},
+            gamete_labels=["default"],
+        )
+        _registry = IndexRegistry()
+        _registry.slab_labels = ["default"]
+        _registry.glab_labels = ["default"]
+        for gt in _species.get_all_genotypes():
+            _registry.register_genotype(gt)
+    return _FakePop(_species, _registry)
 
     def register_compiled_hook(self, desc):
         pass
@@ -79,11 +122,11 @@ class _MockConfig:
 def test_mode_expand_registers():
     """mode='expand' → register succeeds."""
 
-    @hook(event="early", selectors={"target": "AA"}, mode="expand")
+    @hook(event="early", selectors={"target": "A|A"}, mode="expand")
     def fn(state, config, target):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -91,11 +134,11 @@ def test_mode_expand_registers():
 def test_mode_expand_two_selectors():
     """mode='expand' with two selectors."""
 
-    @hook(event="early", selectors={"a": "AA", "b": "Aa"}, mode="expand")
+    @hook(event="early", selectors={"a": "A|A", "b": "A|a"}, mode="expand")
     def fn(state, config, a, b):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -103,11 +146,11 @@ def test_mode_expand_two_selectors():
 def test_mode_expand_ignores_param_name():
     """mode='expand' ignores param names — even 'ctx' stays expand."""
 
-    @hook(event="early", selectors={"target": "AA"}, mode="expand")
+    @hook(event="early", selectors={"target": "A|A"}, mode="expand")
     def fn(state, config, ctx):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -120,11 +163,11 @@ def test_mode_expand_ignores_param_name():
 def test_mode_aggregate_registers():
     """mode='aggregate' → register succeeds with namedtuple path."""
 
-    @hook(event="early", selectors={"target": "AA"}, mode="aggregate")
+    @hook(event="early", selectors={"target": "A|A"}, mode="aggregate")
     def fn(state, config, s):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -132,11 +175,11 @@ def test_mode_aggregate_registers():
 def test_mode_aggregate_overrides_auto():
     """mode='aggregate' overrides auto even when param name matches key."""
 
-    @hook(event="early", selectors={"target": "AA"}, mode="aggregate")
+    @hook(event="early", selectors={"target": "A|A"}, mode="aggregate")
     def fn(state, config, target):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -144,11 +187,11 @@ def test_mode_aggregate_overrides_auto():
 def test_mode_aggregate_with_deme_id():
     """mode='aggregate' with deme_id in signature."""
 
-    @hook(event="early", selectors={"t": "AA"}, mode="aggregate")
+    @hook(event="early", selectors={"t": "A|A"}, mode="aggregate")
     def fn(state, config, deme_id, s):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -161,11 +204,11 @@ def test_mode_aggregate_with_deme_id():
 def test_mode_auto_expand_when_param_matches_key():
     """auto: param name matches selector key → expand (old style)."""
 
-    @hook(event="early", selectors={"target": "AA"})
+    @hook(event="early", selectors={"target": "A|A"})
     def fn(state, config, target):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -173,11 +216,11 @@ def test_mode_auto_expand_when_param_matches_key():
 def test_mode_auto_aggregate_when_param_differs():
     """auto: param name differs from keys → aggregate (namedtuple)."""
 
-    @hook(event="early", selectors={"target": "AA"})
+    @hook(event="early", selectors={"target": "A|A"})
     def fn(state, config, ctx):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -185,11 +228,11 @@ def test_mode_auto_aggregate_when_param_differs():
 def test_mode_auto_two_selectors_aggregate():
     """auto: two selectors, param doesn't match → aggregate."""
 
-    @hook(event="early", selectors={"a": "AA", "b": "Aa"})
+    @hook(event="early", selectors={"a": "A|A", "b": "A|a"})
     def fn(state, config, ctx):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -197,11 +240,11 @@ def test_mode_auto_two_selectors_aggregate():
 def test_mode_auto_default():
     """Default (no mode) → auto behavior."""
 
-    @hook(event="early", selectors={"target": "AA"})
+    @hook(event="early", selectors={"target": "A|A"})
     def fn(state, config, ctx):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -209,11 +252,11 @@ def test_mode_auto_default():
 def test_mode_auto_with_deme_id():
     """auto: deme_id is skipped, ctx still triggers aggregate."""
 
-    @hook(event="early", selectors={"target": "AA"})
+    @hook(event="early", selectors={"target": "A|A"})
     def fn(state, config, deme_id, ctx):
         pass
 
-    desc = fn.register(_FakePop())
+    desc = fn.register(_make_fake_pop())
     assert desc.py_wrapper is not None
 
 
@@ -225,7 +268,7 @@ def test_mode_auto_with_deme_id():
 def test_invalid_mode_raises():
     """Invalid mode string raises ValueError at decoration time."""
     with pytest.raises(ValueError, match="mode must be"):
-        @hook(event="early", selectors={"a": "AA"}, mode="invalid")  # type: ignore[arg-type]
+        @hook(event="early", selectors={"a": "A|A"}, mode="invalid")  # type: ignore[arg-type]
         def fn(state, config, a):
             pass
 
@@ -447,11 +490,11 @@ class TestSelectorResolution:
     def test_single_genotype_resolves_to_int_array(self):
         """Single genotype selector → int32 array with one element."""
 
-        @hook(event="early", selectors={"target": "AA"})
+        @hook(event="early", selectors={"target": "A|A"})
         def fn(state, config, target):
             pass
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
         resolved = desc.selectors["target"]
         assert isinstance(resolved, np.ndarray)
         assert resolved.dtype == np.int32
@@ -465,7 +508,7 @@ class TestSelectorResolution:
         def fn(state, config, any):
             pass
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
         resolved = desc.selectors["any"]
         assert resolved.tolist() == [0, 1, 2]
 
@@ -473,11 +516,11 @@ class TestSelectorResolution:
     def test_multiple_genotypes_resolve_to_int_array(self):
         """List of genotype labels → int32 array of indices."""
 
-        @hook(event="early", selectors={"group": ["AA", "aa"]})
+        @hook(event="early", selectors={"group": ["A|A", "a|a"]})
         def fn(state, config, group):
             pass
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
         resolved = desc.selectors["group"]
         assert resolved.tolist() == [0, 2]  # AA→0, aa→2
 
@@ -489,7 +532,7 @@ class TestSelectorResolution:
         def fn(state, config, idx):
             pass
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
         assert desc.selectors["idx"].tolist() == [1]
 
 
@@ -508,12 +551,12 @@ class TestPythonFallbackEndToEnd:
         state = _MockState()
         config = _MockConfig()
 
-        @hook(event="early", selectors={"target": "AA"}, mode="expand")
+        @hook(event="early", selectors={"target": "A|A"}, mode="expand")
         def fn(state, config, target):
             # AA is genotype index 0 — zero it out
             state.individual_count[:, :, target] = 0.0
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
 
         # Before: all cells are 42.0
         assert state.individual_count[0, 0, 0] == 42.0
@@ -533,12 +576,12 @@ class TestPythonFallbackEndToEnd:
         state = _MockState()
         config = _MockConfig()
 
-        @hook(event="early", selectors={"a": "AA", "b": "aa"}, mode="aggregate")
+        @hook(event="early", selectors={"a": "A|A", "b": "a|a"}, mode="aggregate")
         def fn(state, config, sel):
             state.individual_count[:, :, sel.a] = 10.0
             state.individual_count[:, :, sel.b] = 20.0
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
         desc.py_wrapper(state, config, deme_id=0)
 
         assert state.individual_count[0, 0, 0] == 10.0  # AA
@@ -550,12 +593,12 @@ class TestPythonFallbackEndToEnd:
         """deme_id in user signature is forwarded correctly."""
         received_deme: list[int] = []
 
-        @hook(event="early", selectors={"target": "AA"})
+        @hook(event="early", selectors={"target": "A|A"})
         def fn(state, config, deme_id, target):
             received_deme.append(deme_id)
             # target not used — just verify deme_id forwarding
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
         state, config = _MockState(), _MockConfig()
         desc.py_wrapper(state, config, deme_id=5)
 
@@ -567,13 +610,13 @@ class TestPythonFallbackEndToEnd:
         state = _MockState()
         config = _MockConfig()
 
-        @hook(event="early", selectors={"group": ["AA", "Aa"]})
+        @hook(event="early", selectors={"group": ["A|A", "A|a"]})
         def fn(state, config, group):
             # group is an int32 array of [0, 1]
             for g in group:
                 state.individual_count[:, :, int(g)] = 7.0
 
-        desc = fn.register(_FakePop())
+        desc = fn.register(_make_fake_pop())
         desc.py_wrapper(state, config, deme_id=0)
 
         assert state.individual_count[0, 0, 0] == 7.0  # AA

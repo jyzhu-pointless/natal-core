@@ -117,7 +117,7 @@ def compile_selector_hook(
     - Otherwise, use global NUMBA_ENABLED setting (auto-wrap if enabled)
     """
     index_registry = pop.registry
-    species = index_registry.index_to_genotype[0].species
+    species = pop.species
 
     resolved = {
         name: _resolve_selector_to_array(spec, index_registry, species)

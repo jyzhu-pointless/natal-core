@@ -255,8 +255,8 @@ def test_spatial_population_run_tick_supports_heterogeneous_deme_configs(
     ]
 
     cfg0 = demes[0].export_config()
-    cfg1 = demes[1].export_config()._replace(low_density_growth_rate=1.7)
-    demes[1].import_config(cfg1)
+    demes[1].update().competition(low_density_growth_rate=1.7)
+    cfg1 = demes[1].export_config()
 
     assert cfg0.low_density_growth_rate != demes[1].export_config().low_density_growth_rate
 
@@ -308,7 +308,7 @@ def test_spatial_population_heterogeneous_configs_use_python_hook_dispatch(
         _make_deme(simple_species, "deme_1", adult_count=100.0),
     ]
 
-    demes[1].import_config(demes[1].export_config()._replace(low_density_growth_rate=1.9))
+    demes[1].update().competition(low_density_growth_rate=1.9)
 
     spatial = SpatialPopulation(
         demes=demes,
@@ -340,8 +340,8 @@ def test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_st
         _make_deme(simple_species, "deme_1", adult_count=100.0),
         _make_deme(simple_species, "deme_2", adult_count=100.0),
     ]
-    demes[1].import_config(demes[1].export_config()._replace(low_density_growth_rate=1.4))
-    demes[2].import_config(demes[2].export_config()._replace(low_density_growth_rate=1.8))
+    demes[1].update().competition(low_density_growth_rate=1.4)
+    demes[2].update().competition(low_density_growth_rate=1.8)
 
     spatial = SpatialPopulation(
         demes=demes,
