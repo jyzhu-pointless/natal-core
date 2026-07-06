@@ -26,7 +26,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Self, Sequence, cast
 
 import numpy as np
-from numba import objmode  # pyright: ignore[reportMissingTypeStubs]
+from numba import (
+    objmode,  # pyright: ignore[reportMissingTypeStubs, reportAttributeAccessIssue, reportUnknownVariableType]
+)
 from numpy.typing import NDArray
 
 from natal.configurator._params import (
