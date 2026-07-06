@@ -26,8 +26,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Self, Sequence, cast
 
 import numpy as np
-from numba import (
-    objmode,  # pyright: ignore[reportMissingTypeStubs, reportAttributeAccessIssue, reportUnknownVariableType]
+from numba import (  # pyright: ignore[reportMissingTypeStubs]
+    objmode,  # pyright: ignore[reportAttributeAccessIssue, reportUnknownVariableType]
 )
 from numpy.typing import NDArray
 
