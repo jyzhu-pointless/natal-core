@@ -16,6 +16,8 @@ watch:
 theme:
   name: material
   language: en
+  logo: ../natal-brand.svg
+  favicon: ../natal.svg
   features:
     - navigation.tabs
     - navigation.sections
