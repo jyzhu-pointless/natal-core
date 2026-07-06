@@ -4,6 +4,9 @@ site_author: Jinyu Zhu
 
 docs_dir: docs/zh
 
+hooks:
+  - docs/hooks.py
+
 repo_url: https://github.com/jyzhu-pointless/natal-core
 repo_name: jyzhu-pointless/natal-core
 
