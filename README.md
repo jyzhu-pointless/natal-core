@@ -1,6 +1,6 @@
 # ⚡️ NATAL Core
 
-**N**umba-**A**ccelerated **T**oolkit for **A**nalysis of **L**ifecycles
+**N**umerical **A**ggregation **T**oolkit for **A**nalysis of **L**ifecycles
 
 [![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
@@ -12,7 +12,7 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-**NATAL Core** is a high-performance forward-time population genetics simulation engine that supports configurable lifecycles of species. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and simulation engine accelerated by Numba. NATAL Core is especially useful for **modeling gene drive systems** in insect populations, but its flexible architecture allows it to be applied to a wide range of population genetics scenarios.
+**NATAL Core** is a high-performance forward-time population genetics simulation engine that supports configurable lifecycles of species. Rather than tracking individuals one by one, it adopts a **numerical aggregation** approach: individuals are grouped by age, sex, and genotype, their dynamics computed mathematically, and randomness introduced through probability distributions — avoiding the overhead of per-individual iteration. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and a Numba-accelerated computation core. NATAL Core is especially useful for **modeling gene drive systems** in insect populations, but its flexible architecture allows it to be applied to a wide range of population genetics scenarios.
 
 NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for parameter inference in population genetics models based on NATAL Core.
 
@@ -20,7 +20,7 @@ NATAL Core is part of the NATAL project. The full project also includes **NATAL 
 
 - 🪲 Forward-time configurable population modeling (age-structured and discrete-generation).
 - 🧬 Genetic architecture definition with chromosomes, loci, and alleles.
-- 🚀 Numba-accelerated engine for high performance.
+- 🚀 Numerical aggregation engine, Numba-accelerated.
 - 🧩 Built-in genetic presets, especially for homing drives and toxin-antidote drives.
 - 🪝 Hook system for custom interventions during simulation.
 - 🔍 Observation and filtering utilities for downstream analysis.
