@@ -1,4 +1,10 @@
-"""Base class for all genetic entities (Gene, Haplotype, HaploidGenotype, Genotype)."""
+"""Base class for all genetic entities (Gene, Haplotype, HaploidGenotype, Genotype).
+
+This module defines :class:`GeneticEntity`, the abstract base class for
+all runtime entity types in the genetics package.  Entities are bound to
+a :class:`~natal.genetics.structures._base.GeneticStructure`, auto-register
+on creation, and are cached for identity-based deduplication.
+"""
 
 from __future__ import annotations
 
@@ -45,6 +51,24 @@ class GeneticEntity(Generic[S]):
         structure: Any = None,
         **kwargs: Any
     ) -> E:
+        """Create or retrieve a cached GeneticEntity instance.
+
+        When a species context is available the instance is cached under a
+        ``(species_id, structure_type, structure_name, entity_class, name)``
+        key, so subsequent calls with identical arguments return the same
+        object.  Falls back to a plain ``object.__new__(cls)`` (no caching)
+        when no species can be resolved.
+
+        Args:
+            name: Entity identifier within its bound structure.
+            structure: Parent structure instance, or ``None`` to extract
+                from ``kwargs`` (looked up under common keys such as
+                ``locus``, ``chromosome``, ``species``).
+            **kwargs: Additional arguments forwarded to ``__init__``.
+
+        Returns:
+            A new or cached entity instance.
+        """
         # For subclasses that use different parameter names (e.g., locus, chromosome, species)
         # We need to extract the structure from kwargs
         # If structure is not provided as positional arg, check kwargs
@@ -105,6 +129,22 @@ class GeneticEntity(Generic[S]):
         structure: Any = None,
         **kwargs: Any
     ):
+        """Initialize a genetic entity bound to the given structure.
+
+        Validates that *name* is non-empty, that *structure* is provided
+        and matches the expected structure type, then auto-registers the
+        entity with its parent structure and caches the instance.
+
+        Args:
+            name: Entity identifier (must be non-empty).
+            structure: Parent :class:`GeneticStructure` instance.
+            **kwargs: Ignored — kept for signature alignment with
+                :meth:`__new__`.
+
+        Raises:
+            ValueError: If *name* is empty.
+            TypeError: If *structure* is missing or of wrong type.
+        """
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -133,8 +173,8 @@ class GeneticEntity(Generic[S]):
         self.structure = structure
 
         # Auto-register with the structure ("register upon creation")
-        register_owner = cast(Any, structure)
-        register_owner.register(self)
+        # structure already validated as GeneticStructure subclass above
+        structure.register(self)  # type: ignore  # already validated above; Generic E = Any
 
         # Mark as initialized
         self._initialized = True
@@ -163,10 +203,15 @@ class GeneticEntity(Generic[S]):
 
     @classmethod
     def clear_species_cache(cls, species_id: int) -> None:
-        """Clear entity cache entries that belong to one species id."""
+        """Clear entity cache entries that belong to one species id.
+
+        Args:
+            species_id: The ``id()`` of the target species.
+        """
         keys_to_remove = [k for k in GeneticEntity._instance_cache if k[0] == species_id]
         for key in keys_to_remove:
             del GeneticEntity._instance_cache[key]
 
     def __repr__(self) -> str:
+        """Return a string representation of this entity."""
         return f"{self.__class__.__name__}({self.name!r}, structure={self.structure.name!r})"

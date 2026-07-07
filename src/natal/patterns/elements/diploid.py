@@ -1,5 +1,8 @@
-"""
-Diploid-level pattern elements: GenotypePattern, ZygoteTypePattern.
+"""Diploid-level pattern elements: GenotypePattern, ZygoteTypePattern.
+
+Provides :class:`GenotypePattern` (a complete diploid genotype pattern across
+all chromosomes) and :class:`ZygoteTypePattern` (a genotype pattern paired
+with an optional somatic-label constraint).
 """
 
 from __future__ import annotations
@@ -74,6 +77,7 @@ class GenotypePattern:
         return lambda genotype: self.matches(genotype)
 
     def __repr__(self) -> str:
+        """Return a string representation of this genotype pattern."""
         base = f"GenotypePattern([{', '.join(str(cp) if cp else 'None' for cp in self.chromosome_patterns)}])"
         return f"{base}@{self.lab}" if self.lab else base
 
@@ -98,6 +102,13 @@ class ZygoteTypePattern:
         genotype: GenotypePattern,
         slab: Optional[LabPattern] = None,
     ):
+        """Initialize a ZygoteTypePattern.
+
+        Args:
+            genotype: The genotype pattern to match.
+            slab: Optional somatic-label pattern parsed from the ``@slab``
+                suffix.
+        """
         self.genotype = genotype
         self.slab: Optional[LabPattern] = slab
 
@@ -129,7 +140,16 @@ class ZygoteTypePattern:
         slab: str,
         species: Species,
     ) -> ZygoteTypePattern:
-        """Build from a (Genotype, slab_name) tuple."""
+        """Build a ZygoteTypePattern from a (Genotype, slab_name) pair.
+
+        Args:
+            genotype: A Genotype instance.
+            slab: Somatic label name.
+            species: Species for genotype-string resolution.
+
+        Returns:
+            A ZygoteTypePattern matching the given genotype and slab.
+        """
         from natal.patterns.parser import GenotypePatternParser
 
         parser = GenotypePatternParser(species)
@@ -170,5 +190,6 @@ class ZygoteTypePattern:
         return True
 
     def __repr__(self) -> str:
+        """Return a string representation of this zygote type pattern."""
         base = f"ZygoteTypePattern({self.genotype!r})"
         return f"{base}@{self.slab}" if self.slab else base

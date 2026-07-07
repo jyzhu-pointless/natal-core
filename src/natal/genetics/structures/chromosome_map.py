@@ -1,5 +1,9 @@
 """RecombinationMap — stores recombination rates between adjacent loci on a chromosome.
 
+Provides :class:`RecombinationMap`, a 1D container that stores and
+retrieves recombination rates between adjacent loci.  Supports single-locus
+lookups, pairwise cumulative-rate queries, and slice/array indexing.
+
 Originally defined as an inner class of Chromosome, factored out for module size.
 """
 
@@ -45,6 +49,17 @@ class RecombinationMap:
         loci: Optional[List[Locus]] = None,
         rates: Optional[np.ndarray] = None
     ) -> None:
+        """Initialize a RecombinationMap.
+
+        Args:
+            loci: Ordered list of Locus instances (at least 2).
+            rates: Optional array of initial recombination rates.  Must
+                have length ``len(loci) - 1``.
+
+        Raises:
+            ValueError: If fewer than 2 loci are provided, or if *rates*
+                length does not match.
+        """
         size = len(loci) - 1 if loci and len(loci) > 1 else 0
         if size <= 0:
             raise ValueError("RecombinationMap requires at least 2 loci.")
@@ -59,7 +74,17 @@ class RecombinationMap:
 
     # ---------- Name conversion ----------
     def _name_to_index(self, name: str) -> int:
-        """Convert locus name to index in loci list."""
+        """Convert locus name to index in the loci list.
+
+        Args:
+            name: Locus name.
+
+        Returns:
+            Integer index in the loci list.
+
+        Raises:
+            KeyError: If the name is not found.
+        """
         if not self.loci_names:
             raise ValueError("No loci names defined in map.")
         try:
@@ -72,7 +97,17 @@ class RecombinationMap:
         return self._name_to_index(name)
 
     def _normalize_single_key(self, key: _KeyType) -> int:
-        """Normalize a single key to integer index."""
+        """Normalize a single key (int, str, or Locus) to integer index.
+
+        Args:
+            key: A locus index, name, or Locus instance.
+
+        Returns:
+            Integer index in the loci list.
+
+        Raises:
+            KeyError: If the key does not correspond to a registered locus.
+        """
         if isinstance(key, str):
             return self._name_to_index(key)
         elif isinstance(key, self._get_locus_class()):
@@ -82,7 +117,11 @@ class RecombinationMap:
 
     @staticmethod
     def _get_locus_class():
-        """Lazy import to avoid circular dependencies."""
+        """Return the Locus class (lazy import to avoid circular deps).
+
+        Returns:
+            The :class:`~natal.genetics.structures.locus.Locus` class.
+        """
         from .locus import Locus
         return Locus
 
@@ -218,9 +257,11 @@ class RecombinationMap:
 
     # ---------- Visualization ----------
     def __repr__(self) -> str:
+        """Return a formatted representation of the recombination map."""
         return self._formatted_repr()
 
     def __str__(self) -> str:
+        """Return a formatted string of the recombination map."""
         return self._formatted_repr()
 
     def _formatted_repr(self) -> str:
@@ -246,9 +287,11 @@ class RecombinationMap:
         return (self.loci_names[index], self.loci_names[index + 1])
 
     def __len__(self) -> int:
+        """Return the number of adjacent-locus intervals."""
         return len(self._rates)
 
     def __iter__(self):
+        """Iterate over recombination rates."""
         return iter(self._rates)
 
     def __array__(self, dtype: Optional[np.dtype] = None, copy: Optional[bool] = None) -> np.ndarray:
@@ -261,4 +304,5 @@ class RecombinationMap:
 
     @property
     def dtype(self):
+        """Return the NumPy dtype of the underlying rates array."""
         return self._rates.dtype

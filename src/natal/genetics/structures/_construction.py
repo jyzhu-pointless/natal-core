@@ -28,13 +28,25 @@ else:
 
 
 class ChromosomeDictSpec(TypedDict, total=False):
-    """Extended specification for a chromosome entry."""
+    """Extended specification for a chromosome entry in :meth:`Species.from_dict`.
+
+    Attributes:
+        sex_type: Sex chromosome type (``"X"``, ``"Y"``, ``"Z"``, ``"W"``,
+            or omitted for autosome).
+        loci: Either a list of locus names or a dict mapping locus names
+            to lists of allele names.
+    """
     sex_type: Union[SexChromosomeType, str]
     loci: Union[List[str], Dict[str, List[str]]]
 
 
 class SpeciesConstructionMixin:
-    """Dictionary and string-based construction methods for Species."""
+    """Dictionary and string-based construction methods for Species.
+
+    Provides alternative construction APIs that build the complete species
+    hierarchy (chromosomes, loci, alleles) from compact dict or string
+    representations.
+    """
 
     @classmethod
     def from_dict(
@@ -238,7 +250,14 @@ class SpeciesConstructionMixin:
         return HaploidGenome(species=self, haplotypes=haplotypes_sorted)
 
     def get_haploid_genotype_from_str(self, haplotype_str: str) -> HaploidGenome:
-        """Alias for get_haploid_genome_from_str."""
+        """Alias for :meth:`get_haploid_genome_from_str`.
+
+        Args:
+            haplotype_str: String like ``"ABC"`` or ``"a1/b1/c1"``.
+
+        Returns:
+            HaploidGenome instance.
+        """
         return self.get_haploid_genome_from_str(haplotype_str)
 
     def get_genotype_from_str(self, genotype_str: str) -> Genotype:

@@ -1,4 +1,10 @@
-"""Gene (allele) entity bound to a Locus structure."""
+"""Gene (allele) entity bound to a Locus structure.
+
+This module provides :class:`Gene`, the entity representing a single
+allele at a genetic locus.  Each Gene is bound to exactly one
+:class:`~natal.genetics.structures.locus.Locus` and is automatically
+registered under that locus upon creation.
+"""
 
 from __future__ import annotations
 
@@ -33,7 +39,17 @@ class Gene(GeneticEntity['Locus']):
     """
     structure_type: type[GeneticStructure[Any]]  # Set to Locus at module init time
 
-    def __new__(cls, name: str, locus: Optional[Locus] = None, **kwargs: Any) -> Gene:
+    def __new__(cls, name: str, locus: Optional[Locus] = None, **kwargs: Any) -> Gene:  # forwarded to GeneticStructure.__new__
+        """Create or retrieve a cached Gene instance.
+
+        Args:
+            name: Allele name (must be unique within the species).
+            locus: Parent Locus structure this gene belongs to.
+            **kwargs: Additional arguments forwarded to ``__init__``.
+
+        Returns:
+            A new or cached Gene instance.
+        """
         # Pass locus to parent __new__ via kwargs
         return super().__new__(cls, name, locus=locus, **kwargs)
 
@@ -43,6 +59,22 @@ class Gene(GeneticEntity['Locus']):
         locus: Optional[Locus] = None,
         **kwargs: Any
     ):
+        """Initialize a Gene bound to a Locus.
+
+        Validates the name format (letters, digits, underscores only),
+        checks for duplicate gene names across the species, and
+        auto-registers with the parent locus.
+
+        Args:
+            name: Allele name (must match ``[A-Za-z0-9_]+`` and be
+                unique within the species).
+            locus: Parent Locus instance.
+            **kwargs: Extra attributes stored as instance attributes.
+
+        Raises:
+            TypeError: If *locus* is ``None``.
+            ValueError: If *name* format is invalid or a duplicate.
+        """
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -81,6 +113,7 @@ class Gene(GeneticEntity['Locus']):
         super().__init__(name, structure=locus)
 
     def __repr__(self):
+        """Return a string representation of this Gene."""
         return f"Gene({self.name!r}, locus={self.locus.name!r})"
 
 

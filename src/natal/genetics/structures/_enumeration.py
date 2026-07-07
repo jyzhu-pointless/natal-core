@@ -25,7 +25,12 @@ else:
 
 
 class SpeciesEnumerationMixin:
-    """Iteration and enumeration methods for Species."""
+    """Iteration and enumeration methods for Species.
+
+    Provides methods for counting and iterating over all possible haploid
+    genomes and diploid genotypes in a species, considering sex-chromosome
+    constraints, valid sex genotypes, and unordered-mode canonicalisation.
+    """
 
     def get_sex_chromosome_groups(self) -> Optional[Dict[str, List[Chromosome]]]:
         """

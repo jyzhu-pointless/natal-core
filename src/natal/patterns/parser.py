@@ -27,7 +27,14 @@ from .elements.haploid import GameteTypePattern, HaploidGenomePattern
 
 
 class GenotypePatternParser:
-    """Parses genotype pattern strings into GenotypePattern objects."""
+    """Parses genotype pattern strings into GenotypePattern objects.
+
+    Parses flexible pattern syntax including wildcards (``*``), set
+    patterns (``{A,B}``), negation (``!A``), unordered pairs (``::``),
+    bracketed groupings (``()``), and label suffixes (``@lab``).
+
+    Results are cached per (species, pattern_string) pair for performance.
+    """
 
     _pattern_cache: Dict[Tuple[int, str], GenotypePattern] = {}
 
@@ -324,7 +331,17 @@ class GenotypePatternParser:
         return HaplotypePath(locus_patterns)
 
     def _parse_flexible_loci(self, haplotype_str: str) -> List[str]:
-        """Parse a haplotype string without ``/`` separators."""
+        """Parse a haplotype string without ``/`` separators.
+
+        Handles single-character gene names, wildcards, set patterns,
+        and negation patterns without explicit ``/`` delimiters.
+
+        Args:
+            haplotype_str: Haplotype string without ``/`` separators.
+
+        Returns:
+            List of locus-level pattern substrings.
+        """
         locus_strs: List[str] = []
         i = 0
         while i < len(haplotype_str):
@@ -604,7 +621,11 @@ class GenotypePatternParser:
             raise ValueError(f"Unknown pattern element type: {type(pattern_element)}")
 
     def _get_all_allele_names(self) -> List[str]:
-        """Get all allele names in the species."""
+        """Get all allele names in the species.
+
+        Returns:
+            Sorted list of all allele names across all loci.
+        """
         allele_names: set[str] = set()
         for chromosome in self.species.chromosomes:
             for locus in chromosome.loci:

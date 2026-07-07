@@ -1,5 +1,8 @@
-"""
-Chromosome-level pattern elements: HaplotypePath, ChromosomePairPattern.
+"""Chromosome-level pattern elements: HaplotypePath, ChromosomePairPattern.
+
+Provides :class:`HaplotypePath` (pattern for a single haplotype covering
+all loci on a chromosome) and :class:`ChromosomePairPattern` (pattern for
+a pair of homologous chromosomes with optional unordered matching).
 """
 
 from __future__ import annotations
@@ -13,22 +16,26 @@ from ._base import PatternElement
 
 
 class HaplotypePath:
-    """Pattern for a single Haplotype, optionally filtered by gamete label.
+    """Pattern for a single Haplotype (one DNA strand of one chromosome).
 
     The ``@lab`` suffix (e.g. ``A/B@cas9_deposited``) is parsed and stored
-    in *lab* but is NOT checked by :meth:`matches` — label filtering is the
-    caller's responsibility (e.g. ``GenotypeSelector``).  When *lab* is
-    ``None`` the pattern effectively matches any label.
+    on the containing :class:`~natal.patterns.elements.diploid.GenotypePattern`,
+    NOT on HaplotypePath — a chromosomal haplotype has no intrinsic label.
+
+    Attributes:
+        locus_patterns (Sequence[PatternElement]): Pattern elements, one
+            per locus in chromosome order.
     """
 
     def __init__(
         self,
         locus_patterns: Sequence[PatternElement],
     ):
-        """Initialize a haplotype pattern.
+        """Initialize a haplotype path pattern.
 
         Args:
-            locus_patterns: Sequence of PatternElement for each locus.
+            locus_patterns: Pattern elements, one per locus in chromosome
+                order.
 
         Note:
             The ``@lab`` suffix is stripped by the parser and stored on
@@ -68,11 +75,23 @@ class HaplotypePath:
         return lambda haplotype: self.matches(haplotype)
 
     def __repr__(self) -> str:
+        """Return a string representation of this HaplotypePath."""
         return f"HaplotypePath([{', '.join(str(lp) for lp in self.locus_patterns)}])"
 
 
 class ChromosomePairPattern:
-    """Pattern for a pair of homologous chromosomes."""
+    """Pattern for a pair of homologous chromosomes.
+
+    Matches one chromosome pair (maternal and paternal haplotypes).
+    Supports ordered (``|``) and unordered (``::``) matching.
+
+    Attributes:
+        maternal_pattern (HaplotypePath): Pattern for the maternal haplotype.
+        paternal_pattern (HaplotypePath): Pattern for the paternal haplotype.
+        unordered (bool): If True, maternal/paternal order is ignored.
+        explicit_grouping (bool): If True, this pattern was explicitly
+            grouped with ``()`` in the pattern string.
+    """
 
     def __init__(
         self,
@@ -132,5 +151,6 @@ class ChromosomePairPattern:
         return lambda pair: self.matches(pair)
 
     def __repr__(self) -> str:
+        """Return a string representation of this chromosome pair pattern."""
         sep = "::" if self.unordered else "|"
         return f"ChromosomePair({self.maternal_pattern} {sep} {self.paternal_pattern})"

@@ -1,4 +1,10 @@
-"""Base class for all genetic structures (Species, Chromosome, Locus)."""
+"""Base class for all genetic structures (Species, Chromosome, Locus).
+
+Provides :class:`GeneticStructure`, the abstract base for all structural
+blueprints in the genetics package.  Structures define the hierarchical
+architecture of a species (Species → Chromosome → Locus) and manage
+child-structure registries and entity bindings.
+"""
 
 from __future__ import annotations
 
@@ -85,6 +91,26 @@ class GeneticStructure(Generic[E]):
         *args: Any,
         **kwargs: Any
     ):
+        """Create or retrieve a cached GeneticStructure instance.
+
+        When a Species context is available the instance is cached under
+        the species-scoped cache; otherwise the global fallback cache is
+        used.  Returns the existing cached instance if one with the same
+        name already exists.
+
+        Args:
+            name: Structure name (must be unique within type and species).
+            *args: Positional arguments forwarded to ``__init__``.
+            **kwargs: Keyword arguments forwarded to ``__init__``.
+                ``species`` and ``parent`` are intercepted for cache
+                resolution.
+
+        Returns:
+            A new or cached structure instance.
+
+        Raises:
+            AssertionError: If *name* is not a string or is empty.
+        """
         # Extract species and parent from kwargs
         species = kwargs.get('species')
         parent = kwargs.get('parent')
@@ -136,6 +162,22 @@ class GeneticStructure(Generic[E]):
         parent: Optional[GeneticStructure[Any]] = None,
         species: Optional[Species] = None
     ):
+        """Initialize a GeneticStructure.
+
+        Sets up the entity registry, resolves species binding (from
+        *species*, *parent*, or self for a top-level Species), initialises
+        the child-structure registry if applicable, and registers with the
+        parent.
+
+        Args:
+            name: Structure name (must be non-empty).
+            parent: Parent structure, or ``None`` for top-level structures.
+            species: Explicit Species reference, or ``None`` to inherit
+                from *parent*.
+
+        Raises:
+            AssertionError: If *name* is empty or *parent* validation fails.
+        """
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -188,7 +230,14 @@ class GeneticStructure(Generic[E]):
         self._add_to_cache(self._species)
 
     def _get_cache_for_species(self, species: Optional[Species]) -> Dict[str, GeneticStructure[E]]:
-        """Get the appropriate cache for the given species."""
+        """Get the appropriate cache for the given species.
+
+        Args:
+            species: Target species, or ``None`` for the global fallback cache.
+
+        Returns:
+            The species-scoped or global cache dict.
+        """
         cls = self.__class__
         if species is not None:
             if cls not in species.structure_cache:
@@ -200,12 +249,20 @@ class GeneticStructure(Generic[E]):
             return GLOBAL_STRUCTURE_CACHE[cls]
 
     def _remove_from_cache(self, species: Optional[Species]) -> None:
-        """Remove this structure from the specified species's cache (or global cache)."""
+        """Remove this structure from the specified species's cache (or global cache).
+
+        Args:
+            species: Target species, or ``None`` for the global fallback cache.
+        """
         cache = self._get_cache_for_species(species)
         cache.pop(self.name, None)
 
     def _add_to_cache(self, species: Optional[Species]) -> None:
-        """Add this structure to the specified species's cache (or global cache)."""
+        """Add this structure to the specified species's cache (or global cache).
+
+        Args:
+            species: Target species, or ``None`` for the global fallback cache.
+        """
         cache = self._get_cache_for_species(species)
         cache[self.name] = self
 
@@ -359,6 +416,15 @@ class GeneticStructure(Generic[E]):
         return child_registry.all
 
     def _requirechild_structures_registry(self) -> ChildStructureRegistry[GeneticStructure[Any]]:
+        """Return the child-structures registry or raise.
+
+        Returns:
+            The child-structures registry.
+
+        Raises:
+            AttributeError: If this structure type does not support
+                child structures.
+        """
         if not hasattr(self, "child_structures"):
             raise AttributeError(f"{self.__class__.__name__} does not support child structures.")
         return self.child_structures
@@ -400,8 +466,10 @@ class GeneticStructure(Generic[E]):
 
     @property
     def all_entities(self) -> List[E]:
-        """
-        Returns a list of all entities currently registered to this structure.
+        """Return a list of all entities currently registered to this structure.
+
+        Returns:
+            A snapshot list of registered entity instances.
         """
         return self._entities.all
 
@@ -433,4 +501,5 @@ class GeneticStructure(Generic[E]):
         return structure
 
     def __repr__(self) -> str:
+        """Return a string representation of this GeneticStructure."""
         return f"{self.__class__.__name__}({self.name}, {self.entity_type}={self.all_entities})"

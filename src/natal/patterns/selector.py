@@ -1,5 +1,9 @@
-"""
-Genotype selector for observation and filtering, plus zygote type resolution.
+"""Genotype selector for observation and filtering, plus zygote type resolution.
+
+Provides :class:`GenotypeSelector` for resolving genotype selectors
+(integers, strings, pattern strings, or Genotype objects) into indices,
+and :func:`resolve_zygote_type` for converting selector strings to
+ZType indices with species-appropriate ordering semantics.
 """
 
 from __future__ import annotations
@@ -16,15 +20,17 @@ from .parser import GenotypePatternParser
 class GenotypeSelector:
     """Unified genotype selector for observation and filtering.
 
-    This class provides a unified interface for selecting genotypes using various
-    input formats, leveraging the existing pattern matching system.
+    Provides a unified interface for selecting genotypes using various
+    input formats (integers, strings, pattern strings, or Genotype
+    objects), leveraging the existing pattern matching system.
     """
 
     def __init__(self, species: Species):
-        """Initialize genotype selector for a specific species.
+        """Initialize a GenotypeSelector for a specific species.
 
         Args:
-            species: The Species object to use for pattern parsing.
+            species: The Species object to use for pattern parsing and
+                genotype resolution.
         """
         self.species = species
         self.parser = GenotypePatternParser(species)
@@ -181,7 +187,7 @@ class GenotypeSelector:
             else:
                 other_selectors.append(selector)
 
-        def filter_func(genotype: Any) -> bool:
+        def filter_func(genotype: int) -> bool:  # genotype index in registry
             # Check pattern filters
             for pattern_filter in pattern_filters:
                 if pattern_filter(genotype):
@@ -196,7 +202,7 @@ class GenotypeSelector:
 
         return filter_func
 
-    def get_pattern_for_selector(self, selector: Any) -> Optional[GenotypePattern]:
+    def get_pattern_for_selector(self, selector: Any) -> Optional[GenotypePattern]:  # accepts str or GenotypePattern
         """Convert a selector to a GenotypePattern if possible.
 
         Args:

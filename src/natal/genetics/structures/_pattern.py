@@ -22,7 +22,12 @@ else:
 
 
 class SpeciesPatternMixin:
-    """Pattern matching and resolution methods for Species."""
+    """Pattern matching and resolution methods for Species.
+
+    Provides genotype-selector resolution (exact match + pattern fallback),
+    genotype-pattern and haploid-genome-pattern parsing, and filtering of
+    genotype/haploid-genome collections by pattern strings.
+    """
 
     def resolve_single_genotype_selector(
         self,

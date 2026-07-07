@@ -1,5 +1,8 @@
-"""
-Haploid-level pattern elements: GameteTypePattern, HaploidGenomePattern.
+"""Haploid-level pattern elements: GameteTypePattern, HaploidGenomePattern.
+
+Provides :class:`GameteTypePattern` (a haplotype pattern paired with an
+optional gamete-label constraint) and :class:`HaploidGenomePattern`
+(a complete haploid genome pattern across all chromosomes).
 """
 
 from __future__ import annotations
@@ -28,10 +31,17 @@ class GameteTypePattern:
         haplotype_path: HaplotypePath,
         lab: Optional[LabPattern] = None,
     ):
+        """Initialize a GameteTypePattern.
+
+        Args:
+            haplotype_path: HaplotypePath pattern for the genetic content.
+            lab: Optional gamete-label constraint.
+        """
         self.haplotype_path = haplotype_path
         self.lab: Optional[LabPattern] = lab
 
     def __repr__(self) -> str:
+        """Return a string representation of this gamete type pattern."""
         base = f"GameteTypePattern({self.haplotype_path!r})"
         return f"{base}@{self.lab}" if self.lab else base
 
@@ -90,5 +100,6 @@ class HaploidGenomePattern:
         return lambda genome: self.matches(genome)
 
     def __repr__(self) -> str:
+        """Return a string representation of this haploid genome pattern."""
         base = f"HaploidGenomePattern([{', '.join(str(hp) if hp else 'None' for hp in self.haplotype_patterns)}])"
         return f"{base}@{self.lab}" if self.lab else base

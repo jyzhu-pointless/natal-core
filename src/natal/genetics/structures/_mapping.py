@@ -21,7 +21,12 @@ else:
 
 
 class SpeciesMappingMixin:
-    """Mapping methods for Species — genotype ordering, gamete/zygote maps, config blueprint."""
+    """Mapping methods for Species — genotype ordering, gamete/zygote maps, config blueprint.
+
+    Provides unordered genotype canonicalisation and methods to build the
+    genotype-to-gamete and gamete-to-zygote transition maps used by the
+    simulation engine.
+    """
 
     def unordered_genotype(
         self,

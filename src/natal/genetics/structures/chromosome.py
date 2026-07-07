@@ -1,4 +1,9 @@
-"""Chromosome structure — groups linked loci with recombination rates."""
+"""Chromosome structure — groups linked loci with recombination rates.
+
+This module provides :class:`Chromosome`, the structural blueprint for a
+single chromosome that groups multiple :class:`~natal.genetics.structures.locus.Locus`
+instances and stores recombination rates between adjacent loci.
+"""
 
 from __future__ import annotations
 
@@ -67,6 +72,21 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         recombination_rates: Optional[Union[List[float], np.ndarray]] = None,
         sex_type: Optional[Union[SexChromosomeType, str]] = None,
     ):
+        """Initialize a Chromosome structure.
+
+        Sets up the sex chromosome type, registers with the parent Species,
+        adds any pre-existing loci, and initialises the recombination map.
+
+        Args:
+            name: Chromosome name.
+            loci: Optional list of pre-existing Locus instances to add.
+            species: Parent Species (alternative to *parent*).
+            parent: Parent Species (alias for *species*).
+            recombination_rates: Optional array of recombination rates
+                between adjacent loci (length must be ``len(loci) - 1``).
+            sex_type: Sex chromosome type (``"X"``, ``"Y"``, ``"Z"``,
+                ``"W"``, ``"autosome"``, or ``None`` for autosome).
+        """
         # Initialize placeholders BEFORE super().__init__
         # because __iter__ may be called during parent registration
         if not hasattr(self, '_recombination_map'):
@@ -108,7 +128,16 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
                 self.recombination_map[i] = rate
 
     def _set_sex_type(self, sex_type: Optional[Union[SexChromosomeType, str]]) -> None:
-        """Set sex chromosome type (internal method)"""
+        """Set sex chromosome type (internal method).
+
+        Args:
+            sex_type: A :class:`SexChromosomeType` value, a string like
+                ``"X"`` / ``"Y"`` / ``"Z"`` / ``"W"`` / ``"autosome"``,
+                or ``None`` (defaults to autosome).
+
+        Raises:
+            ValueError: If the string value is not recognised.
+        """
         assert isinstance(sex_type, (SexChromosomeType, str, type(None))), f"Expected SexChromosomeType or str, got {type(sex_type).__name__}"
         if sex_type is None:
             self._sex_type = SexChromosomeType.AUTOSOME
@@ -159,7 +188,14 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
 
     @property
     def entity_type(self):
-        """Lazy import to avoid circular dependency."""
+        """Return the entity type for this structure.
+
+        Uses a lazy import to avoid circular dependencies with the
+        entities module.
+
+        Returns:
+            The :class:`~natal.genetics.entities.haplotype.Haplotype` class.
+        """
         from ..entities.haplotype import Haplotype
         return Haplotype
 
@@ -174,7 +210,10 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         return self._sorted_loci_cache
 
     def _invalidate_recombination_map_cache(self) -> None:
-        """Invalidate sorted loci cache and update recombination map."""
+        """Invalidate sorted-loci cache and update recombination map.
+
+        Called whenever a locus is added, removed, or repositioned.
+        """
         self._sorted_loci_cache = None
         self._update_recombination_map()
 
@@ -346,7 +385,11 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
             self._recombination_map = RecombinationMap(loci=new_sorted_loci)
 
     def invalidate_recombination_map_cache(self) -> None:
-        """Public wrapper for recombination-map cache invalidation."""
+        """Public wrapper for recombination-map cache invalidation.
+
+        Called externally after manual modifications that affect locus
+        ordering or recombination rates.
+        """
         self._invalidate_recombination_map_cache()
 
     def _update_recombination_map_on_insert(
@@ -472,7 +515,14 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
             self._recombination_map = RecombinationMap(loci=self.loci)
 
     def get_locus_index(self, name: str) -> int:
-        """Get the index of a locus by name in the sorted loci list."""
+        """Get the index of a locus by name in the sorted loci list.
+
+        Args:
+            name: Locus name.
+
+        Returns:
+            The positional index in the sorted loci list.
+        """
         return self.recombination_map.name_to_index(name)
 
     def set_recombination(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float):
@@ -518,24 +568,39 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         self.set_recombination_all(value)
 
     def set_recombination_rate(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float):
-        """
-        Deprecated: Use set_recombination instead.
+        """Set recombination rate between two adjacent loci.
+
+        Deprecated:
+            Use :meth:`set_recombination` instead.
+
+        Args:
+            locus_a: First locus (name or Locus object).
+            locus_b: Second locus (name or Locus object).
+            rate: Recombination rate in ``[0, 0.5]``.
         """
         self.set_recombination(locus_a, locus_b, rate)
 
     def set_recombination_rates(self, settings: Dict[Tuple[Union[Locus, str], Union[Locus, str]], float]):
-        """
-        Deprecated: Use set_recombination_bulk instead.
+        """Bulk-set recombination rates for multiple locus pairs.
+
+        Deprecated:
+            Use :meth:`set_recombination_bulk` instead.
+
+        Args:
+            settings: Dict mapping ``(locus_a, locus_b)`` to rate.
         """
         self.set_recombination_bulk(settings)
 
     def __repr__(self):
+        """Return a string representation of this Chromosome."""
         return f"Chromosome({self.name!r}, loci={[loc.name for loc in self.loci]})"
 
     def __iter__(self):
+        """Iterate over loci in positional order."""
         return iter(self.loci)
 
     def __len__(self):
+        """Return the number of loci on this chromosome."""
         return len(self.loci)
 
 

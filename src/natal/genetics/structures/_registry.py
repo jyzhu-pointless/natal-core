@@ -1,4 +1,10 @@
-"""Base registry classes for genetic structures."""
+"""Base registry classes for genetic structures.
+
+Provides :class:`RegistryBase`, :class:`EntityRegistry`, and
+:class:`ChildStructureRegistry` for managing registered entities and
+child structures on genetic structures with deduplication and runtime
+type validation.
+"""
 
 from __future__ import annotations
 
@@ -47,9 +53,24 @@ class RegistryBase(ABC, Generic[T]):
     # This keeps subclass logic focused on storage semantics while centralizing
     # input normalization and strict runtime type checks.
     def __init__(self, expected_type: Optional[type[GeneticStructure[E]]] = None):
+        """Initialize a RegistryBase.
+
+        Args:
+            expected_type: Optional runtime type constraint for registered
+                items.  When set, ``isinstance`` checks are performed on
+                every registration.
+        """
         self._expected_type = expected_type
 
     def _check_type(self, item: T) -> None:
+        """Runtime type check against the expected type.
+
+        Args:
+            item: Item to validate.
+
+        Raises:
+            TypeError: If *item* is not an instance of ``_expected_type``.
+        """
         if self._expected_type and not isinstance(item, self._expected_type):
             raise TypeError(f"Expected type {self._expected_type.__name__}, got {type(item).__name__}")
 
@@ -162,9 +183,19 @@ class RegistryBase(ABC, Generic[T]):
                 raise TypeError(f"Expected registry item type, got {type(item_or_items).__name__}")
 
     def __len__(self) -> int:
+        """Return the number of registered items.
+
+        Raises:
+            NotImplementedError: Must be overridden by subclasses.
+        """
         raise NotImplementedError
 
     def clear(self) -> None:
+        """Remove all registered items.
+
+        Raises:
+            NotImplementedError: Must be overridden by subclasses.
+        """
         raise NotImplementedError
 
 
@@ -180,20 +211,36 @@ class EntityRegistry(RegistryBase[E]):
     # - _set provides O(1) membership uniqueness checks
     # - _storage preserves insertion order for deterministic iteration
     def __init__(self, expected_type: Optional[type] = None):
+        """Initialize an EntityRegistry.
+
+        Args:
+            expected_type: Optional runtime type constraint.
+        """
         super().__init__(expected_type)
         self._storage: List[E] = []
         self._set: Set[E] = set()
 
     def _get_key(self, item: E) -> E:
+        """Return the deduplication key — object identity."""
         return item  # Use object identity
 
     def _single_register(self, item: E) -> None:
+        """Register a single entity by object identity.
+
+        Args:
+            item: Entity instance to register.
+        """
         self._check_type(item)
         if item not in self._set:
             self._storage.append(item)
             self._set.add(item)
 
     def _single_unregister(self, item: E) -> None:
+        """Unregister a single entity by object identity.
+
+        Args:
+            item: Entity instance to unregister.
+        """
         if item in self._set:
             self._storage.remove(item)
             self._set.remove(item)
@@ -206,21 +253,25 @@ class EntityRegistry(RegistryBase[E]):
         )
 
     def __iter__(self):
+        """Iterate over registered entities in insertion order."""
         return iter(self._storage)
 
     def __contains__(self, item: E) -> bool:
+        """Check if an entity is registered (by object identity)."""
         return item in self._set
 
     def __len__(self) -> int:
+        """Return the number of registered entities."""
         return len(self._storage)
 
     def clear(self) -> None:
+        """Remove all registered entities."""
         self._storage.clear()
         self._set.clear()
 
     @property
     def all(self) -> List[E]:
-        """Returns all registered entities."""
+        """Return all registered entities as a new list."""
         return list(self._storage)
 
 
@@ -238,18 +289,34 @@ class ChildStructureRegistry(RegistryBase[S]):
         owner: GeneticStructure[Any],
         expected_type: Optional[type[GeneticStructure[E]]] = None
     ):
+        """Initialize a ChildStructureRegistry.
+
+        Args:
+            owner: The parent GeneticStructure that owns this registry.
+            expected_type: Expected type for child structures.
+        """
         super().__init__(expected_type)
         self._owner = owner  # The parent structure that owns this registry
         self._storage: Dict[str, S] = {}
 
     def _is_expected_child(self, item: object) -> TypeGuard[S]:
-        # Additional explicit narrower used when reading from heterogeneous caches.
-        # Cache values are stored in broader Dict[str, GeneticStructure] maps; this
-        # function safely narrows back to S for assignment into Dict[str, S].
+        """Narrow a cached structure back to the expected child type.
+
+        Cache values are stored in broader ``Dict[str, GeneticStructure]``
+        maps; this function safely narrows back to ``S`` for assignment
+        into ``Dict[str, S]``.
+
+        Args:
+            item: A structure from a heterogeneous cache.
+
+        Returns:
+            True if *item* is an instance of the expected type.
+        """
         expected_type = self._expected_type
         return expected_type is not None and isinstance(item, expected_type)
 
     def _get_key(self, item: S) -> str:
+        """Return the deduplication key — ``item.name``."""
         return item.name
 
     def _single_register(self, item: S) -> None:

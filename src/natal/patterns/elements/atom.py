@@ -1,6 +1,9 @@
-"""
-Atom-level pattern elements: AllelePattern, WildcardPattern, SetPattern,
+"""Atom-level pattern elements: AllelePattern, WildcardPattern, SetPattern,
 LabPattern, LocusPattern.
+
+Provides the primitive pattern matching elements that operate at the
+individual-allele level, plus label pattern matching (:class:`LabPattern`)
+and locus-pair pattern matching (:class:`LocusPattern`).
 """
 
 from __future__ import annotations
@@ -13,32 +16,72 @@ from ._base import PatternElement, PatternParseError
 
 
 class AllelePattern(PatternElement):
-    """Exact match for a single allele name."""
+    """Exact match for a single allele name.
+
+    Attributes:
+        allele_name (str): The exact allele name this pattern matches.
+    """
 
     def __init__(self, allele_name: str):
+        """Initialize an AllelePattern.
+
+        Args:
+            allele_name: The exact allele name to match.
+        """
         self.allele_name = allele_name
 
     def matches(self, gene: Optional[Gene]) -> bool:
+        """Check if a gene matches this allele name.
+
+        Args:
+            gene: The Gene object to match, or ``None``.
+
+        Returns:
+            True if *gene* is not ``None`` and its name equals
+            ``self.allele_name``.
+        """
         if gene is None:
             return False
         return gene.name == self.allele_name
 
     def __repr__(self) -> str:
+        """Return a string representation of this pattern."""
         return f"AllelePattern({self.allele_name})"
 
 
 class WildcardPattern(PatternElement):
-    """Wildcard (*) - matches any allele."""
+    """Wildcard pattern - matches any allele.
+
+    The wildcard (``*``) matches any non-``None`` gene.
+    """
 
     def matches(self, gene: Optional[Gene]) -> bool:
+        """Check if a gene matches this wildcard.
+
+        Args:
+            gene: The Gene object to match, or ``None``.
+
+        Returns:
+            True if *gene* is not ``None``.
+        """
         return gene is not None
 
     def __repr__(self) -> str:
+        """Return a string representation of this pattern."""
         return "WildcardPattern(*)"
 
 
 class SetPattern(PatternElement):
-    """Set pattern - matches alleles in a set, with optional negation."""
+    """Set pattern - matches alleles in a set, with optional negation.
+
+    Supports positive matching (allele is in the set), negated matching
+    (allele is NOT in the set), and multi-allele set syntax like
+    ``{A,B,C}`` and ``!{A,B}``.
+
+    Attributes:
+        alleles (Set[str]): Set of allele names.
+        negate (bool): If True, match alleles NOT in the set.
+    """
 
     def __init__(self, alleles: Set[str], negate: bool = False):
         """Initialize a set pattern.
@@ -51,18 +94,36 @@ class SetPattern(PatternElement):
         self.negate = negate
 
     def matches(self, gene: Optional[Gene]) -> bool:
+        """Check if a gene matches this set pattern.
+
+        Args:
+            gene: The Gene object to match, or ``None``.
+
+        Returns:
+            True if *gene* is not ``None`` and satisfies the set constraint.
+        """
         if gene is None:
             return False
         result = gene.name in self.alleles
         return (not result) if self.negate else result
 
     def __repr__(self) -> str:
+        """Return a string representation of this pattern."""
         prefix = "!" if self.negate else ""
         return f"SetPattern({prefix}{{{', '.join(sorted(self.alleles))}}})"
 
 
 class LocusPattern:
-    """Pattern for a single locus (two homologous chromosomes)."""
+    """Pattern for a single locus on two homologous chromosomes.
+
+    Matches a pair of alleles (maternal and paternal) at one locus.
+    Supports ordered (``|``) and unordered (``::``) matching.
+
+    Attributes:
+        maternal_pattern (PatternElement): Pattern for the maternal allele.
+        paternal_pattern (PatternElement): Pattern for the paternal allele.
+        unordered (bool): If True, maternal/paternal order is ignored.
+    """
 
     def __init__(
         self,
@@ -110,6 +171,7 @@ class LocusPattern:
             )
 
     def __repr__(self) -> str:
+        """Return a string representation of this locus pattern."""
         sep = "::" if self.unordered else "/"
         return f"{self.maternal_pattern}{sep}{self.paternal_pattern}"
 
@@ -125,6 +187,11 @@ class LabPattern:
 
     When *lab* and *lab_set* are both ``None`` the pattern matches any label
     (equivalent to omitting the ``@`` suffix entirely).
+
+    Attributes:
+        lab (Optional[str]): Exact label to match, or ``None``.
+        negate (bool): If True, negate the matching condition.
+        lab_set (Optional[Set[str]]): Set of labels for set matching.
     """
 
     def __init__(
@@ -133,6 +200,13 @@ class LabPattern:
         negate: bool = False,
         lab_set: Optional[Set[str]] = None,
     ):
+        """Initialize a LabPattern.
+
+        Args:
+            lab: Exact label name to match, or ``None`` for wildcard.
+            negate: If True, match the complement of the constraint.
+            lab_set: Set of label names for set matching.
+        """
         self.lab = lab
         self.negate = negate
         self.lab_set = lab_set
@@ -151,6 +225,9 @@ class LabPattern:
         """False when this is a pure wildcard (no constraint).
 
         Prefer :meth:`is_wildcard` for readability in conditional checks.
+
+        Returns:
+            True if a constraint (lab or lab_set) is set.
         """
         return self.lab is not None or self.lab_set is not None
 
@@ -159,6 +236,7 @@ class LabPattern:
         return self.lab is None and self.lab_set is None
 
     def __repr__(self) -> str:
+        """Return a string representation of this label pattern."""
         if self.lab_set is not None:
             inner = "{" + ",".join(sorted(self.lab_set)) + "}"
         elif self.lab is not None:

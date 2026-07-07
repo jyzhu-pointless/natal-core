@@ -1,4 +1,10 @@
-"""Locus structure — a genetic position on a chromosome."""
+"""Locus structure — a genetic position on a chromosome.
+
+This module provides :class:`Locus`, the structural blueprint for a single
+genetic locus.  A Locus can have multiple :class:`~natal.genetics.entities.gene.Gene`
+entities (alleles) registered to it and maintains a positional coordinate
+used for recombination rate calculations.
+"""
 
 from __future__ import annotations
 
@@ -35,6 +41,19 @@ class Locus(GeneticStructure['Gene']):
         parent: Optional[Chromosome] = None,
         **kwargs: Any  # extra parameters stored as custom locus attributes
     ):
+        """Initialize a Locus structure.
+
+        Computes a default position (max position among siblings + 1) when
+        *position* is not given, and registers with the parent Chromosome.
+
+        Args:
+            name: Locus name.
+            position: Linear position on the chromosome (used for
+                recombination ordering).  Defaults to ``max(siblings) + 1``.
+            chromosome: Parent Chromosome (alternative to *parent*).
+            parent: Parent Chromosome (alias for *chromosome*).
+            **kwargs: Extra attributes stored as instance attributes.
+        """
         # Check if already initialized (cached instance)
         if hasattr(self, '_initialized') and self._initialized:
             return
@@ -83,7 +102,13 @@ class Locus(GeneticStructure['Gene']):
 
     @property
     def entity_type(self):
-        """Lazy import to avoid circular dependency."""
+        """Return the entity type for this structure.
+
+        Uses a lazy import to avoid circular dependencies.
+
+        Returns:
+            The :class:`~natal.genetics.entities.gene.Gene` class.
+        """
         from ..entities.gene import Gene
         return Gene
 
@@ -195,5 +220,6 @@ class Locus(GeneticStructure['Gene']):
         return cls(name, position=position).add_alleles(alleles_or_allele_names)
 
     def __repr__(self) -> str:
+        """Return a string representation of this Locus."""
         allele_names = [g.name for g in self.alleles]
         return f"Locus({self.name!r}, position={self.position}, alleles={allele_names})"

@@ -1,5 +1,14 @@
-"""
-Genotype entity — diploid genotype with gamete production and recombination.
+"""Genotype entity — diploid genotype with gamete production and recombination.
+
+This module provides :class:`Genotype`, the diploid genotype entity that
+pairs two :class:`~natal.genetics.entities.haplotype.HaploidGenotype`
+instances (maternal and paternal) and supports gamete production via
+Mendelian segregation with optional recombination.
+
+Also provides the free functions
+:func:`compute_recombinant_haplotypes` and
+:func:`compute_recombinant_haplotypes_with_alleles` for computing
+recombination patterns and frequencies.
 """
 
 from __future__ import annotations
@@ -146,6 +155,21 @@ class Genotype:
         maternal: HaploidGenotype,
         paternal: HaploidGenotype
     ):
+        """Initialize a diploid Genotype from two haploid genomes.
+
+        Validates that both haploid genomes belong to the same species,
+        stores maternal and paternal references, and caches gamete
+        frequencies.
+
+        Args:
+            species: The Species both haploid genomes belong to.
+            maternal: Maternal haploid genome.
+            paternal: Paternal haploid genome.
+
+        Raises:
+            ValueError: If the two haploid genomes belong to different
+                species.
+        """
         # Prevent re-initialization of cached instances
         if hasattr(self, '_initialized') and self._initialized:
             return
@@ -526,6 +550,7 @@ class Genotype:
 
 
     def __repr__(self):
+        """Return a string representation of this Genotype."""
         return f"Genotype(species={self.species.name!r}, maternal={self.maternal!r}, paternal={self.paternal!r})"
 
 

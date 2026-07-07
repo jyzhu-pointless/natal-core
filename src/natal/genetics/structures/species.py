@@ -1,4 +1,11 @@
-"""Species — top-level genetic architecture structure."""
+"""Species — top-level genetic architecture structure.
+
+This module provides :class:`Species`, the root structural blueprint for
+a species' genetic architecture.  A Species contains multiple
+:class:`~natal.genetics.structures.chromosome.Chromosome` instances, each
+with its own loci and recombination rates, and provides methods for
+construction, enumeration, mapping, and pattern matching via mixin classes.
+"""
 
 from __future__ import annotations
 
@@ -141,6 +148,11 @@ class Species(
 
     @gamete_labels.setter
     def gamete_labels(self, labels: List[str]) -> None:
+        """Set the gamete labels list.
+
+        Args:
+            labels: New list of gamete label strings.
+        """
         self._gamete_labels = list(labels)
 
     @property
@@ -150,11 +162,22 @@ class Species(
 
     @somatic_labels.setter
     def somatic_labels(self, labels: List[str]) -> None:
+        """Set the somatic labels list.
+
+        Args:
+            labels: New list of somatic label strings.
+        """
         self._somatic_labels = list(labels)
 
     @property
     def entity_type(self):
-        """Lazy import to avoid circular dependency."""
+        """Return the entity type for this structure.
+
+        Uses a lazy import to avoid circular dependencies.
+
+        Returns:
+            The :class:`~natal.genetics.entities.haplotype.HaploidGenome` class.
+        """
         from ..entities.haplotype import HaploidGenome
         return HaploidGenome
 
@@ -179,7 +202,11 @@ class Species(
         self.clear_entity_cache()
 
     def _invalidate_gene_index_cache(self) -> None:
-        """Invalidate species-level gene name lookup cache."""
+        """Invalidate the species-level gene name lookup cache.
+
+        Called whenever a gene is registered or unregistered to force
+        rebuild on the next :meth:`build_gene_index` call.
+        """
         self._gene_index_cache = None
 
     def invalidate_gene_index_cache(self) -> None:
@@ -473,6 +500,7 @@ class Species(
         return gene_index
 
     def __repr__(self):
+        """Return a string representation of this Species."""
         chrom_strs: List[str] = []
         for chrom in self.chromosomes:
             loci_names = [locus.name for locus in chrom.loci]
@@ -480,7 +508,9 @@ class Species(
         return f"Species({self.name!r}, {{{', '.join(chrom_strs)}}})"
 
     def __iter__(self):
+        """Iterate over chromosomes in this species."""
         return iter(self.chromosomes)
 
     def __len__(self):
+        """Return the number of chromosomes in this species."""
         return len(self.chromosomes)

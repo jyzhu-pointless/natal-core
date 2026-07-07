@@ -1,5 +1,8 @@
-"""
-Base classes for genetic pattern matching elements.
+"""Base classes for genetic pattern matching elements.
+
+Provides :class:`PatternElement` (abstract base for allele-level pattern
+matching) and :class:`PatternParseError` (exception raised on invalid
+pattern syntax).
 """
 
 from __future__ import annotations
@@ -13,7 +16,11 @@ if TYPE_CHECKING:
 
 
 class PatternParseError(Exception):
-    """Error raised during genotype pattern parsing."""
+    """Error raised during genotype pattern parsing.
+
+    Indicates that a pattern string could not be parsed due to invalid
+    syntax, unsupported constructs, or species context mismatches.
+    """
     pass
 
 
@@ -34,4 +41,4 @@ class PatternElement(ABC):
 
     @abstract_method
     def __repr__(self) -> str:
-        pass
+        """Return a string representation of this pattern element."""

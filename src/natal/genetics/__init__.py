@@ -1,7 +1,20 @@
 """Genetics subpackage — genetic structures and entities.
 
-Re-exports all public symbols from the structures/ and entities/ subdirectories.
-Formerly known as genetic_structures.py and genetic_entities.py.
+This subpackage defines the complete genetic architecture modelling layer:
+- **Structures**: Blueprint types (:class:`~natal.genetics.structures.species.Species`,
+  :class:`~natal.genetics.structures.chromosome.Chromosome`,
+  :class:`~natal.genetics.structures.locus.Locus`) that define the
+  hierarchical organisation of a species' genome.
+- **Entities**: Runtime instances (:class:`~natal.genetics.entities.gene.Gene`,
+  :class:`~natal.genetics.entities.haplotype.Haplotype`,
+  :class:`~natal.genetics.entities.haplotype.HaploidGenotype`,
+  :class:`~natal.genetics.entities.genotype.Genotype`) that are bound
+  to structures and support operations such as gamete production with
+  recombination.
+
+Re-exports all public symbols from the ``structures/`` and ``entities/``
+subdirectories.  Formerly known as ``genetic_structures.py`` and
+``genetic_entities.py``.
 """
 
 from .entities.gene import Gene

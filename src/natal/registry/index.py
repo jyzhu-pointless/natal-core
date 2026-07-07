@@ -13,7 +13,7 @@ are suitable for NumPy arrays and Numba‑accelerated engine.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Dict, List, Tuple
 
 import numpy as np
 
@@ -45,6 +45,11 @@ class IndexRegistry:
     """
 
     def __init__(self) -> None:
+        """Initialize an empty IndexRegistry.
+
+        All internal mapping dicts and lists start empty; entries are
+        added lazily via the registration methods.
+        """
         # ---- ZType space (diploid layer primary index) ----
         self._ztype_to_index: Dict[Tuple[Genotype, str], int] = {}
         self._index_to_ztype: List[Tuple[Genotype, str]] = []
@@ -216,7 +221,7 @@ class IndexRegistry:
             indices.append(idx)
         return indices
 
-    def register_haplogenotype(self, haplo_id: Any) -> List[int]:
+    def register_haplogenotype(self, haplo_id: HaploidGenotype) -> list[int]:
         """Register a haplogenotype and auto-cross-product with all glab labels.
 
         If ``glab_labels`` is empty it is auto-initialised to ``["default"]``.
@@ -336,8 +341,15 @@ class IndexRegistry:
         """
         return [i for i, (gt, _) in enumerate(self._index_to_ztype) if gt == genotype]
 
-    def gtype_indices_for(self, haplo: Any) -> list[int]:
-        """Return all GType indices for a given HaploidGenotype object."""
+    def gtype_indices_for(self, haplo: HaploidGenotype) -> list[int]:
+        """Return all GType indices for a given HaploidGenotype object.
+
+        Args:
+            haplo: A HaploidGenotype instance.
+
+        Returns:
+            List of GType indices for this haplotype (one per glab label).
+        """
         return [i for i, (hg, _) in enumerate(self._index_to_gtype) if hg == haplo]
 
     def gtype_index(self, haplo: HaploidGenotype, glab_label: str) -> int:
@@ -385,7 +397,12 @@ class IndexRegistry:
         self._compress_gtypes(gtype_mask)
 
     def _compress_ztypes(self, ztype_mask: NDArray[np.int32]) -> None:
-        """Rebuild ZType flat lists/dicts from the active mask entries."""
+        """Rebuild ZType flat lists/dicts from the active mask entries.
+
+        Args:
+            ztype_mask: ``int32`` array where ``>=0`` entries survive
+                and ``-1`` entries are pruned.
+        """
         active = ztype_mask >= 0
 
         new_index_to_ztype: list[Tuple[Genotype, str]] = [
@@ -395,7 +412,12 @@ class IndexRegistry:
         self._ztype_to_index = {zt: i for i, zt in enumerate(new_index_to_ztype)}
 
     def _compress_gtypes(self, gtype_mask: NDArray[np.int32]) -> None:
-        """Rebuild GType flat lists/dicts from the active mask entries."""
+        """Rebuild GType flat lists/dicts from the active mask entries.
+
+        Args:
+            gtype_mask: ``int32`` array where ``>=0`` entries survive
+                and ``-1`` entries are pruned.
+        """
         active = gtype_mask >= 0
 
         new_index_to_gtype: list[Tuple[HaploidGenotype, str]] = [

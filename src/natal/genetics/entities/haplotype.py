@@ -1,4 +1,11 @@
-"""Haplotype and HaploidGenotype entities."""
+"""Haplotype and HaploidGenotype entities.
+
+This module provides :class:`Haplotype` (genes on one chromosome from one
+parent) and :class:`HaploidGenotype` (all haplotypes forming one complete
+haploid genome).  Both are bound to their respective structures
+(:class:`~natal.genetics.structures.chromosome.Chromosome` and
+:class:`~natal.genetics.structures.species.Species`).
+"""
 
 from __future__ import annotations
 
@@ -34,7 +41,20 @@ class Haplotype(GeneticEntity['Chromosome']):
     """
     structure_type: type  # Set after Chromosome import
 
-    def __new__(cls, chromosome: Optional[Chromosome] = None, genes: Optional[List[Gene]] = None, **kwargs: Any) -> Haplotype:
+    def __new__(cls, chromosome: Optional[Chromosome] = None, genes: Optional[List[Gene]] = None, **kwargs: Any) -> Haplotype:  # forwarded to GeneticStructure.__new__
+        """Create or retrieve a cached Haplotype instance.
+
+        The cache name is generated automatically from the ordered gene
+        names (``"gene1/gene2/..."``).
+
+        Args:
+            chromosome: Parent Chromosome structure.
+            genes: Ordered list of Gene instances, one per locus.
+            **kwargs: Additional arguments forwarded to ``__init__``.
+
+        Returns:
+            A new or cached Haplotype instance.
+        """
         # Generate name from genes for caching (ignore any passed 'name' parameter)
         kwargs.pop('name', None)  # Remove 'name' if present to avoid conflicts
         if genes:
@@ -49,6 +69,21 @@ class Haplotype(GeneticEntity['Chromosome']):
         genes: Optional[List[Gene]] = None,
         **kwargs: Any
     ):
+        """Initialize a Haplotype bound to a Chromosome.
+
+        Validates that all genes belong to the given chromosome, that
+        there are no duplicate loci, and that all loci are covered
+        (unless the chromosome allows incomplete haplotypes).
+
+        Args:
+            chromosome: Parent Chromosome instance.
+            genes: Ordered list of Gene instances, one per chromosome locus.
+            **kwargs: Extra attributes stored as instance attributes.
+
+        Raises:
+            TypeError: If *chromosome* or *genes* is ``None``.
+            ValueError: If validation of gene-locus completeness fails.
+        """
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -117,6 +152,7 @@ class Haplotype(GeneticEntity['Chromosome']):
         return None
 
     def __repr__(self):
+        """Return a string representation of this Haplotype."""
         gene_names = [gene.name for gene in self.genes]
         return f"Haplotype(chromosome={self.chromosome.name!r}, genes={gene_names})"
 
@@ -143,7 +179,20 @@ class HaploidGenotype(GeneticEntity['Species']):
     """
     structure_type: type  # Set after Species import
 
-    def __new__(cls, species: Optional[Species] = None, haplotypes: Optional[List[Haplotype]] = None, **kwargs: Any) -> HaploidGenotype:
+    def __new__(cls, species: Optional[Species] = None, haplotypes: Optional[List[Haplotype]] = None, **kwargs: Any) -> HaploidGenotype:  # forwarded to GeneticStructure.__new__
+        """Create or retrieve a cached HaploidGenotype instance.
+
+        The cache name is generated automatically from the ordered
+        haplotype names (``"hap1;hap2;..."``).
+
+        Args:
+            species: Parent Species structure.
+            haplotypes: One Haplotype per chromosome in the species.
+            **kwargs: Additional arguments forwarded to ``__init__``.
+
+        Returns:
+            A new or cached HaploidGenotype instance.
+        """
         # Generate name from haplotypes for caching (ignore any passed 'name' parameter)
         kwargs.pop('name', None)  # Remove 'name' if present to avoid conflicts
         if haplotypes:
@@ -158,6 +207,21 @@ class HaploidGenotype(GeneticEntity['Species']):
         haplotypes: Optional[List[Haplotype]] = None,
         **kwargs: Any
     ):
+        """Initialize a HaploidGenotype bound to a Species.
+
+        Validates that all haplotypes belong to the given species, that
+        there are no duplicate chromosomes, and that sex-chromosome group
+        coverage is correct (exactly one per group when groups are defined).
+
+        Args:
+            species: Parent Species instance.
+            haplotypes: One Haplotype per required chromosome.
+            **kwargs: Extra attributes stored as instance attributes.
+
+        Raises:
+            TypeError: If *species* or *haplotypes* is ``None``.
+            ValueError: If validation of chromosome coverage fails.
+        """
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -251,6 +315,7 @@ class HaploidGenotype(GeneticEntity['Species']):
         return self.name
 
     def __str__(self) -> str:
+        """Return the species-parsable string representation."""
         return self.to_string()
 
     def get_haplotype_for_chromosome(self, chromosome: Chromosome) -> Haplotype:
@@ -287,6 +352,7 @@ class HaploidGenotype(GeneticEntity['Species']):
         return None
 
     def __repr__(self):
+        """Return a string representation of this HaploidGenotype."""
         chrom_names = [hap.chromosome.name for hap in self.haplotypes]
         return f"HaploidGenotype(species={self.species.name!r}, haplotypes={chrom_names})"
 
