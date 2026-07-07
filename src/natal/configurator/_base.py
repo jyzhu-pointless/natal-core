@@ -130,6 +130,11 @@ def set_param(
     Usable from pure Python, ``with objmode():`` inside njit hooks, and
     Configurator chain methods.
 
+    If *name* matches a custom field on ``config.custom`` (registered via
+    :meth:`Configurator.custom`), it is written directly — no registry
+    lookup needed. This means ``hook_set_param`` inside Numba hooks can
+    also address custom fields.
+
     Args:
         config: The PopulationConfig or DiscretePopulationConfig to modify.
         name: Parameter name — full key ``"competition.carrying_capacity"``,
@@ -138,7 +143,7 @@ def set_param(
                direct array access instead.
 
     Raises:
-        KeyError: If *name* is not a registered parameter.
+        KeyError: If *name* is not a registered parameter or custom field.
         ValueError: If *name* refers to a tensor (non-scalar) parameter.
 
     Examples::
@@ -149,6 +154,10 @@ def set_param(
     """
     desc = resolve_param(name)  # noqa: F821
     if desc is None:
+        # Fallback: check custom fields (not in the parameter registry).
+        if hasattr(config, 'custom') and config.custom.dtype.names and name in config.custom.dtype.names:
+            config.custom[name][()] = value
+            return
         raise KeyError(f"Unknown parameter: {name!r}")
     if desc.config_field is None:
         raise ValueError(
