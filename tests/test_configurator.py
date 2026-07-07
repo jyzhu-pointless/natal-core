@@ -5,7 +5,7 @@ import pytest
 
 import natal as nt
 from natal.configurator import Configurator, set_param
-from natal.data import build_population_config
+from natal.data import build_custom_array, build_population_config
 
 
 @pytest.fixture(scope="module")
@@ -26,6 +26,19 @@ def minimal_config(species):
         zygotes_to_gametes_map=species.get_config_blueprint()["zygotes_to_gametes_map"],
         gametes_to_zygotes_map=species.get_config_blueprint()["gametes_to_zygotes_map"],
     )
+
+
+@pytest.fixture
+def config_with_custom(species):
+    cfg = build_population_config(
+        n_genotypes=species.get_config_blueprint()["n_genotypes"],
+        n_gtypes=species.get_config_blueprint()["n_gtypes"],
+        n_ages=2,
+        n_glabs=species.get_config_blueprint()["n_glabs"],
+        zygotes_to_gametes_map=species.get_config_blueprint()["zygotes_to_gametes_map"],
+        gametes_to_zygotes_map=species.get_config_blueprint()["gametes_to_zygotes_map"],
+    )
+    return cfg._replace(custom=build_custom_array({"temperature": 25.0, "flag": True}))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -57,6 +70,33 @@ class TestSetParam:
     def test_unknown_param_raises(self, minimal_config):
         with pytest.raises(KeyError, match="nonexistent"):
             set_param(minimal_config, "nonexistent", 1.0)
+
+    # ── Custom field fallback ──────────────────────────────────────────
+
+    def test_custom_field_write(self, config_with_custom):
+        """set_param writes to a registered custom field."""
+        set_param(config_with_custom, "temperature", 30.0)
+        assert config_with_custom.custom["temperature"][()] == 30.0
+
+    def test_custom_field_bool(self, config_with_custom):
+        """set_param writes bool values to registered custom fields."""
+        set_param(config_with_custom, "flag", False)
+        assert bool(config_with_custom.custom["flag"][()]) is False
+
+    def test_custom_field_no_config_custom_raises(self, minimal_config):
+        """set_param raises KeyError when config has no custom fields."""
+        with pytest.raises(KeyError, match="nonexistent"):
+            set_param(minimal_config, "nonexistent", 1.0)
+
+    def test_custom_field_unknown_still_raises(self, config_with_custom):
+        """set_param raises KeyError for names absent from both registry and custom."""
+        with pytest.raises(KeyError, match="unknown_custom"):
+            set_param(config_with_custom, "unknown_custom", 1.0)
+
+    def test_custom_field_registry_takes_priority(self, config_with_custom):
+        """Registry parameters shadow custom fields with the same name."""
+        set_param(config_with_custom, "carrying_capacity", 8000.0)
+        assert config_with_custom.carrying_capacity[()] == 8000.0
 
 
 # ══════════════════════════════════════════════════════════════════════════
