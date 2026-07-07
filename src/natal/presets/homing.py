@@ -210,26 +210,35 @@ class HomingDrive(GeneticPreset):
 
     @property
     def drive_allele(self) -> Gene:
+        """Gene: The drive allele (e.g. the Cas9/gRNA construct)."""
         return self._resolve_bound_gene(self._str_drive_allele)
 
     @property
     def target_allele(self) -> Gene:
+        """Gene: The wild-type allele targeted for cleavage."""
         return self._resolve_bound_gene(self._str_target_allele)
 
     @property
     def resistance_genotype(self) -> Gene:
+        """Gene: The resistance allele formed by NHEJ repair.
+
+        Raises:
+            ValueError: If no resistance allele was configured.
+        """
         if self._str_resistance_allele is None:
             raise ValueError(f"Resistance allele not defined in HomingDrive '{self.name}'.")
         return self._resolve_bound_gene(self._str_resistance_allele)
 
     @property
     def functional_resistance_allele(self) -> Optional[Gene]:
+        """Gene or None: The functional resistance allele, if configured."""
         if self._str_functional_resistance_allele is None:
             return None
         return self._resolve_bound_gene(self._str_functional_resistance_allele)
 
     @property
     def cas9_allele(self) -> Optional[Gene]:
+        """Gene or None: The Cas9 source allele, if different from drive_allele."""
         if self._str_cas9_allele is None:
             return None
         return self._resolve_bound_gene(self._str_cas9_allele)
@@ -240,6 +249,7 @@ class HomingDrive(GeneticPreset):
         In heterozygotes (drive/wild-type), gametes are biased towards drive.
         """
         def drive_carrier_filter(gt: Genotype) -> bool:
+            """Return True if the genotype carries both drive and Cas9 alleles."""
             from natal.presets._types import count_allele_copies
 
             has_drive = count_allele_copies(gt, self.drive_allele) > 0
@@ -332,7 +342,14 @@ class HomingDrive(GeneticPreset):
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoResistance")
 
         def zygote_has_cas9(gt: Genotype) -> bool:
-            """Check if the zygote itself carries the Cas9 source (somatic cleavage)."""
+            """Check if the zygote itself carries the Cas9 source (somatic cleavage).
+
+            Args:
+                gt: The zygote genotype to check.
+
+            Returns:
+                True if the zygote carries cas9_allele or drive_allele.
+            """
             from natal.presets._types import count_allele_copies
 
             target = self.cas9_allele if self.cas9_allele else self.drive_allele

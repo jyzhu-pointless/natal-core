@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         DemeSelector,
         HookProgram,
     )
+    from natal.population.base import BasePopulation
 
 HookCallback = Callable[..., object]
 HookEntry = Tuple[int, Optional[str], HookCallback]
@@ -239,7 +240,7 @@ class HookManagerMixin:
 
     # ── Compiled Hooks (DSL / Numba-friendly) ────────────────────────
 
-    def _register_compiled_hook(self, desc: Any) -> None:
+    def _register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:
         """Register a compiled hook descriptor.
 
         Args:
@@ -318,7 +319,7 @@ class HookManagerMixin:
         if self._hook_executor is None:
             self._hook_executor = self._build_hook_executor()
 
-    def register_compiled_hook(self, desc: Any) -> None:
+    def register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:
         """Public wrapper for registering compiled hooks."""
         self._register_compiled_hook(desc)
 
@@ -337,7 +338,7 @@ class HookManagerMixin:
         return sorted(hooks, key=lambda h: h.priority)
 
     def register_declarative_hook(
-        self,
+        self: BasePopulation[Any],  # type: ignore[reportGeneralTypeIssues, reportMissingTypeArgument]  # mixin, host is BasePopulation subclass
         event: str,
         ops: List[Any],
         priority: int = 0,
@@ -370,7 +371,7 @@ class HookManagerMixin:
         from natal.hooks import compile_declarative_hook
         desc = compile_declarative_hook(
             ops,
-            cast(Any, self),
+            self,
             event,
             priority=priority,
             name=name,

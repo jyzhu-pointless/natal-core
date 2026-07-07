@@ -337,15 +337,28 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
     # Helpers
     def _create_registry(self) -> IndexRegistry:
+        """Create a new IndexRegistry for this population.
+
+        Returns:
+            A fresh IndexRegistry instance.
+        """
         return IndexRegistry()
 
     def _get_genotypes(self) -> List[Genotype]:
+        """Retrieve all diploid genotypes defined by the species.
+
+        Returns:
+            List of all Genotype objects.
+        """
         return self.species.get_all_genotypes()
-        # return self._registry.index_to_genotype
 
     def _get_haplogenotypes(self) -> Optional[List[HaploidGenotype]]:
+        """Retrieve all haploid genotypes defined by the species.
+
+        Returns:
+            List of all HaploidGenotype objects, or None if not available.
+        """
         return self.species.get_all_haploid_genotypes()
-        # return self._registry.index_to_haplo
 
     @staticmethod
     def _derive_hook_slot(name: str) -> int:
@@ -524,6 +537,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         pass
 
     def __repr__(self) -> str:
+        """Return a string summary of the population state."""  # noqa: D400
         return (
             f"{self.__class__.__name__}("
             f"name={self.name!r}, "

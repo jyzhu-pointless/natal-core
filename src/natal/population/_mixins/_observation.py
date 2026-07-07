@@ -12,7 +12,6 @@ from typing import (
     Dict,
     Optional,
     Union,
-    cast,
 )
 
 import numpy as np
@@ -29,6 +28,7 @@ if TYPE_CHECKING:
         GroupsInput,
         Observation,
     )
+    from natal.population.base import BasePopulation
 
 
 class ObservationMixin:
@@ -124,7 +124,7 @@ class ObservationMixin:
         )
 
     def output_current_state(
-        self,
+        self: BasePopulation[Any],  # type: ignore[reportGeneralTypeIssues, reportMissingTypeArgument]  # mixin, host is BasePopulation subclass
         *,
         observation: Optional[Observation] = None,
         groups: Optional[GroupsInput] = None,
@@ -153,7 +153,7 @@ class ObservationMixin:
             A dictionary with observation metadata and observed counts.
         """
         return _output_current_state(
-            cast(Any, self),
+            self,
             observation=observation,
             groups=groups,
             collapse_age=collapse_age,
@@ -163,7 +163,7 @@ class ObservationMixin:
         )
 
     def output_history(
-        self,
+        self: BasePopulation[Any],  # type: ignore[reportGeneralTypeIssues, reportMissingTypeArgument]  # mixin, host is BasePopulation subclass
         *,
         observation: Optional[Observation] = None,
         groups: Optional[GroupsInput] = None,
@@ -192,7 +192,7 @@ class ObservationMixin:
             A dictionary containing observation metadata and per-snapshot outputs.
         """
         return _output_history(
-            cast(Any, self),
+            self,
             observation=observation,
             groups=groups,
             collapse_age=collapse_age,

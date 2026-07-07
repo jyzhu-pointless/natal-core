@@ -197,6 +197,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._finalize_hooks()
 
     def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
+        """Clone this population with a new name and optional config override."""
         clone = super()._clone(name, config=config)  # type: ignore[arg-type]  # subclass accepts DiscretePopulationConfig, super expects PopulationConfig
         if config is not None:
             object.__setattr__(clone, "_config", self._to_discrete_config(config))  # type: ignore[assignment]  # bypasses type check for covariant _config override
@@ -294,6 +295,20 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self,
         age_data: Union[List[int], Dict[int, int], int, float],
     ) -> Tuple[float, float]:
+        """Resolve age distribution data into ``(age_0, age_1)`` counts.
+
+        Accepts int/float (all to age 1), list of length 0–2, or dict
+        with keys 0 and/or 1.
+
+        Args:
+            age_data: Age distribution specification.
+
+        Returns:
+            A tuple of ``(age_0_count, age_1_count)``.
+
+        Raises:
+            ValueError: If *age_data* format is unsupported.
+        """
         if isinstance(age_data, (int, float)):
             return 0.0, float(age_data)
         if isinstance(age_data, list):
@@ -313,6 +328,14 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self,
         distribution: Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]],
     ) -> None:
+        """Distribute individuals across genotypes and ages from a nested dict.
+
+        Args:
+            distribution: Dict mapping sex -> {genotype -> age_distribution}.
+
+        Raises:
+            ValueError: If sex key is not ``"female"`` or ``"male"``.
+        """
         self.state.individual_count.fill(0.0)
         for sex_key, genotype_dist in distribution.items():
             sex_key_norm = sex_key.lower().strip()
@@ -590,6 +613,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         finish: bool,
         clear_history_on_start: bool,
     ) -> DiscreteGenerationPopulation:
+        """Run simulation ticks using the Python fallback path (no Numba)."""
         from natal.data import DiscretePopulationState
 
         self.ensure_hook_executor()
@@ -789,5 +813,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return cast('DiscreteConfigurator', self._create_configurator())
 
     def __repr__(self) -> str:
+        """Return a string summary of the discrete-generation population."""
         status = "Finished" if self._finished else "Active"
         return f"<DiscreteGenerationPopulation(name='{self.name}', tick={self.tick}, status={status})>"

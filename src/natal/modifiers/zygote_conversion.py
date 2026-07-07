@@ -154,6 +154,7 @@ class ZygoteGenotypeConversionRule:
         return self._replacement_fn(genotype)
 
     def __repr__(self) -> str:
+        """Return a string identifying this genotype conversion rule."""
         return f"ZygoteGenotypeConversionRule({self.name}, rate={self.rate})"
 
 class ZygoteAlleleConversionRule:
@@ -232,6 +233,7 @@ class ZygoteAlleleConversionRule:
         return applies
 
     def __repr__(self) -> str:
+        """Return a string identifying this allele conversion rule."""
         return f"ZygoteAlleleConversionRule({self.name}, rate={self.rate})"
 
 
@@ -263,6 +265,11 @@ class ZygoteConversionRuleSet:
     _RuleType = Union[ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule]
 
     def __init__(self, name: str = "ZygoteConversionRuleSet"):
+        """Initialize an empty zygote conversion rule set.
+
+        Args:
+            name: A human-readable name for this rule set.
+        """
         self.name = name
         self.rules: List[ZygoteConversionRuleSet._RuleType] = []
 
@@ -371,6 +378,7 @@ class ZygoteConversionRuleSet:
         def zygote_modifier_func(*_args: object, **_kwargs: object) -> Dict[
             Tuple[int, int], Dict[int, float]
         ]:
+            """Produce a mapping of gamete-pair -> {genotype_idx: probability} from all rules."""  # noqa: D400
             diploid_genotypes = population.registry.index_to_genotype
 
             # Build genotype index lookup for the registered diploid set.
@@ -475,6 +483,7 @@ class ZygoteConversionRuleSet:
         return zygote_modifier_func
 
     def __repr__(self) -> str:
+        """Return a string identifying this rule set and its rule count."""
         return f"{self.name} with {len(self.rules)} rules"
 
 

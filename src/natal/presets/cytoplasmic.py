@@ -51,7 +51,8 @@ class CytoplasmicPreset(GeneticPreset):
         return None
 
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
-        return None  # redirection is done post-expansion
+        """Return no zygote-level modifier — redirection is done post-expansion."""
+        return None
 
     @staticmethod
     def apply_zygote_redirect(
@@ -196,6 +197,18 @@ class Wolbachia(CytoplasmicPreset):
         species: Optional[Species] = None,
         priority: int = 0,
     ):
+        """Initialize a Wolbachia cytoplasmic preset.
+
+        Args:
+            name: Preset name.
+            infected_slab: Somatic slab label for infected individuals.
+            normal_slab: Somatic slab label for uninfected individuals.
+            viability_scaling: Viability multiplier for infected carriers.
+            fecundity_scaling: Fecundity multiplier for infected carriers.
+                ``None`` means no fecundity effect.
+            species: Optional species for validation.
+            priority: Modifier and fitness application priority.
+        """
         super().__init__(name=name, species=species, priority=priority)
         self._maternal_map = {infected_slab: "wolbachia"}
         self.infected_slab = infected_slab
@@ -204,6 +217,12 @@ class Wolbachia(CytoplasmicPreset):
         self.fecundity_scaling = fecundity_scaling
 
     def fitness_patch(self) -> PresetFitnessPatch:
+        """Build fitness patch applying viability and fecundity scaling.
+
+        Returns:
+            A fitness patch dict with optional ``viability_per_slab`` and
+            ``fecundity_per_slab`` entries for the infected slab.
+        """
         patch: PresetFitnessPatch = {}
         patch['viability_per_slab'] = {self.infected_slab: self.viability_scaling}
         if self.fecundity_scaling is not None:
@@ -229,6 +248,18 @@ class TransgenicBackground(GeneticPreset):
         species: Optional[Species] = None,
         priority: int = 0,
     ):
+        """Initialize a TransgenicBackground preset.
+
+        Args:
+            name: Preset name.
+            tg_slab: Somatic slab label for transgenic individuals.
+            wt_slab: Somatic slab label for wild-type background.
+            fecundity_scaling: Fecundity multiplier for transgenic carriers.
+            viability_scaling: Optional viability multiplier for transgenic
+                carriers. ``None`` means no viability effect.
+            species: Optional species for validation.
+            priority: Modifier and fitness application priority.
+        """
         super().__init__(name=name, species=species, priority=priority)
         self.tg_slab = tg_slab
         self.wt_slab = wt_slab
@@ -236,12 +267,20 @@ class TransgenicBackground(GeneticPreset):
         self.viability_scaling = viability_scaling
 
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+        """Return no gamete modifier — transgenic background is slab-only."""
         return None
 
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+        """Return no zygote modifier — transgenic background is slab-only."""
         return None
 
     def fitness_patch(self) -> PresetFitnessPatch:
+        """Build fitness patch applying fecundity and optional viability scaling.
+
+        Returns:
+            A fitness patch dict with ``fecundity_per_slab`` and optionally
+            ``viability_per_slab`` entries for the transgenic slab.
+        """
         patch: PresetFitnessPatch = {}
         patch['fecundity_per_slab'] = {self.tg_slab: self.fecundity_scaling}
         if self.viability_scaling is not None:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -32,6 +33,9 @@ from typing import (
     Union,
     cast,
 )
+
+if TYPE_CHECKING:
+    from natal.population.base import BasePopulation
 
 import numpy as np
 
@@ -72,7 +76,9 @@ class GameteModifier(Protocol):
     The result writes frequency distributions for compressed indices directly
     back into numeric tensors.
     """
-    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Mapping[Any, float]]: ...
+    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Mapping[Any, float]]:
+        """Call the gamete modifier, returning frequency distributions per sex/genotype."""
+        ...
 
 
 class ZygoteModifier(Protocol):
@@ -98,14 +104,19 @@ class ZygoteModifier(Protocol):
 
         Dict[Any, Union[int, Genotype, Dict[int, float]]]
     """
-    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Union[int, Genotype, Mapping[Any, float]]]: ...
+    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Union[int, Genotype, Mapping[Any, float]]]:
+        """Call the zygote modifier, returning replacement mappings per gamete pair."""
+        ...
 
 
 # ============================================================================
 # HELPER FUNCTIONS FOR MODIFIER CONSTRUCTION
 # ============================================================================
 
-def _invoke_modifier(mod: Callable[..., Any], population: Any = None) -> object:
+def _invoke_modifier(
+    mod: Callable[..., Any],  # modifier function from pipeline
+    population: BasePopulation[Any] | None = None,
+) -> object:
     """Invoke a modifier callable, supporting both 0-arg and 1-arg signatures.
 
     Args:
@@ -237,6 +248,7 @@ def wrap_gamete_modifier(
         A callable (np.ndarray) -> np.ndarray.
     """
     def tensor_modifier(tensor: np.ndarray) -> np.ndarray:
+        """Apply the gamete modifier to a tensor, returning a modified copy."""  # noqa: D400
         modified = tensor.copy()
         n_sexes, n_ztypes, n_hg_glabs = modified.shape
 
@@ -353,6 +365,7 @@ def wrap_zygote_modifier(
         A callable (np.ndarray) -> np.ndarray.
     """
     def tensor_modifier(tensor: np.ndarray) -> np.ndarray:
+        """Apply the zygote modifier to a tensor, returning a modified copy."""  # noqa: D400
         modified = tensor.copy()
 
         bulk_obj = _invoke_modifier(mod, population)
@@ -714,6 +727,14 @@ def _write_zygote_mapping(
 
 
 def _as_pair(value: object) -> Optional[Tuple[object, object]]:
+    """Safely extract a 2-tuple from an unknown value.
+
+    Args:
+        value: The value to convert.
+
+    Returns:
+        A 2-tuple if *value* is a tuple of length 2, else None.
+    """
     if not isinstance(value, tuple):
         return None
     items = cast(Tuple[object, ...], value)
@@ -723,11 +744,28 @@ def _as_pair(value: object) -> Optional[Tuple[object, object]]:
 
 
 def _is_int_pair(value: object) -> TypeGuard[Tuple[int, int]]:
+    """Type guard: check if *value* is a 2-tuple of ints.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        True if *value* is a 2-tuple where both elements are ints.
+    """
     pair = _as_pair(value)
     return pair is not None and isinstance(pair[0], int) and isinstance(pair[1], int)
 
 
 def _as_idx_prob_pair(value: object) -> Optional[Tuple[object, float]]:
+    """Extract an ``(index, probability)`` pair from a value.
+
+    Args:
+        value: The value to convert.
+
+    Returns:
+        A tuple of ``(index, probability)`` if *value* is a 2-tuple
+        with a numeric second element, else None.
+    """
     pair = _as_pair(value)
     if pair is None or not isinstance(pair[1], (int, float)):
         return None

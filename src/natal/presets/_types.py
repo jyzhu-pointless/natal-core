@@ -171,14 +171,38 @@ def _is_effect_scale(value: object) -> TypeGuard[Union[float, Tuple[float, float
 
 
 def _is_viability_age_map(config: Mapping[object, object]) -> TypeGuard[Dict[Age, Union[float, Tuple[float, float]]]]:
+    """Type guard: check if *config* maps age integers to effect scales.
+
+    Args:
+        config: The value to check.
+
+    Returns:
+        True if every key is an int and every value is a valid effect scale.
+    """
     return all(isinstance(age_key, int) and _is_effect_scale(scale) for age_key, scale in config.items())
 
 
 def _is_simple_age_scale_map(config: Mapping[object, object]) -> TypeGuard[Dict[int, Union[int, float]]]:
+    """Type guard: check if *config* maps age integers to simple numeric scales.
+
+    Args:
+        config: The value to check.
+
+    Returns:
+        True if every key is an int and every value is a number.
+    """
     return all(isinstance(age_key, int) and isinstance(scale, (int, float)) for age_key, scale in config.items())
 
 
 def _as_pair(value: object) -> Optional[Tuple[object, object]]:
+    """Safely extract a 2-tuple from an unknown value.
+
+    Args:
+        value: The value to convert.
+
+    Returns:
+        A 2-tuple if *value* is a tuple of length 2, else None.
+    """
     if not isinstance(value, tuple):
         return None
     items = cast(Tuple[object, ...], value)
@@ -188,12 +212,34 @@ def _as_pair(value: object) -> Optional[Tuple[object, object]]:
 
 
 def _coerce_sex_specifier(value: object) -> _SexSpecifier:
+    """Coerce an unknown value to a valid sex specifier (Sex, int, or str).
+
+    Args:
+        value: The value to coerce.
+
+    Returns:
+        The validated sex specifier.
+
+    Raises:
+        TypeError: If *value* is not a Sex, int, or str.
+    """
     if isinstance(value, (Sex, int, str)):
         return value
     raise TypeError(f"Invalid sex key type: {type(value).__name__}")
 
 
 def _coerce_selector(value: object) -> Union[Genotype, str, Tuple[Union[Genotype, str], ...]]:
+    """Coerce an unknown value to a genotype selector.
+
+    Args:
+        value: The value to coerce.
+
+    Returns:
+        The validated selector (Genotype, str, or tuple thereof).
+
+    Raises:
+        TypeError: If *value* is not a valid selector type.
+    """
     if isinstance(value, (Genotype, str)):
         return value
     if isinstance(value, tuple):
@@ -204,6 +250,17 @@ def _coerce_selector(value: object) -> Union[Genotype, str, Tuple[Union[Genotype
 
 
 def _split_config_mode(value: object) -> Tuple[object, str]:
+    """Split a scaling config value from its mode specifier.
+
+    If *value* is a 2-tuple ``(scaling_value, mode_str)``, return
+    both parts.  Otherwise return ``(value, "multiplicative")``.
+
+    Args:
+        value: The scaling config, optionally paired with a mode.
+
+    Returns:
+        A tuple of ``(scaling_value, mode_str)``.
+    """
     pair = _as_pair(value)
     if pair is not None and isinstance(pair[1], str):
         return pair[0], pair[1]
@@ -211,6 +268,19 @@ def _split_config_mode(value: object) -> Tuple[object, str]:
 
 
 def _is_viability_scaling_config(value: object) -> TypeGuard[_ViabilityScalingConfig]:
+    """Type guard: check if *value* is a valid viability scaling config.
+
+    Accepts:
+    - A single number or effect scale pair.
+    - An age-keyed dict of effect scales.
+    - A sex-keyed dict where each value is an effect scale or age-keyed dict.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        True if *value* matches the ViabilityScalingConfig shape.
+    """
     if isinstance(value, (int, float)) or _is_effect_scale(value):
         return True
     if not isinstance(value, Mapping):
@@ -230,6 +300,15 @@ def _is_viability_scaling_config(value: object) -> TypeGuard[_ViabilityScalingCo
 
 
 def _is_fecundity_scaling_config(value: object) -> TypeGuard[_FecundityScalingConfig]:
+    """Type guard: check if *value* is a valid fecundity scaling config.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        True if *value* is a number, effect scale, or sex-keyed dict
+        of effect scales.
+    """
     if isinstance(value, (int, float)) or _is_effect_scale(value):
         return True
     if not isinstance(value, Mapping):
@@ -239,6 +318,14 @@ def _is_fecundity_scaling_config(value: object) -> TypeGuard[_FecundityScalingCo
 
 
 def _is_sexual_selection_scaling_config(value: object) -> TypeGuard[_SexualSelectionScalingConfig]:
+    """Type guard: check if *value* is a valid sexual selection scaling config.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        True if *value* is a number or an effect scale pair.
+    """
     if isinstance(value, (int, float)):
         return True
     pair = _as_pair(value)

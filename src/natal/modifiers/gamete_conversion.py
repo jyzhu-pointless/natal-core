@@ -162,6 +162,7 @@ class GameteHaploidGenomeConversionRule:
         return applies
 
     def __repr__(self) -> str:
+        """Return a string identifying this haploid-genome conversion rule."""
         return f"GameteHaploidGenomeConversionRule({self.name}, rate={self.rate})"
 
 class GameteAlleleConversionRule:
@@ -232,6 +233,7 @@ class GameteAlleleConversionRule:
         self.target_glab = target_glab
 
     def __repr__(self) -> str:
+        """Return a string identifying this allele conversion rule."""
         return f"GameteAlleleConversionRule({self.name}, rate={self.rate})"
 
     def applies_to_sex(self, sex_idx: _SexSpecifier, sex_name: Optional[str] = None) -> bool:
@@ -462,6 +464,7 @@ class GameteConversionRuleSet:
         return gamete_modifier_func  # TODO: protocol typing still needs cleanup.
 
     def __repr__(self) -> str:
+        """Return a string identifying this rule set and its rule count."""
         return f"{self.name} with {len(self.rules)} rules"
 
 

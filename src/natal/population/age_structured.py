@@ -153,7 +153,21 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         fixed_egg_count: bool = False,
         *,
         legacy_path: Literal[True],
-    ) -> AgeStructuredPopulationBuilder: ...
+    ) -> AgeStructuredPopulationBuilder:
+        """Create an age-structured population builder via the legacy code path.
+
+        Args:
+            species: The species genetic architecture.
+            name: Population name.
+            stochastic: Whether to use stochastic sampling.
+            continuous_sampling: Whether to use continuous sampling.
+            fixed_egg_count: Whether egg counts are fixed.
+            legacy_path: Literal ``True`` to select the legacy path.
+
+        Returns:
+            An AgeStructuredPopulationBuilder instance.
+        """
+        ...
 
     @classmethod
     @overload
@@ -168,7 +182,23 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         compress: bool = False,
         declared_zygote_types: set[str] | set[int] | None = None,
         legacy_path: Literal[False] = False,
-    ) -> AgeStructuredConfigurator: ...
+    ) -> AgeStructuredConfigurator:
+        """Create an age-structured population configurator (new API path).
+
+        Args:
+            species: The species genetic architecture.
+            name: Population name.
+            stochastic: Whether to use stochastic sampling.
+            continuous_sampling: Whether to use continuous sampling.
+            fixed_egg_count: Whether egg counts are fixed.
+            compress: Whether to enable zygote-type compression.
+            declared_zygote_types: Explicit zygote-type set when compress is True.
+            legacy_path: Literal ``False`` to select the new API path.
+
+        Returns:
+            An AgeStructuredConfigurator instance.
+        """
+        ...
 
     @classmethod
     def setup(
@@ -713,7 +743,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             tuple: A Numba-compatible configuration tuple.
         """
-        return sk.export_config(self)  # type: ignore
+        return sk.export_config(self)  # type: ignore  # forward-reference in simulator module
 
     def run(
         self,

@@ -135,19 +135,23 @@ class ToxinAntidoteDrive(GeneticPreset):
 
     @property
     def drive_allele(self) -> Gene:
+        """Gene: The drive allele carrying the toxin-antidote construct."""
         return self._resolve_bound_gene(self._str_drive_allele)
 
     @property
     def target_allele(self) -> Gene:
+        """Gene: The wild-type allele targeted for disruption."""
         return self._resolve_bound_gene(self._str_target_allele)
 
     @property
     def disrupted_allele(self) -> Gene:
+        """Gene: The disrupted (cleaved) allele produced by target disruption."""
         return self._resolve_bound_gene(self._str_disrupted_allele)
 
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Implement target disruption in the germline of drive carriers."""
         def drive_carrier_filter(gt: Genotype) -> bool:
+            """Return True if the genotype carries at least one drive allele."""
             return count_allele_copies(gt, self.drive_allele) > 0
 
         rule_set = GameteConversionRuleSet(f"{self.name}_GermlineDisruption")
@@ -179,6 +183,7 @@ class ToxinAntidoteDrive(GeneticPreset):
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoDisruption")
 
         def zygote_has_drive(gt: Genotype) -> bool:
+            """Return True if the zygote carries at least one drive allele."""
             return count_allele_copies(gt, self.drive_allele) > 0
 
         for sex in (Sex.FEMALE, Sex.MALE):
