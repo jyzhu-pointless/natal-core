@@ -167,6 +167,8 @@ pop.update().custom(temperature=35.0, season_idx=1)
 
 Supported types: `bool`, `float`, `int`.
 
+> **Note**: Custom fields are NOT in the parameter registry, so `set_param()` and `hook_set_param()` cannot address them. Use direct array writes (`config.custom["temperature"][()] = value`) or `pop.update().custom(temperature=30.0)` instead.
+
 ---
 
 ## 5. Spatial Population — Per-Deme Modification
@@ -210,9 +212,42 @@ set_param / pop.update() / hook direct write
 low_density_growth_rate, juvenile_growth_mode, generation_time, expected_competition_strength,
 expected_survival_rate.
 
+### `set_config()` — Whole-Config Replacement
+
+`pop.set_config(new_config)` replaces the population's entire config object at once. This is useful when rebuilding a config from scratch (e.g. after modifying custom field schemas). The new config must have the same type (`PopulationConfig` or `DiscretePopulationConfig`) as the original.
+
+Internally, Configurator's `custom()` method with new field names triggers this path: it rebuilds the custom structured array and calls `set_config()` to propagate the new config back to the population.
+
 ---
 
-## 7. Old vs New
+## 7. Parameter Reference
+
+Parameters are grouped by domain, matching the Configurator chain API methods.
+
+| Domain | Parameter | Aliases | Models | set_param |
+|---|---|---|---|---|
+| setup | `stochastic` | — | both | ❌ build-time only |
+| setup | `continuous_sampling` | — | both | ❌ build-time only |
+| setup | `fixed_egg_count` | — | both | ❌ build-time only |
+| setup | `has_sex_chromosomes` | — | both | ❌ build-time only |
+| age_structure | `n_ages` | — | age-structured | ❌ build-time only |
+| age_structure | `new_adult_age` | — | age-structured | ❌ build-time only |
+| age_structure | `generation_time` | — | age-structured | ❌ build-time only |
+| survival | `female_age_based_survival` | — | age-structured | ✅ |
+| survival | `male_age_based_survival` | — | age-structured | ✅ |
+| reproduction | `eggs_per_female` | `expected_eggs_per_female` | both | ✅ |
+| reproduction | `sex_ratio` | — | both | ✅ |
+| reproduction | `sperm_displacement_rate` | — | both | ✅ |
+| competition | `carrying_capacity` | — | both | ✅ |
+| competition | `low_density_growth_rate` | — | both | ✅ |
+| competition | `juvenile_growth_mode` | `growth_mode` | both | ✅ |
+| fitness | `viability` | — | both | ❌ tensor |
+| fitness | `fecundity` | — | both | ❌ tensor |
+| fitness | `sexual_selection` | — | both | ❌ tensor |
+| fitness | `zygote_viability` | — | both | ❌ tensor |
+| migration | `migration_rate` | — | spatial | spatial-specific |
+
+## 8. Old vs New
 
 | | Old (Builder) | New (Configurator) |
 |---|---|---|

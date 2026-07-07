@@ -379,7 +379,7 @@ This process is transparent to the user, but understanding it is important. See:
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive
+from natal import HomingDrive
 from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(
@@ -418,7 +418,7 @@ print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive
+from natal import HomingDrive
 from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(

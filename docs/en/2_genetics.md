@@ -407,6 +407,39 @@ For detailed rules and examples, please refer to [Genotype Pattern Matching](2_g
 
 Pattern syntax maintains compatibility with the precise string format; all precise strings can be correctly matched by Pattern.
 
+#### Genotype Canonicalization
+
+**What is canonicalization?**
+
+When `Species.unordered=True` (the default), the system normalizes maternal/paternal order so that `A|a` and `a|A` resolve to the same `Genotype` instance.
+
+The algorithm performs a per-locus allele index comparison. At each locus, the maternal and paternal allele indices are compared; if the maternal index is greater than the paternal index, the two haplotypes for that chromosome are swapped. This logic lives in `canonical_haploid_pair()` in `_helpers.py`.
+
+**When does it happen?**
+
+Canonicalization occurs at `Genotype.__new__` time, via a call to `canonical_haploid_pair()`. Combined with the instance cache, the canonical form hits the cache first, so `A|a` and `a|A` return the **same `Genotype` object**.
+
+**Sex chromosome special handling**
+
+Sex chromosomes with different types (`X|Y`, `Z|W`) preserve their maternal/paternal ordering — the swap logic is skipped. Same-type sex chromosomes (`X|X`, `Z|Z`) are canonicalized per-locus like autosomes.
+
+**When to use `unordered=False`**
+
+- Parent-of-origin effects (genomic imprinting)
+- Tracking which parent contributed which allele
+- Any scenario where `A|a ≠ a|A` matters
+
+**Pattern matching implications**
+
+- `|` in pattern: strict order (but `Species.unordered` canonicalization means both `A|a` and `a|A` resolve to the same `Genotype` in the registry)
+- `::` in pattern: explicitly unordered match, works regardless of order
+- With `unordered=True` (default): `|` in patterns is auto-promoted to `::` for resolution (because canonicalization already normalized the stored genotype)
+
+**Migration note**
+
+- In v0.1.x, `unordered` defaulted to `False`. v0.2.0 changed it to `True`.
+- Code that relied on the `A|a ≠ a|A` distinction needs explicit `unordered=False`.
+
 ## Complete Example
 
 ```python
