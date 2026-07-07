@@ -99,6 +99,13 @@ class BatchSetting:
         self,
         values: Union[Sequence[Any], NDArray[np.floating[Any]], Callable[..., float]],
     ):
+        """Initialize a BatchSetting from one of three value kinds.
+
+        Args:
+            values: Per-deme specification — a sequence of scalars (one per
+                deme), a 1D/2D numpy array, or a callable for spatial
+                expansion.
+        """
         self._fn: Optional[Callable[..., float]] = None
         self._fn_param_count: Optional[int] = None
         self._values: Optional[List[Any]] = None
@@ -259,7 +266,7 @@ def batch_setting(
 # ---------------------------------------------------------------------------
 
 
-def _make_hashable(value: Any) -> Any:
+def _make_hashable(value: Any) -> Any:  # accepts arbitrary types for dict-key conversion
     """Recursively convert *value* into a hashable form for deduplication.
 
     Used by ``_build_heterogeneous()`` to detect which demes have identical
@@ -409,6 +416,22 @@ class SpatialConfigurator:
         *,
         pop_type: Literal["age_structured", "discrete_generation"] = "age_structured",
     ):
+        """Initialize the spatial configurator.
+
+        Creates a single-deme template ``Configurator`` internally and
+        stores spatial parameters (topology, migration) for later use
+        during ``build()``.
+
+        Args:
+            species: Genetic architecture shared by all demes.
+            n_demes: Number of demes in the spatial layout.
+            topology: Optional grid topology for migration routing.
+            pop_type: Population model type — ``"age_structured"``
+                (default) or ``"discrete_generation"``.
+
+        Raises:
+            ValueError: If ``n_demes`` is less than 1.
+        """
         if n_demes < 1:
             raise ValueError(f"n_demes must be >= 1, got {n_demes}")
 
@@ -1534,6 +1557,12 @@ class _SpatialUpdate:
     })
 
     def __init__(self, spatial_pop: SpatialPopulation) -> None:
+        """Initialize the multi-deme updater.
+
+        Args:
+            spatial_pop: The spatial population whose demes will be
+                updated by chainable methods.
+        """
         self._pop = spatial_pop
 
     def competition(self, **kwargs: object) -> _SpatialUpdate:
@@ -1564,7 +1593,7 @@ class _SpatialUpdate:
         self._dispatch_scalar("modifiers", kwargs)
         return self
 
-    def presets(self, *presets: Any) -> _SpatialUpdate:
+    def presets(self, *presets: GeneticPreset) -> _SpatialUpdate:
         if not self._pop.demes:
             return self
         # Track old→new config: refresh_modifiers() + reapply_preset_fitness() replaces

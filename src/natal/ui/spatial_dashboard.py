@@ -27,7 +27,7 @@ except ImportError:
 try:
     import matplotlib.pyplot as plt
 except ImportError:
-    plt = None  # type: ignore
+    plt = None  # type: ignore  # plt may be None when matplotlib missing
 
 from natal.data import PopulationState
 from natal.spatial.population import SpatialPopulation
@@ -76,6 +76,12 @@ class SpatialDashboard:
         # detect it as raw state (not pre-applied observed data).
         class _StateRef:
             def __init__(self, pop):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
+                """Initialize the state reference wrapper.
+
+                Args:
+                    pop: The spatial population to wrap for aggregate
+                        state access.
+                """
                 self._pop = pop
 
             @property
@@ -768,7 +774,7 @@ class SpatialDashboard:
             if fig.data[cbar_idx].marker.colorbar:
                 fig.data[cbar_idx].marker.colorbar.title = colorbar_title
 
-    def _on_landscape_click(self, e: Any) -> None:
+    def _on_landscape_click(self, e: Any) -> None:  # plotly event object
         """Handle plotly click and select the clicked deme."""
         args = getattr(e, "args", None)
         if not isinstance(args, dict):
@@ -874,7 +880,7 @@ class SpatialDashboard:
 
         return rows
 
-    def _get_genotype_fitness(self, config: Any, g_idx: int, target_age: int) -> dict[str, str]:
+    def _get_genotype_fitness(self, config: Any, g_idx: int, target_age: int) -> dict[str, str]:  # config: PopulationConfig-like duck type
         """Return formatted viability and fecundity values for one genotype."""
         # TODO: When SpatialPopulation supports both shared and per-deme mutable
         # configuration layers, explicitly resolve invariants vs per-deme overrides here.
@@ -1515,7 +1521,7 @@ class SpatialDashboard:
                 with ui.row().classes("w-full gap-2"):  # type: ignore[reportPossiblyUnboundVariable]
                     ui.button("Step", on_click=self._run_step).props("icon=skip_next outline").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]
 
-                    def update_play_state(event: Any) -> None:
+                    def update_play_state(event: Any) -> None:  # plotly event object
                         self._toggle_play()
                         icon = "pause" if self.is_running else "play_arrow"
                         text = "Pause" if self.is_running else "Play"

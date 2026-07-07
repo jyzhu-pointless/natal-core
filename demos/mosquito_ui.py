@@ -1,3 +1,10 @@
+"""Interactive mosquito population simulation with NATAL UI dashboard.
+
+Demonstrates the same age-structured mosquito model as ``mosquito.py``
+but launches the interactive NiceGUI-based dashboard for real-time
+simulation control and visualization.
+"""
+
 from collections.abc import Mapping, Sequence
 
 import natal as nt

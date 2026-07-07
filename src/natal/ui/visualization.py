@@ -6,7 +6,10 @@ as visual representations (SVG, colors, etc.).
 """
 
 import hashlib
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from natal.genetics import HaploidGenotype, Species
 
 __all__ = ["get_allele_color", "render_cell_svg"]
 
@@ -36,7 +39,7 @@ def get_allele_color(allele_name: str) -> str:
     h = hashlib.md5(allele_name.encode('utf-8')).hexdigest()
     return f"#{h[:6]}"
 
-def render_cell_svg(entity: Any, species_def: Any, size: int = 100) -> str:
+def render_cell_svg(entity: Any, species_def: "Species", size: int = 100) -> str:  # entity: duck-typed for Genotype and HaploidGenotype
     """Generate an SVG string representing a cell's genotype.
     
     Draws a cell circle containing chromosome bars. Can render both diploid 
@@ -75,7 +78,7 @@ def render_cell_svg(entity: Any, species_def: Any, size: int = 100) -> str:
         n_loci = len(loci)
         seg_height = bar_height / max(1, n_loci)
 
-        def draw_chrom_bar(x: float, source_obj: Any) -> None:
+        def draw_chrom_bar(x: float, source_obj: "HaploidGenotype | None") -> None:
             # Get haplotype for this chromosome
             if source_obj is None: # Missing chromosome
                 return
@@ -84,7 +87,8 @@ def render_cell_svg(entity: Any, species_def: Any, size: int = 100) -> str:
             # For Genotype, source_obj is a HaploidGenotype
             # For HaploidGenotype, source_obj is self
             haplo = source_obj.get_haplotype_for_chromosome(chrom)
-            if haplo is None: return
+            if haplo is None:  # type: ignore[comparison-overlap]
+                return
 
             for l_idx, locus in enumerate(loci):
                 gene = haplo.get_gene_at_locus(locus)

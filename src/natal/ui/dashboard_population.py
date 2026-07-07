@@ -57,6 +57,19 @@ class Dashboard:
     """
 
     def __init__(self, population: 'BasePopulation[Any]'):
+        """Initialize the population dashboard.
+
+        Sets up chart data structures, allele frequency tracking,
+        observation panel, and UI state flags for the simulation
+        control interface.
+
+        Args:
+            population: The simulation population instance to monitor
+                and control.
+
+        Raises:
+            ImportError: If NiceGUI is not installed.
+        """
         if not _has_nicegui:
             raise ImportError("NiceGUI is required. Please install it with: pip install nicegui")
 
@@ -423,12 +436,12 @@ class Dashboard:
                 s['data'] = full_allele_data[idx_start:idx_end:stride]
         self.chart_allele.update()
 
-    def _update_record_every(self, e: Any) -> None:
+    def _update_record_every(self, e: Any) -> None:  # Dash callback event
         """Update population record_every setting."""
         if e.value is not None:  # type: ignore[reportUnknownMemberType]
             self.pop.record_every = int(e.value)  # type: ignore[reportUnknownArgumentType]
 
-    def _update_max_history(self, e: Any) -> None:
+    def _update_max_history(self, e: Any) -> None:  # Dash callback event
         """Update population max_history setting."""
         if e.value is not None:  # type: ignore[reportUnknownMemberType]
             self.pop.max_history = int(e.value)  # type: ignore[reportUnknownArgumentType]
@@ -1074,7 +1087,7 @@ class Dashboard:
                 with ui.row().classes('w-full gap-2'):
                     ui.button('Step', on_click=self._run_step).props('icon=skip_next outline').classes('flex-grow')
 
-                    def update_play_state(e: Any) -> None:  # type: ignore[reportUnknownParameterType]
+                    def update_play_state(e: Any) -> None:  # Dash callback event; Any used for unknown event shape  # type: ignore[reportUnknownParameterType]
                         self._toggle_play()
                         icon = "pause" if self.is_running else "play_arrow"
                         text = "Pause" if self.is_running else "Play"

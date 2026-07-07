@@ -93,7 +93,7 @@ def get_numba_cache_dir() -> str:
     return NUMBA_CACHE_DIR
 
 
-def _log_print(*args: Any, **kwargs: Any) -> None:
+def _log_print(*args: Any, **kwargs: Any) -> None:  # Numba-compatible logging; Any for heterogenous args
     """Thread-safe print for interleaved spinner/cache output."""
     with _NUMBA_LOG_IO_LOCK:
         print(*args, **kwargs)
@@ -304,7 +304,7 @@ def _install_cache_log_formatter() -> None:
         original_cache_log = cast(Callable[..., Any], getattr(caching_obj, "_cache_log"))  # noqa: B009
 
         @wraps(original_cache_log)
-        def _formatted_cache_log(msg: Any, *args: Any) -> None:
+        def _formatted_cache_log(msg: Any, *args: Any) -> None:  # Numba-compatible log forwarding
             if not NUMBA_LOG_ENABLED:
                 return
 
@@ -377,7 +377,7 @@ def _install_dispatcher_compile_formatter() -> None:
         original_compile_for_args = cast(Callable[..., Any], getattr(dispatcher_obj, "_compile_for_args"))  # noqa: B009
 
         @wraps(original_compile_for_args)
-        def _formatted_compile_for_args(self: Any, *args: Any, **kwargs: Any) -> Any:
+        def _formatted_compile_for_args(self: Any, *args: Any, **kwargs: Any) -> Any:  # Numba dispatcher wrapper; Any for compatibility
             if not NUMBA_LOG_ENABLED:
                 return original_compile_for_args(self, *args, **kwargs)
 

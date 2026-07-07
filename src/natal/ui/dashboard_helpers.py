@@ -6,7 +6,13 @@ between the panmictic and spatial dashboards.
 """
 
 import inspect
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from natal.genetics import Haplotype, Locus
+    from natal.hooks.types import CompiledHookDescriptor, HookOp
+    from natal.output.observation import Observation
+    from natal.population.base import BasePopulation
 
 import numpy as np
 
@@ -54,7 +60,7 @@ def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
             mat_hap = gt.maternal.get_haplotype_for_chromosome(chrom)
             pat_hap = gt.paternal.get_haplotype_for_chromosome(chrom)
 
-            def _hap_str(hap: Any, loci: list[Any]) -> str:
+            def _hap_str(hap: "Haplotype | None", loci: "list[Locus]") -> str:
                 if hap is None:
                     return ""
                 names: list[str] = []
@@ -77,7 +83,7 @@ def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
     return labels
 
 
-def numpy_converter(obj: Any) -> Any:
+def numpy_converter(obj: Any) -> Any:  # generic numpy-to-JSON converter
     """JSON serialization helper for numpy types."""
     if isinstance(obj, np.integer):
         return int(obj)  # type: ignore[reportUnknownArgumentType]
@@ -90,7 +96,7 @@ def numpy_converter(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
-def jsonable_config_value(value: Any) -> Any:
+def jsonable_config_value(value: Any) -> Any:  # generic numpy-to-JSON converter
     """Recursively convert numpy types to native Python for JSON serialization."""
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -120,7 +126,7 @@ def growth_mode_name(mode: int) -> str:
     return mapping.get(int(mode), f"UNKNOWN_{mode}")
 
 
-def format_op(op: Any) -> str:
+def format_op(op: "HookOp") -> str:
     """Format a declarative HookOp into a human-readable HTML string."""
     from natal.hooks.entry.declarative import OpType
 
@@ -163,7 +169,7 @@ def format_op(op: Any) -> str:
     return " ".join(parts)
 
 
-def get_hooks_data(population: Any) -> list[dict[str, Any]]:
+def get_hooks_data(population: "BasePopulation[Any]") -> list[dict[str, Any]]:
     """Serialize hook information for export."""
     from natal.hooks.types import OpType
 
@@ -180,7 +186,7 @@ def get_hooks_data(population: Any) -> list[dict[str, Any]]:
         OpType.STOP_IF_EXTINCTION: "stop_if_extinction",
     }
 
-    def normalize_op_type(op_type: Any) -> str:
+    def normalize_op_type(op_type: Any) -> str:  # HookOp op_type; accepts int or enum
         try:
             enum_value = OpType(int(op_type))
             return op_type_name_map.get(enum_value, enum_value.name.lower())
@@ -189,7 +195,7 @@ def get_hooks_data(population: Any) -> list[dict[str, Any]]:
                 return str(op_type.name).lower()
             return str(op_type).lower()
 
-    def normalize_ages(ages: Any) -> Any:
+    def normalize_ages(ages: Any) -> Any:  # hook op ages field; diverse accepted types
         if ages == "*":
             return "*"
         if isinstance(ages, range):
@@ -234,7 +240,7 @@ def get_hooks_data(population: Any) -> list[dict[str, Any]]:
     return hooks_data  # type: ignore[reportUnknownVariableType]
 
 
-def render_single_hook(desc: Any, is_global: bool = False) -> None:
+def render_single_hook(desc: "CompiledHookDescriptor", is_global: bool = False) -> None:
     """Render one compiled hook descriptor as an expansion panel."""
     if not _has_nicegui:
         return
@@ -268,7 +274,7 @@ def render_single_hook(desc: Any, is_global: bool = False) -> None:
                     ui.label("Custom Numba Hook").classes("font-bold")
 
 
-def render_hooks_panel(population: Any) -> None:
+def render_hooks_panel(population: "BasePopulation[Any]") -> None:
     """Render the hooks expansion-panel list into the current NiceGUI container."""
     if not _has_nicegui:
         return
@@ -283,10 +289,10 @@ def render_hooks_panel(population: Any) -> None:
 
 
 def build_observation_from_specs(
-    population: Any,
+    population: "BasePopulation[Any]",
     specs: list[dict[str, Any]],
     collapse_age: bool = False,
-) -> Any:
+) -> "Observation":
     """Build an Observation from a list of group spec dicts.
 
     Each spec dict may contain keys: ``genotype``, ``age``, ``sex``.
@@ -303,7 +309,7 @@ def build_observation_from_specs(
     )
 
 
-def render_observation_results(observation: Any, state_or_observed: Any) -> None:
+def render_observation_results(observation: "Observation", state_or_observed: Any) -> None:  # state_or_observed: PopulationState or pre-computed array
     """Render observation results as a table.
 
     ``state_or_observed`` can be either a state object with ``individual_count``,
@@ -364,9 +370,19 @@ class ObservationPanel:
     def __init__(
         self,
         genotype_labels: list[str],
-        get_state: Any,
-        get_registry: Any,
+        get_state: Any,  # callable returning PopulationState
+        get_registry: Any,  # callable returning IndexRegistry
     ) -> None:
+        """Initialize the observation panel.
+
+        Args:
+            genotype_labels: List of genotype display labels used for
+                group selection.
+            get_state: Callable returning the current ``PopulationState``
+                for observation rendering.
+            get_registry: Callable returning the ``IndexRegistry`` for
+                building observation filters.
+        """
         if not _has_nicegui:
             return
         self._genotype_labels = genotype_labels
@@ -378,7 +394,7 @@ class ObservationPanel:
         self._groups_container: Any = None
         self._results_container: Any = None
 
-    def build(self, container: Any) -> None:
+    def build(self, container: Any) -> None:  # NiceGUI container element
         """Render the full observation UI into *container*."""
         if not _has_nicegui:
             return
@@ -415,7 +431,7 @@ class ObservationPanel:
             del self._group_specs[idx]
             self._rerender_groups()
 
-    def _update_spec(self, idx: int, key: str, value: Any) -> None:
+    def _update_spec(self, idx: int, key: str, value: Any) -> None:  # spec field value; any JSON-serializable type
         if idx < len(self._group_specs):
             self._group_specs[idx][key] = value
 

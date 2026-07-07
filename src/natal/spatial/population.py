@@ -26,7 +26,12 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.data import DiscretePopulationState, PopulationConfig, PopulationState
+from natal.data import (
+    DiscretePopulationConfig,
+    DiscretePopulationState,
+    PopulationConfig,
+    PopulationState,
+)
 from natal.engine.lifecycle_wrappers import (
     LifecycleWrappers,
     compile_lifecycle_wrappers,
@@ -212,6 +217,14 @@ class _SpatialUpdate:
     def __init__(
         self, spatial_pop: SpatialPopulation, *, deme: int | None = None,
     ) -> None:
+        """Initialize the per-deme or multi-deme updater.
+
+        Args:
+            spatial_pop: The spatial population whose demes will be
+                updated.
+            deme: When set, updates target only the given deme index;
+                when ``None``, updates target all demes.
+        """
         self._pop = spatial_pop
         self._deme = deme
 
@@ -292,12 +305,12 @@ class _SpatialUpdate:
         # via _replace().  id(d.config) dedup alone misses demes sharing
         # the old config reference.  Track old→new config so every deme
         # gets the new config, whether it was the one processed or shared.
-        updated_configs: dict[int, object] = {}
+        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
         for d in self._pop.demes:
             old_config = d.config
             cid = id(old_config)
             if cid in updated_configs:
-                d.set_config(cast(Any, updated_configs[cid]))
+                d.set_config(updated_configs[cid])
                 continue
             Configurator.for_population(d).reconfigure_preset(preset, **changes)
             new_config = d.config

@@ -1,3 +1,10 @@
+"""Age-structured mosquito population simulation with homing drive.
+
+Demonstrates NATAL Core's age-structured population model with sperm
+storage, a homing drive genetic preset, and pattern-string observation
+filtering on a mosquito-like life cycle.
+"""
+
 from collections.abc import Mapping, Sequence
 
 import natal as nt

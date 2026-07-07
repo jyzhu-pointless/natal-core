@@ -26,7 +26,7 @@ __all__ = [
 ]
 
 
-def launch(population: Any, port: int = 8080, title: str = "NATAL Dashboard") -> None:
+def launch(population: Any, port: int = 8080, title: str = "NATAL Dashboard") -> None:  # population parameter; generic entry point
     """Launch either the population or spatial dashboard."""
     if isinstance(population, SpatialPopulation):
         launch_spatial(population, port=port, title=title)
