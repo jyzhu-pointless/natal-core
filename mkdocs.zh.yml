@@ -117,6 +117,7 @@ nav:
     - 等位基因转换规则: allele_conversion_rules.md
     - 缓存与代码生成: caching_and_codegen.md
     - 基因型筛选器: genotype_filter.md
+    - 迁移: Builder → Configurator: migration_builder_to_configurator.md
     - 迁移核实现: migration_kernel_impl.md
     - 观测实现: observation_impl.md
     - 预设封装与验证: preset_encapsulation_and_validation.md
