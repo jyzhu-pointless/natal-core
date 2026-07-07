@@ -15,6 +15,7 @@ except ImportError:
     prange = range  # type: ignore[assignment]
 
     def get_thread_id() -> int:
+        """Return a dummy thread ID when Numba is not available."""
         return 0
 
     numba_max_threads = 1

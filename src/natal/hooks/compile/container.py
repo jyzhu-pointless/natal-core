@@ -16,7 +16,7 @@ from ..types import EVENT_NAMES, HookCallable
 
 
 @njit_switch(cache=True)
-def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:
+def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:  # Numba-compatible hook signature; Any matches (state, config, deme_id) protocol
     """Default no-op hook: ``(state, config, deme_id) -> 0``.
 
     Used as the fallback when no hooks are registered for an event.

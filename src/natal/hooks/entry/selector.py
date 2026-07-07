@@ -184,6 +184,7 @@ def compile_selector_hook(
         runtime_values = _build_selector_njit_runtime_values(resolved)
 
         def py_wrapper(state: PopulationState, config: PopulationConfig | None = None, deme_id: int = -1) -> None:
+            """Python-thunk selector hook: pack selectors into a namedtuple and call user function."""  # noqa: D400
             nt = _Sel(**runtime_values)
             # Pass namedtuple as keyword arg so user's parameter name
             # (nt_param_name) matches the kwarg.
@@ -193,6 +194,7 @@ def compile_selector_hook(
                 func(state, config, **{nt_param_name: nt})
     else:
         def py_wrapper(state: PopulationState, config: PopulationConfig | None = None, deme_id: int = -1) -> None:
+            """Python-thunk selector hook: build kwargs dict and call user function."""  # noqa: D400
             kwargs = _build_selector_python_kwargs(resolved)
             if has_deme_id:
                 func(state, config, deme_id, **kwargs)
@@ -292,7 +294,7 @@ def _compile_selector_njit_wrapper(
 def _build_namedtuple_class(field_names: list[str]) -> type:  # type: ignore[return]
     """Build a namedtuple class from selector field names (Python path only)."""
     from collections import namedtuple
-    return namedtuple("_Sel", field_names)  # type: ignore[return-value]
+    return namedtuple("_Sel", field_names)  # type: ignore[return-value]  # dynamic namedtuple type
 
 
 def _build_selector_python_kwargs(resolved_selectors: Dict[str, NDArray[np.int32]]) -> Dict[str, int | NDArray[np.int32]]:

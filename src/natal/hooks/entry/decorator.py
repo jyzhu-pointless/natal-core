@@ -47,7 +47,8 @@ class DecoratedHookFn(Protocol):
     wrappers) are plain ``HookCallable``.
     """
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the decorated hook function with arbitrary arguments."""
 
     __name__: str
     meta: Dict[str, Any]
@@ -130,7 +131,14 @@ def _normalize_py_hook(fn: HookCallable) -> HookCallable:
 
 
 def _has_required_parameters(func: HookCallable) -> bool:
-    """Return ``True`` if *func* requires positional or keyword arguments."""
+    """Return ``True`` if *func* requires positional or keyword arguments.
+
+    Args:
+        func: The function to inspect.
+
+    Returns:
+        True if any parameter has no default value.
+    """
     sig = inspect.signature(func)
     for param in sig.parameters.values():
         if param.kind in (
@@ -444,11 +452,11 @@ def hook(
                         "custom mode."
                     )
 
-            hook_func.compiled = desc  # type: ignore
+            hook_func.compiled = desc  # type: ignore  # set on DecoratedHookFn proxy
             pop.register_compiled_hook(desc)
             return desc
 
-        hook_func.register = register  # type: ignore
+        hook_func.register = register  # type: ignore  # set on DecoratedHookFn proxy
         return hook_func
 
     return decorator

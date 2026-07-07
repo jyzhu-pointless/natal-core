@@ -7,13 +7,16 @@ offspring distributions, and other population genetics operations. All
 functions are written to be shape-defensive and to integrate with the
 `PopulationState` data structures.
 """
-from typing import Annotated, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Annotated, Any, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 
 from natal.numba import compat as nbc
 from natal.numba.utils import njit_switch
+
+if TYPE_CHECKING:
+    from natal.data.config import DiscretePopulationConfig, PopulationConfig
 
 # ============================================================================
 # Continuous distribution helper functions (for continuous_sampling=True)
@@ -1099,7 +1102,9 @@ def compute_equilibrium_metrics(
     return expected_competition_strength, expected_survival_rate
 
 
-def sync_equilibrium_metrics(config: Any) -> None:
+def sync_equilibrium_metrics(
+    config: "PopulationConfig | DiscretePopulationConfig",
+) -> None:
     """Recompute and write expected_competition_strength + expected_survival_rate.
 
     Call this after modifying *carrying_capacity*, *eggs_per_female*,
@@ -1320,7 +1325,7 @@ def fertilize_with_precomputed_offspring_probability(
     )
 
 
-def fertilize_with_mating_genotype(*args: Any, **kwargs: Any) -> Any:
+def fertilize_with_mating_genotype(*args: Any, **kwargs: Any) -> Any:  # forwarded to kernel function; Any is required for Numba compatibility
     """Deprecated: this function has been removed.
 
     The mating-genotype fertilization path has been consolidated into

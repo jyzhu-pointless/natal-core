@@ -129,6 +129,7 @@ def _is_numba_dispatcher(fn: Callable[..., object]) -> bool:
 
 
 def _validate_numba_hook_required(fn: Callable[..., object], hook_name: str, reason: str) -> None:
+    """Validate that *fn* is njit-compiled when Numba is enabled."""
     from ..numba.utils import NUMBA_ENABLED
 
     if NUMBA_ENABLED and not _is_numba_dispatcher(fn):
@@ -142,26 +143,78 @@ def _validate_numba_hook_required(fn: Callable[..., object], hook_name: str, rea
 
 # Public wrappers for helpers that may be reused across modules.
 def stable_callable_identity(fn: Callable[..., object]) -> str:
+    """Build a stable identity string for a callable across process runs.
+
+    Args:
+        fn: The callable to identify.
+
+    Returns:
+        A string in the format ``module:qualname``.
+    """
     return _stable_callable_identity(fn)
 
 
 def hash_key(parts: List[str]) -> str:
+    """Compute a deterministic short hash key for generated wrapper identity.
+
+    Args:
+        parts: String parts to hash.
+
+    Returns:
+        A 16-character hex digest.
+    """
     return _hash_key(parts)
 
 
 def is_numba_dispatcher(fn: Callable[..., object]) -> bool:
+    """Return True when callable is a Numba dispatcher (has ``py_func``).
+
+    Args:
+        fn: The callable to check.
+
+    Returns:
+        True if the callable is Numba-compiled.
+    """
     return _is_numba_dispatcher(fn)
 
 
 def write_codegen_module(stem: str, source: str) -> Path:
+    """Write generated wrapper module to stable path if it doesn't exist.
+
+    Args:
+        stem: Module stem name (no extension).
+        source: Python source code to write.
+
+    Returns:
+        Path to the written module file.
+    """
     return _write_codegen_module(stem, source)
 
 
 def load_codegen_module(stem: str, module_path: Path):
+    """Load a generated wrapper module from file, reusing sys.modules when possible.
+
+    Args:
+        stem: Module stem name.
+        module_path: Path to the module file.
+
+    Returns:
+        The loaded module.
+    """
     return _load_codegen_module(stem, module_path)
 
 
 def validate_numba_hook_required(fn: Callable[..., object], hook_name: str, reason: str) -> None:
+    """Validate that *fn* is njit-compiled when Numba is enabled.
+
+    Args:
+        fn: The callable to validate.
+        hook_name: Name of the hook for error message.
+        reason: Reason why Numba compilation is required.
+
+    Raises:
+        TypeError: If Numba is enabled but *fn* is not an ``@njit`` function.
+    """
     _validate_numba_hook_required(fn, hook_name, reason)
 
 
@@ -226,6 +279,11 @@ class CompiledHookPlan:
     condition_params: np.ndarray
 
     def to_tuple(self) -> Tuple[object, ...]:
+        """Convert this plan to a flat tuple for HDF5 / array storage.
+
+        Returns:
+            A tuple of all fields in declaration order.
+        """
         return (
             self.n_ops,
             self.op_types,
@@ -242,10 +300,12 @@ class CompiledHookPlan:
 
 
 def _empty_selector_map() -> Dict[str, np.ndarray]:
+    """Return an empty selector map (default factory for dataclass fields)."""
     return {}
 
 
 def _empty_meta_map() -> Dict[str, int]:
+    """Return an empty meta map (default factory for dataclass fields)."""
     return {}
 
 

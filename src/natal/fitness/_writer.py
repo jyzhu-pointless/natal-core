@@ -37,13 +37,13 @@ def _get_fitness_array(
         ValueError: If *field_name* is not recognised.
     """
     if field_name == "viability":
-        return config.viability_fitness  # type: ignore[return-value]
+        return config.viability_fitness  # type: ignore[return-value]  # union-narrowing false positive
     if field_name == "fecundity":
-        return config.fecundity_fitness  # type: ignore[return-value]
+        return config.fecundity_fitness  # type: ignore[return-value]  # union-narrowing false positive
     if field_name == "sexual_selection":
-        return config.sexual_selection_fitness  # type: ignore[return-value]
+        return config.sexual_selection_fitness  # type: ignore[return-value]  # union-narrowing false positive
     if field_name == "zygote_viability":
-        return config.zygote_viability_fitness  # type: ignore[return-value]
+        return config.zygote_viability_fitness  # type: ignore[return-value]  # union-narrowing false positive
     raise ValueError(f"Unknown fitness field: {field_name}")
 
 
