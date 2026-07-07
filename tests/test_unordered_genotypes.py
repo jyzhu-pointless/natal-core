@@ -46,7 +46,7 @@ class TestOrderedDefault:
         """Both 'A|a' and 'a|A' in initial state are accepted and placed."""
         sp = nt.Species.from_dict("nc_init", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False, legacy_path=True,
+            species=sp, stochastic=False,
         ).initial_state(
             individual_count={"female": {"A|a": 50, "a|A": 30}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()

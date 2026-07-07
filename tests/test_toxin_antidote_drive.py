@@ -3,9 +3,10 @@ from __future__ import annotations
 import unittest
 import uuid
 
+import natal as nt
+
 from natal.presets import ToxinAntidoteDrive
 from natal.genetics import Species
-from natal.configurator import DiscreteGenerationPopulationBuilder
 
 
 class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):
@@ -103,8 +104,9 @@ def _make_species_cross_chromosome(prefix: str = "TADriveCrossChromSpecies") -> 
 
 def _build_population(species: Species):
     return (
-        DiscreteGenerationPopulationBuilder(species)
-        .setup(name="TADrivePop", stochastic=False)
+        nt.DiscreteGenerationPopulation
+        .setup(species, stochastic=False)
+        .setup(name="TADrivePop")
         .initial_state(
             {
                 "female": {"Drive|WT": 20},
@@ -117,8 +119,9 @@ def _build_population(species: Species):
 
 def _build_population_cross_locus(species: Species):
     return (
-        DiscreteGenerationPopulationBuilder(species)
-        .setup(name="TADriveCrossLocusPop", stochastic=False)
+        nt.DiscreteGenerationPopulation
+        .setup(species, stochastic=False)
+        .setup(name="TADriveCrossLocusPop")
         .initial_state(
             {
                 "female": {"Drive/WT2|WT1/WT2": 20},
@@ -131,8 +134,9 @@ def _build_population_cross_locus(species: Species):
 
 def _build_population_cross_chromosome(species: Species):
     return (
-        DiscreteGenerationPopulationBuilder(species)
-        .setup(name="TADriveCrossChromPop", stochastic=False)
+        nt.DiscreteGenerationPopulation
+        .setup(species, stochastic=False)
+        .setup(name="TADriveCrossChromPop")
         .initial_state(
             {
                 "female": {"Drive|WT1;WT2|WT2": 20},

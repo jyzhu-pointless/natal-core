@@ -14,13 +14,11 @@ from typing import (
     Callable,
     Dict,
     List,
-    Literal,
     Optional,
     Set,
     Tuple,
     Union,
     cast,
-    overload,
 )
 
 import numpy as np
@@ -37,7 +35,6 @@ from natal.utils.types import Sex
 if TYPE_CHECKING:
     from natal.configurator import (
         AgeStructuredConfigurator,
-        AgeStructuredPopulationBuilder,
     )
 
 __all__ = ["AgeStructuredPopulation"]
@@ -143,64 +140,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._finalize_hooks()
 
     @classmethod
-    @overload
-    def setup(
-        cls,
-        species: Species,
-        name: str = "AgeStructuredPop",
-        stochastic: bool = True,
-        continuous_sampling: bool = False,
-        fixed_egg_count: bool = False,
-        *,
-        legacy_path: Literal[True],
-    ) -> AgeStructuredPopulationBuilder:
-        """Create an age-structured population builder via the legacy code path.
-
-        Args:
-            species: The species genetic architecture.
-            name: Population name.
-            stochastic: Whether to use stochastic sampling.
-            continuous_sampling: Whether to use continuous sampling.
-            fixed_egg_count: Whether egg counts are fixed.
-            legacy_path: Literal ``True`` to select the legacy path.
-
-        Returns:
-            An AgeStructuredPopulationBuilder instance.
-        """
-        ...
-
-    @classmethod
-    @overload
-    def setup(
-        cls,
-        species: Species,
-        name: str = "AgeStructuredPop",
-        stochastic: bool = True,
-        continuous_sampling: bool = False,
-        fixed_egg_count: bool = False,
-        *,
-        compress: bool = False,
-        declared_zygote_types: set[str] | set[int] | None = None,
-        legacy_path: Literal[False] = False,
-    ) -> AgeStructuredConfigurator:
-        """Create an age-structured population configurator (new API path).
-
-        Args:
-            species: The species genetic architecture.
-            name: Population name.
-            stochastic: Whether to use stochastic sampling.
-            continuous_sampling: Whether to use continuous sampling.
-            fixed_egg_count: Whether egg counts are fixed.
-            compress: Whether to enable zygote-type compression.
-            declared_zygote_types: Explicit zygote-type set when compress is True.
-            legacy_path: Literal ``False`` to select the new API path.
-
-        Returns:
-            An AgeStructuredConfigurator instance.
-        """
-        ...
-
-    @classmethod
     def setup(
         cls,
         species: Species,
@@ -212,33 +151,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         compress: bool = False,
         declared_zygote_types: set[str] | set[int] | None = None,
         declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
-        legacy_path: bool = False,
-    ) -> AgeStructuredPopulationBuilder | AgeStructuredConfigurator:
+    ) -> AgeStructuredConfigurator:
         """Fluent population construction entry point.
 
-        By default returns an ``AgeStructuredConfigurator`` (the new path).
-        Chain domain methods and end with ``.build()`` to create a Population.
-
-        Pass ``legacy_path=True`` to use the classic Builder API.
+        Returns an ``AgeStructuredConfigurator``.  Chain domain methods
+        and end with ``.build()`` to create a Population.
         """
-        if legacy_path:
-            import warnings
-            warnings.warn(
-                "legacy_path=True is deprecated. Use the new Configurator API "
-                "(default path) instead. See docs/ for migration guide.",
-                FutureWarning, stacklevel=2,
-            )
-            from natal.configurator import AgeStructuredPopulationBuilder
-
-            builder = AgeStructuredPopulationBuilder(species)
-            builder.setup(
-                name=name,
-                stochastic=stochastic,
-                continuous_sampling=continuous_sampling,
-                fixed_egg_count=fixed_egg_count,
-            )
-            return builder
-
         from natal.configurator import Configurator
 
         if declared_genotypes is not None:

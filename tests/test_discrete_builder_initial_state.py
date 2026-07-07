@@ -3,13 +3,11 @@ from __future__ import annotations
 import unittest
 import uuid
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
 
 from natal.population.discrete_generation import DiscreteGenerationPopulation
 from natal.genetics import Species
-from natal.configurator import DiscreteGenerationPopulationBuilder
 from natal.utils.types import Sex
 
 
@@ -33,30 +31,6 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
         self.gt_drive_wt = self.species.unordered_genotype(
             drive_wt_raw.maternal, drive_wt_raw.paternal,
         )
-
-    def test_build_allows_none_carrying_capacity(self) -> None:
-        builder = DiscreteGenerationPopulationBuilder(self.species)
-        builder.competition(carrying_capacity=None)
-        builder.initial_state(
-            {
-                "female": {"WT|WT": 10},
-                "male": {"WT|WT": 10},
-            }
-        )
-
-        fake_config = object()
-
-        class _FakePopulation:
-            def __init__(self, **kwargs) -> None:
-                self.kwargs = kwargs
-
-        with patch("natal.configurator._factory.PopulationConfigBuilder.build", return_value=fake_config) as build_mock:
-            with patch("natal.population.discrete_generation.DiscreteGenerationPopulation", _FakePopulation):
-                pop = builder.build()
-
-        self.assertIsNotNone(pop)
-        self.assertIs(build_mock.call_args.kwargs["age_1_carrying_capacity"], None)
-        self.assertIs(build_mock.call_args.kwargs["expected_num_adult_females"], None)
 
     def _make_population_shell(self) -> DiscreteGenerationPopulation:
         pop = DiscreteGenerationPopulation.__new__(DiscreteGenerationPopulation)

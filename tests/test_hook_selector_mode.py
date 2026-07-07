@@ -284,12 +284,11 @@ def test_full_execution_aggregate_mode():
     from numba import njit
 
     import natal as nt
-    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (
-        DiscreteGenerationPopulationBuilder(species=species)
-        .setup(name="test", stochastic=False)
+    pop = (nt.DiscreteGenerationPopulation
+        .setup(species=species, stochastic=False)
+        .setup(name="test")
         .initial_state(individual_count={"female": {"W|W": 100, "D|D": 50},
                                           "male":   {"W|W": 100, "D|D": 50}})
         .reproduction(eggs_per_female=10)
@@ -325,12 +324,11 @@ def test_full_execution_expand_mode():
     from numba import njit
 
     import natal as nt
-    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (
-        DiscreteGenerationPopulationBuilder(species=species)
-        .setup(name="test", stochastic=False)
+    pop = (nt.DiscreteGenerationPopulation
+        .setup(species=species, stochastic=False)
+        .setup(name="test")
         .initial_state(individual_count={"female": {"W|W": 100, "D|D": 50},
                                           "male":   {"W|W": 100, "D|D": 50}})
         .reproduction(eggs_per_female=10)
@@ -367,12 +365,11 @@ def test_backward_compat_old_style():
     from numba import njit
 
     import natal as nt
-    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (
-        DiscreteGenerationPopulationBuilder(species=species)
-        .setup(name="test", stochastic=False)
+    pop = (nt.DiscreteGenerationPopulation
+        .setup(species=species, stochastic=False)
+        .setup(name="test")
         .initial_state(individual_count={"female": {"W|W": 100}, "male": {"W|W": 100}})
         .reproduction(eggs_per_female=10)
         .competition(juvenile_growth_mode="no_competition")
@@ -405,12 +402,11 @@ def test_full_execution_numba_deme_id():
     from numba import njit
 
     import natal as nt
-    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="NumbaDeme", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (
-        DiscreteGenerationPopulationBuilder(species=species)
-        .setup(name="test", stochastic=False)
+    pop = (nt.DiscreteGenerationPopulation
+        .setup(species=species, stochastic=False)
+        .setup(name="test")
         .initial_state(individual_count={"female": {"W|W": 100}, "male": {"W|W": 100}})
         .reproduction(eggs_per_female=10)
         .competition(juvenile_growth_mode="no_competition")
@@ -439,12 +435,11 @@ def test_full_execution_numba_multi_genotype():
     from numba import njit
 
     import natal as nt
-    from natal.configurator import DiscreteGenerationPopulationBuilder
 
     species = nt.Species.from_dict(name="NumbaMulti", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (
-        DiscreteGenerationPopulationBuilder(species=species)
-        .setup(name="test", stochastic=False)
+    pop = (nt.DiscreteGenerationPopulation
+        .setup(species=species, stochastic=False)
+        .setup(name="test")
         .initial_state(individual_count={"female": {"W|W": 100, "D|D": 50},
                                           "male":   {"W|W": 100, "D|D": 50}})
         .reproduction(eggs_per_female=10)

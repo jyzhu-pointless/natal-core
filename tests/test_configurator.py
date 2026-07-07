@@ -354,41 +354,38 @@ class TestCustomFields:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class TestLegacyBuilder:
-    def test_discrete_builder_unchanged(self, species):
-        from natal.configurator import DiscreteGenerationPopulationBuilder
-
+class TestConfiguratorBuildAndUpdate:
+    def test_discrete_configurator_build(self, species):
         pop = (
-            DiscreteGenerationPopulationBuilder(species)
-            .setup(name="legacy", stochastic=False)
+            nt.DiscreteGenerationPopulation
+            .setup(species, stochastic=False)
+            .setup(name="cfg")
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
             .reproduction(eggs_per_female=50, sex_ratio=0.5)
             .competition(carrying_capacity=10000, low_density_growth_rate=6.0,
                          juvenile_growth_mode="concave")
             .build()
         )
-        assert pop.name == "legacy"
+        assert pop.name == "cfg"
         assert pop.config.carrying_capacity[()] == 10000.0
 
-    def test_legacy_builder_update_works(self, species):
-        from natal.configurator import DiscreteGenerationPopulationBuilder
-
+    def test_configurator_update_works(self, species):
         pop = (
-            DiscreteGenerationPopulationBuilder(species)
-            .setup(name="legacy2", stochastic=False)
+            nt.DiscreteGenerationPopulation
+            .setup(species, stochastic=False)
+            .setup(name="cfg2")
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
             .reproduction(eggs_per_female=50, sex_ratio=0.5)
             .competition(carrying_capacity=10000, low_density_growth_rate=6.0,
                          juvenile_growth_mode="concave")
             .build()
         )
-        # Old builder can still use new update()
         pop.update().competition(carrying_capacity=5000)
         assert pop.config.carrying_capacity[()] == 5000.0
 
-        assert pop.tick == 0, "test_legacy_builder_update_works: initial tick should be 0"
+        assert pop.tick == 0, "initial tick should be 0"
         pop.run(1)
-        assert pop.tick == 1, "test_legacy_builder_update_works: population should run 1 tick"
+        assert pop.tick == 1, "population should run 1 tick"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -479,28 +476,20 @@ class TestMergeHooks:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# legacy_path=True deprecation warning
+# Configurator returns correct type
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class TestLegacyPathDeprecation:
-    def test_discrete_legacy_path_warns(self, species):
-        import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            nt.DiscreteGenerationPopulation.setup(species, legacy_path=True)
-        future = [x for x in w if issubclass(x.category, FutureWarning)]
-        assert len(future) >= 1
-        assert "deprecated" in str(future[0].message).lower()
+class TestConfiguratorReturnType:
+    def test_setup_returns_discrete_configurator(self, species):
+        from natal.configurator import DiscreteConfigurator
+        cfg = nt.DiscreteGenerationPopulation.setup(species)
+        assert isinstance(cfg, DiscreteConfigurator)
 
-    def test_age_structured_legacy_path_warns(self, species):
-        import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            nt.AgeStructuredPopulation.setup(species, legacy_path=True)
-        future = [x for x in w if issubclass(x.category, FutureWarning)]
-        assert len(future) >= 1
-        assert "deprecated" in str(future[0].message).lower()
+    def test_setup_returns_age_structured_configurator(self, species):
+        from natal.configurator import AgeStructuredConfigurator
+        cfg = nt.AgeStructuredPopulation.setup(species)
+        assert isinstance(cfg, AgeStructuredConfigurator)
 
 
 # ══════════════════════════════════════════════════════════════════════════

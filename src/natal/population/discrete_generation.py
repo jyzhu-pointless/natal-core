@@ -15,12 +15,10 @@ from typing import (
     Any,
     Dict,
     List,
-    Literal,
     Optional,
     Tuple,
     Union,
     cast,
-    overload,
 )
 
 import numpy as np
@@ -46,7 +44,6 @@ from natal.utils.types import Sex
 if TYPE_CHECKING:
     from natal.configurator import (
         DiscreteConfigurator,
-        DiscreteGenerationPopulationBuilder,
     )
 
 __all__ = ["DiscreteGenerationPopulation"]
@@ -204,22 +201,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return clone
 
     @classmethod
-    @overload
-    def setup(
-        cls,
-        species: Species,
-        name: str = "DiscreteGenerationPop",
-        stochastic: bool = True,
-        continuous_sampling: bool = False,
-        fixed_egg_count: bool = False,
-        *,
-        legacy_path: Literal[True],
-    ) -> DiscreteGenerationPopulationBuilder:
-        """Create a builder for a discrete-generation population (legacy path)."""
-        ...
-
-    @classmethod
-    @overload
     def setup(
         cls,
         species: Species,
@@ -231,48 +212,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         compress: bool = False,
         declared_zygote_types: set[str] | set[int] | None = None,
         declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
-        legacy_path: Literal[False] = False,
     ) -> DiscreteConfigurator:
-        """Create a builder for a discrete-generation population."""
-        ...
-
-    @classmethod
-    def setup(
-        cls,
-        species: Species,
-        name: str = "DiscreteGenerationPop",
-        stochastic: bool = True,
-        continuous_sampling: bool = False,
-        fixed_egg_count: bool = False,
-        *,
-        compress: bool = False,
-        declared_zygote_types: set[str] | set[int] | None = None,
-        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
-        legacy_path: bool = False,
-    ) -> DiscreteGenerationPopulationBuilder | DiscreteConfigurator:
         """Fluent population construction entry point.
 
-        By default returns a ``DiscreteConfigurator`` (the new path).  Chain
-        domain methods and end with ``.build()`` to create a Population.
-
-        Pass ``legacy_path=True`` to use the classic Builder API.
+        Returns a ``DiscreteConfigurator``.  Chain domain methods and end
+        with ``.build()`` to create a Population.
         """
-        if legacy_path:
-            import warnings
-            warnings.warn(
-                "legacy_path=True is deprecated. Use the new Configurator API "
-                "(default path) instead. See docs/ for migration guide.",
-                FutureWarning, stacklevel=2,
-            )
-            from natal.configurator import DiscreteGenerationPopulationBuilder
-
-            return DiscreteGenerationPopulationBuilder(species).setup(
-                name=name,
-                stochastic=stochastic,
-                continuous_sampling=continuous_sampling,
-                fixed_egg_count=fixed_egg_count,
-            )
-
         from natal.configurator import Configurator
 
         if declared_genotypes is not None:

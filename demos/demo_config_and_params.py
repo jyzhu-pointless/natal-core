@@ -50,7 +50,7 @@ sp = nt.Species.from_dict(
 
 pop = (
     nt.DiscreteGenerationPopulation
-    .setup(sp, legacy_path=False)                     # ① 新路径入口
+    .setup(sp)                                        # ① Configurator 入口
     .setup(stochastic=False)                          # ② 确定性模拟
     .initial_state({                                   # ③ 初始种群
         "female": {"WT|WT": 5000, "WT|Var": 1000},
@@ -171,7 +171,7 @@ def hook_objmode(
 # 注意：上面 @hook 装饰器的函数需要在 build() 前注册。
 # 这里重新构建一个带完整 hooks 的种群来演示。
 
-# 注意：带 hook 的种群目前通过 legacy_path 构建以确保 hook 编译路径正确。
+# 注意：带 hook 的种群使用 Configurator 构建。
 pop2 = (
     nt.DiscreteGenerationPopulation
     .setup(sp, name="demo_hooks", stochastic=False)

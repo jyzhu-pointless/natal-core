@@ -1,20 +1,8 @@
-"""Legacy population builder classes and the ``PopulationConfigBuilder`` utility.
+"""``PopulationConfigBuilder`` utility for constructing ``PopulationConfig``.
 
 ``PopulationConfigBuilder`` is the internal engine that converts high-level
 builder parameters (survival arrays, mating rates, modifiers, etc.) into
 a fully-initialized ``PopulationConfig`` / ``DiscretePopulationConfig``.
-It is used at the bottom of the ``build()`` chain in both the legacy
-Builder API and the new Configurator path.
-
-The concrete builder classes in this module (``AgeStructuredPopulationBuilder``,
-``DiscreteGenerationPopulationBuilder``) are legacy wrappers that collect
-parameters via chain methods and delegate to ``PopulationConfigBuilder.build()``.
-
-.. deprecated::
-    Use ``Configurator`` (``configurator/_base.py``) instead.
-    The default ``setup()`` path now goes through ``DiscreteConfigurator`` /
-    ``AgeStructuredConfigurator``.  These Builder classes remain available
-    for backward compatibility only.
 
 Key functions:
   - ``PopulationConfigBuilder.build()`` — construct a full config from
@@ -60,12 +48,6 @@ from natal.utils.types import Sex
 if TYPE_CHECKING:
     pass
 
-from natal.configurator._builder_age import (
-    AgeStructuredPopulationBuilder,  # noqa: F401, pyright: ignore[reportUnusedImport]
-)
-from natal.configurator._builder_discrete import (
-    DiscreteGenerationPopulationBuilder,  # noqa: F401, pyright: ignore[reportUnusedImport]
-)
 from natal.configurator._params import (
     build_equilibrium_distribution,
     compute_expected_eggs_from_females,
@@ -75,8 +57,6 @@ from natal.configurator._params import (
 )
 
 __all__ = [
-    "AgeStructuredPopulationBuilder",     # legacy — use AgeStructuredConfigurator
-    "DiscreteGenerationPopulationBuilder",  # legacy — use DiscreteConfigurator
     "PopulationConfigBuilder",
 ]
 

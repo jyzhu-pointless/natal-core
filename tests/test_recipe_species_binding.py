@@ -5,7 +5,7 @@ import uuid
 
 from natal.presets import HomingDrive
 from natal.genetics import Species
-from natal.configurator import DiscreteGenerationPopulationBuilder
+import natal as nt
 
 
 def _make_species(prefix: str = "PresetBindingSpecies") -> Species:
@@ -36,9 +36,9 @@ class TestPresetSpeciesBinding(unittest.TestCase):
         species = _make_species("Injected")
         preset = _make_preset(species=None)
 
-        pop = (
-            DiscreteGenerationPopulationBuilder(species)
-            .setup(name="PopInjected", stochastic=False)
+        pop = (nt.DiscreteGenerationPopulation
+            .setup(species, stochastic=False)
+            .setup(name="PopInjected")
             .initial_state(
                 {
                     "female": {"WT|WT": 20},
@@ -46,8 +46,7 @@ class TestPresetSpeciesBinding(unittest.TestCase):
                 }
             )
             .presets(preset)
-            .build()
-        )
+            .build())
 
         self.assertIsNotNone(pop)
         self.assertIs(preset._bound_species, species)
@@ -56,9 +55,9 @@ class TestPresetSpeciesBinding(unittest.TestCase):
         species = _make_species("Matched")
         preset = _make_preset(species=species)
 
-        pop = (
-            DiscreteGenerationPopulationBuilder(species)
-            .setup(name="PopMatched", stochastic=False)
+        pop = (nt.DiscreteGenerationPopulation
+            .setup(species, stochastic=False)
+            .setup(name="PopMatched")
             .initial_state(
                 {
                     "female": {"WT|WT": 20},
@@ -66,8 +65,7 @@ class TestPresetSpeciesBinding(unittest.TestCase):
                 }
             )
             .presets(preset)
-            .build()
-        )
+            .build())
 
         self.assertIsNotNone(pop)
         self.assertIs(preset._bound_species, species)
@@ -77,20 +75,19 @@ class TestPresetSpeciesBinding(unittest.TestCase):
         pop_species = _make_species("PopulationSpecies")
         preset = _make_preset(species=preset_species)
 
-        builder = (
-            DiscreteGenerationPopulationBuilder(pop_species)
-            .setup(name="PopMismatch", stochastic=False)
+        cfg = (nt.DiscreteGenerationPopulation
+            .setup(pop_species, stochastic=False)
+            .setup(name="PopMismatch")
             .initial_state(
                 {
                     "female": {"WT|WT": 20},
                     "male": {"Drive|Drive": 20},
                 }
             )
-            .presets(preset)
         )
 
         with self.assertRaises(ValueError) as ctx:
-            builder.build()
+            cfg.presets(preset)
 
         self.assertIn("already bound to species", str(ctx.exception))
         self.assertIn("cannot be applied to population species", str(ctx.exception))

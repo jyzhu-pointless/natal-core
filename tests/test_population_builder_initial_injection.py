@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import unittest
 import uuid
-from unittest.mock import patch
 
 import numpy as np
 
-from natal.genetics import Species
 from natal.configurator import (
-    AgeStructuredPopulationBuilder,
-    DiscreteGenerationPopulationBuilder,
     PopulationConfigBuilder,
 )
+from natal.genetics import Species
 
 
 def _make_species(prefix: str = "BuilderInjectionSpecies") -> Species:
@@ -41,71 +38,6 @@ class TestPopulationBuilderInitialInjection(unittest.TestCase):
 
         from_scalar = PopulationConfigBuilder.resolve_age_param(0.3, 4, [0.0])
         self.assertTrue(np.allclose(from_scalar, np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float64)))
-
-    def test_age_builder_injects_initial_count_into_config(self) -> None:
-        class _FakePopulation:
-            def __init__(self, **kwargs) -> None:
-                self.kwargs = kwargs
-                self.species = kwargs["species"]
-                self._config = kwargs["population_config"]
-                self._index_core = type("I", (), {"genotype_to_index": {}})()
-
-            def apply_recipe(self, recipe) -> None:
-                return None
-
-        fake_config = object()
-        builder = (
-            AgeStructuredPopulationBuilder(self.species)
-            .age_structure(n_ages=4, new_adult_age=2)
-            .initial_state(
-                {
-                    "female": {"WT|WT": [1, 2, 3, 4]},
-                    "male": {"Drive|WT": {2: 5}},
-                }
-            )
-        )
-
-        with patch("natal.configurator._factory.PopulationConfigBuilder.build", return_value=fake_config) as build_mock:
-            with patch("natal.population.age_structured.AgeStructuredPopulation", _FakePopulation):
-                pop = builder.build()
-
-        self.assertIsNotNone(pop)
-        init_arr = build_mock.call_args.kwargs["initial_individual_count"]
-        self.assertIsInstance(init_arr, np.ndarray)
-        self.assertEqual(init_arr.shape, (2, 4, len(self.species.get_all_genotypes(unordered=True))))
-        self.assertGreater(init_arr.sum(), 0)
-
-    def test_discrete_builder_injects_initial_count_into_config(self) -> None:
-        class _FakePopulation:
-            def __init__(self, **kwargs) -> None:
-                self.kwargs = kwargs
-                self.species = kwargs["species"]
-                self._config = kwargs["population_config"]
-                self._index_core = type("I", (), {"genotype_to_index": {}})()
-
-            def apply_recipe(self, recipe) -> None:
-                return None
-
-        fake_config = object()
-        builder = (
-            DiscreteGenerationPopulationBuilder(self.species)
-            .initial_state(
-                {
-                    "female": {"WT|WT": 10},
-                    "male": {"Drive|WT": [2, 3]},
-                }
-            )
-        )
-
-        with patch("natal.configurator._factory.PopulationConfigBuilder.build", return_value=fake_config) as build_mock:
-            with patch("natal.population.discrete_generation.DiscreteGenerationPopulation", _FakePopulation):
-                pop = builder.build()
-
-        self.assertIsNotNone(pop)
-        init_arr = build_mock.call_args.kwargs["initial_individual_count"]
-        self.assertIsInstance(init_arr, np.ndarray)
-        self.assertEqual(init_arr.shape, (2, 2, len(self.species.get_all_genotypes(unordered=True))))
-        self.assertGreater(init_arr.sum(), 0)
 
 
 if __name__ == "__main__":

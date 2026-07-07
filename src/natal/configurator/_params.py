@@ -372,3 +372,36 @@ def resolve_param(name: str) -> ParamDescriptor | None:
             return desc
 
     return None
+
+
+def iter_sexual_selection_entries(
+    sexual_selection: dict[Any, float | dict[Any, float]]
+) -> list[tuple[Any, Any, float]]:
+    """Parse sexual selection map into (female_selector, male_selector, value) triples.
+
+    Supports flat (male->value, female wildcard ``*``) and nested
+    (female->male->value) forms.
+
+    Args:
+        sexual_selection: The raw user-provided sexual selection map.
+
+    Returns:
+        List of ``(female_selectors, male_selectors, value)`` entries.
+    """
+    if not sexual_selection:
+        return []
+    has_nested = any(isinstance(v, dict) for v in sexual_selection.values())
+    entries: list[tuple[Any, Any, float]] = []
+    if has_nested:
+        for female_selector, male_map in sexual_selection.items():
+            if not isinstance(male_map, dict):
+                raise TypeError(
+                    "When using nested sexual_selection, each female key must map to a dict of male->value"
+                )
+            for male_selector, value in male_map.items():
+                entries.append((female_selector, male_selector, float(value)))
+        return entries
+    for male_selector, value in sexual_selection.items():
+        assert isinstance(value, float), "In flat sexual_selection form, values must be floats"
+        entries.append(("*", male_selector, value))
+    return entries

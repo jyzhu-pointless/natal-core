@@ -7,9 +7,9 @@ import uuid
 
 import numpy as np
 
-from natal.genetics import Species
-from natal.configurator import AgeStructuredPopulationBuilder
+import natal as nt
 from natal.data import build_population_config
+from natal.genetics import Species
 
 
 def _make_simple_species() -> Species:
@@ -66,9 +66,9 @@ class TestZygoteFitness(unittest.TestCase):
 
         # Build population with initial state and zygote fitness
         population = (
-            AgeStructuredPopulationBuilder(self.simple_species)
-            .age_structure(n_ages=3)
-            .initial_state({
+            nt.AgeStructuredPopulation.setup(self.simple_species)
+            .age_structure(n_ages=3, new_adult_age=2)
+            .initial_state(individual_count={
                 "female": {"A|A": [1, 0, 0], "A|a": [1, 0, 0], "a|a": [1, 0, 0]},
                 "male": {"A|A": [1, 0, 0], "A|a": [1, 0, 0], "a|a": [1, 0, 0]},
             })
@@ -94,9 +94,9 @@ class TestZygoteFitness(unittest.TestCase):
         # For this test, we'll use the Builder's fitness method directly
         # instead of creating a custom preset class
         population = (
-            AgeStructuredPopulationBuilder(self.simple_species)
-            .age_structure(n_ages=3)
-            .initial_state({
+            nt.AgeStructuredPopulation.setup(self.simple_species)
+            .age_structure(n_ages=3, new_adult_age=2)
+            .initial_state(individual_count={
                 "female": {"A|A": [1, 0, 0]},
                 "male": {"A|A": [1, 0, 0]},
             })
@@ -116,9 +116,9 @@ class TestZygoteFitness(unittest.TestCase):
         """Test that zygote and viability fitness can be combined."""
 
         population = (
-            AgeStructuredPopulationBuilder(self.simple_species)
-            .age_structure(n_ages=3)
-            .initial_state({
+            nt.AgeStructuredPopulation.setup(self.simple_species)
+            .age_structure(n_ages=3, new_adult_age=2)
+            .initial_state(individual_count={
                 "female": {"A|A": [1, 0, 0]},
                 "male": {"A|A": [1, 0, 0]},
             })
@@ -145,9 +145,9 @@ class TestZygoteFitness(unittest.TestCase):
 
         # Create a population with zygote fitness
         population = (
-            AgeStructuredPopulationBuilder(self.simple_species)
-            .age_structure(n_ages=3)
-            .initial_state({
+            nt.AgeStructuredPopulation.setup(self.simple_species)
+            .age_structure(n_ages=3, new_adult_age=2)
+            .initial_state(individual_count={
                 "female": {"A|A": [0, 0, 10]},  # Put adults in age 2
                 "male": {"A|A": [0, 0, 5]},     # Put adults in age 2
             })
@@ -177,9 +177,9 @@ class TestZygoteFitness(unittest.TestCase):
 
         # Compare with a population without zygote fitness to ensure no errors
         control_population = (
-            AgeStructuredPopulationBuilder(self.simple_species)
-            .age_structure(n_ages=3)
-            .initial_state({
+            nt.AgeStructuredPopulation.setup(self.simple_species)
+            .age_structure(n_ages=3, new_adult_age=2)
+            .initial_state(individual_count={
                 "female": {"A|A": [0, 0, 10]},  # Put adults in age 2
                 "male": {"A|A": [0, 0, 5]},     # Put adults in age 2
             })
