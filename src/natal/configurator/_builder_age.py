@@ -1,4 +1,24 @@
-"""AgeStructuredPopulationBuilder extracted from _factory.py."""
+"""Legacy builder for ``AgeStructuredPopulation`` (overlapping generations).
+
+Provides a chainable API for constructing an age-structured population
+with per-age survival, mating, reproduction, competition, and genetic
+presets.  The population is finalised by calling ``.build()``, which
+returns an ``AgeStructuredPopulation`` ready for simulation.
+
+Usage::
+
+    pop = (AgeStructuredPopulationBuilder(species)
+        .setup(name="MyPop")
+        .age_structure(n_ages=8, new_adult_age=2)
+        .initial_state(individual_count={"female": {"WT|WT": 5000}})
+        .reproduction(eggs_per_female=100)
+        .competition(carrying_capacity=10000)
+        .build())
+
+.. deprecated::
+    Use ``AgeStructuredConfigurator`` via ``Configurator.from_species()``
+    instead.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +38,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from natal.population.age_structured import AgeStructuredPopulation
+    from natal.presets import GeneticPreset
 
 import numpy as np
 from numpy.typing import NDArray
@@ -54,6 +75,15 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
     """
 
     def __init__(self, species: Species):
+        """Initialise the builder with a species.
+
+        Sets sensible defaults for all configuration parameters.
+        Chain methods (``.setup()``, ``.age_structure()``, etc.)
+        override them before ``.build()``.
+
+        Args:
+            species: Genetic architecture for the population.
+        """
         warnings.warn(
             "AgeStructuredPopulationBuilder is deprecated. Use Configurator instead.",
             DeprecationWarning,
@@ -114,6 +144,22 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         fixed_egg_count: bool = False,
         **kwargs: object,
     ) -> AgeStructuredPopulationBuilder:
+        """Configure basic simulation flags and the population name.
+
+        Args:
+            name: Population name used at construction time.
+            stochastic: If ``True``, use stochastic (multinomial) sampling;
+                if ``False``, use deterministic median outcomes.
+            continuous_sampling: If ``True``, sample from continuous
+                distributions instead of discrete counts.
+            fixed_egg_count: If ``True``, disable Poisson noise on egg
+                production (deterministic egg count).
+            **kwargs: Additional parameters stored as
+                ``"setup.<key>"`` for downstream use.
+
+        Returns:
+            Self for chaining.
+        """
         self.name = name
         self.stochastic = stochastic
         self.continuous_sampling = continuous_sampling
@@ -132,6 +178,23 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
         **kwargs: object,
     ) -> AgeStructuredPopulationBuilder:
+        """Set the number of age classes and the first adult age.
+
+        Args:
+            n_ages: Total number of age classes (minimum 2).
+            new_adult_age: Index of the first adult age class
+                (individuals at this age and above participate in
+                reproduction).
+            generation_time: Optional generation time marker
+                (not used by the simulation engine directly).
+            equilibrium_distribution: Custom equilibrium age
+                distribution as a flat or ``(2, n_ages)`` array.
+            **kwargs: Additional parameters stored as
+                ``"age_structure.<key>"``.
+
+        Returns:
+            Self for chaining.
+        """
         self.n_ages = n_ages
         self.new_adult_age = new_adult_age
         self._set_param("age_structure.n_ages", n_ages)
@@ -173,6 +236,24 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         individual_count: InitialIndividualCountInput,
         sperm_storage: Optional[InitialSpermStorageInput] = None,
     ) -> AgeStructuredPopulationBuilder:
+        """Set the initial population distribution.
+
+        Accepts per-sex, per-genotype counts with optional age-specific
+        distributions.  ``sperm_storage`` comes from mated females
+        (if sperm storage simulation is enabled).
+
+        Args:
+            individual_count: Nested dict as
+                ``{sex: {genotype_selector: count}}`` where count can
+                be a scalar (applied to all adult ages), a list/array
+                (one value per age), or a dict ``{age: count}``.
+            sperm_storage: Nested dict as
+                ``{female_genotype: {male_genotype: age_counts}}``
+                for initial stored sperm.
+
+        Returns:
+            Self for chaining.
+        """
         self.initial_individual_count = individual_count
         if sperm_storage is not None:
             self.initial_sperm_storage = sperm_storage
@@ -186,6 +267,27 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
         **kwargs: object,
     ) -> AgeStructuredPopulationBuilder:
+        """Configure per-age survival rates.
+
+        Each survival parameter accepts flexible input forms:
+        ``None`` (default), scalar (all ages), list/ndarray
+        (per-age values), dict ``{age: rate}`` (sparse), or
+        callable ``fn(age) -> float``.
+
+        Args:
+            female_age_based_survival: Survival probability from each
+                female age to the next (length ``n_ages - 1``).
+            male_age_based_survival: Same for males.
+            generation_time: Optional marker (also settable via
+                :meth:`age_structure`).
+            equilibrium_distribution: Custom equilibrium distribution
+                (also settable via :meth:`age_structure`).
+            **kwargs: Additional parameters stored as
+                ``"survival.<key>"``.
+
+        Returns:
+            Self for chaining.
+        """
         if female_age_based_survival is not None:
             self.female_age_based_survival = female_age_based_survival
         if male_age_based_survival is not None:
@@ -210,6 +312,35 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         sperm_displacement_rate: float = 0.05,
         **kwargs: object,
     ) -> AgeStructuredPopulationBuilder:
+        """Configure reproduction parameters.
+
+        Controls mating rates, reproduction participation, fertility,
+        egg production, sex ratio, and sperm storage dynamics.
+
+        Args:
+            female_age_based_mating_rate: Per-age female mating
+                probability (length ``n_ages``).
+            male_age_based_mating_rate: Per-age male mating
+                probability (length ``n_ages``).
+            age_based_reproduction_rate: Per-age female reproduction
+                participation rate (length ``n_ages``).
+            female_age_based_fertility: Per-age relative fertility
+                weight (length ``n_ages``).
+            eggs_per_female: Average number of eggs per reproducing
+                female per tick.
+            fixed_egg_count: If ``True``, disable Poisson noise
+                on egg production.
+            sex_ratio: Female fraction of offspring (0–1).
+            use_sperm_storage: Deprecated — sperm storage is always
+                enabled in the simulation engine.
+            sperm_displacement_rate: Fraction of stored sperm displaced
+                per mating event.
+            **kwargs: Additional parameters stored as
+                ``"reproduction.<key>"``.
+
+        Returns:
+            Self for chaining.
+        """
         if female_age_based_mating_rate is not None:
             self.female_age_based_mating_rate = np.array(female_age_based_mating_rate)
         if male_age_based_mating_rate is not None:
@@ -222,6 +353,12 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self.fixed_egg_count = fixed_egg_count
         self.sex_ratio = sex_ratio
         self.use_sperm_storage = use_sperm_storage
+        warnings.warn(
+            "use_sperm_storage is deprecated and has no effect; sperm storage "
+            "is always enabled in the simulation engine.",
+            FutureWarning,
+            stacklevel=2,
+        )
         self.sperm_displacement_rate = sperm_displacement_rate
         self._set_params(domain="reproduction", **kwargs)
         return self
@@ -237,6 +374,33 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
         **kwargs: object,
     ) -> AgeStructuredPopulationBuilder:
+        """Configure density-dependent competition.
+
+        Sets carrying capacity, growth rate, juvenile competition
+        strength, and the juvenile growth mode (regulation function).
+
+        Args:
+            competition_strength: Relative competition weight for
+                older juveniles (age 1) vs. new larvae (age 0).
+            juvenile_growth_mode: Regulation function —
+                ``"logistic"``, ``"concave"``, ``"beverton_holt"``,
+                ``"fixed"``, ``"linear"``, ``"no_competition"``,
+                or the integer constant.
+            low_density_growth_rate: Per-capita growth rate at low
+                density (intrinsic rate of increase r).
+            age_1_carrying_capacity: Carrying capacity at age 1 (K).
+            old_juvenile_carrying_capacity: Deprecated alias for
+                *age_1_carrying_capacity*.
+            expected_num_adult_females: Target adult female count
+                for Champer-model equilibrium computation.
+            equilibrium_distribution: Custom ``(2, n_ages)``
+                equilibrium distribution.
+            **kwargs: Additional parameters stored as
+                ``"competition.<key>"``.
+
+        Returns:
+            Self for chaining.
+        """
         self.relative_competition_factor = competition_strength
         self.juvenile_growth_mode = juvenile_growth_mode
         self.low_density_growth_rate = low_density_growth_rate
@@ -251,7 +415,20 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self._set_params(domain="competition", **kwargs)
         return self
 
-    def presets(self, *preset_list: Any) -> AgeStructuredPopulationBuilder:
+    def presets(self, *preset_list: GeneticPreset) -> AgeStructuredPopulationBuilder:
+        """Register genetic presets to apply during ``build()``.
+
+        Presets are applied AFTER the config is constructed but
+        BEFORE fitness operations, so fitness can override preset
+        values if needed.
+
+        Args:
+            *preset_list: One or more ``GeneticPreset`` instances
+                (e.g. ``HomingDrive``, ``ToxinAntidoteDrive``).
+
+        Returns:
+            Self for chaining.
+        """
         if preset_list:
             self._presets = list(preset_list)
         return self
@@ -264,6 +441,27 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         zygote_viability: Optional[ViabilityMap] = None,
         mode: str = "replace",
     ) -> AgeStructuredPopulationBuilder:
+        """Register fitness operations applied during ``build()``.
+
+        Fitness is applied AFTER presets, allowing user-specified
+        fitness to override preset defaults.  Supports four fitness
+        components, each mapping genotype selectors to values.
+
+        Args:
+            viability: Per-genotype juvenile survival fitness.
+                Maps ``{selector: value}`` or
+                ``{selector: {sex: value}}``.
+            fecundity: Per-genotype fecundity (egg production) fitness.
+            sexual_selection: Per-genotype mating success fitness,
+                flat ``{male_selector: value}`` or nested
+                ``{female_selector: {male_selector: value}}``.
+            zygote_viability: Per-genotype zygote-stage survival fitness.
+            mode: ``"replace"`` (overwrite) or ``"multiply"``
+                (scale existing values).
+
+        Returns:
+            Self for chaining.
+        """
         if viability is not None:
             self._fitness_operations.append(("viability", (viability,), {'mode': mode}))
         if fecundity is not None:
@@ -301,6 +499,17 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         gamete_modifiers: Optional[List[ModifierSpec]] = None,
         zygote_modifiers: Optional[List[ModifierSpec]] = None,
     ) -> AgeStructuredPopulationBuilder:
+        """Register gamete (meiosis) and/or zygote (fertilisation) modifiers.
+
+        Args:
+            gamete_modifiers: List of ``(priority, name, callable)``
+                tuples affecting the genotype->gamete map (meiosis).
+            zygote_modifiers: List of ``(priority, name, callable)``
+                tuples affecting the gamete->zygote map (fertilisation).
+
+        Returns:
+            Self for chaining.
+        """
         if gamete_modifiers is not None:
             self.gamete_modifiers = gamete_modifiers
         if zygote_modifiers is not None:
@@ -311,6 +520,23 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         self,
         *hook_items: Union[HookFn, HookMap]
     ) -> AgeStructuredPopulationBuilder:
+        """Register event-driven hooks for simulation-time interventions.
+
+        Each item can be a raw ``{event: [(func, name, priority)]}``
+        dict or a callable decorated with ``@hook(event='...')``.
+
+        Args:
+            *hook_items: Hook registrations.  Items decorated with
+                ``@hook`` are automatically parsed for event and
+                priority metadata.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            ValueError: If a callable has no event metadata.
+            TypeError: If an item is neither a dict nor a callable.
+        """
         for item in hook_items:
             if isinstance(item, dict):
                 hook_map = cast(HookMap, item)
@@ -336,6 +562,22 @@ class AgeStructuredPopulationBuilder(PopulationBuilderBase):
         return self
 
     def build(self) -> AgeStructuredPopulation:
+        """Finalise configuration and create an ``AgeStructuredPopulation``.
+
+        Resolves the initial individual count (and optional sperm
+        storage) from user-friendly dict format into ndarrays,
+        constructs the ``PopulationConfig`` via
+        :meth:`PopulationConfigBuilder.build`, then creates the
+        Population and applies presets and fitness operations.
+
+        Returns:
+            A fully configured ``AgeStructuredPopulation`` ready for
+            simulation.
+
+        Raises:
+            ValueError: If ``initial_individual_count`` was not set
+                via :meth:`initial_state` before calling ``build()``.
+        """
         from natal.configurator._factory import PopulationConfigBuilder
         from natal.population.age_structured import AgeStructuredPopulation
 

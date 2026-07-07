@@ -1,4 +1,22 @@
-"""DiscreteGenerationPopulationBuilder extracted from _factory.py."""
+"""Legacy builder for ``DiscreteGenerationPopulation`` (non-overlapping generations).
+
+Provides a chainable API for constructing a Wright-Fisher discrete-generation
+population with two age classes (age-0 juveniles, age-1 adults).  Adults are
+fully replaced each tick.
+
+Usage::
+
+    pop = (DiscreteGenerationPopulationBuilder(species)
+        .setup(name="MyPop")
+        .initial_state(individual_count={"female": {"WT|WT": 5000}})
+        .reproduction(eggs_per_female=100)
+        .competition(carrying_capacity=10000)
+        .build())
+
+.. deprecated::
+    Use ``DiscreteConfigurator`` via ``Configurator.for_discrete()``
+    instead.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +24,6 @@ import warnings
 from collections.abc import Iterable, Mapping
 from typing import (
     TYPE_CHECKING,
-    Any,
     Dict,
     List,
     Optional,
@@ -18,6 +35,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from natal.population.discrete_generation import DiscreteGenerationPopulation
+    from natal.presets import GeneticPreset
 
 import numpy as np
 
@@ -53,6 +71,15 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
     """
 
     def __init__(self, species: Species):
+        """Initialise the builder with a species.
+
+        Sets sensible defaults for all configuration parameters.
+        Chain methods (``.setup()``, ``.reproduction()``, etc.)
+        override them before ``.build()``.
+
+        Args:
+            species: Genetic architecture for the population.
+        """
         warnings.warn(
             "DiscreteGenerationPopulationBuilder is deprecated. Use Configurator instead.",
             DeprecationWarning,
@@ -86,7 +113,20 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self._fitness_operations: List[FitnessOperation] = []
         self._hooks: HookMap = {}
 
-    def presets(self, *preset_list: Any) -> DiscreteGenerationPopulationBuilder:
+    def presets(self, *preset_list: GeneticPreset) -> DiscreteGenerationPopulationBuilder:
+        """Register genetic presets to apply during ``build()``.
+
+        Presets are applied AFTER the config is constructed but
+        BEFORE fitness operations, so fitness can override preset
+        values if needed.
+
+        Args:
+            *preset_list: One or more ``GeneticPreset`` instances
+                (e.g. ``HomingDrive``, ``ToxinAntidoteDrive``).
+
+        Returns:
+            Self for chaining.
+        """
         if preset_list:
             self._presets = list(preset_list)
         return self
@@ -99,6 +139,23 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         zygote_viability: Optional[ViabilityMap] = None,
         mode: str = "replace",
     ) -> DiscreteGenerationPopulationBuilder:
+        """Register fitness operations applied during ``build()``.
+
+        Fitness is applied AFTER presets, allowing user-specified
+        fitness to override preset defaults.  Supports four fitness
+        components, each mapping genotype selectors to values.
+
+        Args:
+            viability: Per-genotype juvenile survival fitness.
+            fecundity: Per-genotype fecundity (egg production) fitness.
+            sexual_selection: Per-genotype mating success fitness.
+            zygote_viability: Per-genotype zygote-stage survival fitness.
+            mode: ``"replace"`` (overwrite) or ``"multiply"``
+                (scale existing values).
+
+        Returns:
+            Self for chaining.
+        """
         if viability is not None:
             self._fitness_operations.append(("viability", (viability,), {'mode': mode}))
         if fecundity is not None:
@@ -136,6 +193,17 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         gamete_modifiers: Optional[List[ModifierSpec]] = None,
         zygote_modifiers: Optional[List[ModifierSpec]] = None,
     ) -> DiscreteGenerationPopulationBuilder:
+        """Register gamete (meiosis) and/or zygote (fertilisation) modifiers.
+
+        Args:
+            gamete_modifiers: List of ``(priority, name, callable)``
+                tuples affecting the genotype->gamete map (meiosis).
+            zygote_modifiers: List of ``(priority, name, callable)``
+                tuples affecting the gamete->zygote map (fertilisation).
+
+        Returns:
+            Self for chaining.
+        """
         if gamete_modifiers is not None:
             self.gamete_modifiers = gamete_modifiers
         if zygote_modifiers is not None:
@@ -150,6 +218,22 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         fixed_egg_count: bool = False,
         **kwargs: object,
     ) -> DiscreteGenerationPopulationBuilder:
+        """Configure basic simulation flags and the population name.
+
+        Args:
+            name: Population name used at construction time.
+            stochastic: If ``True``, use stochastic (multinomial) sampling;
+                if ``False``, use deterministic median outcomes.
+            continuous_sampling: If ``True``, sample from continuous
+                distributions instead of discrete counts.
+            fixed_egg_count: If ``True``, disable Poisson noise on egg
+                production (deterministic egg count).
+            **kwargs: Additional parameters stored as
+                ``"setup.<key>"`` for downstream use.
+
+        Returns:
+            Self for chaining.
+        """
         self.name = name
         self.stochastic = stochastic
         self.continuous_sampling = continuous_sampling
@@ -185,6 +269,21 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self,
         individual_count: InitialIndividualCountInput,
     ) -> DiscreteGenerationPopulationBuilder:
+        """Set the initial population distribution (discrete-generation model).
+
+        Accepts per-sex, per-genotype counts.  Age distribution is
+        optional — counts can be scalar (applied to adults), a
+        sequence of ``(age0, age1)``, or a dict ``{age: count}``.
+
+        Args:
+            individual_count: Nested dict as
+                ``{sex: {genotype_selector: count}}`` where count
+                can be a scalar, ``[age0, age1]`` list, or
+                ``{0: age0, 1: age1}`` dict.
+
+        Returns:
+            Self for chaining.
+        """
         self.initial_individual_count = individual_count
         return self
 
@@ -196,6 +295,21 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         male_adult_mating_rate: float = 1.0,
         **kwargs: object,
     ) -> DiscreteGenerationPopulationBuilder:
+        """Configure reproduction for the discrete-generation model.
+
+        Discrete model uses scalar parameters — no per-age arrays.
+
+        Args:
+            eggs_per_female: Eggs per reproducing female per tick.
+            sex_ratio: Female fraction of offspring (0–1).
+            female_adult_mating_rate: Adult female mating probability.
+            male_adult_mating_rate: Adult male mating probability.
+            **kwargs: Additional parameters stored as
+                ``"reproduction.<key>"``.
+
+        Returns:
+            Self for chaining.
+        """
         self.eggs_per_female = eggs_per_female
         self.sex_ratio = sex_ratio
         self.female_adult_mating_rate = female_adult_mating_rate
@@ -209,6 +323,20 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         male_age0_survival: float = 1.0,
         **kwargs: object,
     ) -> DiscreteGenerationPopulationBuilder:
+        """Configure juvenile survival rates.
+
+        Only age-0 (juvenile → adult) survival matters — adult
+        survival is always 0.0 in non-overlapping generations.
+
+        Args:
+            female_age0_survival: Female juvenile survival probability.
+            male_age0_survival: Male juvenile survival probability.
+            **kwargs: Additional parameters stored as
+                ``"survival.<key>"``.
+
+        Returns:
+            Self for chaining.
+        """
         self.female_age0_survival = female_age0_survival
         self.male_age0_survival = male_age0_survival
         self._set_params(domain="survival", **kwargs)
@@ -221,6 +349,25 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         carrying_capacity: Optional[float] = None,
         **kwargs: object,
     ) -> DiscreteGenerationPopulationBuilder:
+        """Configure density-dependent competition.
+
+        For the discrete model, juvenile competition strength is
+        computed directly from total age-0 abundance.
+
+        Args:
+            juvenile_growth_mode: Regulation function —
+                ``"logistic"``, ``"concave"``, ``"beverton_holt"``,
+                ``"fixed"``, ``"linear"``, ``"no_competition"``,
+                or the integer constant.
+            low_density_growth_rate: Per-capita growth rate at low
+                density (intrinsic rate of increase r).
+            carrying_capacity: Equilibrium total adults at age 1 (K).
+            **kwargs: Additional parameters stored as
+                ``"competition.<key>"``.
+
+        Returns:
+            Self for chaining.
+        """
         self.juvenile_growth_mode = juvenile_growth_mode
         self.low_density_growth_rate = low_density_growth_rate
         if carrying_capacity is not None:
@@ -232,6 +379,23 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         self,
         *hook_items: Union[HookFn, HookMap]
     ) -> DiscreteGenerationPopulationBuilder:
+        """Register event-driven hooks for simulation-time interventions.
+
+        Each item can be a raw ``{event: [(func, name, priority)]}``
+        dict or a callable decorated with ``@hook(event='...')``.
+
+        Args:
+            *hook_items: Hook registrations.  Items decorated with
+                ``@hook`` are automatically parsed for event and
+                priority metadata.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            ValueError: If a callable has no event metadata.
+            TypeError: If an item is neither a dict nor a callable.
+        """
         for item in hook_items:
             if isinstance(item, dict):
                 hook_map = cast(HookMap, item)
@@ -258,6 +422,23 @@ class DiscreteGenerationPopulationBuilder(PopulationBuilderBase):
         return self
 
     def build(self) -> DiscreteGenerationPopulation:
+        """Finalise configuration and create a ``DiscreteGenerationPopulation``.
+
+        Resolves the initial individual count from user-friendly dict
+        format into ndarrays, constructs the DiscretePopulationConfig
+        via :meth:`PopulationConfigBuilder.build` (with fixed
+        ``n_ages=2``, ``new_adult_age=1``, ``generation_time=1``),
+        then creates the Population and applies presets and fitness
+        operations.
+
+        Returns:
+            A fully configured ``DiscreteGenerationPopulation`` ready
+            for simulation.
+
+        Raises:
+            ValueError: If ``initial_individual_count`` was not set
+                via :meth:`initial_state` before calling ``build()``.
+        """
         from natal.configurator._factory import PopulationConfigBuilder
         from natal.population.discrete_generation import DiscreteGenerationPopulation
 

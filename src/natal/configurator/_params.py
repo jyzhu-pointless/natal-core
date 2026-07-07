@@ -1,8 +1,23 @@
-"""Parameter resolution helpers extracted from population_builder and configurator.
+"""Parameter resolution helpers shared by Configurator and legacy builders.
 
-These are standalone functions used by both the Configurator and the legacy
-PopulationConfigBuilder.  Extracting them into a shared module avoids circular
-imports between _base.py, _factory.py, discrete.py, and age_structured.py.
+Standalone functions used by both the Configurator and the legacy
+``PopulationConfigBuilder``.  Extracting them into a shared module avoids
+circular imports between ``_base.py``, ``_factory.py``, ``discrete.py``,
+and ``age_structured.py``.
+
+Function overview:
+  - ``resolve_age_param()`` — convert flexible survival specs
+    (scalar, list, dict, callable) into a 1-D float array.
+  - ``resolve_growth_mode()`` — normalise juvenile growth mode
+    string or int to the internal integer constant.
+  - ``resolve_carrying_capacity()`` — determine K from the three
+    available sources (explicit, legacy alias, or initial state).
+  - ``build_equilibrium_distribution()`` — propagate K through
+    survival rates to produce a (2, n_ages) equilibrium array.
+  - ``compute_expected_eggs_from_females()`` — forward-propagate
+    a target adult female count to compute total egg production.
+  - ``resolve_param()`` — parameter name lookup with three-tier
+    fallback (exact, short-name, alias).
 """
 
 from __future__ import annotations
@@ -163,7 +178,24 @@ def resolve_age_param(
 
 
 def resolve_growth_mode(mode: Union[int, str]) -> int:
-    """Resolve juvenile growth mode string or int to internal constant."""
+    """Normalise a juvenile growth mode specification to the internal integer constant.
+
+    Accepts either the string name (case-insensitive: ``"logistic"``,
+    ``"concave"``, ``"beverton_holt"``, ``"fixed"``, ``"linear"``,
+    ``"no_competition"``) or the corresponding integer constant from
+    :mod:`natal.data`.  Strings are mapped via a lookup table; integers
+    are validated against the set of known constants.
+
+    Args:
+        mode: Growth mode as a string or integer constant.
+
+    Returns:
+        The canonical integer constant.
+
+    Raises:
+        ValueError: If the string is not recognised or the integer is
+            not a valid constant.
+    """
     if isinstance(mode, int):
         if mode not in [NO_COMPETITION, FIXED, LOGISTIC, CONCAVE, BEVERTON_HOLT, LINEAR]:
             raise ValueError(f"Invalid growth mode constant: {mode}")
@@ -184,6 +216,27 @@ def resolve_carrying_capacity(
     old_juvenile_carrying_capacity: Optional[float],
     initial_individual_count: Optional[NDArray[np.float64]] = None,
 ) -> float:
+    """Resolve the carrying capacity K from available sources.
+
+    Priority order:
+    1. ``age_1_carrying_capacity`` (explicit value).
+    2. ``old_juvenile_carrying_capacity`` (deprecated alias).
+    3. Sum of age-1 counts from ``initial_individual_count`` (auto-detect).
+    4. Sum of all counts from ``initial_individual_count`` (fallback).
+
+    Args:
+        age_1_carrying_capacity: Explicit K value (age-1 total at equilibrium).
+        old_juvenile_carrying_capacity: Deprecated alias for *age_1_carrying_capacity*.
+        initial_individual_count: Optional initial count array of shape
+            ``(2, n_ages, n_ztypes)`` used for auto-detection when K is not
+            explicitly provided.
+
+    Returns:
+        The resolved carrying capacity.
+
+    Raises:
+        ValueError: If none of the three sources yields a valid K >= 0.5.
+    """
     # Priority 1: age_1_carrying_capacity
     if age_1_carrying_capacity is not None:
         return float(age_1_carrying_capacity)

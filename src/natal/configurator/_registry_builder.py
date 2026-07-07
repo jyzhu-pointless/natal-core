@@ -1,7 +1,19 @@
-"""Registry builder and config map rebuild helpers extracted from _base.py.
+"""Registry builder, adapter, and config map rebuild helpers.
 
-These are internal helpers shared by the Configurator and the
-ConfigContext adapter.
+Internal helpers shared by the Configurator and the ``ConfigContext``
+adapter.
+
+Key components:
+  - ``build_registry()`` — create an ``IndexRegistry`` pre-populated
+    with all genotypes, haplotypes, and gamete/somatic labels from
+    a ``Species``.
+  - ``ConfigContext`` — adapter that mimics ``BasePopulation``'s
+    attribute surface so that ``apply_preset_to_population()`` and
+    modifier functions can operate on config arrays without a live
+    Population object.
+  - ``rebuild_config_maps()`` — apply gamete/zygote modifiers,
+    run optional index compression, and recompute the offspring
+    probability tensor.
 """
 
 from __future__ import annotations

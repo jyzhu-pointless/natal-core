@@ -1,4 +1,19 @@
-"""Base builder class extracted from _factory.py."""
+"""Abstract base class for the legacy chainable population builders.
+
+Provides shared member fields and utility methods used by both
+``AgeStructuredPopulationBuilder`` and
+``DiscreteGenerationPopulationBuilder``:
+
+  - ``_params`` dict for storing arbitrary key-value parameters
+    set via ``_set_param`` / ``_set_params``.
+  - ``_presets`` list for accumulating genetic presets.
+  - ``_observation_groups`` for configuring compressed history recording.
+
+Also provides concrete implementations of shared chain methods:
+  - ``with_observation()`` — register observation groups.
+  - ``custom()`` — register custom named fields on ``config.custom``.
+  - ``add_preset()`` — add a gene drive preset.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +43,8 @@ from natal.utils.helpers import resolve_sex_label
 from natal.utils.types import Sex
 
 if TYPE_CHECKING:
-    pass
+    from natal.population.base import BasePopulation
+    from natal.presets import GeneticPreset
 
 
 GenotypeSelectorAtom = Union[Genotype, str]
@@ -89,6 +105,15 @@ class PopulationBuilderBase:
             self._params[f"{domain}.{k}"] = v
 
     def get_params(self) -> dict[str, object]:
+        """Return a shallow copy of all accumulated builder parameters.
+
+        Parameters are stored as ``"domain.key": value`` pairs, set via
+        :meth:`_set_param` or :meth:`_set_params` during chain method
+        calls.
+
+        Returns:
+            A dict copy of the internal parameter store.
+        """
         return dict(self._params)
 
     def with_observation(
@@ -219,7 +244,7 @@ class PopulationBuilderBase:
 
         return updates
 
-    def add_preset(self, preset: Any) -> PopulationBuilderBase:
+    def add_preset(self, preset: GeneticPreset) -> PopulationBuilderBase:
         """Add a gene drive preset to apply during build.
 
         Presets are applied in the order they are added.
@@ -233,7 +258,7 @@ class PopulationBuilderBase:
         self._presets.append(preset)
         return self
 
-    def build(self) -> Any:
+    def build(self) -> BasePopulation[Any]:
         """Build and return the configured Population.
 
         Raises:

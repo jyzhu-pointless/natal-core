@@ -1,10 +1,29 @@
-"""Legacy population builder classes.
+"""Legacy population builder classes and the ``PopulationConfigBuilder`` utility.
+
+``PopulationConfigBuilder`` is the internal engine that converts high-level
+builder parameters (survival arrays, mating rates, modifiers, etc.) into
+a fully-initialized ``PopulationConfig`` / ``DiscretePopulationConfig``.
+It is used at the bottom of the ``build()`` chain in both the legacy
+Builder API and the new Configurator path.
+
+The concrete builder classes in this module (``AgeStructuredPopulationBuilder``,
+``DiscreteGenerationPopulationBuilder``) are legacy wrappers that collect
+parameters via chain methods and delegate to ``PopulationConfigBuilder.build()``.
 
 .. deprecated::
     Use ``Configurator`` (``configurator/_base.py``) instead.
     The default ``setup()`` path now goes through ``DiscreteConfigurator`` /
     ``AgeStructuredConfigurator``.  These Builder classes remain available
     for backward compatibility only.
+
+Key functions:
+  - ``PopulationConfigBuilder.build()`` — construct a full config from
+    resolved parameters.
+  - ``resolve_age_structured_initial_individual_count()`` — parse
+    JSON-style ``{sex: {genotype: count}}`` into a ``(2, n_ages, n_ztypes)``
+    ndarray.
+  - ``resolve_discrete_initial_individual_count()`` — same for the
+    two-age discrete model.
 """
 
 
@@ -378,27 +397,27 @@ class PopulationConfigBuilder:
     # code may still call them.
 
     @staticmethod
-    def resolve_age_param(*args: Any, **kwargs: Any) -> NDArray[np.float64]:
+    def resolve_age_param(*args: Any, **kwargs: Any) -> NDArray[np.float64]:  # noqa: ANN401  # forwarded to child constructor; Any is required for polymorphic dispatch
         """Delegate to :func:`natal.configurator._params.resolve_age_param`."""
         return resolve_age_param(*args, **kwargs)
 
     @staticmethod
-    def _resolve_growth_mode(*args: Any, **kwargs: Any) -> int:
+    def _resolve_growth_mode(*args: Any, **kwargs: Any) -> int:  # noqa: ANN401  # forwarded to child constructor; Any is required for polymorphic dispatch
         """Delegate to :func:`natal.configurator._params.resolve_growth_mode`."""
         return resolve_growth_mode(*args, **kwargs)
 
     @staticmethod
-    def _resolve_carrying_capacity(*args: Any, **kwargs: Any) -> float:
+    def _resolve_carrying_capacity(*args: Any, **kwargs: Any) -> float:  # noqa: ANN401  # forwarded to child constructor; Any is required for polymorphic dispatch
         """Delegate to :func:`natal.configurator._params.resolve_carrying_capacity`."""
         return resolve_carrying_capacity(*args, **kwargs)
 
     @staticmethod
-    def _build_equilibrium_distribution(*args: Any, **kwargs: Any) -> NDArray[np.float64]:
+    def _build_equilibrium_distribution(*args: Any, **kwargs: Any) -> NDArray[np.float64]:  # noqa: ANN401  # forwarded to child constructor; Any is required for polymorphic dispatch
         """Delegate to :func:`natal.configurator._params.build_equilibrium_distribution`."""
         return build_equilibrium_distribution(*args, **kwargs)
 
     @staticmethod
-    def compute_expected_eggs_from_females(*args: Any, **kwargs: Any) -> float:
+    def compute_expected_eggs_from_females(*args: Any, **kwargs: Any) -> float:  # noqa: ANN401  # forwarded to child constructor; Any is required for polymorphic dispatch
         """Delegate to :func:`natal.configurator._params.compute_expected_eggs_from_females`."""
         return compute_expected_eggs_from_females(*args, **kwargs)
 

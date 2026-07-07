@@ -3,6 +3,15 @@
 Two age classes (age-0 juveniles, age-1 adults).  Non-overlapping
 generations — adults are replaced each tick.
 
+The ``DiscreteConfigurator`` class provides chainable domain methods
+for scalar parameters only — because the discrete model has fixed
+dimensions (n_ages=2, new_adult_age=1), there are no per-age array
+parameters.  Configuration is written directly into 0-d ndarray fields.
+
+    cfg = DiscreteConfigurator.for_discrete(species)
+    cfg.competition(K=10000).reproduction(eggs_per_female=100)
+    pop = cfg.build()
+
 Create via ``Configurator.for_discrete(species)`` or
 ``DiscreteGenerationPopulation.setup(species)``.
 """
@@ -239,7 +248,7 @@ class DiscreteConfigurator(Configurator):
 
     def build(
         self, name: str | None = None, hooks: HookMap | None = None,
-    ) -> DiscreteGenerationPopulation:  # type: ignore[name-defined]  # noqa: F821
+    ) -> DiscreteGenerationPopulation:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported class forward ref
         """Build and return a ``DiscreteGenerationPopulation``.
 
         Extracts discrete-specific scalars from stored override values

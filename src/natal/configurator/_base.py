@@ -5,6 +5,9 @@ Functionality:
   - Register custom named parameters (stored as a structured numpy array).
   - Freeze changes back to an immutable NamedTuple via ``_replace``
     (cheap — all ndarray fields are shared by reference).
+  - ``_pop_ref`` write-back: when wired to a live Population via
+    ``for_population()``, config mutations propagate back to the
+    Population automatically through ``set_config()``.
 
 Why this module exists:
   ``PopulationConfig`` / ``DiscretePopulationConfig`` are immutable
@@ -19,6 +22,15 @@ Why this module exists:
   modifiers operate on config arrays without needing a live Population
   object.  The standalone :func:`set_param` function is also usable
   from within Numba-compiled hooks via ``objmode``.
+
+Key classes:
+  - ``Configurator`` — base class with chainable domain methods.
+  - ``DiscreteConfigurator`` — subclass for non-overlapping generations.
+  - ``AgeStructuredConfigurator`` — subclass for overlapping generations.
+
+See also:
+  :func:`set_param` — low-level scalar writer.
+  :func:`hook_set_param` — Numba-safe wrapper for use in hooks.
 """
 
 from __future__ import annotations
@@ -307,13 +319,23 @@ class Configurator:
     def _make_ctx(self) -> ConfigContext:
         """Build a :class:`ConfigContext` seeded from the current state.
 
+        Creates an adapter that mimics ``BasePopulation``'s attribute
+        surface so that ``apply_preset_to_population`` and modifier
+        functions can operate without a live Population.
+
         The context receives a shallow copy of the modifier lists so that
         preset / modifier calls can append without mutating the originals
         until :meth:`_sync_from_ctx` explicitly commits them back.
 
-        Flushes both deferred fitness and initial_state before creating
-        the context.  The BFS in ``rebuild_config_maps`` needs the
-        initial state as its seed — empty seeds cause over-pruning.
+        Lazily builds ``self._registry`` from the species on first call.
+
+        Returns:
+            A new ``ConfigContext`` pre-populated with species, config,
+            registry, and modifier lists.
+
+        Raises:
+            RuntimeError: If ``_species`` is ``None`` (Configurator was
+                created via the raw constructor without a Species).
         """
         # _species and _registry are set either:
         #   - by from_species() (build path) — _species directly, registry lazy
@@ -341,6 +363,11 @@ class Configurator:
 
         Called after ``apply_preset_to_population`` or ``rebuild_config_maps``
         has finished writing into *ctx.config* and the modifier lists.
+        Copies the mutated config and modifier lists back, and records
+        whether compression was applied.
+
+        Args:
+            ctx: The ``ConfigContext`` whose state to consume.
         """
         self._config = ctx.config
         self.gamete_modifiers = ctx.gamete_modifiers
@@ -356,7 +383,7 @@ class Configurator:
         species: Species,
         *,
         discrete: bool = False,
-    ) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821
+    ) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
         """Create a Configurator from a Species with a minimal config.
 
         This is the primary factory.  Pass ``discrete=True`` for
@@ -415,13 +442,13 @@ class Configurator:
         return result
 
     @classmethod
-    def for_discrete(cls, species: Species) -> DiscreteConfigurator:  # type: ignore[name-defined]  # noqa: F821
+    def for_discrete(cls, species: Species) -> DiscreteConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
         """Shorthand for ``from_species(species, discrete=True)``."""
         from natal.configurator.discrete import DiscreteConfigurator as _DC
         return cast(_DC, cls.from_species(species, discrete=True))
 
     @classmethod
-    def for_age_structured(cls, species: Species) -> AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821
+    def for_age_structured(cls, species: Species) -> AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
         """Shorthand for ``from_species(species)``."""
         from natal.configurator.age_structured import AgeStructuredConfigurator as _ASC
         return cast(_ASC, cls.from_species(species))
@@ -429,7 +456,7 @@ class Configurator:
     @staticmethod
     def for_config(
         config: PopulationConfig | DiscretePopulationConfig,
-    ) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821
+    ) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
         """Return the right Configurator subclass for the given config type.
 
         Args:
@@ -448,7 +475,7 @@ class Configurator:
         return AgeStructuredConfigurator(config)
 
     @staticmethod
-    def for_population(pop: BasePopulation[Any]) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821
+    def for_population(pop: BasePopulation[Any]) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported forward ref; Any: Generic population reference, species type irrelevant
         """Create a Configurator wired to *pop* for runtime updates.
 
         Binds ``_pop_ref``, ``_species``, and ``_registry``
@@ -648,11 +675,23 @@ class Configurator:
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
 
     def presets(self, *presets: GeneticPreset) -> Self:
-        """Apply genetic presets directly to config arrays.
+        """Apply genetic presets to config arrays.
+
+        Each preset encapsulates modifier callables, fitness patches,
+        and optionally a cytoplasmic tag.  Presets are applied in order.
+        Modifier lists are accumulated — calling ``presets()`` again
+        appends additional modifiers rather than replacing existing ones.
 
         When wired to a Population (via ``for_population()``), presets are
         applied directly to the Population — no adapter, no write-back needed.
         Otherwise the ``ConfigContext`` adapter path is used for build-time.
+
+        Args:
+            *presets: One or more ``GeneticPreset`` instances
+                (e.g. ``HomingDrive``, ``ToxinAntidoteDrive``).
+
+        Returns:
+            Self for chaining.
         """
         if self._pop_ref is not None:
             # Collect presets, then apply in priority order.
@@ -923,11 +962,19 @@ class Configurator:
         """Recompute ``expected_competition_strength`` and ``expected_survival_rate``.
 
         Called by :meth:`apply` and after equilibrium-sensitive parameter
-        changes.  If a custom ``equilibrium_distribution`` was stored (via
+        changes (carrying capacity, eggs per female, sex ratio).  Results
+        are written directly into the config's 0-d ndarray fields.
+
+        If a custom ``equilibrium_distribution`` was stored (via
         ``competition(equilibrium_distribution=...)``), it is used as the
         target age structure for the Champer model.  If the user explicitly
         set ``expected_num_adult_females``, external egg counts are computed
         from that value instead of the distribution.
+
+        For ``DiscretePopulationConfig``, survival/mating/reproduction arrays
+        are constructed manually from scalar fields (age0_survival,
+        adult_mating_rate, etc.) before calling
+        ``compute_equilibrium_metrics``.
         """
         from natal.configurator._params import compute_expected_eggs_from_females
         from natal.engine.simulation.age_structured import (

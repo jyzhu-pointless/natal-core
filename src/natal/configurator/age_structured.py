@@ -3,7 +3,15 @@
 Supports arbitrary age classes with per-age survival, mating, and
 fertility.  Adults survive across ticks — generations overlap.
 
-Per-age parameters accept flexible input: scalar, list, dict, callable.
+The ``AgeStructuredConfigurator`` class provides chainable domain
+methods that mutate config arrays in-place:
+
+    cfg = AgeStructuredConfigurator.from_species(species)
+    cfg.age_structure(8, 2).competition(K=10000)
+    pop = cfg.build()
+
+Per-age parameters accept flexible input: scalar, list, dict,
+or callable.  They are resolved by ``resolve_age_param()``.
 
 Create via ``Configurator.from_species()`` or
 ``AgeStructuredPopulation.setup(species, legacy_path=False)``.
@@ -284,8 +292,23 @@ class AgeStructuredConfigurator(Configurator):
 
     def build(
         self, name: str | None = None, hooks: HookMap | None = None,
-    ) -> AgeStructuredPopulation:  # type: ignore[name-defined]  # noqa: F821
-        """Build and return an ``AgeStructuredPopulation``."""
+    ) -> AgeStructuredPopulation:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported class forward ref
+        """Finalise the config and create an ``AgeStructuredPopulation``.
+
+        Delegates to :meth:`Configurator.build` which syncs equilibrium
+        metrics, runs optional index compression, builds the custom
+        array, merges hooks, and passes the config to the Population
+        constructor.
+
+        Args:
+            name: Population name (falls back to ``.setup(name=...)``
+                or ``"AgeStructuredPopulation"``).
+            hooks: Additional hook registrations merged with any stored
+                via :meth:`hooks`.
+
+        Returns:
+            An ``AgeStructuredPopulation`` ready for simulation.
+        """
         from natal.population.age_structured import (
             AgeStructuredPopulation as ASP,
         )
