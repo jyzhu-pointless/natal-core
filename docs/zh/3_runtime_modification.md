@@ -159,6 +159,8 @@ pop.update().custom(temperature=35.0, season_idx=1)
 
 支持 `bool`、`float`、`int`。
 
+> **注意**：自定义字段不在参数注册表中，因此 `set_param()` 和 `hook_set_param()` 无法访问它们。应在 hook 中使用直接数组写入 (`config.custom["temperature"][()] = value`) 或 `pop.update().custom(temperature=30.0)`。
+
 ---
 
 ## 5. 空间种群 per-deme 修改
@@ -197,9 +199,42 @@ set_param / pop.update() / hook 内直接写
 
 9 个生态参数（K、eggs、sex_ratio、sperm_displacement_rate、low_density_growth_rate、juvenile_growth_mode、generation_time、expected_competition_strength、expected_survival_rate）均为 0-d ndarray。
 
+### `set_config()` — 整体配置替换
+
+`pop.set_config(new_config)` 一次性替换种群的整个配置对象。适用于从头重建配置后（例如修改了 custom 字段结构）。新配置必须与原有配置类型相同（`PopulationConfig` 或 `DiscretePopulationConfig`）。
+
+Configurator 的 `custom()` 方法在添加新字段时会触发此路径：它会重建 custom 结构化数组并调用 `set_config()` 将新配置写回种群。
+
 ---
 
-## 7. 新旧对比
+## 7. 参数参考
+
+参数按领域分组，与 Configurator 链式 API 方法对应。
+
+| 领域 | 参数名 | 别名 | 适用模型 | set_param |
+|---|---|---|---|---|
+| setup | `stochastic` | — | both | ❌ 构建时 |
+| setup | `continuous_sampling` | — | both | ❌ 构建时 |
+| setup | `fixed_egg_count` | — | both | ❌ 构建时 |
+| setup | `has_sex_chromosomes` | — | both | ❌ 构建时 |
+| age_structure | `n_ages` | — | age-structured | ❌ 构建时 |
+| age_structure | `new_adult_age` | — | age-structured | ❌ 构建时 |
+| age_structure | `generation_time` | — | age-structured | ❌ 构建时 |
+| survival | `female_age_based_survival` | — | age-structured | ✅ |
+| survival | `male_age_based_survival` | — | age-structured | ✅ |
+| reproduction | `eggs_per_female` | `expected_eggs_per_female` | both | ✅ |
+| reproduction | `sex_ratio` | — | both | ✅ |
+| reproduction | `sperm_displacement_rate` | — | both | ✅ |
+| competition | `carrying_capacity` | — | both | ✅ |
+| competition | `low_density_growth_rate` | — | both | ✅ |
+| competition | `juvenile_growth_mode` | `growth_mode` | both | ✅ |
+| fitness | `viability` | — | both | ❌ 张量 |
+| fitness | `fecundity` | — | both | ❌ 张量 |
+| fitness | `sexual_selection` | — | both | ❌ 张量 |
+| fitness | `zygote_viability` | — | both | ❌ 张量 |
+| migration | `migration_rate` | — | spatial | 仅空间 |
+
+## 8. 新旧对比
 
 | | 旧（Builder） | 新（Configurator） |
 |---|---|---|

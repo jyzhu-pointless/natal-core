@@ -378,7 +378,7 @@ launch(pop, port=8080, title="My Simulation")
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive
+from natal import HomingDrive
 from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(
@@ -417,7 +417,7 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive
+from natal import HomingDrive
 from natal.hooks import hook, Op
 
 sp = nt.Species.from_dict(
