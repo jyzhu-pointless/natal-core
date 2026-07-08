@@ -16,7 +16,7 @@ watch:
 theme:
   name: material
   language: zh
-  logo: natal-brand.svg
+  logo: natal-doc.svg
   favicon: natal.svg
   features:
     - navigation.tabs

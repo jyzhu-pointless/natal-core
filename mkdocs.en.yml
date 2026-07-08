@@ -16,7 +16,7 @@ watch:
 theme:
   name: material
   language: en
-  logo: natal-brand.svg
+  logo: natal-doc.svg
   favicon: natal.svg
   features:
     - navigation.tabs
@@ -150,4 +150,3 @@ nav:
     - ui: api/ui.md
     - utils: api/utils.md
 
-extra_css:
