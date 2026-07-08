@@ -37,8 +37,9 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from numba import prange  # type: ignore[reportMissingTypeStubs]
 
+# prange removed — parallel=True on _execute_single_csr_hook was causing
+# OpenMP overhead (4-5x slowdown) for small genotype counts. See #perf.
 from natal.numba import compat as nbc
 from natal.numba.utils import njit_switch
 
@@ -412,7 +413,7 @@ _OP_STOP_IF_ABOVE = 8
 _OP_STOP_IF_EXTINCTION = 9
 
 
-@njit_switch(cache=True, parallel=True)
+@njit_switch(cache=True)
 def _execute_single_csr_hook(
     hook_idx: int,
     n_hooks: int | np.integer[Any],
@@ -515,13 +516,13 @@ def _execute_single_csr_hook(
         sex_female = sex_masks_data[sex_mask_idx]
         sex_male = sex_masks_data[sex_mask_idx + 1]
 
-        # Mutation ops (0..5): iterate sex × age × genotype, with prange
-        # on the innermost zidx loop.  Each (sex, age, zidx) cell is
-        # independent — different zidx values write to distinct rows of
-        # individual_count and sperm_storage, so no data races.
+        # Mutation ops (0..5): iterate sex × age × genotype serially.
+        # Each (sex, age, zidx) cell is independent — different zidx
+        # values write to distinct rows of individual_count and
+        # sperm_storage, so no data races.
         #
         # Stop ops (6..9) are handled separately below with a serial
-        # reduction — prange is NOT used there.
+        # reduction.
         if op_type <= _OP_SAMPLE:
             for sex_idx in range(2):
                 if sex_idx == 0 and not sex_female:
@@ -532,7 +533,7 @@ def _execute_single_csr_hook(
                 for age_idx_ptr in range(age_start, age_end):
                     age = age_data[age_idx_ptr]
 
-                    for zidx_ptr in prange(zidx_start, zidx_end):
+                    for zidx_ptr in range(zidx_start, zidx_end):
                         zidx = zidx_data[zidx_ptr]
                         current = individual_count[sex_idx, age, zidx]
 
