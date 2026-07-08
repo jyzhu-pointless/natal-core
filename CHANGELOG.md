@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (v0.2.0)
+## v0.2.0a (2026.7.8)
 
 ### Breaking Changes
 
