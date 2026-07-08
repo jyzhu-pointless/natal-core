@@ -520,8 +520,8 @@ class Configurator:
         continuous_sampling: bool | None = None,
         fixed_egg_count: bool | None = None,
         compress: bool = False,
-        declared_zygote_types: set[str] | set[int] | None = None,
-        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
+        declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
+        declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
     ) -> Self:
         """Configure simulation flags and optional population name.
 
@@ -532,7 +532,7 @@ class Configurator:
         The older ``compress_gametes()`` / ``compress_genotypes()`` chain
         methods have been removed — use this parameter instead.
 
-        *declared_zygote_types* is a set of genotype strings (``"WT|WT"``) or
+        *declared_zygote_types* is a sequence of genotype strings (``"WT|WT"``) or
         integer indices that are treated as reachable by the BFS even if they
         have zero individuals in the initial state.  Use this to prevent
         compression from pruning genotypes that may appear later via hooks or
@@ -549,7 +549,7 @@ class Configurator:
                 distributions instead of discrete counts.
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
             compress: If ``True``, enable full index compression at build time.
-            declared_zygote_types: Optional set of genotype selectors to protect
+            declared_zygote_types: Optional sequence of genotype selectors to protect
                 from compression pruning.
 
         Returns:
@@ -572,7 +572,7 @@ class Configurator:
                 )
             declared_zygote_types = declared_genotypes
         if declared_zygote_types is not None:
-            self._declared_zygote_types = declared_zygote_types
+            self._declared_zygote_types = cast("set[str] | set[int]", set(declared_zygote_types))
         overrides: dict[str, bool] = {}
         if stochastic is not None:
             overrides["stochastic"] = stochastic
