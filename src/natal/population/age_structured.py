@@ -15,6 +15,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
@@ -149,13 +150,49 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         fixed_egg_count: bool = False,
         *,
         compress: bool = False,
-        declared_zygote_types: set[str] | set[int] | None = None,
-        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
+        declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
+        declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
     ) -> AgeStructuredConfigurator:
-        """Fluent population construction entry point.
+        """Start building an age-structured population with overlapping generations.
 
-        Returns an ``AgeStructuredConfigurator``.  Chain domain methods
-        and end with ``.build()`` to create a Population.
+        This is the fluent entry point for constructing an
+        ``AgeStructuredPopulation``.  It returns an ``AgeStructuredConfigurator``
+        that you configure by chaining domain methods (``initial_state()``,
+        ``reproduction()``, ``competition()``, etc.) and finalize with
+        ``build()``.
+
+        Args:
+            species: Species object describing the population's genetic
+                architecture (chromosomes, loci, alleles).
+            name: Human-readable name for the population.
+                Defaults to ``"AgeStructuredPop"``.
+            stochastic: If ``False``, use deterministic (median) outcomes for
+                reproduction and survival. Defaults to ``True``.
+            continuous_sampling: If ``True``, sample from continuous
+                distributions instead of discrete counts.
+                Defaults to ``False``.
+            fixed_egg_count: If ``True``, disable Poisson noise on egg counts
+                so each female produces exactly the specified number of eggs.
+                Defaults to ``False``.
+            compress: If ``True``, enable full index compression at build
+                time, pruning unreachable GTypes and ZTypes to shrink
+                internal arrays. Defaults to ``False``.
+            declared_zygote_types: Optional sequence of genotype strings
+                (``"WT|WT"``) or integer indices that are treated as
+                reachable even if absent from the initial state.  Use this
+                to prevent compression from pruning genotypes that may
+                appear later via hooks or runtime presets.
+            declared_genotypes: Deprecated alias for
+                *declared_zygote_types*.
+
+        Returns:
+            ``AgeStructuredConfigurator`` ready for domain-method chaining.
+            Call ``.build()`` to produce an ``AgeStructuredPopulation``.
+
+        Raises:
+            ValueError: If both ``declared_zygote_types`` and
+                ``declared_genotypes`` (deprecated alias) are specified
+                simultaneously.
         """
         from natal.configurator import Configurator
 
