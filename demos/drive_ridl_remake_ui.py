@@ -26,21 +26,17 @@ sp_complete_drive = nt.Species.from_dict(
 # 2. Define the drive system
 def make_drive_ridl(
     drive_conversion_rate: float = 0.5,
-    germline_resistance_formation_rate: float = 0.5,
     drive_homozygote_fitness: float = 1.0,  # fecundity fitness for both sexes
 ) -> nt.HomingDrive:
     """Create a Drive-RIDL system."""
-    d, r, f = drive_conversion_rate, germline_resistance_formation_rate, drive_homozygote_fitness
-    late_germline_resistance_formation_rate: float = r / (1 - d)
+    d, f = drive_conversion_rate, drive_homozygote_fitness
     per_allele_fitness: float = f ** 0.5
 
     assert 0 <= d <= 1, "Drive conversion rate must be between 0 and 1."
-    assert 0 <= r <= 1, "Germline resistance formation rate must be between 0 and 1."
     assert 0 <= f <= 1, "Drive homozygote fitness must be between 0 and 1."
-    assert d + r <= 1, "The sum of drive conversion rate and germline resistance formation rate must be less than or equal to 1."
 
     return nt.HomingDrive(
-        name=f"Drive-RIDL_complete_dr_{d}_res_{r}_fit_{f}",
+        name=f"Drive-RIDL_complete_dr_{d}_fit_{f}",
         drive_allele="Dr",
         target_allele="WT",
         drive_conversion_rate=drive_conversion_rate,
@@ -66,7 +62,7 @@ def stop_simulation():
 # 4. Define the population
 pop = (nt.AgeStructuredPopulation.setup(
         species=sp_complete_drive,
-        name="Drive RIDL",
+        name="Drive-RIDL",
     ).age_structure(
         n_ages=8,
         new_adult_age=2,
@@ -87,14 +83,12 @@ pop = (nt.AgeStructuredPopulation.setup(
         juvenile_growth_mode="linear",
         low_density_growth_rate=6.0,
         age_1_carrying_capacity=24000,
-        expected_num_new_adult_females=54000,
     ).reproduction(
         eggs_per_female=50,
         sperm_displacement_rate=0.05,
     ).presets(
         make_drive_ridl(
             drive_conversion_rate=0.0,
-            germline_resistance_formation_rate=0.0,
             drive_homozygote_fitness=1.0
         )
     ).hooks(
