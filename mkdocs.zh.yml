@@ -30,14 +30,14 @@ theme:
 
   palette:
     - scheme: default
-      primary: indigo
-      accent: indigo
+      primary: black
+      accent: grey
       toggle:
         icon: material/brightness-7
         name: 切换到深色模式
     - scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: black
+      accent: grey
       toggle:
         icon: material/brightness-4
         name: 切换到浅色模式
