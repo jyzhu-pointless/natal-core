@@ -117,7 +117,7 @@ nav:
     - Allele Conversion Rules: allele_conversion_rules.md
     - Caching and Codegen: caching_and_codegen.md
     - Genotype Filter: genotype_filter.md
-    - Migration: Builder → Configurator: migration_builder_to_configurator.md
+    - Migration: migration_builder_to_configurator.md
     - Migration Kernel Implementation: migration_kernel_impl.md
     - Observation Implementation: observation_impl.md
     - Preset Encapsulation and Validation: preset_encapsulation_and_validation.md
