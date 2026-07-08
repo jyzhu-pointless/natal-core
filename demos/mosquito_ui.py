@@ -101,7 +101,7 @@ pop = nt.AgeStructuredPopulation\
     .competition(
         juvenile_growth_mode="concave",
         old_juvenile_carrying_capacity=120,
-        expected_num_adult_females=210,
+        expected_num_new_adult_females=210,
     ) \
     .presets(
         drive

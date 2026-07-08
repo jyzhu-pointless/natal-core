@@ -760,7 +760,7 @@ class SpatialConfigurator:
         low_density_growth_rate: Union[float, BatchSetting] = 6.0,
         age_1_carrying_capacity: Union[int, None, BatchSetting] = None,
         old_juvenile_carrying_capacity: Union[int, None, BatchSetting] = None,
-        expected_num_adult_females: Union[int, None, BatchSetting] = None,
+        expected_num_new_adult_females: Union[int, None, BatchSetting] = None,
         equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64], BatchSetting]] = None,
         # Discrete-generation params
         carrying_capacity: Union[int, None, BatchSetting] = None,
@@ -775,7 +775,7 @@ class SpatialConfigurator:
             age_1_carrying_capacity: Carrying capacity at age=1 (age-structured).
                 Accepts ``BatchSetting``.
             old_juvenile_carrying_capacity: Alias for ``age_1_carrying_capacity``.
-            expected_num_adult_females: Equilibrium adult females. Accepts ``BatchSetting``.
+            expected_num_new_adult_females: Equilibrium adult females. Accepts ``BatchSetting``.
             equilibrium_distribution: Optional equilibrium distribution.
             carrying_capacity: Carrying capacity (discrete-generation). Accepts ``BatchSetting``.
 
@@ -797,7 +797,7 @@ class SpatialConfigurator:
                     "juvenile_growth_mode": juvenile_growth_mode,
                     "low_density_growth_rate": low_density_growth_rate,
                     "age_1_carrying_capacity": resolved_cc,
-                    "expected_num_adult_females": expected_num_adult_females,
+                    "expected_num_new_adult_females": expected_num_new_adult_females,
                     "equilibrium_distribution": equilibrium_distribution,
                 },
             )

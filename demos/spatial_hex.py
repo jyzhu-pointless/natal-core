@@ -54,7 +54,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
         )
         .competition(
             juvenile_growth_mode="logistic",
-            expected_num_adult_females=240,
+            expected_num_new_adult_females=240,
         )
         .migration(
             kernel=np.array(

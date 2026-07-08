@@ -10,7 +10,7 @@
 - **Parameter rename**: `female_age_based_survival_rates` → `female_age_based_survival` (all `_rates` suffixes dropped).
 - **Default survival**: age-structured models now default to 100% survival at all ages (`np.ones(n_ages - 1)`).
 - **Species default**: `Species.unordered=True` by default — `A|a` and `a|A` are the same genotype.
-- **Scale system removed**: `population_scale`, `base_carrying_capacity`, `base_expected_num_adult_females` and related getter/setter methods removed. `carrying_capacity` is now a direct 0-d ndarray.
+- **Scale system removed**: `population_scale`, `base_carrying_capacity`, `base_expected_num_new_adult_females` and related getter/setter methods removed. `carrying_capacity` is now a direct 0-d ndarray.
 - **SpatialBuilder → SpatialConfigurator**: old `SpatialBuilder` class removed.
 - **Migration rate type**: `SpatialPopulation.migration_rate` returns `NDArray[float64]` (was `float`). Scalar rates apply only to adults.
 - **V1 discrete lifecycle removed**: old template and kernels deleted; only V2 (`DiscretePopulationConfig`-based) path remains.

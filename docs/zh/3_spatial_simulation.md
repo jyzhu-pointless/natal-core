@@ -156,7 +156,7 @@ pop = (
 | `competition` | `carrying_capacity` / `age_1_carrying_capacity` | float |
 | `competition` | `low_density_growth_rate` | float |
 | `competition` | `juvenile_growth_mode` | str |
-| `competition` | `expected_num_adult_females` | float |
+| `competition` | `expected_num_new_adult_females` | float |
 | `age_structure` | `equilibrium_distribution` | list[float] |
 | `presets` | 位置参数 | preset 对象 |
 | `fitness` | `viability` / `fecundity` / `sexual_selection` / `zygote_viability` | dict |

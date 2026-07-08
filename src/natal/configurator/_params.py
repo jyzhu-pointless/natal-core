@@ -294,7 +294,7 @@ def build_equilibrium_distribution(
 
 
 def compute_expected_eggs_from_females(
-    expected_num_adult_females: float,
+    expected_num_new_adult_females: float,
     eggs_per_female: float,
     age_based_survival_rates: NDArray[np.float64],
     age_based_reproduction_rates: Optional[NDArray[np.float64]],
@@ -305,12 +305,12 @@ def compute_expected_eggs_from_females(
 ) -> float:
     """Compute total expected egg production from a target adult female count.
 
-    Forward-propagates ``expected_num_adult_females`` across adult ages via
+    Forward-propagates ``expected_num_new_adult_females`` across adult ages via
     survival rates (same direction as ``compute_equilibrium_metrics``), then
     computes total egg production from the resulting age-specific female counts.
 
     Args:
-        expected_num_adult_females: Number of adult females at new_adult_age.
+        expected_num_new_adult_females: Number of adult females at new_adult_age.
         eggs_per_female: Base eggs per female.
         age_based_survival_rates: (2, n_ages) survival array.
         age_based_reproduction_rates: Female reproduction participation by age.
@@ -331,7 +331,7 @@ def compute_expected_eggs_from_females(
 
     # Build female-only adult distribution (forward propagation)
     female_dist = np.zeros(n_ages, dtype=np.float64)
-    female_dist[new_adult_age] = expected_num_adult_females
+    female_dist[new_adult_age] = expected_num_new_adult_females
     for age in range(new_adult_age + 1, n_ages):
         female_dist[age] = female_dist[age - 1] * age_based_survival_rates[0, age - 1]
 

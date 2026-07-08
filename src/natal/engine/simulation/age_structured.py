@@ -1019,7 +1019,7 @@ def compute_equilibrium_metrics(
         n_ages: Total number of ages
         equilibrium_individual_count: Optional user-provided equilibrium distribution (2, n_ages)
         external_expected_eggs: If provided, overrides ``produced_age_0`` in the survival
-            rate computation. This enables ``expected_num_adult_females`` to independently
+            rate computation. This enables ``expected_num_new_adult_females`` to independently
             determine expected egg production separate from the equilibrium distribution.
 
     Returns:
@@ -1089,7 +1089,7 @@ def compute_equilibrium_metrics(
     # Where s_0_avg is base survival rate from Age 0 to Age 1
     s_0_avg = sex_ratio * age_based_survival_rates[0, 0] + (1.0 - sex_ratio) * age_based_survival_rates[1, 0]
 
-    # When external_expected_eggs is provided (from expected_num_adult_females),
+    # When external_expected_eggs is provided (from expected_num_new_adult_females),
     # use it for the survival rate formula instead of the distribution-computed produced_age_0.
     # This allows independent specification of capacity (K) and expected egg production.
     survival_eggs = external_expected_eggs if external_expected_eggs is not None else produced_age_0

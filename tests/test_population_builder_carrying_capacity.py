@@ -87,7 +87,7 @@ class TestCarryingCapacityResolution:
         fertility = np.array([0.0, 0.0, 1.0, 0.8], dtype=np.float64)
 
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
-            expected_num_adult_females=500.0,
+            expected_num_new_adult_females=500.0,
             eggs_per_female=100.0,
             age_based_survival_rates=survival,
             age_based_reproduction_rates=reproduction,
@@ -121,8 +121,8 @@ class TestCarryingCapacityResolution:
         # N_f[2] = 400, eggs = 400 * 1.0 * 1.0 * 100 = 40000
         assert eggs == pytest.approx(40000.0)
 
-    def test_builder_with_only_expected_num_adult_females(self) -> None:
-        """Test builder uses expected_num_adult_females for eggs, initial state for K."""
+    def test_builder_with_only_expected_num_new_adult_females(self) -> None:
+        """Test builder uses expected_num_new_adult_females for eggs, initial state for K."""
         sp = _make_species("TestBuilderCapacity")
 
         pop = (
@@ -146,7 +146,7 @@ class TestCarryingCapacityResolution:
             )
             .competition(
                 juvenile_growth_mode="logistic",
-                expected_num_adult_females=300.0,
+                expected_num_new_adult_females=300.0,
             )
             .build()
         )
@@ -154,7 +154,7 @@ class TestCarryingCapacityResolution:
         assert pop is not None
         cfg = pop.export_config()
         assert cfg.carrying_capacity > 0
-        # expected_num_adult_females is used internally for equilibrium;
+        # expected_num_new_adult_females is used internally for equilibrium;
         # no longer stored as a separate config field.
 
     def test_builder_prefers_explicit_carrying_capacity(self) -> None:
@@ -175,7 +175,7 @@ class TestCarryingCapacityResolution:
             .competition(
                 juvenile_growth_mode="fixed",
                 old_juvenile_carrying_capacity=5000,
-                expected_num_adult_females=100,
+                expected_num_new_adult_females=100,
             )
             .build()
         )
@@ -243,8 +243,8 @@ class TestCarryingCapacityResolution:
         expected_surv = K / (eggs_from_dist * s_0_avg)
         assert surv == pytest.approx(expected_surv)
 
-    def test_expected_num_adult_females_sets_expected_eggs_independently(self) -> None:
-        """With both K and expected_num_adult_females, the survival rate reconciles them."""
+    def test_expected_num_new_adult_females_sets_expected_eggs_independently(self) -> None:
+        """With both K and expected_num_new_adult_females, the survival rate reconciles them."""
         n_ages = 6
         survival = np.array([
             [1.0, 1.0, 0.9, 0.8, 0.6, 0.0],
@@ -259,7 +259,7 @@ class TestCarryingCapacityResolution:
         sex_ratio = 0.5
         new_adult_age = 1
 
-        # K = 500 (capacity), expected_num_adult_females = 200
+        # K = 500 (capacity), expected_num_new_adult_females = 200
         K = 500.0
         expected_females = 200.0
 
@@ -268,9 +268,9 @@ class TestCarryingCapacityResolution:
             K=K, sex_ratio=sex_ratio, age_based_survival_rates=survival, n_ages=n_ages,
         )
 
-        # Compute expected eggs from expected_num_adult_females
+        # Compute expected eggs from expected_num_new_adult_females
         external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
-            expected_num_adult_females=expected_females,
+            expected_num_new_adult_females=expected_females,
             eggs_per_female=eggs_per_female,
             age_based_survival_rates=survival,
             age_based_reproduction_rates=mating[0],
@@ -323,7 +323,7 @@ class TestCarryingCapacityResolution:
                 competition_strength=5.0,
                 juvenile_growth_mode="linear",
                 old_juvenile_carrying_capacity=100.0,
-                expected_num_adult_females=20.0,
+                expected_num_new_adult_females=20.0,
             )
             .build()
         )
@@ -361,7 +361,7 @@ class TestCarryingCapacityResolution:
                 competition_strength=5.0,
                 juvenile_growth_mode="linear",
                 old_juvenile_carrying_capacity=600.0,
-                expected_num_adult_females=1050.0,
+                expected_num_new_adult_females=1050.0,
             )
             .build()
         )
@@ -389,7 +389,7 @@ class TestChamperModel:
         - expected_competition_strength = 1050×1.0 + 12×5.0 = 1110
         - s_0_avg = 0.5×1.0 + 0.5×1.0 = 1.0
 
-    When expected_num_adult_females=21 (count at new_adult_age=2):
+    When expected_num_new_adult_females=21 (count at new_adult_age=2):
         - Forward-propagated female dist: [0,0,21,17.5,14,10.5,7,3.5]
         - external_expected_eggs = 73.5 female-age-units × 50 = 3675
         - survival rate = 12 / (3675 × 1.0) ≈ 0.003265
@@ -400,7 +400,7 @@ class TestChamperModel:
     sex_ratio = 0.5
     eggs_per_female = 50.0
     K = 12.0
-    expected_num_adult_females = 21.0
+    expected_num_new_adult_females = 21.0
 
     female_survival = [1.0, 1.0, 5 / 6, 4 / 5, 3 / 4, 2 / 3, 1 / 2, 0]
     male_survival = [1.0, 1.0, 2 / 3, 1 / 2, 0]
@@ -462,7 +462,7 @@ class TestChamperModel:
         assert cfg.expected_survival_rate == pytest.approx(expected_surv)
 
     def test_path_both_params_independent(self) -> None:
-        """Path 2: K and expected_num_adult_females are independent."""
+        """Path 2: K and expected_num_new_adult_females are independent."""
         sp = _make_species("ChamperPath2")
 
         pop = (
@@ -485,7 +485,7 @@ class TestChamperModel:
                 juvenile_growth_mode="logistic",
                 low_density_growth_rate=6.0,
                 age_1_carrying_capacity=self.K,
-                expected_num_adult_females=self.expected_num_adult_females,
+                expected_num_new_adult_females=self.expected_num_new_adult_females,
             )
             .build()
         )
@@ -497,7 +497,7 @@ class TestChamperModel:
         # Competition strength still from equilibrium distribution (not affected by external eggs)
         assert cfg.expected_competition_strength == pytest.approx(1110.0)
 
-        # Survival rate uses external_expected_eggs from expected_num_adult_females
+        # Survival rate uses external_expected_eggs from expected_num_new_adult_females
         # 21 females at age 2 → forward-propagated via survival → 73.5 female-age-units
         # 73.5 * 50 = 3675 eggs
         external_eggs = 73.5 * 50.0  # = 3675.0
@@ -545,7 +545,7 @@ class TestChamperModel:
     def test_expected_eggs_from_females_default_rates(self) -> None:
         """Verify eggs computation with default reproduction (all adults mate, fertility=1)."""
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
-            expected_num_adult_females=self.expected_num_adult_females,
+            expected_num_new_adult_females=self.expected_num_new_adult_females,
             eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_reproduction_rates=None,
@@ -563,7 +563,7 @@ class TestChamperModel:
         reproduction = np.array([0.0, 0.0, 0.5, 1.0, 1.0, 0.8, 0.5, 0.0], dtype=np.float64)
 
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
-            expected_num_adult_females=self.expected_num_adult_females,
+            expected_num_new_adult_females=self.expected_num_new_adult_females,
             eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_reproduction_rates=reproduction,
@@ -583,7 +583,7 @@ class TestChamperModel:
         fertility = np.array([0.0, 0.0, 0.8, 1.0, 1.0, 0.8, 0.5, 0.0], dtype=np.float64)
 
         eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
-            expected_num_adult_females=self.expected_num_adult_females,
+            expected_num_new_adult_females=self.expected_num_new_adult_females,
             eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
             age_based_reproduction_rates=reproduction,

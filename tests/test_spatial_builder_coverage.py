@@ -1287,7 +1287,7 @@ class TestInitialStateWithSpermStorage:
                     female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
                     male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
                 )
-                .competition(carrying_capacity=1000, expected_num_adult_females=100)
+                .competition(carrying_capacity=1000, expected_num_new_adult_females=100)
                 .build()
             )
             spatial.run(2)
@@ -1438,7 +1438,7 @@ class TestHeterogeneousAgeStructuredState:
                     female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
                     male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
                 )
-                .competition(carrying_capacity=1000, expected_num_adult_females=100)
+                .competition(carrying_capacity=1000, expected_num_new_adult_females=100)
                 .build()
             )
             spatial.run(2)

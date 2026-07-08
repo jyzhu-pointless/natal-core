@@ -492,7 +492,7 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
 - **ZType 全量修复（第二阶段）** — 系统性修复 `genotype_to_index` 在使用 n_slabs>1 时的 50+ 处静默错误。所有 pattern 字符串解析统一走 `ZygoteTypePattern`。删除 `genotype_to_index`、`genotype_index()`、`_ensure_genotype_registered()`、`_UnorderedGenotypeDict`。修复观察系统在 n_slabs>1 时的崩溃（mask 维度 `n_genotypes` → `n_ztypes`）。7 个 n_slabs>1 回归测试。参数重命名 `genotype_idx` → `ztype_idx`。状态：997 passed，pyright 0，ruff clean。
 
 - **refresh 系统重构** — `rebuild_from_presets()` 拆为 `refresh_modifiers()`（public，仅 modifier 重建）+ `_reapply_preset_fitness()`（private，fitness 重置和重应用）。删除了 `refresh_modifier_maps()` public wrapper。`add_gamete_modifier` / `add_zygote_modifier` 的 `refresh` 参数现在只控制是否立即重建 maps，派生列表写入无条件发生。修复了 `rebuild_from_presets` 静默覆盖手动 fitness 的问题——`refresh_modifiers()` 不碰 fitness，只有 `apply_preset()` / `presets()` / `reconfigure_preset()` 会调用 `_reapply_preset_fitness()`。
-- **#2** `expected_num_adult_females` — 旧机制（`base_expected_num_adult_females` + `get_effective_expected_adult_females()`）已全部移除。新机制通过 `Configurator.competition()` 接收参数，流经 `_compute_carrying_capacity_params()` 转换为 `external_expected_eggs`。两个专用测试验证。
+- **#2** `expected_num_new_adult_females` — 旧机制（`base_expected_num_new_adult_females` + `get_effective_expected_adult_females()`）已全部移除。新机制通过 `Configurator.competition()` 接收参数，流经 `_compute_carrying_capacity_params()` 转换为 `external_expected_eggs`。两个专用测试验证。
 - **#8 部分** `pop.update()` / `_SpatialUpdate` — 空间模型的运行时 config 修改 API，clone-on-write 语义，`test_spatial_update.py` 覆盖。
 - **`parameters.jsonc` alias 修复** — `eggs_per_female` 的 alias 从冗余同名修正为 `expected_eggs_per_female`（保留向后兼容）。
 

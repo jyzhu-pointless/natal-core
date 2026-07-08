@@ -173,7 +173,7 @@ Competition parameters take effect during the survival phase of the population.
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
-| `expected_num_adult_females` | `Optional[int]` | Expected number of adult females, used to independently calculate expected egg production | `None` | Expected egg production derivation | Decoupled from `age_1_carrying_capacity`: one sets capacity, the other sets egg production (see below) |
+| `expected_num_new_adult_females` | `Optional[int]` | Expected number of adult females, used to independently calculate expected egg production | `None` | Expected egg production derivation | Decoupled from `age_1_carrying_capacity`: one sets capacity, the other sets egg production (see below) |
 | `equilibrium_distribution` | `Optional` | Explicit equilibrium distribution (2, n_ages) array | `None` | Competition metric derivation | Can be passed via `age_structure`, `survival`, or `competition`; later one takes precedence |
 
 **Carrying capacity resolution logic**:
@@ -181,7 +181,7 @@ Competition parameters take effect during the survival phase of the population.
 Carrying capacity $K$ and expected egg production are two independent concepts. The system follows a separation principle:
 
 - `age_1_carrying_capacity` (or legacy alias `old_juvenile_carrying_capacity`) directly specifies the **carrying capacity at age=1 $K$**
-- `expected_num_adult_females` independently specifies the **expected egg production** (does not back-calculate $K$)
+- `expected_num_new_adult_females` independently specifies the **expected egg production** (does not back-calculate $K$)
 
 The initialization path has three scenarios:
 
@@ -190,11 +190,11 @@ The initialization path has three scenarios:
    - Calculates total expected egg production based on the equilibrium distribution, female mating rates, relative fertility, and egg production
    - Equilibrium survival rate = $K$ / total expected egg production
 
-2. **Both `age_1_carrying_capacity` and `expected_num_adult_females` provided**:
+2. **Both `age_1_carrying_capacity` and `expected_num_new_adult_females` provided**:
    - `age_1_carrying_capacity` is directly used as $K$
-   - Propagates `expected_num_adult_females` forward through survival rates to each adult age group, producing the female equilibrium distribution
+   - Propagates `expected_num_new_adult_females` forward through survival rates to each adult age group, producing the female equilibrium distribution
    - Calculates expected egg production based on this distribution (considering mating rates and relative fertility)
-   - The system independently calculates the equilibrium survival rate using $K$ (from `age_1_carrying_capacity`) and expected egg production (from `expected_num_adult_females`)
+   - The system independently calculates the equilibrium survival rate using $K$ (from `age_1_carrying_capacity`) and expected egg production (from `expected_num_new_adult_females`)
 
 3. **Missing items inferred from initial state** (assuming the initial state is at equilibrium):
    - If $K$ is missing: uses the total count of age-1 individuals from the initial state
@@ -213,7 +213,7 @@ total_expected_eggs = Σ( N_f[age] × P_reproducing[age] × fertility[age] × eg
 
 Where:
 - `N_f[age]`: Number of females at that age at equilibrium
-  - When derived from `expected_num_adult_females`: propagated forward from new_adult_age using female survival rates
+  - When derived from `expected_num_new_adult_females`: propagated forward from new_adult_age using female survival rates
   - When derived from the equilibrium distribution: read directly from the female row in the distribution
 - `P_reproducing[age]`: Proportion of females of that age participating in reproduction, from `age_based_reproduction_rate` (if not set, uses the female row of `female_age_based_mating_rate`)
 - `fertility[age]`: Relative fertility weight for that age, from `female_age_based_fertility` (defaults to all 1s)
@@ -221,7 +221,7 @@ Where:
 
 **Meaning of external_expected_eggs**:
 
-When `expected_num_adult_females` is provided (path 2), the system uses it to calculate an expected egg production that is independent of the equilibrium distribution, called **external_expected_eggs**. This value is only used for survival rate calculation:
+When `expected_num_new_adult_females` is provided (path 2), the system uses it to calculate an expected egg production that is independent of the equilibrium distribution, called **external_expected_eggs**. This value is only used for survival rate calculation:
 
 ```
 equilibrium_survival_rate = K / (external_expected_eggs × s_0_avg)

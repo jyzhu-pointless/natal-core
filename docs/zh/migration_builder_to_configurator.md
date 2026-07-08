@@ -68,7 +68,7 @@ pop.update().reproduction(eggs_per_female=100)
 ### 5. 参数变更
 
 - `female_age_based_survival_rates` → `female_age_based_survival`（所有 `_rates` 后缀已移除）
-- `species_scale`、`base_carrying_capacity`、`base_expected_num_adult_females` 已删除
+- `species_scale`、`base_carrying_capacity`、`base_expected_num_new_adult_females` 已删除
 - `carrying_capacity` 现在是直接的 0-d ndarray
 
 ### 6. `SpatialBuilder` → `SpatialConfigurator`

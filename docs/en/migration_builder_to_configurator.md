@@ -68,7 +68,7 @@ pop.update().reproduction(eggs_per_female=100)
 ### 5. Parameter Changes
 
 - `female_age_based_survival_rates` → `female_age_based_survival` (all `_rates` suffixes dropped)
-- `species_scale`, `base_carrying_capacity`, `base_expected_num_adult_females` removed
+- `species_scale`, `base_carrying_capacity`, `base_expected_num_new_adult_females` removed
 - `carrying_capacity` is now a direct 0-d ndarray
 
 ### 6. `SpatialBuilder` → `SpatialConfigurator`

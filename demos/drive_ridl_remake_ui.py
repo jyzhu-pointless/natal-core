@@ -18,7 +18,7 @@ sp_complete_drive = nt.Species.from_dict(
     name="Anopheles gambiae",
     structure={
         "chr": {
-            "loc": ["WT", "Dr", "R2", "R1"]
+            "loc": ["WT", "Dr"]
         }
     }
 )
@@ -43,10 +43,7 @@ def make_drive_ridl(
         name=f"Drive-RIDL_complete_dr_{d}_res_{r}_fit_{f}",
         drive_allele="Dr",
         target_allele="WT",
-        resistance_allele="R2",
-        functional_resistance_allele="R1",
         drive_conversion_rate=drive_conversion_rate,
-        late_germline_resistance_formation_rate=late_germline_resistance_formation_rate,
         fecundity_scaling={"female": per_allele_fitness},
         sexual_selection_scaling=per_allele_fitness,
         viability_scaling={"female": 0.0},  # fsRIDL
@@ -70,6 +67,9 @@ def stop_simulation():
 pop = (nt.AgeStructuredPopulation.setup(
         species=sp_complete_drive,
         name="Drive RIDL",
+    ).age_structure(
+        n_ages=8,
+        new_adult_age=2,
     ).initial_state(
         individual_count={
             "female": {
@@ -79,9 +79,6 @@ pop = (nt.AgeStructuredPopulation.setup(
                 "WT|WT": [0, 12000, 12000, 8000, 4000]
             }
         }
-    ).age_structure(
-        n_ages=8,
-        new_adult_age=2,
     ).survival(
         female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
         male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0],
@@ -90,7 +87,7 @@ pop = (nt.AgeStructuredPopulation.setup(
         juvenile_growth_mode="linear",
         low_density_growth_rate=6.0,
         age_1_carrying_capacity=24000,
-        expected_num_adult_females=54000,
+        expected_num_new_adult_females=54000,
     ).reproduction(
         eggs_per_female=50,
         sperm_displacement_rate=0.05,

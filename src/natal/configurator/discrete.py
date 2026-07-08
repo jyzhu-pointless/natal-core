@@ -67,8 +67,8 @@ class DiscreteConfigurator(Configurator):
 
         Note:
             When *carrying_capacity* (K) is set and the user has not
-            explicitly called ``expected_num_adult_females=``,
-            ``expected_num_adult_females`` is auto-computed as
+            explicitly called ``expected_num_new_adult_females=``,
+            ``expected_num_new_adult_females`` is auto-computed as
             ``K * sex_ratio`` for the discrete model.
         """
         self._has_domain_params = True
@@ -110,11 +110,11 @@ class DiscreteConfigurator(Configurator):
                 set_param(self._config, f"competition.{name}", value)
         if k_value is not None:
             self._sync_equilibrium()
-        # Auto-compute expected_num_adult_females = K × sex_ratio
-        if not getattr(self, "_has_user_expected_females", False):
+        # Auto-compute expected_num_new_adult_females = K × sex_ratio
+        if not getattr(self, "_has_user_expected_new_adult_females", False):
             k = float(self._config.carrying_capacity)
             sr = float(self._config.sex_ratio)
-            self._user_expected_adult_females = k * sr
+            self._user_expected_new_adult_females = k * sr
         return self
 
     def reproduction(

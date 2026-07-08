@@ -201,7 +201,7 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 All three kinds are uniformly expanded into Python lists via `expand(n_demes, topology)` at `build()` time.
 
-Parameters that accept `BatchSetting`: `carrying_capacity`, `age_1_carrying_capacity`, `eggs_per_female`, `sex_ratio`, `low_density_growth_rate`, `juvenile_growth_mode`, `expected_num_adult_females`.
+Parameters that accept `BatchSetting`: `carrying_capacity`, `age_1_carrying_capacity`, `eggs_per_female`, `sex_ratio`, `low_density_growth_rate`, `juvenile_growth_mode`, `expected_num_new_adult_females`.
 
 ## Performance Data
 

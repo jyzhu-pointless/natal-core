@@ -43,7 +43,7 @@ def _minimal_pop(sp, *, pop_name: str = "AgePop"):
         .competition(
             juvenile_growth_mode="concave",
             old_juvenile_carrying_capacity=500,
-            expected_num_adult_females=450,
+            expected_num_new_adult_females=450,
         )
         .build()
     )

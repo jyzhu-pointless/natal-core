@@ -201,7 +201,7 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 三种 kind 在 `build()` 时通过 `expand(n_demes, topology)` 统一展开为 Python 列表。
 
-接受 `BatchSetting` 的参数有：`carrying_capacity`、`age_1_carrying_capacity`、`eggs_per_female`、`sex_ratio`、`low_density_growth_rate`、`juvenile_growth_mode`、`expected_num_adult_females`。
+接受 `BatchSetting` 的参数有：`carrying_capacity`、`age_1_carrying_capacity`、`eggs_per_female`、`sex_ratio`、`low_density_growth_rate`、`juvenile_growth_mode`、`expected_num_new_adult_females`。
 
 ## 性能数据
 

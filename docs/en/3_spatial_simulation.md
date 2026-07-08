@@ -156,7 +156,7 @@ See the "Migration Paths" and "migration_rate and Boundary Effects" sections for
 | `competition` | `carrying_capacity` / `age_1_carrying_capacity` | float |
 | `competition` | `low_density_growth_rate` | float |
 | `competition` | `juvenile_growth_mode` | str |
-| `competition` | `expected_num_adult_females` | float |
+| `competition` | `expected_num_new_adult_females` | float |
 | `age_structure` | `equilibrium_distribution` | list[float] |
 | `presets` | positional arguments | preset object |
 | `fitness` | `viability` / `fecundity` / `sexual_selection` / `zygote_viability` | dict |

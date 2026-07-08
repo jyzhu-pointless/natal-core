@@ -65,7 +65,7 @@ pop_no = (
     .competition(
         juvenile_growth_mode="concave",
         old_juvenile_carrying_capacity=1200,
-        expected_num_adult_females=2100,
+        expected_num_new_adult_females=2100,
     )
     .presets(drive)
     .build()
@@ -113,7 +113,7 @@ pop_yes = (
     .competition(
         juvenile_growth_mode="concave",
         old_juvenile_carrying_capacity=1200,
-        expected_num_adult_females=2100,
+        expected_num_new_adult_females=2100,
     )
     .presets(drive)
     .build()

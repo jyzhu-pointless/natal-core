@@ -132,7 +132,7 @@ class AgeStructuredConfigurator(Configurator):
         low_density_growth_rate: float | None = None,
         juvenile_growth_mode: int | str | None = None,
         competition_strength: float | None = None,
-        expected_num_adult_females: float | None = None,
+        expected_num_new_adult_females: float | None = None,
         equilibrium_distribution: NDArray[np.float64] | None = None,
         age_1_carrying_capacity: float | None = None,
         old_juvenile_carrying_capacity: float | None = None,
@@ -144,7 +144,7 @@ class AgeStructuredConfigurator(Configurator):
             low_density_growth_rate: Per-capita growth at low density (r).
             juvenile_growth_mode: Regulation function (string or int).
             competition_strength: Larval competition weight.
-            expected_num_adult_females: Target adult females (Champer model).
+            expected_num_new_adult_females: Target adult females (Champer model).
             equilibrium_distribution: Custom (n_sexes, n_ages) array for
                 Champer equilibrium computation.
             age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
@@ -194,9 +194,9 @@ class AgeStructuredConfigurator(Configurator):
         ]:
             if value is not None:
                 set_param(self._config, f"competition.{name}", value)
-        if expected_num_adult_females is not None:
-            self._user_expected_adult_females = float(expected_num_adult_females)
-            self._has_user_expected_females = True
+        if expected_num_new_adult_females is not None:
+            self._user_expected_new_adult_females = float(expected_num_new_adult_females)
+            self._has_user_expected_new_adult_females = True
         if equilibrium_distribution is not None:
             self._equilibrium_distribution = equilibrium_distribution
         if k_value is not None:

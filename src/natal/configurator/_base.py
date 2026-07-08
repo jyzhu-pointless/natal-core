@@ -977,7 +977,7 @@ class Configurator:
         If a custom ``equilibrium_distribution`` was stored (via
         ``competition(equilibrium_distribution=...)``), it is used as the
         target age structure for the Champer model.  If the user explicitly
-        set ``expected_num_adult_females``, external egg counts are computed
+        set ``expected_num_new_adult_females``, external egg counts are computed
         from that value instead of the distribution.
 
         For ``DiscretePopulationConfig``, survival/mating/reproduction arrays
@@ -999,10 +999,10 @@ class Configurator:
             n_ages = int(config.n_ages)
             eq_dist = eq_dist.reshape(2, n_ages)
 
-        # Compute external_expected_eggs from expected_num_adult_females
+        # Compute external_expected_eggs from expected_num_new_adult_females
         # Only when the user explicitly set it (avoid default config value)
         external_eggs: float | None = None
-        if getattr(self, "_has_user_expected_females", False):
+        if getattr(self, "_has_user_expected_new_adult_females", False):
             if isinstance(config, DiscretePopulationConfig):
                 ext_surv: NDArray[np.float64] = np.array([
                     [config.female_age0_survival, 0.0],
@@ -1016,7 +1016,7 @@ class Configurator:
                 ext_repro = config.age_based_reproduction_rates
 
             external_eggs = compute_expected_eggs_from_females(
-                expected_num_adult_females=getattr(self, "_user_expected_adult_females", 500.0),
+                expected_num_new_adult_females=getattr(self, "_user_expected_new_adult_females", 500.0),
                 eggs_per_female=float(config.eggs_per_female),
                 age_based_survival_rates=ext_surv,
                 age_based_reproduction_rates=ext_repro,

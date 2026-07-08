@@ -130,7 +130,7 @@ class PopulationConfigBuilder:
         low_density_growth_rate: float,
         age_1_carrying_capacity: Optional[float],
         old_juvenile_carrying_capacity: Optional[float],
-        expected_num_adult_females: Optional[float],
+        expected_num_new_adult_females: Optional[float],
         equilibrium_individual_distribution: Optional[ArrayF64],
         # Modifiers
         gamete_modifiers: Optional[List[ModifierSpec]],
@@ -168,7 +168,7 @@ class PopulationConfigBuilder:
             low_density_growth_rate (float): Intrinsic growth rate.
             age_1_carrying_capacity (Optional[float]): Population carrying capacity at age=1.
             old_juvenile_carrying_capacity (Optional[float]): Alias for age_1_carrying_capacity (deprecated).
-            expected_num_adult_females (Optional[float]): Target adult female count.
+            expected_num_new_adult_females (Optional[float]): Target adult female count.
             equilibrium_individual_distribution (Optional[NDArray]): Expected distribution.
             gamete_modifiers (List[Tuple]): Custom gamete modifiers.
             zygote_modifiers (List[Tuple]): Custom zygote modifiers.
@@ -311,11 +311,11 @@ class PopulationConfigBuilder:
             )
 
         # ===== Compute expected egg production =====
-        # expected_num_adult_females independently determines expected eggs;
+        # expected_num_new_adult_females independently determines expected eggs;
         # otherwise fall back to the equilibrium distribution's adult females.
-        if expected_num_adult_females is not None:
+        if expected_num_new_adult_females is not None:
             external_eggs = compute_expected_eggs_from_females(
-                expected_num_adult_females=expected_num_adult_females,
+                expected_num_new_adult_females=expected_num_new_adult_females,
                 eggs_per_female=eggs_per_female,
                 age_based_survival_rates=age_based_survival_rates,
                 age_based_reproduction_rates=female_reproduction,

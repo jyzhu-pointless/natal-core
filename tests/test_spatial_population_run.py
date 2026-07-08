@@ -178,7 +178,7 @@ def _make_population_config(species: Species, name: str = "config_template") -> 
         )
         .competition(
             juvenile_growth_mode="logistic",
-            expected_num_adult_females=100,
+            expected_num_new_adult_females=100,
         )
         .build()
         .export_config()

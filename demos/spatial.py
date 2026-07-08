@@ -112,7 +112,7 @@ def main() -> None:
         )
         .competition(
             juvenile_growth_mode="logistic",
-            expected_num_adult_females=200,
+            expected_num_new_adult_females=200,
         )
         .migration(adjacency=adjacency, migration_rate=0.15)
         .build()
