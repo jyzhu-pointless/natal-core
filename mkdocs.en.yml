@@ -16,7 +16,7 @@ watch:
 theme:
   name: material
   language: en
-  logo: natal-doc.svg
+  logo: natal-brand.svg
   favicon: natal.svg
   features:
     - navigation.tabs
@@ -30,14 +30,14 @@ theme:
 
   palette:
     - scheme: default
-      primary: teal
-      accent: teal
+      primary: black
+      accent: grey
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
-      primary: teal
-      accent: teal
+      primary: black
+      accent: grey
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -151,4 +151,3 @@ nav:
     - utils: api/utils.md
 
 extra_css:
-  - stylesheets/extra.css
