@@ -27,7 +27,7 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 `HomingDrive` 实现 CRISPR/Cas9 类型的同源重组基因驱动：
 
 ```python
-from natal.genetic_presets import HomingDrive
+from natal.presets import HomingDrive
 
 # 创建基本的基因驱动
 drive = HomingDrive(
@@ -68,7 +68,7 @@ drive = HomingDrive(
 `ToxinAntidoteDrive` 用于建模"驱动等位基因触发目标位点破坏，破坏等位基因产生适应度损失，而驱动等位基因提供救援"的系统。
 
 ```python
-from natal.genetic_presets import ToxinAntidoteDrive
+from natal.presets import ToxinAntidoteDrive
 
 ta_drive = ToxinAntidoteDrive(
     name="TARE_Drive",
@@ -115,7 +115,7 @@ ta_drive_with_mating_cost = ToxinAntidoteDrive(
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive
+from natal.presets import HomingDrive
 
 # 创建基因驱动
 drive = HomingDrive(
@@ -144,7 +144,7 @@ pop.run(n_steps=100)
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive, ToxinAntidoteDrive
+from natal.presets import HomingDrive, ToxinAntidoteDrive
 
 # 创建多个预设
 drive1 = HomingDrive("Drive1", "Drive", "WT", conversion_rate=0.95)

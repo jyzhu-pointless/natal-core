@@ -9,7 +9,7 @@ Understanding these two objects helps in organizing initialization, execution, a
 
 ## Overview
 
-After the user constructs a population via the Builder or `setup(...).build()`, the framework internally follows this flow:
+After the user constructs a population via `setup(...).build()`, the framework internally follows this flow:
 
 ```text
 User input parameters

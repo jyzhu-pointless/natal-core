@@ -168,8 +168,8 @@ def _clone_deme(template, config, name):
     clone._name    = name
     clone._history = []
     clone._state   = State.create(...)                        # 新 state 数组
-    clone._state_nn.individual_count[:] = template._state_nn.individual_count
-    clone._state_nn.sperm_storage[:]    = template._state_nn.sperm_storage
+    clone.state.individual_count[:] = template.state.individual_count
+    clone.state.sperm_storage[:]    = template.state.sperm_storage
     clone._initial_population_snapshot  = (copy of template's snapshot)
 
     return clone
@@ -220,7 +220,7 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 `SpatialConfigurator` 不修改任何现有类：
 
-- `AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder` — 不变，SpatialConfigurator 通过组合方式包装
+- 旧的 Builder 类（`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`）已移除，SpatialConfigurator 是唯一的配置路径
 - `SpatialPopulation.__init__` — 不变，`build()` 最终调用它，传入已构建好的 deme 列表
 - 旧的逐 deme 构造写法仍然有效
 

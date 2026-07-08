@@ -11,7 +11,6 @@ This section provides module-level API references, organized by the package's 17
 ## Configurator
 
 - [Configurator](configurator.md)
-- [Population Builder (legacy)](population_builder.md)
 
 ## Genetics
 
@@ -20,11 +19,11 @@ This section provides module-level API references, organized by the package's 17
 
 ## Patterns
 
-- [Genotype Patterns](genetic_patterns.md)
+- [Patterns](patterns.md)
 
 ## Presets
 
-- [Genetic Presets](genetic_presets.md)
+- [Presets](presets.md)
 
 ## Data
 
@@ -38,7 +37,7 @@ This section provides module-level API references, organized by the package's 17
 
 ## Hooks
 
-- [Hook DSL](hook_dsl.md)
+- [hooks Module](hooks.md)
 
 ## Modifiers
 

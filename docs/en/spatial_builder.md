@@ -168,8 +168,8 @@ def _clone_deme(template, config, name):
     clone._name    = name
     clone._history = []
     clone._state   = State.create(...)                        # New state array
-    clone._state_nn.individual_count[:] = template._state_nn.individual_count
-    clone._state_nn.sperm_storage[:]    = template._state_nn.sperm_storage
+    clone.state.individual_count[:] = template.state.individual_count
+    clone.state.sperm_storage[:]    = template.state.sperm_storage
     clone._initial_population_snapshot  = (copy of template's snapshot)
 
     return clone

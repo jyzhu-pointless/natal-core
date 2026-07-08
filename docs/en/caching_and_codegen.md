@@ -27,7 +27,7 @@ def run_discrete_tick_with_hooks(
     late_hook: Callable,
 ):
     ...
-    result = first_hook(ind_count, tick)
+    result = first_hook(state, config)
 ```
 
 When Numba compiles this function, the type of the `first_hook` parameter is a specific `Dispatcher` instance. Numba creates a **specialization** for each distinct set of Dispatcher parameters. The specialization's cache key includes **type identification information** (including overload fingerprints and other instance-bound information) for that Dispatcher.
@@ -47,10 +47,10 @@ _LATE_HOOK = None
 @njit_switch(cache=True)
 def _lifecycle_tick_527c055(...):
     ...
-    result = _FIRST_HOOK(ind_count, tick)  # ← global variable, not a parameter
+    result = _FIRST_HOOK(state, config)  # ← global variable, not a parameter
 ```
 
-When Numba compiles `_lifecycle_tick_527c055`, `_FIRST_HOOK` is a module-level global variable. Numba's cache key depends only on the function's own source text and function name, and the **type signature** of the global variable (`(ind_count, tick) -> int`). It **does not depend** on the identity of the specific Dispatcher object that the global variable points to.
+When Numba compiles `_lifecycle_tick_527c055`, `_FIRST_HOOK` is a module-level global variable. Numba's cache key depends only on the function's own source text and function name, and the **type signature** of the global variable (`(state, config) -> int`). It **does not depend** on the identity of the specific Dispatcher object that the global variable points to.
 
 Therefore, as long as the generated function name and source code remain unchanged (guaranteed by the hash_key), the cache key remains stable across processes.
 
@@ -113,7 +113,7 @@ from natal.engine.simulator import (
 )
 from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import EVENT_FIRST, EVENT_EARLY, EVENT_LATE, ...
-from natal.population_state import DiscretePopulationState
+from natal.data import DiscretePopulationState
 
 _FIRST_HOOK = None
 _EARLY_HOOK = None

@@ -29,7 +29,7 @@ Preset 的价值就是把这些内容收敛成一个稳定配置单元。
 ## 示例：封装一个最小 DrivePreset
 
 ```python
-from natal.genetic_presets import GeneticPreset
+from natal.presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 
 
@@ -94,7 +94,7 @@ pop = (
 ## 复杂基因驱动示例
 
 ```python
-from natal.genetic_presets import GeneticPreset
+from natal.presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 

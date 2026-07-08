@@ -18,7 +18,7 @@ NATAL Core 提供两种主要的种群类型：
 
 ## 创建种群
 
-通过链式 API 创建种群。默认使用 `Configurator` 路径（即时写入参数），旧 `Builder` 类通过 `legacy_path=True` 访问。
+通过链式 API 创建种群。
 
 ```python
 import natal as nt
@@ -36,7 +36,7 @@ pop = (
 
 # 年龄结构化种群
 pop = (
-    nt.AgeStructuredPopulation.setup(sp, legacy_path=False)
+    nt.AgeStructuredPopulation.setup(sp)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state({
         "female": {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},

@@ -27,7 +27,7 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 `HomingDrive` implements CRISPR/Cas9-type homing-based gene drive:
 
 ```python
-from natal.genetic_presets import HomingDrive
+from natal.presets import HomingDrive
 
 # Create a basic gene drive
 drive = HomingDrive(
@@ -68,7 +68,7 @@ drive = HomingDrive(
 `ToxinAntidoteDrive` is used for modeling systems where "the drive allele triggers target site disruption, the disrupted allele causes fitness loss, and the drive allele provides rescue."
 
 ```python
-from natal.genetic_presets import ToxinAntidoteDrive
+from natal.presets import ToxinAntidoteDrive
 
 ta_drive = ToxinAntidoteDrive(
     name="TARE_Drive",
@@ -115,7 +115,7 @@ ta_drive_with_mating_cost = ToxinAntidoteDrive(
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive
+from natal.presets import HomingDrive
 
 # Create gene drive
 drive = HomingDrive(
@@ -144,7 +144,7 @@ pop.run(n_steps=100)
 
 ```python
 import natal as nt
-from natal.genetic_presets import HomingDrive, ToxinAntidoteDrive
+from natal.presets import HomingDrive, ToxinAntidoteDrive
 
 # Create multiple presets
 drive1 = HomingDrive("Drive1", "Drive", "WT", conversion_rate=0.95)

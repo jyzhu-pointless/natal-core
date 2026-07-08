@@ -37,7 +37,7 @@ pop = (
 
 # Age-structured
 pop = (
-    nt.AgeStructuredPopulation.setup(sp, legacy_path=False)
+    nt.AgeStructuredPopulation.setup(sp)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state({
         "female": {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},

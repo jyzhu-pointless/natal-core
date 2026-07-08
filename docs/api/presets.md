@@ -1,10 +1,10 @@
-# genetic_presets Module
+# presets Module
 
 Built-in genetic presets and preset application helpers.
 
 ## Overview
 
-The `genetic_presets` module provides reusable preset abstractions and concrete
+The `presets` subpackage provides reusable preset abstractions and concrete
 implementations (for example, gene drives) that can inject gamete modifiers,
 zygote modifiers, and fitness patches into populations.
 

@@ -137,12 +137,11 @@ nav:
     - age_structured_population: api/age_structured_population.md
     - discrete_generation_population: api/discrete_generation_population.md
     - configurator: api/configurator.md
-    - population_builder (legacy): api/population_builder.md
-    - genetic_patterns: api/genetic_patterns.md
-    - genetic_presets: api/genetic_presets.md
+    - patterns: api/patterns.md
+    - presets: api/presets.md
     - modifiers: api/modifiers.md
     - algorithms: api/algorithms.md
-    - hooks: api/hook_dsl.md
+    - hooks: api/hooks.md
     - simulation_engine: api/simulation_engine.md
     - spatial: api/spatial.md
     - fitness: api/fitness.md

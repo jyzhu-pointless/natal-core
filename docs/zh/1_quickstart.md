@@ -170,7 +170,7 @@ print(f"雄性总数: {pop.get_male_count():.0f}")
 
 ## 3️⃣ 第三步：使用遗传预设系统
 
-针对基因驱动、点突变等常见的遗传现象，NATAL 提供了**遗传预设（Genetic Presets）**系统。相比手动编写底层的映射修饰函数，预设系统更加简洁、可重用且易于维护。
+针对基因驱动、点突变等常见的遗传现象，NATAL 提供了**遗传预设（Presets）**系统。相比手动编写底层的映射修饰函数，预设系统更加简洁、可重用且易于维护。
 
 ### 使用基因驱动预设
 
@@ -197,7 +197,7 @@ pop = (nt.DiscreteGenerationPopulation
 
 ### 使用其他预设
 
-目前预设系统包括 [HomingDrive](api/genetic_presets.md#natal.genetic_presets.HomingDrive) 和 [ToxinAntidoteDrive](api/genetic_presets.md#natal.genetic_presets.ToxinAntidoteDrive) 两类，未来会持续扩展更多预设类型。
+目前预设系统包括 [HomingDrive](api/presets.md#natal.presets.HomingDrive) 和 [ToxinAntidoteDrive](api/presets.md#natal.presets.ToxinAntidoteDrive) 两类，未来会持续扩展更多预设类型。
 
 你也可以自定义预设，详见 [设计你自己的预设](3_custom_presets.md)。
 
@@ -368,7 +368,7 @@ launch(pop, port=8080, title="My Simulation")
 这个过程对用户透明，但理解它很重要。详见：
 - [Index registry](4_index_registry.md)
 - [PopulationState & PopulationConfig](4_population_state_config.md)
-- [Modifiers 系统](3_modifiers.md) 和 [遗传预设系统](2_genetic_presets.md)
+- [Modifiers 系统](3_modifiers.md) 和 [预设系统](2_genetic_presets.md)
 - [Hooks 系统](2_hooks.md)
 - [Numba 优化指南](4_numba_optimization.md)---
 
@@ -472,7 +472,7 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 
 现在你已经掌握了基础知识！接下来可以：
 
-1. **深入学习遗传预设系统**：[遗传预设系统](2_genetic_presets.md) - 学习如何创建自定义预设
+1. **深入学习预设系统**：[预设系统](2_genetic_presets.md) - 学习如何创建自定义预设
 2. **理解遗传架构**：[遗传结构与实体](2_genetics.md) - 深入了解Species、Chromosome等概念
 3. **掌握高级功能**：[Hook 系统](2_hooks.md) - 学习如何注入自定义模拟逻辑
 4. **需要自定义遗传规则**：[Modifier 机制](3_modifiers.md) - 手动编写gamete/zygote修饰器

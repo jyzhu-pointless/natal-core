@@ -600,7 +600,7 @@ hex_kernel = build_gaussian_kernel("hex", size=11, mean_dispersal=2.0)
 `sigma` 与 `mean_dispersal` 互斥。2D 各向同性高斯分布中，平均位移遵循 Rayleigh 分布：
 $\bar{d} = \sigma\sqrt{\pi/2}$。
 
-也可以手动构造 kernel（兼容旧代码）：
+也可以手动构造 kernel：
 
 ```python
 import numpy as np

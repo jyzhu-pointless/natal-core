@@ -111,7 +111,7 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 在开始设计复杂的转换规则之前，了解 `GeneticPreset` 的基础模板很重要：
 
 ```python
-from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
+from natal.presets import GeneticPreset, PresetFitnessPatch
 from natal.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
@@ -151,7 +151,7 @@ class MyCustomPreset(GeneticPreset):
 #### 简单点突变
 
 ```python
-from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
+from natal.presets import GeneticPreset, PresetFitnessPatch
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
@@ -383,7 +383,7 @@ Preset 的价值就是把这些内容收敛成一个稳定配置单元。
 ### 示例：封装一个最小 DrivePreset
 
 ```python
-from natal.genetic_presets import GeneticPreset
+from natal.presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 
 
@@ -448,7 +448,7 @@ pop = (
 ### 复杂基因驱动示例
 
 ```python
-from natal.genetic_presets import GeneticPreset
+from natal.presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 

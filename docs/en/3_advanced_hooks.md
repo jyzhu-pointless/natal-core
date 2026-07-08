@@ -171,7 +171,7 @@ signature:
 def hook_agg(state, config, ctx):
     ctx.drive, ctx.wt  # namedtuple attributes
 
-# "wt" ∈ {"wt"} → auto expand (backward compatible)
+# "wt" ∈ {"wt"} → auto expand
 @hook(event="early", selectors={"wt": "WT|WT"}, custom=True)
 def hook_exp(state, config, wt):
     ...  # wt is a plain int parameter
@@ -365,7 +365,7 @@ and writes are in-place and immediate:
 ```python
 import natal as nt
 from natal.population_config import DiscretePopulationConfig
-from natal.population_state import DiscretePopulationState
+from natal.data import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)
 def heatwave(state: DiscretePopulationState,

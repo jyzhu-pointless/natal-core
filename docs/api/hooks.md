@@ -1,10 +1,10 @@
-# Hook DSL
+# hooks Module
 
 Domain-Specific Language for simulation hooks.
 
 ## Overview
 
-The hook DSL provides the core components for the declarative hook system.
+The `hooks` subpackage provides the core components for the declarative hook system.
 
 ## Complete Module Reference
 

@@ -487,7 +487,7 @@ def release_drive_carriers():
 4. **高级配置**：`presets()`、`fitness()`、`modifiers()` 立即写入 config（非延迟）
 5. **最终构建**：`build()` 执行 equilibrium sync 并创建 `Population` 对象
 
-旧 `Builder` 类（`DiscreteGenerationPopulationBuilder` / `AgeStructuredPopulationBuilder`）仍可通过 `setup(legacy_path=True)` 使用。新代码推荐默认的 `Configurator` 路径。
+
 
 ## 小结
 

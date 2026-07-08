@@ -483,9 +483,6 @@ The chainable API is powered by a `Configurator` object. Each chain method write
 4. **Advanced config**: `presets()`, `fitness()`, `modifiers()` write immediately (not deferred)
 5. **Final build**: `build()` syncs equilibrium metrics and creates the Population object
 
-The legacy `Builder` classes (`DiscreteGenerationPopulationBuilder` /
-`AgeStructuredPopulationBuilder`) are still available via `setup(legacy_path=True)`.
-New code should use the default `Configurator` path.
 
 ## Summary
 

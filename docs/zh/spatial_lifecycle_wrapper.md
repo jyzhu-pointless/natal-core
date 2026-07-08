@@ -24,12 +24,12 @@
 # 重构前
 def _lifecycle_tick_<hash>(state, config, registry):
     ...
-    result = _FIRST_HOOK(ind_count, tick)
+    result = _FIRST_HOOK(state, config)
 
 # 重构后
 def _lifecycle_tick_<hash>(state, config, registry, deme_id=-1):
     ...
-    result = _FIRST_HOOK(ind_count, tick, deme_id)
+    result = _FIRST_HOOK(state, config, deme_id)
 ```
 
 对应的 tick body 中对 `_FIRST_HOOK`/`_EARLY_HOOK`/`_LATE_HOOK` 的调用和 `execute_csr_event_program_with_state` 的调用都传递了 `deme_id`。
@@ -88,7 +88,7 @@ import numpy as np
 from natal.engine.spatial_migrator import run_spatial_migration
 from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP
 from natal.numba_utils import njit_switch, prange
-from natal.population_state import PopulationState
+from natal.data import PopulationState
 from natal._hook_codegen_lifecycle_structured_<key> import _lifecycle_tick_<key> as _run_deme_tick
 ```
 
@@ -205,19 +205,19 @@ _spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry,
   │    │    │                                    ← 委托给 panmictic tick
   │    │    ├─ [FIRST 事件]                        （带 deme_id=d）
   │    │    │    execute_csr_event_program(registry, FIRST, ind, sperm, tick, d)
-  │    │    │    _FIRST_HOOK(ind, tick, d)
+  │    │    │    _FIRST_HOOK(state, config, d)
   │    │    │
   │    │    ├─ Reproduction（繁殖）
   │    │    │
   │    │    ├─ [EARLY 事件]
   │    │    │    execute_csr_event_program(registry, EARLY, ind, sperm, tick, d)
-  │    │    │    _EARLY_HOOK(ind, tick, d)
+  │    │    │    _EARLY_HOOK(state, config, d)
   │    │    │
   │    │    ├─ Survival / Competition（生存/竞争）
   │    │    │
   │    │    ├─ [LATE 事件]
   │    │    │    execute_csr_event_program(registry, LATE, ind, sperm, tick, d)
-  │    │    │    _LATE_HOOK(ind, tick, d)
+  │    │    │    _LATE_HOOK(state, config, d)
   │    │    │
   │    │    └─ Aging（老化）→ 返回 (ind, sperm, tick+1), result
   │    │

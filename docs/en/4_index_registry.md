@@ -220,7 +220,7 @@ The key insight: once the reachable set stabilises, the compression mask maps ol
 
 ### Declare Semantics
 
-The `declare` mechanism (`setup(compress=True, declared_zygote_types={"AA"})` or the deprecated `compress_genotypes(True).declare("AA")`) adds **seeds** to the BFS, not just final entries in the genotype list.
+The `declare` mechanism (`setup(compress=True, declared_zygote_types={"AA"})`) adds **seeds** to the BFS, not just final entries in the genotype list.
 
 Example: If the initial state only has `aa` individuals, and a hook releases `AA` individuals at tick 100:
 
@@ -248,7 +248,6 @@ Without the `declare`, `A` would never enter the reachable haplotype set, and `A
 - `declared_zygote_types` is set on `.setup(compress=True, declared_zygote_types=...)`.
 - The BFS is **symmetrical** — declaring a genotype also brings in all haplotypes it produces, which may combine to form additional genotypes not explicitly declared.
 - Declared genotypes are expanded to **all slab variants** for the BFS (internally, they are treated as reachable ZTypes across all slabs).
-- The deprecated `.compress_genotypes(True).declare("AA")` chain method still works but the preferred API is `.setup(compress=True, declared_zygote_types={"AA"})`.
 
 ## User Interface Notes
 

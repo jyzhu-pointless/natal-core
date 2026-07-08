@@ -27,7 +27,7 @@ def run_discrete_tick_with_hooks(
     late_hook: Callable,
 ):
     ...
-    result = first_hook(ind_count, tick)
+    result = first_hook(state, config)
 ```
 
 当 Numba 编译这个函数时，`first_hook` 参数的类型是具体某个 `Dispatcher` 实例。Numba 会为每组不同的 Dispatcher 参数创建一个**特化版本**（specialization）。特化版本的缓存键中包含该 Dispatcher 的**类型标识信息**（including overload fingerprints 等与实例绑定的信息）。
@@ -47,10 +47,10 @@ _LATE_HOOK = None
 @njit_switch(cache=True)
 def _lifecycle_tick_527c055(...):
     ...
-    result = _FIRST_HOOK(ind_count, tick)  # ← 全局变量，不是参数
+    result = _FIRST_HOOK(state, config)  # ← 全局变量，不是参数
 ```
 
-Numba 编译 `_lifecycle_tick_527c055` 时，`_FIRST_HOOK` 是模块级全局变量。Numba 的缓存键只依赖函数自身的源码文本和函数名，以及全局变量的**类型签名**（`(ind_count, tick) -> int`）。它**不依赖**该全局变量指向的具体 Dispatcher 对象的身份标识。
+Numba 编译 `_lifecycle_tick_527c055` 时，`_FIRST_HOOK` 是模块级全局变量。Numba 的缓存键只依赖函数自身的源码文本和函数名，以及全局变量的**类型签名**（`(state, config) -> int`）。它**不依赖**该全局变量指向的具体 Dispatcher 对象的身份标识。
 
 因此，只要生成的函数名和源码不变（由 hash_key 保证），缓存键跨进程稳定。
 
@@ -113,7 +113,7 @@ from natal.engine.simulator import (
 )
 from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import EVENT_FIRST, EVENT_EARLY, EVENT_LATE, ...
-from natal.population_state import DiscretePopulationState
+from natal.data import DiscretePopulationState
 
 _FIRST_HOOK = None
 _EARLY_HOOK = None

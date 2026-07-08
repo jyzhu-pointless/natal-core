@@ -266,7 +266,7 @@ def record_observation(self, obs: Optional[Observation]) -> None:
 
 `_build_deme_info()` parses the `"deme"` key in group specs, supporting three formats:
 - Missing / `"all"` → not in dict (default all demes)
-- `list[int | (row, col)]` → `("mask", flat_indices)` (backward compatible)
+- `list[int | (row, col)]` → `("mask", flat_indices)`
 - `{"demes": [...], "mode": "aggregate" | "expand" | "mask"}` → dict format with new semantics
 
 #### Python Dispatch Path

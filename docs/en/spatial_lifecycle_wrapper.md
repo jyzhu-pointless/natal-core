@@ -24,12 +24,12 @@ In `_gen_lifecycle_source`, add `deme_id=-1` to the tick function signature:
 # Before refactoring
 def _lifecycle_tick_<hash>(state, config, registry):
     ...
-    result = _FIRST_HOOK(ind_count, tick)
+    result = _FIRST_HOOK(state, config)
 
 # After refactoring
 def _lifecycle_tick_<hash>(state, config, registry, deme_id=-1):
     ...
-    result = _FIRST_HOOK(ind_count, tick, deme_id)
+    result = _FIRST_HOOK(state, config, deme_id)
 ```
 
 Corresponding calls to `_FIRST_HOOK`/`_EARLY_HOOK`/`_LATE_HOOK` and `execute_csr_event_program_with_state` in the tick body all pass `deme_id`.
@@ -88,7 +88,7 @@ import numpy as np
 from natal.engine.spatial_migrator import run_spatial_migration
 from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP
 from natal.numba_utils import njit_switch, prange
-from natal.population_state import PopulationState
+from natal.data import PopulationState
 from natal._hook_codegen_lifecycle_structured_<key> import _lifecycle_tick_<key> as _run_deme_tick
 ```
 
@@ -205,19 +205,19 @@ _spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry,
   │    │    │                                    ← Delegate to panmictic tick
   │    │    ├─ [FIRST event]                       (with deme_id=d)
   │    │    │    execute_csr_event_program(registry, FIRST, ind, sperm, tick, d)
-  │    │    │    _FIRST_HOOK(ind, tick, d)
+  │    │    │    _FIRST_HOOK(state, config, d)
   │    │    │
   │    │    ├─ Reproduction
   │    │    │
   │    │    ├─ [EARLY event]
   │    │    │    execute_csr_event_program(registry, EARLY, ind, sperm, tick, d)
-  │    │    │    _EARLY_HOOK(ind, tick, d)
+  │    │    │    _EARLY_HOOK(state, config, d)
   │    │    │
   │    │    ├─ Survival / Competition
   │    │    │
   │    │    ├─ [LATE event]
   │    │    │    execute_csr_event_program(registry, LATE, ind, sperm, tick, d)
-  │    │    │    _LATE_HOOK(ind, tick, d)
+  │    │    │    _LATE_HOOK(state, config, d)
   │    │    │
   │    │    └─ Aging → returns (ind, sperm, tick+1), result
   │    │

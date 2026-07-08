@@ -129,8 +129,8 @@ nav:
     - API 概览: api/index.md
     - 遗传结构: api/genetic_structures.md
     - 遗传实体: api/genetic_entities.md
-    - 遗传模式: api/genetic_patterns.md
-    - 遗传预设: api/genetic_presets.md
+    - 遗传模式: api/patterns.md
+    - 遗传预设: api/presets.md
     - 种群状态: api/population_state.md
     - 状态转换: api/state_translation.md
     - 种群配置: api/population_config.md
@@ -138,6 +138,5 @@ nav:
     - 离散代种群: api/discrete_generation_population.md
     - 年龄结构种群: api/age_structured_population.md
     - 配置器 (Configurator): api/configurator.md
-    - 种群构建器 (legacy): api/population_builder.md
     - 修饰器: api/modifiers.md
     - 算法: api/algorithms.md

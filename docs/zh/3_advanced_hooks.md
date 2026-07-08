@@ -168,7 +168,7 @@ def balance_population(state, config, sel):
 def hook_agg(state, config, ctx):
     ctx.drive, ctx.wt  # namedtuple 属性
 
-# 参数名 "wt" 匹配 selector key "wt" → 自动展开（向后兼容）
+# 参数名 "wt" 匹配 selector key "wt" → 自动展开
 @hook(event="early", custom=True, selectors={"wt": "WT|WT"})
 def hook_exp(state, config, wt):
     # wt 是单独的 int 参数
@@ -362,7 +362,7 @@ Hook 可以直接修改种群配置参数——`config` 作为参数传入，原
 ```python
 import natal as nt
 from natal.population_config import DiscretePopulationConfig
-from natal.population_state import DiscretePopulationState
+from natal.data import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)
 def heatwave(state: DiscretePopulationState,

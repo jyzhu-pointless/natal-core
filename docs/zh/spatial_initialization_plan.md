@@ -276,13 +276,13 @@ for i in range(n_demes):
 | batch 展开后 config 分组 key 不可哈希（含 NumPy 数组）| 用 `id(arr)` 或序列化摘要 |
 | 克隆 demes 时 `_compiled_hooks` 共享引用导致状态泄漏 | Copy-on-write：`set_hook`/`remove_hook` 时按需复制 |
 | `PopulationConfig` 是否支持 `_replace`？ | 目测是 NamedTuple，确认后可用 |
-| SpatialConfigurator 与现有 `DiscreteGenerationPopulationBuilder` 的关系 | SpatialConfigurator 内部持有 per-deme builder，复用其校验逻辑 |
+| SpatialConfigurator 与现有 `Configurator` 的关系 | SpatialConfigurator 内部持有 per-deme builder，复用其校验逻辑 |
 
 ---
 
 ## 接口设计原则
 
-1. **不破坏现有 API** — `DiscreteGenerationPopulation.builder()` 和现有`SpatialPopulation.__init__` 不动
+1. **不破坏现有 API** — 现有`SpatialPopulation.__init__` 不动
 2. **`batch_setting` 是可选增强** — 不加 demo 照样跑，加了语法更简洁
 3. **零拷贝优先** — 同构 config/hooks 共享引用，只复制差异行为
 4. **验证前置** — `build()` 时校验 batch_setting 长度/坐标与 n_demes 一致

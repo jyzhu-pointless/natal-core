@@ -111,7 +111,7 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 Before designing complex conversion rules, it is important to understand the basic template of `GeneticPreset`:
 
 ```python
-from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
+from natal.presets import GeneticPreset, PresetFitnessPatch
 from natal.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
@@ -151,7 +151,7 @@ Implementation notes:
 #### Simple Point Mutation
 
 ```python
-from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
+from natal.presets import GeneticPreset, PresetFitnessPatch
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
@@ -383,7 +383,7 @@ A practical Preset should include:
 ### Example: Encapsulating a Minimal DrivePreset
 
 ```python
-from natal.genetic_presets import GeneticPreset
+from natal.presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 
 
@@ -448,7 +448,7 @@ This significantly reduces the risk of "results cannot be reproduced."
 ### Complex Gene Drive Example
 
 ```python
-from natal.genetic_presets import GeneticPreset
+from natal.presets import GeneticPreset
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 from natal.zygote_allele_conversion import ZygoteConversionRuleSet
 

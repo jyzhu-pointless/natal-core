@@ -107,7 +107,7 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 在开始设计复杂的转换规则之前，了解 `GeneticPreset` 的基础模板很重要：
 
 ```python
-from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
+from natal.presets import GeneticPreset, PresetFitnessPatch
 from natal.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
@@ -147,7 +147,7 @@ class MyCustomPreset(GeneticPreset):
 ### 简单点突变
 
 ```python
-from natal.genetic_presets import GeneticPreset, PresetFitnessPatch
+from natal.presets import GeneticPreset, PresetFitnessPatch
 from natal.gamete_allele_conversion import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):

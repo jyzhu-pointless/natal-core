@@ -54,7 +54,7 @@ Slab 被具体的 Preset 使用，例如 **Wolbachia**（通过 `"wolbachia_infe
 
 ### 索引注册表结构
 
-旧版注册表存储扁平的基因型和单倍型列表。新版注册表使用扁平的（实体, 标签）配对列表：
+注册表使用扁平的（实体, 标签）配对列表：
 
 ```python
 class IndexRegistry:
@@ -73,19 +73,6 @@ class IndexRegistry:
     glab_labels: List[str] = []
 ```
 
-### 与旧版 API 的关系
-
-向后兼容的属性从 ZType/GType 空间重建出扁平列表：
-
-```python
-# 旧风格：唯一基因型（从 ZType 空间去重）
-registry.index_to_genotype  # [Genotype("A|A"), Genotype("A|a"), ...]
-registry.haplo_to_index     # {HaploidGenotype("A"): 0, HaploidGenotype("a"): 1, ...}
-
-# 新风格：包含标签维度
-registry.index_to_ztype     # [(Genotype("A|A"), "default"), (Genotype("A|A"), "infected"), ...]
-registry.index_to_gtype     # [(HaploidGenotype("A"), "default"), (HaploidGenotype("A"), "cas9_deposited"), ...]
-```
 
 计算出的 `N_ztype` 是 `_index_to_ztype` 的长度——这是引擎 `individual_count` 数组最后一个轴（ZType 维度）所消耗的值。
 

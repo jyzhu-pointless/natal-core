@@ -4,8 +4,7 @@ Parameter configuration — build and runtime modification of population models.
 
 ## Overview
 
-`Configurator` is the unified API for setting and modifying simulation parameters.
-It replaces the legacy `PopulationBuilder` classes with a single class that works
+`Configurator` is the unified API for setting and modifying simulation parameters
 identically at build time and runtime.
 
 Key features:
@@ -276,14 +275,4 @@ Configurator                  # base: setup, build, apply, presets, fitness, hoo
 └── AgeStructuredConfigurator # + competition(Champer), reproduction(per-age), survival(per-age)
 ```
 
-## Backward Compatibility
 
-The legacy `PopulationBuilder` classes remain accessible via `legacy_path=True`:
-
-```python
-pop = nt.DiscreteGenerationPopulation.setup(sp, legacy_path=True)
-    .initial_state(...).build()
-```
-
-`Configurator` fully covers the Builder's functionality — `legacy_path` defaults to
-`False`, so new code does not need to specify it.

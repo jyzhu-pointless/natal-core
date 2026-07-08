@@ -72,7 +72,7 @@ Hook 签名统一为 ``(state, config) → int``。``config`` 可原地修改，
 
 ```python
 from natal.population_config import DiscretePopulationConfig
-from natal.population_state import DiscretePopulationState
+from natal.data import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)
 def environment_change(

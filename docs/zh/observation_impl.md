@@ -266,7 +266,7 @@ def record_observation(self, obs: Optional[Observation]) -> None:
 
 `_build_deme_info()` 解析 group spec 中的 `"deme"` 键，支持三种格式：
 - 缺失 / `"all"` → 不在 dict 中（默认全 deme）
-- `list[int | (row, col)]` → `("mask", flat_indices)`（向后兼容）
+- `list[int | (row, col)]` → `("mask", flat_indices)`
 - `{"demes": [...], "mode": "aggregate" | "expand" | "mask"}` → dict 格式新语义
 
 #### Python Dispatch 路径
