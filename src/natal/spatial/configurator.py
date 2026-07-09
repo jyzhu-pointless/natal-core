@@ -473,6 +473,10 @@ class SpatialConfigurator:
         self._param_values: dict[str, object] = {}
         self._spatial_name: str = "SpatialPopulation"
 
+        # Compression settings (set via setup()).
+        self._compress: bool = False
+        self._declared_zygote_types: Optional[set[str] | set[int]] = None
+
     # ------------------------------------------------------------------
     # Internal: batch detection and delegation
     # ------------------------------------------------------------------
@@ -575,6 +579,9 @@ class SpatialConfigurator:
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
+        compress: bool = False,
+        declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
+        declared_genotypes: Sequence[str] | Sequence[int] | None = None,
     ) -> SpatialConfigurator:
         """Configure basic population settings.
 
@@ -583,6 +590,13 @@ class SpatialConfigurator:
             stochastic: Whether to use stochastic sampling.
             continuous_sampling: If True, use Dirichlet sampling.
             fixed_egg_count: If True, egg count is fixed.
+            compress: If True, enable index compression at build time.
+                In heterogeneous (batch-setting) builds, compression seeds
+                include the union of initial genotypes across all demes
+                to keep registries compatible for migration.
+            declared_zygote_types: Genotypes to protect from compression
+                pruning (merged with auto-extracted hook references).
+            declared_genotypes: Deprecated alias for declared_zygote_types.
 
         Returns:
             Self for chaining.
@@ -593,12 +607,28 @@ class SpatialConfigurator:
             "stochastic": stochastic,
             "continuous_sampling": continuous_sampling,
             "fixed_egg_count": fixed_egg_count,
+            "compress": compress,
+            "declared_zygote_types": declared_zygote_types,
         }))
+        if declared_genotypes is not None:
+            import warnings
+            warnings.warn(
+                "declared_genotypes is deprecated. Use declared_zygote_types instead.",
+                FutureWarning, stacklevel=2,
+            )
+            if declared_zygote_types is not None:
+                raise ValueError(
+                    "Cannot specify both declared_zygote_types and "
+                    "declared_genotypes (deprecated alias)."
+                )
+            declared_zygote_types = declared_genotypes
         self._template.setup(
             name=name,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             fixed_egg_count=fixed_egg_count,
+            compress=compress,
+            declared_zygote_types=declared_zygote_types,
         )
         return self
 
@@ -1154,6 +1184,31 @@ class SpatialConfigurator:
         for param_name, batch in self._batch_settings.items():
             expanded[param_name] = batch.expand(self._n_demes, self._topology)
 
+        # 1a. If compression is enabled, compute the union of initial genotypes
+        #     across ALL demes.  Without this, different demes could end up
+        #     with incompatible compressed registries (pruning genotypes that
+        #     exist in other demes but not in the current group's initial state).
+        #     The union seeds ensure all groups produce the same compressed
+        #     registry, making cross-deme migration safe.
+        extra_declared_ztypes: set[str] | None = None
+        if self._compress and "individual_count" in expanded:
+            union_genotypes: set[str] = set()
+            for ic_dict in expanded["individual_count"]:
+                if isinstance(ic_dict, dict):
+                    for sex_map_val in cast("dict[str, dict[str, float | int]]", ic_dict).values():
+                        for gt_key in sex_map_val:
+                                union_genotypes.add(gt_key)
+            if union_genotypes:
+                extra_declared_ztypes = union_genotypes
+            else:
+                extra_declared_ztypes = set()
+            # Merge with user-declared zygote types (from setup()).
+            user_declared = self._declared_zygote_types
+            if user_declared is not None:
+                for item in user_declared:
+                    if isinstance(item, str):
+                        extra_declared_ztypes.add(item)
+
         # 2. Hash each deme's batch-param values into a signature.
         #    ndarray values → bytes; dict values → sorted kv tuples.
         #    Two demes with identical signatures share a config.
@@ -1188,7 +1243,9 @@ class SpatialConfigurator:
 
             if base_config is None:
                 # First group: full builder replay (no base_config to _replace from).
-                group_template = self._build_template_for_group(sig_map)
+                group_template = self._build_template_for_group(
+                    sig_map, extra_declared_ztypes=extra_declared_ztypes
+                )
                 base_config = group_template.export_config()
                 base_template = group_template
             elif self._can_use_replace(sig_map, base_config):
@@ -1226,7 +1283,9 @@ class SpatialConfigurator:
                 # Fallback: parameter not recognised by _can_use_replace
                 # (e.g. fitness dict, custom modifier). Full builder replay —
                 # all arrays freshly allocated, no sharing with base_config.
-                group_template = self._build_template_for_group(sig_map)
+                group_template = self._build_template_for_group(
+                    sig_map, extra_declared_ztypes=extra_declared_ztypes
+                )
 
             demes[first_idx] = group_template
 
@@ -1424,7 +1483,12 @@ class SpatialConfigurator:
 
         return variant
 
-    def _build_template_for_group(self, sig_map: Dict[str, object]) -> PopulationInstance:
+    def _build_template_for_group(
+        self,
+        sig_map: Dict[str, object],
+        *,
+        extra_declared_ztypes: set[str] | None = None,
+    ) -> PopulationInstance:
         """Build a single template deme for one config-signature group.
 
         Creates a fresh panmictic builder and replays every method call
@@ -1443,6 +1507,9 @@ class SpatialConfigurator:
         Args:
             sig_map: Mapping from batch parameter name to the group's
                 concrete value.
+            extra_declared_ztypes: Additional genotype strings to protect
+                from compression pruning, typically the union of initial
+                genotypes across all demes.
 
         Returns:
             A fully-built population instance for this group.
@@ -1463,13 +1530,28 @@ class SpatialConfigurator:
                 if key in sig_map:
                     resolved[key] = sig_map[key]
                 elif isinstance(value, BatchSetting):
-                    # This shouldn't happen if sig_map covers all batch names,
-                    # but fall back to first value just in case.
                     first = value.first_value()
                     if first is not None:
                         resolved[key] = first
                 else:
                     resolved[key] = value
+
+            # Merge extra declared zygote types into the setup call.
+            if (
+                extra_declared_ztypes
+                and method_name == "setup"
+                and "declared_zygote_types" in resolved
+            ):
+                existing_decl = resolved["declared_zygote_types"]
+                if existing_decl is not None and isinstance(existing_decl, Sequence):
+                    combined_decl: set[object] = set(
+                        cast("Sequence[str] | Sequence[int]", existing_decl)
+                    ) | extra_declared_ztypes  # type: ignore[arg-type]
+                    resolved["declared_zygote_types"] = combined_decl
+                else:
+                    resolved["declared_zygote_types"] = extra_declared_ztypes
+            elif extra_declared_ztypes and method_name == "setup":
+                resolved["declared_zygote_types"] = extra_declared_ztypes
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":

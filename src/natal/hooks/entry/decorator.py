@@ -18,7 +18,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol, cast
 
 from natal.hooks.entry.declarative import compile_declarative_hook
-from natal.hooks.entry.selector import compile_selector_hook
+from natal.hooks.entry.selector import SelectorSpec, compile_selector_hook
 from natal.numba.utils import njit_switch
 
 from ..types import (
@@ -54,7 +54,7 @@ class DecoratedHookFn(Protocol):
     meta: Dict[str, Any]
     compiled: Optional[Any]
     event: Any
-    selectors: Dict[str, Any]
+    selectors: Dict[str, SelectorSpec]
     priority: int
     custom: bool
     deme_selector: Any
@@ -183,7 +183,7 @@ def _is_declarative_population_hook(func: HookCallable) -> bool:
 
 def hook(
     event: Optional[str] = None,
-    selectors: Optional[Dict[str, Any]] = None,
+    selectors: Optional[Dict[str, SelectorSpec]] = None,
     priority: int = 0,
     custom: bool = False,
     deme: DemeSelector = "*",
