@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from natal.data import (
     DiscretePopulationConfig,
@@ -118,6 +119,9 @@ class ConfigContext:
         self.compress = compress
         self.compression_applied: bool = False
         self.declared_zygote_types: set[str] | set[int] | None = None
+        # Compression masks (exposed for spatial post-processing).
+        self.ztype_mask: NDArray[np.int32] | None = None
+        self.gtype_mask: NDArray[np.int32] | None = None
         self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
         self.presets: list[GeneticPreset] = []  # for cytoplasmic preset post-processing
@@ -306,6 +310,8 @@ def rebuild_config_maps(ctx: ConfigContext) -> None:
         )
         gtype_mask = _gt_mask
         ztype_mask = _zt_mask
+        ctx.gtype_mask = gtype_mask
+        ctx.ztype_mask = ztype_mask
 
         # Guard: if no genotypes or gametes are reachable, skip compression
         # entirely (initial state is empty and no declared_genotypes given).

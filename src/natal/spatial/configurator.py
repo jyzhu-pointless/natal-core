@@ -473,6 +473,35 @@ class SpatialConfigurator:
         self._param_values: dict[str, object] = {}
         self._spatial_name: str = "SpatialPopulation"
 
+        # Compression (set via setup()).
+        self._compress: bool = False
+        self._declared_zygote_types: set[str] | set[int] | None = None
+
+    def _compress_once(
+        self, expanded: Dict[str, List[Any]]
+    ) -> set[str]:
+        """Compute the union of initial genotypes across ALL demes.
+
+        These become ``declared_zygote_types`` for every group's compression
+        pass.  Because all groups share the same species and the same declared
+        seeds, each group's BFS produces the same reachable set → the same
+        compressed registry → compatible for cross-deme migration.
+        """
+        union: set[str] = set()
+        if "individual_count" in expanded:
+            for ic_entry in expanded["individual_count"]:
+                if isinstance(ic_entry, dict):
+                    for sex_map in cast(
+                        "dict[str, dict[str, float | int]]", ic_entry
+                    ).values():
+                        union.update(sex_map.keys())
+        user_decl = self._declared_zygote_types
+        if user_decl is not None:
+            for item in user_decl:
+                if isinstance(item, str):
+                    union.add(item)
+        return union
+
     # ------------------------------------------------------------------
     # Internal: batch detection and delegation
     # ------------------------------------------------------------------
@@ -575,6 +604,8 @@ class SpatialConfigurator:
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
+        compress: bool = False,
+        declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
     ) -> SpatialConfigurator:
         """Configure basic population settings.
 
@@ -583,23 +614,43 @@ class SpatialConfigurator:
             stochastic: Whether to use stochastic sampling.
             continuous_sampling: If True, use Dirichlet sampling.
             fixed_egg_count: If True, egg count is fixed.
+            compress: If True, enable index compression at build time.
+                Compression is applied once at the spatial level (not
+                per-group), producing a unified registry shared by all
+                demes — safe for cross-deme migration.
+            declared_zygote_types: Optional sequence of genotype
+                selectors to protect from compression pruning.
+                Hook genotype references are auto-collected; use this
+                only for genotypes introduced by custom njit hooks.
 
         Returns:
             Self for chaining.
         """
         self._spatial_name = name
-        self._replay_log.append(("setup", {
+        replay_kwargs: dict[str, object] = {
             "name": name,
             "stochastic": stochastic,
             "continuous_sampling": continuous_sampling,
             "fixed_egg_count": fixed_egg_count,
-        }))
-        self._template.setup(
-            name=name,
-            stochastic=stochastic,
-            continuous_sampling=continuous_sampling,
-            fixed_egg_count=fixed_egg_count,
-        )
+            "compress": compress,
+            "declared_zygote_types": declared_zygote_types,
+        }
+        self._replay_log.append(("setup", replay_kwargs))
+        template_kwargs: dict[str, object] = {
+            "name": name,
+            "stochastic": stochastic,
+            "continuous_sampling": continuous_sampling,
+            "fixed_egg_count": fixed_egg_count,
+            "compress": compress if not self._batch_settings else False,
+            "declared_zygote_types": declared_zygote_types,
+        }
+        self._template.setup(**template_kwargs)  # type: ignore[arg-type]
+        if compress:
+            self._compress = True
+        if declared_zygote_types is not None:
+            self._declared_zygote_types = cast(
+                "set[str] | set[int]", set(declared_zygote_types)
+            )
         return self
 
     def age_structure(
@@ -1154,6 +1205,14 @@ class SpatialConfigurator:
         for param_name, batch in self._batch_settings.items():
             expanded[param_name] = batch.expand(self._n_demes, self._topology)
 
+        # 1a. If compression is enabled, compute union seeds from ALL demes.
+        #     These seeds are passed to every group's build so that BFS
+        #     reachability is identical across groups — producing the same
+        #     compressed registry, safe for migration.
+        union_declared: set[str] | None = None
+        if self._compress:
+            union_declared = self._compress_once(expanded)
+
         # 2. Hash each deme's batch-param values into a signature.
         #    ndarray values → bytes; dict values → sorted kv tuples.
         #    Two demes with identical signatures share a config.
@@ -1187,8 +1246,9 @@ class SpatialConfigurator:
             }
 
             if base_config is None:
-                # First group: full builder replay (no base_config to _replace from).
-                group_template = self._build_template_for_group(sig_map)
+                group_template = self._build_template_for_group(
+                    sig_map, extra_declared=union_declared,
+                )
                 base_config = group_template.export_config()
                 base_template = group_template
             elif self._can_use_replace(sig_map, base_config):
@@ -1226,7 +1286,9 @@ class SpatialConfigurator:
                 # Fallback: parameter not recognised by _can_use_replace
                 # (e.g. fitness dict, custom modifier). Full builder replay —
                 # all arrays freshly allocated, no sharing with base_config.
-                group_template = self._build_template_for_group(sig_map)
+                group_template = self._build_template_for_group(
+                    sig_map, extra_declared=union_declared,
+                )
 
             demes[first_idx] = group_template
 
@@ -1424,28 +1486,21 @@ class SpatialConfigurator:
 
         return variant
 
-    def _build_template_for_group(self, sig_map: Dict[str, object]) -> PopulationInstance:
+    def _build_template_for_group(
+        self, sig_map: Dict[str, object],
+        *, extra_declared: set[str] | None = None,
+    ) -> PopulationInstance:
         """Build a single template deme for one config-signature group.
 
         Creates a fresh panmictic builder and replays every method call
         recorded in ``_replay_log``, substituting ``BatchSetting`` values
         with the group-specific concrete values from *sig_map*.
 
-        This is the **full-rebuild fallback** — used when the group's
-        differing parameters can't be applied via ``_replace`` (e.g. fitness
-        dicts, or anything ``_can_use_replace`` doesn't recognise).
-        All arrays (genotype maps, fitness, survival, etc.) are freshly
-        allocated.
-
-        For scalar-only differences, prefer ``_build_variant_config`` which
-        shares heavy arrays via ``_replace``.
-
         Args:
             sig_map: Mapping from batch parameter name to the group's
                 concrete value.
-
-        Returns:
-            A fully-built population instance for this group.
+            extra_declared: Additional genotype strings to protect from
+                compression pruning (union seeds across all demes).
         """
         if self._pop_type == "age_structured":
             template_cfg = Configurator.for_age_structured(self._species)
@@ -1457,19 +1512,27 @@ class SpatialConfigurator:
             if method is None:
                 continue
 
-            # Substitute batch-setting values for this group.
             resolved: Dict[str, object] = {}
             for key, value in kwargs.items():
                 if key in sig_map:
                     resolved[key] = sig_map[key]
                 elif isinstance(value, BatchSetting):
-                    # This shouldn't happen if sig_map covers all batch names,
-                    # but fall back to first value just in case.
                     first = value.first_value()
                     if first is not None:
                         resolved[key] = first
                 else:
                     resolved[key] = value
+
+            # Merge union seeds into the setup call's declared_zygote_types.
+            if extra_declared and method_name == "setup":
+                existing = resolved.get("declared_zygote_types")
+                if existing is not None and isinstance(existing, Sequence):
+                    merged: set[str] = set(
+                        cast("Sequence[str] | Sequence[int]", existing)
+                    ) | extra_declared  # type: ignore[arg-type]
+                    resolved["declared_zygote_types"] = merged
+                else:
+                    resolved["declared_zygote_types"] = extra_declared
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":
