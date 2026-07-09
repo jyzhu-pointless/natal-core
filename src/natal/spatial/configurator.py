@@ -43,9 +43,11 @@ from natal.configurator import (
 )
 from natal.data import DiscretePopulationConfig, PopulationConfig
 from natal.genetics import Species
+from natal.genetics.structures._helpers import build_compression_mask
 from natal.output.observation import GroupsInput
 from natal.population.age_structured import AgeStructuredPopulation
 from natal.population.discrete_generation import DiscreteGenerationPopulation
+from natal.registry.index import IndexRegistry
 from natal.spatial.population import SpatialPopulation
 from natal.spatial.topology import GridTopology
 
@@ -480,16 +482,15 @@ class SpatialConfigurator:
     def _compress_once(
         self, expanded: Dict[str, List[Any]]
     ) -> set[str]:
-        """Compute the union of initial genotypes across ALL demes.
+        """Compute the union of genotypes reachable anywhere in the system.
 
-        These become ``declared_zygote_types`` for every group's compression
-        pass.  Because all groups share the same species and the same declared
-        seeds, each group's BFS produces the same reachable set → the same
-        compressed registry → compatible for cross-deme migration.
+        Combines modifier maps from all config groups, runs a single BFS
+        on the merged adjacency matrix, and returns genotype strings that
+        must be protected from compression pruning across ALL groups.
         """
         union: set[str] = set()
 
-        # Collect genotypes from ALL demes' initial states.
+        # Genotypes from ALL demes' initial states.
         if "individual_count" in expanded:
             for ic_entry in expanded["individual_count"]:
                 if isinstance(ic_entry, dict):
@@ -498,7 +499,7 @@ class SpatialConfigurator:
                     ).values():
                         union.update(sex_map.keys())
 
-        # Collect genotype refs from hooks in the replay log.
+        # Genotype refs from hooks.
         from natal.configurator._base import collect_hook_genotype_refs
         for method_name, kwargs in self._replay_log:
             if method_name == "hooks":
@@ -513,7 +514,189 @@ class SpatialConfigurator:
             for item in user_decl:
                 if isinstance(item, str):
                     union.add(item)
+
+        # Build first group without compress → full config + registry
+        # (needed for BFS seed initial_individual_count).
+        batch_param_names = sorted(expanded.keys())
+        first_sig: Dict[str, Any] = {
+            name: expanded[name][0] for name in batch_param_names
+        }
+        full_template = self._build_template_for_group(
+            first_sig, compress=False,
+        )
+        full_config = full_template.export_config()
+        full_registry = full_template.index_registry
+
+        # Combined modifier maps from ALL unique groups.
+        combined_z2g, combined_g2z = self._build_combined_modifier_maps(
+            expanded, full_config,
+        )
+
+        # BFS on combined maps with union seeds as declared_genotypes.
+        _, _, ztype_mask, _ = build_compression_mask(
+            combined_z2g,
+            combined_g2z,
+            full_config.initial_individual_count,
+            declared_genotypes=self._resolve_declared_to_ints(
+                union, full_registry, full_config.n_slabs,
+            ),
+            n_glabs=int(full_config.n_glabs),
+            n_slabs=1,
+        )
+
+        # Convert surviving genotypes back to strings, add to union.
+        dips = full_registry.index_to_genotype
+        for old_idx in range(len(ztype_mask)):
+            if ztype_mask[old_idx] >= 0 and old_idx < len(dips):
+                union.add(str(dips[old_idx]))
+
         return union
+
+    @staticmethod
+    def _resolve_declared_to_ints(
+        declared: set[str],
+        registry: IndexRegistry,
+        n_slabs: np.integer | int,
+    ) -> set[int] | None:
+        """Convert declared genotype strings to slab-expanded ZType indices."""
+        if not declared:
+            return None
+        result: set[int] = set()
+        dips = registry.index_to_genotype
+        n_slabs_int = int(n_slabs)
+        for dg in declared:
+            for gt in dips:
+                if str(gt) == dg:
+                    for s in range(n_slabs_int):
+                        result.add(
+                            registry.ztype_index(gt, registry.slab_labels[s])
+                        )
+        return result
+
+    def _build_combined_modifier_maps(
+        self,
+        expanded: Dict[str, List[Any]],
+        full_config: PopulationConfig | DiscretePopulationConfig,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Sum modifier-applied gamete/zygote maps across all config groups.
+
+        Each group's modifiers are applied independently to the Mendelian
+        baseline, and the resulting probability tensors are summed.  The
+        combined map's non-zero entries represent all gamete/zygote
+        productions possible anywhere in the spatial system — this is the
+        adjacency matrix for the unified BFS.
+        """
+        batch_param_names = sorted(expanded.keys())
+        n_demes = len(expanded[batch_param_names[0]])
+
+        # Collect unique group signatures.
+        seen: set[tuple[tuple[str, Any], ...]] = set()
+        sigs: list[Dict[str, Any]] = []
+        for i in range(n_demes):
+            sig_key = tuple(
+                (name, _make_hashable(expanded[name][i]))
+                for name in batch_param_names
+            )
+            if sig_key not in seen:
+                seen.add(sig_key)
+                sigs.append({
+                    name: expanded[name][i] for name in batch_param_names
+                })
+
+        # Mendelian baseline from species cache.
+        bp = self._species.get_config_blueprint()
+        baseline_z2g = bp["zygotes_to_gametes_map"]
+        baseline_g2z = bp["gametes_to_zygotes_map"]
+
+        combined_z2g: NDArray[np.float64] = np.zeros_like(baseline_z2g)
+        combined_g2z: NDArray[np.float64] = np.zeros_like(baseline_g2z)
+
+        from natal.configurator._registry_builder import build_registry
+        from natal.modifiers.module import build_modifier_wrappers
+
+        registry = build_registry(self._species)
+        haps = registry.index_to_haplo
+        dips = registry.index_to_genotype
+
+        for sig in sigs:
+            # Replay presets/modifiers to get modifier lists for this group.
+            gamete_mods: list[tuple[int, str | None, Any]] = []
+            zygote_mods: list[tuple[int, str | None, Any]] = []
+
+            # Do a lightweight replay — only need modifiers.
+            cfg = Configurator.for_age_structured(self._species)
+            for method_name, kwargs in self._replay_log:
+                if method_name in ("hooks", "initial_state", "setup",
+                                   "reproduction", "competition",
+                                   "age_structure", "survival", "fitness",
+                                   "custom", "with_observation", "migration"):
+                    continue  # irrelevant for modifier collection
+
+                # Substitute batch values.
+                resolved: Dict[str, Any] = {}
+                for key, value in kwargs.items():
+                    if key in sig:
+                        resolved[key] = sig[key]
+                    elif isinstance(value, BatchSetting):
+                        first = value.first_value()
+                        if first is not None:
+                            resolved[key] = first
+                    else:
+                        resolved[key] = value
+
+                # Apply to temporary configurator.
+                method = getattr(cfg, method_name, None)
+                if method is None:
+                    continue
+
+                if method_name == "presets":
+                    raw_list = cast(Any, resolved.pop("preset_list", ()))
+                    expanded_presets: list[object] = []
+                    for i_p, item in enumerate(raw_list):
+                        key = f"_preset_{i_p}"
+                        val = sig.get(key)
+                        if val is not None:
+                            expanded_presets.append(val)
+                        elif isinstance(item, BatchSetting):
+                            first = item.first_value()
+                            if first is not None:
+                                expanded_presets.append(first)
+                        else:
+                            expanded_presets.append(item)
+                    filtered = {k: v for k, v in resolved.items() if v is not None}
+                    method(*expanded_presets, **filtered)
+                elif method_name == "modifiers":
+                    filtered = {k: v for k, v in resolved.items() if v is not None}
+                    method(**filtered)
+                else:
+                    filtered = {k: v for k, v in resolved.items() if v is not None}
+                    method(**filtered)
+
+            gamete_mods = cfg.gamete_modifiers
+            zygote_mods = cfg.zygote_modifiers
+
+            # Build wrappers and apply to baseline copies.
+            z2g_copy = baseline_z2g.copy()
+            g2z_copy = baseline_g2z.copy()
+
+            g_funcs, z_funcs = build_modifier_wrappers(
+                gamete_modifiers=gamete_mods,
+                zygote_modifiers=zygote_mods,
+                population=None,
+                index_registry=registry,
+                haploid_genotypes=haps,
+                diploid_genotypes=dips,
+                n_glabs=int(full_config.n_glabs),
+            )
+            for fn in g_funcs:
+                z2g_copy = fn(z2g_copy)
+            for fn in z_funcs:
+                g2z_copy = fn(g2z_copy)
+
+            combined_z2g += z2g_copy
+            combined_g2z += g2z_copy
+
+        return combined_z2g, combined_g2z
 
     # ------------------------------------------------------------------
     # Internal: batch detection and delegation
@@ -1218,10 +1401,7 @@ class SpatialConfigurator:
         for param_name, batch in self._batch_settings.items():
             expanded[param_name] = batch.expand(self._n_demes, self._topology)
 
-        # 1a. If compression is enabled, compute union seeds from ALL demes.
-        #     These seeds are passed to every group's build so that BFS
-        #     reachability is identical across groups — producing the same
-        #     compressed registry, safe for migration.
+        # 1a. If compression is enabled, compute union declared genotypes.
         union_declared: set[str] | None = None
         if self._compress:
             union_declared = self._compress_once(expanded)
@@ -1502,6 +1682,7 @@ class SpatialConfigurator:
     def _build_template_for_group(
         self, sig_map: Dict[str, object],
         *, extra_declared: set[str] | None = None,
+        compress: bool | None = None,
     ) -> PopulationInstance:
         """Build a single template deme for one config-signature group.
 
@@ -1546,6 +1727,11 @@ class SpatialConfigurator:
                     resolved["declared_zygote_types"] = merged
                 else:
                     resolved["declared_zygote_types"] = extra_declared
+
+            # Override compress flag (used by _compress_once to build
+            # without compression).
+            if compress is not None and method_name == "setup":
+                resolved["compress"] = compress
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":
