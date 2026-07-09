@@ -233,6 +233,37 @@ class TestHeterogeneousUnionSeeds:
         assert reg0.ztype_index(sp_gt("a|a"), "default") == 2
         assert reg1.ztype_index(sp_gt("a|a"), "default") == 2
 
+    def test_preset_heterogeneity_combined_maps_protect_all(self):
+        """Drive on deme A + no drive on deme B → aa survives in both.
+
+        Deme 0 has drive (a→A conversion), deme 1 has no drive but
+        starts with a|a.  Without combined modifier maps, deme 0's
+        per-deme BFS would prune aa.  Combined maps sum drive-modified
+        + Mendelian baseline → aa gamete reachable → aa protected.
+        """
+        sp = nt.Species.from_dict(
+            "hu_preset", {"c1": {"l1": ["A", "a"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = _make_drive()
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=2, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count=nt.batch_setting([
+                {"female": {"A|a": 100}, "male": {"A|a": 100}},
+                {"female": {"a|a": 100}, "male": {"a|a": 100}},
+            ]),
+        ).competition(
+            carrying_capacity=200, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(nt.batch_setting([drive, None])).build()
+
+        reg0 = pop.demes[0].index_registry
+        reg1 = pop.demes[1].index_registry
+        assert reg0.n_ztypes == reg1.n_ztypes == 3
+        sp_gt = sp.get_genotype_from_str
+        assert reg0.ztype_index(sp_gt("a|a"), "default") == 2
+        assert reg1.ztype_index(sp_gt("a|a"), "default") == 2
+
 
 # ── Compress + migration ────────────────────────────────────────────────────────
 
