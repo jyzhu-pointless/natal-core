@@ -193,6 +193,46 @@ class TestHeterogeneousUnionSeeds:
             assert not np.any(np.isnan(s))
             assert np.all(s >= 0)
 
+    def test_opposite_homozygotes_discover_heterozygote(self):
+        """AA + aa seeds → BFS propagates to Aa via union gamete pool.
+
+        Deme 0 starts with only A|A, deme 1 with only a|a.  Neither deme
+        contains A|a in its initial state.  But union seeds {A|A, a|a}
+        make BFS produce both A and a gametes, whose cross yields A|a.
+        The compressed registry must include all three genotypes in both
+        demes — otherwise migration of A|a individuals between demes
+        would fail.
+        """
+        sp = nt.Species.from_dict(
+            "hu_opposite", {"c1": {"l1": ["A", "a"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=2, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count=nt.batch_setting([
+                {"female": {"A|A": 100}, "male": {"A|A": 100}},
+                {"female": {"a|a": 100}, "male": {"a|a": 100}},
+            ]),
+        ).competition(
+            carrying_capacity=200, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).build()
+
+        reg0 = pop.demes[0].index_registry
+        reg1 = pop.demes[1].index_registry
+
+        # Both demes must see all 3 genotypes.
+        assert reg0.n_ztypes == reg1.n_ztypes == 3
+
+        # Index mapping identical across demes.
+        sp_gt = sp.get_genotype_from_str
+        assert reg0.ztype_index(sp_gt("A|A"), "default") == 0
+        assert reg1.ztype_index(sp_gt("A|A"), "default") == 0
+        assert reg0.ztype_index(sp_gt("A|a"), "default") == 1
+        assert reg1.ztype_index(sp_gt("A|a"), "default") == 1
+        assert reg0.ztype_index(sp_gt("a|a"), "default") == 2
+        assert reg1.ztype_index(sp_gt("a|a"), "default") == 2
+
 
 # ── Compress + migration ────────────────────────────────────────────────────────
 
