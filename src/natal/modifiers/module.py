@@ -226,7 +226,6 @@ def wrap_gamete_modifier(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
-    expand_to_ztypes: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level GameteModifier into a tensor-level callable.
 
@@ -240,9 +239,6 @@ def wrap_gamete_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
-        expand_to_ztypes: If True, expand resolved genotype indices to all
-            ZType (genotype×slab) indices before writing.  Required when the
-            tensor's genotype axis is pre-expanded (G×S).
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
@@ -343,7 +339,6 @@ def wrap_zygote_modifier(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int,
-    expand_to_ztypes: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level ZygoteModifier into a tensor-level callable.
 
@@ -357,9 +352,6 @@ def wrap_zygote_modifier(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
-        expand_to_ztypes: If True, expand resolved genotype indices to all
-            ZType (genotype×slab) indices before writing.  Required when the
-            tensor's genotype axis is pre-expanded (G×S).
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
@@ -391,7 +383,6 @@ def build_modifier_wrappers(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    expand_to_ztypes: bool = False,
 ) -> Tuple[List[Callable[[np.ndarray], np.ndarray]], List[Callable[[np.ndarray], np.ndarray]]]:
     """Wrap high-level gamete/zygote modifiers into tensor-level callables.
 
@@ -406,9 +397,6 @@ def build_modifier_wrappers(
         haploid_genotypes: List of all HaploidGenotype objects.
         diploid_genotypes: List of all Genotype objects.
         n_glabs: Number of gamete-label variants.
-        expand_to_ztypes: If True, expand genotype indices to ZType indices
-            in both gamete and zygote wrappers.  Use when the tensor's
-            genotype axis is pre-expanded (G×S).
 
     Returns:
         Tuple of (gamete_modifier_funcs, zygote_modifier_funcs), each a list
@@ -419,12 +407,12 @@ def build_modifier_wrappers(
 
     for _, _, mod in zygote_modifiers:
         zygote_modifier_funcs.append(
-            wrap_zygote_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs, expand_to_ztypes=expand_to_ztypes)
+            wrap_zygote_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
         )
 
     for _, _, mod in gamete_modifiers:
         gamete_modifier_funcs.append(
-            wrap_gamete_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs, expand_to_ztypes=expand_to_ztypes)
+            wrap_gamete_modifier(mod, population, index_registry, haploid_genotypes, diploid_genotypes, n_glabs)
         )
 
     return gamete_modifier_funcs, zygote_modifier_funcs

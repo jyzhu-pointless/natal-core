@@ -348,7 +348,7 @@ class _SpatialUpdate:
         # Expand all batch keys into per-deme value lists
         expanded: dict[str, list[object]] = {}
         for batch_key in batch_keys:
-            batch: BatchSetting = kwargs.pop(batch_key)  # type: ignore[assignment]
+            batch: BatchSetting[Any] = kwargs.pop(batch_key)  # type: ignore[assignment]
             expanded[batch_key] = batch.expand(n_demes, self._pop.topology)
 
         # Apply per-deme: each deme gets its slice of batch values + shared scalars.
