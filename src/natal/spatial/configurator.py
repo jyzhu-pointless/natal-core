@@ -488,6 +488,8 @@ class SpatialConfigurator:
         compressed registry → compatible for cross-deme migration.
         """
         union: set[str] = set()
+
+        # Collect genotypes from ALL demes' initial states.
         if "individual_count" in expanded:
             for ic_entry in expanded["individual_count"]:
                 if isinstance(ic_entry, dict):
@@ -495,6 +497,17 @@ class SpatialConfigurator:
                         "dict[str, dict[str, float | int]]", ic_entry
                     ).values():
                         union.update(sex_map.keys())
+
+        # Collect genotype refs from hooks in the replay log.
+        from natal.configurator._base import collect_hook_genotype_refs
+        for method_name, kwargs in self._replay_log:
+            if method_name == "hooks":
+                hook_items = kwargs.get("hook_items", ())
+                if hook_items:
+                    union.update(
+                        collect_hook_genotype_refs(list(hook_items))
+                    )
+
         user_decl = self._declared_zygote_types
         if user_decl is not None:
             for item in user_decl:

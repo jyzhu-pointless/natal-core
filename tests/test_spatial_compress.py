@@ -285,3 +285,88 @@ class TestCompressMigrationInvariants:
         # Sanity: no NaN, no negatives in compressed state.
         assert not np.any(np.isnan(pop_c.demes[0].state.individual_count))
         assert np.all(pop_c.demes[0].state.individual_count >= 0)
+
+
+# ── Spatial + hook + compress ───────────────────────────────────────────────────
+
+
+class TestSpatialHookCompress:
+    """Hook genotype refs are auto-protected from compression in spatial models."""
+
+    def test_homo_hook_protects_genotype_from_drive_pruning(self):
+        """Drive prunes aa, but hook referencing aa keeps it at index 2."""
+        sp = nt.Species.from_dict(
+            "shc_drive", {"c1": {"l1": ["A", "a"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = _make_drive()
+
+        @nt.hook(event="first", priority=0)
+        def release():
+            return [nt.Op.add(genotypes="a|a", ages=1, sex="male", delta=10)]
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=2, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count={"female": {"A|a": 5000}, "male": {"A|a": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(drive).hooks(release).build()
+
+        reg = pop.demes[0].index_registry
+        # Without hook: n_ztypes=2. With hook auto-resolution: 3.
+        assert reg.n_ztypes == 3
+        assert reg.ztype_index(sp.get_genotype_from_str("a|a"), "default") == 2
+        assert pop.demes[1].index_registry is reg
+
+    def test_hetero_hook_in_union_seeds(self):
+        """Hook refs from all demes included in union seeds."""
+        sp = nt.Species.from_dict(
+            "shc_union", {"c1": {"l1": ["A", "a"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+
+        @nt.hook(event="first", priority=0)
+        def release():
+            return [nt.Op.add(genotypes="A|A", ages=1, sex="male", delta=10)]
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=2, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count=nt.batch_setting([
+                {"female": {"a|a": 100}, "male": {"a|a": 100}},
+                {"female": {"A|a": 100}, "male": {"A|a": 100}},
+            ]),
+        ).competition(
+            carrying_capacity=200, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).hooks(release).build()
+
+        r0 = pop.demes[0].index_registry
+        r1 = pop.demes[1].index_registry
+        assert r0.n_ztypes == r1.n_ztypes
+        AA = sp.get_genotype_from_str("A|A")
+        assert r0.ztype_index(AA, "default") == r1.ztype_index(AA, "default") == 0
+
+    def test_selector_hook_protects_genotype(self):
+        """Selector hook protects aa at exact index 2."""
+        sp = nt.Species.from_dict(
+            "shc_sel", {"c1": {"l1": ["A", "a"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = _make_drive()
+
+        @nt.hook(event="first", priority=0, selectors={"target": "a|a"})
+        def count_aa(state, config, target, deme_id=-1):
+            _ = target
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count={"female": {"A|a": 5000}, "male": {"A|a": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(drive).hooks(count_aa).build()
+
+        reg = pop.demes[0].index_registry
+        assert reg.n_ztypes == 3
+        assert reg.ztype_index(sp.get_genotype_from_str("a|a"), "default") == 2
