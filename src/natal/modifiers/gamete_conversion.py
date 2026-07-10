@@ -591,14 +591,8 @@ class GameteConversionRuleSet:
     ) -> GameteModifier:
         """Convert the ruleset to a GameteModifier for population integration.
 
-        The returned modifier will:
-          1. Iterate over all genotypes in the population
-          2. For each genotype, extract glab-aware gamete frequencies
-          3. Apply conversion rules respecting source_glab/target_glab constraints
-          4. Return compressed-index frequency mappings
-
-        For pre-compiled matrix multiplication, use :meth:`to_matrix` and
-        apply manually with ``freq_vec @ M``.
+        Uses pre-compiled matrix multiplication — one ``freq_vec @ M``
+        per (sex, ztype) pair replaces the legacy rule-cascading Python loop.
 
         Args:
             population: The BasePopulation that will use this modifier.
@@ -606,7 +600,13 @@ class GameteConversionRuleSet:
         Returns:
             A callable that implements GameteModifier protocol.
         """
-        rules = self.rules
+        # Pre-compile matrices at modifier-definition time
+        ztype_to_matrix = self.to_matrix(population)
+
+        n_glabs = int(population.config.n_glabs)
+        zygotes_to_gametes_map = population.config.zygotes_to_gametes_map
+        haploid_genotypes = population.registry.index_to_haplo
+        n_gtypes = population.registry.n_gtypes
 
         def gamete_modifier_func(*_args: object, **_kwargs: object) -> Dict[Tuple[int, int], Dict[int, float]]:
             """Apply all conversion rules to gamete frequencies.
@@ -615,48 +615,32 @@ class GameteConversionRuleSet:
             """
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
 
-            n_glabs = int(population.config.n_glabs)
-            zygotes_to_gametes_map = population.config.zygotes_to_gametes_map
-            haploid_genotypes = population.registry.index_to_haplo
+            for (sex_idx, ztype_idx), M in ztype_to_matrix.items():
+                initial_freqs = extract_gamete_frequencies_by_glab(
+                    zygotes_to_gametes_map,
+                    sex_idx,
+                    ztype_idx,
+                    haploid_genotypes,
+                    n_glabs,
+                )
+                if not initial_freqs:
+                    continue
 
-            resolved_rules = _resolve_rule_glabs(rules, population)
+                freq_vec = np.zeros(n_gtypes, dtype=np.float64)
+                for (hg, glab_idx), freq in initial_freqs.items():
+                    glab_str = population.registry.glab_labels[glab_idx]
+                    gtype_idx = population.registry.gtype_index(hg, glab_str)
+                    freq_vec[gtype_idx] = freq
 
-            for sex_idx in range(population.config.n_sexes):
-                for ztype_idx, (genotype, _slab) in enumerate(population.registry.index_to_ztype):
-                    if not any(rule.applies_to_sex(sex_idx) and
-                              rule.applies_to_genotype(genotype)
-                              for rule in rules):
-                        continue
+                converted_vec = freq_vec @ M
 
-                    initial_freqs = extract_gamete_frequencies_by_glab(
-                        zygotes_to_gametes_map,
-                        sex_idx,
-                        ztype_idx,
-                        haploid_genotypes,
-                        n_glabs
-                    )
+                compressed_freqs: Dict[int, float] = {}
+                nonzero = np.nonzero(converted_vec > 1e-12)[0]
+                for gtype_idx in nonzero:
+                    compressed_freqs[int(gtype_idx)] = float(converted_vec[gtype_idx])
 
-                    if not initial_freqs:
-                        continue
-
-                    converted_freqs = _compute_converted_gamete_freqs(
-                        genotype,
-                        resolved_rules,
-                        sex_idx,
-                        population,
-                        initial_freqs=initial_freqs
-                    )
-
-                    if converted_freqs:
-                        compressed_freqs: Dict[int, float] = {}
-                        for (hg, glab_idx), freq in converted_freqs.items():
-                            if freq > 0:
-                                glab_label_str = population.registry.glab_labels[glab_idx]
-                                cidx = population.registry.gtype_index(hg, glab_label_str)
-                                compressed_freqs[cidx] = compressed_freqs.get(cidx, 0.0) + freq
-
-                        if compressed_freqs:
-                            result[(sex_idx, ztype_idx)] = compressed_freqs
+                if compressed_freqs:
+                    result[(sex_idx, ztype_idx)] = compressed_freqs
 
             return result
 
@@ -673,7 +657,8 @@ class GameteConversionRuleSet:
         ``freqs`` is a row vector of length ``n_gtypes``.
 
         Matrices are composed sequentially for cascading rules:
-        ``M_total = M_k @ ... @ M_1``.
+        ``M_total = M_1 @ M_2 @ ... @ M_k`` (row-vector left-multiplies,
+        so ``M_1`` is applied first).
 
         Only (sex, ztype) pairs where at least one rule applies are included.
 
@@ -709,10 +694,11 @@ class GameteConversionRuleSet:
                 if not applicable:
                     continue
 
-                # Compose: M_total = M_k @ ... @ M_1
+                # Compose: M_total = M_1 @ M_2 @ ... @ M_k
+                # (row-vector left-multiplies so M_1 is applied first)
                 M_total = applicable[0][0].copy()
                 for M_rule, _ in applicable[1:]:
-                    M_total = M_rule @ M_total
+                    M_total = M_total @ M_rule
 
                 # Only store if non-trivial (not pure identity)
                 eye = np.eye(n_gtypes, dtype=np.float64)
