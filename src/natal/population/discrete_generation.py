@@ -16,6 +16,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -210,8 +211,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         fixed_egg_count: bool = False,
         *,
         compress: bool = False,
-        declared_zygote_types: set[str] | set[int] | None = None,
-        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
+        declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
+        declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
     ) -> DiscreteConfigurator:
         """Fluent population construction entry point.
 

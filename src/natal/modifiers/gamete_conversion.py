@@ -397,8 +397,8 @@ class GameteConversionRuleSet:
         rate: float,
         *,
         when: Optional[Condition] = None,
-        sex_filter=None,          # legacy — accept and forward
-        genotype_filter=None,     # legacy — accept and forward
+        sex_filter: "str | int | None" = None,
+        genotype_filter: "_GenotypeFilter" = None,
     ) -> 'GameteConversionRuleSet':
         """Add a gamete-label conversion rule.
 
