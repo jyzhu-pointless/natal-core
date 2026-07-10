@@ -397,33 +397,34 @@ class GameteConversionRuleSet:
         rate: float,
         *,
         when: Optional[Condition] = None,
+        sex_filter=None,          # legacy — accept and forward
+        genotype_filter=None,     # legacy — accept and forward
     ) -> 'GameteConversionRuleSet':
         """Add a gamete-label conversion rule.
 
-        For every (sex, ztype) that satisfies *when*, all gametes carrying
-        *from_glab* have their label reassigned to *to_glab* with
-        probability *rate*.
-
-        This replaces the old pattern of ``add_hg_convert(hg→hg, target_glab=...)``
-        which was a semantic abuse of the haploid-genotype rule for glab-only
-        operations.
+        For every (sex, ztype) that satisfies *when* (or legacy filters),
+        gametes carrying *from_glab* have their label reassigned to
+        *to_glab* with probability *rate*.
 
         Args:
             from_glab: Source gamete label.
             to_glab: Target gamete label.
             rate: Conversion probability, in [0, 1].
-            when: Optional condition.  If None, applies unconditionally.
+            when: Optional composable condition (preferred over legacy kwargs).
+            sex_filter: Legacy — forwarded to add_hg_convert.
+            genotype_filter: Legacy — forwarded to add_hg_convert.
 
         Returns:
             *self* for chaining.
         """
         return self.add_hg_convert(
             hg_match=lambda hg: True,
-            to_haploid_genotype=lambda hg: hg,  # identity on haploid genome
+            to_haploid_genotype=lambda hg: hg,
             rate=rate,
             target_glab=to_glab,
             source_glab=from_glab,
-            # when → sex_filter + genotype_filter 转换在 to_gamete_modifier 编译时处理
+            sex_filter=sex_filter,
+            genotype_filter=genotype_filter,
         )
 
     def to_gamete_modifier(
