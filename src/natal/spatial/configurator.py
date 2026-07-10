@@ -605,13 +605,12 @@ class SpatialConfigurator:
             combined_z2g,
             combined_g2z,
             full_config.initial_individual_count,
-            declared_genotypes=seeds if seeds else None,
+            declared_zygote_types=seeds if seeds else None,
         )
 
         # ── Step 6: Add BFS survivors to seeds ─────────────────────────
-        dips = full_registry.index_to_genotype
         for old_idx in range(len(ztype_mask)):
-            if ztype_mask[old_idx] >= 0 and old_idx < len(dips):
+            if ztype_mask[old_idx] >= 0:
                 seeds.add(old_idx)
 
         return seeds

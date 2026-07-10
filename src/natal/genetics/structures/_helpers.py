@@ -107,9 +107,9 @@ def build_compression_mask(
     z2g_map: NDArray[np.float64],
     g2z_map: NDArray[np.float64],
     initial_individual_count: NDArray[np.float64],
-    declared_genotypes: set[int] | None = None,
+    declared_zygote_types: set[int] | None = None,
 ) -> tuple[NDArray[np.int32], int, NDArray[np.int32], int]:
-    """Build compression masks for both the GType (gamete) and ZType
+    """Build compression masks for the GType (gamete) and ZType
     (zygote) axes.
 
     Uses a unified gamete-set fixed-point BFS that simultaneously tracks
@@ -118,77 +118,77 @@ def build_compression_mask(
     index maps from the mask — the mask values themselves are not consumed
     downstream.
 
-    Both maps are assumed pre-expanded: the G dimension of *z2g_map* /
-    *g2z_map* is ``n_ztypes`` (genotype × slab), and the HL dimension
+    Both maps are assumed pre-expanded: the ZT dimension of *z2g_map* /
+    *g2z_map* is ``n_ztypes`` (genotype × slab), and the GT dimension
     is ``n_gtypes`` (haploid × glab).
 
     Args:
-        z2g_map: ``zygotes_to_gametes_map``, shape ``(2, G, HL)``.
-        g2z_map: ``gametes_to_zygotes_map``, shape ``(HL, HL, G)``.
-        initial_individual_count: ``(2, A, G)`` — genotypes with
-            count > 0 are the seeds for the BFS.
-        declared_genotypes: Manual override — these ZType indices
+        z2g_map: ``zygotes_to_gametes_map``, shape ``(2, n_zt, n_gt)``.
+        g2z_map: ``gametes_to_zygotes_map``, shape ``(n_gt, n_gt, n_zt)``.
+        initial_individual_count: ``(2, A, n_zt)`` — ztypes with
+            count > 0 are the BFS seeds.
+        declared_zygote_types: Manual override — these ZType indices
             are treated as reachable regardless of initial state.
 
     Returns:
-        ``(gtype_mask, hl_compressed, ztype_mask, ztype_compressed)``
+        ``(gtype_mask, n_gt_compressed, ztype_mask, n_zt_compressed)``
         where each mask is ``int32`` with -1 for pruned entries.
     """
-    G = int(z2g_map.shape[1])
-    HL = int(z2g_map.shape[2])
+    n_zt = int(z2g_map.shape[1])
+    n_gt = int(z2g_map.shape[2])
 
-    gametes_of: list[set[int]] = [set() for _ in range(G)]
-    for g in range(G):
-        for hl in range(HL):
-            if z2g_map[0, g, hl] > 0.0 or z2g_map[1, g, hl] > 0.0:
-                gametes_of[g].add(hl)
+    gametes_of: list[set[int]] = [set() for _ in range(n_zt)]
+    for zt in range(n_zt):
+        for gt in range(n_gt):
+            if z2g_map[0, zt, gt] > 0.0 or z2g_map[1, zt, gt] > 0.0:
+                gametes_of[zt].add(gt)
 
     zygotes_of: dict[tuple[int, int], set[int]] = {}
-    for hl1 in range(HL):
-        for hl2 in range(HL):
+    for gt1 in range(n_gt):
+        for gt2 in range(n_gt):
             targets: set[int] = set()
-            for g in range(G):
-                if g2z_map[hl1, hl2, g] > 0.0:
-                    targets.add(g)
+            for zt in range(n_zt):
+                if g2z_map[gt1, gt2, zt] > 0.0:
+                    targets.add(zt)
             if targets:
-                zygotes_of[(hl1, hl2)] = targets
+                zygotes_of[(gt1, gt2)] = targets
 
-    declared: set[int] = declared_genotypes if declared_genotypes is not None else set()
-    reachable_g: set[int] = set(declared)
-    for g in range(G):
-        if initial_individual_count[:, :, g].sum() > 0.0:
-            reachable_g.add(g)
+    declared: set[int] = declared_zygote_types if declared_zygote_types is not None else set()
+    reachable_zt: set[int] = set(declared)
+    for zt in range(n_zt):
+        if initial_individual_count[:, :, zt].sum() > 0.0:
+            reachable_zt.add(zt)
 
-    reachable_hl: set[int] = set()
-    for g in reachable_g:
-        reachable_hl.update(gametes_of[g])
+    reachable_gt: set[int] = set()
+    for zt in reachable_zt:
+        reachable_gt.update(gametes_of[zt])
 
     changed = True
     while changed:
         changed = False
-        hl_list = list(reachable_hl)
+        gt_list = list(reachable_gt)
         i = 0
-        while i < len(hl_list):
-            hl1 = hl_list[i]
-            for j in range(i, len(hl_list)):
-                hl2 = hl_list[j]
-                pairs = [(hl1, hl2)] if hl1 == hl2 else [(hl1, hl2), (hl2, hl1)]
+        while i < len(gt_list):
+            gt1 = gt_list[i]
+            for j in range(i, len(gt_list)):
+                gt2 = gt_list[j]
+                pairs = [(gt1, gt2)] if gt1 == gt2 else [(gt1, gt2), (gt2, gt1)]
                 for pair in pairs:
                     for go in zygotes_of.get(pair, ()):
-                        if go not in reachable_g:
-                            reachable_g.add(go)
-                            new_hl = gametes_of[go] - reachable_hl
-                            if new_hl:
-                                reachable_hl.update(new_hl)
-                                hl_list.extend(new_hl)
+                        if go not in reachable_zt:
+                            reachable_zt.add(go)
+                            new_gt = gametes_of[go] - reachable_gt
+                            if new_gt:
+                                reachable_gt.update(new_gt)
+                                gt_list.extend(new_gt)
                                 changed = True
             i += 1
 
-    gtype_mask = np.full(HL, -1, dtype=np.int32)
-    gtype_mask[list(reachable_hl)] = 0
+    gtype_mask = np.full(n_gt, -1, dtype=np.int32)
+    gtype_mask[list(reachable_gt)] = 0
 
-    ztype_mask = np.full(G, -1, dtype=np.int32)
-    ztype_mask[list(reachable_g)] = 0
-    ztype_compressed = len(reachable_g)
+    ztype_mask = np.full(n_zt, -1, dtype=np.int32)
+    ztype_mask[list(reachable_zt)] = 0
+    n_zt_compressed = len(reachable_zt)
 
-    return gtype_mask, len(reachable_hl), ztype_mask, ztype_compressed
+    return gtype_mask, len(reachable_gt), ztype_mask, n_zt_compressed

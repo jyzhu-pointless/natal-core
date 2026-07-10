@@ -302,7 +302,7 @@ def rebuild_config_maps(
                 zygotes_to_gametes_map,
                 gametes_to_zygotes_map,
                 ctx.config.initial_individual_count,
-                declared_genotypes=declared_ints,
+                declared_zygote_types=declared_ints,
             )
         )
         gtype_mask = _gt_mask
