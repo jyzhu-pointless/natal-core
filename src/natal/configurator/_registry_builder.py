@@ -29,7 +29,6 @@ from natal.data import (
     compress_config,
 )
 from natal.genetics import Species, build_compression_mask
-from natal.presets import CytoplasmicPreset
 from natal.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
@@ -338,23 +337,13 @@ def rebuild_config_maps(
         n_g_compressed = int(ctx.config.n_ztypes)
         ctx.registry.compress(ztype_mask, gtype_mask)
 
-    # ---- apply cytoplasmic preset effects (pre-tensor) ----
+    # ---- apply post-modifier map transforms ----
     for preset in ctx.presets:
-        if isinstance(preset, CytoplasmicPreset):
-            n_genotypes = len(ctx.registry.index_to_genotype)
-            n_gtypes = len(ctx.registry.index_to_haplo)
-            n_glabs = int(ctx.config.n_glabs)
-            n_slabs = int(ctx.config.n_slabs)
-            CytoplasmicPreset.tag_maternal_gametes(
-                zygotes_to_gametes_map, ctx.species.gamete_labels,
-                ctx.species.somatic_labels,
-                n_genotypes, n_gtypes, n_glabs, n_slabs,
-            )
-            CytoplasmicPreset.redirect_zygotes(
-                gametes_to_zygotes_map, ctx.species.gamete_labels,
-                ctx.species.somatic_labels,
-                n_genotypes, n_gtypes, n_glabs, n_slabs,
-            )
+        preset.map_transform(
+            zygotes_to_gametes_map,
+            gametes_to_zygotes_map,
+            ctx.registry,
+        )
 
     # ---- recompute offspring probability tensor from the updated maps ----
     offspring_tensor = compute_offspring_probability_tensor(

@@ -140,7 +140,6 @@ class ModifierPresetMixin(HookManagerMixin):
             compute_offspring_probability_tensor,
         )
         from natal.modifiers.module import build_modifier_wrappers
-        from natal.presets import CytoplasmicPreset
 
         if self._config is None or self._registry is None:
             return
@@ -186,25 +185,13 @@ class ModifierPresetMixin(HookManagerMixin):
             n_slabs=n_slabs,
         )
 
-        # Step 4: Apply cytoplasmic preset effects if presets are configured.
-        # This must happen BEFORE the offspring tensor is computed, so the
-        # tensor reflects the modified maps.
+        # Step 4: Apply post-modifier map transforms (e.g. cytoplasmic).
         for preset in self._presets:
-            if isinstance(preset, CytoplasmicPreset):
-                n_genotypes = len(diploid_genotypes)
-                n_gtypes = len(haploid_genotypes)
-                species = getattr(self, "_species", None)
-                if species is not None:
-                    CytoplasmicPreset.tag_maternal_gametes(
-                        zygotes_to_gametes_map, species.gamete_labels,
-                        species.somatic_labels,
-                        n_genotypes, n_gtypes, n_glabs, n_slabs,
-                    )
-                    CytoplasmicPreset.redirect_zygotes(
-                        gametes_to_zygotes_map, species.gamete_labels,
-                        species.somatic_labels,
-                        n_genotypes, n_gtypes, n_glabs, n_slabs,
-                    )
+            preset.map_transform(
+                zygotes_to_gametes_map,
+                gametes_to_zygotes_map,
+                self._registry,
+            )
 
         # Step 5: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through

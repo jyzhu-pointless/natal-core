@@ -8,6 +8,9 @@ Public module — provides the core preset infrastructure.
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Callable, Optional, Self, Tuple
 
+import numpy as np
+from numpy.typing import NDArray
+
 from natal.genetics import Gene, Species
 from natal.modifiers.module import GameteModifier, ZygoteModifier
 from natal.utils.types import Sex
@@ -20,6 +23,7 @@ from ._types import (
 
 if TYPE_CHECKING:
     from natal.population.base import BasePopulation
+    from natal.registry.index import IndexRegistry
 
 
 def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'GeneticPreset') -> None:
@@ -183,6 +187,26 @@ class GeneticPreset(ABC):
 
         where c1, c2 are compressed coordinate pairs representing the parental
         diploid genotypes.
+        """
+        return None
+
+    def map_transform(
+        self,
+        z2g_map: NDArray[np.float64],
+        g2z_map: NDArray[np.float64],
+        registry: "IndexRegistry",
+    ) -> None:
+        """Post-modifier map-level transform.  Default no-op.
+
+        Called AFTER all gamete/zygote modifiers have been applied.
+        Override for bulk read-modify-write operations that can't be
+        expressed as per-row modifier callbacks — e.g. slab-aware
+        gamete tagging and zygote redirection.
+
+        Args:
+            z2g_map: Fully modified zygotes → gametes map ``(2, ZT, GT)``.
+            g2z_map: Fully modified gametes → zygotes map ``(GT, GT, ZT)``.
+            registry: Current ``IndexRegistry`` for slab/glab resolution.
         """
         return None
 
