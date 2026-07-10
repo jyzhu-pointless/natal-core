@@ -16,7 +16,6 @@ from typing import (
     List,
     Optional,
     Sequence,
-    Set,
     Tuple,
     Union,
     cast,
@@ -467,34 +466,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         return int(total)
 
-
-    def _get_fecundity(self, genotype: Genotype, sex: Sex) -> float:
-        """Internal helper: return fecundity for a genotype and sex.
-
-        Args:
-            genotype: Target genotype.
-            sex: Target sex.
-
-        Returns:
-            float: The fecundity fitness value.
-        """
-        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
-        return self.config.fecundity_fitness[int(sex.value), genotype_idx]
-
-    def _get_sexual_preference(self, female_genotype: Genotype, male_genotype: Genotype) -> float:
-        """Internal helper: return sexual preference value for a genotype pair.
-
-        Args:
-            female_genotype: Genotype of the female.
-            male_genotype: Genotype of the male.
-
-        Returns:
-            float: The sexual selection fitness weight.
-        """
-        f_idx = self.registry.ztype_index(female_genotype, self.registry.slab_labels[0])
-        m_idx = self.registry.ztype_index(male_genotype, self.registry.slab_labels[0])
-        return self.config.sexual_selection_fitness[f_idx, m_idx]
-
     @property
     def config(self) -> PopulationConfig:
         """PopulationConfig: The current configuration."""
@@ -900,30 +871,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             return self.state.individual_count[Sex.MALE.value, :, :].sum(axis=1)
         else:
             return self.state.individual_count.sum(axis=(0, 2))
-
-    def get_genotype_count(self, genotype: Genotype) -> Tuple[int, int]:
-        """Return total counts for a genotype as (female_count, male_count).
-
-        Args:
-            genotype: Target genotype instance.
-
-        Returns:
-            Tuple[int,int]: ``(female_count, male_count)`` across all ages.
-        """
-        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
-        female_count = self.state.individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
-        male_count = self.state.individual_count[Sex.MALE.value, :, genotype_idx].sum()
-        return (female_count, male_count)
-
-    @property
-    def genotypes_present(self) -> Set[Genotype]:
-        """Set[Genotype]: Returns the set of genotypes with count > 0."""
-        present: Set[Genotype] = set()
-        for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
-            total_count = self.state.individual_count[:, :, z_idx].sum()
-            if total_count > 0:
-                present.add(genotype)
-        return present
 
     def update(self) -> AgeStructuredConfigurator:
         """Return an ``AgeStructuredConfigurator`` for modifying this population's config."""
