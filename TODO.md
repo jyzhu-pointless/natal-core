@@ -178,41 +178,25 @@
 - `src/natal/modifiers/module.py`：三个函数签名中删除参数及 docstring，转发代码移除
 - `src/natal/configurator/_registry_builder.py`：调用方移除 `expand_to_ztypes=...` 传参
 
-### #11.5 📋 Modifier 系统：genotype vs ztype 概念混用 + 冗余参数
+### #11.5 ⚠️ Modifier 系统：genotype vs ztype 概念混用 + 冗余参数
 
 **来源**：2026-07-10 `expand_to_ztypes` 清理后的进一步审计。
 
-**问题 1 — 冗余参数**：`haploid_genotypes` 和 `diploid_genotypes` 在所有 internal helper 中与 `index_registry` 同时出现，但 registry 已包含 `index_to_haplo` 和 `index_to_genotype`，功能完全重叠。涉及函数：
+**已完成的子项**（`feature/spatial-compress-unified` 分支）：
+- ✅ 冗余参数清理：`_resolve_gidx`、`_apply_comp_map` 等 7 个旧函数删除，统一层 `_resolve_ztype_key`/`_resolve_gtype_key` 仅接受 registry
+- ✅ `CytoplasmicPreset` 特判消除：`gamete_modifier()` 和 `zygote_modifier()` 返回真实 modifier，`isinstance(preset, CytoplasmicPreset)` 全部删除
+- ✅ 手动 glab 公式清理：`module.py:555-556` 删除（统一层替代），`cytoplasmic.py` 中 glab 索引改走 registry
+- ✅ `build_compression_mask` 死参数 `n_glabs`/`n_slabs` 删除，G→n_zt/HL→n_gt 重命名
+- ✅ `_compress_once` ztype 一等公民化，`seeds: set[int]` 替代 `union: set[str]`
+- ✅ `batch_setting` 泛型化 `Generic[_T]`
+- ✅ `gamete_conversion.py` + `zygote_conversion.py` ztype/gtype 适配
 
-| 函数 | 冗余参数 | registry 等价物 |
-|------|---------|----------------|
-| `_resolve_gidx` | `diploid_genotypes` | `registry.index_to_genotype` |
-| `_resolve_genotype` | `diploid_genotypes` | `registry.index_to_genotype` |
-| `_resolve_part_to_compressed` | `haploid_genotypes` | `registry.index_to_haplo` |
-| `_find_haploid_by_name` | `haploid_genotypes` | `registry.index_to_haplo` |
-| `_apply_comp_map` | `haploid_genotypes` | `registry.index_to_haplo` |
+**遗留子项**：
+- 📋 命名修正：`GameteModifier` Protocol docstring 中 `genotype_idx` → `ztype_idx`、`_write_zygote_mapping` docstring、`_normalize_zygote_val` docstring
+- 📋 协议扩展：让 modifier 支持 slab-level 目标选择（当前 `ztype_indices_for()` 无条件全板展开）
+- 📋 Conversion ruleset 新 DSL（Condition 组合条件、`add_glab_convert`、`add_slab_convert`）API 已就绪，内部委托到旧 API；矩阵编译（`to_matrix(registry)`）和完整迁移待 Stage 2
 
-`n_glabs` 也可从 `len(registry.glab_labels)` 推导。
-
-**问题 2 — genotype/ztype 概念混用**：
-- `GameteModifier` Protocol：外键文档写 `(sex_idx, genotype_idx)`，实际 `_resolve_gidx` 解析后返回 ztype 索引
-- `_resolve_gidx`：函数名暗示返��� genotype index，实际返回 `ztype_indices_for(gt)`（ztype）
-- `_write_zygote_mapping`：docstring 写 "genotype index"，实际写入 ztype 维度
-- `_normalize_zygote_val`：int 键被当作 ztype 索引直接使用
-
-**问题 3 — 无法按 slab 粒度控制**：modifier 的 genotype 键经 `ztype_indices_for()` 无条件展开到全部 slab。`n_slabs > 1` 时用户无法指定"只影响 slab 2 的 genotype X"。
-
-**修复方向**：
-1. 删除冗余参数，统一以 `index_registry` 为唯一数据源
-2. 协议和实现中的 "genotype" → "ztype" 命名修正
-3. 让 modifier 支持 slab-level 目标选择（需要协议扩展）
-4. 消除 `CytoplasmicPreset` 特判：`rebuild_config_maps` 中的 `isinstance(preset, CytoplasmicPreset)` 硬编码分支应在协议升级后移除
-5. 消除手动 glab 公式（`hg * n_glabs + glab`）：
-   - `modifiers/module.py:555-556`（`_resolve_part_to_compressed`）
-   - `presets/cytoplasmic.py:132-133`（`tag_maternal_gametes`）
-   统一使用 `registry.gtype_index()`
-
-**涉及文件**：`src/natal/modifiers/module.py` 为主，波及所有调用 `build_modifier_wrappers` 的位置，及 `src/natal/presets/cytoplasmic.py`、`src/natal/population/_mixins/_modifiers.py`、`src/natal/configurator/_registry_builder.py`
+**涉及文件**：`src/natal/modifiers/module.py`、`src/natal/presets/cytoplasmic.py`、`src/natal/population/_mixins/_modifiers.py`、`src/natal/configurator/_registry_builder.py`
 
 ### #11.1 ⚠️ Hook 系统测试覆盖缺口
 
@@ -587,3 +571,46 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
 - **类型规范** — `selector.py` + `decorator.py` 消除 `Any`/`object` 滥用，改用 `PopulationState`、`PopulationConfig`、`int | NDArray[np.int32]` 等具体类型。CLAUDE.md 新增"禁止滥用 Any 和 object"规则。
 - **Test marker 修复** — `test_lifecycle_wrappers.py` 中 2 个测试从无标记改为 `@pytest.mark.numba_on`。
 - **发现 #17** — `NATAL_DISABLE_NUMBA=1` 全量运行发现 9 个既有失败。修复 6 个（hook 约定 + marker），剩余 3 个为 `_replace()` 0-d ndarray 退化问题。
+
+---
+
+## Conversion Ruleset 重构（2026-07-10 grill session）
+
+### ✅ Stage 1 完成 — DSL 基础 + 特判消除
+
+**已完成**（`feature/spatial-compress-unified` 分支）：
+
+1. **Condition DSL**（`src/natal/modifiers/conditions.py`）：
+   - `sex()`、`ztype_has()`、`slab()`、`is_maternal()`、`is_paternal()` + `&`/`|` 组合
+2. **新 API**：
+   - `GameteRuleSet.add_glab_convert(from_glab, to_glab, rate, when=...)` — 替代 `add_hg_convert(hg→hg, target_glab=...)` 的语义拐弯
+   - `ZygoteRuleSet.add_glab_redirect(from_glab, to_glab, when=...)` — zygote-level glab redirect
+   - 旧 API 保留，新 API 内部委托到旧 API
+3. **Preset 迁移**：
+   - HomingDrive + ToxinAntidote：Cas9 沉积标注从 `add_hg_convert` → `add_glab_convert`
+   - CytoplasmicPreset：走 modifier 协议，`isinstance` 特判消除
+4. **ztype/gtype 适配**：
+   - `gamete_conversion.py`：`index_to_genotype` → `index_to_ztype`，`genotype_idx` → `ztype_idx`
+   - `zygote_conversion.py`：同上 + `g = row.argmax()` 后直接用 ztype 索引
+
+### 📋 Stage 2 待做 — 矩阵编译 + 完整迁移
+
+1. `RuleSet.to_matrix(registry)` — 编译规则为稀疏矩阵，替代 Python 级联循环
+2. `add_slab_convert` — gamete/zygote 端 slab 操作（当前 CytoplasmicPreset 只能走 modifier 自制循环）
+3. `when` → 旧 API 参数翻译（当前只接受并存，未实际转换）
+4. `_compute_converted_gamete_freqs` 替换为矩阵乘法
+5. `extract_gamete_frequencies_by_glab` 调用消除
+
+### 剩余 P2 命名清理（grill list #8-#16）
+
+| # | 位置 | 问题 |
+|---|------|------|
+| 8 | engine 40+ 处 | docstring `n_genotypes` 实际是 `n_ztypes` |
+| 9 | `age_structured.py:95-106` | `n_g_orig` 在 genotype/ztype 间摇摆 |
+| 10 | `hooks/declarative.py:268` | `_resolve_genotypes` → `_resolve_ztypes` |
+| 11 | `discrete_generation.py:161` | `n_genotypes = config.n_ztypes` |
+| 12 | `migration/adjacency.py:619` | `genotype_idx` → `ztype_idx` |
+| 13 | `configurator/_base.py` 10+ 处 | docstring "genotype" 应为 "ztype" |
+| 14 | `configurator/_factory.py` 5+ 处 | docstring "genotype" 应为 "ztype" |
+| 15 | `engine/age_structured.py` | `n_haplogenotypes`/`n_glabs` 标记 unused |
+| 16 | `population/age_structured.py:95-106` | `n_g_orig` 语义歧义 |
