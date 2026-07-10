@@ -5,13 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.registry.index import IndexRegistry
 from natal.modifiers.module import (
-    _resolve_gtype_key,
     _normalize_zygote_val_to_distribution,
+    _resolve_gtype_key,
     _write_zygote_distribution,
     evaluate_genotype_filter,
 )
+from natal.registry.index import IndexRegistry
 
 # ============================================================================
 # _resolve_gtype_key
@@ -34,7 +34,6 @@ class TestResolveGtypeKey:
         registry.register_haplogenotype(hgs[0])
         registry.register_haplogenotype(hgs[1])
 
-        key = ((hgs[0], "default"),)  # just one part for this test
         # We test resolve_gtype_key with a single part
         result = _resolve_gtype_key((hgs[0], "default"), registry)
         assert result == 0  # hg0 * 1 + 0
@@ -88,9 +87,9 @@ class TestNormalizeZygoteVal:
         assert result == {3: 0.5}
 
     def test_non_numeric_prob_raises(self, simple_species):
-        """Dict with non-numeric probability raises TypeError."""
+        """Dict with non-numeric probability raises AssertionError."""
         registry = IndexRegistry()
-        with pytest.raises(TypeError, match="probabilities must be numeric"):
+        with pytest.raises(AssertionError, match="probabilities must be numeric"):
             _normalize_zygote_val_to_distribution({3: "bad"}, registry)
 
 

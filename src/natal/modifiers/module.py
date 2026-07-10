@@ -22,20 +22,19 @@ import inspect
 from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     List,
-    Mapping,
     Optional,
     Protocol,
     Tuple,
+    TypeAlias,
     TypeGuard,
     Union,
     cast,
 )
 
 if TYPE_CHECKING:
-    from natal.population.base import BasePopulation
+    from natal.registry.index import IndexRegistry
 
 import numpy as np
 
@@ -44,6 +43,11 @@ from natal.utils.helpers import resolve_sex_label
 
 GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
 GlabSelector = Optional[Union[str, int]]
+
+# Key types accepted by the unified resolvers.  Ints are pre-resolved
+# compressed indices; strings and domain objects are runtime-dispatched.
+ZtypeKey: TypeAlias = Union[int, str, Genotype]
+GtypeKey: TypeAlias = Union[int, str, HaploidGenotype, Tuple[int, int], Tuple[str, int]]
 
 # Bulk-only modifier interface expectations (strict form):
 # - gamete modifier: callable() -> Dict[(sex_idx:int, genotype_idx:int) -> Dict[compressed_hg_glab_idx:int -> freq:float]]
@@ -76,8 +80,8 @@ class GameteModifier(Protocol):
     The result writes frequency distributions for compressed indices directly
     back into numeric tensors.
     """
-    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Mapping[Any, float]]:
-        """Call the gamete modifier, returning frequency distributions per sex/genotype."""
+    def __call__(self, *args: object, **kwargs: object) -> Mapping[tuple[int, ZtypeKey], Mapping[GtypeKey, float]]:
+        """Call the gamete modifier, returning frequency distributions per sex/ztype."""
         ...
 
 
@@ -102,9 +106,9 @@ class ZygoteModifier(Protocol):
 
     The protocol returns::
 
-        Dict[Any, Union[int, Genotype, Dict[int, float]]]
+        Dict[object, Union[int, Genotype, Dict[int, float]]]
     """
-    def __call__(self, *args: object, **kwargs: object) -> Mapping[Any, Union[int, Genotype, Mapping[Any, float]]]:
+    def __call__(self, *args: object, **kwargs: object) -> Mapping[tuple[int, int], Union[int, Genotype, Mapping[ZtypeKey, float]]]:
         """Call the zygote modifier, returning replacement mappings per gamete pair."""
         ...
 
@@ -114,8 +118,8 @@ class ZygoteModifier(Protocol):
 # ============================================================================
 
 def _invoke_modifier(
-    mod: Callable[..., Any],  # modifier function from pipeline
-    population: BasePopulation[Any] | None = None,
+    mod: Callable[..., object],
+    population: object | None = None,
 ) -> object:
     """Invoke a modifier callable, supporting both 0-arg and 1-arg signatures.
 
@@ -173,24 +177,13 @@ def evaluate_genotype_filter(
         compiled_filter = pattern.to_filter()
     return compiled_filter(genotype), compiled_filter
 
-    raise TypeError("genotype_filter must be a callable, pattern string, or None")
-
-
-# ============================================================================
-# TENSOR-LEVEL WRAPPER FACTORIES
-# ============================================================================
-# These functions wrap high-level modifiers (returning dicts of domain objects)
-# into tensor-level callables that accept/return NumPy arrays. They encapsulate
-# the key-parsing and index-resolution logic so that both base_population and
-# external modifier systems (e.g. gamete_allele_conversion) can reuse them.
-
 
 # ============================================================================
 # Unified key resolution — ztype / gtype selectors → numeric indices
 # ============================================================================
 
 
-def _resolve_ztype_key(key: object, registry: Any) -> list[int]:
+def _resolve_ztype_key(key: ZtypeKey, registry: IndexRegistry) -> list[int]:
     """Resolve a ztype selector to a list of ztype indices.
 
     Accepted forms:
@@ -212,7 +205,7 @@ def _resolve_ztype_key(key: object, registry: Any) -> list[int]:
     return registry.ztype_indices_for(key)
 
 
-def _resolve_gtype_key(key: object, registry: Any) -> int:
+def _resolve_gtype_key(key: GtypeKey, registry: IndexRegistry) -> int:
     """Resolve a gtype selector to a compressed gtype index.
 
     Accepted forms:
@@ -246,7 +239,7 @@ def _resolve_gtype_key(key: object, registry: Any) -> int:
     raise KeyError(f"Cannot resolve gamete type key: {key!r}")
 
 
-def _resolve_haplo_str(name: str, registry: Any) -> HaploidGenotype:
+def _resolve_haplo_str(name: str, registry: IndexRegistry) -> HaploidGenotype:
     """Find a HaploidGenotype by ``to_string()`` match via the registry."""
     for hg in registry.index_to_haplo:
         if hasattr(hg, "to_string") and hg.to_string() == name:
@@ -263,15 +256,13 @@ def _write_gamete_distribution(
     tensor: np.ndarray,
     sex_idx: int,
     zidx: int,
-    distribution: Mapping[object, object],
-    registry: Any,
+    distribution: Mapping[GtypeKey, float],
+    registry: IndexRegistry,
     n_gtypes: int,
 ) -> None:
     """Write ``{gtype_key: freq}`` into ``tensor[sex_idx, zidx, :]``."""
     tensor[sex_idx, zidx, :] = 0.0
     for key, freq in distribution.items():
-        if not isinstance(freq, (int, float)):
-            continue
         try:
             gt = _resolve_gtype_key(key, registry)
         except (KeyError, IndexError, ValueError):
@@ -293,8 +284,8 @@ def _write_zygote_distribution(
 
 
 def _normalize_zygote_val_to_distribution(
-    val: object,
-    registry: Any,
+    val: int | tuple[ZtypeKey, float] | Mapping[ZtypeKey, float] | ZtypeKey,
+    registry: IndexRegistry,
 ) -> dict[int, float]:
     """Normalize a zygote replacement value into ``{ztype_idx: prob}``.
 
@@ -311,7 +302,7 @@ def _normalize_zygote_val_to_distribution(
         if isinstance(candidate, int):
             result[int(candidate)] = float(prob)
         else:
-            gt_obj = _resolve_genotype_from_registry(candidate, registry)
+            gt_obj = _resolve_genotype_from_registry(cast(ZtypeKey, candidate), registry)
             z_indices = registry.ztype_indices_for(gt_obj)
             each = float(prob) / len(z_indices)
             for zi in z_indices:
@@ -319,13 +310,12 @@ def _normalize_zygote_val_to_distribution(
         return result
 
     if isinstance(val, Mapping):
-        for cand, prob in cast(Mapping[object, object], val).items():
-            if not isinstance(prob, (int, float)):
-                raise TypeError("Zygote replacement probabilities must be numeric")
+        for cand, prob in val.items():
+            assert isinstance(prob, (int, float)), "Zygote replacement probabilities must be numeric"
             if isinstance(cand, int):
-                result[int(cand)] = float(prob)
+                result[int(cand)] = float(cast(float, prob))
             else:
-                gt_obj = _resolve_genotype_from_registry(cand, registry)
+                gt_obj = _resolve_genotype_from_registry(cast(ZtypeKey, cand), registry)
                 z_indices = registry.ztype_indices_for(gt_obj)
                 each = float(prob) / len(z_indices)
                 for zi in z_indices:
@@ -334,42 +324,52 @@ def _normalize_zygote_val_to_distribution(
 
     if isinstance(val, int):
         result[int(val)] = 1.0
-    else:
+    elif isinstance(val, (str, Genotype)):
         gt_obj = _resolve_genotype_from_registry(val, registry)
         z_indices = registry.ztype_indices_for(gt_obj)
         each = 1.0 / len(z_indices)
         for zi in z_indices:
             result[int(zi)] = each
+    else:
+        raise TypeError(f"Unsupported zygote replacement value: {type(val)}")
     return result
 
 
-def _resolve_genotype_from_registry(key: object, registry: Any) -> Genotype:
+def _resolve_genotype_from_registry(key: ZtypeKey, registry: IndexRegistry) -> Genotype:
     """Resolve a genotype selector (int, str, or Genotype) via registry."""
-    genotypes = registry.index_to_genotype
     if isinstance(key, int):
-        return genotypes[key]
+        return registry.index_to_genotype[key]
     if isinstance(key, str):
-        for g in genotypes:
+        for g in registry.index_to_genotype:
             if hasattr(g, "to_string") and g.to_string() == key:
                 return g
         raise KeyError(f"Cannot resolve genotype: {key!r}")
-    return cast(Genotype, key)
+    return key
+
+
+# ============================================================================
+# TENSOR-LEVEL WRAPPER FACTORIES
+# ============================================================================
+# These functions wrap high-level modifiers (returning dicts of domain objects)
+# into tensor-level callables that accept/return NumPy arrays. They encapsulate
+# the key-parsing and index-resolution logic so that both base_population and
+# external modifier systems (e.g. gamete_allele_conversion) can reuse them.
 
 
 def wrap_gamete_modifier(
     mod: GameteModifier,
-    population: Any,
-    index_registry: Any,
+    population: object | None,
+    registry: IndexRegistry,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level GameteModifier into a tensor-level callable.
 
     The returned callable accepts a tensor of shape ``(n_sexes, n_ztypes, n_gtypes)``
-    and returns a modified copy.  All key resolution is done via *index_registry*.
+    and returns a modified copy.  All key resolution is done via *registry*.
 
     Args:
         mod: A GameteModifier callable.
         population: The population object (passed to mod if it takes an argument).
-        index_registry: IndexRegistry for key resolution.
+        registry: IndexRegistry for key resolution.
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
@@ -384,18 +384,16 @@ def wrap_gamete_modifier(
                 "Gamete modifier must return a mapping from keys to "
                 "compressed-index->freq mappings"
             )
-        bulk = cast(Mapping[object, object], bulk_obj)
+        # User-provided modifier returns heterogeneous dicts — cast at boundary.
+        bulk = cast(Mapping[Union[str, tuple[object, object]], Mapping[object, object]], bulk_obj)
 
         for key, val in bulk.items():
             sex_idx = _resolve_sex_name(key) if isinstance(key, str) else None
 
-            if sex_idx is not None and isinstance(val, Mapping):
-                # Case A: top-level sex name ('male'/'female')
-                for ztype_key, distribution in cast(
-                    Mapping[object, object], val
-                ).items():
+            if sex_idx is not None:
+                for ztype_key, distribution in val.items():
                     try:
-                        indices = _resolve_ztype_key(ztype_key, index_registry)
+                        indices = _resolve_ztype_key(cast(ZtypeKey, ztype_key), registry)
                     except (KeyError, IndexError, ValueError):
                         continue
                     if not (0 <= sex_idx < n_sexes):
@@ -405,35 +403,32 @@ def wrap_gamete_modifier(
                             if 0 <= zi < n_ztypes:
                                 _write_gamete_distribution(
                                     modified, sex_idx, zi,
-                                    cast(Mapping[object, object], distribution),
-                                    index_registry, n_gtypes,
+                                    cast(Mapping[GtypeKey, float], distribution),
+                                    registry, n_gtypes,
                                 )
                 continue
 
             key_tuple = _as_pair(key)
             if key_tuple is not None and isinstance(key_tuple[0], int):
-                # Case B: explicit (sex_idx, ztype_key)
                 sex_idx = key_tuple[0]
                 ztype_key = key_tuple[1]
                 if not (0 <= sex_idx < n_sexes):
                     continue
                 try:
-                    for zi in _resolve_ztype_key(ztype_key, index_registry):
+                    for zi in _resolve_ztype_key(cast(ZtypeKey, ztype_key), registry):
                         if 0 <= zi < n_ztypes:
                             _write_gamete_distribution(
                                 modified, sex_idx, zi,
-                                cast(Mapping[object, object], val),
-                                index_registry, n_gtypes,
+                                cast(Mapping[GtypeKey, float], val),
+                                registry, n_gtypes,
                             )
                 except (KeyError, IndexError, ValueError):
                     continue
                 continue
 
             # Case C: key is ztype_key applied to all sexes
-            if not isinstance(val, Mapping):
-                continue
             try:
-                indices = _resolve_ztype_key(key, index_registry)
+                indices = _resolve_ztype_key(cast(ZtypeKey, key), registry)
             except (KeyError, IndexError, ValueError):
                 continue
             for sex_idx in range(n_sexes):
@@ -441,8 +436,8 @@ def wrap_gamete_modifier(
                     if 0 <= zi < n_ztypes:
                         _write_gamete_distribution(
                             modified, sex_idx, zi,
-                            cast(Mapping[object, object], val),
-                            index_registry, n_gtypes,
+                            cast(Mapping[GtypeKey, float], val),
+                            registry, n_gtypes,
                         )
 
         return modified
@@ -451,18 +446,18 @@ def wrap_gamete_modifier(
 
 def wrap_zygote_modifier(
     mod: ZygoteModifier,
-    population: Any,
-    index_registry: Any,
+    population: object | None,
+    registry: IndexRegistry,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level ZygoteModifier into a tensor-level callable.
 
     The returned callable accepts a tensor of shape ``(n_gtypes, n_gtypes, n_ztypes)``
-    and returns a modified copy.  All key resolution is done via *index_registry*.
+    and returns a modified copy.  All key resolution is done via *registry*.
 
     Args:
         mod: A ZygoteModifier callable.
         population: The population object (passed to mod if it takes an argument).
-        index_registry: IndexRegistry for key resolution.
+        registry: IndexRegistry for key resolution.
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
@@ -475,20 +470,23 @@ def wrap_zygote_modifier(
             raise TypeError(
                 "Zygote modifier must return a mapping from keys to replacements"
             )
-        bulk = cast(Mapping[object, object], bulk_obj)
+        # User-provided modifier returns heterogeneous dicts — cast at boundary.
+        bulk = cast(Mapping[tuple[object, object], object], bulk_obj)
 
         for key, val in bulk.items():
             if _is_int_pair(key):
-                c1 = cast(int, cast(tuple[object, object], key)[0])
-                c2 = cast(int, cast(tuple[object, object], key)[1])
+                c1, c2 = key
             else:
                 pair = _as_pair(key)
                 if pair is None:
                     raise TypeError("Zygote modifier key must be a 2-tuple")
-                c1 = _resolve_gtype_key(pair[0], index_registry)
-                c2 = _resolve_gtype_key(pair[1], index_registry)
+                c1 = _resolve_gtype_key(cast(GtypeKey, pair[0]), registry)
+                c2 = _resolve_gtype_key(cast(GtypeKey, pair[1]), registry)
 
-            distribution = _normalize_zygote_val_to_distribution(val, index_registry)
+            distribution = _normalize_zygote_val_to_distribution(
+                cast(Union[int, tuple[ZtypeKey, float], Mapping[ZtypeKey, float], ZtypeKey], val),
+                registry,
+            )
             _write_zygote_distribution(modified, c1, c2, distribution)
 
         return modified
@@ -498,8 +496,8 @@ def wrap_zygote_modifier(
 def build_modifier_wrappers(
     gamete_modifiers: List[Tuple[int, Optional[str], GameteModifier]],
     zygote_modifiers: List[Tuple[int, Optional[str], ZygoteModifier]],
-    population: Any,
-    index_registry: Any,
+    population: object | None,
+    registry: IndexRegistry,
 ) -> Tuple[List[Callable[[np.ndarray], np.ndarray]], List[Callable[[np.ndarray], np.ndarray]]]:
     """Wrap high-level gamete/zygote modifiers into tensor-level callables.
 
@@ -507,7 +505,7 @@ def build_modifier_wrappers(
         gamete_modifiers: List of (modifier_id, name, modifier) tuples.
         zygote_modifiers: List of (modifier_id, name, modifier) tuples.
         population: The population object.
-        index_registry: IndexRegistry for all key resolution.
+        registry: IndexRegistry for all key resolution.
 
     Returns:
         Tuple of (gamete_modifier_funcs, zygote_modifier_funcs).
@@ -517,12 +515,12 @@ def build_modifier_wrappers(
 
     for _, _, mod in zygote_modifiers:
         zygote_modifier_funcs.append(
-            wrap_zygote_modifier(mod, population, index_registry)
+            wrap_zygote_modifier(mod, population, registry)
         )
 
     for _, _, mod in gamete_modifiers:
         gamete_modifier_funcs.append(
-            wrap_gamete_modifier(mod, population, index_registry)
+            wrap_gamete_modifier(mod, population, registry)
         )
 
     return gamete_modifier_funcs, zygote_modifier_funcs

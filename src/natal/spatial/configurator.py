@@ -744,7 +744,7 @@ class SpatialConfigurator:
                 gamete_modifiers=gamete_mods,
                 zygote_modifiers=zygote_mods,
                 population=None,
-                index_registry=registry,
+                registry=registry,
             )
             for fn in g_funcs:
                 z2g_copy = fn(z2g_copy)
