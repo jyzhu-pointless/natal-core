@@ -243,9 +243,6 @@ def rebuild_config_maps(
             zygote_modifiers=ctx.zygote_modifiers,
             population=None,
             index_registry=ctx.registry,
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
         )
 
         # ---- fetch the Mendelian baseline from the species cache ----

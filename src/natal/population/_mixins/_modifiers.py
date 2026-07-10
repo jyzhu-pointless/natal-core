@@ -162,9 +162,6 @@ class ModifierPresetMixin(HookManagerMixin):
             zygote_modifiers=self._zygote_modifiers,
             population=self,
             index_registry=self._index_registry,
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
         )
 
         # Step 2: Build the gametogenesis map.  For each diploid genotype

@@ -678,8 +678,6 @@ class SpatialConfigurator:
         from natal.modifiers.module import build_modifier_wrappers
 
         registry = build_registry(self._species)
-        haps = registry.index_to_haplo
-        dips = registry.index_to_genotype
 
         for sig in sigs:
             # Replay presets/modifiers to get modifier lists for this group.
@@ -747,9 +745,6 @@ class SpatialConfigurator:
                 zygote_modifiers=zygote_mods,
                 population=None,
                 index_registry=registry,
-                haploid_genotypes=haps,
-                diploid_genotypes=dips,
-                n_glabs=int(full_config.n_glabs),
             )
             for fn in g_funcs:
                 z2g_copy = fn(z2g_copy)
