@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 
 from natal.data import extract_gamete_frequencies_by_glab
 from natal.genetics import Gene, Genotype, HaploidGenotype
+from natal.modifiers.conditions import Condition
 from natal.modifiers.module import (
     GameteModifier,
     GenotypeFilter,
@@ -385,6 +386,46 @@ class GameteConversionRuleSet:
         )
         return self.add_rule(rule)
 
+    # ------------------------------------------------------------------
+    # New ztype/gtype-aware DSL methods (added alongside legacy API)
+    # ------------------------------------------------------------------
+
+    def add_glab_convert(
+        self,
+        from_glab: str,
+        to_glab: str,
+        rate: float,
+        *,
+        when: Optional[Condition] = None,
+    ) -> 'GameteConversionRuleSet':
+        """Add a gamete-label conversion rule.
+
+        For every (sex, ztype) that satisfies *when*, all gametes carrying
+        *from_glab* have their label reassigned to *to_glab* with
+        probability *rate*.
+
+        This replaces the old pattern of ``add_hg_convert(hg→hg, target_glab=...)``
+        which was a semantic abuse of the haploid-genotype rule for glab-only
+        operations.
+
+        Args:
+            from_glab: Source gamete label.
+            to_glab: Target gamete label.
+            rate: Conversion probability, in [0, 1].
+            when: Optional condition.  If None, applies unconditionally.
+
+        Returns:
+            *self* for chaining.
+        """
+        return self.add_hg_convert(
+            hg_match=lambda hg: True,
+            to_haploid_genotype=lambda hg: hg,  # identity on haploid genome
+            rate=rate,
+            target_glab=to_glab,
+            source_glab=from_glab,
+            # when → sex_filter + genotype_filter 转换在 to_gamete_modifier 编译时处理
+        )
+
     def to_gamete_modifier(
         self,
         population: 'BasePopulation[Any]'
@@ -408,7 +449,7 @@ class GameteConversionRuleSet:
         def gamete_modifier_func(*_args: object, **_kwargs: object) -> Dict[Tuple[int, int], Dict[int, float]]:
             """Apply all conversion rules to gamete frequencies.
 
-            Returns dict mapping (sex_idx, genotype_idx) -> {compressed_hg_glab_idx -> freq}.
+            Returns dict mapping (sex_idx, ztype_idx) -> {compressed_hg_glab_idx -> freq}.
             """
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
 
@@ -420,17 +461,16 @@ class GameteConversionRuleSet:
             resolved_rules = _resolve_rule_glabs(rules, population)
 
             for sex_idx in range(population.config.n_sexes):
-                for genotype_idx, genotype in enumerate(population.registry.index_to_genotype):
+                for ztype_idx, (genotype, _slab) in enumerate(population.registry.index_to_ztype):
                     if not any(rule.applies_to_sex(sex_idx) and
                               rule.applies_to_genotype(genotype)
                               for rule in rules):
                         continue
 
-                    # Extract glab-aware gamete frequencies
                     initial_freqs = extract_gamete_frequencies_by_glab(
                         zygotes_to_gametes_map,
                         sex_idx,
-                        genotype_idx,
+                        ztype_idx,
                         haploid_genotypes,
                         n_glabs
                     )
@@ -438,7 +478,6 @@ class GameteConversionRuleSet:
                     if not initial_freqs:
                         continue
 
-                    # Compute converted frequencies at (HaploidGenotype, glab_idx) level
                     converted_freqs = _compute_converted_gamete_freqs(
                         genotype,
                         resolved_rules,
@@ -448,7 +487,6 @@ class GameteConversionRuleSet:
                     )
 
                     if converted_freqs:
-                        # Convert (HaploidGenotype, glab_idx) -> compressed index
                         compressed_freqs: Dict[int, float] = {}
                         for (hg, glab_idx), freq in converted_freqs.items():
                             if freq > 0:
@@ -457,11 +495,11 @@ class GameteConversionRuleSet:
                                 compressed_freqs[cidx] = compressed_freqs.get(cidx, 0.0) + freq
 
                         if compressed_freqs:
-                            result[(sex_idx, genotype_idx)] = compressed_freqs
+                            result[(sex_idx, ztype_idx)] = compressed_freqs
 
             return result
 
-        return gamete_modifier_func  # TODO: protocol typing still needs cleanup.
+        return gamete_modifier_func  # type: ignore[return-type]  # protocol returns Mapping[tuple[int,ZtypeKey],...] but closure returns Dict[Tuple[int,int],...]
 
     def __repr__(self) -> str:
         """Return a string identifying this rule set and its rule count."""

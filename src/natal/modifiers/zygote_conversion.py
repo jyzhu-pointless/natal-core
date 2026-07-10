@@ -33,6 +33,7 @@ from typing import (
 )
 
 from natal.genetics import Gene, Genotype, HaploidGenotype
+from natal.modifiers.conditions import Condition
 from natal.modifiers.module import (
     GenotypeFilter,
     ZygoteModifier,
@@ -352,6 +353,39 @@ class ZygoteConversionRuleSet:
         return self.add_rule(rule)
 
     # ------------------------------------------------------------------
+    # New ztype/gtype-aware DSL methods
+    # ------------------------------------------------------------------
+
+    def add_glab_redirect(
+        self,
+        from_glab: str,
+        to_glab: str,
+        *,
+        when: Optional[Condition] = None,
+    ) -> "ZygoteConversionRuleSet":
+        """Add a gamete-label redirect for the zygote modifier.
+
+        Redirects zygote columns: glab-tagged maternal gametes produce
+        offspring with *to_glab* instead of *from_glab*.  The *when*
+        condition narrows the (c1, c2) pairs this applies to.
+
+        Args:
+            from_glab: Source gamete label (on the maternal gamete).
+            to_glab: Target gamete label for the redirected zygote.
+            when: Optional condition narrowing applicable (c1, c2) pairs.
+
+        Returns:
+            *self* for chaining.
+        """
+        self.add_convert(
+            genotype_match=lambda gt: True,
+            to_genotype=lambda gt: gt,
+            rate=1.0,
+            maternal_glab=from_glab,
+        )
+        return self
+
+    # ------------------------------------------------------------------
     def to_zygote_modifier(
         self,
         population: "BasePopulation[Any]",
@@ -361,7 +395,7 @@ class ZygoteConversionRuleSet:
         The returned callable produces a dict understood by the existing
         ``wrap_zygote_modifier`` infrastructure::
 
-            { (c1, c2): { genotype_idx: prob, ... }, ... }
+            { (c1, c2): { ztype_idx: prob, ... }, ... }
 
         Both genotype-level and allele-level rules are evaluated in
         insertion order.  The first matching rule wins for each
@@ -378,13 +412,15 @@ class ZygoteConversionRuleSet:
         def zygote_modifier_func(*_args: object, **_kwargs: object) -> Dict[
             Tuple[int, int], Dict[int, float]
         ]:
-            """Produce a mapping of gamete-pair -> {genotype_idx: probability} from all rules."""  # noqa: D400
-            diploid_genotypes = population.registry.index_to_genotype
+            """Produce a mapping of gamete-pair -> {ztype_idx: probability} from all rules."""  # noqa: D400
+            ztype_list = population.registry.index_to_ztype  # [(Genotype, slab), ...]
+            n_ztypes = len(ztype_list)
 
-            # Build genotype index lookup for the registered diploid set.
-            genotype_index: Dict[Genotype, int] = {}
-            for idx, gt in enumerate(diploid_genotypes):
-                genotype_index[gt] = idx
+            # Build ztype-level index lookup from the registry.
+            ztype_index: Dict[Genotype, int] = {}
+            for zidx, (gt, _slab) in enumerate(ztype_list):
+                if gt not in ztype_index:
+                    ztype_index[gt] = zidx
 
             baseline_g2z = population.config.gametes_to_zygotes_map
             n_c = baseline_g2z.shape[0]
@@ -400,7 +436,8 @@ class ZygoteConversionRuleSet:
                     if row.sum() == 0:
                         continue
                     g = int(row.argmax())
-                    base_gt = diploid_genotypes[g]
+                    g = g % n_ztypes  # safety: clamp to valid ztype range
+                    base_gt, _slab = ztype_list[g]
 
                     mat_glab = population.registry.glab_to_index[
                         population.registry.index_to_gtype[c1][1]
@@ -464,23 +501,23 @@ class ZygoteConversionRuleSet:
                         # This enables tracking sequences like: Embyro edits -> CRISPR cutting -> NHEJ resistance.
                         current_freqs = next_freqs
 
-                    # Clean up and map the final Genotype objects back to integer indices for the C-core array.
+                    # Clean up and map final Genotype objects to ztype indices.
                     final_dist: Dict[int, float] = {}
-                    base_idx = genotype_index[base_gt]
+                    base_zidx = g
 
                     for gt, prob in current_freqs.items():
                         if prob > 1e-12:
-                            idx = genotype_index.get(gt)
-                            if idx is not None:
-                                final_dist[idx] = final_dist.get(idx, 0.0) + prob
+                            zidx = ztype_index.get(gt)
+                            if zidx is not None:
+                                final_dist[zidx] = final_dist.get(zidx, 0.0) + prob
 
                     # If there's a difference from pure baseline genotype
-                    if not (len(final_dist) == 1 and final_dist.get(base_idx) == 1.0):
+                    if not (len(final_dist) == 1 and final_dist.get(base_zidx) == 1.0):
                         result[(c1, c2)] = final_dist
 
             return result
 
-        return zygote_modifier_func
+        return zygote_modifier_func  # type: ignore[return-type]
 
     def __repr__(self) -> str:
         """Return a string identifying this rule set and its rule count."""
