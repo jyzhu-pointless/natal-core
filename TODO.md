@@ -178,6 +178,37 @@
 - `src/natal/modifiers/module.py`：三个函数签名中删除参数及 docstring，转发代码移除
 - `src/natal/configurator/_registry_builder.py`：调用方移除 `expand_to_ztypes=...` 传参
 
+### #11.5 📋 Modifier 系统：genotype vs ztype 概念混用 + 冗余参数
+
+**来源**：2026-07-10 `expand_to_ztypes` 清理后的进一步审计。
+
+**问题 1 — 冗余参数**：`haploid_genotypes` 和 `diploid_genotypes` 在所有 internal helper 中与 `index_registry` 同时出现，但 registry 已包含 `index_to_haplo` 和 `index_to_genotype`，功能完全重叠。涉及函数：
+
+| 函数 | 冗余参数 | registry 等价物 |
+|------|---------|----------------|
+| `_resolve_gidx` | `diploid_genotypes` | `registry.index_to_genotype` |
+| `_resolve_genotype` | `diploid_genotypes` | `registry.index_to_genotype` |
+| `_resolve_part_to_compressed` | `haploid_genotypes` | `registry.index_to_haplo` |
+| `_find_haploid_by_name` | `haploid_genotypes` | `registry.index_to_haplo` |
+| `_apply_comp_map` | `haploid_genotypes` | `registry.index_to_haplo` |
+
+`n_glabs` 也可从 `len(registry.glab_labels)` 推导。
+
+**问题 2 — genotype/ztype 概念混用**：
+- `GameteModifier` Protocol：外键文档写 `(sex_idx, genotype_idx)`，实际 `_resolve_gidx` 解析后返回 ztype 索引
+- `_resolve_gidx`：函数名暗示返��� genotype index，实际返回 `ztype_indices_for(gt)`（ztype）
+- `_write_zygote_mapping`：docstring 写 "genotype index"，实际写入 ztype 维度
+- `_normalize_zygote_val`：int 键被当作 ztype 索引直接使用
+
+**问题 3 — 无法按 slab 粒度控制**：modifier 的 genotype 键经 `ztype_indices_for()` 无条件展开到全部 slab。`n_slabs > 1` 时用户无法指定"只影响 slab 2 的 genotype X"。
+
+**修复方向**：
+1. 删除冗余参数，统一以 `index_registry` 为唯一数据源
+2. 协议和实现中的 "genotype" → "ztype" 命名修正
+3. 可选：让 modifier 支持 slab-level 目标选择（需要协议扩展）
+
+**涉及文件**：`src/natal/modifiers/module.py` 为主，波及所有调用 `build_modifier_wrappers` 的位置
+
 ### #11.1 ⚠️ Hook 系统测试覆盖缺口
 
 **来源**：2026-06-17 测试审计。`test_hook_kernel_ops.py` 是独立脚本不被 pytest 发现，`_apply_target_with_sperm` 零覆盖，多个 Op 类型无端到端生命周期测试。
