@@ -7,7 +7,9 @@ wrapping modifiers that alter gamete or zygote production in the simulation.
 from natal.modifiers.gamete_conversion import (  # noqa: F401
     GameteAlleleConversionRule,
     GameteConversionRuleSet,
-    GameteHaploidGenomeConversionRule,
+    GameteGlabConversionRule,
+    GameteGtypeConversionRule,
+    GameteHaploidGenomeConversionRule,  # backward compat alias
 )
 from natal.modifiers.module import (  # noqa: F401
     GameteModifier,
@@ -22,7 +24,9 @@ from natal.modifiers.module import (  # noqa: F401
 from natal.modifiers.zygote_conversion import (  # noqa: F401
     ZygoteAlleleConversionRule,
     ZygoteConversionRuleSet,
-    ZygoteGenotypeConversionRule,
+    ZygoteGenotypeConversionRule,  # backward compat alias
+    ZygoteGlabRedirectRule,
+    ZygoteZtypeConversionRule,
 )
 
 __all__ = [
@@ -30,6 +34,8 @@ __all__ = [
     "evaluate_genotype_filter",
     "GameteAlleleConversionRule",
     "GameteConversionRuleSet",
+    "GameteGlabConversionRule",
+    "GameteGtypeConversionRule",
     "GameteHaploidGenomeConversionRule",
     "GameteModifier",
     "GenotypeFilter",
@@ -39,5 +45,7 @@ __all__ = [
     "ZygoteAlleleConversionRule",
     "ZygoteConversionRuleSet",
     "ZygoteGenotypeConversionRule",
+    "ZygoteGlabRedirectRule",
     "ZygoteModifier",
+    "ZygoteZtypeConversionRule",
 ]

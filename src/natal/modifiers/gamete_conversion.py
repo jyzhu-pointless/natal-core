@@ -1,17 +1,21 @@
 """Gamete allele conversion system.
 
 This module provides a generic system for defining transformations at the gamete level.
-It supports two flavors of rules:
+It supports three flavors of rules:
 
 1. Allele-level (GameteAlleleConversionRule):
    Replace a single allele inside a HaploidGenotype.
    Examples: convert(from_allele="A", to_allele="B", rate=0.5)
 
-2. HaploidGenotype-level (GameteHaploidGenomeConversionRule):
-   Match a whole HaploidGenotype and replace it with another.
+2. Gtype-level (GameteGtypeConversionRule):
+   Match a whole HaploidGenotype+glab pair and replace it with another.
    Examples: convert(hg_match=hg_AB, to_haploid_genotype=hg_CD, rate=0.8)
 
-Both create a GameteModifier that modifies zygotes_to_gametes_map during gamete production.
+3. Glab-only (GameteGlabConversionRule):
+   Reassign a gamete label without changing the HaploidGenotype.
+   Examples: convert(from_glab="default", to_glab="cas9_deposited", rate=0.95)
+
+All create a GameteModifier that modifies zygotes_to_gametes_map during gamete production.
 """
 
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -32,7 +36,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "GameteAlleleConversionRule",
-    "GameteHaploidGenomeConversionRule",
+    "GameteGtypeConversionRule",
+    "GameteGlabConversionRule",
+    "GameteHaploidGenomeConversionRule",  # backward compat alias
     "GameteConversionRuleSet"
 ]
 
@@ -164,7 +170,107 @@ class GameteHaploidGenomeConversionRule:
 
     def __repr__(self) -> str:
         """Return a string identifying this haploid-genome conversion rule."""
-        return f"GameteHaploidGenomeConversionRule({self.name}, rate={self.rate})"
+        return f"GameteGtypeConversionRule({self.name}, rate={self.rate})"
+
+
+# Backward-compatible alias: GameteGtypeConversionRule is the new canonical name.
+GameteGtypeConversionRule = GameteHaploidGenomeConversionRule
+
+
+class GameteGlabConversionRule:
+    """Defines a gamete label (glab) reassignment rule.
+
+    Reassigns gametes carrying *from_glab* to *to_glab* with probability
+    *rate*, **without** changing the ``HaploidGenotype``.  This is the
+    canonical type created by :meth:`GameteConversionRuleSet.add_glab_convert`.
+
+    Unlike :class:`GameteGtypeConversionRule`, this rule always matches
+    every haploid genome — only the gamete label is changed.
+
+    Examples:
+
+        # 95% of cas9_deposited gametes become default again
+        rule = GameteGlabConversionRule(
+            from_glab="cas9_deposited",
+            to_glab="default",
+            rate=0.95,
+        )
+    """
+
+    def __init__(
+        self,
+        from_glab: Union[str, int],
+        to_glab: Union[str, int],
+        rate: float,
+        name: Optional[str] = None,
+        sex_filter: Optional[Union[str, int, Sex]] = "both",
+        genotype_filter: _GenotypeFilter = None,
+    ):
+        """Initialise a gamete-label conversion rule.
+
+        Args:
+            from_glab: Source gamete label (str name or int index).
+            to_glab: Target gamete label (str name or int index).
+            rate: Probability of conversion, in [0, 1].
+            name: Human-readable label.
+            sex_filter: Apply only to specific sex.
+            genotype_filter: Optional filter on the *diploid* Genotype
+                of the gamete producer. Accepts callable or genotype
+                pattern string.
+
+        Raises:
+            ValueError: If *rate* is not in [0, 1].
+        """
+        if not 0 <= rate <= 1:
+            raise ValueError(f"rate must be in [0, 1], got {rate}")
+
+        self.from_glab = from_glab
+        self.to_glab = to_glab
+        self.rate = rate
+        self.name = name or f"GameteGlabConversion(from={from_glab}, to={to_glab}, rate={rate})"
+        if sex_filter is None:
+            self.sex_filter = "both"
+        else:
+            self.sex_filter = sex_filter
+        self.genotype_filter = genotype_filter
+        self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
+
+        # Compatibility attributes so _resolve_rule_glabs can process this rule.
+        self.source_glab: Union[str, int, None] = from_glab
+        self.target_glab: Union[str, int, None] = to_glab
+
+    def matches(self, hg: HaploidGenotype) -> bool:
+        """Always returns True — glab rules match every haploid genome."""
+        return True
+
+    def replacement(self, hg: HaploidGenotype) -> HaploidGenotype:
+        """Return the same haploid genome unchanged."""
+        return hg
+
+    def applies_to_sex(self, sex_idx: _SexSpecifier, sex_name: Optional[str] = None) -> bool:
+        """Check if rule applies to a given sex."""
+        if self.sex_filter == "both":
+            return True
+        try:
+            target_sex_idx = resolve_sex_label(self.sex_filter)
+            return sex_idx == target_sex_idx
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid sex_filter: {self.sex_filter}") from e
+
+    def applies_to_genotype(self, genotype: Genotype) -> bool:
+        """Check if rule applies to a given diploid genotype."""
+        applies, compiled = _evaluate_genotype_filter(
+            self.genotype_filter,
+            genotype,
+            self._compiled_genotype_filter,
+        )
+        self._compiled_genotype_filter = compiled
+        return applies
+
+    def __repr__(self) -> str:
+        """Return a string identifying this glab conversion rule."""
+        return f"GameteGlabConversionRule({self.name}, rate={self.rate})"
+
 
 class GameteAlleleConversionRule:
     """Defines a single allele conversion rule: from_allele -> to_allele with probability.
@@ -275,13 +381,14 @@ class GameteAlleleConversionRule:
         return applies
 
 # Type alias for accepted gamete rule types
-_GameteRuleType = Union[GameteAlleleConversionRule, GameteHaploidGenomeConversionRule]
+_GameteRuleType = Union[GameteAlleleConversionRule, GameteGtypeConversionRule, GameteGlabConversionRule]
 
 class GameteConversionRuleSet:
     """Manages a collection of gamete conversion rules.
 
-    Accepts both :class:`GameteAlleleConversionRule` (allele-level) and
-    :class:`GameteHaploidGenomeConversionRule` (whole-HaploidGenotype-level).
+    Accepts :class:`GameteAlleleConversionRule` (allele-level),
+    :class:`GameteGtypeConversionRule` (gtype-level), and
+    :class:`GameteGlabConversionRule` (glab-only).
     Rules are evaluated in insertion order; the first matching rule wins for
     each ``(hg, glab)`` entry.
 
@@ -290,8 +397,10 @@ class GameteConversionRuleSet:
         ruleset = GameteConversionRuleSet()
         # allele-level
         ruleset.add_allele_convert("A", "B", rate=0.5)
-        # haploid-genome-level
-        ruleset.add_hg_convert(hg_AB, hg_CD, rate=0.8)
+        # gtype-level
+        ruleset.add_gtype_convert(hg_AB, hg_CD, rate=0.8)
+        # glab-only
+        ruleset.add_glab_convert("default", "cas9_deposited", rate=0.95)
 
         gamete_mod = ruleset.to_gamete_modifier(population)
         population.add_gamete_modifier(gamete_mod, name="conversions")
@@ -307,9 +416,9 @@ class GameteConversionRuleSet:
         self.rules: List[_GameteRuleType] = []
 
     def add_rule(self, rule: _GameteRuleType) -> 'GameteConversionRuleSet':
-        """Append a rule (allele-level or HaploidGenotype-level).  Returns *self*."""
-        assert isinstance(rule, (GameteAlleleConversionRule, GameteHaploidGenomeConversionRule)), \
-                "rule must be an instance of GameteAlleleConversionRule or GameteHaploidGenomeConversionRule"
+        """Append a rule (allele-level, gtype-level, or glab-only).  Returns *self*."""
+        assert isinstance(rule, (GameteAlleleConversionRule, GameteGtypeConversionRule, GameteGlabConversionRule)), \
+                "rule must be a GameteAlleleConversionRule, GameteGtypeConversionRule, or GameteGlabConversionRule"
         self.rules.append(rule)
         return self
 
@@ -361,7 +470,10 @@ class GameteConversionRuleSet:
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
     ) -> 'GameteConversionRuleSet':
-        """Add a HaploidGenotype-level conversion rule.
+        """Add a gtype-level conversion rule (backward-compat alias for add_gtype_convert).
+
+        .. deprecated::
+            Use :meth:`add_gtype_convert` instead.
 
         Args:
             hg_match: Match predicate / HaploidGenotype.
@@ -375,7 +487,41 @@ class GameteConversionRuleSet:
         Returns:
             *self* for chaining.
         """
-        rule = GameteHaploidGenomeConversionRule(
+        return self.add_gtype_convert(
+            hg_match=hg_match,
+            to_haploid_genotype=to_haploid_genotype,
+            rate=rate,
+            sex_filter=sex_filter,
+            genotype_filter=genotype_filter,
+            source_glab=source_glab,
+            target_glab=target_glab,
+        )
+
+    def add_gtype_convert(
+        self,
+        hg_match: Union[Callable[[HaploidGenotype], bool], HaploidGenotype],
+        to_haploid_genotype: Union[HaploidGenotype, Callable[[HaploidGenotype], HaploidGenotype]],
+        rate: float,
+        sex_filter: Optional[Union[str, int]] = None,
+        genotype_filter: _GenotypeFilter = None,
+        source_glab: Optional[Union[str, int]] = None,
+        target_glab: Optional[Union[str, int]] = None,
+    ) -> 'GameteConversionRuleSet':
+        """Add a gtype-level conversion rule.
+
+        Args:
+            hg_match: Match predicate / HaploidGenotype.
+            to_haploid_genotype: Replacement HaploidGenotype or callable.
+            rate: Conversion probability.
+            sex_filter: Rule applies only to this sex ("male"/"female" or index).
+            genotype_filter: Rule applies only if diploid parent passes this filter.
+            source_glab: Rule applies only to gametes currently holding this label.
+            target_glab: Gametes that successfully convert get reassigned to this label.
+
+        Returns:
+            *self* for chaining.
+        """
+        rule = GameteGtypeConversionRule(
             hg_match=hg_match,
             to_haploid_genotype=to_haploid_genotype,
             rate=rate,
@@ -406,26 +552,32 @@ class GameteConversionRuleSet:
         gametes carrying *from_glab* have their label reassigned to
         *to_glab* with probability *rate*.
 
+        This creates a :class:`GameteGlabConversionRule` directly — no
+        delegation to the gtype-level API.
+
         Args:
             from_glab: Source gamete label.
             to_glab: Target gamete label.
             rate: Conversion probability, in [0, 1].
             when: Optional composable condition (preferred over legacy kwargs).
-            sex_filter: Legacy — forwarded to add_hg_convert.
-            genotype_filter: Legacy — forwarded to add_hg_convert.
+            sex_filter: Legacy — rule applies only to this sex.
+            genotype_filter: Legacy — rule applies only if diploid parent
+                passes this filter.
 
         Returns:
             *self* for chaining.
         """
-        return self.add_hg_convert(
-            hg_match=lambda hg: True,
-            to_haploid_genotype=lambda hg: hg,
+        # TODO: Translate `when` condition to legacy filters once the Condition
+        # DSL evaluator is hooked into the modifier execution path.
+        _ = when
+        rule = GameteGlabConversionRule(
+            from_glab=from_glab,
+            to_glab=to_glab,
             rate=rate,
-            target_glab=to_glab,
-            source_glab=from_glab,
             sex_filter=sex_filter,
             genotype_filter=genotype_filter,
         )
+        return self.add_rule(rule)
 
     def to_gamete_modifier(
         self,
@@ -521,8 +673,9 @@ def _resolve_rule_glabs(
 ) -> List[_ResolvedGameteRule]:
     """Resolve string glab names in rules to integer indices.
 
-    Works for both :class:`GameteAlleleConversionRule` and
-    :class:`GameteHaploidGenomeConversionRule` since both carry the same
+    Works for :class:`GameteAlleleConversionRule`,
+    :class:`GameteGtypeConversionRule`, and
+    :class:`GameteGlabConversionRule` since all carry the same
     ``source_glab`` / ``target_glab`` attributes.
 
     Returns:
@@ -557,7 +710,7 @@ def _compute_converted_gamete_freqs(
     """Compute gamete frequencies after applying conversion rules (glab-aware).
 
     Handles both :class:`GameteAlleleConversionRule` and
-    :class:`GameteHaploidGenomeConversionRule`. Rules are applied serially
+    :class:`GameteGtypeConversionRule`. Rules are applied serially
     (Sequential cascade framework), allowing multiple rules to act conditionally
     on the same gamete pool. This means the outcome of Rule N becomes the input
     pool for Rule N+1.
@@ -566,8 +719,8 @@ def _compute_converted_gamete_freqs(
     current_freqs = initial_freqs.copy()
 
     for rule, src_glab_idx, tgt_glab_idx in resolved_rules:
-        assert isinstance(rule, (GameteAlleleConversionRule, GameteHaploidGenomeConversionRule)), \
-                "Resolved rules must be instances of GameteAlleleConversionRule or GameteHaploidGenomeConversionRule"
+        assert isinstance(rule, (GameteAlleleConversionRule, GameteGtypeConversionRule, GameteGlabConversionRule)), \
+                "Resolved rules must be instances of GameteAlleleConversionRule, GameteGtypeConversionRule, or GameteGlabConversionRule"
 
         # Check rule-level conditions (does it apply to this sex / diploid genotype?)
         if not rule.applies_to_sex(sex_idx) or not rule.applies_to_genotype(genotype):
@@ -585,8 +738,23 @@ def _compute_converted_gamete_freqs(
                 next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
                 continue
 
-            # --- HaploidGenotype-level rule ---
-            if isinstance(rule, GameteHaploidGenomeConversionRule):
+            # --- Glab-only rule ---
+            if isinstance(rule, GameteGlabConversionRule):
+                prob = rule.rate
+
+                # split: unconverted keeps original glab, converted gets target_glab
+                unconverted_key = (hg, glab_idx)
+                next_freqs[unconverted_key] = (
+                    next_freqs.get(unconverted_key, 0.0) + freq * (1 - prob)
+                )
+                out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
+                converted_key = (hg, out_glab)
+                next_freqs[converted_key] = (
+                    next_freqs.get(converted_key, 0.0) + freq * prob
+                )
+
+            # --- Gtype-level rule ---
+            elif isinstance(rule, GameteGtypeConversionRule):
                 # If the gamete's genome does not match the rule's target pattern, pass untouched.
                 if not rule.matches(hg):
                     next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
@@ -610,7 +778,7 @@ def _compute_converted_gamete_freqs(
                 )
 
             # --- Allele-level rule ---
-            else:  # isinstance(rule, GameteAlleleConversionRule)
+            else:
                 # Attempt to convert inside the haploid genotype.
                 # Returns (original, converted, prob) if the target allele is present.
                 converted = _convert_haploid_genotype(

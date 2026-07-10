@@ -1,9 +1,9 @@
 """Zygote allele conversion system.
 
 This module provides a generic system for defining genotype transformations at the zygote level.
-It supports two flavors of rules:
+It supports three flavors of rules:
 
-1. Genotype-level (ZygoteGenotypeConversionRule):
+1. Genotype-level (ZygoteZtypeConversionRule):
    Match a whole diploid genotype and replace it with another.
    Examples: convert(genotype_match=gt_AA, to_genotype=gt_Aa, rate=0.8)
 
@@ -11,7 +11,12 @@ It supports two flavors of rules:
    Replace a single allele inside the diploid genotype.
    Examples: convert(from_allele="A", to_allele="B", rate=0.5, side="both")
 
-Both create a ZygoteModifier that modifies gametes_to_zygotes_map after fertilization.
+3. Glab-redirect (ZygoteGlabRedirectRule):
+   Redirect zygote columns: glab-tagged maternal gametes produce offspring
+   with a different glab.
+   Examples: redirect(from_glab="cas9_deposited", to_glab="default")
+
+All create a ZygoteModifier that modifies gametes_to_zygotes_map after fertilization.
 
 Typical use cases:
 - Maternal-effect lethality (certain maternal genotypes kill offspring)
@@ -45,8 +50,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ZygoteAlleleConversionRule",
-    "ZygoteGenotypeConversionRule",
-    "ZygoteConversionRuleSet"
+    "ZygoteGenotypeConversionRule",  # backward compat alias
+    "ZygoteGlabRedirectRule",
+    "ZygoteConversionRuleSet",
+    "ZygoteZtypeConversionRule",
 ]
 
 _GenotypeFilter = GenotypeFilter
@@ -156,7 +163,76 @@ class ZygoteGenotypeConversionRule:
 
     def __repr__(self) -> str:
         """Return a string identifying this genotype conversion rule."""
-        return f"ZygoteGenotypeConversionRule({self.name}, rate={self.rate})"
+        return f"ZygoteZtypeConversionRule({self.name}, rate={self.rate})"
+
+
+# Backward-compatible alias: ZygoteZtypeConversionRule is the new canonical name.
+ZygoteZtypeConversionRule = ZygoteGenotypeConversionRule
+
+
+class ZygoteGlabRedirectRule:
+    """Defines a glab-redirect rule for zygote column mapping.
+
+    When a maternal gamete with *from_glab* fertilizes (producing a zygote),
+    the resulting offspring is tagged with *to_glab* instead.  This is the
+    canonical type created by
+    :meth:`ZygoteConversionRuleSet.add_glab_redirect`.
+
+    Unlike :class:`ZygoteZtypeConversionRule`, this rule does not change the
+    genotype — it only affects the gamete label carried forward.
+
+    Examples:
+
+        # cas9_deposited maternal gametes produce default offspring
+        rule = ZygoteGlabRedirectRule(
+            from_glab="cas9_deposited",
+            to_glab="default",
+        )
+    """
+
+    def __init__(
+        self,
+        from_glab: Union[str, int],
+        to_glab: Union[str, int],
+        rate: float = 1.0,
+        name: Optional[str] = None,
+    ):
+        """Initialise a glab-redirect rule.
+
+        Args:
+            from_glab: Source gamete label (on the maternal gamete).
+            to_glab: Target gamete label for the redirected zygote.
+            rate: Effective redirect probability, in [0, 1]. Default 1.0.
+            name: Human-readable label.
+
+        Raises:
+            ValueError: If *rate* is not in [0, 1].
+        """
+        if not 0 <= rate <= 1:
+            raise ValueError(f"rate must be in [0, 1], got {rate}")
+
+        self.from_glab = from_glab
+        self.to_glab = to_glab
+        self.rate = rate
+        self.name = name or f"ZygoteGlabRedirect(from={from_glab}, to={to_glab}, rate={rate})"
+
+        # Expose glab attributes in the same shape as ZygoteGenotypeConversionRule
+        # so that _resolve_zygote_rule_glabs can process this rule.
+        self.maternal_glab: Union[str, int, None] = from_glab
+        self.paternal_glab: Union[str, int, None] = None
+
+    def matches(self, genotype: Genotype) -> bool:
+        """Always returns True — glab redirect does not filter by genotype."""
+        return True
+
+    def replacement(self, genotype: Genotype) -> Genotype:
+        """Return the same genotype unchanged."""
+        return genotype
+
+    def __repr__(self) -> str:
+        """Return a string identifying this glab redirect rule."""
+        return f"ZygoteGlabRedirectRule({self.name}, rate={self.rate})"
+
 
 class ZygoteAlleleConversionRule:
     """Defines an allele-level zygote conversion rule: from_allele -> to_allele.
@@ -245,10 +321,11 @@ class ZygoteAlleleConversionRule:
 class ZygoteConversionRuleSet:
     """Manages a collection of zygote conversion rules.
 
-    Accepts both :class:`ZygoteGenotypeConversionRule` (genotype-level) and
-    :class:`ZygoteAlleleConversionRule` (allele-level).  Rules are
-    evaluated in insertion order; the first matching rule wins for each
-    ``(c1, c2)`` pair.
+    Accepts :class:`ZygoteZtypeConversionRule` (genotype-level),
+    :class:`ZygoteAlleleConversionRule` (allele-level), and
+    :class:`ZygoteGlabRedirectRule` (glab-redirect).
+    Rules are evaluated in insertion order; the first matching rule wins
+    for each ``(c1, c2)`` pair.
 
     Examples:
 
@@ -257,13 +334,15 @@ class ZygoteConversionRuleSet:
         ruleset.add_convert(gt_AA, gt_Aa, rate=0.8)
         # allele-level
         ruleset.add_allele_convert("W", "D", rate=0.95, side="both")
+        # glab-redirect
+        ruleset.add_glab_redirect("cas9_deposited", "default")
 
         zygote_mod = ruleset.to_zygote_modifier(population)
         population.add_zygote_modifier(zygote_mod, name="zygote_conversions")
     """
 
     # Union type alias for accepted rule types
-    _RuleType = Union[ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule]
+    _RuleType = Union[ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, ZygoteGlabRedirectRule]
 
     def __init__(self, name: str = "ZygoteConversionRuleSet"):
         """Initialize an empty zygote conversion rule set.
@@ -276,9 +355,9 @@ class ZygoteConversionRuleSet:
 
     # ------------------------------------------------------------------
     def add_rule(self, rule: _RuleType) -> "ZygoteConversionRuleSet":
-        """Append a rule (genotype-level or allele-level).  Returns *self*."""
-        assert isinstance(rule, (ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule)), \
-                "rule must be an instance of ZygoteGenotypeConversionRule or ZygoteAlleleConversionRule"
+        """Append a rule (genotype-level, allele-level, or glab-redirect).  Returns *self*."""
+        assert isinstance(rule, (ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, ZygoteGlabRedirectRule)), \
+                "rule must be a ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, or ZygoteGlabRedirectRule"
         self.rules.append(rule)
         return self
 
@@ -304,7 +383,7 @@ class ZygoteConversionRuleSet:
         Returns:
             *self* for chaining.
         """
-        rule = ZygoteGenotypeConversionRule(
+        rule = ZygoteZtypeConversionRule(
             genotype_match,
             to_genotype,
             rate,
@@ -369,6 +448,9 @@ class ZygoteConversionRuleSet:
         offspring with *to_glab* instead of *from_glab*.  The *when*
         condition narrows the (c1, c2) pairs this applies to.
 
+        This creates a :class:`ZygoteGlabRedirectRule` directly — no
+        delegation to the genotype-level API.
+
         Args:
             from_glab: Source gamete label (on the maternal gamete).
             to_glab: Target gamete label for the redirected zygote.
@@ -377,13 +459,15 @@ class ZygoteConversionRuleSet:
         Returns:
             *self* for chaining.
         """
-        self.add_convert(
-            genotype_match=lambda gt: True,
-            to_genotype=lambda gt: gt,
+        # TODO: Translate `when` condition to legacy glab/rate once the
+        # Condition DSL evaluator is hooked into the zygote modifier path.
+        _ = when
+        rule = ZygoteGlabRedirectRule(
+            from_glab=from_glab,
+            to_glab=to_glab,
             rate=1.0,
-            maternal_glab=from_glab,
         )
-        return self
+        return self.add_rule(rule)
 
     # ------------------------------------------------------------------
     def to_zygote_modifier(
@@ -454,8 +538,8 @@ class ZygoteConversionRuleSet:
                     # Each rule receives the entire probability distribution from the previous rule,
                     # splitting it further based on its conversion rates.
                     for rule, mat_glab_req, pat_glab_req in resolved_rules:
-                        assert isinstance(rule, (ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule)), \
-                        "Resolved rules must be instances of ZygoteGenotypeConversionRule or ZygoteAlleleConversionRule"
+                        assert isinstance(rule, (ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, ZygoteGlabRedirectRule)), \
+                        "Resolved rules must be instances of ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, or ZygoteGlabRedirectRule"
                         # glab filters on maternal (c1) and/or paternal (c2) gamete tags
                         if mat_glab_req is not None and mat_glab != mat_glab_req:
                             continue
@@ -469,7 +553,7 @@ class ZygoteConversionRuleSet:
                                 continue
 
                             # ----- Genotype-level rule -----
-                            if isinstance(rule, ZygoteGenotypeConversionRule):
+                            if isinstance(rule, ZygoteZtypeConversionRule):
                                 if rule.matches(gt):
                                     # The genotype matches the rule. Split the probability:
                                     # - (1 - rate) fails conversion and remains unchanged.
@@ -480,6 +564,14 @@ class ZygoteConversionRuleSet:
                                 else:
                                     # Rule does not match; genotype passes through untouched.
                                     next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
+
+                            # ----- Glab-redirect rule -----
+                            elif isinstance(rule, ZygoteGlabRedirectRule):
+                                # Glab redirect: genotype passes through unchanged.
+                                # The glab reassignment is implicit in the (c1, c2) column
+                                # position of the zygote map — this rule only filters which
+                                # (c1, c2) pairs it applies to via maternal_glab.
+                                next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
 
                             # ----- Allele-level rule -----
                             else:
@@ -530,20 +622,21 @@ class ZygoteConversionRuleSet:
 
 # Type alias for the resolved-rules list (both rule types share the same tuple shape)
 _ResolvedRule = Tuple[
-    Union[ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule],
+    Union[ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, ZygoteGlabRedirectRule],
     Optional[int],  # maternal glab idx
     Optional[int],  # paternal glab idx
 ]
 
 
 def _resolve_zygote_rule_glabs(
-    rules: List[Union[ZygoteGenotypeConversionRule, ZygoteAlleleConversionRule]],
+    rules: List[Union[ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, ZygoteGlabRedirectRule]],
     population: "BasePopulation[Any]",
 ) -> List[_ResolvedRule]:
     """Resolve ``maternal_glab`` / ``paternal_glab`` strings to int indices.
 
-    Works for both :class:`ZygoteGenotypeConversionRule` and
-    :class:`ZygoteAlleleConversionRule` since both carry the same glab
+    Works for :class:`ZygoteZtypeConversionRule`,
+    :class:`ZygoteAlleleConversionRule`, and
+    :class:`ZygoteGlabRedirectRule` since all carry the same glab
     attributes.
 
     Returns:
