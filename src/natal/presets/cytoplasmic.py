@@ -5,7 +5,7 @@ Public module — provides CytoplasmicPreset, Wolbachia, and TransgenicBackgroun
 
 # pyright: reportPrivateUsage=false
 
-from typing import TYPE_CHECKING, Any, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -18,7 +18,6 @@ from ._types import PresetFitnessPatch
 
 if TYPE_CHECKING:
     from natal.population.base import BasePopulation
-    from natal.registry.index import IndexRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -48,77 +47,95 @@ class CytoplasmicPreset(GeneticPreset):
     _maternal_map: dict[str, str] = {}  # {slab_name: glab_name}
 
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
-        """Deferred — tagging handled in build_population_config expansion."""
-        return None
+        """Tag maternal gametes: default-glab → *glab_name* for matching slabs.
+
+        Only female gametes from mothers in the mapped slab are tagged.
+        """
+        if not self._maternal_map:
+            return None
+
+        def modifier_func(*_args: object, **_kwargs: object) -> Dict[
+            Tuple[int, int], Dict[int, float]
+        ]:
+            registry = population.registry
+            z2g = population.config.zygotes_to_gametes_map
+            result: Dict[Tuple[int, int], Dict[int, float]] = {}
+
+            for slab_name, glab_name in self._maternal_map.items():
+                for ztype_idx, (_genotype, slab) in enumerate(
+                    cast(list[tuple[object, str]], registry.index_to_ztype)
+                ):
+                    if slab != slab_name:
+                        continue
+                    row = z2g[0, ztype_idx, :]
+                    dist: Dict[int, float] = {}
+                    for gtype_idx in range(len(row)):
+                        val = float(row[gtype_idx])
+                        if val > 0:
+                            hg, glab = registry.index_to_gtype[gtype_idx]
+                            if glab == "default":
+                                # Use glab index arithmetic (matches original tag_maternal_gametes)
+                                glab_idx = registry.glab_to_index.get(glab_name)
+                                if glab_idx is None:
+                                    continue
+                                hg_idx = registry.haplo_to_index.get(hg)
+                                if hg_idx is None:
+                                    continue
+                                dst = hg_idx * len(registry.glab_labels) + glab_idx
+                                dist[dst] = dist.get(dst, 0.0) + val
+                            else:
+                                dist[gtype_idx] = dist.get(gtype_idx, 0.0) + val
+                    if dist:
+                        result[(0, ztype_idx)] = dist
+
+            return result
+
+        return modifier_func  # type: ignore[return-type]
 
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
-        """Return no zygote-level modifier — redirection is done post-expansion."""
-        return None
+        """Redirect zygotes: tagged maternal gamete + any paternal → target slab."""
+        if not self._maternal_map:
+            return None
 
-    def map_transform(
-        self,
-        z2g_map: NDArray[np.float64],
-        g2z_map: NDArray[np.float64],
-        registry: "IndexRegistry",
-    ) -> None:
-        """Post-modifier cytoplasmic inheritance — tag maternal gametes + redirect zygotes.
+        def modifier_func(*_args: object, **_kwargs: object) -> Dict[
+            Tuple[int, int], Dict[int, float]
+        ]:
+            registry = population.registry
+            g2z = population.config.gametes_to_zygotes_map
+            result: Dict[Tuple[int, int], Dict[int, float]] = {}
+            default_slab = registry.slab_labels[0]
+            n_gtypes = g2z.shape[0]
 
-        Uses *registry* for all slab/glab/index resolution (no manual arithmetic).
-        """
-        gamete_labels = registry.glab_labels
-        somatic_labels = registry.slab_labels
-        default_slab = somatic_labels[0]
-        n_glabs = len(gamete_labels)
-        n_slabs = len(somatic_labels)
-
-        if n_glabs < 2 or n_slabs < 2:
-            return
-
-        for slab_name, glab_name in self._maternal_map.items():
-            if slab_name not in somatic_labels or glab_name not in gamete_labels:
-                continue
-
-            # ── tag_maternal_gametes ──
-            # Female gametes from `slab_name` mothers: copy default-glab
-            # gamete probabilities to `glab_name`-glab column, zero original.
-            for ztype_idx, (_genotype, slab) in enumerate(
-                cast(list[tuple[object, str]], registry.index_to_ztype)
-            ):
-                if slab != slab_name:
-                    continue
-                for hg in registry.index_to_haplo:
-                    src = registry.gtype_index(hg, "default")
-                    dst = registry.gtype_index(hg, glab_name)
-                    z2g_map[0, ztype_idx, dst] = z2g_map[0, ztype_idx, src]
-                    z2g_map[0, ztype_idx, src] = 0.0
-
-        # ── redirect_zygotes ──
-        # Gamete pairs where maternal gamete carries `glab_name` tag:
-        # move zygote probability from `default_slab` to `slab_name`.
-        for slab_name, glab_name in self._maternal_map.items():
-            if slab_name not in somatic_labels or glab_name not in gamete_labels:
-                continue
-            n_gtypes = g2z_map.shape[0]
-
-            for c1 in range(n_gtypes):
-                _, c1_glab = registry.index_to_gtype[c1]
-                if c1_glab != glab_name:
-                    continue
-                for c2 in range(n_gtypes):
-                    row = g2z_map[c1, c2]
-                    if row.sum() == 0:
+            for slab_name, glab_name in self._maternal_map.items():
+                for c1 in range(n_gtypes):
+                    _, c1_glab = registry.index_to_gtype[c1]
+                    if c1_glab != glab_name:
                         continue
-                    for ztype_idx in range(len(registry.index_to_ztype)):
-                        gt, slab = cast(
-                            tuple[object, str], registry.index_to_ztype[ztype_idx]
-                        )
-                        if slab != default_slab:
+                    for c2 in range(n_gtypes):
+                        row = g2z[c1, c2]
+                        if row.sum() == 0:
                             continue
-                        val = g2z_map[c1, c2, ztype_idx]
-                        if val > 0:
-                            dst_z = registry.ztype_index(cast(Genotype, gt), slab_name)
-                            g2z_map[c1, c2, dst_z] += val
-                            g2z_map[c1, c2, ztype_idx] = 0.0
+                        dist: Dict[int, float] = {}
+                        for ztype_idx in range(len(row)):
+                            val = float(row[ztype_idx])
+                            if val <= 0:
+                                continue
+                            gt, slab = cast(
+                                tuple[object, str], registry.index_to_ztype[ztype_idx]
+                            )
+                            if slab == default_slab:
+                                dst_z = registry.ztype_index(
+                                    cast(Genotype, gt), slab_name
+                                )
+                                dist[dst_z] = dist.get(dst_z, 0.0) + val
+                            else:
+                                dist[ztype_idx] = dist.get(ztype_idx, 0.0) + val
+                        if dist:
+                            result[(c1, c2)] = dist
+
+            return result
+
+        return modifier_func  # type: ignore[return-type]
 
     @staticmethod
     def apply_zygote_redirect(

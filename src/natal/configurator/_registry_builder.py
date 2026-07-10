@@ -337,14 +337,6 @@ def rebuild_config_maps(
         n_g_compressed = int(ctx.config.n_ztypes)
         ctx.registry.compress(ztype_mask, gtype_mask)
 
-    # ---- apply post-modifier map transforms ----
-    for preset in ctx.presets:
-        preset.map_transform(
-            zygotes_to_gametes_map,
-            gametes_to_zygotes_map,
-            ctx.registry,
-        )
-
     # ---- recompute offspring probability tensor from the updated maps ----
     offspring_tensor = compute_offspring_probability_tensor(
         meiosis_f=zygotes_to_gametes_map[0],

@@ -185,14 +185,6 @@ class ModifierPresetMixin(HookManagerMixin):
             n_slabs=n_slabs,
         )
 
-        # Step 4: Apply post-modifier map transforms (e.g. cytoplasmic).
-        for preset in self._presets:
-            preset.map_transform(
-                zygotes_to_gametes_map,
-                gametes_to_zygotes_map,
-                self._registry,
-            )
-
         # Step 5: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
         # the fusion map.  The result is a 4-D array indexed by
