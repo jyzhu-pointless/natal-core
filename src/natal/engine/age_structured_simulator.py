@@ -70,8 +70,8 @@ def run_reproduction_with_precomputed_offspring_probability(
     """Run reproduction stage: mating, sperm-store update, and offspring generation.
 
     Args:
-        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
-        sperm_store: Sperm-store array ``(n_ages, n_genotypes, n_genotypes)``.
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
+        sperm_store: Sperm-store array ``(n_ages, n_ztypes, n_ztypes)``.
         config: PopulationConfig object.
         offspring_probability: Precomputed offspring tensor
             ``P_offspring[gf, gm, g_off]`` reused across demes/ticks.
@@ -109,7 +109,7 @@ def run_reproduction_with_precomputed_offspring_probability(
 
     # 3. Update sperm-store state (the mating process).
     # alg.sample_mating updates sperm storage based on mating rates
-    female_counts = ind_count[0, :, :] # (n_ages, n_genotypes)
+    female_counts = ind_count[0, :, :] # (n_ages, n_ztypes)
 
     sperm_store = alg.sample_mating(
         female_counts,
@@ -210,8 +210,8 @@ def run_reproduction(
     """Run reproduction stage: mating, sperm-store update, and offspring generation.
 
     Args:
-        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
-        sperm_store: Sperm-store array ``(n_ages, n_genotypes, n_genotypes)``.
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
+        sperm_store: Sperm-store array ``(n_ages, n_ztypes, n_ztypes)``.
         config: PopulationConfig object.
 
     Returns:
@@ -238,8 +238,8 @@ def run_survival(
     3. Perform density-dependent juvenile recruitment
 
     Args:
-        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
-        sperm_store: Sperm-store array ``(n_ages, n_genotypes, n_genotypes)``.
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
+        sperm_store: Sperm-store array ``(n_ages, n_ztypes, n_ztypes)``.
         config: PopulationConfig instance.
 
     Returns:
@@ -324,7 +324,7 @@ def run_survival(
         n_ages
     )
 
-    # 1.2 Viability survival rates -> shape (n_ages, n_genotypes).
+    # 1.2 Viability survival rates -> shape (n_ages, n_ztypes).
     target_viability_age = config.new_adult_age - 1
     s_via_f, s_via_m = alg.compute_viability_survival_rates(
         config.viability_fitness[0, target_viability_age, :],
@@ -334,11 +334,11 @@ def run_survival(
         n_ages
     )
 
-    # 2 Combine survival rates (age-specific × viability) → shape (n_ages, n_genotypes)
+    # 2 Combine survival rates (age-specific × viability) → shape (n_ages, n_ztypes)
     # Total survival rate = age-based survival x viability survival.
-    # Broadcasting needed: s_age_f shape (n_ages,) and s_via_f shape (n_ages, n_genotypes).
-    s_combined_f = s_age_f[:, None] * s_via_f  # (n_ages, n_genotypes)
-    s_combined_m = s_age_m[:, None] * s_via_m  # (n_ages, n_genotypes)
+    # Broadcasting needed: s_age_f shape (n_ages,) and s_via_f shape (n_ages, n_ztypes).
+    s_combined_f = s_age_f[:, None] * s_via_f  # (n_ages, n_ztypes)
+    s_combined_m = s_age_m[:, None] * s_via_m  # (n_ages, n_ztypes)
 
     # 3 Apply combined survival rates to individuals
     if stochastic:
@@ -346,7 +346,7 @@ def run_survival(
         f_surv, m_surv, sperm_store = alg.sample_survival_with_sperm_storage(
             (ind_count[0], ind_count[1]),
             sperm_store,
-            s_combined_f,  # shape (n_ages, n_genotypes)
+            s_combined_f,  # shape (n_ages, n_ztypes)
         s_combined_m,
         n_ztypes,
         n_ages,
@@ -375,7 +375,7 @@ def run_aging(
     """Run aging stage: advance age classes.
 
     Args:
-        ind_count: Individual-count array ``(n_sexes, n_ages, n_genotypes)``.
+        ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
         sperm_store: Sperm-store array.
         config: PopulationConfig instance.
 

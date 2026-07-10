@@ -506,7 +506,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         Returns:
             np.ndarray: Float64 array with shape
-                ``(n_snapshots, 1 + n_sexes*n_ages*n_genotypes + n_ages*n_genotypes^2)``,
+                ``(n_snapshots, 1 + n_sexes*n_ages*n_ztypes + n_ages*n_ztypes^2)``,
                 where each row is a flattened snapshot state.
 
         Raises:
@@ -547,8 +547,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         if isinstance(state, np.ndarray):
             # Reconstruct state from flattened array
-            n_sexes, n_ages, n_genotypes = self.state.individual_count.shape
-            state_obj = parse_flattened_state(state, n_sexes, n_ages, n_genotypes)
+            n_sexes, n_ages, n_ztypes = self.state.individual_count.shape
+            state_obj = parse_flattened_state(state, n_sexes, n_ages, n_ztypes)
             self.state.individual_count[:] = state_obj.individual_count
             self.state.sperm_storage[:] = state_obj.sperm_storage
             self._state = PopulationState(

@@ -915,8 +915,8 @@ class SpatialDashboard:
         n_demes = self.pop.n_demes
         n_sexes = int(config.n_sexes)
         n_ages = int(config.n_ages)
-        n_genotypes = int(config.n_ztypes)
-        ind_per_deme = n_sexes * n_ages * n_genotypes
+        n_ztypes = int(config.n_ztypes)
+        ind_per_deme = n_sexes * n_ages * n_ztypes
         registry = first_deme.registry
 
         # Collect known allele names for zero-filling
@@ -928,7 +928,7 @@ class SpatialDashboard:
 
         for tick, flat_state in self.pop.history:
             ind_size = n_demes * ind_per_deme
-            ind_all = flat_state[1:1 + ind_size].reshape(n_demes, n_sexes, n_ages, n_genotypes)
+            ind_all = flat_state[1:1 + ind_size].reshape(n_demes, n_sexes, n_ages, n_ztypes)
             total_pop = float(ind_all.sum())
 
             # Aggregate genotype counts across all demes
@@ -1437,7 +1437,7 @@ class SpatialDashboard:
                     "carrying_capacity": float(first_config.carrying_capacity),  # type: ignore[reportUnknownArgumentType]
                     "n_sexes": int(first_config.n_sexes),  # type: ignore[reportUnknownArgumentType]
                     "n_ages": int(first_config.n_ages),  # type: ignore[reportUnknownArgumentType]
-                    "n_genotypes": int(first_config.n_ztypes),  # type: ignore[reportUnknownArgumentType]
+                    "n_ztypes": int(first_config.n_ztypes),  # type: ignore[reportUnknownArgumentType]
                     "sex_ratio": float(first_config.sex_ratio),  # type: ignore[reportUnknownArgumentType]
                     "eggs_per_female": float(first_config.expected_eggs_per_female),  # type: ignore[reportUnknownArgumentType]
                     "growth_mode": growth_mode_name(int(first_config.juvenile_growth_mode)),  # type: ignore[reportUnknownArgumentType]
