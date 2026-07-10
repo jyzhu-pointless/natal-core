@@ -606,8 +606,6 @@ class SpatialConfigurator:
             combined_g2z,
             full_config.initial_individual_count,
             declared_genotypes=seeds if seeds else None,
-            n_glabs=int(full_config.n_glabs),
-            n_slabs=1,
         )
 
         # ── Step 6: Add BFS survivors to seeds ─────────────────────────

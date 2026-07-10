@@ -108,26 +108,27 @@ def build_compression_mask(
     g2z_map: NDArray[np.float64],
     initial_individual_count: NDArray[np.float64],
     declared_genotypes: set[int] | None = None,
-    n_glabs: int = 1,
-    n_slabs: int = 1,
 ) -> tuple[NDArray[np.int32], int, NDArray[np.int32], int]:
     """Build compression masks for both the GType (gamete) and ZType
     (zygote) axes.
 
     Uses a unified gamete-set fixed-point BFS that simultaneously tracks
-    reachable GTypes and ZTypes.  For n_slabs=1 the ZType mask reduces
-    to a plain genotype compress map (G_orig,).
+    reachable GTypes and ZTypes.  Masks are boolean (``int32`` with -1
+    for pruned, >=0 for surviving).  Callers rebuild their own compressed
+    index maps from the mask — the mask values themselves are not consumed
+    downstream.
+
+    Both maps are assumed pre-expanded: the G dimension of *z2g_map* /
+    *g2z_map* is ``n_ztypes`` (genotype × slab), and the HL dimension
+    is ``n_gtypes`` (haploid × glab).
 
     Args:
-        z2g_map: ``zygotes_to_gametes_map``, shape ``(2, G, HL)``,
-            after modifier application.
+        z2g_map: ``zygotes_to_gametes_map``, shape ``(2, G, HL)``.
         g2z_map: ``gametes_to_zygotes_map``, shape ``(HL, HL, G)``.
         initial_individual_count: ``(2, A, G)`` — genotypes with
             count > 0 are the seeds for the BFS.
-        declared_genotypes: Manual override — these genotype indices
+        declared_genotypes: Manual override — these ZType indices
             are treated as reachable regardless of initial state.
-        n_glabs: Number of gamete labels (for GType decompression).
-        n_slabs: Number of somatic labels (for ZType — default 1).
 
     Returns:
         ``(gtype_mask, hl_compressed, ztype_mask, ztype_compressed)``
@@ -183,25 +184,11 @@ def build_compression_mask(
                                 changed = True
             i += 1
 
-    from natal.data import (
-        compress_hl,
-        decompress_hl,
-    )
-
     gtype_mask = np.full(HL, -1, dtype=np.int32)
-    sorted_pairs = sorted(
-        decompress_hl(hl, n_glabs) for hl in reachable_hl
-    )
-    for j, (hg, glab) in enumerate(sorted_pairs):
-        hl = compress_hl(hg, glab, n_glabs)
-        gtype_mask[hl] = j
+    gtype_mask[list(reachable_hl)] = 0
 
-    ztype_mask = np.full(G * n_slabs, -1, dtype=np.int32)
-    ztype_compressed = 0
-    for g_orig in sorted(reachable_g):
-        for s in range(n_slabs):
-            flat = g_orig * n_slabs + s
-            ztype_mask[flat] = ztype_compressed
-            ztype_compressed += 1
+    ztype_mask = np.full(G, -1, dtype=np.int32)
+    ztype_mask[list(reachable_g)] = 0
+    ztype_compressed = len(reachable_g)
 
-    return gtype_mask, len(sorted_pairs), ztype_mask, ztype_compressed
+    return gtype_mask, len(reachable_hl), ztype_mask, ztype_compressed

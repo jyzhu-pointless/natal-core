@@ -302,8 +302,6 @@ def rebuild_config_maps(
                 zygotes_to_gametes_map,
                 gametes_to_zygotes_map,
                 ctx.config.initial_individual_count,
-                n_glabs=n_glabs,
-                n_slabs=1,  # maps are pre-expanded; mask lives in G_orig space
                 declared_genotypes=declared_ints,
             )
         )
