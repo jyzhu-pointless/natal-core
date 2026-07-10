@@ -205,9 +205,14 @@
 **修复方向**：
 1. 删除冗余参数，统一以 `index_registry` 为唯一数据源
 2. 协议和实现中的 "genotype" → "ztype" 命名修正
-3. 可选：让 modifier 支持 slab-level 目标选择（需要协议扩展）
+3. 让 modifier 支持 slab-level 目标选择（需要协议扩展）
+4. 消除 `CytoplasmicPreset` 特判：`rebuild_config_maps` 中的 `isinstance(preset, CytoplasmicPreset)` 硬编码分支应在协议升级后移除
+5. 消除手动 glab 公式（`hg * n_glabs + glab`）：
+   - `modifiers/module.py:555-556`（`_resolve_part_to_compressed`）
+   - `presets/cytoplasmic.py:132-133`（`tag_maternal_gametes`）
+   统一使用 `registry.gtype_index()`
 
-**涉及文件**：`src/natal/modifiers/module.py` 为主，波及所有调用 `build_modifier_wrappers` 的位置
+**涉及文件**：`src/natal/modifiers/module.py` 为主，波及所有调用 `build_modifier_wrappers` 的位置，及 `src/natal/presets/cytoplasmic.py`、`src/natal/population/_mixins/_modifiers.py`、`src/natal/configurator/_registry_builder.py`
 
 ### #11.1 ⚠️ Hook 系统测试覆盖缺口
 
