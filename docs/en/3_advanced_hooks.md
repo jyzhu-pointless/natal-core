@@ -204,10 +204,10 @@ def hook2(state, config, deme_id, sel):
 
 ## Numba-Compatible Random Sampling
 
-When performing random sampling in custom Hooks, it is recommended to use functions provided by the `natal.numba_compat` module. These functions are optimized to remain efficient in both Numba mode and pure Python mode:
+When performing random sampling in custom Hooks, it is recommended to use functions provided by the `natal.numba` module. These functions are optimized to remain efficient in both Numba mode and pure Python mode:
 
 ```python
-from natal.numba_compat import (
+from natal.numba import (
     binomial,
     binomial_2d,
     continuous_binomial,
@@ -296,7 +296,7 @@ When `NUMBA_ENABLED=False`:
 - No need to modify Hook definition code to switch execution paths
 
 ```python
-from natal.numba_utils import numba_disabled
+from natal.numba import numba_disabled
 import natal as nt
 
 with numba_disabled():
@@ -364,7 +364,7 @@ and writes are in-place and immediate:
 
 ```python
 import natal as nt
-from natal.population_config import DiscretePopulationConfig
+from natal.data import DiscretePopulationConfig
 from natal.data import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)

@@ -141,8 +141,8 @@ allele_freqs = pop.compute_allele_frequencies()
 print("等位基因频率:", allele_freqs)
 
 # 获取特定等位基因频率
-drive_freq = allele_freqs.get("D", 0.0)
-print(f"驱动等位基因频率: {drive_freq}")
+var_freq = allele_freqs.get("Var", 0.0)
+print(f"Var 等位基因频率: {var_freq}")
 ```
 
 ## 历史记录系统

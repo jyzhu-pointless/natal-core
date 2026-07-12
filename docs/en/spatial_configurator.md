@@ -6,7 +6,7 @@
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial_configurator import batch_setting
+from natal.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -187,7 +187,7 @@ def _clone_deme(template, config, name):
 ## `BatchSetting`: Cross-Deme Varying Parameters
 
 ```python
-from natal.spatial_configurator import batch_setting
+from natal.spatial import batch_setting
 
 # List: index-to-index correspondence
 batch_setting([10000, 5000, 5000, 8000])        # kind="scalar"

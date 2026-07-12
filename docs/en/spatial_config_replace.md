@@ -4,7 +4,7 @@
 
 `SpatialConfigurator._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `PopulationConfig`.
 
-If only a few parameters differ between groups, all large arrays (`genotype_to_gametes_map`, `gametes_to_zygote_map`, `viability_fitness`, `fecundity_fitness`, etc.) are still duplicated, causing memory waste.
+If only a few parameters differ between groups, all large arrays (`zygotes_to_gametes_map`, `gametes_to_zygotes_map`, `viability_fitness`, `fecundity_fitness`, etc.) are still duplicated, causing memory waste.
 
 ```
 2601 demes, each with a unique carrying_capacity
@@ -129,8 +129,8 @@ With 2601 demes and only `carrying_capacity` differing:
 
 | Item | Before Optimization | After Optimization |
 |---|---|---|
-| `genotype_to_gametes_map` | 2601 copies | 1 copy (shared) |
-| `gametes_to_zygote_map` | 2601 copies | 1 copy (shared) |
+| `zygotes_to_gametes_map` | 2601 copies | 1 copy (shared) |
+| `gametes_to_zygotes_map` | 2601 copies | 1 copy (shared) |
 | `viability_fitness` | 2601 copies | 1 copy (shared) |
 | `fecundity_fitness` | 2601 copies | 1 copy (shared) |
 | `carrying_capacity` (scalar) | 2601 copies | 2601 copies (~60KB) |
@@ -140,8 +140,8 @@ With 2601 demes and only `initial_individual_count` differing:
 
 | Item | Before Optimization | After Optimization |
 |---|---|---|
-| `genotype_to_gametes_map` | 2601 copies | 1 copy (shared) |
-| `gametes_to_zygote_map` | 2601 copies | 1 copy (shared) |
+| `zygotes_to_gametes_map` | 2601 copies | 1 copy (shared) |
+| `gametes_to_zygotes_map` | 2601 copies | 1 copy (shared) |
 | All fitness arrays | 2601 copies | 1 copy (shared) |
 | `initial_individual_count` | 2601 copies | 2601 copies (must differ) |
 

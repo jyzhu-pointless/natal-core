@@ -30,6 +30,7 @@ site/*
 .omo/*
 .opencode/*
 .codex/*
+.reasonix/*
 .agents/*
 
 *beamer*

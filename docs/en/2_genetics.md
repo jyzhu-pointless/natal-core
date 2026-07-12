@@ -367,7 +367,7 @@ print(f"Genotype: {wt_drive}")  # Output: WT|Drive (by default, maternal/paterna
 
 The string parsing syntax for `Genotype` is essentially the same as for `HaploidGenotype`, with the addition of maternal and paternal separation:
 
-- **Pipe (|) separates maternal and paternal**: The left side of the pipe is the maternal haploid genotype, the right side is the paternal haploid genotype. **Note:** by default (`Species.unordered=True`), the system canonicalizes the pair so `A|a` and `a|A` resolve to the same genotype — tracking parent-of-origin explicitly requires `unordered=False`.. **Note**: by default `Species.unordered=True`, so `A|a` and `a|A` produce the same Genotype instance after canonicalization.
+- **Pipe (|) separates maternal and paternal**: The left side of the pipe is the maternal haploid genotype, the right side is the paternal haploid genotype. **Note:** by default (`Species.unordered=True`), the system canonicalizes the pair so `A|a` and `a|A` resolve to the same genotype — tracking parent-of-origin explicitly requires `unordered=False`.
 - **Other rules are the same as HaploidGenotype**: Including semicolons to separate chromosomes, slashes to separate genes, and the ability to omit slashes for single-character genes
 
 ```python

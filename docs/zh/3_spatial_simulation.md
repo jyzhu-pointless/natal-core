@@ -24,7 +24,7 @@ spatial = (
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -56,8 +56,8 @@ pop_het = (
 如果已有独立构建好的 deme 列表，可以直接传给 `SpatialPopulation` 构造函数。所有 deme 必须共享同一个 Species 对象：
 
 ```python
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import SquareGrid
+from natal.spatial import SpatialPopulation
+from natal.spatial import SquareGrid
 
 shared_config = demes[0].export_config()
 for deme in demes[1:]:
@@ -173,7 +173,7 @@ pop = (
 ### 四种输入形式
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 import numpy as np
 
 # 1. 标量列表（一一对应 n_demes 个 deme）
@@ -214,7 +214,7 @@ pop = (
 为每个 deme 指定不同的初始基因型分布，常用于空间驱动释放场景：
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 # 默认所有 deme 只有 WT
 n_demes = 100
@@ -581,7 +581,7 @@ $$p_n = \frac{w_n}{S_{\text{ref}}}, \quad S_{\text{ref}} = \begin{cases} \sum_{m
 NATAL 提供 `build_gaussian_kernel()` 工厂函数，自动根据拓扑类型使用正确的距离度量：
 
 ```python
-from natal.spatial_topology import build_gaussian_kernel, HexGrid, SquareGrid
+from natal.spatial import build_gaussian_kernel, HexGrid, SquareGrid
 
 # 六边形网格高斯核 —— 自动使用余弦定理距离公式
 hex_kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
@@ -713,7 +713,7 @@ pop.run(10)
 
 ```python
 from natal import Species, SpatialPopulation, HexGrid
-from natal.spatial_topology import build_gaussian_kernel
+from natal.spatial import build_gaussian_kernel
 
 species = Species.from_dict(name="hex", structure={"chr1": {"loc": ["WT", "Dr"]}})
 

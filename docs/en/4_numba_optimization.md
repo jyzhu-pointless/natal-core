@@ -27,7 +27,7 @@ The project enables Numba by default to ensure stable performance at typical sim
 ### 2.2 Temporarily Disable (Recommended Debugging Approach)
 
 ```python
-from natal.numba_utils import numba_disabled
+from natal.numba import numba_disabled
 
 with numba_disabled():
     pop.run(n_steps=10)
@@ -38,7 +38,7 @@ This approach has a clear scope, and the original state is automatically restore
 ### 2.3 Global Enable/Disable
 
 ```python
-from natal.numba_utils import disable_numba, enable_numba
+from natal.numba import disable_numba, enable_numba
 
 disable_numba()
 pop.run(n_steps=10)

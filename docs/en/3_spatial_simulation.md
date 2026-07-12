@@ -24,7 +24,7 @@ spatial = (
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -56,8 +56,8 @@ pop_het = (
 If you already have an independently constructed list of demes, you can pass them directly to the `SpatialPopulation` constructor. All demes must share the same Species object:
 
 ```python
-from natal.spatial_population import SpatialPopulation
-from natal.spatial_topology import SquareGrid
+from natal.spatial import SpatialPopulation
+from natal.spatial import SquareGrid
 
 shared_config = demes[0].export_config()
 for deme in demes[1:]:
@@ -173,7 +173,7 @@ The following parameters do **not** accept `batch_setting`:
 ### Four Input Forms
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 import numpy as np
 
 # 1. Scalar list (one-to-one correspondence with n_demes demes)
@@ -214,7 +214,7 @@ pop = (
 Specify different initial genotype distributions for each deme, commonly used in spatial drive release scenarios:
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 # Default: all demes have only WT
 n_demes = 100
@@ -581,7 +581,7 @@ where $\sum_{i,j} K_{i,j}$ is the sum of all kernel weights (denoted `kernel_tot
 NATAL provides the `build_gaussian_kernel()` factory function, automatically using the correct distance metric based on topology type:
 
 ```python
-from natal.spatial_topology import build_gaussian_kernel, HexGrid, SquareGrid
+from natal.spatial import build_gaussian_kernel, HexGrid, SquareGrid
 
 # Hexagonal grid Gaussian kernel -- automatically uses cosine law distance formula
 hex_kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
@@ -712,7 +712,7 @@ pop.run(10)
 
 ```python
 from natal import Species, SpatialPopulation, HexGrid
-from natal.spatial_topology import build_gaussian_kernel
+from natal.spatial import build_gaussian_kernel
 
 species = Species.from_dict(name="hex", structure={"chr1": {"loc": ["WT", "Dr"]}})
 

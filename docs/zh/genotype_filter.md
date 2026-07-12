@@ -19,7 +19,7 @@ def my_filter(genotype):
 ## 核心示例：只在 W::D 杂合子中发生 W->D
 
 ```python
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 
 def is_wd_heterozygote(genotype) -> bool:
@@ -28,7 +28,7 @@ def is_wd_heterozygote(genotype) -> bool:
 
 
 ruleset = GameteConversionRuleSet("homing_drive")
-ruleset.add_convert(
+ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.5,
@@ -58,7 +58,7 @@ def build_filter_from_pattern(species, pattern: str):
     return species.parse_genotype_pattern(pattern)
 
 
-ruleset.add_convert(
+ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.5,
@@ -94,12 +94,12 @@ class PatternBasedPreset(GeneticPreset):
         self.conversion_rate = conversion_rate
 
     def gamete_modifier(self, population):
-        from natal.gamete_allele_conversion import GameteConversionRuleSet
+        from natal.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
         pattern_filter = population.species.parse_genotype_pattern(self.pattern)
 
-        ruleset.add_convert(
+        ruleset.add_allele_convert(
             from_allele="WT",
             to_allele="Drive",
             rate=self.conversion_rate,
@@ -126,12 +126,12 @@ class ConditionalMutation(GeneticPreset):
         self.required_background = required_background
 
     def gamete_modifier(self, population):
-        from natal.gamete_allele_conversion import GameteConversionRuleSet
+        from natal.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
 
         # 只在携带背景等位基因时才发生突变
-        ruleset.add_convert(
+        ruleset.add_allele_convert(
             from_allele=self.target_allele,
             to_allele=f"{self.target_allele}_mutant",
             rate=1e-4,
