@@ -35,12 +35,14 @@ class CytoplasmicPreset(GeneticPreset):
     """Base class for maternally-inherited cytoplasmic elements.
 
     Child slab = mother slab regardless of father.  The mechanism:
-    1. *Gamete tagging* happens externally during slab expansion
-       (via ``build_population_config``) — the
-       non-default glab/slab pairs are auto-detected by convention.
-       ``gamete_modifier`` returns ``None`` (no per-modifier tagging).
-    2. ``apply_zygote_redirect`` (called during zygote map expansion)
-       redirects tagged gamete pairs from slab-0 to the correct child slab.
+    1. *Gamete tagging* — ``gamete_modifier`` builds a declarative
+       ``GameteConversionRuleSet`` with pre-compiled probability
+       transition matrices.  Default-glab gametes from specific
+       maternal genotypes are reassigned to the cytoplasmic glab.
+    2. *Zygote redirect* — ``zygote_modifier`` uses pre-computed
+       ``glab → target_slab`` index lookup to redirect zygote
+       columns: maternal gametes tagged with the cytoplasmic glab
+       produce offspring in the matching slab.
 
     Subclasses must provide ``_maternal_map`` — a dict mapping
     ``{maternal_slab_name: glab_name}``.  Each maternal slab that

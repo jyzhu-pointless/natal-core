@@ -170,8 +170,8 @@ class ModifierPresetMixin(HookManagerMixin):
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
-            gamete_modifiers=gamete_funcs,
             n_slabs=n_slabs,
+            gamete_modifiers=gamete_funcs,
         )
 
         # Step 3: Build the fusion map.  For each pair of haploid gametes
@@ -181,8 +181,8 @@ class ModifierPresetMixin(HookManagerMixin):
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
-            zygote_modifiers=zygote_funcs,
             n_slabs=n_slabs,
+            zygote_modifiers=zygote_funcs,
         )
 
         # Step 5: Compute the full offspring probability tensor by

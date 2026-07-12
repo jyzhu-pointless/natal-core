@@ -325,7 +325,7 @@ class HomingDrive(GeneticPreset):
             if self.cas9_deposition_glab:
                 if sex == Sex.FEMALE or self.use_paternal_deposition:
                     rule_set.add_glab_convert(
-                        from_glab="default",
+                        from_glab=None,
                         to_glab=self.cas9_deposition_glab,
                         rate=1.0,
                         sex_filter=sex,

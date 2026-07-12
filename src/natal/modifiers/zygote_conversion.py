@@ -72,7 +72,7 @@ def _evaluate_genotype_filter(
 # Rule definition
 # ============================================================================
 
-class ZygoteGenotypeConversionRule:
+class ZygoteZtypeConversionRule:
     """Defines a single zygote-level genotype conversion rule.
 
     A rule specifies that when a zygote's *resulting* diploid genotype
@@ -151,6 +151,7 @@ class ZygoteGenotypeConversionRule:
         self.name = name or f"ZygoteConversion(rate={rate})"
         self.maternal_glab = maternal_glab
         self.paternal_glab = paternal_glab
+        self._when: Optional[Condition] = None
 
     # ------------------------------------------------------------------
     def matches(self, genotype: Genotype) -> bool:
@@ -166,8 +167,8 @@ class ZygoteGenotypeConversionRule:
         return f"ZygoteZtypeConversionRule({self.name}, rate={self.rate})"
 
 
-# Backward-compatible alias: ZygoteZtypeConversionRule is the new canonical name.
-ZygoteZtypeConversionRule = ZygoteGenotypeConversionRule
+# Backward-compatible alias.
+ZygoteGenotypeConversionRule = ZygoteZtypeConversionRule
 
 
 class ZygoteGlabRedirectRule:
@@ -196,6 +197,7 @@ class ZygoteGlabRedirectRule:
         to_glab: Union[str, int],
         rate: float = 1.0,
         name: Optional[str] = None,
+        when: Optional[Condition] = None,
     ):
         """Initialise a glab-redirect rule.
 
@@ -204,6 +206,8 @@ class ZygoteGlabRedirectRule:
             to_glab: Target gamete label for the redirected zygote.
             rate: Effective redirect probability, in [0, 1]. Default 1.0.
             name: Human-readable label.
+            when: Optional :class:`Condition` to narrow applicable
+                (c1, c2) pairs.
 
         Raises:
             ValueError: If *rate* is not in [0, 1].
@@ -215,6 +219,7 @@ class ZygoteGlabRedirectRule:
         self.to_glab = to_glab
         self.rate = rate
         self.name = name or f"ZygoteGlabRedirect(from={from_glab}, to={to_glab}, rate={rate})"
+        self._when = when
 
         # Expose glab attributes in the same shape as ZygoteGenotypeConversionRule
         # so that _resolve_zygote_rule_glabs can process this rule.
@@ -298,6 +303,7 @@ class ZygoteAlleleConversionRule:
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
         self.maternal_glab = maternal_glab
         self.paternal_glab = paternal_glab
+        self._when: Optional[Condition] = None
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check whether this rule should be evaluated for *genotype*."""
@@ -459,13 +465,11 @@ class ZygoteConversionRuleSet:
         Returns:
             *self* for chaining.
         """
-        # TODO: Translate `when` condition to legacy glab/rate once the
-        # Condition DSL evaluator is hooked into the zygote modifier path.
-        _ = when
         rule = ZygoteGlabRedirectRule(
             from_glab=from_glab,
             to_glab=to_glab,
             rate=1.0,
+            when=when,
         )
         return self.add_rule(rule)
 
@@ -500,11 +504,11 @@ class ZygoteConversionRuleSet:
             ztype_list = population.registry.index_to_ztype  # [(Genotype, slab), ...]
             n_ztypes = len(ztype_list)
 
-            # Build ztype-level index lookup from the registry.
-            ztype_index: Dict[Genotype, int] = {}
-            for zidx, (gt, _slab) in enumerate(ztype_list):
-                if gt not in ztype_index:
-                    ztype_index[gt] = zidx
+            # Build ztype-level index lookup — keyed by (Genotype, slab)
+            # so that conversions preserve the original slab.
+            ztype_index: Dict[tuple[Genotype, str], int] = {
+                (gt, slab): zidx for zidx, (gt, slab) in enumerate(ztype_list)
+            }
 
             baseline_g2z = population.config.gametes_to_zygotes_map
             n_c = baseline_g2z.shape[0]
@@ -521,7 +525,8 @@ class ZygoteConversionRuleSet:
                         continue
                     g = int(row.argmax())
                     g = g % n_ztypes  # safety: clamp to valid ztype range
-                    base_gt, _slab = ztype_list[g]
+                    base_gt, base_slab = ztype_list[g]
+                    effective_slab = base_slab
 
                     mat_glab = population.registry.glab_to_index[
                         population.registry.index_to_gtype[c1][1]
@@ -546,6 +551,17 @@ class ZygoteConversionRuleSet:
                         if pat_glab_req is not None and pat_glab != pat_glab_req:
                             continue
 
+                        # when condition: skip rule if it doesn't match this (c1, c2) pair.
+                        if (
+                            (_when := getattr(rule, "_when", None)) is not None
+                            and not _when._matches(
+                                sex_idx=-1, ztype_idx=g,
+                                genotype=base_gt, slab=base_slab,
+                                registry=population.registry,
+                            )
+                        ):
+                            continue
+
                         # next_freqs accumulates the genotypes formed after THIS rule applies.
                         next_freqs: Dict[Genotype, float] = {}
                         for gt, prob in current_freqs.items():
@@ -567,10 +583,7 @@ class ZygoteConversionRuleSet:
 
                             # ----- Glab-redirect rule -----
                             elif isinstance(rule, ZygoteGlabRedirectRule):
-                                # Glab redirect: genotype passes through unchanged.
-                                # The glab reassignment is implicit in the (c1, c2) column
-                                # position of the zygote map — this rule only filters which
-                                # (c1, c2) pairs it applies to via maternal_glab.
+                                effective_slab = str(rule.to_glab)
                                 next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
 
                             # ----- Allele-level rule -----
@@ -599,7 +612,7 @@ class ZygoteConversionRuleSet:
 
                     for gt, prob in current_freqs.items():
                         if prob > 1e-12:
-                            zidx = ztype_index.get(gt)
+                            zidx = ztype_index.get((gt, effective_slab))
                             if zidx is not None:
                                 final_dist[zidx] = final_dist.get(zidx, 0.0) + prob
 

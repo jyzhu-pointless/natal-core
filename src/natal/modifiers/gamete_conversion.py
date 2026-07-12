@@ -61,7 +61,7 @@ def _evaluate_genotype_filter(
     """Compatibility wrapper around shared genotype filter evaluator."""
     return evaluate_genotype_filter(genotype_filter, genotype, compiled_filter)
 
-class GameteHaploidGenomeConversionRule:
+class GameteGtypeConversionRule:
     """Defines a whole-HaploidGenotype replacement rule at the gamete level.
 
     Unlike :class:`GameteAlleleConversionRule` which swaps a single allele,
@@ -145,6 +145,7 @@ class GameteHaploidGenomeConversionRule:
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
         self.source_glab = source_glab
         self.target_glab = target_glab
+        self._when: Optional[Condition] = None
 
     def matches(self, hg: HaploidGenotype) -> bool:
         """Return True if *hg* satisfies this rule's match predicate."""
@@ -179,8 +180,8 @@ class GameteHaploidGenomeConversionRule:
         return f"GameteGtypeConversionRule({self.name}, rate={self.rate})"
 
 
-# Backward-compatible alias: GameteGtypeConversionRule is the new canonical name.
-GameteGtypeConversionRule = GameteHaploidGenomeConversionRule
+# Backward-compatible alias.
+GameteHaploidGenomeConversionRule = GameteGtypeConversionRule
 
 
 class GameteGlabConversionRule:
@@ -205,17 +206,19 @@ class GameteGlabConversionRule:
 
     def __init__(
         self,
-        from_glab: Union[str, int],
+        from_glab: Union[str, int, None],
         to_glab: Union[str, int],
         rate: float,
         name: Optional[str] = None,
         sex_filter: Optional[Union[str, int, Sex]] = "both",
         genotype_filter: _GenotypeFilter = None,
+        when: Optional[Condition] = None,
     ):
         """Initialise a gamete-label conversion rule.
 
         Args:
-            from_glab: Source gamete label (str name or int index).
+            from_glab: Source gamete label (str, int, or ``None`` to match
+                any glab).
             to_glab: Target gamete label (str name or int index).
             rate: Probability of conversion, in [0, 1].
             name: Human-readable label.
@@ -223,6 +226,8 @@ class GameteGlabConversionRule:
             genotype_filter: Optional filter on the *diploid* Genotype
                 of the gamete producer. Accepts callable or genotype
                 pattern string.
+            when: Optional :class:`Condition` to narrow which
+                (sex, ztype) pairs this rule applies to.
 
         Raises:
             ValueError: If *rate* is not in [0, 1].
@@ -240,6 +245,7 @@ class GameteGlabConversionRule:
             self.sex_filter = sex_filter
         self.genotype_filter = genotype_filter
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
+        self._when = when
 
         # Compatibility attributes so _resolve_rule_glabs can process this rule.
         self.source_glab: Union[str, int, None] = from_glab
@@ -344,6 +350,7 @@ class GameteAlleleConversionRule:
         self._compiled_genotype_filter: Optional[Callable[[Genotype], bool]] = None
         self.source_glab = source_glab
         self.target_glab = target_glab
+        self._when: Optional[Condition] = None
 
     def __repr__(self) -> str:
         """Return a string identifying this allele conversion rule."""
@@ -388,6 +395,30 @@ class GameteAlleleConversionRule:
 
 # Type alias for accepted gamete rule types
 _GameteRuleType = Union[GameteAlleleConversionRule, GameteGtypeConversionRule, GameteGlabConversionRule]
+
+
+def _rule_when_applies(
+    rule: _GameteRuleType,
+    *,
+    sex_idx: int,
+    ztype_idx: int,
+    genotype: Genotype,
+    slab: str,
+    registry: IndexRegistry,
+) -> bool:
+    """Check whether *rule*'s ``_when`` condition matches, if set.
+
+    Returns ``True`` when the rule has no ``_when`` attribute or when the
+    stored :class:`Condition` evaluates to ``True``.
+    """
+    when: Optional[Condition] = getattr(rule, "_when", None)  # type: ignore[reportPrivateUsage]
+    if when is None:
+        return True
+    return when._matches(  # type: ignore[reportPrivateUsage]
+        sex_idx=sex_idx, ztype_idx=ztype_idx,
+        genotype=genotype, slab=slab, registry=registry,
+    )
+
 
 class GameteConversionRuleSet:
     """Manages a collection of gamete conversion rules.
@@ -544,7 +575,7 @@ class GameteConversionRuleSet:
 
     def add_glab_convert(
         self,
-        from_glab: str,
+        from_glab: str | None,
         to_glab: str,
         rate: float,
         *,
@@ -555,14 +586,14 @@ class GameteConversionRuleSet:
         """Add a gamete-label conversion rule.
 
         For every (sex, ztype) that satisfies *when* (or legacy filters),
-        gametes carrying *from_glab* have their label reassigned to
-        *to_glab* with probability *rate*.
+        gametes carrying *from_glab* (or any glab when ``None``) have
+        their label reassigned to *to_glab* with probability *rate*.
 
         This creates a :class:`GameteGlabConversionRule` directly — no
         delegation to the gtype-level API.
 
         Args:
-            from_glab: Source gamete label.
+            from_glab: Source gamete label, or ``None`` to match any glab.
             to_glab: Target gamete label.
             rate: Conversion probability, in [0, 1].
             when: Optional composable condition (preferred over legacy kwargs).
@@ -573,15 +604,13 @@ class GameteConversionRuleSet:
         Returns:
             *self* for chaining.
         """
-        # TODO: Translate `when` condition to legacy filters once the Condition
-        # DSL evaluator is hooked into the modifier execution path.
-        _ = when
         rule = GameteGlabConversionRule(
             from_glab=from_glab,
             to_glab=to_glab,
             rate=rate,
             sex_filter=sex_filter,
             genotype_filter=genotype_filter,
+            when=when,
         )
         return self.add_rule(rule)
 
@@ -683,13 +712,17 @@ class GameteConversionRuleSet:
         # 3. For each (sex, ztype), compose applicable matrices
         result: Dict[Tuple[int, int], NDArray[np.float64]] = {}
         for sex_idx in range(population.config.n_sexes):
-            for ztype_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):
+            for ztype_idx, (genotype, slab) in enumerate(registry.index_to_ztype):
                 # Gather applicable matrices in insertion order
                 applicable = [
                     (M_rule, rule)
                     for M_rule, (rule, _, _) in zip(per_rule_matrices, resolved_rules)
                     if rule.applies_to_sex(sex_idx)
                     and rule.applies_to_genotype(genotype)
+                    and _rule_when_applies(
+                        rule, sex_idx=sex_idx, ztype_idx=ztype_idx,
+                        genotype=genotype, slab=slab, registry=registry,
+                    )
                 ]
                 if not applicable:
                     continue
@@ -753,121 +786,6 @@ def _resolve_rule_glabs(
     return resolved
 
 
-def _compute_converted_gamete_freqs(  # noqa: F811  # pyright: ignore[reportUnusedFunction] — kept as reference implementation; new path uses to_matrix()
-    genotype: Genotype,
-    resolved_rules: List[_ResolvedGameteRule],
-    sex_idx: int,
-    population: BasePopulation[Any],
-    initial_freqs: Dict[Tuple[HaploidGenotype, int], float],
-) -> Dict[Tuple[HaploidGenotype, int], float]:
-    """Compute gamete frequencies after applying conversion rules (glab-aware).
-
-    Handles both :class:`GameteAlleleConversionRule` and
-    :class:`GameteGtypeConversionRule`. Rules are applied serially
-    (Sequential cascade framework), allowing multiple rules to act conditionally
-    on the same gamete pool. This means the outcome of Rule N becomes the input
-    pool for Rule N+1.
-    """
-    # current_freqs holds the state of the gamete pool before evaluating the current rule.
-    current_freqs = initial_freqs.copy()
-
-    for rule, src_glab_idx, tgt_glab_idx in resolved_rules:
-        assert isinstance(rule, (GameteAlleleConversionRule, GameteGtypeConversionRule, GameteGlabConversionRule)), \
-                "Resolved rules must be instances of GameteAlleleConversionRule, GameteGtypeConversionRule, or GameteGlabConversionRule"
-
-        # Check rule-level conditions (does it apply to this sex / diploid genotype?)
-        if not rule.applies_to_sex(sex_idx) or not rule.applies_to_genotype(genotype):
-            continue
-
-        # next_freqs will collect the newly partitioned frequencies after applying THIS rule.
-        next_freqs: Dict[Tuple[HaploidGenotype, int], float] = {}
-        for (hg, glab_idx), freq in current_freqs.items():
-            if freq <= 1e-12:
-                continue
-
-            # source_glab filter: if set, only apply rule to gametes carrying this exact label.
-            # Gametes failing the label pass untouched to next_freqs.
-            if src_glab_idx is not None and glab_idx != src_glab_idx:
-                next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
-                continue
-
-            # --- Glab-only rule ---
-            if isinstance(rule, GameteGlabConversionRule):
-                prob = rule.rate
-
-                # split: unconverted keeps original glab, converted gets target_glab
-                unconverted_key = (hg, glab_idx)
-                next_freqs[unconverted_key] = (
-                    next_freqs.get(unconverted_key, 0.0) + freq * (1 - prob)
-                )
-                out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
-                converted_key = (hg, out_glab)
-                next_freqs[converted_key] = (
-                    next_freqs.get(converted_key, 0.0) + freq * prob
-                )
-
-            # --- Gtype-level rule ---
-            elif isinstance(rule, GameteGtypeConversionRule):
-                # If the gamete's genome does not match the rule's target pattern, pass untouched.
-                if not rule.matches(hg):
-                    next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
-                    continue
-
-                converted_hg = rule.replacement(hg)
-                prob = rule.rate
-
-                # The pool splits here:
-                # 1. The fraction that DID NOT convert (1 - prob) is preserved.
-                unconverted_key = (hg, glab_idx)
-                next_freqs[unconverted_key] = (
-                    next_freqs.get(unconverted_key, 0.0) + freq * (1 - prob)
-                )
-
-                # 2. The fraction that DID convert (prob) is mapped to the new haploid genome.
-                out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
-                converted_key = (converted_hg, out_glab)
-                next_freqs[converted_key] = (
-                    next_freqs.get(converted_key, 0.0) + freq * prob
-                )
-
-            # --- Allele-level rule ---
-            else:
-                # Attempt to convert inside the haploid genotype.
-                # Returns (original, converted, prob) if the target allele is present.
-                converted = _convert_haploid_genotype(
-                    hg,
-                    rule.from_allele_str,
-                    rule.to_allele_str,
-                    rule.rate,
-                )
-
-                if converted is not None:
-                    original_hg, converted_hg, prob = converted
-
-                    # Unconverted portion (1 - prob) keeps original genotype and glab
-                    unconverted_key = (original_hg, glab_idx)
-                    next_freqs[unconverted_key] = (
-                        next_freqs.get(unconverted_key, 0.0) + freq * (1 - prob)
-                    )
-
-                    # Converted portion (prob): updates the genotype, and uses target_glab if specified.
-                    out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
-                    converted_key = (converted_hg, out_glab)
-                    next_freqs[converted_key] = (
-                        next_freqs.get(converted_key, 0.0) + freq * prob
-                    )
-                else:
-                    # Allele not found in this gamete -> pass untouched.
-                    next_freqs[(hg, glab_idx)] = next_freqs.get((hg, glab_idx), 0.0) + freq
-
-        # Update the pool for the next rule in the pipeline.
-        # This allows chained events! (e.g. Rule1: Target->Drive(70%); Rule2: (Target->R1)(from the remaining 30%)).
-        current_freqs = next_freqs
-
-    final_freqs = {k: v for k, v in current_freqs.items() if v > 1e-12}
-
-    return final_freqs
-
 
 def _build_single_rule_matrix(
     rule: _GameteRuleType,
@@ -917,7 +835,10 @@ def _build_single_rule_matrix(
             out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
             converted_idx = registry.gtype_index(converted_hg, glab_labels[out_glab])
             M[gtype_idx, gtype_idx] = 1.0 - prob
-            M[gtype_idx, converted_idx] = prob
+            if converted_idx != gtype_idx:
+                M[gtype_idx, converted_idx] = prob
+            else:
+                M[gtype_idx, gtype_idx] = 1.0
 
         elif isinstance(rule, GameteGtypeConversionRule):
             if not rule.matches(hg):
@@ -926,13 +847,19 @@ def _build_single_rule_matrix(
             out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
             converted_idx = registry.gtype_index(converted_hg, glab_labels[out_glab])
             M[gtype_idx, gtype_idx] = 1.0 - rule.rate
-            M[gtype_idx, converted_idx] = rule.rate
+            if converted_idx != gtype_idx:
+                M[gtype_idx, converted_idx] = rule.rate
+            else:
+                M[gtype_idx, gtype_idx] = 1.0
 
         else:  # GameteGlabConversionRule
             out_glab = tgt_glab_idx if tgt_glab_idx is not None else glab_idx
             converted_idx = registry.gtype_index(hg, glab_labels[out_glab])
             M[gtype_idx, gtype_idx] = 1.0 - rule.rate
-            M[gtype_idx, converted_idx] = rule.rate
+            if converted_idx != gtype_idx:
+                M[gtype_idx, converted_idx] = rule.rate
+            else:
+                M[gtype_idx, gtype_idx] = 1.0
 
     return M
 

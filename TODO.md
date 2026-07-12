@@ -42,41 +42,14 @@
 
 ### #4 🎨 修饰器矩阵化 —— Sequential Cascade → 矩阵乘法
 
-**此分支改动**：新增了声明式配置适配层（`_ConfigContext`），为修饰器提供了运行时上下文绑定，是矩阵化路径的前置依赖。设计了详细的实现方案（`matrix-modifier-design.html`），但 `compile_matrix()`、`to_matrix()`、`ModifierMatrix`、`apply_transition()` 均未实现。Cascade 仍使用 `Dict[Genotype, float]` 逐 rule 迭代。
+**状态**：✅ 已实现。`GameteConversionRuleSet.to_matrix(population)` 编译 rules 为
+`{(sex, ztype): (n_gtypes, n_gtypes)}` dense float64 矩阵，
+`to_gamete_modifier()` 通过 `freq_vec @ M` 替代旧 `_compute_converted_gamete_freqs`
+逐 rule 迭代。旧 Cascade 函数已删除（~114 行）。
 
-**优先级理由**：🟡 已证明的数学基础 + 明确实现路径（~130 行，3 文件），g=100、hl=8、3 modifier 场景下 offspring_tensor 加速 5000x。同时支持 reconfiguration 增量更新，对大型模拟有显著性能价值。但前提是 #1 正确性 bug 完成后才应开始。
-
-**数学基础**（已证明）：
-
-1. **每条 rule 是线性算子**：`_compute_converted_gamete_freqs` 对频率向量 v ∈ ℝᴰ
-   只做比例分割（v'[hg] = v[hg]·(1−r), v'[converted_hg] += v[hg]·r）。
-   无归一化、无阈值、无非线性步骤。
-
-2. **Cascade ≡ 矩阵乘积**：`M_total = Rₖ · ... · R₂ · R₁`，其中每 Rᵢ 是 D×D
-   稀疏矩阵（D = n_hg × n_glabs，通常 10-100）。级联合成 = 矩阵乘法。
-
-3. **可交换条件**：Mᴬ·Mᴮ = Mᴮ·Mᴬ ⟺ affected_A ∩ affected_B = ∅ 或
-   from_allele_A ≠ from_allele_B。RuleSet API 下 from_allele 静态声明，
-   编译期即可检测。
-
-4. **genotype_filter**：filter=False 的 genotype → 对应矩阵 = I（单位矩阵），
-   不改动该行。ModifierMatrix = {g ∈ affected: M_total, g ∉ affected: I}。
-
-**实现路径**（~130 行，3 文件，纯加法，不改现有 API）：
-
-| 文件 | 改动 |
-|---|---|
-| gamete_allele_conversion.py | 每 rule 加 compile_matrix() → D×D 稀疏矩阵；加 to_matrix() 编译 RuleSet 为 ModifierMatrix |
-| configurator.py | _rebuild_config_maps 加 if/else 分发：全部 RuleSet → 矩阵路径；否则 → 现有回调路径 |
-| modifiers.py | 加 apply_transition() 逐行 @ 矩阵；_apply_comp_map 保留作为回调路径基础设施 |
-
-**不改**：genetic_presets.py、任何 Numba 内核、population_config.py、initialize_gamete_map。
-
-**reconfigure 增量**：只重编译被改 preset 的矩阵（纯算术），重新合成 M_total
-（2 次矩阵乘法），应用到 affected_rows。不重跑其他 modifier。
-
-**指标**：g=100, hl=8, 3 modifier, |affected|=2 → offspring_tensor 2500× 加速。
-详见 `matrix-modifier-design.html`。
+**剩余工作**：
+- zygote 侧仍使用 Dict[Genotype, float] 逐 rule 迭代，未矩阵化
+- `ModifierMatrix` 稀疏表示未实现（当前 dense 在 n_gtypes ≤ 250 时足够快）
 
 ### #5 ⚠️ Spatial History
 

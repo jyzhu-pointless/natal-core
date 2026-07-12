@@ -16,6 +16,7 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
     cast,
@@ -871,6 +872,42 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             return self.state.individual_count[Sex.MALE.value, :, :].sum(axis=1)
         else:
             return self.state.individual_count.sum(axis=(0, 2))
+
+    def get_genotype_count(self, genotype: Genotype) -> Tuple[int, int]:
+        """Return total counts for a genotype as (female_count, male_count).
+
+        .. deprecated::
+            Use ``self.registry.ztype_index()`` + manual array sum instead.
+        """
+        import warnings
+        warnings.warn(
+            "get_genotype_count is deprecated; use registry + manual sum",
+            DeprecationWarning, stacklevel=2,
+        )
+        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
+        female_count = self.state.individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
+        male_count = self.state.individual_count[Sex.MALE.value, :, genotype_idx].sum()
+        return (female_count, male_count)
+
+    @property
+    def genotypes_present(self) -> Set[Genotype]:
+        """Set[Genotype]: Returns the set of genotypes with count > 0.
+
+        .. deprecated::
+            Use ``self.registry.index_to_genotype`` + manual count check
+            instead.
+        """
+        import warnings
+        warnings.warn(
+            "genotypes_present is deprecated; use registry + manual count check",
+            DeprecationWarning, stacklevel=2,
+        )
+        present: Set[Genotype] = set()
+        for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
+            total_count = self.state.individual_count[:, :, z_idx].sum()
+            if total_count > 0:
+                present.add(genotype)
+        return present
 
     def update(self) -> AgeStructuredConfigurator:
         """Return an ``AgeStructuredConfigurator`` for modifying this population's config."""
