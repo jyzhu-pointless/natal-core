@@ -244,6 +244,72 @@ def merge_hooks(hook_items: list[_HookItem]) -> HookMap:
     return result
 
 
+def _collect_genotype_strings(genotype_ref: str | Sequence[str]) -> set[str]:
+    """Extract non-wildcard genotype strings from a HookOp.genotypes value."""
+    result: set[str] = set()
+    if isinstance(genotype_ref, str):
+        if genotype_ref != "*":
+            result.add(genotype_ref)
+    else:
+        for s in genotype_ref:
+            if s != "*":
+                result.add(s)
+    return result
+
+
+def collect_hook_genotype_refs(hook_items: list[_HookItem]) -> set[str]:
+    """Extract genotype string references from hook items for compression seeds.
+
+    - Selector hooks: reads ``func.selectors`` metadata directly.
+    - Declarative hooks: calls function once, extracts ``op.genotypes``.
+    - Custom hooks: skipped.
+    """
+    refs: set[str] = set()
+    for item in hook_items:
+        if isinstance(item, dict):
+            hook_dict: HookMap = cast(HookMap, item)
+            for registrations in hook_dict.values():
+                for hook_reg in registrations:
+                    refs.update(_extract_refs_from_callable(hook_reg[0]))
+        elif callable(item):
+            refs.update(_extract_refs_from_callable(item))
+    return refs
+
+
+def _extract_refs_from_callable(func: Callable[..., Any]) -> set[str]:
+    """Extract genotype strings from a single hook callable."""
+    selectors = getattr(func, "selectors", None)
+    if selectors:
+        result: set[str] = set()
+        for val in selectors.values():
+            if isinstance(val, str):
+                result.update(_collect_genotype_strings(val))
+            elif isinstance(val, (list, tuple)):
+                for v in val:  # pyright: ignore[reportUnknownVariableType]
+                    if isinstance(v, str):
+                        result.update(_collect_genotype_strings(v))
+        return result
+
+    meta = getattr(func, "meta", None)
+    is_custom = getattr(func, "custom", False) or (meta and meta.get("custom"))
+    if not is_custom and meta:
+        try:
+            ops = func()
+            if isinstance(ops, list):
+                result: set[str] = set()
+                for op in ops:  # pyright: ignore[reportUnknownVariableType]
+                    genotypes = getattr(op, "genotypes", None)  # pyright: ignore[reportUnknownArgumentType]
+                    if isinstance(genotypes, str):
+                        result.update(_collect_genotype_strings(genotypes))
+                    elif isinstance(genotypes, (list, tuple)):
+                        for g in genotypes:  # pyright: ignore[reportUnknownVariableType]
+                            if isinstance(g, str):
+                                result.update(_collect_genotype_strings(g))
+                return result
+        except Exception:
+            pass
+
+    return set()
 
 
 # ── Configurator ───────────────────────────────────────────────────────────────
@@ -1109,6 +1175,22 @@ class Configurator:
         # config; compression subslices the arrays naturally.
         final_config = self._config
         if self._compress and not self._compression_applied:
+            # Auto-collect genotype refs from hooks so genotypes introduced
+            # only via hooks survive BFS pruning.
+            stored_hooks: list[_HookItem] | None = getattr(
+                self, "_hook_items", None
+            )
+            if stored_hooks:
+                hook_refs = collect_hook_genotype_refs(stored_hooks)
+                if hook_refs:
+                    existing = self._declared_zygote_types
+                    self._declared_zygote_types = cast(
+                        "set[str] | set[int]",
+                        (existing | hook_refs)
+                        if existing is not None
+                        else hook_refs,
+                    )
+
             ctx = self._make_ctx()
             ctx.compress = True  # compression only happens at build time
             rebuild_config_maps(ctx)

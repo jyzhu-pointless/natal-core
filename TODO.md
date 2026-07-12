@@ -146,6 +146,38 @@
 
 - 添加非平凡 modifier 的端到端效果测试（验证 genotype_to_gametes_map 或 offspring_tensor 改变）
 
+### #11.2 ✅ `BatchSetting` 类型安全 —— 泛型化消除 `Any` 泄漏
+
+**来源**：2026-07-09 代码审查。`BatchSetting` 从入口到出口一路 `Any`，类型信息完全丢失。
+
+**已完成**（`fix/compress-once-ztype-refactor` 分支）：
+- `BatchSetting(Generic[_T])`：`expand() → List[_T]`，`first_value() → Optional[_T]`
+- `batch_setting()` 返回 `BatchSetting[_T]`
+- 所有未参数化的 `BatchSetting` 引用改为 `BatchSetting[Any]`
+
+**涉及文件**：`src/natal/spatial/configurator.py`、`src/natal/spatial/population.py`
+
+### #11.3 ✅ `_compress_once` 重构 —— ztype 作为一等公民，消除 genotype 字符串中转
+
+**来源**：2026-07-09 PR #32 Copilot review Comment 1+2+3 的共同根因。
+
+**已完成**（`fix/compress-once-ztype-refactor` 分支）：
+- `union: set[str]` → `seeds: set[int]`，返回值同步
+- 模板构建前置，种子从 `initial_individual_count` 非零 z_idx 收集
+- Hook refs 和 declared 字符串经 `_resolve_declared_to_ints` 转 ztype int
+- 整数 `declared_zygote_types` 直接入种子
+- `extra_declared` 改为 `set[int]`，合并逻辑简化
+
+**涉及文件**：`src/natal/spatial/configurator.py`
+
+### #11.4 ✅ 删除 `wrap_gamete_modifier` / `wrap_zygote_modifier` / `build_modifier_wrappers` 的死参数 `expand_to_ztypes`
+
+**来源**：2026-07-09 PR #32 Copilot review Comment 3 的反向分析。
+
+**已完成**（`fix/compress-once-ztype-refactor` 分支）：
+- `src/natal/modifiers/module.py`：三个函数签名中删除参数及 docstring，转发代码移除
+- `src/natal/configurator/_registry_builder.py`：调用方移除 `expand_to_ztypes=...` 传参
+
 ### #11.1 ⚠️ Hook 系统测试覆盖缺口
 
 **来源**：2026-06-17 测试审计。`test_hook_kernel_ops.py` 是独立脚本不被 pytest 发现，`_apply_target_with_sperm` 零覆盖，多个 Op 类型无端到端生命周期测试。

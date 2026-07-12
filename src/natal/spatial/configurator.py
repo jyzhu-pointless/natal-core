@@ -24,11 +24,13 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Generic,
     List,
     Literal,
     Optional,
     Sequence,
     Tuple,
+    TypeVar,
     Union,
     cast,
 )
@@ -43,9 +45,11 @@ from natal.configurator import (
 )
 from natal.data import DiscretePopulationConfig, PopulationConfig
 from natal.genetics import Species
+from natal.genetics.structures._helpers import build_compression_mask
 from natal.output.observation import GroupsInput
 from natal.population.age_structured import AgeStructuredPopulation
 from natal.population.discrete_generation import DiscreteGenerationPopulation
+from natal.registry.index import IndexRegistry
 from natal.spatial.population import SpatialPopulation
 from natal.spatial.topology import GridTopology
 
@@ -71,7 +75,10 @@ _HookItem = Union[
 # BatchSetting
 # ---------------------------------------------------------------------------
 
-class BatchSetting:
+_T = TypeVar('_T')
+
+
+class BatchSetting(Generic[_T]):
     """Deferred per-deme parameter specification.
 
     Wraps one of three value kinds used by ``SpatialConfigurator`` to express
@@ -89,6 +96,11 @@ class BatchSetting:
 
     ``SpatialConfigurator`` detects ``BatchSetting`` values in builder method
     calls, stores them, and expands them during ``build()``.
+
+    Type Parameter:
+        _T: The element type of the per-deme sequence.  Inferred from the
+        ``Sequence[T]`` input; defaults to ``Any`` for ndarray/callable inputs
+        where element types cannot be statically determined.
     """
 
     _KIND_SCALAR = "scalar"
@@ -97,7 +109,7 @@ class BatchSetting:
 
     def __init__(
         self,
-        values: Union[Sequence[Any], NDArray[np.floating[Any]], Callable[..., float]],
+        values: Union[Sequence[_T], NDArray[np.floating[Any]], Callable[..., float]],
     ):
         """Initialize a BatchSetting from one of three value kinds.
 
@@ -108,7 +120,7 @@ class BatchSetting:
         """
         self._fn: Optional[Callable[..., float]] = None
         self._fn_param_count: Optional[int] = None
-        self._values: Optional[List[Any]] = None
+        self._values: Optional[List[_T]] = None
         self._values_array: Optional[NDArray[np.floating[Any]]] = None
         self._n_demes: Optional[int] = None
 
@@ -142,7 +154,7 @@ class BatchSetting:
         self,
         n_demes: int,
         topology: Optional[GridTopology] = None,
-    ) -> List[Any]:
+    ) -> List[_T]:
         """Expand to a concrete list of per-deme values.
 
         - **scalar/array**: validate length, return as list (2D arrays are
@@ -186,8 +198,8 @@ class BatchSetting:
                         f"BatchSetting 2D array shape {arr.shape} does not match "
                         f"topology shape ({topology.rows}, {topology.cols})"
                     )
-                return arr.ravel(order="C").tolist()
-            return arr.tolist()
+                return cast(List[_T], arr.ravel(order="C").tolist())
+            return cast(List[_T], arr.tolist())
 
         elif self._kind == self._KIND_SPATIAL:
             if topology is None:
@@ -204,15 +216,15 @@ class BatchSetting:
                 except (ValueError, TypeError):
                     self._fn_param_count = 1
             if self._fn_param_count >= 2:
-                return [
+                return cast(List[_T], [
                     float(fn(*topology.from_index(i)))
                     for i in range(n_demes)
-                ]
-            return [float(fn(i)) for i in range(n_demes)]
+                ])
+            return cast(List[_T], [float(fn(i)) for i in range(n_demes)])
 
         raise ValueError(f"Unknown kind: {self._kind}")
 
-    def first_value(self) -> Any:
+    def first_value(self) -> Optional[_T]:
         """Return a single concrete element for template-builder delegation.
 
         ``SpatialConfigurator`` holds a single-deme template builder internally.
@@ -239,8 +251,8 @@ class BatchSetting:
 
 
 def batch_setting(
-    values: Union[Sequence[Any], NDArray[np.floating[Any]], Callable[..., float], BatchSetting],
-) -> BatchSetting:
+    values: Union[Sequence[_T], NDArray[np.floating[Any]], Callable[..., float], BatchSetting[_T]],
+) -> BatchSetting[_T]:
     """Create a ``BatchSetting`` for per-deme parameter specification.
 
     Args:
@@ -257,7 +269,7 @@ def batch_setting(
         expands at build time.
     """
     if isinstance(values, BatchSetting):
-        return values
+        return cast(BatchSetting[_T], values)
     return BatchSetting(values)
 
 
@@ -453,14 +465,14 @@ class SpatialConfigurator:
                 Configurator.for_discrete(species)
 
         # Accumulated batch settings: param_name -> BatchSetting.
-        self._batch_settings: Dict[str, BatchSetting] = {}
+        self._batch_settings: Dict[str, BatchSetting[Any]] = {}
 
         # Replay log: list of (method_name, kwargs_with_batch_settings).
         self._replay_log: List[tuple[str, Dict[str, Any]]] = []
 
         # Spatial migration parameters.
         self._migration_kernel: Optional[NDArray[np.float64]] = None
-        self._migration_kernel_batch: Optional[BatchSetting] = None
+        self._migration_kernel_batch: Optional[BatchSetting[Any]] = None
         self._migration_rate: float = 0.0
         self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto"
         self._migration_adjacency: Optional[object] = None
@@ -472,6 +484,285 @@ class SpatialConfigurator:
         # Parameter registry (mirrors PopulationBuilderBase._param_values).
         self._param_values: dict[str, object] = {}
         self._spatial_name: str = "SpatialPopulation"
+
+        # Compression (set via setup()).
+        self._compress: bool = False
+        self._declared_zygote_types: set[str] | set[int] | None = None
+
+    def _compress_once(
+        self, expanded: Dict[str, List[Any]]
+    ) -> set[int]:
+        """Compute the union of ztype indices reachable anywhere in the system.
+
+        Builds the first group's template to obtain a resolved
+        ``initial_individual_count`` array, then collects reachable ztype
+        seeds from all groups' initial states, hook genotype refs, and
+        user-declared types.  Runs a single BFS on combined modifier maps
+        and returns ztype indices that must be protected from compression
+        pruning across ALL groups.
+
+        Returns:
+            ``set[int]`` of ztype indices (pre-compression) to protect.
+        """
+        seeds: set[int] = set()
+
+        # ── Step 1: Build first group template (no compress) ──────────
+        # Must happen BEFORE seed collection because the resolved
+        # initial_individual_count array provides correct ztype indices
+        # — raw dict keys in `expanded` may be unresolved patterns,
+        # Genotype objects, or tuples.
+        batch_param_names = sorted(expanded.keys())
+        first_sig: Dict[str, Any] = {
+            name: expanded[name][0] for name in batch_param_names
+        }
+        full_template = self._build_template_for_group(
+            first_sig, compress=False,
+        )
+        full_config = full_template.export_config()
+        full_registry = full_template.index_registry
+
+        # ── Step 2: Seeds from initial_individual_count ────────────────
+        # Non-zero positions in the resolved array are ztype indices.
+        if "individual_count" in expanded:
+            n_demes = len(expanded["individual_count"])
+            seen: set[tuple[tuple[str, Any], ...]] = set()
+            from natal.configurator._factory import PopulationConfigBuilder
+
+            n_ages = int(full_config.n_ages)
+            new_adult_age = int(full_config.new_adult_age)
+
+            for i in range(n_demes):
+                sig_key = tuple(
+                    (name, _make_hashable(expanded[name][i]))
+                    for name in batch_param_names
+                )
+                if sig_key in seen:
+                    continue
+                seen.add(sig_key)
+
+                ind_cnt = expanded["individual_count"][i]
+                if not isinstance(ind_cnt, dict):
+                    continue
+
+                from natal.configurator._factory import InitialIndividualCountInput
+                dist = cast(InitialIndividualCountInput, ind_cnt)
+
+                if self._pop_type == "age_structured":
+                    array = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
+                        species=self._species,
+                        distribution=dist,
+                        n_ages=n_ages,
+                        new_adult_age=new_adult_age,
+                    )
+                else:
+                    array = PopulationConfigBuilder.resolve_discrete_initial_individual_count(
+                        species=self._species,
+                        distribution=dist,
+                    )
+                if array.size > 0:
+                    nz = np.nonzero(
+                        array.sum(axis=(0, 1)) if array.ndim == 3 else array
+                    )
+                    seeds.update(int(z) for z in nz[0])
+
+        # ── Step 3: Seeds from hook genotype refs ──────────────────────
+        from natal.configurator._base import collect_hook_genotype_refs
+        hook_strs: set[str] = set()
+        for method_name, kwargs in self._replay_log:
+            if method_name == "hooks":
+                hook_items = kwargs.get("hook_items", ())
+                if hook_items:
+                    hook_strs.update(
+                        collect_hook_genotype_refs(list(hook_items))
+                    )
+        resolved = self._resolve_declared_to_ints(
+            hook_strs, full_registry, full_config.n_slabs,
+        )
+        if resolved:
+            seeds.update(resolved)
+
+        # ── Step 4: Seeds from user-declared zygote types ──────────────
+        user_decl = self._declared_zygote_types
+        if user_decl is not None:
+            str_decl: set[str] = set()
+            for item in user_decl:
+                if isinstance(item, str):
+                    str_decl.add(item)
+                else:
+                    seeds.add(item)  # int — already a ztype index
+            if str_decl:
+                resolved_decl = self._resolve_declared_to_ints(
+                    str_decl, full_registry, full_config.n_slabs,
+                )
+                if resolved_decl:
+                    seeds.update(resolved_decl)
+
+        # ── Step 5: Build combined modifier maps & BFS ─────────────────
+        combined_z2g, combined_g2z = self._build_combined_modifier_maps(
+            expanded, full_config,
+        )
+        _, _, ztype_mask, _ = build_compression_mask(
+            combined_z2g,
+            combined_g2z,
+            full_config.initial_individual_count,
+            declared_genotypes=seeds if seeds else None,
+            n_glabs=int(full_config.n_glabs),
+            n_slabs=1,
+        )
+
+        # ── Step 6: Add BFS survivors to seeds ─────────────────────────
+        dips = full_registry.index_to_genotype
+        for old_idx in range(len(ztype_mask)):
+            if ztype_mask[old_idx] >= 0 and old_idx < len(dips):
+                seeds.add(old_idx)
+
+        return seeds
+
+    @staticmethod
+    def _resolve_declared_to_ints(
+        declared: set[str],
+        registry: IndexRegistry,
+        n_slabs: np.integer | int,
+    ) -> set[int] | None:
+        """Convert declared genotype strings to slab-expanded ZType indices."""
+        if not declared:
+            return None
+        result: set[int] = set()
+        dips = registry.index_to_genotype
+        n_slabs_int = int(n_slabs)
+        for dg in declared:
+            for gt in dips:
+                if str(gt) == dg:
+                    for s in range(n_slabs_int):
+                        result.add(
+                            registry.ztype_index(gt, registry.slab_labels[s])
+                        )
+        return result
+
+    def _build_combined_modifier_maps(
+        self,
+        expanded: Dict[str, List[Any]],
+        full_config: PopulationConfig | DiscretePopulationConfig,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Sum modifier-applied gamete/zygote maps across all config groups.
+
+        Each group's modifiers are applied independently to the Mendelian
+        baseline, and the resulting probability tensors are summed.  The
+        combined map's non-zero entries represent all gamete/zygote
+        productions possible anywhere in the spatial system — this is the
+        adjacency matrix for the unified BFS.
+        """
+        batch_param_names = sorted(expanded.keys())
+        n_demes = len(expanded[batch_param_names[0]])
+
+        # Collect unique group signatures.
+        seen: set[tuple[tuple[str, Any], ...]] = set()
+        sigs: list[Dict[str, Any]] = []
+        for i in range(n_demes):
+            sig_key = tuple(
+                (name, _make_hashable(expanded[name][i]))
+                for name in batch_param_names
+            )
+            if sig_key not in seen:
+                seen.add(sig_key)
+                sigs.append({
+                    name: expanded[name][i] for name in batch_param_names
+                })
+
+        # Mendelian baseline from species cache.
+        bp = self._species.get_config_blueprint()
+        baseline_z2g = bp["zygotes_to_gametes_map"]
+        baseline_g2z = bp["gametes_to_zygotes_map"]
+
+        combined_z2g: NDArray[np.float64] = np.zeros_like(baseline_z2g)
+        combined_g2z: NDArray[np.float64] = np.zeros_like(baseline_g2z)
+
+        from natal.configurator._registry_builder import build_registry
+        from natal.modifiers.module import build_modifier_wrappers
+
+        registry = build_registry(self._species)
+        haps = registry.index_to_haplo
+        dips = registry.index_to_genotype
+
+        for sig in sigs:
+            # Replay presets/modifiers to get modifier lists for this group.
+            gamete_mods: list[tuple[int, str | None, Any]] = []
+            zygote_mods: list[tuple[int, str | None, Any]] = []
+
+            # Do a lightweight replay — only need modifiers.
+            cfg = Configurator.for_age_structured(self._species)
+            for method_name, kwargs in self._replay_log:
+                if method_name in ("hooks", "initial_state", "setup",
+                                   "reproduction", "competition",
+                                   "age_structure", "survival", "fitness",
+                                   "custom", "with_observation", "migration"):
+                    continue  # irrelevant for modifier collection
+
+                # Substitute batch values.
+                resolved: Dict[str, Any] = {}
+                for key, value in kwargs.items():
+                    if key in sig:
+                        resolved[key] = sig[key]
+                    elif isinstance(value, BatchSetting):
+                        first: Any = cast(BatchSetting[Any], value).first_value()
+                        if first is not None:
+                            resolved[key] = first
+                    else:
+                        resolved[key] = value
+
+                # Apply to temporary configurator.
+                method = getattr(cfg, method_name, None)
+                if method is None:
+                    continue
+
+                if method_name == "presets":
+                    raw_list = cast(Any, resolved.pop("preset_list", ()))
+                    expanded_presets: list[object] = []
+                    for i_p, item in enumerate(raw_list):
+                        key = f"_preset_{i_p}"
+                        val = sig.get(key)
+                        if val is not None:
+                            expanded_presets.append(val)
+                        elif isinstance(item, BatchSetting):
+                            first = cast(BatchSetting[Any], item).first_value()
+                            if first is not None:
+                                expanded_presets.append(first)
+                        else:
+                            expanded_presets.append(item)
+                    filtered = {k: v for k, v in resolved.items() if v is not None}
+                    method(*expanded_presets, **filtered)
+                elif method_name == "modifiers":
+                    filtered = {k: v for k, v in resolved.items() if v is not None}
+                    method(**filtered)
+                else:
+                    filtered = {k: v for k, v in resolved.items() if v is not None}
+                    method(**filtered)
+
+            gamete_mods = cfg.gamete_modifiers
+            zygote_mods = cfg.zygote_modifiers
+
+            # Build wrappers and apply to baseline copies.
+            z2g_copy = baseline_z2g.copy()
+            g2z_copy = baseline_g2z.copy()
+
+            g_funcs, z_funcs = build_modifier_wrappers(
+                gamete_modifiers=gamete_mods,
+                zygote_modifiers=zygote_mods,
+                population=None,
+                index_registry=registry,
+                haploid_genotypes=haps,
+                diploid_genotypes=dips,
+                n_glabs=int(full_config.n_glabs),
+            )
+            for fn in g_funcs:
+                z2g_copy = fn(z2g_copy)
+            for fn in z_funcs:
+                g2z_copy = fn(g2z_copy)
+
+            combined_z2g += z2g_copy
+            combined_g2z += g2z_copy
+
+        return combined_z2g, combined_g2z
 
     # ------------------------------------------------------------------
     # Internal: batch detection and delegation
@@ -517,7 +808,7 @@ class SpatialConfigurator:
                 # Feed the first element to the template builder so it
                 # can proceed through setup() → … → build() without
                 # errors.  The full per-deme list is expanded at build().
-                first = value.first_value()
+                first = cast(BatchSetting[Any], value).first_value()
                 if first is not None:
                     concrete[key] = first
             else:
@@ -552,7 +843,7 @@ class SpatialConfigurator:
                 # feed it the first element so it can proceed through
                 # its own build() pipeline. The full per-deme list is
                 # stored in _batch_settings for later expansion.
-                first = value.first_value()
+                first = cast(BatchSetting[Any], value).first_value()
                 if first is not None:
                     concrete_kwargs[key] = first
             else:
@@ -575,6 +866,8 @@ class SpatialConfigurator:
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
+        compress: bool = False,
+        declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
     ) -> SpatialConfigurator:
         """Configure basic population settings.
 
@@ -583,23 +876,43 @@ class SpatialConfigurator:
             stochastic: Whether to use stochastic sampling.
             continuous_sampling: If True, use Dirichlet sampling.
             fixed_egg_count: If True, egg count is fixed.
+            compress: If True, enable index compression at build time.
+                Compression is applied once at the spatial level (not
+                per-group), producing a unified registry shared by all
+                demes — safe for cross-deme migration.
+            declared_zygote_types: Optional sequence of genotype
+                selectors to protect from compression pruning.
+                Hook genotype references are auto-collected; use this
+                only for genotypes introduced by custom njit hooks.
 
         Returns:
             Self for chaining.
         """
         self._spatial_name = name
-        self._replay_log.append(("setup", {
+        replay_kwargs: dict[str, object] = {
             "name": name,
             "stochastic": stochastic,
             "continuous_sampling": continuous_sampling,
             "fixed_egg_count": fixed_egg_count,
-        }))
-        self._template.setup(
-            name=name,
-            stochastic=stochastic,
-            continuous_sampling=continuous_sampling,
-            fixed_egg_count=fixed_egg_count,
-        )
+            "compress": compress,
+            "declared_zygote_types": declared_zygote_types,
+        }
+        self._replay_log.append(("setup", replay_kwargs))
+        template_kwargs: dict[str, object] = {
+            "name": name,
+            "stochastic": stochastic,
+            "continuous_sampling": continuous_sampling,
+            "fixed_egg_count": fixed_egg_count,
+            "compress": compress if not self._batch_settings else False,
+            "declared_zygote_types": declared_zygote_types,
+        }
+        self._template.setup(**template_kwargs)  # type: ignore[arg-type]
+        if compress:
+            self._compress = True
+        if declared_zygote_types is not None:
+            self._declared_zygote_types = cast(
+                "set[str] | set[int]", set(declared_zygote_types)
+            )
         return self
 
     def age_structure(
@@ -697,8 +1010,8 @@ class SpatialConfigurator:
     def reproduction(
         self,
         # Shared params (accept BatchSetting for per-deme variation)
-        eggs_per_female: Union[float, BatchSetting] = 50.0,
-        sex_ratio: Union[float, BatchSetting] = 0.5,
+        eggs_per_female: Union[float, BatchSetting[Any]] = 50.0,
+        sex_ratio: Union[float, BatchSetting[Any]] = 0.5,
         fixed_egg_count: bool = False,
         # Age-structured params
         female_age_based_mating_rate: Optional[Any] = None,
@@ -756,14 +1069,14 @@ class SpatialConfigurator:
         self,
         # Age-structured params
         competition_strength: float = 5.0,
-        juvenile_growth_mode: Union[int, str, BatchSetting] = "logistic",
-        low_density_growth_rate: Union[float, BatchSetting] = 6.0,
-        age_1_carrying_capacity: Union[int, None, BatchSetting] = None,
-        old_juvenile_carrying_capacity: Union[int, None, BatchSetting] = None,
-        expected_num_new_adult_females: Union[int, None, BatchSetting] = None,
-        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64], BatchSetting]] = None,
+        juvenile_growth_mode: Union[int, str, BatchSetting[Any]] = "logistic",
+        low_density_growth_rate: Union[float, BatchSetting[Any]] = 6.0,
+        age_1_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
+        old_juvenile_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
+        expected_num_new_adult_females: Union[int, None, BatchSetting[Any]] = None,
+        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64], BatchSetting[Any]]] = None,
         # Discrete-generation params
-        carrying_capacity: Union[int, None, BatchSetting] = None,
+        carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
     ) -> SpatialConfigurator:
         """Configure competition and density-dependence.
 
@@ -829,7 +1142,7 @@ class SpatialConfigurator:
         for i, item in enumerate(preset_list):
             if isinstance(item, BatchSetting):
                 self._batch_settings[f"_preset_{i}"] = item
-                first = item.first_value()
+                first = cast(BatchSetting[Any], item).first_value()
                 if first is not None:
                     concrete_args.append(first)
             else:
@@ -1154,6 +1467,11 @@ class SpatialConfigurator:
         for param_name, batch in self._batch_settings.items():
             expanded[param_name] = batch.expand(self._n_demes, self._topology)
 
+        # 1a. If compression is enabled, compute union declared ztype indices.
+        union_declared: set[int] | None = None
+        if self._compress:
+            union_declared = self._compress_once(expanded)
+
         # 2. Hash each deme's batch-param values into a signature.
         #    ndarray values → bytes; dict values → sorted kv tuples.
         #    Two demes with identical signatures share a config.
@@ -1187,8 +1505,9 @@ class SpatialConfigurator:
             }
 
             if base_config is None:
-                # First group: full builder replay (no base_config to _replace from).
-                group_template = self._build_template_for_group(sig_map)
+                group_template = self._build_template_for_group(
+                    sig_map, extra_declared=union_declared,
+                )
                 base_config = group_template.export_config()
                 base_template = group_template
             elif self._can_use_replace(sig_map, base_config):
@@ -1226,7 +1545,9 @@ class SpatialConfigurator:
                 # Fallback: parameter not recognised by _can_use_replace
                 # (e.g. fitness dict, custom modifier). Full builder replay —
                 # all arrays freshly allocated, no sharing with base_config.
-                group_template = self._build_template_for_group(sig_map)
+                group_template = self._build_template_for_group(
+                    sig_map, extra_declared=union_declared,
+                )
 
             demes[first_idx] = group_template
 
@@ -1424,28 +1745,22 @@ class SpatialConfigurator:
 
         return variant
 
-    def _build_template_for_group(self, sig_map: Dict[str, object]) -> PopulationInstance:
+    def _build_template_for_group(
+        self, sig_map: Dict[str, object],
+        *, extra_declared: set[int] | None = None,
+        compress: bool | None = None,
+    ) -> PopulationInstance:
         """Build a single template deme for one config-signature group.
 
         Creates a fresh panmictic builder and replays every method call
         recorded in ``_replay_log``, substituting ``BatchSetting`` values
         with the group-specific concrete values from *sig_map*.
 
-        This is the **full-rebuild fallback** — used when the group's
-        differing parameters can't be applied via ``_replace`` (e.g. fitness
-        dicts, or anything ``_can_use_replace`` doesn't recognise).
-        All arrays (genotype maps, fitness, survival, etc.) are freshly
-        allocated.
-
-        For scalar-only differences, prefer ``_build_variant_config`` which
-        shares heavy arrays via ``_replace``.
-
         Args:
             sig_map: Mapping from batch parameter name to the group's
                 concrete value.
-
-        Returns:
-            A fully-built population instance for this group.
+            extra_declared: Additional ztype indices to protect from
+                compression pruning (union seeds across all demes).
         """
         if self._pop_type == "age_structured":
             template_cfg = Configurator.for_age_structured(self._species)
@@ -1457,19 +1772,28 @@ class SpatialConfigurator:
             if method is None:
                 continue
 
-            # Substitute batch-setting values for this group.
             resolved: Dict[str, object] = {}
             for key, value in kwargs.items():
                 if key in sig_map:
                     resolved[key] = sig_map[key]
                 elif isinstance(value, BatchSetting):
-                    # This shouldn't happen if sig_map covers all batch names,
-                    # but fall back to first value just in case.
-                    first = value.first_value()
+                    first = cast(BatchSetting[Any], value).first_value()
                     if first is not None:
                         resolved[key] = first
                 else:
                     resolved[key] = value
+
+            # Merge union seeds into the setup call's declared_zygote_types.
+            # extra_declared already includes user-declared types (resolved by
+            # _compress_once), hook refs, and BFS survivors — it is the complete
+            # seed set.  Replace the replay log's declared_zygote_types outright.
+            if extra_declared and method_name == "setup":
+                resolved["declared_zygote_types"] = list(extra_declared)
+
+            # Override compress flag (used by _compress_once to build
+            # without compression).
+            if compress is not None and method_name == "setup":
+                resolved["compress"] = compress
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":
@@ -1481,7 +1805,7 @@ class SpatialConfigurator:
                     if preset_val is not None:
                         expanded_presets.append(preset_val)
                     elif isinstance(item, BatchSetting):
-                        first = item.first_value()
+                        first = cast(BatchSetting[Any], item).first_value()
                         if first is not None:
                             expanded_presets.append(first)
                     else:

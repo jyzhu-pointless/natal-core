@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from natal.data import (
     DiscretePopulationConfig,
@@ -118,6 +119,9 @@ class ConfigContext:
         self.compress = compress
         self.compression_applied: bool = False
         self.declared_zygote_types: set[str] | set[int] | None = None
+        # Compression masks (exposed for spatial post-processing).
+        self.ztype_mask: NDArray[np.int32] | None = None
+        self.gtype_mask: NDArray[np.int32] | None = None
         self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
         self.presets: list[GeneticPreset] = []  # for cytoplasmic preset post-processing
@@ -200,17 +204,22 @@ class ConfigContext:
 # ── Core: rebuild genotype/gamete/zygote maps from modifier lists ─────────────
 
 
-def rebuild_config_maps(ctx: ConfigContext) -> None:
+def rebuild_config_maps(
+    ctx: ConfigContext,
+    *,
+    override_z2g: NDArray[np.float64] | None = None,
+    override_g2z: NDArray[np.float64] | None = None,
+) -> None:
     """Apply gamete/zygote modifiers and rebuild ``offspring_tensor``.
 
     Starts from the species-level Mendelian baseline (cached via
     :meth:`Species.get_config_blueprint`) and applies modifier callables
     in-place, avoiding redundant O(n²) baseline recomputation.
 
-    Returns:
-        ``None`` — the mutated config is written back through
-        ``ctx.config``, which the caller is expected to sync via
-        :meth:`Configurator._sync_from_ctx`.
+    When *override_z2g* / *override_g2z* are provided, the modifier
+    application step is skipped and the override maps are used directly.
+    This is used by spatial compression to combine modifier maps from
+    multiple demes into a unified BFS adjacency matrix.
     """
     from natal.engine.simulation.age_structured import (
         compute_offspring_probability_tensor,
@@ -224,37 +233,31 @@ def rebuild_config_maps(ctx: ConfigContext) -> None:
         return  # species has no haploid genotypes (no sex chromosomes)
 
     n_glabs = int(ctx.config.n_glabs)
-    # ---- compile modifier callables from the accumulated modifier lists ----
-    # build_modifier_wrappers converts user-supplied GameteModifier /
-    # ZygoteModifier objects into tensor → tensor callables.
-    gamete_funcs, zygote_funcs = build_modifier_wrappers(
-        gamete_modifiers=ctx.gamete_modifiers,
-        zygote_modifiers=ctx.zygote_modifiers,
-        population=None,
-        index_registry=ctx.registry,
-        haploid_genotypes=haploid_genotypes,
-        diploid_genotypes=diploid_genotypes,
-        n_glabs=n_glabs,
-        expand_to_ztypes=int(ctx.config.n_slabs) > 1,
-    )
+    if override_z2g is not None and override_g2z is not None:
+        zygotes_to_gametes_map = override_z2g.copy()
+        gametes_to_zygotes_map = override_g2z.copy()
+    else:
+        # ---- compile modifier callables from the accumulated modifier lists ----
+        gamete_funcs, zygote_funcs = build_modifier_wrappers(
+            gamete_modifiers=ctx.gamete_modifiers,
+            zygote_modifiers=ctx.zygote_modifiers,
+            population=None,
+            index_registry=ctx.registry,
+            haploid_genotypes=haploid_genotypes,
+            diploid_genotypes=diploid_genotypes,
+            n_glabs=n_glabs,
+        )
 
-    # ---- fetch the Mendelian baseline from the species cache ----
-    # Because get_config_blueprint() is cached per-species, repeatedly
-    # calling it is cheap.  We copy the arrays so that modifier callables
-    # can mutate them without corrupting the cached originals.
-    bp = ctx.species.get_config_blueprint()
-    zygotes_to_gametes_map = bp["zygotes_to_gametes_map"].copy()
-    gametes_to_zygotes_map = bp["gametes_to_zygotes_map"].copy()
+        # ---- fetch the Mendelian baseline from the species cache ----
+        bp = ctx.species.get_config_blueprint()
+        zygotes_to_gametes_map = bp["zygotes_to_gametes_map"].copy()
+        gametes_to_zygotes_map = bp["gametes_to_zygotes_map"].copy()
 
-    # ---- chain modifier callables on top of the baseline ----
-    # Each callable accepts and returns a tensor of the same shape,
-    # allowing modifiers to be composed in registration order.
-    # Blueprint maps are pre-expanded (G×S), so modifier wrappers
-    # expand genotype indices to ZType indices internally.
-    for fn in gamete_funcs:
-        zygotes_to_gametes_map = fn(zygotes_to_gametes_map)
-    for fn in zygote_funcs:
-        gametes_to_zygotes_map = fn(gametes_to_zygotes_map)
+        # ---- chain modifier callables on top of the baseline ----
+        for fn in gamete_funcs:
+            zygotes_to_gametes_map = fn(zygotes_to_gametes_map)
+        for fn in zygote_funcs:
+            gametes_to_zygotes_map = fn(gametes_to_zygotes_map)
 
     # ---- index compression (optional) ----
     n_g_compressed = int(ctx.config.n_ztypes)
@@ -306,6 +309,8 @@ def rebuild_config_maps(ctx: ConfigContext) -> None:
         )
         gtype_mask = _gt_mask
         ztype_mask = _zt_mask
+        ctx.gtype_mask = gtype_mask
+        ctx.ztype_mask = ztype_mask
 
         # Guard: if no genotypes or gametes are reachable, skip compression
         # entirely (initial state is empty and no declared_genotypes given).
