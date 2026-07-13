@@ -58,6 +58,17 @@ def test_regression_issue34_zygote_modifier_index_error():
     assert pop is not None
     assert pop.config.n_ztypes > pop.registry.num_genotypes()  # slabs > 1
 
+    # Verify zygote modifier preserves probability mass:
+    # every row of gametes_to_zygotes_map should sum to 0.0 or ~1.0.
+    g2z = pop.config.gametes_to_zygotes_map
+    row_sums = g2z.sum(axis=2)
+    for i in range(g2z.shape[0]):
+        for j in range(g2z.shape[1]):
+            s = float(row_sums[i, j])
+            assert s == pytest.approx(0.0) or s == pytest.approx(1.0), (
+                f"gametes_to_zygotes_map[{i},{j}] sum = {s:.6f}, expected 0 or 1"
+            )
+
 
 # ============================================================================
 # Issue #36 — gamete modifier wrong ztype

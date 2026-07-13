@@ -633,7 +633,7 @@ class ZygoteConversionRuleSet:
 
             return result
 
-        return zygote_modifier_func  # type: ignore[return-type]
+        return zygote_modifier_func  # type: ignore[return-type]  # inner func matches ZygoteModifier protocol
 
     def __repr__(self) -> str:
         """Return a string identifying this rule set and its rule count."""

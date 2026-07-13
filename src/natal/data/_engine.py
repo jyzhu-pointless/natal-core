@@ -25,7 +25,6 @@ from .config import DiscretePopulationConfig, PopulationConfig
 def initialize_zygote_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
-    *,
     n_glabs: int = 1,
     n_slabs: int = 1,
     unordered: bool = False,
@@ -109,7 +108,6 @@ def initialize_zygote_map(
 def initialize_gamete_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
-    *,
     n_glabs: int = 1,
     n_slabs: int = 1,
     gamete_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,

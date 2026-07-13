@@ -130,7 +130,7 @@ class CytoplasmicPreset(GeneticPreset):
 
             return result
 
-        return modifier_func  # type: ignore[return-type]
+        return modifier_func  # type: ignore[return-type]  # inner func matches GameteModifier protocol
 
     def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
         """Redirect zygotes: tagged maternal gamete + any paternal → target slab.
@@ -196,7 +196,7 @@ class CytoplasmicPreset(GeneticPreset):
 
             return result
 
-        return modifier_func  # type: ignore[return-type]
+        return modifier_func  # type: ignore[return-type]  # inner func matches ZygoteModifier protocol
 
     @staticmethod
     def apply_zygote_redirect(

@@ -566,13 +566,13 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
    - `gamete_conversion.py`：`index_to_genotype` → `index_to_ztype`，`genotype_idx` → `ztype_idx`
    - `zygote_conversion.py`：同上 + `g = row.argmax()` 后直接用 ztype 索引
 
-### 📋 Stage 2 待做 — 矩阵编译 + 完整迁移
+### 📋 Stage 2 待做 — 剩余迁移
 
-1. `RuleSet.to_matrix(registry)` — 编译规则为稀疏矩阵，替代 Python 级联循环
-2. `add_slab_convert` — gamete/zygote 端 slab 操作（当前 CytoplasmicPreset 只能走 modifier 自制循环）
-3. `when` → 旧 API 参数翻译（当前只接受并存，未实际转换）
+1. ✅ `RuleSet.to_matrix(registry)` — 已实现（`1f06109`），CytoplasmicPreset 已在用
+2. ✅ `when` 条件接线 — 已实现（`8d70791`），gamete/zygote modifier 均已支持
+3. `add_slab_convert` — gamete/zygote 端 slab 操作（当前 CytoplasmicPreset 自制循环）
 4. `_compute_converted_gamete_freqs` 替换为矩阵乘法
-5. `extract_gamete_frequencies_by_glab` 调用消除
+5. `extract_gamete_frequencies_by_glab` 调用精简（CytoplasmicPreset 路径仍保留）
 
 ### 剩余 P2 命名清理（grill list #8-#16）
 
