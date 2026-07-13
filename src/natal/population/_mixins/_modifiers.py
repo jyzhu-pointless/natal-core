@@ -189,8 +189,13 @@ class ModifierPresetMixin(HookManagerMixin):
         # convolving the maternal and paternal gametogenesis maps through
         # the fusion map.  The result is a 4-D array indexed by
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
-        n_g = int(self._config.n_ztypes)
-        n_hg = int(self._config.n_gtypes)
+        #
+        # Use the rebuilt map's actual dimensions — after compression some
+        # (genotype, slab) pairs may be pruned, making the regular-grid
+        # formula ``len(diploid_genotypes) * n_slabs`` mismatch the
+        # config's ``n_ztypes``.
+        n_g = int(zygotes_to_gametes_map.shape[1])
+        n_hg = int(zygotes_to_gametes_map.shape[2])
         offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=zygotes_to_gametes_map[0],
             meiosis_m=zygotes_to_gametes_map[1],

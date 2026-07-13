@@ -575,4 +575,3 @@ def _as_idx_prob_pair(value: object) -> Optional[Tuple[object, float]]:
     if pair is None or not isinstance(pair[1], (int, float)):
         return None
     return pair[0], float(pair[1])
-

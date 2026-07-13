@@ -583,7 +583,18 @@ class ZygoteConversionRuleSet:
 
                             # ----- Glab-redirect rule -----
                             elif isinstance(rule, ZygoteGlabRedirectRule):
-                                effective_slab = str(rule.to_glab)
+                                # ``to_glab`` names a somatic slab (misnamed —
+                                # it is a slab, not a gamete label).  Guard
+                                # against non-existent slabs: if the target
+                                # slab is not in the ztype index, stay at
+                                # ``base_slab`` instead of dropping probability.
+                                # NOTE: ``rule.rate`` is not applied here because
+                                # ``effective_slab`` is shared across all genotypes
+                                # of this (c1,c2) pair; per-genotype rate splitting
+                                # would require per-genotype slab tracking.
+                                target_slab = str(rule.to_glab)
+                                if (gt, target_slab) in ztype_index:
+                                    effective_slab = target_slab
                                 next_freqs[gt] = next_freqs.get(gt, 0.0) + prob
 
                             # ----- Allele-level rule -----
