@@ -216,11 +216,11 @@ class _Slab(Condition):
 
 
 class _Maternal(Condition):
-    """Marker for maternal-side gamete rules (zygote only).
+    """Condition that matches maternal-side gametes.
 
-    Currently a placeholder — always returns ``True``.  The
-    maternal/paternal distinction is enforced by the zygote modifier
-    pipeline through the ``(c1, c2)`` column indexing.
+    In gamete-modifier context, ``sex_idx == 0`` (female) is the
+    maternal side.  In zygote-modifier context (``sex_idx == -1``),
+    always returns ``True`` since both parental sides are present.
     """
 
     def _matches(
@@ -231,16 +231,18 @@ class _Maternal(Condition):
         slab: str,
         registry: IndexRegistry,
     ) -> bool:
-        _ = (sex_idx, ztype_idx, genotype, slab, registry)
-        return True
+        _ = (ztype_idx, genotype, slab, registry)
+        # In gamete context: female=0 (maternal).  In zygote context
+        # sex_idx=-1: both sides present → always True.
+        return sex_idx != 1
 
 
 class _Paternal(Condition):
-    """Marker for paternal-side gamete rules (zygote only).
+    """Condition that matches paternal-side gametes.
 
-    Currently a placeholder — always returns ``True``.  The
-    maternal/paternal distinction is enforced by the zygote modifier
-    pipeline through the ``(c1, c2)`` column indexing.
+    In gamete-modifier context, ``sex_idx == 1`` (male) is the
+    paternal side.  In zygote-modifier context (``sex_idx == -1``),
+    always returns ``True`` since both parental sides are present.
     """
 
     def _matches(
@@ -251,8 +253,10 @@ class _Paternal(Condition):
         slab: str,
         registry: IndexRegistry,
     ) -> bool:
-        _ = (sex_idx, ztype_idx, genotype, slab, registry)
-        return True
+        _ = (ztype_idx, genotype, slab, registry)
+        # In gamete context: male=1 (paternal).  In zygote context
+        # sex_idx=-1: both sides present → always True.
+        return sex_idx != 0
 
 
 # ---------------------------------------------------------------------------

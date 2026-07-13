@@ -169,18 +169,24 @@ def test_slab_empty_string():
 # ============================================================================
 
 
-def test_is_maternal_always_true():
+def test_is_maternal():
     c = is_maternal()
     assert isinstance(c, _Maternal)
+    # gamete context: female (0) = maternal, male (1) = not maternal
     assert c._matches(sex_idx=0, ztype_idx=0, genotype=_G_AA, slab="default", registry=_registry(_G_AA))
-    assert c._matches(sex_idx=1, ztype_idx=5, genotype=_G_AB, slab="x", registry=IndexRegistry())
+    assert not c._matches(sex_idx=1, ztype_idx=5, genotype=_G_AB, slab="x", registry=IndexRegistry())
+    # zygote context: sex_idx=-1 → always True (both sides present)
+    assert c._matches(sex_idx=-1, ztype_idx=0, genotype=_G_AA, slab="default", registry=_registry(_G_AA))
 
 
-def test_is_paternal_always_true():
+def test_is_paternal():
     c = is_paternal()
     assert isinstance(c, _Paternal)
-    assert c._matches(sex_idx=0, ztype_idx=0, genotype=_G_AA, slab="default", registry=_registry(_G_AA))
+    # gamete context: male (1) = paternal, female (0) = not paternal
+    assert not c._matches(sex_idx=0, ztype_idx=0, genotype=_G_AA, slab="default", registry=_registry(_G_AA))
     assert c._matches(sex_idx=1, ztype_idx=5, genotype=_G_AB, slab="x", registry=IndexRegistry())
+    # zygote context: sex_idx=-1 → always True (both sides present)
+    assert c._matches(sex_idx=-1, ztype_idx=0, genotype=_G_AA, slab="default", registry=_registry(_G_AA))
 
 
 # ============================================================================
