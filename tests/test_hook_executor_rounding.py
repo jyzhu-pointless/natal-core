@@ -1,6 +1,7 @@
 import math
 
 import natal.hooks.runtime.csr_kernel as csr_kernel
+from natal.numba import binomial, set_numba_seed
 
 
 def _call_python_impl(fn, *args):  # type: ignore[no-untyped-def]
@@ -14,6 +15,17 @@ def _call_python_impl(fn, *args):  # type: ignore[no-untyped-def]
     in both modes.
     """
     return fn.py_func(*args) if hasattr(fn, "py_func") else fn(*args)
+
+
+def test_sample_survivors_uses_exported_binomial() -> None:
+    """Discrete survivor sampling must use the public compat sampler."""
+    set_numba_seed(1)
+    expected = float(binomial(1000, 0.5))
+
+    set_numba_seed(1)
+    actual = csr_kernel._sample_survivors(1000.0, 0.5, True, False)
+
+    assert actual == expected
 
 
 def test_apply_target_without_sperm_rounds_current_count_in_stochastic_mode(monkeypatch) -> None:

@@ -269,7 +269,7 @@ def _sample_survivors(
     if stochastic_flag:
         if dirichlet_flag:
             return nbc.continuous_binomial(n_base, survival_prob)
-        return float(np.random.binomial(int(round(n_base)), survival_prob))
+        return float(nbc.binomial(int(round(n_base)), survival_prob))
     return n_base * survival_prob
 
 
