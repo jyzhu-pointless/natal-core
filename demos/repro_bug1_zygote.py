@@ -25,7 +25,7 @@ cfg = nt.Configurator.for_age_structured(sp)
 cfg = cfg.setup(stochastic=False)
 cfg = cfg.age_structure(n_ages=8, new_adult_age=2)
 cfg = cfg.initial_state(
-    {"female": {"WT|WT": np.ones(8)}, "male": {"WT|WT": np.ones(8)}}
+    {"female": {"WT|WT": list(np.ones(8))}, "male": {"WT|WT": list(np.ones(8))}}
 )
 cfg = cfg.competition(low_density_growth_rate=1, carrying_capacity=100)
 cfg = cfg.presets(drive)                    # <-- crashes here

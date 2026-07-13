@@ -275,12 +275,27 @@ def rebuild_config_maps(
             for dg in ctx.declared_zygote_types:
                 if isinstance(dg, str):
                     try:
-                        gt = ctx.species.get_genotype_from_str(dg)
-                        if gt in diploid_genotypes:
-                            for s in range(n_slabs):
-                                declared_ints.add(
-                                    ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
-                                )
+                        # Use ZygoteTypePattern to properly handle @slab
+                        # suffixes (e.g. "Drive|Rescue_Cargo@S").
+                        from natal.patterns.elements.diploid import ZygoteTypePattern
+                        pattern = ZygoteTypePattern.parse(dg, ctx.species)
+                        matched = False
+                        for gt in diploid_genotypes:
+                            if pattern.genotype.matches(gt):
+                                for s in range(n_slabs):
+                                    declared_ints.add(
+                                        ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
+                                    )
+                                matched = True
+                        if not matched:
+                            # Fallback: strip @slab and try exact match
+                            dg_clean = dg.split("@")[0]
+                            gt = ctx.species.get_genotype_from_str(dg_clean)
+                            if gt in diploid_genotypes:
+                                for s in range(n_slabs):
+                                    declared_ints.add(
+                                        ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
+                                    )
                     except Exception:
                         pass
                 else:

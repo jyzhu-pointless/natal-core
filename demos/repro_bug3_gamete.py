@@ -14,7 +14,7 @@ sp = nt.Species.from_dict(
     structure={"chr1": {"A": GENOS}},
     somatic_labels=["S", "E", "I"],
     gamete_labels=["default", "Cas9_deposited"],
-    unordered=False,
+    unordered=True,
 )
 
 drive = nt.HomingDrive(
@@ -34,11 +34,13 @@ def release():
     return [Op.add(genotypes="Drive|Rescue_Cargo@S", ages=2, sex="both",
                    delta=rd, when="tick == 20")]
 
-pop = (nt.Configurator.for_age_structured(sp)
-       .setup(stochastic=True)
-       .age_structure(n_ages=8, new_adult_age=2)
-       .initial_state({"female": {"WT|WT": np.array([0, 6, 6, 5, 4, 3, 2, 1]) * 72},
-                       "male": {"WT|WT": np.array([0, 6, 6, 4, 2, 0, 0, 0]) * 72}})
+pop = (nt.AgeStructuredPopulation.setup(
+        species=sp,
+        stochastic=True,
+        compress=True
+    ).age_structure(n_ages=8, new_adult_age=2)
+       .initial_state({"female": {"WT|WT": list(np.array([0, 6, 6, 5, 4, 3, 2, 1]) * 72)},
+                       "male": {"WT|WT": list(np.array([0, 6, 6, 4, 2, 0, 0, 0]) * 72)}})
        .survival(female_age_based_survival=[1, 1, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
                  male_age_based_survival=[1, 1, 2/3, 1/2, 0, 0, 0, 0])
        .reproduction(eggs_per_female=50, sex_ratio=0.5)
