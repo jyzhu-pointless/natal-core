@@ -100,7 +100,7 @@ class ZygoteZtypeConversionRule:
         name: Optional[str] = None,
         maternal_glab: Optional[Union[str, int]] = None,
         paternal_glab: Optional[Union[str, int]] = None,
-    ):
+    ) -> None:
         """Initialise a zygote conversion rule.
 
         Args:
@@ -198,7 +198,7 @@ class ZygoteGlabRedirectRule:
         rate: float = 1.0,
         name: Optional[str] = None,
         when: Optional[Condition] = None,
-    ):
+    ) -> None:
         """Initialise a glab-redirect rule.
 
         Args:
@@ -271,7 +271,7 @@ class ZygoteAlleleConversionRule:
         genotype_filter: _GenotypeFilter = None,
         maternal_glab: Optional[Union[str, int]] = None,
         paternal_glab: Optional[Union[str, int]] = None,
-    ):
+    ) -> None:
         """Initialise an allele-level zygote conversion rule.
 
         Args:
@@ -350,7 +350,7 @@ class ZygoteConversionRuleSet:
     # Union type alias for accepted rule types
     _RuleType = Union[ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, ZygoteGlabRedirectRule]
 
-    def __init__(self, name: str = "ZygoteConversionRuleSet"):
+    def __init__(self, name: str = "ZygoteConversionRuleSet") -> None:
         """Initialize an empty zygote conversion rule set.
 
         Args:

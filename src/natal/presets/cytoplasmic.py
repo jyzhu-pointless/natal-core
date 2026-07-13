@@ -252,7 +252,7 @@ class Wolbachia(CytoplasmicPreset):
         fecundity_scaling: Optional[float] = None,
         species: Optional[Species] = None,
         priority: int = 0,
-    ):
+    ) -> None:
         """Initialize a Wolbachia cytoplasmic preset.
 
         Args:
@@ -303,7 +303,7 @@ class TransgenicBackground(GeneticPreset):
         viability_scaling: Optional[float] = None,
         species: Optional[Species] = None,
         priority: int = 0,
-    ):
+    ) -> None:
         """Initialize a TransgenicBackground preset.
 
         Args:

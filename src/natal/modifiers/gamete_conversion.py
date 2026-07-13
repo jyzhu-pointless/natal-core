@@ -88,7 +88,7 @@ class GameteGtypeConversionRule:
         genotype_filter: _GenotypeFilter = None,
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
-    ):
+    ) -> None:
         """Initialise a haploid-genome-level gamete conversion rule.
 
         Args:
@@ -213,7 +213,7 @@ class GameteGlabConversionRule:
         sex_filter: Optional[Union[str, int, Sex]] = "both",
         genotype_filter: _GenotypeFilter = None,
         when: Optional[Condition] = None,
-    ):
+    ) -> None:
         """Initialise a gamete-label conversion rule.
 
         Args:
@@ -308,7 +308,7 @@ class GameteAlleleConversionRule:
         genotype_filter: _GenotypeFilter = None,
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
-    ):
+    ) -> None:
         """Initialize an allele conversion rule.
 
         Args:
@@ -443,7 +443,7 @@ class GameteConversionRuleSet:
         population.add_gamete_modifier(gamete_mod, name="conversions")
     """
 
-    def __init__(self, name: str = "GameteConversionRuleSet"):
+    def __init__(self, name: str = "GameteConversionRuleSet") -> None:
         """Initialize an empty ruleset.
 
         Args:
