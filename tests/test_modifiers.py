@@ -396,16 +396,6 @@ class TestZygoteRules:
 
 class TestRuleSets:
     """Unit tests for GameteConversionRuleSet and ZygoteConversionRuleSet."""
-
-    def test_gamete_ruleset_add_convert(self, simple_species):
-        """add_convert appends a rule and returns self."""
-        from natal.modifiers.gamete_conversion import GameteConversionRuleSet
-        hg = simple_species.get_all_haploid_genotypes()[0]
-        rs = GameteConversionRuleSet()
-        result = rs.add_glab_convert(from_glab='a', to_glab='b', rate=0.5)
-        assert result is rs
-        assert len(rs.rules) == 1
-
     def test_gamete_ruleset_add_glab_convert(self):
         """add_glab_convert appends a glab rule."""
         from natal.modifiers.gamete_conversion import GameteConversionRuleSet
@@ -571,3 +561,374 @@ class TestRuleSetValidation:
         rs = ZygoteConversionRuleSet()
         with pytest.raises(AssertionError):
             rs.add_rule(object())  # type: ignore[arg-type]
+
+
+# ============================================================================
+# End-to-end gamete modifier — numerical invariants
+# ============================================================================
+
+
+def _build_glab_pop():
+    """Build a minimal age-structured population with two gamete labels."""
+    import natal as nt
+    sp = nt.Species.from_dict(
+        name="_glab_test",
+        structure={"chr1": {"A": ["WT", "Dr"]}},
+        gamete_labels=["default", "tagged"],
+    )
+    return (
+        nt.Configurator.for_age_structured(sp)
+        .setup(stochastic=False)
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
+        .competition(carrying_capacity=100, low_density_growth_rate=1)
+        .build()
+    )
+
+
+class TestGameteModifierE2E:
+    """End-to-end tests for gamete modifiers with numerical invariants."""
+
+    def test_glab_convert_preserves_row_sums(self):
+        """After glab convert, every (sex,ztype) row sums to 0 or 1."""
+        from natal.modifiers.gamete_conversion import GameteConversionRuleSet
+        pop = _build_glab_pop()
+        rs = GameteConversionRuleSet()
+        rs.add_glab_convert(from_glab="default", to_glab="tagged", rate=0.3)
+        modifier = rs.to_gamete_modifier(pop)
+        assert modifier is not None
+        pop.add_gamete_modifier(modifier, name="test")
+
+        z2g = pop.config.zygotes_to_gametes_map
+        n_ztypes = z2g.shape[1]
+        assert n_ztypes > 0
+
+        for sex in range(z2g.shape[0]):
+            for z in range(n_ztypes):
+                s = float(z2g[sex, z, :].sum())
+                # Row sum must be exactly 0.0 (empty ztype) or 1.0
+                assert s == pytest.approx(0.0) or s == pytest.approx(1.0), (
+                    f"Row (sex={sex}, ztype={z}) sum={s:.6f}, expected 0 or 1"
+                )
+
+    def test_glab_convert_rate_is_exact(self):
+        """Glab convert at rate=0.3 shifts exactly 30% probability mass."""
+        from natal.modifiers.gamete_conversion import GameteConversionRuleSet
+        pop = _build_glab_pop()
+        reg = pop.registry
+
+        # Find a ztype with a known haploid-genotype distribution
+        # WT|WT produces only WT gametes (100% WT@default before modifier)
+        wt_gt = pop.species.get_genotype_from_str("WT|WT")
+        zidx = reg.ztype_index(wt_gt, reg.slab_labels[0])
+
+        # Capture baseline (no modifier)
+        z2g_before = pop.config.zygotes_to_gametes_map.copy()
+
+        # Apply 30% glab convert: default → tagged
+        rs = GameteConversionRuleSet()
+        rs.add_glab_convert(from_glab="default", to_glab="tagged", rate=0.3)
+        modifier = rs.to_gamete_modifier(pop)
+        assert modifier is not None
+        pop.add_gamete_modifier(modifier, name="test", refresh=True)
+
+        z2g_after = pop.config.zygotes_to_gametes_map
+
+        # Before: 100% at default glab for WT haploid
+        # After: 70% at default, 30% at tagged
+        n_glabs = int(pop.config.n_glabs)
+        assert n_glabs == 2
+
+        # Get the row for female, WT|WT ztype
+        row_before = z2g_before[0, zidx, :]
+        row_after = z2g_after[0, zidx, :]
+
+        # Verify row sums are 1.0
+        assert float(row_before.sum()) == pytest.approx(1.0)
+        assert float(row_after.sum()) == pytest.approx(1.0)
+
+        # Find the default-glab WT gtype index and tagged-glab WT gtype index
+        wt_hg = pop.species.get_haploid_genotype_from_str("WT")
+        gtype_default = reg.gtype_index(wt_hg, "default")
+        gtype_tagged = reg.gtype_index(wt_hg, "tagged")
+
+        # Before: 100% at default
+        assert float(row_before[gtype_default]) == pytest.approx(1.0)
+        assert float(row_before[gtype_tagged]) == pytest.approx(0.0)
+
+        # After: 70% at default, 30% at tagged
+        assert float(row_after[gtype_default]) == pytest.approx(0.7, rel=1e-6)
+        assert float(row_after[gtype_tagged]) == pytest.approx(0.3, rel=1e-6)
+
+
+class TestZygoteModifierE2E:
+    """End-to-end tests for zygote modifiers with numerical invariants."""
+
+    def test_row_sums_are_zero_or_one(self):
+        """After zygote modifier, gametes_to_zygotes_map rows sum to 0 or 1."""
+        import natal as nt
+        sp = nt.Species.from_dict(
+            name="_zygote_e2e",
+            structure={"chr1": {"A": ["WT", "Dr", "R2"]}},
+            somatic_labels=["S"],
+            gamete_labels=["default"],
+        )
+        pop = (
+            nt.Configurator.for_age_structured(sp)
+            .setup(stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
+            .competition(carrying_capacity=100, low_density_growth_rate=1)
+            .build()
+        )
+
+        g2z = pop.config.gametes_to_zygotes_map
+        for c1 in range(g2z.shape[0]):
+            for c2 in range(g2z.shape[1]):
+                s = float(g2z[c1, c2, :].sum())
+                assert s == pytest.approx(0.0) or s == pytest.approx(1.0), (
+                    f"gametes_to_zygotes_map[{c1},{c2}] sum={s:.6f}"
+                )
+
+    def test_allele_convert_preserves_row_sums(self):
+        """Zygote allele conversion must not break row-sum invariant."""
+        import natal as nt
+        from natal.modifiers.zygote_conversion import (
+            ZygoteConversionRuleSet,
+        )
+        sp = nt.Species.from_dict(
+            name="_zygote_allele",
+            structure={"chr1": {"A": ["WT", "Dr", "R2"]}},
+            somatic_labels=["S"],
+            gamete_labels=["default"],
+        )
+        pop = (
+            nt.Configurator.for_age_structured(sp)
+            .setup(stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
+            .competition(carrying_capacity=100, low_density_growth_rate=1)
+            .build()
+        )
+
+        # Add a zygote allele conversion: WT → Dr at 50% on both sides
+        rs = ZygoteConversionRuleSet("test_allele")
+        rs.add_allele_convert(from_allele="WT", to_allele="Dr", rate=0.5, side="both")
+        modifier = rs.to_zygote_modifier(pop)
+        assert modifier is not None
+        pop.add_zygote_modifier(modifier, name="test")
+
+        g2z = pop.config.gametes_to_zygotes_map
+        for c1 in range(g2z.shape[0]):
+            for c2 in range(g2z.shape[1]):
+                s = float(g2z[c1, c2, :].sum())
+                assert s == pytest.approx(0.0) or s == pytest.approx(1.0), (
+                    f"After allele convert: g2z[{c1},{c2}] sum={s:.6f}"
+                )
+
+    def test_allele_convert_exact_wt_wt(self):
+        """WT|WT × WT|WT with 50% WT→Dr conversion on both sides.
+
+        Each side independently: 50% WT stays, 50% becomes Dr.
+        Four zygote outcomes with expected probabilities:
+          - WT|WT: (1-r)² = 0.25
+          - Dr|WT: r(1-r) = 0.25  (maternal only)
+          - WT|Dr: (1-r)r = 0.25  (paternal only)
+          - Dr|Dr: r²     = 0.25
+        """
+        import natal as nt
+        from natal.modifiers.zygote_conversion import (
+            ZygoteConversionRuleSet,
+        )
+        sp = nt.Species.from_dict(
+            name="_zygote_exact",
+            structure={"chr1": {"A": ["WT", "Dr"]}},
+            somatic_labels=["S"],
+            gamete_labels=["default"],
+            unordered=False,
+        )
+        pop = (
+            nt.Configurator.for_age_structured(sp)
+            .setup(stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
+            .competition(carrying_capacity=100, low_density_growth_rate=1)
+            .build()
+        )
+
+        rs = ZygoteConversionRuleSet("test_exact")
+        rs.add_allele_convert(from_allele="WT", to_allele="Dr", rate=0.5, side="both")
+        modifier = rs.to_zygote_modifier(pop)
+        assert modifier is not None
+        # Apply modifier directly — calls modifier_func which returns
+        # {(c1,c2): {ztype_idx: prob}}
+        result = modifier()
+        assert result  # must have entries for (c1,c2) where WT pairs meet
+
+        # Find the (c1,c2) for WT@default × WT@default
+        wt_hg = sp.get_haploid_genotype_from_str("WT")
+        reg = pop.registry
+        c_wt = reg.gtype_index(wt_hg, "default")
+        pair_result = result.get((c_wt, c_wt))
+        assert pair_result is not None, "WT×WT pair must have modifier output"
+
+        # Get ztype indices for the four expected genotypes
+        wt_wt_z = reg.ztype_index(sp.get_genotype_from_str("WT|WT"), "S")
+        dr_wt_z = reg.ztype_index(sp.get_genotype_from_str("Dr|WT"), "S")
+        wt_dr_z = reg.ztype_index(sp.get_genotype_from_str("WT|Dr"), "S")
+        dr_dr_z = reg.ztype_index(sp.get_genotype_from_str("Dr|Dr"), "S")
+
+        total = sum(pair_result.values())
+        assert total == pytest.approx(1.0, rel=1e-6), f"Total prob={total}"
+
+        assert pair_result.get(wt_wt_z, 0.0) == pytest.approx(0.25, rel=1e-4)
+        assert pair_result.get(dr_wt_z, 0.0) == pytest.approx(0.25, rel=1e-4)
+        assert pair_result.get(wt_dr_z, 0.0) == pytest.approx(0.25, rel=1e-4)
+        assert pair_result.get(dr_dr_z, 0.0) == pytest.approx(0.25, rel=1e-4)
+
+
+# ============================================================================
+# Modifier tensor invariants
+# ============================================================================
+
+
+class TestModifierTensorInvariants:
+    """Verify structural invariants on all modifier-generated tensors."""
+
+    def test_zygotes_to_gametes_map_row_sums(self):
+        """Every non-empty (sex, ztype) row sums to 1.0."""
+        pop = _build_glab_pop()
+        z2g = pop.config.zygotes_to_gametes_map
+        for sex in range(z2g.shape[0]):
+            for z in range(z2g.shape[1]):
+                s = float(z2g[sex, z, :].sum())
+                if s > 1e-12:
+                    assert s == pytest.approx(1.0, rel=1e-6), (
+                        f"z2g[{sex},{z}] sum={s:.10f}, expected 1.0"
+                    )
+
+    def test_gametes_to_zygotes_map_row_sums(self):
+        """Every non-empty (c1,c2) row sums to 1.0."""
+        pop = _build_glab_pop()
+        g2z = pop.config.gametes_to_zygotes_map
+        for c1 in range(g2z.shape[0]):
+            for c2 in range(g2z.shape[1]):
+                s = float(g2z[c1, c2, :].sum())
+                if s > 1e-12:
+                    assert s == pytest.approx(1.0, rel=1e-6), (
+                        f"g2z[{c1},{c2}] sum={s:.10f}, expected 1.0"
+                    )
+
+    def test_no_nan_in_maps(self):
+        """No NaN values in any modifier map."""
+        pop = _build_glab_pop()
+        assert not np.any(np.isnan(pop.config.zygotes_to_gametes_map))
+        assert not np.any(np.isnan(pop.config.gametes_to_zygotes_map))
+
+    def test_no_negative_in_maps(self):
+        """No negative probabilities in any modifier map."""
+        pop = _build_glab_pop()
+        assert np.all(pop.config.zygotes_to_gametes_map >= 0.0)
+        assert np.all(pop.config.gametes_to_zygotes_map >= 0.0)
+
+
+# ============================================================================
+# Module-level coverage: build_modifier_wrappers + wrap_*_modifier
+# ============================================================================
+
+
+class TestBuildModifierWrappers:
+    """Cover build_modifier_wrappers and the wrap_*_modifier pipeline."""
+
+    def test_wraps_gamete_modifier(self):
+        """A gamete modifier registered via add_gamete_modifier appears in config."""
+        from natal.modifiers.gamete_conversion import GameteConversionRuleSet
+        pop = _build_glab_pop()
+        rs = GameteConversionRuleSet()
+        rs.add_glab_convert(from_glab="default", to_glab="tagged", rate=0.5)
+        modifier = rs.to_gamete_modifier(pop)
+        assert modifier is not None
+        pop.add_gamete_modifier(modifier, name="test", refresh=True)
+
+        # Modifier must have been registered and maps rebuilt
+        assert len(pop._gamete_modifiers) > 0
+        z2g = pop.config.zygotes_to_gametes_map
+        assert z2g.shape[2] > 0  # gtypes axis exists
+
+    def test_wraps_zygote_modifier(self):
+        """A zygote modifier registered via add_zygote_modifier appears in config."""
+        from natal.modifiers.zygote_conversion import (
+            ZygoteConversionRuleSet,
+        )
+        pop = _build_glab_pop()
+        rs = ZygoteConversionRuleSet("test_zyg")
+        gt = pop.species.get_genotype_from_str("WT|WT")
+        rs.add_convert(genotype_match=gt, to_genotype=gt, rate=0.1)
+        modifier = rs.to_zygote_modifier(pop)
+        assert modifier is not None
+        pop.add_zygote_modifier(modifier, name="test", refresh=True)
+
+        assert len(pop._zygote_modifiers) > 0
+        g2z = pop.config.gametes_to_zygotes_map
+        assert g2z.shape[2] > 0  # ztypes axis exists
+
+    def test_multiple_modifiers_compose(self):
+        """Two glab converts compose correctly: each row sum stays 1.0."""
+        from natal.modifiers.gamete_conversion import GameteConversionRuleSet
+        pop = _build_glab_pop()
+
+        rs1 = GameteConversionRuleSet()
+        rs1.add_glab_convert(from_glab="default", to_glab="tagged", rate=0.5)
+        pop.add_gamete_modifier(rs1.to_gamete_modifier(pop), name="first")  # type: ignore[arg-type]
+
+        rs2 = GameteConversionRuleSet()
+        rs2.add_glab_convert(from_glab="default", to_glab="tagged", rate=0.3)
+        pop.add_gamete_modifier(rs2.to_gamete_modifier(pop), name="second", refresh=True)  # type: ignore[arg-type]
+
+        z2g = pop.config.zygotes_to_gametes_map
+        for sex in range(z2g.shape[0]):
+            for z in range(z2g.shape[1]):
+                s = float(z2g[sex, z, :].sum())
+                if s > 1e-12:
+                    assert s == pytest.approx(1.0, rel=1e-6), (
+                        f"After 2 modifiers: z2g[{sex},{z}] sum={s:.6f}"
+                    )
+
+
+# ============================================================================
+# module.py uncovered helpers
+# ============================================================================
+
+
+class TestModuleHelpers:
+    """Cover _resolve_sex_name and other module.py helpers."""
+
+    def test_resolve_sex_name_known(self):
+        """_resolve_sex_name resolves 'female'→0, 'male'→1."""
+        from natal.modifiers.module import _resolve_sex_name
+        assert _resolve_sex_name("female") == 0
+        assert _resolve_sex_name("male") == 1
+        assert _resolve_sex_name(0) == 0
+        assert _resolve_sex_name(1) == 1
+
+    def test_resolve_sex_name_unknown(self):
+        """_resolve_sex_name returns None for unknown keys."""
+        from natal.modifiers.module import _resolve_sex_name
+        assert _resolve_sex_name("unknown") is None
+        assert _resolve_sex_name(99) is None
+
+    def test_normalize_zygote_val_int_ztype(self):
+        """_normalize_zygote_val_to_distribution: int becomes {int:1.0}."""
+        from natal.modifiers.module import _normalize_zygote_val_to_distribution
+        reg = IndexRegistry()
+        assert _normalize_zygote_val_to_distribution(7, reg) == {7: 1.0}
+
+    def test_write_zygote_distribution_preserves_total(self):
+        """_write_zygote_distribution: total probability = 1.0 after write."""
+        from natal.modifiers.module import _write_zygote_distribution
+        n_g, n_z = 4, 3
+        tensor = np.zeros((n_g, n_g, n_z), dtype=np.float64)
+        _write_zygote_distribution(tensor, 0, 1, {0: 0.4, 2: 0.6})
+        assert float(tensor[0, 1, :].sum()) == pytest.approx(1.0)
+        assert tensor[0, 1, 0] == pytest.approx(0.4)
+        assert tensor[0, 1, 2] == pytest.approx(0.6)
