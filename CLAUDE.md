@@ -59,6 +59,18 @@ python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 
 提交前必须通过 **全部三项**：`pytest` + `pyright` + `ruff check src demos`。不压制、不绕过。
 
+### 审查流程
+
+每次完成代码修改后，必须按以下顺序执行，**禁止以自我审查代替**：
+
+1. **`@tester`** — 根据 `numerical-verification` 标准和 AGENTS.md 的测试覆盖规则，为新代码或变更代码生成严格测试。
+2. **运行 `python scripts/generate_init_pyi.py`** — 公开 API 变更后重新生成 stub，确保后续 pyright 检查基于最新 stub。
+3. **`@evaluator`** — 执行全面审查：运行 `pytest` / `pyright` / `ruff` 门禁检查，加载 `code-review` 和 `numerical-verification` skill 进行代码和测试质量审查，检查 docstring 合规性，检查 `Any`/`object` 滥用和 `cast(Any)` 禁令。
+4. **若变更涉及公开 API（签名、参数、默认值、模块重命名等），主 agent 调用 `@docs`** 同步 `docs/zh/` 和 `docs/en/` 中的文档和示例代码。
+5. **主 agent 不得自行运行 `pytest`、`pyright`、`ruff` 并声称"已通过审查"**。这些命令的结果必须由 evaluator 独立验证并出具结构化报告。
+
+只有当 evaluator 给出 `APPROVED` 判定后，修改才算完成。
+
 ### 修复策略
 
 - **修改的文件**：所有 pyright / ruff / pytest 报错必须修，无论是否预先存在。
@@ -93,32 +105,43 @@ python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 
 ## 架构
 
-`natal` 包使用 **lazy loading**——`__init__.py` 通过 AST 解析 `__all__` 构建名称索引，`__getattr__` 按需导入，启动近乎即时。
+`natal` 包使用 **lazy loading**——顶层 `__init__.py` 通过 AST 静态解析各公开子包的字面量 `__all__`，构建名称到模块的索引；首次访问名称时，`__getattr__` 才导入对应子包。
 
 ### 核心模块
 
-| 层 | 模块 | 职责 |
+| 层 | 子包 | 职责 |
 |---|---|---|
-| 遗传结构 | `genetic_structures.py`, `genetic_entities.py` | Species / Chromosome / Locus 不可变蓝图；Gene / Genotype / Haplotype 实体 |
-| 配置与状态 | `population_config.py`, `population_state.py` | PopulationConfig（静态 NamedTuple，9 个生态参数为 0-d ndarray）+ PopulationState（可变数组） |
-| 群体模型 | `discrete_generation_population.py`, `age_structured_population.py`, `spatial_population.py` | Wright-Fisher / 年龄结构 / 空间多 deme 模拟 |
-| Builder | `population_builder.py`, `configurator.py` | 链式建造 API + Configurator 运行时修改 |
-| Hook 系统 | `hooks/` | 事件驱动干预（init/first/early/late/finish），声明式 + Python 函数式 |
-| 引擎 | `engine/` | Numba 加速模拟循环 + codegen 动态生成 wrapper |
-| 预设 | `genetic_presets.py` | HomingDrive / ToxinAntidoteDrive，封装 modifier + fitness |
-| 参数注册 | `parameters.py` | ParamDescriptor 注册表 + Numba setter codegen |
+| 遗传领域与索引 | `genetics/`, `patterns/`, `registry/` | 定义 Species / Chromosome / Locus 和遗传实体；解析基因型模式；将 ZType / GType 映射为引擎使用的整数索引 |
+| 配置与数据 | `configurator/`, `data/` | Configurator 链式构建及运行时修改；PopulationConfig / DiscretePopulationConfig 和对应的 State 数组容器 |
+| 种群模型 | `population/`, `spatial/` | 年龄结构与离散代种群；多 deme 容器、空间拓扑和迁移配置 |
+| 遗传效应 | `modifiers/`, `presets/`, `fitness/` | 配子/合子转换规则；HomingDrive、ToxinAntidoteDrive、Wolbachia 等预设；适应度补丁的解析与写入 |
+| Hook 系统 | `hooks/` | 编译声明式操作和 `@hook` 函数，按 first / early / late / finish 事件及优先级执行 |
+| 引擎与加速 | `engine/`, `numba/` | 年龄结构、离散代和空间生命周期；迁移内核；Numba 开关、兼容层及动态 wrapper 生成 |
+| 输出与界面 | `output/`, `ui/` | 观测筛选、历史记录、可读格式转换和交互式可视化 |
 
 ### 数据流
 
 ```
-Species → IndexRegistry → PopulationConfig + PopulationState
-  → 每 tick: Hooks → Reproduction → Competition → Survival → Observation
-  → 空间模型: per-deme 模拟 → migration
+Species → Configurator → IndexRegistry + PopulationConfig / DiscretePopulationConfig
+  → 预设、修饰器与适应度 → 可选 ZType / GType 压缩
+  → Population + PopulationState / DiscretePopulationState
+
+标准每 tick: first Hook → 繁殖 → early Hook → 密度调节 + 存活
+  → late Hook → 年龄推进 → tick + 1
+
+离散代 extreme-speed: first Hook → 融合的 Wright-Fisher tick → tick + 1
+  （不执行 early / late Hook）
+
+空间模型: 各 deme 生命周期 → Migration → 可选 Observation / History 记录
 ```
+
+`finish` Hook 不属于单个 tick；它在种群结束模拟时执行。
 
 ### 关键设计
 
-- **0-d ndarray**：9 个生态参数（K, eggs, sex_ratio 等）可在 hook 内 `config.field[()] = v` 原地修改。
-- **Hook 签名**：`hook(state, config, deme_id) → int`，config 直接传入。
-- **Numba-first, Python-fallback**：核心模拟兼容两种模式，`njit_switch` 自动降级。
-- **Codegen 缓存**：生成的 kernel wrapper 按内容哈希缓存，重复运行复用编译结果。
+- **引擎数据与可变参数分离**：Config 和 State 都是 NamedTuple。标量元数据不可原地替换，数组内容可以修改；9 个生态参数使用 0-d ndarray，因此 Configurator 和 Hook 可通过 `config.field[()] = value` 原地更新。
+- **扁平类型索引**：IndexRegistry 直接维护 `ZType = (Genotype, slab)` 与 `GType = (HaploidGenotype, glab)` 的索引。构建时可按可达性压缩两套索引及相关配置数组。
+- **统一配置入口**：`AgeStructuredPopulation.setup(...)`、`DiscreteGenerationPopulation.setup(...)` 和 `pop.update()` 使用同一套 Configurator 链式 API。构建阶段通过 ConfigContext 在 Population 创建前应用预设和修饰器，并在需要时重建遗传映射与 offspring tensor；`.fitness()` 则直接写入 Config。
+- **双路径 Hook**：声明式操作编译为连续数组和偏移表（CSR），自定义函数通过 `@hook` 注册；两者可按优先级混合。函数签名为 `hook(state, config, deme_id) -> int`。
+- **Numba-first, Python-fallback**：`njit_switch` 默认启用 Numba，也可切换到 Python 实现以便调试。空间 wrapper 在 Numba 路径中并行运行各 deme 的生命周期，再统一迁移。
+- **稳定身份的 codegen 缓存**：Hook 和生命周期 wrapper 根据函数的 `module:qualname`、分派结构及选择器生成稳定哈希。生成源码与 Numba 产物写入 `.numba_cache/`；相同组合沿用稳定路径，并在缓存有效时跨运行复用编译结果。
