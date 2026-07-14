@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.2.0b (2026.7.14)
+
+### Breaking Changes
+
+- **Parameter rename**: `expected_num_adult_females` → `expected_num_new_adult_females` (Configurator + `PopulationConfig`).
+
+### New Features
+
+- **Spatial index compression** (#32): unified-registry `compress()` prunes unreachable ztypes/gtypes across demes via BFS from seed genotypes; combined modifier maps keep drive-reachable types alive. Adds `bench_compress.py`.
+- **Modifier system refactor** (#33):
+  - **ztype/gtype naming**: `GameteHaploidGenomeConversionRule` → `GameteGtypeConversionRule`, `ZygoteGenotypeConversionRule` → `ZygoteZtypeConversionRule` (old names kept as aliases); `add_hg_convert` → `add_gtype_convert`.
+  - **Matrix compilation**: `RuleSet.to_matrix()` compiles rules into dense transition matrices; a single `freq_vec @ M` replaces the Python rule-cascading loop.
+  - **Declarative `Condition` DSL**: `sex()`, `ztype_has()`, `slab()`, `is_maternal()`, `is_paternal()`, combinable with `&` / `|`.
+  - **New independent rules**: `GameteGlabConversionRule`, `ZygoteGlabRedirectRule`.
+  - **Presets migrated** to the declarative base (`CytoplasmicPreset`, `Wolbachia`, `TransgenicBackground`, `HomingDrive`, `ToxinAntidoteDrive`); ~129 lines of dead code removed.
+
+### Bug Fixes
+
+- **#34**: zygote modifier `IndexError` when `somatic_labels > 1` — the argmax ztype index is now mapped back to its `Genotype` before indexing.
+- **#36**: gamete modifier read the wrong ztype index with slabs > 1, causing the cargo allele to vanish — now indexes via `ztype_index(genotype, default_slab)`.
+- **#37** (#38): compact spatial hook plan + copy-on-write shared storage.
+- **perf**: removed `prange` from `_execute_single_csr_hook` to fix a regression.
+
+### Changed
+
+- `declared_zygote_types` parameter relaxed from `set` to `Sequence`.
+
+### Documentation
+
+- Expanded `AgeStructuredPopulation.setup()` docstring.
+- Cleaned up drive-ridl demos; removed unused resistance params.
+
+---
+
 ## v0.2.0a (2026.7.8)
 
 ### Breaking Changes
