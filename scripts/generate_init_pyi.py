@@ -84,7 +84,7 @@ def format_import(module_name: str, exported_names: list[str]) -> list[str]:
 
 def render_stub(module_exports: list[tuple[str, list[str]]]) -> str:
     """Render the complete __init__.pyi file content."""
-    all_exports = sorted(name for _, names in module_exports for name in names)
+    all_exports = sorted({name for _, names in module_exports for name in names})
 
     lines = [
         '"""Static package exports for editor tooling."""',

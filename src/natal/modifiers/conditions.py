@@ -80,7 +80,9 @@ class _And(Condition):
     """Logical AND of two conditions."""
 
     def __init__(self, left: Condition, right: Condition) -> None:
-        """Args:
+        """Store the two operands to combine with AND.
+
+        Args:
             left: Left-hand condition.
             right: Right-hand condition.
         """
@@ -108,7 +110,9 @@ class _Or(Condition):
     """Logical OR of two conditions."""
 
     def __init__(self, left: Condition, right: Condition) -> None:
-        """Args:
+        """Store the two operands to combine with OR.
+
+        Args:
             left: Left-hand condition.
             right: Right-hand condition.
         """
@@ -141,7 +145,9 @@ class _Sex(Condition):
     """Matches a specific sex index."""
 
     def __init__(self, sex_idx: int) -> None:
-        """Args:
+        """Store the sex index to match.
+
+        Args:
             sex_idx: Integer sex index to match.
         """
         self._sex_idx = sex_idx
@@ -162,7 +168,9 @@ class _ZtypeHas(Condition):
     """Matches ztypes whose genotype satisfies a pattern or filter."""
 
     def __init__(self, pattern_or_fn: str | Callable[[Genotype], bool]) -> None:
-        """Args:
+        """Store the pattern or predicate used to test genotypes.
+
+        Args:
             pattern_or_fn: A genotype pattern string (e.g. ``"WT|Dr"``)
                 or a ``(Genotype) -> bool`` callable.
         """
@@ -198,7 +206,9 @@ class _Slab(Condition):
     """Matches a specific somatic slab label."""
 
     def __init__(self, slab_name: str) -> None:
-        """Args:
+        """Store the slab label to match.
+
+        Args:
             slab_name: Somatic slab label to match.
         """
         self._slab = slab_name
