@@ -1126,7 +1126,7 @@ class SpatialPopulation:
             return
 
         # Group targeted demes by the identity of their hook storage.
-        # Demes that share the same ``_compiled_hooks`` list (via clone
+        # Demes that share the same ``compiled_hook_descriptors`` list (via clone
         # sharing) should only have the hook compiled and appended once.
         storage_groups = self._group_demes_by_hook_storage(target_ids)
 
@@ -1151,7 +1151,7 @@ class SpatialPopulation:
         # Invalidate the hook executor on all targeted demes so they pick up
         # the recompiled aggregate hooks.
         for deme_id in target_ids:
-            self._demes[deme_id]._hook_executor = None  # type: ignore[attr-defined]  # HookExecutor is set during ensure_hook_executor; None invalidates.
+            self._demes[deme_id].hook_executor = None
 
         # Rebuild aggregate hooks once after all per-deme mutations.
         self._hooks = self._compile_spatial_hooks_from_demes()
@@ -1161,20 +1161,21 @@ class SpatialPopulation:
     ) -> dict[tuple[int, int], list[int]]:
         """Group deme indices by the identity of their hook storage.
 
-        Demes that share the same ``_compiled_hooks`` and ``_hooks`` objects
+        Demes that share the same ``compiled_hook_descriptors`` and ``hook_entries`` objects
         (typically clones sharing template storage) are placed in the same
         group.
 
+        Args:
+            deme_ids: Indices of demes to group.
+
         Returns:
-            A dict mapping ``(id(_compiled_hooks), id(_hooks))`` to the list
+            A dict mapping ``(id(compiled_hook_descriptors), id(hook_entries))`` to the list
             of deme indices sharing that storage.
         """
         groups: dict[tuple[int, int], list[int]] = {}
         for deme_id in deme_ids:
             deme = self._demes[deme_id]
-            ch_id = id(getattr(deme, '_compiled_hooks', None))
-            h_id = id(getattr(deme, '_hooks', None))
-            key = (ch_id, h_id)
+            key = (id(deme.compiled_hook_descriptors), id(deme.hook_entries))
             groups.setdefault(key, []).append(deme_id)
         return groups
 
@@ -1184,7 +1185,7 @@ class SpatialPopulation:
         """Return all deme indices that share the given hook storage identity.
 
         Args:
-            storage_key: A ``(id(_compiled_hooks), id(_hooks))`` pair.
+            storage_key: A ``(id(compiled_hook_descriptors), id(hook_entries))`` pair.
 
         Returns:
             List of deme indices across the entire population whose storage
@@ -1193,9 +1194,7 @@ class SpatialPopulation:
         owners: list[int] = []
         for deme_id in range(self.n_demes):
             deme = self._demes[deme_id]
-            ch_id = id(getattr(deme, '_compiled_hooks', None))
-            h_id = id(getattr(deme, '_hooks', None))
-            if (ch_id, h_id) == storage_key:
+            if (id(deme.compiled_hook_descriptors), id(deme.hook_entries)) == storage_key:
                 owners.append(deme_id)
         return owners
 
@@ -1204,21 +1203,27 @@ class SpatialPopulation:
     ) -> None:
         """Copy-on-write hook storage for a subset of demes.
 
-        Creates shallow copies of ``_compiled_hooks`` and ``_hooks`` from the
-        first deme in *deme_ids* and assigns the copies to all listed demes
-        so they no longer share storage with non-targeted peers.
+        Creates copies of ``compiled_hook_descriptors`` and ``hook_entries`` from the first
+        deme in *deme_ids* so they no longer share storage with non-targeted
+        peers.  Each event list inside ``hook_entries`` is also copied so that
+        future mutations on targeted demes do not leak to untargeted owners.
+
+        Args:
+            deme_ids: Indices of demes to receive the new private storage.
+                All listed demes will point to the same new copies.
         """
         ref = self._demes[deme_ids[0]]
-        ref_compiled = getattr(ref, '_compiled_hooks', None)
-        ref_hooks = getattr(ref, '_hooks', None)
 
-        compiled_copy = list(ref_compiled) if ref_compiled is not None else []  # type: ignore[reportUnknownArgumentType]  # getattr returns Any; isinstance narrows at runtime
-        hooks_copy = dict(ref_hooks) if isinstance(ref_hooks, dict) else {}  # type: ignore[reportUnknownArgumentType]  # getattr returns Any; isinstance narrows at runtime
+        compiled_copy = list(ref.compiled_hook_descriptors)
+        hooks_copy = {
+            event_name: list(entries)
+            for event_name, entries in ref.hook_entries.items()
+        }
 
         for deme_id in deme_ids:
             deme = self._demes[deme_id]
-            object.__setattr__(deme, '_compiled_hooks', compiled_copy)
-            object.__setattr__(deme, '_hooks', hooks_copy)
+            object.__setattr__(deme, 'compiled_hook_descriptors', compiled_copy)
+            object.__setattr__(deme, 'hook_entries', hooks_copy)
 
     def remove_hook(self, event_name: str, hook_id: int) -> bool:
         """Remove a specific hook from all demes.
@@ -1962,7 +1967,7 @@ class SpatialPopulation:
             hooks = [h for h in hooks if h.event == event]
         return sorted(hooks, key=lambda h: h.priority)
 
-    def _has_compiled_hooks(self) -> bool:
+    def _hascompiled_hook_descriptors(self) -> bool:
         """Return whether any managed deme has compiled (CSR/njit) hooks.
 
         Returns:

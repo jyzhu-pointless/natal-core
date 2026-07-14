@@ -331,7 +331,7 @@ def _clone_deme(
 
     - ``_config`` — PopulationConfig (and all ndarrays within it)
     - ``_species``, ``_index_registry``, ``_registry``
-    - ``_hooks``, ``_compiled_hooks``, ``_hook_executor``
+    - ``hook_entries``, ``compiled_hook_descriptors``, ``hook_executor``
     - ``_gamete_modifiers``, ``_zygote_modifiers``
 
     Only these are **independent copies**:
