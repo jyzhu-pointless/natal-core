@@ -752,7 +752,7 @@ def test_compact_plan_subset_selector() -> None:
 
 
 def test_compact_plan_duplicate_slots_preserved() -> None:
-    """Same hook registered twice → two slots, executes twice per deme."""
+    """Same hook registered twice: two compact slots, executes twice per deme."""
     species = _make_species("compact_dup")
 
     @njit
@@ -762,70 +762,74 @@ def test_compact_plan_duplicate_slots_preserved() -> None:
         state.individual_count[0, 1, 0] += 1.0
         return 0
 
-    d0 = _build_test_deme("d0", species)
-    d0.set_hook("first", add_one, hook_id=0)
-    d0.set_hook("first", add_one, hook_id=1)
-    d1 = _build_test_deme("d1", species)
-    d1._config = d0.export_config()  # type: ignore[attr-defined]
-    d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]
-    d1.hook_entries = d0.hook_entries  # type: ignore[attr-defined]
+    sp = _build_quiescent_age_pop(species, n_demes=2)
 
-    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    sp.set_hook("first", add_one, hook_id=0)
+    sp.set_hook("first", add_one, hook_id=1)
 
-    compact = spatial._collect_compact_spatial_hooks()
+    compact = sp._collect_compact_spatial_hooks()
     assert len(compact) == 2
     assert compact[0].deme_selector == "*"
     assert compact[1].deme_selector == "*"
 
     with numba_disabled():
-        spatial.run_tick()
-    assert d0.tick == 1 and d1.tick == 1
-    # Registration with different hook_ids produces two compact slots;
-    # the tick advances, confirming hooks don't crash the lifecycle.
+        sp.run_tick()
+
+    for i in range(2):
+        total = float(sp.deme(i).state.individual_count.sum())
+        assert total == 202.0, f"deme[{i}]: expected 202 (base 200 + 2×1), got {total}"
 
 
 def test_compact_plan_different_order_not_merged() -> None:
-    """[A, B] vs [B, A] at same priority — not merged, different results."""
+    """[A, B] vs [B, A] with same descriptor objects: different order, different results.
+
+    mul2 (×2) and add1 (+1) are non-commutative:
+      [mul2, add1] on 100 → 301 total;  [add1, mul2] → 302 total.
+    Deme 1 reuses deme 0's descriptors in reversed order so the compact plan
+    must produce two separate groups based on order alone.
+    """
     species = _make_species("compact_order")
 
     @njit
-    @hook(event="first", custom=True, priority=0)
+    @hook(event="first", custom=True)
     def mul2(state, config, deme_id):  # type: ignore[no-untyped-def]
         _ = deme_id
         state.individual_count[0, 1, 0] *= 2.0
         return 0
 
     @njit
-    @hook(event="first", custom=True, priority=0)
+    @hook(event="first", custom=True)
     def add1(state, config, deme_id):  # type: ignore[no-untyped-def]
         _ = deme_id
         state.individual_count[0, 1, 0] += 1.0
         return 0
 
-    d0 = _build_test_deme("d0", species)
-    d0.set_hook("first", mul2, hook_id=0)
-    d0.set_hook("first", add1, hook_id=1)
-    d1 = _build_test_deme("d1", species)
-    d1._config = d0.export_config()  # type: ignore[attr-defined]
-    d1.set_hook("first", add1, hook_id=0)
-    d1.set_hook("first", mul2, hook_id=1)
+    sp = _build_quiescent_age_pop(species, n_demes=2)
 
-    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    sp.deme(0).compiled_hook_descriptors = []
+    sp.deme(0).hook_entries = {event: [] for event in sp.deme(0).ALLOWED_EVENTS}
+    sp.deme(0).set_hook("first", mul2, hook_id=0)
+    sp.deme(0).set_hook("first", add1, hook_id=1)
+    descs0 = list(sp.deme(0).compiled_hook_descriptors)
 
-    compact = spatial._collect_compact_spatial_hooks()
+    # Deme 1 reuses the SAME descriptor objects, only the order differs.
+    sp.deme(1).compiled_hook_descriptors = [descs0[1], descs0[0]]
+    sp.deme(1).hook_entries = {event: [] for event in sp.deme(1).ALLOWED_EVENTS}
+
+    sp._hooks = sp._compile_spatial_hooks_from_demes()
+
+    compact = sp._collect_compact_spatial_hooks()
     selectors = {d.deme_selector for d in compact}
     assert 0 in selectors and 1 in selectors
+    assert len(compact) == 4
 
     with numba_disabled():
-        spatial.run_tick()
-    assert d0.tick == 1 and d1.tick == 1
+        sp.run_tick()
 
-    # Verify compact plan: different order → not merged into one group.
-    compact = spatial._collect_compact_spatial_hooks()
-    selectors = {d.deme_selector for d in compact}
-    assert 0 in selectors and 1 in selectors
-    # Each deme contributes 2 descriptors (mul2 + add1), not merged.
-    assert len(compact) == 4
+    total0 = float(sp.deme(0).state.individual_count.sum())
+    total1 = float(sp.deme(1).state.individual_count.sum())
+    assert total0 == 301.0, f"deme[0] mul2→add1: female 100×2+1=201, +100 male = 301, got {total0}"
+    assert total1 == 302.0, f"deme[1] add1→mul2: female (100+1)×2=202, +100 male = 302, got {total1}"
 
 
 def test_compact_plan_empty_hook_sequence_skipped() -> None:
@@ -864,26 +868,14 @@ def test_set_hook_shared_storage_registers_once() -> None:
         state.individual_count[0, 1, 0] += 1.0
         return 0
 
-    d0 = _build_test_deme("d0", species)
-    d1 = _build_test_deme("d1", species)
-    d1._config = d0.export_config()  # type: ignore[attr-defined]
-    d2 = _build_test_deme("d2", species)
-    d2._config = d0.export_config()  # type: ignore[attr-defined]
+    sp = _build_quiescent_age_pop(species, n_demes=3)
 
-    d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]
-    d1.hook_entries = d0.hook_entries  # type: ignore[attr-defined]
-    d2.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]
-    d2.hook_entries = d0.hook_entries  # type: ignore[attr-defined]
-
-    count_before = len(d0.compiled_hook_descriptors)
-
-    spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
-    spatial.set_hook("first", my_hook)
-
-    count_after = len(d0.compiled_hook_descriptors)
+    count_before = len(sp.deme(0).compiled_hook_descriptors)
+    sp.set_hook("first", my_hook)
+    count_after = len(sp.deme(0).compiled_hook_descriptors)
     assert count_after == count_before + 1
 
-    compact = spatial._collect_compact_spatial_hooks()
+    compact = sp._collect_compact_spatial_hooks()
     custom_slots = [d for d in compact if d.njit_fn is not None]
     assert len(custom_slots) == 1
     assert custom_slots[0].deme_selector == "*"
@@ -900,30 +892,20 @@ def test_set_hook_shared_storage_subset_cow_structure() -> None:
         state.individual_count[0, 1, 0] += 1.0
         return 0
 
-    d0 = _build_test_deme("d0", species)
-    d1 = _build_test_deme("d1", species)
-    d1._config = d0.export_config()  # type: ignore[attr-defined]
-    d2 = _build_test_deme("d2", species)
-    d2._config = d0.export_config()  # type: ignore[attr-defined]
+    sp = _build_quiescent_age_pop(species, n_demes=3)
 
-    d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]
-    d1.hook_entries = d0.hook_entries  # type: ignore[attr-defined]
-    d2.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]
-    d2.hook_entries = d0.hook_entries  # type: ignore[attr-defined]
+    shared_id = id(sp.deme(0).compiled_hook_descriptors)
+    count_before = len(sp.deme(0).compiled_hook_descriptors)
 
-    shared_id = id(d0.compiled_hook_descriptors)
-    count_before = len(d0.compiled_hook_descriptors)
+    sp.set_hook("first", my_hook, deme_selector=0)
 
-    spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
-    spatial.set_hook("first", my_hook, deme_selector=0)
+    assert id(sp.deme(0).compiled_hook_descriptors) != shared_id
+    assert len(sp.deme(0).compiled_hook_descriptors) == count_before + 1
 
-    assert id(d0.compiled_hook_descriptors) != shared_id
-    assert len(d0.compiled_hook_descriptors) == count_before + 1
-
-    assert id(d1.compiled_hook_descriptors) == shared_id
-    assert len(d1.compiled_hook_descriptors) == count_before
-    assert id(d2.compiled_hook_descriptors) == shared_id
-    assert len(d2.compiled_hook_descriptors) == count_before
+    assert id(sp.deme(1).compiled_hook_descriptors) == shared_id
+    assert len(sp.deme(1).compiled_hook_descriptors) == count_before
+    assert id(sp.deme(2).compiled_hook_descriptors) == shared_id
+    assert len(sp.deme(2).compiled_hook_descriptors) == count_before
 
 
 def test_set_hook_shared_storage_subset_cow_execution() -> None:
@@ -1012,46 +994,20 @@ def test_set_hook_cow_subsequent_mutation_no_leak() -> None:
         state.individual_count[1, 1, 0] += 1.0
         return 0
 
-    d0 = _build_test_deme("d0", species)
-    d1 = _build_test_deme("d1", species)
-    d1._config = d0.export_config()  # type: ignore[attr-defined]
-    d2 = _build_test_deme("d2", species)
-    d2._config = d0.export_config()  # type: ignore[attr-defined]
+    sp = _build_quiescent_age_pop(species, n_demes=3)
 
-    # Share storage across all three.
-    d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]
-    d1.hook_entries = d0.hook_entries  # type: ignore[attr-defined]
-    d2.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]
-    d2.hook_entries = d0.hook_entries  # type: ignore[attr-defined]
+    # Subset registration on deme 0 triggers COW.
+    sp.set_hook("first", hook_a, deme_selector=0)
+    count_after_a = len(sp.deme(0).compiled_hook_descriptors)
+    count_non_target = len(sp.deme(1).compiled_hook_descriptors)
 
-    spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
+    # Register hook_b on all demes via wildcard selector.
+    sp.set_hook("first", hook_b)
+    assert len(sp.deme(0).compiled_hook_descriptors) == count_after_a + 1
+    assert len(sp.deme(1).compiled_hook_descriptors) == count_non_target + 1
+    assert len(sp.deme(2).compiled_hook_descriptors) == count_non_target + 1
 
-    # First: subset registration on deme 0 triggers COW.
-    spatial.set_hook("first", hook_a, deme_selector=0)
-
-    count_after_a = len(d0.compiled_hook_descriptors)
-    count_non_target = len(d1.compiled_hook_descriptors)
-
-    # Second: register hook_b on all demes via wildcard selector.
-    spatial.set_hook("first", hook_b, deme_selector="*")
-
-    # hook_b should appear on d1, d2 (old shared storage) and on d0 (COW'd storage).
-    # After both registrations:
-    # - d0: hook_a + hook_b = count_after_a + 1
-    # - d1, d2: hook_b only = count_non_target + 1
-    # (hook_a must NOT leak to d1/d2)
-    assert len(d0.compiled_hook_descriptors) == count_after_a + 1
-    assert len(d1.compiled_hook_descriptors) == count_non_target + 1
-    assert len(d2.compiled_hook_descriptors) == count_non_target + 1
-
-    # Also verify compiled_hook_descriptors isolation:
-    # d0 should have both hook_a and hook_b; d1/d2 only hook_b.
-    assert len(d0.compiled_hook_descriptors) == count_after_a + 1  # hook_a + hook_b
-    assert len(d1.compiled_hook_descriptors) == count_non_target + 1  # hook_b only
-    assert len(d2.compiled_hook_descriptors) == count_non_target + 1  # hook_b only
-
-    # And their identities remain decoupled after COW.
-    assert id(d0.compiled_hook_descriptors) != id(d1.compiled_hook_descriptors)
+    assert id(sp.deme(0).compiled_hook_descriptors) != id(sp.deme(1).compiled_hook_descriptors)
 
 
 # -----------------------------------------------------------------------
@@ -1083,54 +1039,53 @@ def test_compact_plan_run_tick_deterministic_state() -> None:
 
 
 def test_compact_plan_mixed_csr_njit_exact_ordering() -> None:
-    """CSR (×2) then njit (+1) on initial 10 → 21; reversed order → 22."""
+    """CSR ×2 then njit +1 on age-1 female=100 → 201; reversed order → 202.
+
+    Uses the same descriptor objects for both demes, only the registration
+    order differs.  Aging moves age 1 → age 2, so the hook effect is
+    observed at age 2 after the tick.  Compact plan must produce two groups.
+    """
     species = _make_species("compact_mixed_exact")
 
     @njit
-    @hook(event="first", custom=True)
+    @hook(event="early", custom=True)
     def add1(state, config, deme_id):  # type: ignore[no-untyped-def]
         _ = deme_id
         state.individual_count[0, 1, 0] += 1.0
         return 0
 
-    @hook(event="first")
+    @hook(event="early")
     def mul2_csr():
         return [Op.scale(genotypes="WT|WT", ages=1, sex="female", factor=2.0)]
 
-    @njit
-    @hook(event="first", custom=True)
-    def add1_first(state, config, deme_id):  # type: ignore[no-untyped-def]
-        _ = deme_id
-        state.individual_count[0, 1, 0] += 1.0
-        return 0
+    sp = _build_quiescent_age_pop(species, n_demes=2)
 
-    @hook(event="first")
-    def mul2_csr2():
-        return [Op.scale(genotypes="WT|WT", ages=1, sex="female", factor=2.0)]
+    sp.deme(0).compiled_hook_descriptors = []
+    sp.deme(0).hook_entries = {event: [] for event in sp.deme(0).ALLOWED_EVENTS}
+    sp.deme(0).set_hook("early", mul2_csr, hook_id=0)
+    sp.deme(0).set_hook("early", add1, hook_id=1)
 
-    d0 = _build_test_deme("d0", species)
-    d0.set_hook("first", mul2_csr, hook_id=0)
-    d0.set_hook("first", add1, hook_id=1)
-    d1 = _build_test_deme("d1", species)
-    d1._config = d0.export_config()  # type: ignore[attr-defined]
-    d1.set_hook("first", add1_first, hook_id=0)
-    d1.set_hook("first", mul2_csr2, hook_id=1)
+    sp.deme(1).compiled_hook_descriptors = []
+    sp.deme(1).hook_entries = {event: [] for event in sp.deme(1).ALLOWED_EVENTS}
+    sp.deme(1).set_hook("early", add1, hook_id=0)
+    sp.deme(1).set_hook("early", mul2_csr, hook_id=1)
+    # Share descriptors for the order-sensitive compact test.
+    descs0 = list(sp.deme(0).compiled_hook_descriptors)
+    sp.deme(1).compiled_hook_descriptors = [descs0[1], descs0[0]]
 
-    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    sp._hooks = sp._compile_spatial_hooks_from_demes()
 
     with numba_disabled():
-        spatial.run_tick()
+        sp.run_tick()
 
-    assert d0.tick == 1 and d1.tick == 1
+    # d0: mul2_csr → add1: female[age=1] 100×2=200 +1=201 → aging to age 2
+    assert float(sp.deme(0).state.individual_count[0, 2, 0]) == 201.0
+    # d1: add1 → mul2_csr: female[age=1] (100+1)=101 ×2=202 → aging to age 2
+    assert float(sp.deme(1).state.individual_count[0, 2, 0]) == 202.0
 
-    # Verify compact plan structure: different hook sequences → different groups.
-    compact = spatial._collect_compact_spatial_hooks()
-    # d0: mul2_csr (hook_id=0) → add1 (hook_id=1), both custom/njit
-    # d1: add1_first (hook_id=0) → mul2_csr2 (hook_id=1)
-    # Different id-keys → two distinct groups, each with 2 descriptors.
+    compact = sp._collect_compact_spatial_hooks()
     selectors = {d.deme_selector for d in compact}
     assert 0 in selectors and 1 in selectors
-    # Each group should produce one descriptor per slot = 2 per deme
     assert len(compact) == 4
 
 
@@ -1230,20 +1185,20 @@ def infect_susceptible_females(state, config, deme_id=-1):
 
 builder = (
     nt.SpatialPopulation.builder(sp, n_demes=N_DEMES)
-    .setup(stochastic=True).age_structure(n_ages=4, new_adult_age=1)
+    .setup(stochastic=True).age_structure(n_ages=8, new_adult_age=1)
     .initial_state({
-        "female": {"WT|WT": [0, 50, 50, 0]},
-        "male":   {"WT|WT": [0, 50, 50, 0]},
+        "female": {"WT|WT": [0, 500, 500, 0, 0, 0, 0, 0]},
+        "male":   {"WT|WT": [0, 500, 500, 0, 0, 0, 0, 0]},
     })
-    .survival(female_age_based_survival=[1, 1, 1, 0],
-              male_age_based_survival=[1, 1, 1, 0])
+    .survival(female_age_based_survival=[1]*8,
+              male_age_based_survival=[1]*8)
     .reproduction(
         eggs_per_female=0,
-        female_age_based_mating_rate=[0, 0, 0, 0],
-        male_age_based_mating_rate=[0, 0, 0, 0],
+        female_age_based_mating_rate=[0, 0, 0, 0, 0, 0, 0, 0],
+        male_age_based_mating_rate=[0, 0, 0, 0, 0, 0, 0, 0],
     )
     .competition(juvenile_growth_mode="logistic",
-                 expected_num_new_adult_females=50)
+                 expected_num_new_adult_females=500)
     .migration(migration_rate=0)
 )
 builder.hooks(infect_susceptible_females)
@@ -1253,19 +1208,22 @@ compact = pop._collect_compact_spatial_hooks()
 assert len(compact) == 1, f"expected 1 compact slot, got {len(compact)}"
 assert compact[0].deme_selector == "*", f"expected wildcard, got {compact[0].deme_selector}"
 
-pop.run_tick()
+registry = pop.hooks.hooks.registry
+assert registry is not None
+assert int(registry.n_hooks) == 1, f"expected 1 hook slot in registry, got {int(registry.n_hooks)}"
 
-for d in range(N_DEMES):
-    state = pop.demes[d].state.individual_count
-    assert np.all(np.isfinite(state)), f"deme[{d}] has non-finite values"
-    assert np.all(state >= 0), f"deme[{d}] has negative counts"
-    # Total per deme: 50 female + 50 male = 100 of each sex across ages 1-2.
-    # Female: [0, 50, 50, 0] = 100, Male: [0, 50, 50, 0] = 100 → 200 total.
-    initial_total = 200
-    final_total = state.sum()
-    assert abs(float(final_total) - initial_total) < 1e-9, (
-        f"deme[{d}] total changed: {final_total} != {initial_total}"
-    )
+for _run_i in range(3):
+    pop.run_tick()
+
+    for d in range(N_DEMES):
+        state = pop.demes[d].state.individual_count
+        assert np.all(np.isfinite(state)), f"run {_run_i} deme[{d}] has non-finite values"
+        assert np.all(state >= 0), f"run {_run_i} deme[{d}] has negative counts"
+        initial_total = 2000
+        final_total = state.sum()
+        assert abs(float(final_total) - initial_total) < 1e-9, (
+            f"run {_run_i} deme[{d}] total changed: {final_total} != {initial_total}"
+        )
 
 sys.exit(0)
 '''

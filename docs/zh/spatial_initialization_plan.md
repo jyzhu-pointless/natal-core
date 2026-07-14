@@ -274,7 +274,7 @@ for i in range(n_demes):
 | 风险 | 缓解 |
 |------|------|
 | batch 展开后 config 分组 key 不可哈希（含 NumPy 数组）| 用 `id(arr)` 或序列化摘要 |
-| 克隆 demes 时 `_compiled_hooks` 共享引用导致状态泄漏 | Copy-on-write：`set_hook`/`remove_hook` 时按需复制 |
+| 克隆 demes 时 `compiled_hook_descriptors` / `hook_entries` 共享引用导致状态泄漏 | Copy-on-write：`set_hook` 子集注册时按需复制 |
 | `PopulationConfig` 是否支持 `_replace`？ | 目测是 NamedTuple，确认后可用 |
 | SpatialConfigurator 与现有 `Configurator` 的关系 | SpatialConfigurator 内部持有 per-deme builder，复用其校验逻辑 |
 

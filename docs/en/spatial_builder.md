@@ -154,8 +154,9 @@ def _clone_deme(template, config, name):
 
     # === Shared references (read-only during simulation) ===
     clone._species           = template._species
-    clone._compiled_hooks    = template._compiled_hooks     # Already compiled hook functions
-    clone._hook_executor     = template._hook_executor       # Hook execution engine
+    clone.hook_entries               = template.hook_entries          # Hook entry list per event
+    clone.compiled_hook_descriptors = template.compiled_hook_descriptors  # Compiled hook descriptors
+    clone.hook_executor            = template.hook_executor           # Hook execution engine
     clone._config            = config                        # PopulationConfig (shared)
     clone._index_registry    = template._index_registry      # Genotype lookup table
     clone._registry          = template._registry
@@ -177,7 +178,7 @@ def _clone_deme(template, config, name):
 
 | Attribute | Shared/Independent | Reason |
 |-----------|-------------------|--------|
-| `_compiled_hooks`, `_hook_executor` | Shared reference | Stateless, read-only registry |
+| `compiled_hook_descriptors`, `hook_entries`, `hook_executor` | Shared reference | Stateless, read-only shared for homogeneous demes; subset `set_hook` triggers copy-on-write |
 | `_config` | Shared reference | Homogeneous demes have identical configs |
 | `_index_registry`, `_registry` | Shared reference | Same species means same genotype indices |
 | `_gamete_modifiers`, `_zygote_modifiers` | Shallow-copied list | Presets may operate on the same object |

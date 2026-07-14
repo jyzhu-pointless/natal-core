@@ -23,6 +23,7 @@ from natal.numba.utils import is_numba_enabled
 
 if TYPE_CHECKING:
     from natal.engine.lifecycle_wrappers import LifecycleWrappers
+    from natal.hooks import HookExecutor
     from natal.hooks.types import (
         CompiledHookDescriptor,
         DemeSelector,
@@ -47,9 +48,9 @@ class HookManagerMixin:
     # Declared here so pyright knows these come from the host class.
     ALLOWED_EVENTS: list[str]  # type: ignore[assignment]
     tick: int  # type: ignore[assignment]
-    hook_entries: dict[str, list[tuple[int, Optional[str], HookCallback]]]  # type: ignore[assignment]
-    compiled_hook_descriptors: list[Any]  # type: ignore[assignment]
-    hook_executor: Any  # type: ignore[assignment]
+    hook_entries: dict[str, list[HookEntry]]
+    compiled_hook_descriptors: list[CompiledHookDescriptor]
+    hook_executor: Optional[HookExecutor]
 
     # ── Hook registration ────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ class HookManagerMixin:
             from natal.hooks import EVENT_ID_MAP
             event_id = EVENT_ID_MAP.get(event_name)
             if event_id is not None:
-                result = self.hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)
+                result = self.hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)  # type: ignore[arg-type]  # mixin, self is BasePopulation at runtime
                 return result
 
         # Fallback to traditional _hooks for compatibility.

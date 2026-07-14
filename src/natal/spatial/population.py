@@ -1300,8 +1300,7 @@ class SpatialPopulation:
         return sequences
 
     def _collect_compact_spatial_hooks(self) -> list[CompiledHookDescriptor]:
-        """Build a compact hook descriptor list by grouping demes with identical
-        hook sequences.
+        """Build a compact hook descriptor list by grouping demes with identical hook sequences.
 
         Demes that share the exact same sequence of descriptors (compared by
         Python object identity) are folded into one set of descriptors with
@@ -1967,7 +1966,7 @@ class SpatialPopulation:
             hooks = [h for h in hooks if h.event == event]
         return sorted(hooks, key=lambda h: h.priority)
 
-    def _hascompiled_hook_descriptors(self) -> bool:
+    def _has_compiled_hooks(self) -> bool:
         """Return whether any managed deme has compiled (CSR/njit) hooks.
 
         Returns:
