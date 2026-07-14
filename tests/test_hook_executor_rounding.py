@@ -16,6 +16,25 @@ def _call_python_impl(fn, *args):  # type: ignore[no-untyped-def]
     return fn.py_func(*args) if hasattr(fn, "py_func") else fn(*args)
 
 
+def test_sample_survivors_uses_exported_binomial(monkeypatch) -> None:
+    """Discrete survivor sampling must route to nbc.binomial with correct args."""
+    captured: dict[str, object] = {}
+
+    def fake_binomial(n: int, p: float) -> int:
+        captured["n"] = n
+        captured["p"] = p
+        return 777
+
+    monkeypatch.setattr(csr_kernel.nbc, "binomial", fake_binomial)
+
+    result = _call_python_impl(csr_kernel._sample_survivors, 1000.0, 0.5, True, False)
+
+    assert result == 777.0
+    assert captured["n"] == 1000
+    assert isinstance(captured["p"], float)
+    assert abs(float(captured["p"]) - 0.5) < 1e-12
+
+
 def test_apply_target_without_sperm_rounds_current_count_in_stochastic_mode(monkeypatch) -> None:
     captured: dict[str, float] = {}
 

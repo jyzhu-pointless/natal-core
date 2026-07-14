@@ -71,7 +71,7 @@ Hook 签名统一为 ``(state, config) → int``。``config`` 可原地修改，
 最快路径。Numba nopython，纯 C 级 ndarray 操作：
 
 ```python
-from natal.population_config import DiscretePopulationConfig
+from natal.data import DiscretePopulationConfig
 from natal.data import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)
@@ -168,7 +168,7 @@ pop.update().custom(temperature=35.0, season_idx=1)
 `SpatialPopulation.update()` 接口与 panmictic 一致，额外支持 per-deme 和批量修改：
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 # 全部 deme
 pop.update().competition(carrying_capacity=5000)

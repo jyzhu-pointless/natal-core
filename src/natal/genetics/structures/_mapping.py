@@ -69,8 +69,8 @@ class SpeciesMappingMixin:
             diploid_genotypes=self.get_all_genotypes(unordered=self.unordered),
             haploid_genotypes=self.get_all_haploid_genotypes(),
             n_glabs=len(self.gamete_labels or ["default"]),
-            gamete_modifiers=gamete_modifiers,
             n_slabs=n_slabs,
+            gamete_modifiers=gamete_modifiers,
         )
 
     def build_zygote_map(
@@ -94,9 +94,9 @@ class SpeciesMappingMixin:
             haploid_genotypes=self.get_all_haploid_genotypes(),
             diploid_genotypes=self.get_all_genotypes(unordered=self.unordered),
             n_glabs=len(self.gamete_labels or ["default"]),
-            zygote_modifiers=zygote_modifiers,
-            unordered=True,
             n_slabs=n_slabs,
+            unordered=True,
+            zygote_modifiers=zygote_modifiers,
         )
 
     def get_config_blueprint(self) -> SpeciesConfigBlueprint:

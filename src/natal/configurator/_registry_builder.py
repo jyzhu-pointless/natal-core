@@ -29,7 +29,6 @@ from natal.data import (
     compress_config,
 )
 from natal.genetics import Species, build_compression_mask
-from natal.presets import CytoplasmicPreset
 from natal.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
@@ -242,10 +241,7 @@ def rebuild_config_maps(
             gamete_modifiers=ctx.gamete_modifiers,
             zygote_modifiers=ctx.zygote_modifiers,
             population=None,
-            index_registry=ctx.registry,
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
+            registry=ctx.registry,
         )
 
         # ---- fetch the Mendelian baseline from the species cache ----
@@ -279,12 +275,27 @@ def rebuild_config_maps(
             for dg in ctx.declared_zygote_types:
                 if isinstance(dg, str):
                     try:
-                        gt = ctx.species.get_genotype_from_str(dg)
-                        if gt in diploid_genotypes:
-                            for s in range(n_slabs):
-                                declared_ints.add(
-                                    ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
-                                )
+                        # Use ZygoteTypePattern to properly handle @slab
+                        # suffixes (e.g. "Drive|Rescue_Cargo@S").
+                        from natal.patterns.elements.diploid import ZygoteTypePattern
+                        pattern = ZygoteTypePattern.parse(dg, ctx.species)
+                        matched = False
+                        for gt in diploid_genotypes:
+                            if pattern.genotype.matches(gt):
+                                for s in range(n_slabs):
+                                    declared_ints.add(
+                                        ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
+                                    )
+                                matched = True
+                        if not matched:
+                            # Fallback: strip @slab and try exact match
+                            dg_clean = dg.split("@")[0]
+                            gt = ctx.species.get_genotype_from_str(dg_clean)
+                            if gt in diploid_genotypes:
+                                for s in range(n_slabs):
+                                    declared_ints.add(
+                                        ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
+                                    )
                     except Exception:
                         pass
                 else:
@@ -302,9 +313,7 @@ def rebuild_config_maps(
                 zygotes_to_gametes_map,
                 gametes_to_zygotes_map,
                 ctx.config.initial_individual_count,
-                n_glabs=n_glabs,
-                n_slabs=1,  # maps are pre-expanded; mask lives in G_orig space
-                declared_genotypes=declared_ints,
+                declared_zygote_types=declared_ints,
             )
         )
         gtype_mask = _gt_mask
@@ -342,24 +351,6 @@ def rebuild_config_maps(
         ctx.config = compress_config(ctx.config, ztype_mask)
         n_g_compressed = int(ctx.config.n_ztypes)
         ctx.registry.compress(ztype_mask, gtype_mask)
-
-    # ---- apply cytoplasmic preset effects (pre-tensor) ----
-    for preset in ctx.presets:
-        if isinstance(preset, CytoplasmicPreset):
-            n_genotypes = len(ctx.registry.index_to_genotype)
-            n_gtypes = len(ctx.registry.index_to_haplo)
-            n_glabs = int(ctx.config.n_glabs)
-            n_slabs = int(ctx.config.n_slabs)
-            CytoplasmicPreset.tag_maternal_gametes(
-                zygotes_to_gametes_map, ctx.species.gamete_labels,
-                ctx.species.somatic_labels,
-                n_genotypes, n_gtypes, n_glabs, n_slabs,
-            )
-            CytoplasmicPreset.redirect_zygotes(
-                gametes_to_zygotes_map, ctx.species.gamete_labels,
-                ctx.species.somatic_labels,
-                n_genotypes, n_gtypes, n_glabs, n_slabs,
-            )
 
     # ---- recompute offspring probability tensor from the updated maps ----
     offspring_tensor = compute_offspring_probability_tensor(

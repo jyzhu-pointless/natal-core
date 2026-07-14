@@ -467,34 +467,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         return int(total)
 
-
-    def _get_fecundity(self, genotype: Genotype, sex: Sex) -> float:
-        """Internal helper: return fecundity for a genotype and sex.
-
-        Args:
-            genotype: Target genotype.
-            sex: Target sex.
-
-        Returns:
-            float: The fecundity fitness value.
-        """
-        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
-        return self.config.fecundity_fitness[int(sex.value), genotype_idx]
-
-    def _get_sexual_preference(self, female_genotype: Genotype, male_genotype: Genotype) -> float:
-        """Internal helper: return sexual preference value for a genotype pair.
-
-        Args:
-            female_genotype: Genotype of the female.
-            male_genotype: Genotype of the male.
-
-        Returns:
-            float: The sexual selection fitness weight.
-        """
-        f_idx = self.registry.ztype_index(female_genotype, self.registry.slab_labels[0])
-        m_idx = self.registry.ztype_index(male_genotype, self.registry.slab_labels[0])
-        return self.config.sexual_selection_fitness[f_idx, m_idx]
-
     @property
     def config(self) -> PopulationConfig:
         """PopulationConfig: The current configuration."""
@@ -535,7 +507,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         Returns:
             np.ndarray: Float64 array with shape
-                ``(n_snapshots, 1 + n_sexes*n_ages*n_genotypes + n_ages*n_genotypes^2)``,
+                ``(n_snapshots, 1 + n_sexes*n_ages*n_ztypes + n_ages*n_ztypes^2)``,
                 where each row is a flattened snapshot state.
 
         Raises:
@@ -576,8 +548,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         if isinstance(state, np.ndarray):
             # Reconstruct state from flattened array
-            n_sexes, n_ages, n_genotypes = self.state.individual_count.shape
-            state_obj = parse_flattened_state(state, n_sexes, n_ages, n_genotypes)
+            n_sexes, n_ages, n_ztypes = self.state.individual_count.shape
+            state_obj = parse_flattened_state(state, n_sexes, n_ages, n_ztypes)
             self.state.individual_count[:] = state_obj.individual_count
             self.state.sperm_storage[:] = state_obj.sperm_storage
             self._state = PopulationState(
@@ -904,12 +876,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def get_genotype_count(self, genotype: Genotype) -> Tuple[int, int]:
         """Return total counts for a genotype as (female_count, male_count).
 
-        Args:
-            genotype: Target genotype instance.
-
-        Returns:
-            Tuple[int,int]: ``(female_count, male_count)`` across all ages.
+        .. deprecated::
+            Use ``self.registry.ztype_index()`` + manual array sum instead.
         """
+        import warnings
+        warnings.warn(
+            "get_genotype_count is deprecated; use registry + manual sum",
+            DeprecationWarning, stacklevel=2,
+        )
         genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
         female_count = self.state.individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
         male_count = self.state.individual_count[Sex.MALE.value, :, genotype_idx].sum()
@@ -917,7 +891,17 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     @property
     def genotypes_present(self) -> Set[Genotype]:
-        """Set[Genotype]: Returns the set of genotypes with count > 0."""
+        """Set[Genotype]: Returns the set of genotypes with count > 0.
+
+        .. deprecated::
+            Use ``self.registry.index_to_genotype`` + manual count check
+            instead.
+        """
+        import warnings
+        warnings.warn(
+            "genotypes_present is deprecated; use registry + manual count check",
+            DeprecationWarning, stacklevel=2,
+        )
         present: Set[Genotype] = set()
         for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
             total_count = self.state.individual_count[:, :, z_idx].sum()

@@ -33,10 +33,10 @@ Think of it as:
 ### Minimal Working Example
 
 ```python
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 ruleset = GameteConversionRuleSet(name="homing_drive")
-ruleset.add_convert(from_allele="W", to_allele="D", rate=0.5)
+ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
 ```
 
 This example is sufficient to describe a minimal conversion mechanism.
@@ -59,7 +59,7 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 #### Using ZygoteConversionRuleSet
 
 ```python
-from natal.gamete_allele_conversion import ZygoteConversionRuleSet
+from natal.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -68,7 +68,7 @@ def has_d_at_a(genotype) -> bool:
     # Pseudo-code, depends on your Genotype structure
     return "D" in str(genotype)
 
-ruleset.add_convert(
+ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.9,
@@ -86,7 +86,7 @@ Drive systems typically use both types of rules simultaneously:
 ```python
 # Gamete stage: W -> D (biased)
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
-gamete_ruleset.add_convert("W", "D", rate=0.99)
+gamete_ruleset.add_allele_convert("W", "D", rate=0.99)
 
 # Zygote stage: copy conversion (ensure homozygosity)
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
@@ -152,7 +152,7 @@ Implementation notes:
 
 ```python
 from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
     """Simple point mutation: WT mutates to Mutant at a certain frequency"""
@@ -163,7 +163,7 @@ class PointMutation(GeneticPreset):
 
     def gamete_modifier(self, population):
         ruleset = GameteConversionRuleSet("PointMutation")
-        ruleset.add_convert("WT", "Mutant", rate=self.mutation_rate)
+        ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(population)
 
     def fitness_patch(self):
@@ -184,14 +184,14 @@ class BidirectionalMutation(GeneticPreset):
         self.backward_rate = backward_rate
 
     def gamete_modifier(self, population):
-        from natal.gamete_allele_conversion import GameteConversionRuleSet
+        from natal.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
         # A -> B (forward mutation)
-        ruleset.add_convert("A", "B", rate=self.forward_rate)
+        ruleset.add_allele_convert("A", "B", rate=self.forward_rate)
         # B -> A (back mutation)
-        ruleset.add_convert("B", "A", rate=self.backward_rate)
+        ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(population)
 ```
@@ -217,7 +217,7 @@ def my_filter(genotype):
 ### Core Example: W->D Only in W::D Heterozygotes
 
 ```python
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 
 def is_wd_heterozygote(genotype) -> bool:
@@ -226,7 +226,7 @@ def is_wd_heterozygote(genotype) -> bool:
 
 
 ruleset = GameteConversionRuleSet("homing_drive")
-ruleset.add_convert(
+ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.5,
@@ -251,7 +251,7 @@ def build_filter_from_pattern(species, pattern: str):
     return species.parse_genotype_pattern(pattern)
 
 
-ruleset.add_convert(
+ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.5,
@@ -287,12 +287,12 @@ class PatternBasedPreset(GeneticPreset):
         self.conversion_rate = conversion_rate
 
     def gamete_modifier(self, population):
-        from natal.gamete_allele_conversion import GameteConversionRuleSet
+        from natal.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
         pattern_filter = population.species.parse_genotype_pattern(self.pattern)
 
-        ruleset.add_convert(
+        ruleset.add_allele_convert(
             from_allele="WT",
             to_allele="Drive",
             rate=self.conversion_rate,
@@ -319,12 +319,12 @@ class ConditionalMutation(GeneticPreset):
         self.required_background = required_background
 
     def gamete_modifier(self, population):
-        from natal.gamete_allele_conversion import GameteConversionRuleSet
+        from natal.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
 
         # Mutation only occurs when the background allele is present
-        ruleset.add_convert(
+        ruleset.add_allele_convert(
             from_allele=self.target_allele,
             to_allele=f"{self.target_allele}_mutant",
             rate=1e-4,
@@ -384,7 +384,7 @@ A practical Preset should include:
 
 ```python
 from natal.presets import GeneticPreset
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 
 class DrivePreset(GeneticPreset):
@@ -399,7 +399,7 @@ class DrivePreset(GeneticPreset):
             name = str(genotype)
             return name in {"W|D", "D|W"}
 
-        ruleset.add_convert(
+        ruleset.add_allele_convert(
             from_allele="W",
             to_allele="D",
             rate=self.conversion_rate,
@@ -449,8 +449,7 @@ This significantly reduces the risk of "results cannot be reproduced."
 
 ```python
 from natal.presets import GeneticPreset
-from natal.gamete_allele_conversion import GameteConversionRuleSet
-from natal.zygote_allele_conversion import ZygoteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
 
 class ComplexDrive(GeneticPreset):
     """Complex gene drive with multi-stage conversion"""
@@ -462,11 +461,11 @@ class ComplexDrive(GeneticPreset):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT -> Drive)
-        ruleset.add_convert("WT", "Drive", rate=0.95,
+        ruleset.add_allele_convert("WT", "Drive", rate=0.95,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
         # Stage 2: Resistance formation (remaining WT -> Resistance)
-        ruleset.add_convert("WT", "Resistance", rate=0.05,
+        ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
         return ruleset.to_gamete_modifier(population)
@@ -475,7 +474,7 @@ class ComplexDrive(GeneticPreset):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # Additional modification at the embryo stage
-        ruleset.add_convert(
+        ruleset.add_allele_convert(
             from_allele="WT",
             to_allele="Resistance",
             rate=0.02,

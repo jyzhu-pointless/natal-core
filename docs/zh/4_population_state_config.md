@@ -32,15 +32,15 @@
 ```python
 class PopulationState(NamedTuple):
     n_tick: int
-    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_genotypes)
-    sperm_storage: NDArray[np.float64]     # (n_ages, n_genotypes, n_genotypes)
+    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_ztypes)
+    sperm_storage: NDArray[np.float64]     # (n_ages, n_ztypes, n_ztypes)
 ```
 
 各字段含义：
 
 - `n_tick`：当前时间步
-- `individual_count`：个体计数主张量，按"性别-年龄-基因型"索引
-- `sperm_storage`：用于表达雌体储精结构，按"年龄-雌性基因型-雄性基因型"索引
+- `individual_count`：个体计数张量，按"性别-年龄-合子类型"索引
+- `sperm_storage`：雌体储精结构，按"年龄-雌性合子类型-雄性合子类型"索引
 
 ## `DiscretePopulationState`：离散世代模型的状态对象
 
@@ -51,7 +51,7 @@ class PopulationState(NamedTuple):
 ```python
 class DiscretePopulationState(NamedTuple):
     n_tick: int
-    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_genotypes)
+    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_ztypes)
 ```
 
 与 `PopulationState` 的主要区别：
@@ -67,7 +67,7 @@ class DiscretePopulationState(NamedTuple):
 ### 配置内容分组
 
 1. **维度与控制参数**
-  - `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
+  - `n_sexes`, `n_ages`, `n_ztypes`, `n_gtypes`, `n_glabs`, `n_slabs`
   - `stochastic`, `continuous_sampling`, `sex_ratio`
 
 2. **年龄相关参数**
@@ -77,13 +77,13 @@ class DiscretePopulationState(NamedTuple):
   - `age_based_relative_competition_strength`
 
 3. **适应度参数**
-  - `viability_fitness`（形状：`(n_sexes, n_ages, n_genotypes)`）
-  - `fecundity_fitness`（形状：`(n_sexes, n_genotypes)`）
-  - `sexual_selection_fitness`（形状：`(n_genotypes, n_genotypes)`）
+  - `viability_fitness`（形状：`(n_sexes, n_ages, n_ztypes)`）
+  - `fecundity_fitness`（形状：`(n_sexes, n_ztypes)`）
+  - `sexual_selection_fitness`（形状：`(n_ztypes, n_ztypes)`）
 
 4. **遗传映射矩阵**
-  - `genotype_to_gametes_map`（形状：`(n_sexes, n_genotypes, n_haploid_genotypes * n_glabs)`）
-  - `gametes_to_zygote_map`（形状：`(n_hg*n_glabs, n_hg*n_glabs, n_genotypes)`）
+  - `zygotes_to_gametes_map`（形状：`(n_sexes, n_ztypes, n_gtypes)`）
+  - `gametes_to_zygotes_map`（形状：`(n_gtypes, n_gtypes, n_ztypes)`）
 
 5. **初始分布与缩放参数**
   - `initial_individual_count`
@@ -101,20 +101,20 @@ def heatwave(state, config):
     return 0
 ```
 
-大数组字段（如 `viability_fitness`、`genotype_to_gametes_map`）不建议在运行中修改，但技术上也可通过数组索引进行原地赋值。可以打印输出 `PopulationConfig` 的字段值，以确认模型参数是否符合预期：
+大数组字段（如 `viability_fitness`、`zygotes_to_gametes_map`）不建议在运行中修改，但技术上也可通过数组索引进行原地赋值。可以打印输出 `PopulationConfig` 的字段值，以确认模型参数是否符合预期：
 
 ```python
 cfg = pop.config
-print(cfg.n_ages, cfg.n_genotypes)
+print(cfg.n_ages, cfg.n_ztypes)
 print(cfg.viability_fitness.shape)
 ```
 
 ## 最简示例：查看 state 与 config
 
 ```python
-from natal.genetic_structures import Species
-from natal.age_structured_population import AgeStructuredPopulation
-from natal.discrete_generation_population import DiscreteGenerationPopulation
+from natal.genetics import Species
+from natal.population import AgeStructuredPopulation
+from natal.population import DiscreteGenerationPopulation
 
 sp = Species.from_dict(name="Demo", structure={"chr1": {"A": ["A1", "A2"]}})
 
@@ -138,13 +138,11 @@ print(age_pop.config.n_ages, age_pop.config.new_adult_age)  # 4, 2
 print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 ```
 
-<!--TODO：可能需要介绍history；需要介绍Population对象的主要方法-->
-
 ## 状态翻译为可读字典/JSON
 
 为便于日志记录、前后端通信与调试，NATAL 提供了将状态对象翻译为人类可读结构的能力。
 
-相关 API 位于 `natal.state_translation`：
+相关 API 位于 `natal.output`：
 
 - `population_state_to_dict` / `population_state_to_json`
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
@@ -195,7 +193,7 @@ print(observed["observed"]["adult_wt_female"])
 如果直接操作 `PopulationState` / `DiscretePopulationState`，也可以调用对应的函数，并显式传入标签：
 
 ```python
-from natal.state_translation import population_state_to_dict
+from natal.output import population_state_to_dict
 
 data = population_state_to_dict(
     state,

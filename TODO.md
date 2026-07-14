@@ -42,41 +42,14 @@
 
 ### #4 🎨 修饰器矩阵化 —— Sequential Cascade → 矩阵乘法
 
-**此分支改动**：新增了声明式配置适配层（`_ConfigContext`），为修饰器提供了运行时上下文绑定，是矩阵化路径的前置依赖。设计了详细的实现方案（`matrix-modifier-design.html`），但 `compile_matrix()`、`to_matrix()`、`ModifierMatrix`、`apply_transition()` 均未实现。Cascade 仍使用 `Dict[Genotype, float]` 逐 rule 迭代。
+**状态**：✅ 已实现。`GameteConversionRuleSet.to_matrix(population)` 编译 rules 为
+`{(sex, ztype): (n_gtypes, n_gtypes)}` dense float64 矩阵，
+`to_gamete_modifier()` 通过 `freq_vec @ M` 替代旧 `_compute_converted_gamete_freqs`
+逐 rule 迭代。旧 Cascade 函数已删除（~114 行）。
 
-**优先级理由**：🟡 已证明的数学基础 + 明确实现路径（~130 行，3 文件），g=100、hl=8、3 modifier 场景下 offspring_tensor 加速 5000x。同时支持 reconfiguration 增量更新，对大型模拟有显著性能价值。但前提是 #1 正确性 bug 完成后才应开始。
-
-**数学基础**（已证明）：
-
-1. **每条 rule 是线性算子**：`_compute_converted_gamete_freqs` 对频率向量 v ∈ ℝᴰ
-   只做比例分割（v'[hg] = v[hg]·(1−r), v'[converted_hg] += v[hg]·r）。
-   无归一化、无阈值、无非线性步骤。
-
-2. **Cascade ≡ 矩阵乘积**：`M_total = Rₖ · ... · R₂ · R₁`，其中每 Rᵢ 是 D×D
-   稀疏矩阵（D = n_hg × n_glabs，通常 10-100）。级联合成 = 矩阵乘法。
-
-3. **可交换条件**：Mᴬ·Mᴮ = Mᴮ·Mᴬ ⟺ affected_A ∩ affected_B = ∅ 或
-   from_allele_A ≠ from_allele_B。RuleSet API 下 from_allele 静态声明，
-   编译期即可检测。
-
-4. **genotype_filter**：filter=False 的 genotype → 对应矩阵 = I（单位矩阵），
-   不改动该行。ModifierMatrix = {g ∈ affected: M_total, g ∉ affected: I}。
-
-**实现路径**（~130 行，3 文件，纯加法，不改现有 API）：
-
-| 文件 | 改动 |
-|---|---|
-| gamete_allele_conversion.py | 每 rule 加 compile_matrix() → D×D 稀疏矩阵；加 to_matrix() 编译 RuleSet 为 ModifierMatrix |
-| configurator.py | _rebuild_config_maps 加 if/else 分发：全部 RuleSet → 矩阵路径；否则 → 现有回调路径 |
-| modifiers.py | 加 apply_transition() 逐行 @ 矩阵；_apply_comp_map 保留作为回调路径基础设施 |
-
-**不改**：genetic_presets.py、任何 Numba 内核、population_config.py、initialize_gamete_map。
-
-**reconfigure 增量**：只重编译被改 preset 的矩阵（纯算术），重新合成 M_total
-（2 次矩阵乘法），应用到 affected_rows。不重跑其他 modifier。
-
-**指标**：g=100, hl=8, 3 modifier, |affected|=2 → offspring_tensor 2500× 加速。
-详见 `matrix-modifier-design.html`。
+**剩余工作**：
+- zygote 侧仍使用 Dict[Genotype, float] 逐 rule 迭代，未矩阵化
+- `ModifierMatrix` 稀疏表示未实现（当前 dense 在 n_gtypes ≤ 250 时足够快）
 
 ### #5 ⚠️ Spatial History
 
@@ -177,6 +150,26 @@
 **已完成**（`fix/compress-once-ztype-refactor` 分支）：
 - `src/natal/modifiers/module.py`：三个函数签名中删除参数及 docstring，转发代码移除
 - `src/natal/configurator/_registry_builder.py`：调用方移除 `expand_to_ztypes=...` 传参
+
+### #11.5 ⚠️ Modifier 系统：genotype vs ztype 概念混用 + 冗余参数
+
+**来源**：2026-07-10 `expand_to_ztypes` 清理后的进一步审计。
+
+**已完成的子项**（`feature/spatial-compress-unified` 分支）：
+- ✅ 冗余参数清理：`_resolve_gidx`、`_apply_comp_map` 等 7 个旧函数删除，统一层 `_resolve_ztype_key`/`_resolve_gtype_key` 仅接受 registry
+- ✅ `CytoplasmicPreset` 特判消除：`gamete_modifier()` 和 `zygote_modifier()` 返回真实 modifier，`isinstance(preset, CytoplasmicPreset)` 全部删除
+- ✅ 手动 glab 公式清理：`module.py:555-556` 删除（统一层替代），`cytoplasmic.py` 中 glab 索引改走 registry
+- ✅ `build_compression_mask` 死参数 `n_glabs`/`n_slabs` 删除，G→n_zt/HL→n_gt 重命名
+- ✅ `_compress_once` ztype 一等公民化，`seeds: set[int]` 替代 `union: set[str]`
+- ✅ `batch_setting` 泛型化 `Generic[_T]`
+- ✅ `gamete_conversion.py` + `zygote_conversion.py` ztype/gtype 适配
+
+**遗留子项**：
+- 📋 命名修正：`GameteModifier` Protocol docstring 中 `genotype_idx` → `ztype_idx`、`_write_zygote_mapping` docstring、`_normalize_zygote_val` docstring
+- 📋 协议扩展：让 modifier 支持 slab-level 目标选择（当前 `ztype_indices_for()` 无条件全板展开）
+- 📋 Conversion ruleset 新 DSL（Condition 组合条件、`add_glab_convert`、`add_slab_convert`）API 已就绪，内部委托到旧 API；矩阵编译（`to_matrix(registry)`）和完整迁移待 Stage 2
+
+**涉及文件**：`src/natal/modifiers/module.py`、`src/natal/presets/cytoplasmic.py`、`src/natal/population/_mixins/_modifiers.py`、`src/natal/configurator/_registry_builder.py`
 
 ### #11.1 ⚠️ Hook 系统测试覆盖缺口
 
@@ -551,3 +544,46 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
 - **类型规范** — `selector.py` + `decorator.py` 消除 `Any`/`object` 滥用，改用 `PopulationState`、`PopulationConfig`、`int | NDArray[np.int32]` 等具体类型。CLAUDE.md 新增"禁止滥用 Any 和 object"规则。
 - **Test marker 修复** — `test_lifecycle_wrappers.py` 中 2 个测试从无标记改为 `@pytest.mark.numba_on`。
 - **发现 #17** — `NATAL_DISABLE_NUMBA=1` 全量运行发现 9 个既有失败。修复 6 个（hook 约定 + marker），剩余 3 个为 `_replace()` 0-d ndarray 退化问题。
+
+---
+
+## Conversion Ruleset 重构（2026-07-10 grill session）
+
+### ✅ Stage 1 完成 — DSL 基础 + 特判消除
+
+**已完成**（`feature/spatial-compress-unified` 分支）：
+
+1. **Condition DSL**（`src/natal/modifiers/conditions.py`）：
+   - `sex()`、`ztype_has()`、`slab()`、`is_maternal()`、`is_paternal()` + `&`/`|` 组合
+2. **新 API**：
+   - `GameteRuleSet.add_glab_convert(from_glab, to_glab, rate, when=...)` — 替代 `add_hg_convert(hg→hg, target_glab=...)` 的语义拐弯
+   - `ZygoteRuleSet.add_glab_redirect(from_glab, to_glab, when=...)` — zygote-level glab redirect
+   - 旧 API 保留，新 API 内部委托到旧 API
+3. **Preset 迁移**：
+   - HomingDrive + ToxinAntidote：Cas9 沉积标注从 `add_hg_convert` → `add_glab_convert`
+   - CytoplasmicPreset：走 modifier 协议，`isinstance` 特判消除
+4. **ztype/gtype 适配**：
+   - `gamete_conversion.py`：`index_to_genotype` → `index_to_ztype`，`genotype_idx` → `ztype_idx`
+   - `zygote_conversion.py`：同上 + `g = row.argmax()` 后直接用 ztype 索引
+
+### 📋 Stage 2 待做 — 剩余迁移
+
+1. ✅ `RuleSet.to_matrix(registry)` — 已实现（`1f06109`），CytoplasmicPreset 已在用
+2. ✅ `when` 条件接线 — 已实现（`8d70791`），gamete/zygote modifier 均已支持
+3. `add_slab_convert` — gamete/zygote 端 slab 操作（当前 CytoplasmicPreset 自制循环）
+4. `_compute_converted_gamete_freqs` 替换为矩阵乘法
+5. `extract_gamete_frequencies_by_glab` 调用精简（CytoplasmicPreset 路径仍保留）
+
+### 剩余 P2 命名清理（grill list #8-#16）
+
+| # | 位置 | 问题 |
+|---|------|------|
+| 8 | engine 40+ 处 | docstring `n_genotypes` 实际是 `n_ztypes` |
+| 9 | `age_structured.py:95-106` | `n_g_orig` 在 genotype/ztype 间摇摆 |
+| 10 | `hooks/declarative.py:268` | `_resolve_genotypes` → `_resolve_ztypes` |
+| 11 | `discrete_generation.py:161` | `n_genotypes = config.n_ztypes` |
+| 12 | `migration/adjacency.py:619` | `genotype_idx` → `ztype_idx` |
+| 13 | `configurator/_base.py` 10+ 处 | docstring "genotype" 应为 "ztype" |
+| 14 | `configurator/_factory.py` 5+ 处 | docstring "genotype" 应为 "ztype" |
+| 15 | `engine/age_structured.py` | `n_haplogenotypes`/`n_glabs` 标记 unused |
+| 16 | `population/age_structured.py:95-106` | `n_g_orig` 语义歧义 |

@@ -26,45 +26,40 @@ def initialize_zygote_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    zygote_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
-        unordered: bool = False,
     n_slabs: int = 1,
+    unordered: bool = False,
+    zygote_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
 ) -> NDArray[np.float64]:
     """Initialize the ``gametes_to_zygotes_map`` tensor.
 
-    The function first populates a baseline mapping following Mendelian
-    inheritance for all haplotype pairs and gamete-label combinations, and
-    then applies optional zygote modifiers to transform the tensor.
+    Builds baseline Mendelian inheritance for all haplotype pairs and
+    gamete-label combinations on ``n_genotypes * n_slabs`` zygote-type
+    columns, then applies optional zygote modifiers.  The baseline maps
+    each genotype pair to the **default** slab (index 0 of each genotype
+    group); zygote modifiers may redirect probability to other slab
+    indices within the same genotype group.
 
     When *unordered* is True, uses ``unordered_genotype()`` so that
     ``(hg_a, hg_b)`` and ``(hg_b, hg_a)`` map to the same unordered
-    genotype index, collapsing symmetric pairs.  Default ``False``
-    preserves maternal/paternal ordering.
-
-    When *n_slabs* > 1 the genotype axis is expanded so that each base
-    genotype has *n_slabs* slab variants.  Zygote modifiers are applied
-    BEFORE expansion — they operate in the unexpanded G_orig space.
+    genotype index, collapsing symmetric pairs.
 
     Args:
         haploid_genotypes: List of all haploid genotype objects.
-        diploid_genotypes: List of all diploid genotype objects.
+        diploid_genotypes: List of all diploid genotype objects (unique
+            set, without slab variants).
         n_glabs: Number of gamete labels (default: 1).
+        n_slabs: Number of somatic slab variants per genotype (≥ 1).
+        unordered: If True, use unordered genotype canonicalization.
         zygote_modifiers: Optional sequence of callables that accept and
             return a modified ``gametes_to_zygotes_map`` tensor.
-        unordered: If True, use unordered genotype canonicalization.
-        n_slabs: Number of somatic slabs (≥ 1).  When > 1 each genotype is
-            replicated across slabs.
 
     Returns:
-        Array of shape (HL, HL, G_orig * n_slabs) representing the
-        probability of each zygote genotype given a pair of gametes.
-
-    Raises:
-        ValueError: If any of the input lists is empty or n_glabs is not positive.
+        Array of shape ``(n_gtypes, n_gtypes, n_genotypes * n_slabs)``.
     """
     n_hg = len(haploid_genotypes)
     n_genotypes = len(diploid_genotypes)
-    n_hg_glabs = n_hg * n_glabs
+    n_ztypes = n_genotypes * n_slabs
+    n_gtypes = n_hg * n_glabs
     if n_hg <= 0:
         raise ValueError("haploid_genotypes must be non-empty")
     if n_genotypes <= 0:
@@ -72,10 +67,10 @@ def initialize_zygote_map(
     if n_glabs <= 0:
         raise ValueError("n_glabs must be positive")
 
-    # 1. Build baseline one-hot tensor according to Mendelian inheritance
-    gametes_to_zygotes_map: NDArray[np.float64] = np.zeros((n_hg_glabs, n_hg_glabs, n_genotypes), dtype=np.float64)
+    gametes_to_zygotes_map: NDArray[np.float64] = np.zeros(
+        (n_gtypes, n_gtypes, n_ztypes), dtype=np.float64,
+    )
 
-    # Local dict-based lookup replacing formula: compressed = hg_idx * n_glabs + glab_idx
     _gtype_index: dict[tuple[int, int], int] = {
         (hi, gi): hi * n_glabs + gi
         for hi in range(n_hg) for gi in range(n_glabs)
@@ -94,29 +89,18 @@ def initialize_zygote_map(
 
             if zygote_gt in diploid_genotypes:
                 idx_gt = diploid_genotypes.index(zygote_gt)
-                # Baseline: labels are equivalent — populate all (glab1, glab2)
+                ztype_idx = idx_gt * n_slabs
                 for glab1 in range(n_glabs):
                     for glab2 in range(n_glabs):
                         compressed_idx1 = _gtype_index[(idx_hg1, glab1)]
                         compressed_idx2 = _gtype_index[(idx_hg2, glab2)]
-                        gametes_to_zygotes_map[compressed_idx1, compressed_idx2, idx_gt] = 1.0
+                        gametes_to_zygotes_map[
+                            compressed_idx1, compressed_idx2, ztype_idx
+                        ] = 1.0
 
-    # 2. Apply optional zygote modifiers (before slab expansion).
     if zygote_modifiers:
         for modifier in zygote_modifiers:
             gametes_to_zygotes_map = modifier(gametes_to_zygotes_map)
-
-    # 3. Slab expansion: expand from G_orig → G_orig * n_slabs.
-    if n_slabs > 1:
-        n_ztypes = n_genotypes * n_slabs
-        expanded = np.zeros((n_hg_glabs, n_hg_glabs, n_ztypes), dtype=np.float64)
-        _ztype_index: dict[tuple[int, int], int] = {
-            (g, s): g * n_slabs + s
-            for g in range(n_genotypes) for s in range(n_slabs)
-        }
-        for g_raw in range(n_genotypes):
-            expanded[:, :, _ztype_index[(g_raw, 0)]] = gametes_to_zygotes_map[:, :, g_raw]
-        gametes_to_zygotes_map = expanded
 
     return gametes_to_zygotes_map
 
@@ -125,36 +109,35 @@ def initialize_gamete_map(
     haploid_genotypes: List[HaploidGenotype],
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
-    gamete_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
     n_slabs: int = 1,
+    gamete_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
 ) -> NDArray[np.float64]:
     """Create and return a ``zygotes_to_gametes_map`` tensor.
 
-    This mirrors the style of :func:`initialize_zygote_map`: build a baseline
-    mapping from each diploid genotype's gamete production and then apply
-    optional modifier callables.
+    Builds a baseline mapping from each diploid genotype's gamete
+    production, replicated across *n_slabs* somatic slab variants, then
+    applies optional modifier callables on the full ``n_genotypes *
+    n_slabs``-wide tensor.
 
-    When *n_slabs* > 1 the genotype axis is tiled so that each base genotype
-    is replicated *n_slabs* times (one per somatic label).  Modifier callables
-    are applied BEFORE tiling — they operate in the unexpanded G_orig space.
+    Mendelian gamete production is identical across slab variants, so each
+    genotype's baseline frequencies are replicated to all slab indices
+    within its genotype group.
 
     Args:
         haploid_genotypes: List of all haploid genotype objects.
-        diploid_genotypes: List of all diploid genotype objects.
+        diploid_genotypes: List of all diploid genotype objects (unique
+            set, without slab variants).
         n_glabs: Number of gamete labels (default: 1).
+        n_slabs: Number of somatic slab variants per genotype (≥ 1).
         gamete_modifiers: Optional sequence of callables that accept and
             return a modified ``zygotes_to_gametes_map`` tensor.
-        n_slabs: Number of somatic slabs (≥ 1).  When > 1 each genotype is
-            replicated across slabs with identical gamete production.
 
     Returns:
-        NDArray[np.float64]: Array shaped ``(n_sexes, G_orig * n_slabs, n_hg*n_glabs)``.
-
-    Raises:
-        ValueError: If any of the input lists is empty or n_glabs is not positive.
+        ``(n_sexes, n_genotypes * n_slabs, n_gtypes)`` float64 array.
     """
     n_hg = len(haploid_genotypes)
     n_genotypes = len(diploid_genotypes)
+    n_ztypes = n_genotypes * n_slabs
     if n_hg <= 0:
         raise ValueError("haploid_genotypes must be non-empty")
     if n_genotypes <= 0:
@@ -162,11 +145,12 @@ def initialize_gamete_map(
     if n_glabs <= 0:
         raise ValueError("n_glabs must be positive")
 
-    # Infer number of sexes from Sex enum
     n_sexes = max(int(s.value) for s in Sex) + 1
-    n_hg_glabs = n_hg * n_glabs
+    n_gtypes = n_hg * n_glabs
 
-    zygotes_to_gametes_map: NDArray[np.float64] = np.zeros((n_sexes, n_genotypes, n_hg_glabs), dtype=np.float64)
+    zygotes_to_gametes_map: NDArray[np.float64] = np.zeros(
+        (n_sexes, n_ztypes, n_gtypes), dtype=np.float64,
+    )
     haplo_to_idx = {hg: idx for idx, hg in enumerate(haploid_genotypes)}
 
     _gtype_index: dict[tuple[int, int], int] = {
@@ -174,9 +158,6 @@ def initialize_gamete_map(
         for hi in range(n_hg) for gi in range(n_glabs)
     }
 
-    # Build optional sex-specific haploid availability constraints from species.
-    # This keeps backward compatibility for autosome-only species (no filtering),
-    # while making XY/ZW systems sex-aware by default.
     allowed_haplotypes_by_sex: dict[int, set[HaploidGenotype]] = {}
     if haploid_genotypes:
         species = haploid_genotypes[0].species
@@ -188,11 +169,8 @@ def initialize_gamete_map(
             if male_allowed:
                 allowed_haplotypes_by_sex[int(Sex.MALE)] = male_allowed
         except Exception:
-            # If species does not provide parent-role iterators, fall back to
-            # legacy behavior (same gamete distribution for all sexes).
             allowed_haplotypes_by_sex = {}
 
-    # Populate baseline mapping using genotype.produce_gametes()
     for idx_genotype, genotype in enumerate(diploid_genotypes):
         base_gametes = genotype.produce_gametes()
         for sex_idx in range(n_sexes):
@@ -213,18 +191,15 @@ def initialize_gamete_map(
                 idx_hg = haplo_to_idx.get(gamete)
                 if idx_hg is None:
                     continue
-                # By default, only map frequency for the default glab (0)
                 compressed_idx = _gtype_index[(idx_hg, 0)]
-                zygotes_to_gametes_map[sex_idx, idx_genotype, compressed_idx] = float(freq) * inv_total
+                baseline_freq = float(freq) * inv_total
+                for slab_idx in range(n_slabs):
+                    ztype_idx = idx_genotype * n_slabs + slab_idx
+                    zygotes_to_gametes_map[sex_idx, ztype_idx, compressed_idx] = baseline_freq
 
-    # Apply optional modifier callables (before slab expansion).
     if gamete_modifiers:
         for modifier in gamete_modifiers:
             zygotes_to_gametes_map = modifier(zygotes_to_gametes_map)
-
-    # Slab expansion: tile each genotype row S times.
-    if n_slabs > 1:
-        zygotes_to_gametes_map = np.repeat(zygotes_to_gametes_map, n_slabs, axis=1)
 
     return zygotes_to_gametes_map
 

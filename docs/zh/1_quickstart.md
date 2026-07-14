@@ -1,7 +1,7 @@
 # 快速开始：15 分钟上手 NATAL
 
 通过一个**离散世代种群**和一个**年龄结构种群**的示例，快速熟悉 NATAL 的核心建模流程与可视化分析工具。（每一代/时间步称为一个 **tick**）
-如您还没有安装 `natal-core`，请参考[首页](index.md)完成安装。
+如您还没有安装 `natal-core`，参见[首页](index.md)完成安装。
 
 ---
 
@@ -57,7 +57,7 @@ sp = nt.Species.from_dict(
 
 这种分离使得模拟可以灵活定义复杂的遗传架构，同时在运行时保持高效的计算。
 
-> 完整概念、对象关系与更多示例请参考 [遗传结构与实体](2_genetics.md)。
+> 完整概念、对象关系与更多示例参见 [遗传结构与实体](2_genetics.md)。
 
 ### 验证架构
 
@@ -141,7 +141,6 @@ pop = (nt.AgeStructuredPopulation
     .reproduction(
         eggs_per_female=100,
         sex_ratio=0.5,
-        =True,        # 启用精子存储机制
     )
     .competition(
         juvenile_growth_mode=1,        # 1: 固定竞争模式
@@ -453,7 +452,7 @@ pop = (nt.AgeStructuredPopulation
         female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
         male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
-    .reproduction(eggs_per_female=100, sex_ratio=0.5, =True)
+    .reproduction(eggs_per_female=100, sex_ratio=0.5)
     .competition(juvenile_growth_mode=1, age_1_carrying_capacity=1200)
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)

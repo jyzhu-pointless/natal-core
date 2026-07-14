@@ -75,6 +75,16 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         config (PopulationConfig): Active static tensor/config container.
         state (T_State): Active population state container.
         history (List[Tuple[int, np.ndarray]]): Recorded state snapshots by tick.
+        hook_entries (Dict[str, List[HookEntry]]): Mapping from event name to
+            the ordered list of hook entries ``(hook_id, hook_name, hook_func)``
+            registered for that event.  Each event list is sorted by hook_id.
+        compiled_hook_descriptors (List[CompiledHookDescriptor]): Ordered list
+            of compiled hook descriptors (CSR plans, njit functions, and Python
+            wrappers) sorted by priority.  Homogeneous demes cloned from the
+            same template share this list object via identity.
+        hook_executor (Optional[HookExecutor]): Python-side coordinator for
+            all hook types.  Lazily built on first use and invalidated whenever
+            hook registration changes the compiled descriptor list.
     """
 
     # Allowed hook events (subclasses may extend this list).
@@ -121,7 +131,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self.max_history: int = 5000  # Default rolling window size
 
         # Hooks system: event_name -> [(hook_id, hook_name, hook_func), ...]
-        self._hooks: Dict[str, List[HookEntry]] = {
+        self.hook_entries: Dict[str, List[HookEntry]] = {
             event: [] for event in self.ALLOWED_EVENTS
         }
 
@@ -138,10 +148,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
         # Compiled hook descriptors (for Numba-accelerated execution).
-        self._compiled_hooks: List[CompiledHookDescriptor] = []
+        self.compiled_hook_descriptors: List[CompiledHookDescriptor] = []
 
         # Hook executor (Python-side coordinator for all hook types).
-        self._hook_executor: Optional[HookExecutor] = None
+        self.hook_executor: Optional[HookExecutor] = None
 
         # Static data container.
         self._config: Optional[PopulationConfig | DiscretePopulationConfig] = None
@@ -192,7 +202,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         for event_name, func, hook_name, hook_id in self._pending_hooks:
             self.set_hook(event_name, func, hook_id=hook_id, hook_name=hook_name, compile=True)
         self._pending_hooks.clear()
-        self._hook_executor = None
+        self.hook_executor = None
 
     def _clone(self, name: str, config: Optional[PopulationConfig] = None) -> Any:
         """Create a lightweight functional copy sharing compiled state and config.
@@ -219,10 +229,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         clone._tick = int(self._tick)
 
         # --- shared hooks (compiled, read-only during simulation) ---
-        clone._hooks = self._hooks
+        clone.hook_entries = self.hook_entries
         clone._pending_hooks = []
-        clone._compiled_hooks = self._compiled_hooks
-        clone._hook_executor = self._hook_executor
+        clone.compiled_hook_descriptors = self.compiled_hook_descriptors
+        clone.hook_executor = self.hook_executor
 
         # --- shared registry ---
         clone._index_registry = self._index_registry

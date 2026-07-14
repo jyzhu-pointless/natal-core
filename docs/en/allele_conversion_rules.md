@@ -29,10 +29,10 @@ This can be understood as:
 ## Minimal Working Example
 
 ```python
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 ruleset = GameteConversionRuleSet(name="homing_drive")
-ruleset.add_convert(from_allele="W", to_allele="D", rate=0.5)
+ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
 ```
 
 This example is already sufficient to describe a minimal conversion mechanism.
@@ -55,7 +55,7 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 ### Using ZygoteConversionRuleSet
 
 ```python
-from natal.zygote_allele_conversion import ZygoteConversionRuleSet
+from natal.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -64,7 +64,7 @@ def has_d_at_a(genotype) -> bool:
     # Pseudo-code, actual implementation depends on your Genotype structure
     return "D" in str(genotype)
 
-ruleset.add_convert(
+ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.9,
@@ -82,11 +82,11 @@ Drive systems typically use both types of rules simultaneously:
 ```python
 # Gamete stage: W -> D (biased)
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
-gamete_ruleset.add_convert("W", "D", rate=0.99)
+gamete_ruleset.add_allele_convert("W", "D", rate=0.99)
 
 # Zygote stage: achieve copying (ensure homozygosity)
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
-zygote_ruleset.add_convert(
+zygote_ruleset.add_allele_convert(
     "W", "D",
     rate=0.95,
     genotype_filter=lambda g: "D" in str(g)
@@ -148,7 +148,7 @@ Implementation highlights:
 
 ```python
 from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
     """Simple point mutation: WT mutates to Mutant at a certain frequency"""
@@ -159,7 +159,7 @@ class PointMutation(GeneticPreset):
 
     def gamete_modifier(self, population):
         ruleset = GameteConversionRuleSet("PointMutation")
-        ruleset.add_convert("WT", "Mutant", rate=self.mutation_rate)
+        ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(population)
 
     def fitness_patch(self):
@@ -180,14 +180,14 @@ class BidirectionalMutation(GeneticPreset):
         self.backward_rate = backward_rate
 
     def gamete_modifier(self, population):
-        from natal.gamete_allele_conversion import GameteConversionRuleSet
+        from natal.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
         # A → B (forward mutation)
-        ruleset.add_convert("A", "B", rate=self.forward_rate)
+        ruleset.add_allele_convert("A", "B", rate=self.forward_rate)
         # B → A (back mutation)
-        ruleset.add_convert("B", "A", rate=self.backward_rate)
+        ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(population)
 ```

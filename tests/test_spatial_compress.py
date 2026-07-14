@@ -441,3 +441,274 @@ class TestSpatialHookCompress:
         reg = pop.demes[0].index_registry
         assert reg.n_ztypes == 3
         assert reg.ztype_index(sp.get_genotype_from_str("a|a"), "default") == 2
+
+
+# ============================================================================
+# Hook pattern formats — auto-collection for compression BFS seeds
+# ============================================================================
+
+
+class TestSpatialHookPatternFormats:
+    """Hook auto-collection handles genotype patterns, not just plain strings."""
+
+    def test_declarative_hook_wildcard_pattern(self):
+        """Op.add with 'Dr|*' wildcard protects all Dr-carrying genotypes."""
+        sp = nt.Species.from_dict(
+            "shc_wild", {"c1": {"l1": ["WT", "Dr", "R2"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = nt.HomingDrive(
+            name="d", drive_allele="Dr", target_allele="WT",
+            resistance_allele="R2", drive_conversion_rate=1.0,
+        )
+
+        @nt.hook(event="first", priority=0)
+        def release():
+            return [nt.Op.add(genotypes="Dr|*", ages=1, sex="male", delta=10)]
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(drive).hooks(release).build()
+
+        reg = pop.demes[0].index_registry
+        # Dr|Dr should exist even though it's not in initial state
+        dr_dr = sp.get_genotype_from_str("Dr|Dr")
+        assert reg.ztype_index(dr_dr, "default") >= 0
+
+    def test_declarative_hook_slab_suffix(self):
+        """Op.add with @slab suffix survives compression (regression for #34 fix)."""
+        sp = nt.Species.from_dict(
+            "shc_slab", {"c1": {"l1": ["WT", "Dr"]}},
+            unordered=True, somatic_labels=["S", "E"],
+            gamete_labels=["default"],
+        )
+
+        @nt.hook(event="first", priority=0)
+        def release():
+            return [nt.Op.add(genotypes="Dr|WT@E", ages=1, sex="male", delta=10)]
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).hooks(release).build()
+
+        reg = pop.demes[0].index_registry
+        # Dr|WT@E must be resolvable
+        dr_wt = sp.get_genotype_from_str("Dr|WT")
+        assert reg.ztype_index(dr_wt, "E") >= 0
+
+
+class TestSpatialSelectorHookPatterns:
+    """Selector hook auto-collection handles set patterns and filters wildcards."""
+
+    def test_selector_set_pattern(self):
+        """Selector with '{Dr,R2}|*' protects all matching genotypes."""
+        sp = nt.Species.from_dict(
+            "shc_setpat", {"c1": {"l1": ["WT", "Dr", "R2"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = nt.HomingDrive(
+            name="d", drive_allele="Dr", target_allele="WT",
+            resistance_allele="R2", drive_conversion_rate=1.0,
+        )
+
+        @nt.hook(event="first", priority=0,
+                 selectors={"drive_carriers": "{Dr,R2}|*"})
+        def count_drive(state, config, drive_carriers, deme_id=-1):
+            _ = (state, config, drive_carriers, deme_id)
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(drive).hooks(count_drive).build()
+
+        reg = pop.demes[0].index_registry
+        # Dr|WT should survive — matched by {Dr,R2}|*
+        dr_wt = sp.get_genotype_from_str("Dr|WT")
+        assert reg.ztype_index(dr_wt, "default") >= 0
+
+    def test_selector_wildcard_only_is_filtered(self):
+        """Selector with '*' only — no concrete genotypes extracted."""
+        sp = nt.Species.from_dict(
+            "shc_selwild", {"c1": {"l1": ["WT", "Dr"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+
+        @nt.hook(event="first", priority=0, selectors={"all": "*"})
+        def count_all(state, config, all, deme_id=-1):
+            _ = (state, config, all, deme_id)
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).hooks(count_all).build()
+
+        reg = pop.demes[0].index_registry
+        # Only genotypes reachable from initial state should survive
+        # (the wildcard * does NOT add seeds)
+        wt_wt = sp.get_genotype_from_str("WT|WT")
+        assert reg.ztype_index(wt_wt, "default") >= 0
+
+
+class TestSpatialCustomHookSkipped:
+    """Custom hooks (custom=True) are explicitly NOT auto-collected."""
+
+    def test_custom_hook_not_collected(self):
+        """Custom hook referencing Dr|Dr — genotype is pruned."""
+        sp = nt.Species.from_dict(
+            "shc_custom", {"c1": {"l1": ["WT", "Dr"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+
+        @nt.hook(event="first", custom=True)
+        def custom_release(state, config, deme_id=-1):
+            # Reference Dr|Dr only in the body — not detectable statically
+            _ = (state, config, deme_id)
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(stochastic=False, compress=True).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).hooks(custom_release).build()
+
+        reg = pop.demes[0].index_registry
+        # Dr|Dr should NOT be in the registry — custom hooks aren't collected
+        dr_dr = sp.get_genotype_from_str("Dr|Dr")
+        with pytest.raises((ValueError, LookupError, KeyError)):
+            reg.ztype_index(dr_dr, "default")
+
+
+class TestSpatialDeclaredZygoteTypes:
+    """Manual declared_zygote_types supports pattern formats and fuzzy matching."""
+
+    def test_declared_wildcard_pattern(self):
+        """declared_zygote_types with 'Dr|*' protects all Dr genotypes."""
+        sp = nt.Species.from_dict(
+            "shc_decl_wild", {"c1": {"l1": ["WT", "Dr", "R2"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = nt.HomingDrive(
+            name="d", drive_allele="Dr", target_allele="WT",
+            resistance_allele="R2", drive_conversion_rate=1.0,
+        )
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(
+            stochastic=False, compress=True, declared_zygote_types={"Dr|*"},
+        ).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(drive).build()
+
+        reg = pop.demes[0].index_registry
+        dr_dr = sp.get_genotype_from_str("Dr|Dr")
+        dr_wt = sp.get_genotype_from_str("Dr|WT")
+        assert reg.ztype_index(dr_dr, "default") >= 0
+        assert reg.ztype_index(dr_wt, "default") >= 0
+
+    def test_declared_set_pattern(self):
+        """declared_zygote_types with '{Dr,R2}::*' unordered set."""
+        sp = nt.Species.from_dict(
+            "shc_decl_set", {"c1": {"l1": ["WT", "Dr", "R2"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = nt.HomingDrive(
+            name="d", drive_allele="Dr", target_allele="WT",
+            resistance_allele="R2", drive_conversion_rate=1.0,
+        )
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(
+            stochastic=False, compress=True,
+            declared_zygote_types={"{Dr,R2}::*"},
+        ).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(drive).build()
+
+        reg = pop.demes[0].index_registry
+        dr_dr = sp.get_genotype_from_str("Dr|Dr")
+        assert reg.ztype_index(dr_dr, "default") >= 0
+
+    def test_declared_mixed_exact_and_pattern(self):
+        """declared_zygote_types mixes exact string and pattern."""
+        sp = nt.Species.from_dict(
+            "shc_decl_mix", {"c1": {"l1": ["WT", "Dr", "R2"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = nt.HomingDrive(
+            name="d", drive_allele="Dr", target_allele="WT",
+            resistance_allele="R2", drive_conversion_rate=1.0,
+        )
+
+        pop = nt.SpatialPopulation.builder(
+            species=sp, n_demes=1, pop_type="discrete_generation",
+        ).setup(
+            stochastic=False, compress=True,
+            declared_zygote_types={"WT|WT", "Dr|*"},
+        ).initial_state(
+            individual_count={"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}},
+        ).competition(
+            carrying_capacity=10000, juvenile_growth_mode=nt.NO_COMPETITION,
+        ).presets(drive).build()
+
+        reg = pop.demes[0].index_registry
+        dr_dr = sp.get_genotype_from_str("Dr|Dr")
+        assert reg.ztype_index(dr_dr, "default") >= 0
+
+
+class TestNonSpatialHookCompress:
+    """Panmictic (non-spatial) path also auto-collects hook genotypes."""
+
+    def test_age_structured_hook_survives_compression(self):
+        """AgeStructuredPopulation.setup(compress=True).hooks() protects hook refs."""
+        sp = nt.Species.from_dict(
+            "nsc_hook", {"c1": {"l1": ["WT", "Dr", "R2"]}},
+            unordered=True, gamete_labels=["default"],
+        )
+        drive = nt.HomingDrive(
+            name="d", drive_allele="Dr", target_allele="WT",
+            resistance_allele="R2", drive_conversion_rate=1.0,
+        )
+
+        @nt.hook(event="first", priority=0)
+        def release():
+            return [nt.Op.add(genotypes="Dr|Dr", ages=1, sex="male", delta=10)]
+
+        pop = (
+            nt.AgeStructuredPopulation.setup(
+                species=sp, stochastic=False, compress=True,
+            )
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state(
+                {"female": {"WT|WT": [0, 100, 0]}, "male": {"WT|WT": [0, 100, 0]}}
+            )
+            .competition(carrying_capacity=1000, low_density_growth_rate=1)
+            .presets(drive)
+            .hooks(release)
+            .build()
+        )
+
+        reg = pop.registry
+        dr_dr = sp.get_genotype_from_str("Dr|Dr")
+        # Must survive compression even though initial state only has WT|WT
+        assert reg.ztype_index(dr_dr, "default") >= 0

@@ -82,7 +82,7 @@ Initial state parameters take effect at the start of the simulation, providing b
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
 | `individual_count` | `Mapping` | Initial individual count distribution, format `{sex: {genotype: age_data}}` | Required | Initial state | If not set, `build()` will raise an error; supports scalar, sequence, mapping, and other formats |
-| `sperm_storage` | `Optional[Mapping]` | Initial sperm storage (only needed when sperm storage is enabled) | `None` | reproduction | Required only when `=True`; format is a three-level mapping |
+| `sperm_storage` | `Optional[Mapping]` | Initial sperm storage for age-structured models | `None` | reproduction | Three-level mapping format; sperm storage is always enabled in age-structured models |
 
 **Age data (`age_data`) format** (all counts must be non-negative):
 
@@ -159,7 +159,6 @@ Validation rules:
 | `eggs_per_female` | `float` | Base number of eggs per female | `50.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
 | `fixed_egg_count` | `bool` | Whether egg count is fixed | `False` | reproduction | `True` for fixed egg count, `False` for random egg production |
 | `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
-| `` | `bool` | Sperm storage is always enabled (this parameter is a no-op retained for compatibility). | `True` | reproduction | The parameter is accepted for compatibility but has no effect. |
 | `sperm_displacement_rate` | `float` | Rate at which new sperm replaces old sperm | `0.05` | reproduction | Typical range `(0, 1]`; larger values mean faster replacement |
 
 ### `competition(...)` – Competition and Density Regulation
@@ -422,12 +421,11 @@ Validation rules:
 |---|---|---|---|---|---|
 | `female_age0_survival` | `float` | Female juvenile (age 0) survival rate | `1.0` | survival | Range `[0, 1]`; `1.0` means all survive |
 | `male_age0_survival` | `float` | Male juvenile (age 0) survival rate | `1.0` | survival | Range `[0, 1]`; `1.0` means all survive |
-| `` | `float` | Adult survival rate between generations | `0.0` | survival / aging boundary | Range `[0, 1]`; set to `0` for strict non-overlapping generations, higher values allow adults to survive across generations |
 
 Modeling advice:
 
-- All three probabilities should ideally be constrained to `[0, 1]`.
-- `=0.0` is commonly used for strict discrete generation models.
+- Both probabilities should ideally be constrained to `[0, 1]`.
+- In discrete-generation models, adults are fully replaced each tick, so adult survival is always 0.0 and cannot be overridden.
 
 ### `competition(...)`
 

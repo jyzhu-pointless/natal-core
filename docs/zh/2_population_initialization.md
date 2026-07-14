@@ -90,7 +90,7 @@ NATAL Core 提供两种主要的种群类型：
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `individual_count` | `Mapping` | 初始个体数量分布，格式为 `{性别: {基因型: 年龄数据}}` | 必填 | 初始状态 | 如未设置，`build()` 会报错；支持标量、序列、映射等多种格式 |
-| `sperm_storage` | `Optional[Mapping]` | 初始精子库存（仅在启用储精时需要） | `None` | reproduction | 仅在 `=True` 时必需；格式为三层映射 |
+| `sperm_storage` | `Optional[Mapping]` | 初始精子库存（年龄结构模型始终启用储精） | `None` | reproduction | 格式为三层映射 |
 
 **年龄数据（`age_data`）的格式**（所有计数必须为非负数）：
 
@@ -167,7 +167,6 @@ NATAL Core 提供两种主要的种群类型：
 | `eggs_per_female` | `float` | 每只雌性的基础产卵数。 | `50.0` | reproduction | 作为种群产卵数的基准；调参时可从中性值开始。 |
 | `fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 表示固定产卵数，`False` 表示随机产卵。 |
 | `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
-| `` | `bool` | 精子存储始终启用（该参数为兼容性保留，无实际效果）。 | `True` | reproduction | 该参数仅用于兼容性，设置任何值均不改变行为。 |
 | `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 取值范围通常为 `(0, 1]`；值越大表示新精子替换速度越快。 |
 
 ### `competition(...)` – 竞争与密度调节
