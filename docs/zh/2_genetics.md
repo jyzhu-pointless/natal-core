@@ -383,7 +383,7 @@ print(f"基因型: {wt_drive}")  # 输出: WT|Drive（默认 unordered=True 时�
 
 `Genotype` 的字符串解析语法与 `HaploidGenotype` 基本相同，增加了母本和父本的分隔：
 
-- **竖线 (|) 分隔母本和父本**：竖线左侧为母本单倍体基因型，右侧为父本单倍体基因型。**注意：** 默认 `Species.unordered=True`，系统自动规范化顺序——`A|a` 和 `a|A` 解析为同一基因型。。**注意：** 默认 `Species.unordered=True`，系统自动规范化顺序——`A|a` 和 `a|A` 解析为同一基因型。
+- **竖线 (|) 分隔母本和父本**：竖线左侧为母本单倍体基因型，右侧为父本单倍体基因型。**注意：** 默认 `Species.unordered=True`，系统自动规范化顺序——`A|a` 和 `a|A` 解析为同一基因型。
 - **其他规则与 HaploidGenotype 相同**：包括分号分隔染色体、斜杠分隔基因、单字符基因可省略斜杠等规则
 
 ```python
@@ -413,7 +413,7 @@ gt3 = sp.get_genotype_from_str("A/WT/Drive|a/WT/Drive")
 - `()` 分组：明确分组染色体位点
 - `::` 无序匹配：表示不区分母本和父本顺序（用于模式匹配；字符串基因型始终使用 `|`，当 `unordered=True` 时自动规范化）
 
-详细规则及示例请参考 [基因型模式匹配](2_genotype_patterns.md)。
+详细规则及示例参见 [基因型模式匹配](2_genotype_patterns.md)。
 
 **`Species` 中的相关方法**：
 - `parse_genotype_pattern(pattern: str)`：解析二倍体基因型模式
@@ -522,14 +522,14 @@ print(f"Genotype: {gt_back}")
 
 # 在 numpy 数组中使用
 individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_genotypes)
-female_count_of_gt = individual_count[1, :, gt_idx]  # 某基因型所有年龄的雌性数量
+female_count_of_gt = individual_count[0, :, gt_idx]  # 某基因型所有年龄的雌性数量
 ```
 
 > 更多关于 IndexRegistry 的细节，见 [IndexRegistry 索引机制](4_index_registry.md)
 
 ***
 
-## 🎯 本章总结
+## 🎯 总结
 
 | 层面     | 对象         | 用途          | 创建/获取方式                       |
 | ------ | ---------- | ----------- | ---------------------------- |

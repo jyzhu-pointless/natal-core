@@ -274,7 +274,7 @@ for i in range(n_demes):
 | Risk | Mitigation |
 |------|------------|
 | Config group key after batch expansion is unhashable (contains NumPy arrays) | Use `id(arr)` or serialized digest |
-| Sharing `_compiled_hooks` reference when cloning demes leads to state leakage | Copy-on-write: duplicate on demand via `set_hook`/`remove_hook` |
+| Sharing `compiled_hook_descriptors` / `hook_entries` reference when cloning demes leads to state leakage | Copy-on-write: duplicate on demand via subset `set_hook` |
 | Does `PopulationConfig` support `_replace`? | It is a NamedTuple, confirmed usable |
 | Relationship between SpatialConfigurator and existing `DiscreteGenerationPopulationBuilder` | SpatialConfigurator holds per-deme builders internally, reuses their validation logic |
 

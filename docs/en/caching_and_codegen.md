@@ -108,7 +108,7 @@ Generated module file example (`hook_codegen/lifecycle_discrete_527c055.py`):
 
 ```python
 import numpy as np
-from natal.engine.simulator import (
+from natal.engine.discrete_generation_simulator import (
     run_discrete_reproduction, run_discrete_survival, run_discrete_aging,
 )
 from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state

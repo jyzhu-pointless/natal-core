@@ -29,6 +29,9 @@ site/*
 .claude/*
 .omo/*
 .opencode/*
+.codex/*
+.reasonix/*
+.agents/*
 
 *beamer*
 

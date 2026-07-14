@@ -140,7 +140,6 @@ class ModifierPresetMixin(HookManagerMixin):
             compute_offspring_probability_tensor,
         )
         from natal.modifiers.module import build_modifier_wrappers
-        from natal.presets import CytoplasmicPreset
 
         if self._config is None or self._registry is None:
             return
@@ -161,10 +160,7 @@ class ModifierPresetMixin(HookManagerMixin):
             gamete_modifiers=self._gamete_modifiers,
             zygote_modifiers=self._zygote_modifiers,
             population=self,
-            index_registry=self._index_registry,
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
+            registry=self._index_registry,
         )
 
         # Step 2: Build the gametogenesis map.  For each diploid genotype
@@ -174,8 +170,8 @@ class ModifierPresetMixin(HookManagerMixin):
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
-            gamete_modifiers=gamete_funcs,
             n_slabs=n_slabs,
+            gamete_modifiers=gamete_funcs,
         )
 
         # Step 3: Build the fusion map.  For each pair of haploid gametes
@@ -185,36 +181,21 @@ class ModifierPresetMixin(HookManagerMixin):
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
-            zygote_modifiers=zygote_funcs,
             n_slabs=n_slabs,
+            zygote_modifiers=zygote_funcs,
         )
-
-        # Step 4: Apply cytoplasmic preset effects if presets are configured.
-        # This must happen BEFORE the offspring tensor is computed, so the
-        # tensor reflects the modified maps.
-        for preset in self._presets:
-            if isinstance(preset, CytoplasmicPreset):
-                n_genotypes = len(diploid_genotypes)
-                n_gtypes = len(haploid_genotypes)
-                species = getattr(self, "_species", None)
-                if species is not None:
-                    CytoplasmicPreset.tag_maternal_gametes(
-                        zygotes_to_gametes_map, species.gamete_labels,
-                        species.somatic_labels,
-                        n_genotypes, n_gtypes, n_glabs, n_slabs,
-                    )
-                    CytoplasmicPreset.redirect_zygotes(
-                        gametes_to_zygotes_map, species.gamete_labels,
-                        species.somatic_labels,
-                        n_genotypes, n_gtypes, n_glabs, n_slabs,
-                    )
 
         # Step 5: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
         # the fusion map.  The result is a 4-D array indexed by
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
-        n_g = int(self._config.n_ztypes)
-        n_hg = int(self._config.n_gtypes)
+        #
+        # Use the rebuilt map's actual dimensions — after compression some
+        # (genotype, slab) pairs may be pruned, making the regular-grid
+        # formula ``len(diploid_genotypes) * n_slabs`` mismatch the
+        # config's ``n_ztypes``.
+        n_g = int(zygotes_to_gametes_map.shape[1])
+        n_hg = int(zygotes_to_gametes_map.shape[2])
         offspring_tensor = compute_offspring_probability_tensor(
             meiosis_f=zygotes_to_gametes_map[0],
             meiosis_m=zygotes_to_gametes_map[1],

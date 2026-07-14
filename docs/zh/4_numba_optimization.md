@@ -27,7 +27,7 @@ NATAL 的核心阶段计算由数值内核完成，Numba 负责将这些内核 J
 ### 2.2 临时关闭（推荐调试方式）
 
 ```python
-from natal.numba_utils import numba_disabled
+from natal.numba import numba_disabled
 
 with numba_disabled():
     pop.run(n_steps=10)
@@ -38,7 +38,7 @@ with numba_disabled():
 ### 2.3 全局启用/禁用
 
 ```python
-from natal.numba_utils import disable_numba, enable_numba
+from natal.numba import disable_numba, enable_numba
 
 disable_numba()
 pop.run(n_steps=10)

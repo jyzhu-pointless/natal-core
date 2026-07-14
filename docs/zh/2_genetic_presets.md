@@ -158,7 +158,7 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="MultiDriveTest")
 
 ## 深入学习
 
-创建自定义预设是高级主题，详细内容请参考以下专门文档：
+创建自定义预设是高级主题，详细内容参见以下专门文档：
 
 - [设计你自己的预设](3_custom_presets.md)
 

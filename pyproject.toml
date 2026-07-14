@@ -89,6 +89,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]  # ignore asserts in tests
+"demos/repro_bug1_zygote.py" = ["E701", "I001"]  # exact copy from GitHub issue #34
+"demos/repro_bug3_gamete.py" = ["E701", "I001"]  # exact copy from GitHub issue #36
 
 [tool.pyright]
 include = ["src"]

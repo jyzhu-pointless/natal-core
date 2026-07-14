@@ -62,6 +62,18 @@ The virtual environment is auto-activated — run commands directly.
 
 All three must pass before committing: `pytest` + `pyright` + `ruff check src demos`. No suppression, no workarounds.
 
+### Review Workflow
+
+After every code change, you MUST follow this sequence. **Self-review is prohibited**:
+
+1. **`@tester`** — Generate strict tests for new or changed code, following `numerical-verification` standards and AGENTS.md test coverage rules.
+2. **Run `python scripts/generate_init_pyi.py`** — Regenerate stubs after public API changes so subsequent pyright checks work against the latest stubs.
+3. **`@evaluator`** — Perform a full audit: run `pytest` / `pyright` / `ruff` gates, load `code-review` and `numerical-verification` skills for code and test quality review, check docstring compliance, and check for `Any`/`object` abuse and `cast(Any)` violations.
+4. **If the change involves public API (signatures, parameters, defaults, module renames, etc.), the primary agent invokes `@docs`** to sync documentation and code examples in `docs/zh/` and `docs/en/`.
+5. **The primary agent MUST NOT run `pytest`, `pyright`, or `ruff` on its own and claim "review passed."** These results must be independently verified by the evaluator, which produces a structured report.
+
+The change is only considered complete when the evaluator returns an `APPROVED` verdict.
+
 ### Fix Policy
 
 - **Modified files**: All pyright / ruff / pytest failures must be fixed, regardless of whether they pre-existed.
@@ -96,32 +108,43 @@ Every change summary must include:
 
 ## Architecture
 
-The `natal` package uses **lazy loading** — `__init__.py` parses `__all__` via AST to build a name-to-module index, and `__getattr__` imports on first access. Startup is nearly instant.
+The `natal` package uses **lazy loading** — the top-level `__init__.py` statically parses literal `__all__` declarations from public subpackages via AST and builds a name-to-module index; `__getattr__` imports the owning subpackage only on first access.
 
 ### Core Modules
 
-| Layer | Modules | Responsibility |
+| Layer | Subpackages | Responsibility |
 |---|---|---|
-| Genetic Structure | `genetic_structures.py`, `genetic_entities.py` | Immutable Species / Chromosome / Locus blueprint; Gene / Genotype / Haplotype entities |
-| Config & State | `population_config.py`, `population_state.py` | PopulationConfig (static NamedTuple, 9 ecological params as 0-d ndarray) + PopulationState (mutable arrays) |
-| Population Models | `discrete_generation_population.py`, `age_structured_population.py`, `spatial_population.py` | Wright-Fisher / age-structured / spatial multi-deme simulation |
-| Builder | `population_builder.py`, `configurator.py` | Fluent builder API + Configurator for runtime modification |
-| Hook System | `hooks/` | Event-driven intervention (init/first/early/late/finish), declarative + Python function styles |
-| Engine | `engine/` | Numba-accelerated simulation loop + codegen for dynamic wrapper generation |
-| Presets | `genetic_presets.py` | HomingDrive / ToxinAntidoteDrive, encapsulating modifier + fitness |
-| Parameter Registry | `parameters.py` | ParamDescriptor registry + Numba setter codegen |
+| Genetics & Indexing | `genetics/`, `patterns/`, `registry/` | Define Species / Chromosome / Locus and genetic entities; parse genotype patterns; map ZTypes / GTypes to integer engine indices |
+| Configuration & Data | `configurator/`, `data/` | Fluent construction and runtime updates through Configurator; PopulationConfig / DiscretePopulationConfig and their State array containers |
+| Population Models | `population/`, `spatial/` | Age-structured and discrete-generation populations; multi-deme containers, spatial topology, and migration configuration |
+| Genetic Effects | `modifiers/`, `presets/`, `fitness/` | Gamete/zygote conversion rules; presets such as HomingDrive, ToxinAntidoteDrive, and Wolbachia; fitness-patch parsing and writes |
+| Hook System | `hooks/` | Compile declarative operations and `@hook` functions for prioritized first / early / late / finish events |
+| Engine & Acceleration | `engine/`, `numba/` | Age-structured, discrete-generation, and spatial lifecycles; migration kernels; Numba switching, compatibility, and dynamic wrapper generation |
+| Output & UI | `output/`, `ui/` | Observation filtering, history recording, readable-format translation, and interactive visualization |
 
 ### Data Flow
 
 ```
-Species → IndexRegistry → PopulationConfig + PopulationState
-  → Per tick: Hooks → Reproduction → Competition → Survival → Observation
-  → Spatial models: per-deme simulation → migration
+Species → Configurator → IndexRegistry + PopulationConfig / DiscretePopulationConfig
+  → Presets, modifiers, and fitness → optional ZType / GType compression
+  → Population + PopulationState / DiscretePopulationState
+
+Standard per tick: first Hook → Reproduction → early Hook → Density regulation + Survival
+  → late Hook → Aging → tick + 1
+
+Discrete-generation extreme-speed: first Hook → fused Wright-Fisher tick → tick + 1
+  (no early / late Hooks)
+
+Spatial models: per-deme lifecycle → Migration → optional Observation / History recording
 ```
+
+The `finish` Hook is outside the per-tick lifecycle and runs when a population finishes its simulation.
 
 ### Key Design Decisions
 
-- **0-d ndarray**: 9 ecological parameters (K, eggs, sex_ratio, etc.) are mutable in-place via `config.field[()] = v` within hooks.
-- **Hook signature**: `hook(state, config, deme_id) → int` — config is passed directly into hooks.
-- **Numba-first, Python-fallback**: The core simulation runs with or without Numba; `njit_switch` auto-degrades.
-- **Codegen caching**: Generated kernel wrappers are cached with content-addressed hashing so repeated simulations reuse compiled modules.
+- **Engine data and mutable parameters are separated**: Config and State are both NamedTuples. Scalar metadata cannot be replaced in place, while array contents remain mutable; nine ecological parameters use 0-d ndarrays so Configurator and Hooks can update them through `config.field[()] = value`.
+- **Flat type indexing**: IndexRegistry directly maintains indices for `ZType = (Genotype, slab)` and `GType = (HaploidGenotype, glab)`. At build time, reachability-based compression can prune both index spaces and their related config arrays.
+- **One configuration entry point**: `AgeStructuredPopulation.setup(...)`, `DiscreteGenerationPopulation.setup(...)`, and `pop.update()` use the same fluent Configurator API. During construction, ConfigContext applies presets and modifiers before a Population exists and rebuilds genetic maps and the offspring tensor when needed; `.fitness()` instead writes directly to Config.
+- **Dual-path Hooks**: Declarative operations compile into contiguous arrays and offset tables (CSR), while custom functions register through `@hook`; both paths can be interleaved by priority. The function signature is `hook(state, config, deme_id) -> int`.
+- **Numba-first, Python-fallback**: `njit_switch` enables Numba by default and can switch to Python implementations for debugging. On the Numba path, spatial wrappers run deme lifecycles in parallel and then perform migration.
+- **Stable-identity codegen cache**: Hook and lifecycle wrappers derive stable hashes from callable `module:qualname` identities, dispatch structure, and selectors. Generated source and Numba artifacts are stored in `.numba_cache/`; identical combinations use stable paths and reuse compiled results across runs when the cache remains valid.

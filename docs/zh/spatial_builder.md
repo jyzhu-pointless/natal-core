@@ -6,7 +6,7 @@
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -154,8 +154,9 @@ def _clone_deme(template, config, name):
 
     # === 共享引用（仿真期间只读）===
     clone._species           = template._species
-    clone._compiled_hooks    = template._compiled_hooks     # 已编译的 hook 函数
-    clone._hook_executor     = template._hook_executor       # hook 执行引擎
+    clone.hook_entries               = template.hook_entries          # Hook entry list per event
+    clone.compiled_hook_descriptors = template.compiled_hook_descriptors  # Compiled hook descriptors
+    clone.hook_executor            = template.hook_executor           # Hook execution engine
     clone._config            = config                        # PopulationConfig（共享）
     clone._index_registry    = template._index_registry      # 基因型查找表
     clone._registry          = template._registry
@@ -177,7 +178,7 @@ def _clone_deme(template, config, name):
 
 | 属性 | 共享/独立 | 原因 |
 |------|----------|------|
-| `_compiled_hooks`, `_hook_executor` | 共享引用 | 无状态，只读 registry |
+| `compiled_hook_descriptors`, `hook_entries`, `hook_executor` | 共享引用 | 无状态，同构 deme 只读共享；子集 `set_hook` 时触发 copy-on-write |
 | `_config` | 共享引用 | 同构 deme 的 config 完全一致 |
 | `_index_registry`, `_registry` | 共享引用 | 物种相同则基因型索引相同 |
 | `_gamete_modifiers`, `_zygote_modifiers` | 浅拷贝列表 | preset 可能操作同一对象 |
@@ -187,7 +188,7 @@ def _clone_deme(template, config, name):
 ## `BatchSetting`：跨 deme 变化的参数
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 # 列表：按索引一一对应
 batch_setting([10000, 5000, 5000, 8000])        # kind="scalar"

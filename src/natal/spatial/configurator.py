@@ -331,7 +331,7 @@ def _clone_deme(
 
     - ``_config`` — PopulationConfig (and all ndarrays within it)
     - ``_species``, ``_index_registry``, ``_registry``
-    - ``_hooks``, ``_compiled_hooks``, ``_hook_executor``
+    - ``hook_entries``, ``compiled_hook_descriptors``, ``hook_executor``
     - ``_gamete_modifiers``, ``_zygote_modifiers``
 
     Only these are **independent copies**:
@@ -605,15 +605,12 @@ class SpatialConfigurator:
             combined_z2g,
             combined_g2z,
             full_config.initial_individual_count,
-            declared_genotypes=seeds if seeds else None,
-            n_glabs=int(full_config.n_glabs),
-            n_slabs=1,
+            declared_zygote_types=seeds if seeds else None,
         )
 
         # ── Step 6: Add BFS survivors to seeds ─────────────────────────
-        dips = full_registry.index_to_genotype
         for old_idx in range(len(ztype_mask)):
-            if ztype_mask[old_idx] >= 0 and old_idx < len(dips):
+            if ztype_mask[old_idx] >= 0:
                 seeds.add(old_idx)
 
         return seeds
@@ -681,8 +678,6 @@ class SpatialConfigurator:
         from natal.modifiers.module import build_modifier_wrappers
 
         registry = build_registry(self._species)
-        haps = registry.index_to_haplo
-        dips = registry.index_to_genotype
 
         for sig in sigs:
             # Replay presets/modifiers to get modifier lists for this group.
@@ -749,10 +744,7 @@ class SpatialConfigurator:
                 gamete_modifiers=gamete_mods,
                 zygote_modifiers=zygote_mods,
                 population=None,
-                index_registry=registry,
-                haploid_genotypes=haps,
-                diploid_genotypes=dips,
-                n_glabs=int(full_config.n_glabs),
+                registry=registry,
             )
             for fn in g_funcs:
                 z2g_copy = fn(z2g_copy)

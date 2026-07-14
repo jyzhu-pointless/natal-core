@@ -201,10 +201,10 @@ def hook2(state, config, deme_id, sel):
 
 ## Numba 兼容的随机采样
 
-在自定义 Hook 中进行随机采样时，推荐使用 `natal.numba_compat` 模块提供的函数。这些函数经过优化，可以在 Numba 模式和纯 Python 模式下都保持高效：
+在自定义 Hook 中进行随机采样时，推荐使用 `natal.numba` 模块提供的函数。这些函数经过优化，可以在 Numba 模式和纯 Python 模式下都保持高效：
 
 ```python
-from natal.numba_compat import (
+from natal.numba import (
     binomial,
     binomial_2d,
     continuous_binomial,
@@ -294,7 +294,7 @@ NATAL Core 的 Hook 系统根据全局 `NUMBA_ENABLED` 开关自动选择执行�
 
 ```python
 from natal.configurator import Configurator
-from natal.numba_utils import numba_disabled
+from natal.numba import numba_disabled
 
 with numba_disabled():
     # 在这个上下文中，NUMBA_ENABLED 为 False
@@ -361,7 +361,7 @@ Hook 可以直接修改种群配置参数——`config` 作为参数传入，原
 
 ```python
 import natal as nt
-from natal.population_config import DiscretePopulationConfig
+from natal.data import DiscretePopulationConfig
 from natal.data import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)

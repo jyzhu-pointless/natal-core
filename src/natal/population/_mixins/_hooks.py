@@ -11,7 +11,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Dict,
     List,
     Optional,
     Tuple,
@@ -24,6 +23,7 @@ from natal.numba.utils import is_numba_enabled
 
 if TYPE_CHECKING:
     from natal.engine.lifecycle_wrappers import LifecycleWrappers
+    from natal.hooks import HookExecutor
     from natal.hooks.types import (
         CompiledHookDescriptor,
         DemeSelector,
@@ -39,18 +39,18 @@ class HookManagerMixin:
     """Mixin providing hook registration, compilation, and dispatch.
 
     Expects the host class (BasePopulation) to define these attributes:
-    ``_hooks: Dict[str, List[HookEntry]]``,
+    ``hook_entries: Dict[str, List[HookEntry]]``,
     ``_pending_hooks: List[PendingHook]``,
-    ``_compiled_hooks: List[CompiledHookDescriptor]``,
-    ``_hook_executor: Optional[HookExecutor]``.
+    ``compiled_hook_descriptors: List[CompiledHookDescriptor]``,
+    ``hook_executor: Optional[HookExecutor]``.
     """
 
     # Declared here so pyright knows these come from the host class.
     ALLOWED_EVENTS: list[str]  # type: ignore[assignment]
     tick: int  # type: ignore[assignment]
-    _hooks: dict[str, list[tuple[int, Optional[str], HookCallback]]]  # type: ignore[assignment]
-    _compiled_hooks: list[Any]  # type: ignore[assignment]
-    _hook_executor: Any  # type: ignore[assignment]
+    hook_entries: dict[str, list[HookEntry]]
+    compiled_hook_descriptors: list[CompiledHookDescriptor]
+    hook_executor: Optional[HookExecutor]
 
     # ── Hook registration ────────────────────────────────────────────
 
@@ -140,15 +140,15 @@ class HookManagerMixin:
                     register_fn(self, event_override=event_name)
                 else:
                     register_fn(self, event_override=event_name, deme_selector_override=deme_selector)
-                # Compiled hooks are stored in _compiled_hooks.
+                # Compiled hooks are stored in compiled_hook_descriptors.
                 # Only selector-mode hooks with py_wrapper are mirrored to _hooks.
-                self._hook_executor = None
+                self.hook_executor = None
                 return
 
         # Traditional registration (no compilation)
         actual_name = hook_name or getattr(func, '__name__', None)
 
-        current_ids = [hid for hid, _, _ in self._hooks[event_name]]
+        current_ids = [hid for hid, _, _ in self.hook_entries[event_name]]
 
         if hook_id is None:
             hook_id = (max(current_ids) + 1) if current_ids else 0
@@ -156,10 +156,10 @@ class HookManagerMixin:
         if hook_id in current_ids:
             raise ValueError(f"hook_id {hook_id} already exists in event '{event_name}'")
 
-        self._hooks[event_name].append((hook_id, actual_name, func))
+        self.hook_entries[event_name].append((hook_id, actual_name, func))
         # Sort by hook ID to preserve execution order.
-        self._hooks[event_name].sort(key=lambda x: x[0])
-        self._hook_executor = None
+        self.hook_entries[event_name].sort(key=lambda x: x[0])
+        self.hook_executor = None
 
     def trigger_event(self, event_name: str, deme_id: int = -1) -> int:
         """
@@ -193,15 +193,15 @@ class HookManagerMixin:
         from natal.hooks import RESULT_CONTINUE
 
         # Prefer HookExecutor when available.
-        if self._hook_executor is not None:
+        if self.hook_executor is not None:
             from natal.hooks import EVENT_ID_MAP
             event_id = EVENT_ID_MAP.get(event_name)
             if event_id is not None:
-                result = self._hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)
+                result = self.hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)  # type: ignore[arg-type]  # mixin, self is BasePopulation at runtime
                 return result
 
         # Fallback to traditional _hooks for compatibility.
-        for _, _, hook in self._hooks.get(event_name, []):
+        for _, _, hook in self.hook_entries.get(event_name, []):
             hook(self)
 
         return RESULT_CONTINUE
@@ -216,7 +216,7 @@ class HookManagerMixin:
         Returns:
             List of tuples ``[(hook_id, hook_name, hook_func), ...]``.
         """
-        return list(self._hooks.get(event_name, []))
+        return list(self.hook_entries.get(event_name, []))
 
     def remove_hook(self, event_name: str, hook_id: int) -> bool:
         """
@@ -229,14 +229,14 @@ class HookManagerMixin:
         Returns:
             True if removed successfully, otherwise False.
         """
-        if event_name not in self._hooks:
+        if event_name not in self.hook_entries:
             return False
 
-        original_len = len(self._hooks[event_name])
-        self._hooks[event_name] = [(hid, name, func) for hid, name, func in self._hooks[event_name]
+        original_len = len(self.hook_entries[event_name])
+        self.hook_entries[event_name] = [(hid, name, func) for hid, name, func in self.hook_entries[event_name]
                                     if hid != hook_id]
-        self._hook_executor = None
-        return len(self._hooks[event_name]) < original_len
+        self.hook_executor = None
+        return len(self.hook_entries[event_name]) < original_len
 
     # ── Compiled Hooks (DSL / Numba-friendly) ────────────────────────
 
@@ -250,11 +250,11 @@ class HookManagerMixin:
             To avoid maintaining two divergent hook sources, this method only
             mirrors compiled hooks into traditional ``_hooks`` when a real
             Python wrapper exists (selector-mode hooks). Pure declarative and
-            njit hooks stay in ``_compiled_hooks`` and are executed by engine
+            njit hooks stay in ``compiled_hook_descriptors`` and are executed by engine
             (or by HookExecutor when trigger_event is used).
         """
-        self._compiled_hooks.append(desc)
-        self._hook_executor = None
+        self.compiled_hook_descriptors.append(desc)
+        self.hook_executor = None
 
         from natal.numba.utils import NUMBA_ENABLED
         if NUMBA_ENABLED and desc.py_wrapper is not None and desc.njit_fn is None:
@@ -271,18 +271,18 @@ class HookManagerMixin:
 
         # Register with traditional system
         event_name = desc.event
-        if event_name in self._hooks:
-            current_ids = [hid for hid, _, _ in self._hooks[event_name]]
+        if event_name in self.hook_entries:
+            current_ids = [hid for hid, _, _ in self.hook_entries[event_name]]
             hook_id = desc.priority
             # Avoid duplicate IDs
             while hook_id in current_ids:
                 hook_id += 1
-            self._hooks[event_name].append((hook_id, desc.name, hook_func))
-            self._hooks[event_name].sort(key=lambda x: x[0])
+            self.hook_entries[event_name].append((hook_id, desc.name, hook_func))
+            self.hook_entries[event_name].sort(key=lambda x: x[0])
 
     def has_python_hooks(self) -> bool:
         """Return whether any Python-layer hooks are currently registered."""
-        hooks_map = cast(Dict[str, List[HookEntry]], getattr(self, "_hooks", {}))
+        hooks_map = self.hook_entries
         return any(len(entries) > 0 for entries in hooks_map.values())
 
     def has_mixed_hook_types(self) -> bool:
@@ -316,8 +316,8 @@ class HookManagerMixin:
 
     def ensure_hook_executor(self) -> None:
         """Build HookExecutor lazily for Python event-dispatch paths."""
-        if self._hook_executor is None:
-            self._hook_executor = self._build_hook_executor()
+        if self.hook_executor is None:
+            self.hook_executor = self._build_hook_executor()
 
     def register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:
         """Public wrapper for registering compiled hooks."""
@@ -332,7 +332,7 @@ class HookManagerMixin:
         Returns:
             List of CompiledHookDescriptor sorted by priority.
         """
-        hooks = cast(List[Any], getattr(self, "_compiled_hooks", []))
+        hooks = cast(List[Any], getattr(self, "compiled_hook_descriptors", []))
         if event is not None:
             hooks = [h for h in hooks if h.event == event]
         return sorted(hooks, key=lambda h: h.priority)
@@ -523,7 +523,7 @@ class HookManagerMixin:
         program_available = True
 
         # Get all compiled hooks
-        compiled_hooks = self._compiled_hooks
+        compiled_hooks = self.compiled_hook_descriptors
         if not compiled_hooks:
             return None
 
@@ -591,7 +591,7 @@ class HookManagerMixin:
         from natal.engine.lifecycle_wrappers import compile_lifecycle_wrappers
         registry = self._build_hook_program()
         return compile_lifecycle_wrappers(
-            self._compiled_hooks,
+            self.compiled_hook_descriptors,
             registry=registry,
             include_spatial_wrappers=False,
         )

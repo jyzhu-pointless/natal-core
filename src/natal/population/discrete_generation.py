@@ -16,6 +16,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -158,7 +159,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._initialize_registry()
 
         n_sexes = self.config.n_sexes
-        n_genotypes = self.config.n_ztypes
+        n_ztypes = self.config.n_ztypes
         n_ages = self.config.n_ages
 
         # Create an empty state first so we can check whether the config's
@@ -167,16 +168,16 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._state = DiscretePopulationState.create(
             n_sexes=n_sexes,
             n_ages=n_ages,
-            n_ztypes=n_genotypes,
+            n_ztypes=n_ztypes,
             n_tick=0,
-            individual_count=np.zeros((n_sexes, n_ages, n_genotypes), dtype=np.float64),
+            individual_count=np.zeros((n_sexes, n_ages, n_ztypes), dtype=np.float64),
         )
 
         cfg_init_ind = self.config.initial_individual_count
         if cfg_init_ind.shape == self.state.individual_count.shape:
             self.state.individual_count[:] = cfg_init_ind
 
-        self._history_shape = (1 + n_sexes * n_ages * n_genotypes,)
+        self._history_shape = (1 + n_sexes * n_ages * n_ztypes,)
 
         # An explicit distribution overrides the config default. We zero out
         # the array first because _distribute_initial_population accumulates.
@@ -210,8 +211,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         fixed_egg_count: bool = False,
         *,
         compress: bool = False,
-        declared_zygote_types: set[str] | set[int] | None = None,
-        declared_genotypes: set[str] | set[int] | None = None,  # deprecated alias
+        declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
+        declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
     ) -> DiscreteConfigurator:
         """Fluent population construction entry point.
 

@@ -140,13 +140,13 @@ launch(pop)
 
 ### 第一部分：快速入门
 
-> 本部分介绍 NATAL Core 的基本概念和使用方法，帮助你快速上手。
+> NATAL Core 的基本概念和使用方法，帮助你快速上手。
 
 1. [快速入门：15 分钟上手 NATAL](1_quickstart.md)
 
 ### 第二部分：实用组件
 
-> 本部分介绍 NATAL Core 的主要组件，它们是日常使用的主要功能。
+> NATAL Core 的主要组件，日常使用的核心功能。
 
 2. [遗传结构与实体](2_genetics.md)
 3. [种群初始化](2_population_initialization.md)
@@ -158,7 +158,7 @@ launch(pop)
 
 ### 第三部分：进阶指南
 
-> 本部分介绍 NATAL Core 的高级功能，包括空间模拟和更多自定义配置。
+> 空间模拟、自定义配置等高级功能。
 
 9. [空间模拟指南](3_spatial_simulation.md)
 10. [运行时参数修改](3_runtime_modification.md)
@@ -168,7 +168,7 @@ launch(pop)
 
 ### 第四部分：内部实现
 
-> 本部分介绍 NATAL Core 中不直接面向用户的底层实现机制，帮助你深入理解 NATAL Core 的工作原理。
+> 不直接面向用户的底层实现机制，帮助你深入理解工作原理。
 
 
 14. [IndexRegistry 索引机制](4_index_registry.md)

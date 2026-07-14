@@ -202,12 +202,12 @@ class Dashboard:
         registry = self.pop.registry
         n_sexes = config.n_sexes
         n_ages = config.n_ages
-        n_genotypes = config.n_ztypes
+        n_ztypes = config.n_ztypes
 
         # Determine indices
         # flat_state structure: [tick, individual_count(flattened), sperm_storage(flattened)...]
         start_idx = 1
-        end_idx = 1 + n_sexes * n_ages * n_genotypes
+        end_idx = 1 + n_sexes * n_ages * n_ztypes
 
         # Extract individual_count
         if flat_state.size < end_idx:
@@ -217,8 +217,8 @@ class Dashboard:
         total_pop = self._to_count(np.sum(ind_flat))
 
         # Compute allele frequencies
-        # Reshape to (n_sexes, n_ages, n_genotypes) then sum to (n_genotypes,)
-        ind_reshaped = ind_flat.reshape((n_sexes, n_ages, n_genotypes))
+        # Reshape to (n_sexes, n_ages, n_ztypes) then sum to (n_ztypes,)
+        ind_reshaped = ind_flat.reshape((n_sexes, n_ages, n_ztypes))
         genotype_counts = ind_reshaped.sum(axis=(0, 1))
 
         freqs = {}
@@ -505,7 +505,7 @@ class Dashboard:
         genotypes = registry.index_to_genotype
 
         # Calculate counts for this specific state
-        # individual_count: (n_sex, n_ages, n_genotypes)
+        # individual_count: (n_sex, n_ages, n_ztypes)
         ind_count = state.individual_count
         n_ages = ind_count.shape[1]
 
@@ -826,14 +826,14 @@ class Dashboard:
             history_list = []
             n_sexes = self.pop._config.n_sexes
             n_ages = self.pop._config.n_ages
-            n_genotypes = self.pop._config.n_ztypes
-            expected_ind_size = int(n_sexes * n_ages * n_genotypes)
+            n_ztypes = self.pop._config.n_ztypes
+            expected_ind_size = int(n_sexes * n_ages * n_ztypes)
 
             for _tick, flat_state in self.pop.history:
                 if flat_state.size == 1 + expected_ind_size:
-                    state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
+                    state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
                 else:
-                    state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
+                    state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
                 history_list.append(semanticize_state(state_obj))  # type: ignore[reportUnknownMemberType]
 
             if not history_list or history_list[-1]["tick"] != self.pop.tick:
@@ -1018,14 +1018,14 @@ class Dashboard:
             # Parse state
             n_sexes = self.pop._config.n_sexes
             n_ages = self.pop._config.n_ages
-            n_genotypes = self.pop._config.n_ztypes
+            n_ztypes = self.pop._config.n_ztypes
 
             # Auto-detect state type based on flattened size
-            expected_ind_size = int(n_sexes * n_ages * n_genotypes)
+            expected_ind_size = int(n_sexes * n_ages * n_ztypes)
             if flat_state.size == 1 + expected_ind_size:
-                state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
+                state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
             else:
-                state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_genotypes, copy=False)
+                state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
 
             self._update_inspection_view(state_obj, tick, is_history=True)  # type: ignore[reportArgumentType]
             self.tabs_main.set_value('inspection')

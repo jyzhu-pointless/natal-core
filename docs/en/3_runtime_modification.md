@@ -76,7 +76,7 @@ can be added, but most hooks do not need it.
 Fastest path. Numba nopython, pure C-level ndarray access:
 
 ```python
-from natal.population_config import DiscretePopulationConfig
+from natal.data import DiscretePopulationConfig
 from natal.data import DiscretePopulationState
 
 @nt.hook(event="early", custom=True)
@@ -177,7 +177,7 @@ Supported types: `bool`, `float`, `int`.
 per-deme and batch support:
 
 ```python
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 
 # All demes
 pop.update().competition(carrying_capacity=5000)

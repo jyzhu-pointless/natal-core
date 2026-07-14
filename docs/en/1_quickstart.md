@@ -141,7 +141,6 @@ pop = (nt.AgeStructuredPopulation
     .reproduction(
         eggs_per_female=100,
         sex_ratio=0.5,
-        =True,        # Enable sperm storage mechanism
     )
     .competition(
         juvenile_growth_mode=1,        # 1: Fixed competition mode
@@ -454,7 +453,7 @@ pop = (nt.AgeStructuredPopulation
         female_age_based_survival=[1.0, 1.0, 5/6, 4/5, 3/4, 2/3, 1/2, 0],
         male_age_based_survival=[1.0, 1.0, 2/3, 1/2, 0, 0, 0, 0]
     )
-    .reproduction(eggs_per_female=100, sex_ratio=0.5, =True)
+    .reproduction(eggs_per_female=100, sex_ratio=0.5)
     .competition(juvenile_growth_mode=1, age_1_carrying_capacity=1200)
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)

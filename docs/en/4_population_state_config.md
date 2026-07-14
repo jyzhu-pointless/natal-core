@@ -32,15 +32,15 @@ This can be understood as:
 ```python
 class PopulationState(NamedTuple):
     n_tick: int
-    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_genotypes)
-    sperm_storage: NDArray[np.float64]     # (n_ages, n_genotypes, n_genotypes)
+    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_ztypes)
+    sperm_storage: NDArray[np.float64]     # (n_ages, n_ztypes, n_ztypes)
 ```
 
 Field descriptions:
 
 - `n_tick`: Current time step
-- `individual_count`: Individual count tensor, indexed by "sex-age-genotype"
-- `sperm_storage`: Structure for female sperm storage, indexed by "age-female genotype-male genotype"
+- `individual_count`: Individual count tensor, indexed by "sex-age-zygote type"
+- `sperm_storage`: Structure for female sperm storage, indexed by "age-female ztype-male ztype"
 
 ## `DiscretePopulationState`: The State Object for Discrete-Generation Models
 
@@ -51,7 +51,7 @@ The discrete-generation model uses `DiscretePopulationState`, also defined in `s
 ```python
 class DiscretePopulationState(NamedTuple):
     n_tick: int
-    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_genotypes)
+    individual_count: NDArray[np.float64]  # (n_sexes, n_ages, n_ztypes)
 ```
 
 Key differences from `PopulationState`:
@@ -67,7 +67,7 @@ Key differences from `PopulationState`:
 ### Configuration Groups
 
 1. **Dimensions and Control Parameters**
-  - `n_sexes`, `n_ages`, `n_genotypes`, `n_haploid_genotypes`, `n_glabs`
+  - `n_sexes`, `n_ages`, `n_ztypes`, `n_gtypes`, `n_glabs`, `n_slabs`
   - `stochastic`, `continuous_sampling`, `sex_ratio`
 
 2. **Age-Related Parameters**
@@ -77,13 +77,13 @@ Key differences from `PopulationState`:
   - `age_based_relative_competition_strength`
 
 3. **Fitness Parameters**
-  - `viability_fitness` (shape: `(n_sexes, n_ages, n_genotypes)`)
-  - `fecundity_fitness` (shape: `(n_sexes, n_genotypes)`)
-  - `sexual_selection_fitness` (shape: `(n_genotypes, n_genotypes)`)
+  - `viability_fitness` (shape: `(n_sexes, n_ages, n_ztypes)`)
+  - `fecundity_fitness` (shape: `(n_sexes, n_ztypes)`)
+  - `sexual_selection_fitness` (shape: `(n_ztypes, n_ztypes)`)
 
 4. **Genetic Mapping Matrices**
-  - `genotype_to_gametes_map` (shape: `(n_sexes, n_genotypes, n_haploid_genotypes * n_glabs)`)
-  - `gametes_to_zygote_map` (shape: `(n_hg*n_glabs, n_hg*n_glabs, n_genotypes)`)
+  - `zygotes_to_gametes_map` (shape: `(n_sexes, n_ztypes, n_gtypes)`)
+  - `gametes_to_zygotes_map` (shape: `(n_gtypes, n_gtypes, n_ztypes)`)
 
 5. **Initial Distribution and Scaling Parameters**
   - `initial_individual_count`
@@ -101,20 +101,20 @@ def heatwave(state, config):
     return 0
 ```
 
-Large array fields (`viability_fitness`, `genotype_to_gametes_map`, etc.) are not recommended for runtime modification but can technically be mutated in-place via array indexing. You can print the field values of `PopulationConfig` to confirm that the model parameters match expectations:
+Large array fields (`viability_fitness`, `zygotes_to_gametes_map`, etc.) are not recommended for runtime modification but can technically be mutated in-place via array indexing. You can print the field values of `PopulationConfig` to confirm that the model parameters match expectations:
 
 ```python
 cfg = pop.config
-print(cfg.n_ages, cfg.n_genotypes)
+print(cfg.n_ages, cfg.n_ztypes)
 print(cfg.viability_fitness.shape)
 ```
 
 ## Minimal Example: Inspecting State and Config
 
 ```python
-from natal.genetic_structures import Species
-from natal.age_structured_population import AgeStructuredPopulation
-from natal.discrete_generation_population import DiscreteGenerationPopulation
+from natal.genetics import Species
+from natal.population import AgeStructuredPopulation
+from natal.population import DiscreteGenerationPopulation
 
 sp = Species.from_dict(name="Demo", structure={"chr1": {"A": ["A1", "A2"]}})
 
@@ -138,13 +138,11 @@ print(age_pop.config.n_ages, age_pop.config.new_adult_age)  # 4, 2
 print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 ```
 
-<!--TODO: may need to introduce history; need to introduce main methods of Population object-->
-
 ## Translating State to Readable Dict/JSON
 
 For logging, frontend-backend communication, and debugging, NATAL provides the ability to translate state objects into human-readable structures.
 
-The relevant API is located in `natal.state_translation`:
+The relevant API is located in `natal.output`:
 
 - `population_state_to_dict` / `population_state_to_json`
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
@@ -195,7 +193,7 @@ print(observed["observed"]["adult_wt_female"])
 If directly working with `PopulationState` / `DiscretePopulationState`, you can also call the corresponding functions and explicitly pass labels:
 
 ```python
-from natal.state_translation import population_state_to_dict
+from natal.output import population_state_to_dict
 
 data = population_state_to_dict(
     state,

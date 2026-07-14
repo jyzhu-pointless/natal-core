@@ -167,13 +167,12 @@ class ToxinAntidoteDrive(GeneticPreset):
                 )
 
             if self.cas9_deposition_glab and (sex == Sex.FEMALE or self.use_paternal_deposition):
-                rule_set.add_hg_convert(
-                    hg_match=lambda hg: True,
-                    to_haploid_genotype=lambda hg: hg,
+                rule_set.add_glab_convert(
+                    from_glab=None,
+                    to_glab=self.cas9_deposition_glab,
                     rate=1.0,
                     sex_filter=sex,
                     genotype_filter=drive_carrier_filter,
-                    target_glab=self.cas9_deposition_glab
                 )
 
         return rule_set.to_gamete_modifier(population) if rule_set.rules else None

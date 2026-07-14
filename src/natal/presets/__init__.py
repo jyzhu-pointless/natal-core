@@ -8,12 +8,16 @@ systems, and the GeneticPreset base class.
 from natal.modifiers.gamete_conversion import (  # noqa: F401 (re-export, canonical location)
     GameteAlleleConversionRule,
     GameteConversionRuleSet,
+    GameteGlabConversionRule,
+    GameteGtypeConversionRule,
     GameteHaploidGenomeConversionRule,
 )
 from natal.modifiers.zygote_conversion import (  # noqa: F401 (re-export, canonical location)
     ZygoteAlleleConversionRule,
     ZygoteConversionRuleSet,
     ZygoteGenotypeConversionRule,
+    ZygoteGlabRedirectRule,
+    ZygoteZtypeConversionRule,
 )
 
 from ._base import GeneticPreset, apply_preset_to_population
@@ -36,8 +40,12 @@ __all__ = [
     "count_allele_copies",
     "GameteAlleleConversionRule",
     "GameteConversionRuleSet",
+    "GameteGlabConversionRule",
+    "GameteGtypeConversionRule",
     "GameteHaploidGenomeConversionRule",
     "ZygoteAlleleConversionRule",
     "ZygoteConversionRuleSet",
     "ZygoteGenotypeConversionRule",
+    "ZygoteGlabRedirectRule",
+    "ZygoteZtypeConversionRule",
 ]

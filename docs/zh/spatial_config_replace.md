@@ -4,7 +4,7 @@
 
 `SpatialConfigurator._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `PopulationConfig`。
 
-如果只有少数参数在组间不同，所有大数组（`genotype_to_gametes_map`、`gametes_to_zygote_map`、`viability_fitness`、`fecundity_fitness` 等）仍会被重复创建，造成内存浪费。
+如果只有少数参数在组间不同，所有大数组（`zygotes_to_gametes_map`、`gametes_to_zygotes_map`、`viability_fitness`、`fecundity_fitness` 等）仍会被重复创建，造成内存浪费。
 
 ```
 2601 个 deme，每个有唯一的 carrying_capacity
@@ -129,8 +129,8 @@ _build_heterogeneous()
 
 | 项目 | 优化前 | 优化后 |
 |---|---|---|
-| `genotype_to_gametes_map` | 2601 份 | 1 份（共享） |
-| `gametes_to_zygote_map` | 2601 份 | 1 份（共享） |
+| `zygotes_to_gametes_map` | 2601 份 | 1 份（共享） |
+| `gametes_to_zygotes_map` | 2601 份 | 1 份（共享） |
 | `viability_fitness` | 2601 份 | 1 份（共享） |
 | `fecundity_fitness` | 2601 份 | 1 份（共享） |
 | `carrying_capacity`（标量） | 2601 个 | 2601 个（~60KB） |
@@ -140,8 +140,8 @@ _build_heterogeneous()
 
 | 项目 | 优化前 | 优化后 |
 |---|---|---|
-| `genotype_to_gametes_map` | 2601 份 | 1 份（共享） |
-| `gametes_to_zygote_map` | 2601 份 | 1 份（共享） |
+| `zygotes_to_gametes_map` | 2601 份 | 1 份（共享） |
+| `gametes_to_zygotes_map` | 2601 份 | 1 份（共享） |
 | 所有 fitness 数组 | 2601 份 | 1 份（共享） |
 | `initial_individual_count` | 2601 份 | 2601 份（必须不同） |
 

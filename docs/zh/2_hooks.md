@@ -37,7 +37,7 @@ def periodic_release():
 
 pop = (
     nt.AgeStructuredPopulation
-    .setup(species=sp, name="MyPop", stochastic=True)
+    .setup(species=sp, name="MyPop", stochastic=True, continuous_sampling=False)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
         "female": {"WT|WT": 1000, "Drive|WT": 0},
@@ -209,6 +209,23 @@ pop = (
 
 pop.run(n_steps=200, record_every=10)
 ```
+
+## 自定义 Hook（直接操作状态数组）
+
+声明式 `Op.*` 操作不够灵活时，使用 `custom=True` 的自定义 Hook 直接操作 NumPy 数组：
+
+```python
+from natal.hooks import hook
+
+@hook(event="early", custom=True, priority=10)
+def my_hook(state, config, deme_id=-1):
+    # state.individual_count 的形状为 (性别, 年龄, 基因型)
+    if state.n_tick % 10 == 0:
+        state.individual_count[1, :, :] += 100  # 增加 100 只雄性
+    return 0  # RESULT_CONTINUE
+```
+
+自定义 Hook 使用签名 `(state, config, deme_id=-1)`。`deme_id` 在 panmictic 种群中默认为 `-1`。返回 `0` 继续模拟，返回 `RESULT_STOP` 结束模拟。关于基于选择器的 Hook、Numba 编译细节以及 Hook 内运行时参数修改，参见 [高级 Hook 教程](3_advanced_hooks.md)。
 
 ## Hook 内修改参数
 

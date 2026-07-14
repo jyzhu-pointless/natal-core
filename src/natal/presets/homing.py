@@ -319,17 +319,18 @@ class HomingDrive(GeneticPreset):
                     )
 
             # 3. Gamete labeling for maternal Cas9 deposition
-            # Instead of editing alleles, this tags the entire output gamete from drive-carrying females
-            # with `cas9_deposition_glab`. The zygote modifier will read this tag to apply embryo resistance.
-            if sex == Sex.FEMALE or self.use_paternal_deposition:
-                rule_set.add_hg_convert(
-                    hg_match=lambda hg: True,
-                    to_haploid_genotype=lambda hg: hg,
-                    rate=1.0,
-                    sex_filter=sex,
-                    genotype_filter=drive_carrier_filter,
-                    target_glab=self.cas9_deposition_glab
-                )
+            # Tags the entire output gamete from drive-carrying females
+            # with `cas9_deposition_glab`. The zygote modifier will read
+            # this tag to apply embryo resistance.
+            if self.cas9_deposition_glab:
+                if sex == Sex.FEMALE or self.use_paternal_deposition:
+                    rule_set.add_glab_convert(
+                        from_glab=None,
+                        to_glab=self.cas9_deposition_glab,
+                        rate=1.0,
+                        sex_filter=sex,
+                        genotype_filter=drive_carrier_filter,
+                    )
 
         return rule_set.to_gamete_modifier(population) if rule_set.rules else None
 

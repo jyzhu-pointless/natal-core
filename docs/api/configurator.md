@@ -90,13 +90,10 @@ cfg.reproduction(
     eggs_per_female=100,
     sex_ratio=0.5,
     female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0, 1.0, 0.5, 0.3, 0.0],
-    =True,
 )
-```
-> Note: `=True` is accepted for compatibility but has **no effect** — sperm storage is always enabled in the age-structured model.
 cfg.survival(
-    female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
-    male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
+    female_age_based_survival=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
+    male_age_based_survival=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
 )
 cfg.competition(
     carrying_capacity=5000,
@@ -229,7 +226,7 @@ pop.update().competition(carrying_capacity=5000)
 pop.update(deme=3).competition(carrying_capacity=8000)
 
 # Batch per-deme
-from natal.spatial_builder import batch_setting
+from natal.spatial import batch_setting
 pop.update().competition(
     carrying_capacity=batch_setting([100, 200, 300, 400])
 )

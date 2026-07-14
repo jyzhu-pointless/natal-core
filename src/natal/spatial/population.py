@@ -1101,6 +1101,12 @@ class SpatialPopulation:
             interpreted here to choose target demes, then forwarded hooks are
             registered on selected demes with panmictic selector semantics.
             Compiler-level selector fields are transport-only metadata.
+
+            When multiple demes share the same hook storage (as happens with
+            homogeneous clones), the hook is registered **once** on a
+            representative and all other targeted owners see the change
+            through shared storage.  This avoids accidental duplicate
+            descriptors that would produce redundant static call sites.
         """
         # Auto-read deme from @hook metadata when no explicit selector given.
         if deme_selector is None:
@@ -1110,15 +1116,114 @@ class SpatialPopulation:
                 if demean_meta is not None and demean_meta != "*":
                     deme_selector = demean_meta
 
-        # Spatial-level selector handling: select target demes here and avoid
-        # passing non-wildcard selectors into BasePopulation.
-        for deme_id, deme in enumerate(self._demes):
-            if deme_selector is not None and not self._selector_matches_deme(deme_selector, deme_id):
-                continue
-            deme.set_hook(event_name, func, hook_id, hook_name, compile, None)
+        # Determine which demes are targeted by the selector.
+        target_ids = [
+            i for i in range(self.n_demes)
+            if deme_selector is None or self._selector_matches_deme(deme_selector, i)
+        ]
+
+        if not target_ids:
+            return
+
+        # Group targeted demes by the identity of their hook storage.
+        # Demes that share the same ``compiled_hook_descriptors`` list (via clone
+        # sharing) should only have the hook compiled and appended once.
+        storage_groups = self._group_demes_by_hook_storage(target_ids)
+
+        for storage_key, group_ids in storage_groups.items():
+            # Find ALL demes (targeted + non-targeted) sharing this storage.
+            all_owners = self._demes_sharing_storage(storage_key)
+
+            if set(all_owners).issubset(set(target_ids)):
+                # All owners are targeted — register once on a representative;
+                # other owners see the change through the shared list.
+                self._demes[group_ids[0]].set_hook(
+                    event_name, func, hook_id, hook_name, compile, None,
+                )
+            else:
+                # Only a subset of owners are targeted — copy-on-write so the
+                # non-targeted owners keep their existing hook storage intact.
+                self._copy_hook_storage_for_demes(group_ids)
+                self._demes[group_ids[0]].set_hook(
+                    event_name, func, hook_id, hook_name, compile, None,
+                )
+
+        # Invalidate the hook executor on all targeted demes so they pick up
+        # the recompiled aggregate hooks.
+        for deme_id in target_ids:
+            self._demes[deme_id].hook_executor = None
 
         # Rebuild aggregate hooks once after all per-deme mutations.
         self._hooks = self._compile_spatial_hooks_from_demes()
+
+    def _group_demes_by_hook_storage(
+        self, deme_ids: list[int],
+    ) -> dict[tuple[int, int], list[int]]:
+        """Group deme indices by the identity of their hook storage.
+
+        Demes that share the same ``compiled_hook_descriptors`` and ``hook_entries`` objects
+        (typically clones sharing template storage) are placed in the same
+        group.
+
+        Args:
+            deme_ids: Indices of demes to group.
+
+        Returns:
+            A dict mapping ``(id(compiled_hook_descriptors), id(hook_entries))`` to the list
+            of deme indices sharing that storage.
+        """
+        groups: dict[tuple[int, int], list[int]] = {}
+        for deme_id in deme_ids:
+            deme = self._demes[deme_id]
+            key = (id(deme.compiled_hook_descriptors), id(deme.hook_entries))
+            groups.setdefault(key, []).append(deme_id)
+        return groups
+
+    def _demes_sharing_storage(
+        self, storage_key: tuple[int, int],
+    ) -> list[int]:
+        """Return all deme indices that share the given hook storage identity.
+
+        Args:
+            storage_key: A ``(id(compiled_hook_descriptors), id(hook_entries))`` pair.
+
+        Returns:
+            List of deme indices across the entire population whose storage
+            matches *storage_key*.
+        """
+        owners: list[int] = []
+        for deme_id in range(self.n_demes):
+            deme = self._demes[deme_id]
+            if (id(deme.compiled_hook_descriptors), id(deme.hook_entries)) == storage_key:
+                owners.append(deme_id)
+        return owners
+
+    def _copy_hook_storage_for_demes(
+        self, deme_ids: list[int],
+    ) -> None:
+        """Copy-on-write hook storage for a subset of demes.
+
+        Creates copies of ``compiled_hook_descriptors`` and ``hook_entries`` from the first
+        deme in *deme_ids* so they no longer share storage with non-targeted
+        peers.  Each event list inside ``hook_entries`` is also copied so that
+        future mutations on targeted demes do not leak to untargeted owners.
+
+        Args:
+            deme_ids: Indices of demes to receive the new private storage.
+                All listed demes will point to the same new copies.
+        """
+        ref = self._demes[deme_ids[0]]
+
+        compiled_copy = list(ref.compiled_hook_descriptors)
+        hooks_copy = {
+            event_name: list(entries)
+            for event_name, entries in ref.hook_entries.items()
+        }
+
+        for deme_id in deme_ids:
+            deme = self._demes[deme_id]
+            object.__setattr__(deme, 'compiled_hook_descriptors', compiled_copy)
+            object.__setattr__(deme, 'hook_entries', hooks_copy)
 
     def remove_hook(self, event_name: str, hook_id: int) -> bool:
         """Remove a specific hook from all demes.
@@ -1165,6 +1270,91 @@ class SpatialPopulation:
             return deme_id in selector
         return deme_id in selector
 
+    def _effective_compiled_hook_sequences(self) -> list[list[CompiledHookDescriptor]]:
+        """Collect per-deme effective hook sequences filtered by selector.
+
+        Each inner list contains the actual descriptor objects (not copies)
+        for hooks whose ``deme_selector`` matches the owning deme. Descriptors
+        are kept in their original registration order (sorted by priority).
+
+        Returns:
+            List of length ``n_demes``, one sequence per deme.
+
+        Note:
+            This method returns references to the original descriptor objects,
+            which allows callers to compare sequences by descriptor identity.
+        """
+        sequences: list[list[CompiledHookDescriptor]] = []
+        for deme_id, deme in enumerate(self._demes):
+            try:
+                hooks = deme.get_compiled_hooks()
+            except AttributeError:
+                sequences.append([])
+                continue
+            effective = [
+                desc
+                for desc in hooks
+                if self._selector_matches_deme(desc.deme_selector, deme_id)
+            ]
+            sequences.append(effective)
+        return sequences
+
+    def _collect_compact_spatial_hooks(self) -> list[CompiledHookDescriptor]:
+        """Build a compact hook descriptor list by grouping demes with identical hook sequences.
+
+        Demes that share the exact same sequence of descriptors (compared by
+        Python object identity) are folded into one set of descriptors with
+        an expanded ``deme_selector`` covering all demes in that group.
+
+        This eliminates redundant static call sites in the spatial lifecycle
+        wrapper — without this compaction, N identical demes produce N static
+        calls to the same dispatcher, which can trigger native instability
+        (SIGSEGV) under prange execution.
+
+        Sequence ordering, repeats, and descriptor identity are preserved:
+        ``[A, A]`` stays distinct from ``[A]``, and ``[A, B]`` stays distinct
+        from ``[B, A]``.  Independent-but-equivalent descriptors built at
+        different times are NOT merged — identity-based grouping is
+        deliberately conservative.
+
+        Returns:
+            List of ``CompiledHookDescriptor`` with compacted
+            ``deme_selector`` values.
+        """
+        sequences = self._effective_compiled_hook_sequences()
+        n_demes = self.n_demes
+
+        # Group demes by descriptor-identity key of their full hook sequence.
+        # Using ``id()`` avoids merging independently-built descriptors that
+        # happen to have equivalent content but different semantics.
+        key_to_demes: dict[tuple[int, ...], list[int]] = {}
+        for deme_id, seq in enumerate(sequences):
+            key = tuple(id(desc) for desc in seq)
+            key_to_demes.setdefault(key, []).append(deme_id)
+
+        compact: list[CompiledHookDescriptor] = []
+        for key, deme_ids in key_to_demes.items():
+            if not key:
+                # Empty hook sequence — no descriptors to produce.
+                continue
+
+            # Determine compact selector for this group.
+            if len(deme_ids) == n_demes:
+                selector: DemeSelector = "*"
+            elif len(deme_ids) == 1:
+                selector = deme_ids[0]
+            else:
+                selector = tuple(sorted(deme_ids))
+
+            # Clone each descriptor from the reference deme's sequence with
+            # the compact selector, preserving per-deme execution semantics:
+            # every deme in the group still executes every slot once.
+            ref_seq = sequences[deme_ids[0]]
+            for desc in ref_seq:
+                compact.append(replace(desc, deme_selector=selector))
+
+        return compact
+
     def _collect_effective_compiled_hooks(self) -> list[CompiledHookDescriptor]:
         """Collect hooks from each deme and pin each one to its owner deme.
 
@@ -1172,6 +1362,10 @@ class SpatialPopulation:
         are only defined inside each deme. This method lifts per-deme hook
         descriptors into one aggregate list while forcing ``deme_selector`` to
         the owning deme id.
+
+        This method returns the **expanded** (per-deme pinned) view for public
+        introspection via :meth:`get_compiled_hooks`. The compact execution
+        plan is built separately by :meth:`_collect_compact_spatial_hooks`.
 
         Returns:
             A flat list of hook descriptors safe for aggregate spatial
@@ -1323,6 +1517,12 @@ class SpatialPopulation:
     def _compile_spatial_hooks_from_demes(self) -> LifecycleWrappers:
         """Compile one aggregate hook bundle from current per-deme hooks.
 
+        Uses the **compact** execution plan so that demes sharing identical
+        hook sequences produce a single wildcard descriptor instead of one
+        per-deme descriptor.  This keeps the generated lifecycle wrapper
+        call graph minimal and avoids redundant static call sites that can
+        trigger native instability under prange.
+
         Returns:
             LifecycleWrappers: Event call chains plus CSR registry and
             pre-compiled lifecycle loop functions.  Used by both generated
@@ -1333,7 +1533,7 @@ class SpatialPopulation:
             initialization, ``set_hook(...)``, and ``remove_hook(...)`` so all
             hook mutation paths stay behaviorally consistent.
         """
-        compiled_hooks = self._collect_effective_compiled_hooks()
+        compiled_hooks = self._collect_compact_spatial_hooks()
         registry = self._build_hook_program(compiled_hooks)
         return compile_lifecycle_wrappers(
             compiled_hooks,

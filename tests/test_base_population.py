@@ -107,9 +107,9 @@ class TestFinalizeHooks:
         assert len(calls) == 1
 
     def test_hook_executor_none_after_finalize(self, simple_species: nt.Species) -> None:
-        """``_hook_executor`` is None immediately after ``_finalize_hooks()``."""
+        """``hook_executor`` is None immediately after ``_finalize_hooks()``."""
         pop = _build_pop(simple_species, "test_executor")
-        assert pop._hook_executor is None
+        assert pop.hook_executor is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════

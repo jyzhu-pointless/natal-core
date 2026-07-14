@@ -30,7 +30,7 @@ A practical Preset should include:
 
 ```python
 from natal.presets import GeneticPreset
-from natal.gamete_allele_conversion import GameteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet
 
 
 class DrivePreset(GeneticPreset):
@@ -45,11 +45,7 @@ class DrivePreset(GeneticPreset):
             name = str(genotype)
             return name in {"W|D", "D|W"}
 
-        ruleset.add_convert(
-            from_allele="W",
-            to_allele="D",
-            rate=self.conversion_rate,
-            genotype_filter=is_wd_heterozygote,
+        ruleset.add_allele_convert(
         )
 
         return ruleset.to_gamete_modifier(population)
@@ -95,8 +91,7 @@ This significantly reduces the risk of "results cannot be reproduced."
 
 ```python
 from natal.presets import GeneticPreset
-from natal.gamete_allele_conversion import GameteConversionRuleSet
-from natal.zygote_allele_conversion import ZygoteConversionRuleSet
+from natal.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
 
 class ComplexDrive(GeneticPreset):
     """Complex gene drive with multi-stage conversion"""
@@ -108,11 +103,11 @@ class ComplexDrive(GeneticPreset):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT → Drive)
-        ruleset.add_convert("WT", "Drive", rate=0.95,
+        ruleset.add_allele_convert("WT", "Drive", rate=0.95,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
         # Stage 2: Resistance formation (remaining WT → Resistance)
-        ruleset.add_convert("WT", "Resistance", rate=0.05,
+        ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
         return ruleset.to_gamete_modifier(population)
@@ -121,7 +116,7 @@ class ComplexDrive(GeneticPreset):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # Additional embryonic stage modification
-        ruleset.add_convert(
+        ruleset.add_allele_convert(
             from_allele="WT",
             to_allele="Resistance",
             rate=0.02,
