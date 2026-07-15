@@ -35,7 +35,7 @@ See also:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Self, Sequence, cast
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Self, Sequence, cast
 
 import numpy as np
 from numba import (  # pyright: ignore[reportMissingTypeStubs]
@@ -964,6 +964,9 @@ class Configurator:
     ) -> Self:
         """Register observation groups, applied at ``build()`` time.
 
+        Only valid during the build phase (``_pop_ref is None``).
+        Calling this on a runtime Configurator raises ``RuntimeError``.
+
         Args:
             groups: Observation groups (dict of name→spec, list of specs,
                 or None for one-group-per-genotype).
@@ -971,9 +974,60 @@ class Configurator:
 
         Returns:
             Self for chaining.
+
+        Raises:
+            RuntimeError: When called on a runtime Configurator.
         """
+        if self._pop_ref is not None:
+            raise RuntimeError(
+                "with_observation() is only valid during the build phase. "
+                "Recording rules cannot change after the Population has been built. "
+                "Use pop.create_observation() for runtime queries."
+            )
         self._observation_groups = groups
         self._observation_collapse_age = collapse_age
+        return self
+
+    def record_history(
+        self,
+        *,
+        mode: str = "raw",
+        max_rows: Optional[int] = None,
+    ) -> Self:
+        """Set the recording mode and capacity for this population's history.
+
+        Must be called during the build phase.  Calling this on a runtime
+        Configurator raises ``RuntimeError``.
+
+        When ``mode="observation"`` and no ``.with_observation()`` has been
+        called, an identity observation (one group per ZType) is
+        automatically generated.
+
+        Args:
+            mode: ``"raw"`` for full-state recording or ``"observation"``
+                for compressed observation-aggregate recording.
+            max_rows: Maximum number of records to keep (FIFO eviction).
+                ``None`` means unlimited.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: When called on a runtime Configurator.
+            ValueError: When mode is not ``"raw"`` or ``"observation"``.
+        """
+        if self._pop_ref is not None:
+            raise RuntimeError(
+                "record_history() is only valid during the build phase. "
+                "Recording settings cannot change after the Population has "
+                "been built. Use pop.clear_history() to reset."
+            )
+        if mode not in ("raw", "observation"):
+            raise ValueError(
+                f"mode must be 'raw' or 'observation', got {mode!r}"
+            )
+        self._record_history_mode: str = mode
+        self._record_history_max_rows: Optional[int] = max_rows
         return self
 
     # -- preset reconfiguration -------------------------------------------------
@@ -1270,7 +1324,58 @@ class Configurator:
         if obs_groups is not None:
             collapse = getattr(self, "_observation_collapse_age", False)
             pop.set_observations(obs_groups, collapse_age=collapse)
+
+        # Compile and freeze the recording plan.
+        self._compile_recording_plan(pop)
         return pop
+
+    def _compile_recording_plan(self, pop: AgeStructuredPopulation | DiscreteGenerationPopulation) -> None:
+        """Compile and freeze the :class:`RecordingPlan` on the population.
+
+        Called at the end of :meth:`build` after all observations and
+        initial state have been applied.  The plan is immutable for the
+        remainder of the population's lifetime.
+        """
+        from natal.data import DiscretePopulationConfig
+        from natal.output._recording import compile_recording_plan
+        from natal.output.history import History
+        from natal.output.observation import build_identity_observation
+
+        config = pop.config
+        if isinstance(config, DiscretePopulationConfig):
+            kind = "discrete_generation"
+            has_sperm = False
+        else:
+            kind = "age_structured"
+            has_sperm = True
+
+        observation = getattr(pop, "_observation", None)
+        compact_meta = getattr(pop, "_compact_meta", None)
+
+        record_mode = getattr(self, "_record_history_mode", None)
+        max_rows = getattr(self, "_record_history_max_rows", None)
+
+        if record_mode == "observation" and observation is None:
+            # auto-generate identity observation
+            n_ztypes = pop.index_registry.n_ztypes
+            observation = build_identity_observation(
+                pop.index_registry,
+                n_ztypes=n_ztypes,
+                n_sexes=pop.config.n_sexes,
+                n_ages=pop.config.n_ages,
+            )
+            pop._observation = observation  # type: ignore[reportPrivateUsage]
+
+        plan = compile_recording_plan(
+            pop,
+            kind=kind,
+            n_demes=1,
+            has_sperm_storage=has_sperm,
+            observation=observation,
+            compact_meta=compact_meta,
+        )
+        pop._recording_plan = plan  # type: ignore[reportPrivateUsage]
+        pop._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]
 
 
 # ── Numba hook wrapper ─────────────────────────────────────────────────────────

@@ -1,6 +1,21 @@
-"""Observation and state translation utilities."""
+"""Observation, history, and state translation utilities."""
 
-from .observation import Observation, ObservationFilter, apply_rule
+from .history import (
+    History,
+    HistoryBatch,
+    HistorySchema,
+    ObservationMetadata,
+    PopulationLayout,
+    SpatialHistoryLayout,
+)
+from .observation import (
+    Observation,
+    ObservationFilter,
+    ObservationResult,
+    apply_rule,
+    build_identity_observation,
+)
+from .record import CompactMeta, build_compact_metadata
 from .translation import (
     discrete_population_state_to_dict,
     discrete_population_state_to_json,
@@ -26,9 +41,19 @@ from .translation import (
 )
 
 __all__ = [
+    "CompactMeta",
+    "History",
+    "HistoryBatch",
+    "HistorySchema",
     "Observation",
     "ObservationFilter",
+    "ObservationMetadata",
+    "ObservationResult",
+    "PopulationLayout",
+    "SpatialHistoryLayout",
     "apply_rule",
+    "build_compact_metadata",
+    "build_identity_observation",
     "discrete_population_state_to_dict",
     "discrete_population_state_to_json",
     "output_current_state",

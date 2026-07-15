@@ -142,6 +142,8 @@ Register observation groups, applied at `build()` time. `groups` can be a dict
 of name-to-spec, a list of specs, or `None` for one-group-per-genotype.
 `collapse_age` controls whether the age axis is collapsed in exports.
 
+> **Build-time only:** Calling `with_observation()` on a live Population (via `pop.update().with_observation(...)`) raises `RuntimeError`. Recording rules are frozen at build time and cannot change afterwards. Use `pop.create_observation()` for runtime queries.
+
 ### `presets(*presets)`
 ```python
 cfg.presets(homing_drive)

@@ -194,6 +194,13 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._finalize_hooks()
 
+        # Build self-describing history schema (frozen at construction).
+        self._init_history_schema(
+            kind="discrete_generation",
+            n_demes=1,
+            has_sperm_storage=False,
+        )
+
     def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
         """Clone this population with a new name and optional config override."""
         clone = super()._clone(name, config=config)  # type: ignore[arg-type]  # subclass accepts DiscretePopulationConfig, super expects PopulationConfig
@@ -477,6 +484,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if record_every > 0 and (state.n_tick % record_every == 0):
             snapshot_init = state.individual_count.ravel().copy()
             self._history.append((state.n_tick, snapshot_init))
+            self._append_to_history_obj(state.n_tick, snapshot_init)  # type: ignore[attr-defined]  # OutputMixin mixin
             self._enforce_history_limit()
 
         was_stopped = False
@@ -528,6 +536,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             if record_every > 0 and (next_tick % record_every == 0):
                 snapshot: np.ndarray = state.individual_count.ravel().copy()
                 self._history.append((next_tick, snapshot))
+                self._append_to_history_obj(next_tick, snapshot)  # type: ignore[attr-defined]  # OutputMixin mixin
                 self._enforce_history_limit()
 
             # No EARLY / LATE hooks — WF fuses reproduction + survival
@@ -633,6 +642,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """Reset tick, history, and population state to initial values."""
         self._tick = 0
         self._history = []
+        if self._history_obj is not None:
+            self._history_obj.clear()
         self._finished = False
         # Guard against calls before __init__ finishes (e.g. during
         # BasePopulation.__init__ -> _initialize -> reset chain).
@@ -660,6 +671,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def get_history(self) -> np.ndarray:
         """Return recorded history as a 2-D ndarray (rows × flattened state)."""
+        if self._history_obj is not None:
+            return self._history_obj.to_numpy()
+
         if len(self._history) == 0:
             return np.zeros((0, self._history_shape[0]), dtype=np.float64)
         return np.array([rec[1] for rec in self._history], dtype=np.float64)
@@ -667,12 +681,35 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     def clear_history(self) -> None:
         """Remove all recorded history snapshots."""
         self._history.clear()
+        if self._history_obj is not None:
+            self._history_obj.clear()
 
     def create_history_snapshot(self) -> None:
-        """Record a snapshot of the current state into history."""
-        flattened = self.state.flatten_all()
-        self._history.append((self._tick, flattened.copy()))
+        """Record a snapshot of the current state into history.
+
+        When observation recording is enabled, produces observation-aggregated
+        rows instead of full raw state.
+        """
+        if self._observation_mask is not None:
+            from natal.output.record import build_observation_row_panmictic
+            observed = build_observation_row_panmictic(
+                self.state.individual_count, self._observation_mask,
+            )
+            flat = np.empty(1 + observed.size, dtype=np.float64)
+            flat[0] = float(self._tick)
+            flat[1:] = observed
+            self._history.append((self._tick, flat))
+        else:
+            flattened = self.state.flatten_all()
+            self._history.append((self._tick, flattened.copy()))
         self._enforce_history_limit()
+
+        # Also populate the new History container.
+        if self._history_obj is not None:
+            row = self._history[-1][1].reshape(1, -1)
+            from natal.output.history import HistoryBatch
+            batch = HistoryBatch(schema=self._history_obj.schema, rows=row)
+            self._history_obj.append(batch)
 
     def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
         """Export the current state and history as flat arrays.
@@ -681,7 +718,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             Tuple of ``(state_flat, history)`` where history may be None.
         """
         state_flat = self.state.flatten_all()
-        history = self.get_history() if self._history else None
+        history: Optional[np.ndarray] = None
+        if self._history_obj is not None and not self._history_obj.is_empty:
+            history = self._history_obj.to_numpy()
+        elif self._history:
+            history = self.get_history()
         return state_flat, history
 
     @property
@@ -742,6 +783,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 flat = history[row_idx, :]
                 tick = int(flat[0])
                 self._history.append((tick, flat.copy()))
+
+            # Also populate the new History container.
+            if self._history_obj is not None:
+                from natal.output.history import HistoryBatch
+                batch = HistoryBatch(schema=self._history_obj.schema, rows=history)
+                self._history_obj.append(batch)
 
     @property
     def state(self) -> DiscretePopulationState:

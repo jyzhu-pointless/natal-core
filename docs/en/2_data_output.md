@@ -96,6 +96,8 @@ pop.set_observations(
 pop.run(n_steps=100, record_every=10)
 ```
 
+> **Recording rules are frozen at build time:** While `pop.record_observation` and `pop.set_observations()` work on live Populations for backward compatibility, the `Configurator.with_observation()` method (used in the build chain) raises `RuntimeError` if called after the Population has been built. The intended workflow is to set up recording rules before `build()` — see the [Configurator API](../api/configurator.md) for details.
+
 Once `record_observation` is set, the kernel automatically uses observation aggregation mode during recording. `output_history()` automatically detects and selects the correct export path:
 
 ```python
@@ -144,7 +146,7 @@ history = pop.output_history()
 for snap in history["snapshots"]:
     print(f"tick {snap['tick']}: {snap['observed']}")
 
-# You can switch back to raw mode at any time for inspection
+# Switch back to raw mode (schema rebuilds only when history is empty)
 pop.record_observation = None  # Disable observation mode
 # Subsequent run() calls will use raw recording
 ```
@@ -252,7 +254,7 @@ spatial.set_observations(
 
 ### History Recording Configuration
 
-The population object has built-in history recording functionality with configurable recording frequency and storage format:
+The population object has built-in history recording functionality with configurable recording frequency and storage format. The recording schema (mode, row size, layout) is **frozen at build time** and cannot change after the first row is recorded.
 
 ```python
 # Configure history recording
@@ -532,10 +534,13 @@ for snapshot in history["snapshots"]:
 Observation rules define how to extract data from the state; history records save the time series of states. Observation rules can be applied to the current state or to history records.
 
 ### How to optimize history records for large datasets?
-Increase the `record_every` interval, use `clear_history()` for periodic cleanup, or export to external storage.
+Increase the `record_every` interval, use `clear_history()` for periodic cleanup, or export to external storage. Note that `clear_history()` preserves the recording schema — you can clear data and continue recording without reconfiguring.
 
 ### Do observation rules affect simulation performance?
 Observation rules themselves do not affect simulation performance, but frequent data extraction and storage may impact overall performance.
+
+### Can I change recording rules after building the Population?
+Recording rules (observation mode vs raw mode) are frozen at build time if set via the Configurator's `with_observation()`. The `pop.record_observation` property setter can still change the mode for backward compatibility, but the `HistorySchema` only rebuilds when no rows have been recorded yet. Use `pop.create_observation()` for runtime queries without modifying the recording mode.
 
 ---
 

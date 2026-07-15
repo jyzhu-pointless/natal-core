@@ -34,7 +34,7 @@ Kernel 层          →  spatial_simulator.py 中的 recording 通路
 ```
 用户定义 groups
        ↓
-ObservationFilter.build_filter(groups) → Observation 对象（含 specs、labels、collapse_age）
+ObservationFilter.build_filter(groups) → Observation 对象（含 labels、mask、collapse_age）
        ↓
 BasePopulation._build_observation_mask(obs) → 4D float64 mask (n_groups, n_sexes, n_ages, n_genotypes)
        ↓
@@ -89,21 +89,24 @@ Python 层：_process_kernel_history() → history.append((tick, row.copy()))
 #### Observation 对象
 
 `Observation` 是不可变 dataclass，包含：
-- `filter`: 创建它的 `ObservationFilter` 引用
-- `diploid_genotypes`: 用于解析 genotype selector 的基因型序列
-- `specs`: 标准化后的分组规格 `[(name, {key: value}), ...]`
 - `labels`: 分组标签元组 `(name_0, name_1, ...)`
 - `collapse_age`: 是否压缩年龄维度
+- `mask`（可选）: 预烘焙的 4D 二进制掩码 `(n_groups, n_sexes, n_ages, n_ztypes)`
+- `population_fingerprint`: 基于布局组件的稳定性哈希
+- `specs`: 内部标准化分组规格（即将弃用）
+- `_registry`: 内部注册表引用（首次使用且 mask 未烘焙时重建）
+
+已移除 `filter` 和 `diploid_genotypes` 属性——`Observation` 不再持有 `ObservationFilter` 或 `BasePopulation` 的引用。
 
 关键方法：
-- `apply(individual_count)` → `(n_groups, n_sexes, n_ages)`：对给定的 count 数组执行观测投影
-- `build_mask(n_sexes, n_ages, n_genotypes)` → `(n_groups, n_sexes, n_ages, n_genotypes)`：编译 4D 二进制掩码，供 kernel 使用。注意该方法始终返回 4D 掩码（`collapse_age=False`），因为 kernel 需要完整的第 3 维
+- `apply(individual_count)` → `(n_groups, n_sexes, n_ages)`：对给定的 count 数组执行观测投影，若 mask 未预烘焙则从 specs 重建
+- `build_mask(n_sexes, n_ages, n_genotypes)` → `(n_groups, n_sexes, n_ages, n_genotypes)`：返回存储的 4D 二进制掩码，若无则从 specs 重建。该方法始终返回 4D 掩码（`collapse_age=False`），因为 kernel 需要完整的第 3 维
 - `to_dict()` → metadata dict：序列化 labels、collapse_age、n_groups 等元数据
 
 #### ObservationFilter
 
-`ObservationFilter(registry)` 负责将用户定义的 group specs 编译为 Observation：
-- `build_filter(diploid_genotypes, groups, collapse_age)` → `Observation`：完整编译流程
+`ObservationFilter(registry)` 是纯粹的编译器，将用户定义的 group specs 编译为不可变 `Observation` 实例。编译完成后不再需要 filter——掩码已烘焙到 Observation 中，不留反向引用：
+- `build_filter(*, diploid_genotypes=None, groups=None, collapse_age=False, n_sexes=2, n_ages=1, n_ztypes=None)` → `Observation`：完整编译流程（仅限关键字参数）。提供 `n_ztypes` 时立即烘焙掩码，否则首次使用时重建
 - `create_observation(...)`：`build_filter` 的别名
 - `build_mask_from_specs(...)` → 4D float64 mask：核心编译函数，循环填充 mask：
   ```python
@@ -134,9 +137,12 @@ def record_observation(self, obs: Optional[Observation]) -> None:
     self._observation = obs
     if obs is not None:
         self._observation_mask = self._build_observation_mask(obs)
+    self._rebuild_history_schema_if_needed()
 ```
 
 Setter 在设置 observation 的同时编译 4D 二进制掩码。`_observation_mask` 的类型是 `NDArray[np.float64]`，shape `(n_groups, n_sexes, n_ages, n_genotypes)`。
+
+> **构建后不可变：** `Configurator.with_observation()` 在活动 Population 上调用时会抛出 `RuntimeError`。录制规则必须在构建阶段设置。`record_observation` 属性 setter 为了向后兼容仍然可用，但仅在尚无历史记录时重建 schema。
 
 #### set_observations 快捷方式
 
@@ -149,9 +155,10 @@ def set_observations(self, groups, *, collapse_age=False):
         collapse_age=collapse_age,
     )
     self._observation_mask = self._build_observation_mask(self._observation)
+    self._rebuild_history_schema_if_needed()
 ```
 
-内部流程：创建 `ObservationFilter` → `build_filter` → 编译 mask → 分别存储 `_observation` 和 `_observation_mask`。
+内部流程：创建 `ObservationFilter` → `build_filter` → 编译 mask → 分别存储 `_observation` 和 `_observation_mask`，然后重建 History schema（如果 schema 尚为初始状态且无历史数据）。一旦有历史记录，`set_observations()` 仍能更新 mask，但 schema（row_size、mode）保持冻结。
 
 #### _clone 的兼容性
 
@@ -263,6 +270,8 @@ def record_observation(self, obs: Optional[Observation]) -> None:
         self._observation_mask = obs.build_mask(...)
         self._rebuild_compact_meta()   # → _build_deme_info() + build_compact_metadata()
 ```
+
+> **仅构建阶段：** spatial 种群同样遵循不可变规则——录制规则必须通过 `SpatialConfigurator.with_observation()` 在构建阶段设置。在活动 Population 上调用会抛出 `RuntimeError`。
 
 `_build_deme_info()` 解析 group spec 中的 `"deme"` 键，支持三种格式：
 - 缺失 / `"all"` → 不在 dict 中（默认全 deme）
@@ -376,9 +385,16 @@ def _build_history_observation_payload(population, history, observation, groups,
 
 ## 关键设计决策
 
-### 1. 统一 _history 存储
+### 1. 双路径历史存储（旧版 + 自描述）
 
-无论原始还是观测模式，`_history` 始终是 `List[Tuple[int, NDArray[np.float64]]]`。区别仅在于 array 的内容（原始扁平 state vs 观测聚合数组）。这样 `get_history()` 的接口保持一致。
+迁移期间代码库使用两套并行的存储路径：
+
+- **旧路径：** `_history` 是 `List[Tuple[int, NDArray[np.float64]]]`（原始或观测聚合），为 `pop.history` 保持向后兼容。
+- **新路径：** `_history_obj` 是 `History` 实例，附带不可变的 `HistorySchema`。行以经过验证的 `HistoryBatch` 对象存储，符合 schema 约束。
+
+`.history` 属性目前从 `_history` 返回旧版 `List[Tuple[int, np.ndarray]]`。新的 `._history_obj` 为内部属性；未来版本计划提供基于新模型的 `.history` 属性。
+
+无论存储路径如何，扁平行的内容相同：原始扁平 state 或观测聚合数组。`clear_history()` 清空两个存储但始终保留 `HistorySchema`。
 
 ### 2. 4D Mask 始终完整
 

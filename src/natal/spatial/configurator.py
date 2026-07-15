@@ -456,6 +456,9 @@ class SpatialConfigurator:
         self._observation_groups: Optional[GroupsInput] = None
         self._observation_collapse_age: bool = False
 
+        # Runtime population reference (None at build time; set by for_population).
+        self._pop_ref: Optional[Any] = None
+
         # Create the template configurator (new path).
         if pop_type == "age_structured":
             self._template: DiscreteConfigurator | AgeStructuredConfigurator = \
@@ -1232,9 +1235,58 @@ class SpatialConfigurator:
 
         Returns:
             SpatialConfigurator: Self for chaining.
+
+        Raises:
+            RuntimeError: When called on a runtime Configurator.
         """
+        if self._pop_ref is not None:
+            raise RuntimeError(
+                "with_observation() is only valid during the build phase. "
+                "Recording rules cannot change after the Population has been built. "
+                "Use pop.create_observation() for runtime queries."
+            )
         self._observation_groups = groups
         self._observation_collapse_age = collapse_age
+        return self
+
+    def record_history(
+        self,
+        *,
+        mode: str = "raw",
+        max_rows: Optional[int] = None,
+    ) -> SpatialConfigurator:
+        """Set the recording mode and capacity for spatial population history.
+
+        Must be called during the build phase.  Calling this on a runtime
+        Configurator raises ``RuntimeError``.
+
+        When ``mode="observation"`` and no ``.with_observation()`` has been
+        called, an identity observation (one group per ZType) is
+        automatically generated.
+
+        Args:
+            mode: ``"raw"`` for full-state recording or ``"observation"``
+                for compressed observation-aggregate recording.
+            max_rows: Maximum number of records to keep (FIFO eviction).
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: When called on a runtime Configurator.
+        """
+        if self._pop_ref is not None:
+            raise RuntimeError(
+                "record_history() is only valid during the build phase. "
+                "Recording settings cannot change after the Population has "
+                "been built."
+            )
+        if mode not in ("raw", "observation"):
+            raise ValueError(
+                f"mode must be 'raw' or 'observation', got {mode!r}"
+            )
+        self._record_history_mode = mode
+        self._record_history_max_rows = max_rows
         return self
 
     # ------------------------------------------------------------------
@@ -1421,6 +1473,7 @@ class SpatialConfigurator:
                 self._observation_groups,
                 collapse_age=self._observation_collapse_age,
             )
+        self._compile_recording_plan(spatial)
         return spatial
 
     def _build_heterogeneous(self) -> SpatialPopulation:
@@ -1574,6 +1627,7 @@ class SpatialConfigurator:
                 self._observation_groups,
                 collapse_age=self._observation_collapse_age,
             )
+        self._compile_recording_plan(spatial)
         return spatial
 
     @staticmethod
@@ -1813,6 +1867,49 @@ class SpatialConfigurator:
                 method(**filtered)
 
         return template_cfg.build(name=f"{self._spatial_name}_group")
+
+    def _compile_recording_plan(self, spatial: SpatialPopulation) -> None:
+        """Compile and freeze the :class:`RecordingPlan` on the spatial population."""
+        from natal.data import DiscretePopulationConfig
+        from natal.output._recording import compile_recording_plan
+        from natal.output.history import History
+        from natal.output.observation import build_identity_observation
+
+        ref_deme = spatial.deme(0)
+        config = ref_deme.config
+        if isinstance(config, DiscretePopulationConfig):
+            kind = "spatial_discrete_generation"
+            has_sperm = False
+        else:
+            kind = "spatial_age_structured"
+            has_sperm = True
+
+        observation = getattr(spatial, "_observation", None)
+        compact_meta = getattr(spatial, "_compact_meta", None)
+
+        record_mode = getattr(self, "_record_history_mode", None)
+        max_rows = getattr(self, "_record_history_max_rows", None)
+
+        if record_mode == "observation" and observation is None:
+            n_ztypes = ref_deme.index_registry.n_ztypes
+            observation = build_identity_observation(
+                ref_deme.index_registry,
+                n_ztypes=n_ztypes,
+                n_sexes=ref_deme.config.n_sexes,
+                n_ages=ref_deme.config.n_ages,
+            )
+            spatial._observation = observation  # type: ignore[reportPrivateUsage]
+
+        plan = compile_recording_plan(
+            ref_deme,
+            kind=kind,
+            n_demes=spatial.n_demes,
+            has_sperm_storage=has_sperm,
+            observation=observation,
+            compact_meta=compact_meta,
+        )
+        spatial._recording_plan = plan  # type: ignore[reportPrivateUsage]
+        spatial._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]
 
     # ------------------------------------------------------------------
     # Runtime update support (for_population)

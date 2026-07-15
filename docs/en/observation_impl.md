@@ -34,7 +34,7 @@ To avoid passing 13+ scattered parameters across multiple function layers, the s
 ```
 User defines groups
        ↓
-ObservationFilter.build_filter(groups) → Observation object (with specs, labels, collapse_age)
+ObservationFilter.build_filter(groups) → Observation object (with labels, mask, collapse_age)
        ↓
 BasePopulation._build_observation_mask(obs) → 4D float64 mask (n_groups, n_sexes, n_ages, n_genotypes)
        ↓
@@ -88,22 +88,25 @@ Row size = `1 + n_demes × n_groups × n_sexes × n_ages`
 
 #### Observation Object
 
-`Observation` is an immutable dataclass containing:
-- `filter`: reference to the `ObservationFilter` that created it
-- `diploid_genotypes`: the genotype sequence used for resolving genotype selectors
-- `specs`: normalized group specifications `[(name, {key: value}), ...]`
+`Observation` is a frozen dataclass containing:
 - `labels`: group label tuple `(name_0, name_1, ...)`
 - `collapse_age`: whether to collapse the age dimension
+- `mask`: optional baked-in 4-D binary mask `(n_groups, n_sexes, n_ages, n_ztypes)`
+- `population_fingerprint`: stable hash derived from layout components
+- `specs`: normalized group specifications (internal; will be removed in a future phase)
+- `_registry`: stored registry reference (used to rebuild mask on first use when not pre-baked)
+
+The `filter` and `diploid_genotypes` attributes have been removed — `Observation` no longer references `ObservationFilter` or `BasePopulation` at runtime.
 
 Key methods:
-- `apply(individual_count)` → `(n_groups, n_sexes, n_ages)`: applies observation projection to a given count array
-- `build_mask(n_sexes, n_ages, n_genotypes)` → `(n_groups, n_sexes, n_ages, n_genotypes)`: compiles a 4D binary mask for kernel use. Note this method always returns a 4D mask (`collapse_age=False`) because the kernel requires the full 3rd dimension
+- `apply(individual_count)` → `(n_groups, n_sexes, n_ages)`: applies observation projection to a given count array, rebuilding the mask from specs if not pre-baked
+- `build_mask(n_sexes, n_ages, n_genotypes)` → `(n_groups, n_sexes, n_ages, n_genotypes)`: returns the stored 4-D binary mask or rebuilds it from specs. This method always returns a 4-D mask (`collapse_age=False`) because the kernel requires the full 3rd dimension
 - `to_dict()` → metadata dict: serializes labels, collapse_age, n_groups and other metadata
 
 #### ObservationFilter
 
-`ObservationFilter(registry)` is responsible for compiling user-defined group specs into Observations:
-- `build_filter(diploid_genotypes, groups, collapse_age)` → `Observation`: full compilation pipeline
+`ObservationFilter(registry)` is a pure compiler that turns user-defined group specs into frozen `Observation` instances. Once compiled, the filter is no longer needed — the mask is baked in and no reverse references remain:
+- `build_filter(*, diploid_genotypes=None, groups=None, collapse_age=False, n_sexes=2, n_ages=1, n_ztypes=None)` → `Observation`: full compilation pipeline (keyword-only arguments). When `n_ztypes` is provided, the mask is baked immediately; otherwise it's rebuilt on first use
 - `create_observation(...)`: alias for `build_filter`
 - `build_mask_from_specs(...)` → 4D float64 mask: core compilation function, fills the mask via a loop:
   ```python
@@ -134,9 +137,12 @@ def record_observation(self, obs: Optional[Observation]) -> None:
     self._observation = obs
     if obs is not None:
         self._observation_mask = self._build_observation_mask(obs)
+    self._rebuild_history_schema_if_needed()
 ```
 
 The setter compiles the 4D binary mask while setting the observation. `_observation_mask` is of type `NDArray[np.float64]` with shape `(n_groups, n_sexes, n_ages, n_genotypes)`.
+
+> **Immutable after build:** The `Configurator.with_observation()` method raises `RuntimeError` when called on a live Population (via `pop.update()`). Recording rules must be set during the build phase. The `record_observation` property setter remains available for backward compatibility but only rebuilds the schema when no rows have been recorded yet.
 
 #### set_observations Convenience Method
 
@@ -149,9 +155,10 @@ def set_observations(self, groups, *, collapse_age=False):
         collapse_age=collapse_age,
     )
     self._observation_mask = self._build_observation_mask(self._observation)
+    self._rebuild_history_schema_if_needed()
 ```
 
-Internal flow: create `ObservationFilter` → `build_filter` → compile mask → store `_observation` and `_observation_mask` separately.
+Internal flow: create `ObservationFilter` → `build_filter` → compile mask → store `_observation` and `_observation_mask` separately, then rebuild the History schema if the schema is still pristine (no rows recorded). Once any history rows exist, calling `set_observations()` updates the observation mask but the schema (row_size, mode) remains frozen.
 
 #### _clone Compatibility
 
@@ -263,6 +270,8 @@ def record_observation(self, obs: Optional[Observation]) -> None:
         self._observation_mask = obs.build_mask(...)
         self._rebuild_compact_meta()   # → _build_deme_info() + build_compact_metadata()
 ```
+
+> **Build-time only:** In spatial populations, the same immutability rule applies — recording rules must be set during the build phase via `SpatialConfigurator.with_observation()`. Calling it on a live spatial population raises `RuntimeError`.
 
 `_build_deme_info()` parses the `"deme"` key in group specs, supporting three formats:
 - Missing / `"all"` → not in dict (default all demes)
@@ -376,9 +385,16 @@ This path has higher performance overhead — it needs to reconstruct state from
 
 ## Key Design Decisions
 
-### 1. Unified _history Storage
+### 1. Dual History Storage (Legacy + Self-describing)
 
-Regardless of raw or observation mode, `_history` is always a `List[Tuple[int, NDArray[np.float64]]]`. The only difference is the array content (raw flat state vs. observation-aggregated array). This keeps the `get_history()` interface consistent.
+The codebase uses two parallel storage paths during the migration period:
+
+- **Legacy path:** `_history` is a `List[Tuple[int, NDArray[np.float64]]]` (raw or observation-aggregated), kept for backward compatibility with `pop.history`.
+- **New path:** `_history_obj` is a `History` instance with an immutable `HistorySchema`. Rows are stored as validated `HistoryBatch` objects conforming to the schema.
+
+The `.history` property currently returns legacy-style `List[Tuple[int, np.ndarray]]` from `_history`. The new `._history_obj` is internal; a public `.history` property backed by the new model is planned for a future release.
+
+Regardless of storage path, the flat row content is the same: raw flat state or observation-aggregated array. `clear_history()` clears both stores but always preserves the `HistorySchema`.
 
 ### 2. 4D Mask Always Complete
 

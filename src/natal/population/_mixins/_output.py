@@ -67,6 +67,22 @@ class OutputMixin(ModifierPresetMixin):
             if excess > 0:
                 self._history = self._history[excess:]
 
+    def _append_to_history_obj(self, tick: int, flat_row: np.ndarray) -> None:
+        """Append a single (tick, flat_row) to ``_history_obj`` if available."""
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is None:
+            return
+        from natal.output.history import HistoryBatch
+
+        row = np.empty(1 + len(flat_row), dtype=np.float64)
+        row[0] = tick
+        row[1:] = flat_row
+        batch = HistoryBatch(
+            schema=history_obj.schema,
+            rows=row[np.newaxis, :],
+        )
+        history_obj.append(batch)
+
     @abstractmethod
     def clear_history(self) -> None:
         """Clear all recorded history states.
@@ -75,6 +91,76 @@ class OutputMixin(ModifierPresetMixin):
         (e.g., ``_history`` list and any subclass-specific history buffers).
         """
         pass
+
+    def record_snapshot(self) -> None:
+        """Record the current stable state into history.
+
+        Must only be called when the engine is not running (between
+        ``run()`` calls).  Duplicate ticks are silently ignored.
+
+        Raises:
+            RuntimeError: If a population has already finished simulation.
+        """
+        if getattr(self, "_finished", False):
+            raise RuntimeError(
+                "Cannot record snapshot on a finished population."
+            )
+        snapshot_fn = getattr(self, "create_history_snapshot", None)
+        if snapshot_fn is not None:
+            snapshot_fn()
+            return
+        record_fn = getattr(self, "_record_snapshot", None)
+        if record_fn is not None:
+            record_fn()
+            return
+        raise NotImplementedError(
+            f"{type(self).__qualname__} has no snapshot recording method."
+        )
+
+    def restore_checkpoint(self, tick: int) -> None:
+        """Restore population state from a raw-history record at *tick*.
+
+        Only valid for raw-mode history.  Restores individual counts and
+        (when applicable) sperm storage.  All records after *tick* are
+        removed.
+
+        Args:
+            tick: Exact tick to restore.
+
+        Raises:
+            ValueError: If mode is not ``"raw"`` or tick is not found.
+        """
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is None or history_obj.is_empty:
+            raise ValueError("No history available for checkpoint restore.")
+        if history_obj.schema.mode != "raw":
+            raise ValueError(
+                "Cannot restore population state from observation-mode "
+                "history.  Record raw history to enable checkpoint "
+                "restoration."
+            )
+        restored_tick, ic, ss = history_obj.restore_state(tick)
+        state = getattr(self, "state", None)
+        if state is None:
+            raise RuntimeError("Population has no state object.")
+
+        n_demes = getattr(self, "n_demes", 1)
+
+        if ic.ndim == 4 and n_demes > 1:
+            for di in range(min(n_demes, ic.shape[0])):
+                demes = getattr(self, "_demes", None)
+                if demes is not None and di < len(demes):
+                    demes[di].state.individual_count[:] = ic[di]
+                    demes[di]._tick = restored_tick
+        else:
+            state.individual_count[:] = ic.reshape(state.individual_count.shape)
+            if ss is not None and hasattr(state, "sperm_storage"):
+                state.sperm_storage[:] = ss.reshape(state.sperm_storage.shape)
+        self._tick = restored_tick
+        if "-" in history_obj.schema.population.kind:
+            history_obj.truncate(retain_until_tick=tick)
+        else:
+            history_obj.truncate(retain_until_tick=tick)
 
     def _process_kernel_history(
         self,
@@ -90,6 +176,14 @@ class OutputMixin(ModifierPresetMixin):
 
         if clear_history_on_start:
             self.clear_history()
+
+        # Populate the new History container if available.
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is not None:
+            from natal.output.history import HistoryBatch
+
+            batch = HistoryBatch(schema=history_obj.schema, rows=history_new)
+            history_obj.append(batch)
 
         for row_idx in range(history_new.shape[0]):
             row = history_new[row_idx, :]

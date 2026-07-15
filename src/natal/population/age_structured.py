@@ -140,6 +140,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._initialize_registry()
         self._finalize_hooks()
 
+        # Build self-describing history schema (frozen at construction).
+        self._init_history_schema(
+            kind="age_structured",
+            n_demes=1,
+            has_sperm_storage=True,
+        )
+
     @classmethod
     def setup(
         cls,
@@ -395,6 +402,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         self._tick = 0
         self._history = []
+        if self._history_obj is not None:
+            self._history_obj.clear()
         self._finished = False
         if hasattr(self, '_initial_population_snapshot'):
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
@@ -498,9 +507,28 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """Record current state to history records.
 
         Saves the current tick and a flattened copy of state to _history.
+        When observation recording is enabled, produces observation-aggregated
+        rows instead of full raw state.
         """
-        flattened = self.state.flatten_all()
-        self._history.append((self._tick, flattened.copy()))
+        if self._observation_mask is not None:
+            from natal.output.record import build_observation_row_panmictic
+            observed = build_observation_row_panmictic(
+                self.state.individual_count, self._observation_mask,
+            )
+            flat = np.empty(1 + observed.size, dtype=np.float64)
+            flat[0] = float(self._tick)
+            flat[1:] = observed
+            self._history.append((self._tick, flat))
+        else:
+            flattened = self.state.flatten_all()
+            self._history.append((self._tick, flattened.copy()))
+
+        # Also populate the new History container.
+        if self._history_obj is not None:
+            row = self._history[-1][1].reshape(1, -1)
+            from natal.output.history import HistoryBatch
+            batch = HistoryBatch(schema=self._history_obj.schema, rows=row)
+            self._history_obj.append(batch)
 
     def get_history(self) -> np.ndarray:
         """Return history records as a 2D NumPy array.
@@ -513,6 +541,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             ValueError: If no history is recorded.
         """
+        if self._history_obj is not None:
+            result = self._history_obj.to_numpy()
+            if result.shape[0] == 0:
+                raise ValueError("No history recorded")
+            return result
+
         if len(self._history) == 0:
             raise ValueError("No history recorded")
 
@@ -523,6 +557,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def clear_history(self) -> None:
         """Clear history records."""
         self._history.clear()
+        if self._history_obj is not None:
+            self._history_obj.clear()
 
     def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
         """Export population state as a flattened array.
@@ -533,7 +569,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 history: Optional array of shape (n_snapshots, flatten_size).
         """
         state_flat = self.state.flatten_all()
-        history = self.get_history() if self._history else None
+        history: Optional[np.ndarray] = None
+        if self._history_obj is not None and not self._history_obj.is_empty:
+            history = self._history_obj.to_numpy()
+        elif self._history:
+            history = self.get_history()
         return state_flat, history
 
     def import_state(self, state: Union[PopulationState, NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]],
@@ -578,6 +618,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 flat = history[row_idx, :]
                 tick = int(flat[0])
                 self._history.append((tick, flat.copy()))
+
+            # Also populate the new History container.
+            if self._history_obj is not None:
+                from natal.output.history import HistoryBatch
+                batch = HistoryBatch(schema=self._history_obj.schema, rows=history)
+                self._history_obj.append(batch)
 
     # ========================================================================
     # History restoration helpers
@@ -670,7 +716,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             tuple: A Numba-compatible configuration tuple.
         """
-        return sk.export_config(self)  # type: ignore  # forward-reference in simulator module
+        return sk.export_config(self)
 
     def run(
         self,

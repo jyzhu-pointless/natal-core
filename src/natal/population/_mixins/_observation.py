@@ -60,6 +60,7 @@ class ObservationMixin:
         self._observation = obs
         if obs is not None:
             self._observation_mask = self._build_observation_mask(obs)
+        self._rebuild_history_schema_if_needed()
 
     def set_observations(self, groups: GroupsInput, *, collapse_age: bool = False) -> None:
         """Register observation groups and immediately compile the binary mask.
@@ -84,6 +85,29 @@ class ObservationMixin:
             collapse_age=bool(collapse_age),
         )
         self._observation_mask = self._build_observation_mask(self._observation)
+        self._rebuild_history_schema_if_needed()
+
+    def _rebuild_history_schema_if_needed(self) -> None:
+        """Rebuild the history schema when observation changes after construction.
+
+        The schema is frozen at Population construction; this method ensures
+        that late observation registration (via Configurator's build()) is
+        reflected in the schema before any rows are recorded.
+        """
+        init_fn = getattr(self, "_init_history_schema", None)
+        if init_fn is None:
+            return
+        # Only rebuild if no rows have been recorded yet (schema still pristine).
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is not None and history_obj.is_empty:
+            old_schema = history_obj.schema
+            observation = getattr(self, "_observation", None)
+            init_fn(
+                kind=old_schema.population.kind,
+                n_demes=old_schema.population.n_demes,
+                has_sperm_storage=old_schema.population.has_sperm_storage,
+                observation=observation,
+            )
 
     def _build_observation_mask(self, obs: Observation) -> np.ndarray:
         """Build the 4-D binary mask from an Observation and current state dims."""

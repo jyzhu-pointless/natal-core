@@ -49,7 +49,8 @@ if TYPE_CHECKING:
         CompiledHookDescriptor,
         HookExecutor,
     )
-    from natal.output.observation import Observation
+    from natal.output.history import History
+    from natal.output.observation import Observation, ObservationResult
     from natal.presets import GeneticPreset
 
 HookCallback = Callable[..., object]
@@ -125,6 +126,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
         # Evolution history as (tick, flattened_array) tuples.
         self._history: List[Tuple[int, np.ndarray]] = []
+
+        # New History data model (frozen at build time).
+        self._history_obj: Optional[History] = None
+        self._recording_plan: Optional[object] = None
 
         # History config
         self.record_every: int = 1
@@ -293,6 +298,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         clone._observation_mask = None
 
         clone._history = []
+        clone._history_obj = None
         clone._finished = False
         clone._running = False
         clone.record_every = int(self.record_every)
@@ -498,6 +504,92 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         """A list of recorded historical states as ``(tick, flattened_array)`` tuples."""
         return list(self._history)
 
+    def _init_history_schema(
+        self,
+        *,
+        kind: str,
+        n_demes: int = 1,
+        has_sperm_storage: bool = False,
+        observation: Optional[Observation] = None,
+    ) -> None:
+        """Build and freeze the self-describing History schema.
+
+        Called once at the end of ``__init__`` by each Population subclass.
+        The schema cannot change after this point.
+
+        Args:
+            kind: One of ``"age_structured"``, ``"discrete_generation"``.
+            n_demes: Number of demes (1 for panmictic).
+            has_sperm_storage: Whether sperm storage arrays are present.
+            observation: Optional compiled Observation for observation-mode
+                recording.
+        """
+        from natal.output.history import (
+            History,
+            HistorySchema,
+            ObservationMetadata,
+            PopulationLayout,
+            SpatialHistoryLayout,
+        )
+
+        state = self.state
+        ind = state.individual_count
+        n_sexes = int(ind.shape[0])
+        n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
+        n_ztypes = int(ind.shape[-1])
+
+        sex_labels = ("female", "male")[:n_sexes]
+
+        layout = PopulationLayout.from_population(
+            kind=kind,
+            n_demes=n_demes,
+            n_sexes=n_sexes,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
+            has_sperm_storage=has_sperm_storage,
+            sex_labels=sex_labels,
+            registry=self.index_registry,
+        )
+
+        obs_meta = None
+        if observation is not None:
+            obs_meta = ObservationMetadata(
+                labels=observation.labels,
+                collapse_age=observation.collapse_age,
+                n_groups=len(observation.labels),
+            )
+
+        spatial_layout = None
+        if n_demes > 1:
+            spatial_layout = SpatialHistoryLayout(
+                n_demes=n_demes,
+                ind_per_deme=n_sexes * n_ages * n_ztypes,
+                sperm_per_deme=n_ages * n_ztypes * n_ztypes if has_sperm_storage else 0,
+            )
+
+        if observation is not None:
+            obs_mask = self._observation_mask
+            if obs_mask is not None:
+                n_groups = obs_mask.shape[0]
+                row_size = 1 + n_groups * n_sexes * n_ages
+            else:
+                row_size = 1 + len(observation.labels) * n_sexes * n_ages
+            mode: str = "observation"
+        else:
+            ind_size = n_sexes * n_ages * n_ztypes
+            sperm_size = n_ages * n_ztypes * n_ztypes if has_sperm_storage else 0
+            row_size = 1 + ind_size * n_demes + sperm_size * n_demes
+            mode = "raw"
+
+        schema = HistorySchema(
+            mode=mode,
+            population=layout,
+            row_size=row_size,
+            observation=obs_meta,
+            spatial_layout=spatial_layout,
+        )
+        self._history_obj = History(schema)
+
     # ========================================================================
     # Core methods
     # ========================================================================
@@ -535,6 +627,36 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     def get_total_count(self) -> int:
         """Return the total number of individuals in the population."""
         pass
+
+    @property
+    def observation(self) -> Optional[Observation]:
+        """The immutable :class:`Observation` for this population.
+
+        Returns ``None`` when no observation has been configured.
+        Once the population is built, the observation cannot be changed.
+        """
+        return self._observation
+
+    def observe(self) -> Optional[ObservationResult]:
+        """Project current state through the population's observation.
+
+        Returns:
+            :class:`ObservationResult` with projected values, or ``None``
+            when no observation has been configured.
+
+        Raises:
+            RuntimeError: When state is not available yet.
+        """
+        obs = self._observation
+        if obs is None:
+            return None
+        state = getattr(self, "state", None)
+        if state is None:
+            raise RuntimeError("Population has no state to observe.")
+        ic = getattr(state, "individual_count", None)
+        if ic is None:
+            raise RuntimeError("Population state has no individual_count.")
+        return obs.project(ic, tick=self._tick)
 
     @abstractmethod
     def get_female_count(self) -> int:

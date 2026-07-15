@@ -446,7 +446,7 @@ class TestUnorderedFullLifecycle:
         assert pop.state.individual_count.sum() == 1250000.0
 
     def test_observation_output_has_unordered_labels(self):
-        """Observation uses unordered genotype count."""
+        """Observation uses unordered genotype count (3 labels for biallelic)."""
         sp = nt.Species.from_dict("canon_life3", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
@@ -454,9 +454,9 @@ class TestUnorderedFullLifecycle:
             individual_count={"female": {"A|A": 100}, "male": {"A|a": 100}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
         obs = pop.create_observation()
-        # Check that the observation's genotype list has unordered count
-        assert obs.diploid_genotypes is not None
-        assert len(obs.diploid_genotypes) == 3  # unordered: AA, Aa, aa
+        # Unordered: AA, Aa, aa = 3 genotypes (Aa == aA)
+        assert len(obs.labels) == 3
+        assert obs.labels == ("g0", "g1", "g2")
 
 
 # ============================================================================

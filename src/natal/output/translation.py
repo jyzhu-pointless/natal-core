@@ -403,7 +403,7 @@ def population_history_to_readable_dict(
 
     history_array: np.ndarray
     if history is None:
-        get_history = getattr(population, "get_history", None)
+        get_history = getattr(population, "get_history", None)  # type: ignore[union-attr]  # get_history defined on subclasses
         if callable(get_history):
             try:
                 history_array = cast(np.ndarray, get_history())
@@ -613,7 +613,7 @@ def _get_history_array(
 ) -> np.ndarray:
     """Fetch history from the population or return a caller-supplied array."""
     if history is None:
-        get_history = getattr(population, "get_history", None)
+        get_history = getattr(population, "get_history", None)  # type: ignore[union-attr]  # get_history defined on subclasses
         if callable(get_history):
             try:
                 return cast(np.ndarray, get_history())
@@ -737,7 +737,7 @@ def population_observation_history_to_readable_dict(
     Returns:
         A dictionary with observation metadata and per-snapshot entries.
     """
-    obs = getattr(population, "record_observation", None)
+    obs = population.record_observation
     if obs is None:
         return _build_history_observation_payload(
             population, history=history, observation=None,
@@ -745,7 +745,7 @@ def population_observation_history_to_readable_dict(
             include_zero_counts=include_zero_counts,
         )
 
-    obs = cast(Observation, obs)
+    assert obs is not None  # type-narrowing guard
     state = cast(PopulationState | DiscretePopulationState, population.state)
 
     n_sexes = int(state.individual_count.shape[0])
@@ -876,7 +876,7 @@ def output_history(
     # Auto-detect: prefer pre-recorded observation history when available and
     # no explicit observation override is provided.  This avoids re-parsing
     # the full raw state per snapshot.
-    pop_obs = getattr(population, "record_observation", None)
+    pop_obs = population.record_observation
     if pop_obs is not None and observation is None and groups is None:
         payload = population_observation_history_to_readable_dict(
             population=population,
@@ -1244,13 +1244,15 @@ def spatial_population_observation_history_to_readable_dict(
     Returns:
         A dictionary with observation metadata and per-tick, per-deme entries.
     """
-    obs = getattr(spatial_population, "record_observation", None)
+    obs = spatial_population.record_observation
     if obs is None:
         return spatial_population_history_to_readable_dict(
             spatial_population=spatial_population,
             history=history,
             include_zero_counts=include_zero_counts,
         )
+
+    assert obs is not None  # type-narrowing guard
 
     n_demes = spatial_population.n_demes
     first_deme = spatial_population.deme(0)
@@ -1444,7 +1446,7 @@ def spatial_population_output_history(
         Dictionary containing per-tick, per-deme readable payloads.
     """
     # Auto-detect pre-recorded observation history (same logic as output_history).
-    obs = getattr(spatial_population, "record_observation", None)
+    obs = spatial_population.record_observation
     if obs is not None:
         payload = spatial_population_observation_history_to_readable_dict(
             spatial_population=spatial_population,

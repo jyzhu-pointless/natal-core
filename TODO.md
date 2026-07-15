@@ -12,6 +12,79 @@
 
 ---
 
+## History / Observation 重构协调与延期设计（2026-07-15）
+
+> 本节记录 `.codex/plans/history_observation_refactor_plan.md` grill session 中已经讨论、但明确不应随当前增量重构一并实现的设计。当前重构只实现构建期 canonical Observation、单模式 History、post-hoc observation、`record_snapshot()` 和 raw checkpoint restore。
+
+### HO-C1 📋 natal-inferencer 接口协调
+
+natal-core 的最终接口稳定后，在 `natal-inferencer` 单独实施：
+
+- 将 `population.record_observation` 替换为只读 `population.observation`。
+- 粒子数组投影统一使用 `population.observation.apply(particle_counts)`。
+- 接受 Population 自动提供 identity Observation 的默认行为。
+- 删除对 `pop.create_observation()`、旧 output helpers 和兼容 alias 的依赖。
+- 增加跨仓库集成测试，覆盖默认 identity 与显式 Observation。
+
+natal-core 不为此保留 `record_observation` shim；两个项目尚未发布，可以直接协调升级。
+
+### HO-D1 🎨 Hook 条件触发与 tick 内记录
+
+**不纳入当前重构。** 当前只增加引擎空闲时调用的 `pop.record_snapshot()`，记录完整 tick 边界。
+
+未来如果允许 Hook 触发记录，必须先解决：
+
+- Hook 运行在 Numba / Python 双路径中，不能直接调用 Python Population 方法。
+- `first`、`early`、`late` 对应不同生命周期阶段，单独使用 tick 无法唯一标识记录。
+- `early` 状态已完成繁殖但尚未完成存活和年龄推进；`late` 状态尚未完成年龄推进。这些状态不是普通 checkpoint，不能从标准 tick 入口恢复。
+- 空间模型还必须明确记录发生在 per-deme 生命周期、全局迁移之前还是之后，并保证跨 deme 一致性。
+- 可能需要 `(tick, phase, occurrence)` 身份、预分配 Numba buffer 和独立的 trace schema。
+- “记录规则”应编译成引擎可执行的信号或条件程序，而不是让 Hook 修改 History 容器。
+
+设计时应优先判断它是否应成为独立的 Trace / Event Record 系统，而不是继续扩张可恢复 History。
+
+### HO-D2 🎨 可恢复的条件中止
+
+**不纳入当前重构，也不增加 `resume()`。** 当前 `RESULT_STOP` 同时承担中止 Hook event、提前退出 `run()` 和永久 finish Population 三种语义；`stop_if_*` 触发后会设置 `is_finished=True`，无法安全继续。
+
+不能简单清除 `_finished`：
+
+- 在 `first` 停止虽然位于 tick 边界，但同一条件可能在下一次 `run()` 立即再次触发。
+- 在 `early` / `late` 停止时状态位于 tick 中间；从 `first` 重新进入会重复生命周期步骤并破坏数值语义。
+- finish Hook 已可能执行，重新开放 Population 会违反终止不变量。
+
+后续设计应拆开：
+
+- `finish`：永久结束，触发 finish Hook，不可继续。
+- `break` / `pause`：只让当前 `run()` 在完整 tick 边界返回，Population 仍可继续。
+- tick 内 abort：保留为生命周期控制，不伪装成可恢复暂停。
+
+可能需要独立 `RunResult` / stop reason 和 tick-boundary condition compiler。当前安全替代方案是在 Python 层逐 tick `run(n_steps=1, record_every=0)`，检查 `pop.observe()` 后调用 `pop.record_snapshot()`。
+
+### HO-D3 🎨 多 Observation 与运行时规则编译
+
+当前只支持一个由 Configurator 在构建期确定的 canonical Observation，不公开 `pop.create_observation()` 或 `pop.observe(other_observation)`。
+
+当前可用替代方式：
+
+- 在 canonical Observation 中声明多个具名 group，再手动拆分结果。
+- 使用 raw History 做自定义分析。
+
+只有出现一份 Population 必须维护多套可复用 Observation 的真实需求后，才设计独立于 Population 的 rule compiler；不得通过恢复 runtime setter 解决。
+
+### HO-D4 🎨 History 持久化存档
+
+当前 `export_state()` 只导出当前 Population 状态，History 不随状态导入导出。`restore_checkpoint()` 只使用当前 Population 内存中的 raw History。
+
+未来如需跨进程或长期存档，应单独设计 `History.save()` / `History.load()`：
+
+- 文件必须保存完整 immutable schema、Population layout fingerprint、labels、axes、mode 和版本。
+- raw 与 observation History 都应可往返，但只有 raw History 可以恢复 Population。
+- 不应重新暴露缺少 schema 的 flat ndarray 文件格式。
+- 需要明确版本迁移、压缩、分块读取和大规模空间 History 的存储策略。
+
+---
+
 ## 🔴 高优先级 — 正确性 / 阻塞项
 
 ### #2 ✅ Selector + custom hook 调用约定统一

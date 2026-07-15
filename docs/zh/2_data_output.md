@@ -96,6 +96,8 @@ pop.set_observations(
 pop.run(n_steps=100, record_every=10)
 ```
 
+> **录制规则在构建时冻结：** `pop.record_observation` 和 `pop.set_observations()` 为了向后兼容仍可在活动 Population 上使用，但 `Configurator.with_observation()`（构建链中使用）在 Population 构建后调用会抛出 `RuntimeError`。推荐的工作流是在 `build()` 之前设置录制规则——详见 [Configurator API](../api/configurator.md)。
+
 `record_observation` 被设置后，内核在 recording 时自动使用观测聚合模式。`output_history()` 自动检测并选择正确的导出路径：
 
 ```python
@@ -144,7 +146,7 @@ history = pop.output_history()
 for snap in history["snapshots"]:
     print(f"tick {snap['tick']}: {snap['observed']}")
 
-# 可以随时切回原始模式查看
+# 切回原始模式（仅在历史为空时重建 schema）
 pop.record_observation = None  # 关闭观测模式
 # 后续 run() 将恢复原始 recording
 ```
@@ -252,7 +254,7 @@ spatial.set_observations(
 
 ### 历史记录配置
 
-种群对象内置历史记录功能，可配置记录频率和存储格式：
+种群对象内置历史记录功能，可配置记录频率和存储格式。录制 schema（模式、行大小、布局）在**构建时冻结**，记录首行后无法更改。
 
 ```python
 # 配置历史记录
@@ -532,10 +534,13 @@ for snapshot in history["snapshots"]:
 观察规则定义如何从状态中提取数据，历史记录保存状态的时间序列。观察规则可应用于当前状态或历史记录。
 
 ### 如何优化大数据量的历史记录？
-增加 `record_every` 间隔，使用 `clear_history()` 定期清理，或导出到外部存储。
+增加 `record_every` 间隔，使用 `clear_history()` 定期清理，或导出到外部存储。注意 `clear_history()` 会保留录制 schema——清空数据后无需重新配置即可继续记录。
 
 ### 观察规则会影响模拟性能吗？
 观察规则本身不影响模拟性能，但频繁的数据提取和存储可能影响整体性能。
+
+### 构建 Population 后还能修改录制规则吗？
+通过 `Configurator.with_observation()` 设置的录制规则在构建时冻结。`pop.record_observation` 属性 setter 为了向后兼容仍可更改模式，但 `HistorySchema` 仅在尚无历史记录时重建。运行时查询请使用 `pop.create_observation()`，无需修改录制模式。
 
 ---
 

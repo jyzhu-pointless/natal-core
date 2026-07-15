@@ -62,6 +62,7 @@ from natal.spatial.topology import (
 
 if TYPE_CHECKING:
     from natal.configurator import Configurator
+    from natal.output.history import History
     from natal.output.observation import Observation
     from natal.presets import GeneticPreset
     from natal.spatial.configurator import BatchSetting, SpatialConfigurator
@@ -695,6 +696,10 @@ class SpatialPopulation:
         # Evolution history as (tick, flattened_array) tuples.
         self._history: List[Tuple[int, NDArray[np.float64]]] = []
 
+        # Self-describing history model and recording plan (frozen at build time).
+        self._history_obj: Optional[History] = None
+        self._recording_plan: Optional[object] = None
+
         # History config
         self.max_history: int = 5000  # Default rolling window size
 
@@ -869,6 +874,9 @@ class SpatialPopulation:
         Each row is ``(tick, ind_all.ravel(), sperm_all.ravel())``.
         Returns a zero-row array if no history has been recorded.
         """
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is not None and history_obj.n_records > 0:
+            return history_obj.to_numpy()
         if len(self._history) == 0:
             return np.zeros((0, 0), dtype=np.float64)
         return np.array([rec[1] for rec in self._history], dtype=np.float64)
@@ -876,6 +884,9 @@ class SpatialPopulation:
     def clear_history(self) -> None:
         """Clear all recorded history."""
         self._history.clear()
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is not None:
+            history_obj.clear()
 
     def _enforce_history_limit(self) -> None:
         """Ensure history size does not exceed max_history by dropping oldest entries."""
@@ -1066,6 +1077,76 @@ class SpatialPopulation:
             flat[1 + ind_all.size:] = sperm_all.ravel()
         self._history.append((self._tick, flat))
         self._enforce_history_limit()
+
+    def record_snapshot(self) -> None:
+        """Record the current stable state across all demes into history.
+
+        Must only be called when the engine is not running.  Records
+        all demes atomically in one snapshot.  Duplicate ticks are
+        silently ignored.
+
+        Raises:
+            RuntimeError: If the population has finished simulation.
+        """
+        if getattr(self, "_finished", False):
+            raise RuntimeError(
+                "Cannot record snapshot on a finished population."
+            )
+        self._record_snapshot()
+
+    def restore_checkpoint(self, tick: int) -> None:
+        """Restore spatial population state from a raw-history record.
+
+        Only valid for raw-mode history.  Restores individual counts and
+        sperm storage for all demes.  All records after *tick* are removed.
+
+        Args:
+            tick: Exact tick to restore.
+
+        Raises:
+            ValueError: If mode is not ``"raw"`` or tick is not found.
+        """
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is None or history_obj.is_empty:
+            raise ValueError("No history available for checkpoint restore.")
+        if history_obj.schema.mode != "raw":
+            raise ValueError(
+                "Cannot restore population state from observation-mode "
+                "history.  Record raw history to enable checkpoint "
+                "restoration."
+            )
+        restored_tick, ic, ss = history_obj.restore_state(tick)
+        if ic.ndim >= 3:
+            n_demes_restored = ic.shape[0] if ic.ndim == 4 else 1
+            for di in range(min(n_demes_restored, len(self._demes))):
+                deme = self._demes[di]
+                if ic.ndim == 4:
+                    deme.state.individual_count[:] = ic[di]
+                else:
+                    deme.state.individual_count[:] = ic
+                if ss is not None:
+                    sp = getattr(deme.state, "sperm_storage", None)
+                    if sp is not None:
+                        sp[:] = ss[di] if ss.ndim == 4 else ss
+                deme._tick = restored_tick  # type: ignore[attr-defined]  # private attr on base population
+        self._tick = restored_tick
+        history_obj.truncate(retain_until_tick=tick)
+
+    def _write_history_obj(self, tick: int, flat_row: NDArray[np.float64]) -> None:
+        """Append a single (tick, flat_row) to ``_history_obj`` if available."""
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is None:
+            return
+        from natal.output.history import HistoryBatch
+
+        row = np.empty(1 + len(flat_row), dtype=np.float64)
+        row[0] = tick
+        row[1:] = flat_row
+        batch = HistoryBatch(
+            schema=history_obj.schema,
+            rows=row[np.newaxis, :],
+        )
+        history_obj.append(batch)
 
     @property
     def hooks(self) -> LifecycleWrappers:
@@ -1576,6 +1657,10 @@ class SpatialPopulation:
         for deme in self._demes:
             deme.reset()
         self._tick = int(self._demes[0].tick)
+        self._history.clear()
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is not None:
+            history_obj.clear()
 
     def aggregate_individual_count(self) -> NDArray[np.float64]:
         """Return the total individual-count tensor summed over all demes."""

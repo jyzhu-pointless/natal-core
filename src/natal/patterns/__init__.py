@@ -15,6 +15,7 @@ from .elements._base import PatternParseError
 from .elements.atom import LabPattern
 from .elements.diploid import ZygoteTypePattern
 from .elements.haploid import GameteTypePattern
+from .individual_selector import IndividualSelector
 from .parser import GenotypePatternParser
 from .selector import GenotypeSelector, resolve_zygote_type
 
@@ -22,6 +23,7 @@ __all__ = [
     "GameteTypePattern",
     "GenotypePatternParser",
     "GenotypeSelector",
+    "IndividualSelector",
     "LabPattern",
     "PatternParseError",
     "ZygoteTypePattern",
