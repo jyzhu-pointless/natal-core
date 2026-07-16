@@ -148,7 +148,6 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
 - `population_to_readable_dict` / `population_to_readable_json`
 - `population_history_to_readable_dict` / `population_history_to_readable_json`
-- `population_to_observation_dict` / `population_to_observation_json`
 
 其中：
 
@@ -176,18 +175,9 @@ print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 如果需要在翻译时直接应用 observation rules（详见 [种群观测规则](2_data_output.md)），可使用观测集成接口：
 
 ```python
-observed = nt.population_to_observation_dict(
-    pop,
-    groups={
-        "adult_wt_female": {
-            "genotype": ["WT|WT"],
-            "sex": "female",
-            "age": [1],
-        }
-    },
-    collapse_age=False,
-)
-print(observed["observed"]["adult_wt_female"])
+observed = pop.observe()
+print("观测轴:", observed.axes)
+print("观测值:", observed.values)
 ```
 
 如果直接操作 `PopulationState` / `DiscretePopulationState`，也可以调用对应的函数，并显式传入标签：

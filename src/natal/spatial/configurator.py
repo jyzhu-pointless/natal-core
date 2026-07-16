@@ -19,6 +19,7 @@ Examples:
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence as SequenceABC
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -27,6 +28,7 @@ from typing import (
     Generic,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -43,10 +45,15 @@ from natal.configurator import (
     Configurator,
     DiscreteConfigurator,
 )
+from natal.configurator._base import normalize_observation_groups
+from natal.configurator._factory import (
+    InitialIndividualCountInput,
+    InitialSpermStorageInput,
+)
 from natal.data import DiscretePopulationConfig, PopulationConfig
 from natal.genetics import Species
 from natal.genetics.structures._helpers import build_compression_mask
-from natal.output.observation import GroupsInput
+from natal.patterns import IndividualSelector
 from natal.population.age_structured import AgeStructuredPopulation
 from natal.population.discrete_generation import DiscreteGenerationPopulation
 from natal.registry.index import IndexRegistry
@@ -65,7 +72,7 @@ __all__ = [
 # Type aliases for population and builder types used throughout.
 PopulationInstance = Union[AgeStructuredPopulation, DiscreteGenerationPopulation]
 _HookItem = Union[
-    Callable[..., object],
+Callable[..., object],  # object: hook callback return type varies by hook category
     Dict[str, List[Tuple[Callable[..., object], Optional[str], Optional[int]]]],
 ]
 
@@ -121,7 +128,7 @@ class BatchSetting(Generic[_T]):
         self._fn: Optional[Callable[..., float]] = None
         self._fn_param_count: Optional[int] = None
         self._values: Optional[List[_T]] = None
-        self._values_array: Optional[NDArray[np.floating[Any]]] = None
+        self._values_array: Optional[NDArray[np.floating[Any]]]  # Any: dtype parameter — npt.NDArray shorthand = None
         self._n_demes: Optional[int] = None
 
         if callable(values):
@@ -278,7 +285,7 @@ def batch_setting(
 # ---------------------------------------------------------------------------
 
 
-def _make_hashable(value: Any) -> Any:  # accepts arbitrary types for dict-key conversion
+def _make_hashable(value: Any) -> Any:  # Any param+return: accepts arbitrary types for dict-key conversion
     """Recursively convert *value* into a hashable form for deduplication.
 
     Used by ``_build_heterogeneous()`` to detect which demes have identical
@@ -312,6 +319,27 @@ def _make_hashable(value: Any) -> Any:  # accepts arbitrary types for dict-key c
         return tuple(_make_hashable(v) for v in tup)
     # Scalar: int, float, str, bool — already hashable.
     return value
+
+
+def _float_value(value: object, *, name: str) -> float:  # object: accepts any scalar from configurator replay log (int, float, np.generic)
+    """Narrow a replay-log scalar before converting it to float.
+
+    Args:
+        value: Deferred scalar value.
+        name: Configuration field used in error messages.
+
+    Returns:
+        The scalar converted to float.
+
+    Raises:
+        TypeError: If the replay value is not numeric.
+    """
+    if isinstance(value, (bool, int, float)):
+        return float(value)
+    if isinstance(value, (np.bool_, np.integer, np.floating)):
+        scalar = cast(bool | int | float, value.item())
+        return float(scalar)
+    raise TypeError(f"{name} must be numeric, got {type(value).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +434,24 @@ def _is_0d_field(config: PopulationConfig | DiscretePopulationConfig, name: str)
     return isinstance(val, np.ndarray) and val.ndim == 0
 
 
+def _object_sequence(value: object, *, name: str) -> Sequence[object]:  # object: accepts any sequence from configurator replay log (list, tuple, ndarray)
+    """Validate a replay-log value used as positional arguments.
+
+    Args:
+        value: Deferred replay-log value.
+        name: User-facing field name for error messages.
+
+    Returns:
+        The value narrowed to a non-string sequence.
+
+    Raises:
+        TypeError: If the value cannot be expanded as positional arguments.
+    """
+    if not isinstance(value, SequenceABC) or isinstance(value, (str, bytes)):
+        raise TypeError(f"{name} must be a sequence, got {type(value).__name__}")
+    return cast(Sequence[object], value)
+
+
 # ---------------------------------------------------------------------------
 # SpatialConfigurator
 # ---------------------------------------------------------------------------
@@ -453,11 +499,17 @@ class SpatialConfigurator:
         self._pop_type: Literal["age_structured", "discrete_generation"] = pop_type
 
         # Observation groups (optional, applied at build time).
-        self._observation_groups: Optional[GroupsInput] = None
+        self._observation_groups: dict[str, IndividualSelector] | None = None
         self._observation_collapse_age: bool = False
+        self._observation_demes: tuple[int, ...] = tuple(range(n_demes))
+        self._observation_deme_mode: Literal[
+            "preserve", "aggregate"
+        ] = "preserve"
+        self._record_history_mode: Literal["raw", "observation"] = "raw"
+        self._record_history_max_rows: int | None = None
 
         # Runtime population reference (None at build time; set by for_population).
-        self._pop_ref: Optional[Any] = None
+        self._pop_ref: Optional[Any] = None  # Any: stores a Population reference; concrete type varies
 
         # Create the template configurator (new path).
         if pop_type == "age_structured":
@@ -468,7 +520,7 @@ class SpatialConfigurator:
                 Configurator.for_discrete(species)
 
         # Accumulated batch settings: param_name -> BatchSetting.
-        self._batch_settings: Dict[str, BatchSetting[Any]] = {}
+        self._batch_settings: Dict[str, BatchSetting[Any]] = {}  # Any: BatchSetting value type varies per config field
 
         # Replay log: list of (method_name, kwargs_with_batch_settings).
         self._replay_log: List[tuple[str, Dict[str, Any]]] = []
@@ -547,7 +599,6 @@ class SpatialConfigurator:
                 if not isinstance(ind_cnt, dict):
                     continue
 
-                from natal.configurator._factory import InitialIndividualCountInput
                 dist = cast(InitialIndividualCountInput, ind_cnt)
 
                 if self._pop_type == "age_structured":
@@ -702,7 +753,7 @@ class SpatialConfigurator:
                     if key in sig:
                         resolved[key] = sig[key]
                     elif isinstance(value, BatchSetting):
-                        first: Any = cast(BatchSetting[Any], value).first_value()
+                        first: Any = cast(BatchSetting[Any], value).first_value()  # Any: BatchSetting value type is unknown until expansion
                         if first is not None:
                             resolved[key] = first
                     else:
@@ -714,7 +765,9 @@ class SpatialConfigurator:
                     continue
 
                 if method_name == "presets":
-                    raw_list = cast(Any, resolved.pop("preset_list", ()))
+                    raw_list = _object_sequence(
+                        resolved.pop("preset_list", ()), name="preset_list"
+                    )
                     expanded_presets: list[object] = []
                     for i_p, item in enumerate(raw_list):
                         key = f"_preset_{i_p}"
@@ -901,7 +954,7 @@ class SpatialConfigurator:
             "compress": compress if not self._batch_settings else False,
             "declared_zygote_types": declared_zygote_types,
         }
-        self._template.setup(**template_kwargs)  # type: ignore[arg-type]
+        self._template.setup(**template_kwargs)  # type: ignore[arg-type]  # template_kwargs has mixed value types; setup validates at runtime
         if compress:
             self._compress = True
         if declared_zygote_types is not None:
@@ -942,8 +995,8 @@ class SpatialConfigurator:
 
     def initial_state(
         self,
-        individual_count: Any,
-        sperm_storage: Optional[Any] = None,
+        individual_count: Any,  # Any: accepts nested dict, list, or ndarray — validated internally
+        sperm_storage: Optional[Any] = None,  # Any: accepts nested dict, list, or ndarray — validated internally  # Any: accepts nested dict, list, or ndarray — validated internally
     ) -> SpatialConfigurator:
         """Configure the initial population state.
 
@@ -1217,42 +1270,68 @@ class SpatialConfigurator:
 
     def with_observation(
         self,
-        groups: GroupsInput,
+        groups: Mapping[str, IndividualSelector],
         *,
         collapse_age: bool = False,
+        demes: Optional[Sequence[int]] = None,
+        deme_mode: Literal["preserve", "aggregate"] = "preserve",
     ) -> SpatialConfigurator:
-        """Register observation groups for compressed history recording.
+        """Define the canonical spatial Observation at build time.
 
-        The groups are compiled into a binary mask at build time and passed
-        to the spatial simulation kernel on each ``run()`` call. Once set,
-        history records store aggregated observation data instead of raw
-        flattened state across all demes.
+        This method only defines how ``pop.observe()`` projects population
+        counts. History remains raw unless ``record_history(mode="observation")``
+        is configured independently.
 
         Args:
-            groups: Observation groups (dict of name -> spec, list of specs,
-                or None for one-group-per-genotype).
-            collapse_age: Whether to collapse the age axis in exports.
+            groups: Non-empty ordered mapping from labels to selectors.
+            collapse_age: Whether to sum and remove the age axis.
+            demes: Ordered deme indices to observe. ``None`` selects all
+                demes in population order.
+            deme_mode: ``"preserve"`` keeps a shared deme axis;
+                ``"aggregate"`` sums and removes it.
 
         Returns:
             SpatialConfigurator: Self for chaining.
 
         Raises:
             RuntimeError: When called on a runtime Configurator.
+            TypeError: If groups is not a mapping of selectors.
+            ValueError: If groups, a group label, the deme mode, or the deme
+                selection is invalid.
         """
         if self._pop_ref is not None:
             raise RuntimeError(
                 "with_observation() is only valid during the build phase. "
-                "Recording rules cannot change after the Population has been built. "
-                "Use pop.create_observation() for runtime queries."
+                "Observation rules cannot change after the Population has been built."
             )
-        self._observation_groups = groups
+        self._observation_groups = normalize_observation_groups(groups)
         self._observation_collapse_age = collapse_age
+        if deme_mode not in ("preserve", "aggregate"):
+            raise ValueError(
+                "deme_mode must be 'preserve' or 'aggregate', "
+                f"got {deme_mode!r}"
+            )
+        selected_demes = (
+            tuple(range(self._n_demes)) if demes is None else tuple(demes)
+        )
+        if not selected_demes:
+            raise ValueError("Observation selects no demes")
+        if any(type(index) is not int for index in selected_demes):
+            raise TypeError("demes must contain integer deme indices")
+        if any(index < 0 or index >= self._n_demes for index in selected_demes):
+            raise ValueError(
+                f"demes must be within [0, {self._n_demes}), got {selected_demes!r}"
+            )
+        if len(set(selected_demes)) != len(selected_demes):
+            raise ValueError("demes must not contain duplicate indices")
+        self._observation_demes = selected_demes
+        self._observation_deme_mode = deme_mode
         return self
 
     def record_history(
         self,
         *,
-        mode: str = "raw",
+        mode: Literal["raw", "observation"] = "raw",
         max_rows: Optional[int] = None,
     ) -> SpatialConfigurator:
         """Set the recording mode and capacity for spatial population history.
@@ -1274,6 +1353,7 @@ class SpatialConfigurator:
 
         Raises:
             RuntimeError: When called on a runtime Configurator.
+            ValueError: When mode is invalid or ``max_rows`` is less than one.
         """
         if self._pop_ref is not None:
             raise RuntimeError(
@@ -1284,6 +1364,10 @@ class SpatialConfigurator:
         if mode not in ("raw", "observation"):
             raise ValueError(
                 f"mode must be 'raw' or 'observation', got {mode!r}"
+            )
+        if max_rows is not None and max_rows < 1:
+            raise ValueError(
+                f"max_rows must be >= 1 or None, got {max_rows}"
             )
         self._record_history_mode = mode
         self._record_history_max_rows = max_rows
@@ -1298,7 +1382,7 @@ class SpatialConfigurator:
         kernel: Optional[NDArray[np.float64]] = None,
         migration_rate: float = 0.0,
         strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto",
-        adjacency: Optional[object] = None,
+        adjacency: Optional[object] = None,  # object: adjacency matrix (NDArray, list, or None) — duck-typed
         kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
@@ -1354,7 +1438,7 @@ class SpatialConfigurator:
     # Parameter introspection (mirrors PopulationBuilderBase)
     # ------------------------------------------------------------------
 
-    def get_params(self) -> dict[str, object]:
+    def get_params(self) -> dict[str, object]:  # object: config field values (int, float, ndarray, bool)
         """Return all registered parameter values.
 
         Merges spatial-specific params with values read from the template config.
@@ -1366,10 +1450,10 @@ class SpatialConfigurator:
         for key, desc in ALL_PARAMETERS.items():
             if desc.config_field is None or desc.is_tensor:
                 continue
-            field: object = getattr(self._template.config, desc.config_field, None)
+            field: object = getattr(self._template.config, desc.config_field, None)  # object: config fields have heterogeneous types
             if field is None:
                 continue
-            val: object
+            val: object  # object: config field values are heterogeneous (int, float, ndarray)
             if desc.config_path and isinstance(field, np.ndarray):
                 val = cast(object, field[desc.config_path])
             elif isinstance(field, np.ndarray) and field.ndim == 0:
@@ -1379,7 +1463,7 @@ class SpatialConfigurator:
             params[key] = val
         return params
 
-    def get_param(self, domain: str, name: str) -> object | None:
+    def get_param(self, domain: str, name: str) -> object | None:  # object: config field value (int, float, ndarray, bool, None)
         """Look up a single registered parameter value."""
         return self.get_params().get(f"{domain}.{name}")
 
@@ -1468,11 +1552,6 @@ class SpatialConfigurator:
             adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
-        if self._observation_groups is not None:
-            spatial.set_observations(
-                self._observation_groups,
-                collapse_age=self._observation_collapse_age,
-            )
         self._compile_recording_plan(spatial)
         return spatial
 
@@ -1538,7 +1617,7 @@ class SpatialConfigurator:
         # 4. Build one template per group.  The first group always runs the
         #    full builder pipeline.  Subsequent groups try ``_replace`` first
         #    (shares heavy ndarrays), falling back to full replay.
-        demes: List[PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]
+        demes: List[PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]  # None placeholder; each slot filled before return
         base_config: PopulationConfig | DiscretePopulationConfig | None = None
         base_template: Optional[PopulationInstance] = None   # template deme from first group — cloned via _clone_deme
 
@@ -1622,11 +1701,6 @@ class SpatialConfigurator:
             adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
-        if self._observation_groups is not None:
-            spatial.set_observations(
-                self._observation_groups,
-                collapse_age=self._observation_collapse_age,
-            )
         self._compile_recording_plan(spatial)
         return spatial
 
@@ -1701,36 +1775,38 @@ class SpatialConfigurator:
         from natal.configurator import PopulationConfigBuilder
         from natal.engine.simulation.age_structured import compute_equilibrium_metrics
 
-        replace_kwargs: Dict[str, Any] = {}
+        replace_kwargs: Dict[str, Any] = {}  # Any: config field values (int, float, ndarray, bool)
         needs_equilibrium = False
 
         for kwarg, raw_val in sig_map.items():
             # sig_map values are genuinely polymorphic (float, int, dict, …);
             # their correctness is pre-validated by _can_use_replace.
-            val = cast(Any, raw_val)
+            val = raw_val
 
             # --- 1. array-valued: dict → array conversion ---
             if kwarg == "individual_count":
+                distribution = cast(InitialIndividualCountInput, val)
                 if pop_type == "age_structured":
                     array = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
                         species=species,
-                        distribution=val,
+                        distribution=distribution,
                         n_ages=int(base_config.n_ages),
                         new_adult_age=int(base_config.new_adult_age),
                     )
                 else:
                     array = PopulationConfigBuilder.resolve_discrete_initial_individual_count(
                         species=species,
-                        distribution=val,
+                        distribution=distribution,
                     )
                 replace_kwargs["initial_individual_count"] = array
                 continue
 
             if kwarg == "sperm_storage":
                 if pop_type == "age_structured":
+                    sperm_storage = cast(InitialSpermStorageInput, val)
                     array = PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
                         species=species,
-                        sperm_storage=val,
+                        sperm_storage=sperm_storage,
                         n_ages=int(base_config.n_ages),
                         new_adult_age=int(base_config.new_adult_age),
                     )
@@ -1741,7 +1817,9 @@ class SpatialConfigurator:
             config_field = _KWARG_RENAMES.get(kwarg, kwarg)
             # Wrap scalar values for 0-d ndarray config fields.
             if _is_0d_field(base_config, config_field) and not isinstance(val, np.ndarray):
-                replace_kwargs[config_field] = np.array(float(val))
+                replace_kwargs[config_field] = np.array(
+                    _float_value(val, name=config_field)
+                )
             else:
                 replace_kwargs[config_field] = val
 
@@ -1843,7 +1921,9 @@ class SpatialConfigurator:
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":
-                raw_preset_list = cast(Any, resolved.pop("preset_list", ()))
+                raw_preset_list = _object_sequence(
+                    resolved.pop("preset_list", ()), name="preset_list"
+                )
                 expanded_presets: list[object] = []
                 for i, item in enumerate(raw_preset_list):
                     key = f"_preset_{i}"
@@ -1859,7 +1939,9 @@ class SpatialConfigurator:
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(*expanded_presets, **filtered)
             elif method_name == "hooks":
-                hook_items = cast(Any, resolved.pop("hook_items", ()))
+                hook_items = _object_sequence(
+                    resolved.pop("hook_items", ()), name="hook_items"
+                )
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(*hook_items, **filtered)
             else:
@@ -1873,7 +1955,10 @@ class SpatialConfigurator:
         from natal.data import DiscretePopulationConfig
         from natal.output._recording import compile_recording_plan
         from natal.output.history import History
-        from natal.output.observation import build_identity_observation
+        from natal.output.observation import (
+            ObservationFilter,
+            build_identity_observation,
+        )
 
         ref_deme = spatial.deme(0)
         config = ref_deme.config
@@ -1884,32 +1969,55 @@ class SpatialConfigurator:
             kind = "spatial_age_structured"
             has_sperm = True
 
-        observation = getattr(spatial, "_observation", None)
-        compact_meta = getattr(spatial, "_compact_meta", None)
+        record_mode = self._record_history_mode
+        max_rows = self._record_history_max_rows
 
-        record_mode = getattr(self, "_record_history_mode", None)
-        max_rows = getattr(self, "_record_history_max_rows", None)
-
-        if record_mode == "observation" and observation is None:
-            n_ztypes = ref_deme.index_registry.n_ztypes
+        n_ztypes = ref_deme.index_registry.n_ztypes
+        if self._observation_groups is None:
             observation = build_identity_observation(
                 ref_deme.index_registry,
                 n_ztypes=n_ztypes,
                 n_sexes=ref_deme.config.n_sexes,
                 n_ages=ref_deme.config.n_ages,
+                deme_indices=self._observation_demes,
+                deme_mode=self._observation_deme_mode,
             )
-            spatial._observation = observation  # type: ignore[reportPrivateUsage]
+        else:
+            observation = ObservationFilter(
+                ref_deme.index_registry
+            ).build_from_selectors(
+                groups=self._observation_groups,
+                collapse_age=self._observation_collapse_age,
+                n_sexes=ref_deme.config.n_sexes,
+                n_ages=ref_deme.config.n_ages,
+                n_ztypes=n_ztypes,
+                deme_indices=self._observation_demes,
+                deme_mode=self._observation_deme_mode,
+            )
+        spatial._observation = observation  # type: ignore[reportPrivateUsage]  # build-time installation of the immutable canonical rule
 
         plan = compile_recording_plan(
             ref_deme,
+            mode=record_mode,
             kind=kind,
             n_demes=spatial.n_demes,
             has_sperm_storage=has_sperm,
             observation=observation,
-            compact_meta=compact_meta,
         )
-        spatial._recording_plan = plan  # type: ignore[reportPrivateUsage]
-        spatial._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]
+        from dataclasses import replace
+
+        observation = replace(
+            observation,
+            population_fingerprint=plan.schema.population.fingerprint,
+        )
+        spatial._observation = observation  # type: ignore[reportPrivateUsage]  # bind canonical rule to the frozen PopulationLayout
+        # Spatial wrappers currently transport one regular raw batch to the
+        # container, which applies the frozen Observation before committing to
+        # History. This avoids the legacy ragged CompactMeta layout while still
+        # storing only the selected observation values.
+        spatial._observation_mask = None  # type: ignore[reportPrivateUsage]  # raw engine transport; container commits the configured History mode
+        spatial._recording_plan = plan  # type: ignore[reportPrivateUsage]  # configurator sets private attr on spatial
+        spatial._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]  # configurator sets private attr
 
     # ------------------------------------------------------------------
     # Runtime update support (for_population)
@@ -1978,31 +2086,31 @@ class _SpatialUpdate:
         """
         self._pop = spatial_pop
 
-    def competition(self, **kwargs: object) -> _SpatialUpdate:
+    def competition(self, **kwargs: object) -> _SpatialUpdate:  # object: Python **kwargs convention; values validated at call site
         self._apply_batch_or_scalar("competition", kwargs)
         return self
 
-    def reproduction(self, **kwargs: object) -> _SpatialUpdate:
+    def reproduction(self, **kwargs: object) -> _SpatialUpdate:  # object: Python **kwargs convention; values validated at call site
         self._apply_batch_or_scalar("reproduction", kwargs)
         return self
 
-    def survival(self, **kwargs: object) -> _SpatialUpdate:
+    def survival(self, **kwargs: object) -> _SpatialUpdate:  # object: Python **kwargs convention; values validated at call site
         self._apply_batch_or_scalar("survival", kwargs)
         return self
 
-    def fitness(self, **kwargs: object) -> _SpatialUpdate:
+    def fitness(self, **kwargs: object) -> _SpatialUpdate:  # object: Python **kwargs convention
         self._dispatch_scalar("fitness", kwargs)
         return self
 
-    def custom(self, **kwargs: object) -> _SpatialUpdate:
+    def custom(self, **kwargs: object) -> _SpatialUpdate:  # object: Python **kwargs convention
         self._apply_batch_or_scalar("custom", kwargs)
         return self
 
-    def setup(self, **kwargs: object) -> _SpatialUpdate:
+    def setup(self, **kwargs: object) -> _SpatialUpdate:  # object: Python **kwargs convention
         self._apply_batch_or_scalar("setup", kwargs)
         return self
 
-    def modifiers(self, **kwargs: object) -> _SpatialUpdate:
+    def modifiers(self, **kwargs: object) -> _SpatialUpdate:  # object: Python **kwargs convention
         self._dispatch_scalar("modifiers", kwargs)
         return self
 
@@ -2025,7 +2133,7 @@ class _SpatialUpdate:
                 updated_configs[cid] = new_config
         return self
 
-    def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:
+    def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:  # object: hook callback return type varies
         if not self._pop.demes:
             return self
         seen: set[int] = set()
@@ -2062,16 +2170,16 @@ class _SpatialUpdate:
 
         n_demes = len(self._pop.demes)
         # Materialise each BatchSetting into a concrete per-deme list.
-        expanded: dict[str, list[object]] = {}
+        expanded: dict[str, list[object]] = {}  # object: config field values per deme (int, float, ndarray)
         for batch_key in batch_keys:
-            batch: BatchSetting = kwargs.pop(batch_key)  # type: ignore[assignment]
+            batch: BatchSetting = kwargs.pop(batch_key)  # type: ignore[assignment]  # kwargs typed as object; callers guarantee BatchSetting
             topology = getattr(self._pop, 'topology', None)
             expanded[batch_key] = batch.expand(n_demes, topology)
 
         # Per-deme loop: each deme gets its slice of expanded values
         # plus any shared (non-BatchSetting) scalar kwargs.
         for i in range(n_demes):
-            per_deme_kwargs: dict[str, object] = dict(kwargs)
+            per_deme_kwargs: dict[str, object] = dict(kwargs)  # object: config field values (int, float, ndarray)
             all_none = True
             for batch_key, vals in expanded.items():
                 val = vals[i]

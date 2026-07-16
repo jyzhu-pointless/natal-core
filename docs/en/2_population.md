@@ -94,7 +94,7 @@ pop.run_tick()
 # Simulate multiple steps, printing state after each step
 for _ in range(100):
     pop.run_tick()
-    print(pop.output_current_state())
+    print(pop.observe().values)
 ```
 
 ### Batch Simulation
@@ -148,27 +148,28 @@ print(f"Var allele frequency: {var_freq}")
 
 ### History Configuration
 
-The population object has built-in history recording functionality, with configurable recording frequency and storage format:
+Choose the History mode and capacity before `build()`. Raw mode and unlimited
+capacity are the defaults:
 
 ```python
-# Configure history recording
-pop.record_every = 10  # Record every 10 steps
-pop.max_history = 1000  # Maximum of 1000 snapshots
+pop = (
+    nt.DiscreteGenerationPopulation.setup(sp)
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500})
+    .record_history(mode="raw", max_rows=1000)
+    .build()
+)
 
 # Run simulation with history recording
-results = pop.run(n_steps=500, record_every=5)
+pop.run(n_steps=500, record_every=5)
 ```
 
 ### History Data Access
 
 ```python
-# Get complete history
-full_history = pop.output_history()
-print("Number of history records:", len(full_history["snapshots"]))
-print("Last step data:", full_history["snapshots"][-1])
-
-# Get list of recorded time steps
-ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
+history = pop.history
+print("Number of history records:", history.n_records)
+print("Individual-count shape:", history.individual_count.shape)
+ticks = history.ticks
 print("Recorded ticks:", ticks)
 ```
 
@@ -187,13 +188,28 @@ results = pop.run(n_steps=100, record_every=5)
 ### Current State Output
 
 ```python
-# Get detailed snapshot of current state
-current_state = pop.output_current_state()
-print("Current state:", current_state)
+# Get current state projection
+result = pop.observe()
+print("Observation axes:", result.axes)
+print("Observation values:", result.values)
 
-# Include zero-count groups in output
-detailed_state = pop.output_current_state(include_zero_counts=True)
-print("Detailed state:", detailed_state)
+# Define a custom observation at build time with IndividualSelector
+from natal.patterns import IndividualSelector
+
+pop = (
+    nt.DiscreteGenerationPopulation.setup(sp)
+    .with_observation(
+        groups={"adult": IndividualSelector(age=[1])},
+        collapse_age=True,
+    )
+    .initial_state(...)
+    .competition(...)
+    .build()
+)
+
+# pop.observe() automatically uses the configured observation
+detailed = pop.observe()
+print("Detailed state:", detailed)
 ```
 
 ### Integration with Observation Rules
@@ -201,22 +217,13 @@ print("Detailed state:", detailed_state)
 Combined with observation rules, specific subpopulation data can be extracted from the population state. For detailed methods, see [Extracting Population Simulation Data](2_data_output.md).
 
 ```python
-# Create observation rules
-observation = pop.create_observation(
-    groups={
-        "adult_wt": {"genotype": ["WT|WT"], "age": [1]},
-        "drive_carriers": {"genotype": ["WT|Drive", "Drive|Drive"]}
-    },
-    collapse_age=False,
-)
+# Every Population has a canonical observation; the default is identity
+current = pop.observe()
+print(current.axes)  # ("group", "sex", "age")
 
-# Get current state with observation rules
-current = pop.output_current_state(observation=observation)
-print("Current observation data:", current["observed"])
-
-# Get history data with observation rules
-history = pop.output_history(observation=observation)
-print("History observation data:", history["observed"])
+# Raw History can be projected later through the same observation
+observed_history = pop.history.observe(pop.observation)
+print(observed_history.values.shape)
 ```
 
 ## Reset and Restart

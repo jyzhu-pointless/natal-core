@@ -13,6 +13,8 @@ mathematical invariant, not an implementation detail.  Covers:
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -23,7 +25,7 @@ from natal.output.history import (
     HistorySchema,
     PopulationLayout,
 )
-from natal.output.observation import ObservationFilter
+from natal.output.observation import Observation, ObservationFilter
 from natal.patterns.individual_selector import IndividualSelector
 
 # ============================================================================
@@ -97,7 +99,7 @@ def _build_pop(
     )
     if with_observation:
         cfg = cfg.with_observation(
-            groups={"total": {"genotype": "*"}},
+            groups={"total": IndividualSelector()},
             collapse_age=False,
         )
     return cfg.build()
@@ -116,7 +118,7 @@ class TestMaxRows:
         schema = _raw_schema(row_size=5)
         history = History(schema, max_rows=None)
         rows = _make_rows(50, 5)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
         # Invariant: all 50 rows retained when unlimited
         assert len(history) == 50
 
@@ -140,7 +142,7 @@ class TestMaxRows:
         schema = _raw_schema(row_size=5)
         history = History(schema, max_rows=3)
         rows = _make_rows(5, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
         # Invariant: only last 3 rows retained
         assert len(history) == 3
         # Invariant: evicted ticks not present
@@ -148,7 +150,7 @@ class TestMaxRows:
         assert 0 not in history.ticks
         assert 1 not in history.ticks
         # Invariant: retained rows have correct tick values
-        arr = history.to_numpy()
+        arr = history._to_numpy()
         assert arr.shape[0] == 3
         np.testing.assert_array_equal(arr[:, 0], np.array([2.0, 3.0, 4.0], dtype=np.float64))
 
@@ -159,7 +161,7 @@ class TestMaxRows:
         for tick in range(7):
             row = np.full(5, float(tick), dtype=np.float64)
             row[0] = float(tick)
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
         # Invariant: after 7 inserts into capacity 3, len=3
         assert len(history) == 3
         # Invariant: ticks are sorted and are the last 3
@@ -171,7 +173,7 @@ class TestMaxRows:
         history = History(schema, max_rows=2)
         # Single batch with 5 rows, all distinct ticks
         rows = _make_rows(5, 3, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
         # Invariant: only last 2 remain
         assert len(history) == 2
         assert history.ticks == (3, 4)
@@ -191,7 +193,7 @@ class TestMaxRows:
             row = np.zeros(row_size, dtype=np.float64)
             row[0] = float(tick)
             row[1 : 1 + ind_size] = marker
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         # After eviction of tick 0, cache should reflect only ticks 1,2
         ic = history.individual_count
@@ -206,7 +208,7 @@ class TestMaxRows:
         schema = _raw_schema(row_size=5)
         history = History(schema, max_rows=5)
         rows = _make_rows(5, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
         assert len(history) == 5
         assert history.ticks == (0, 1, 2, 3, 4)
 
@@ -234,7 +236,7 @@ class TestReadOnlyCachedArrays:
         for tick in range(3):
             row = np.zeros(row_size, dtype=np.float64)
             row[0] = float(tick)
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ic = history.individual_count
         # Invariant: correct shape from layout dimensions
@@ -253,7 +255,7 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ic = history.individual_count
         assert not ic.flags.writeable
@@ -261,7 +263,7 @@ class TestReadOnlyCachedArrays:
             ic[0, 0, 0, 0] = 999.0
 
     def test_individual_count_cached(self) -> None:
-        """Same instance returned on second access (caching)."""
+        """Cache returns equivalent values on repeated access (defensive copy)."""
         n_sexes, n_ages, n_ztypes = 2, 2, 3
         ind_size = n_sexes * n_ages * n_ztypes
         row_size = 1 + ind_size
@@ -272,12 +274,12 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ic1 = history.individual_count
         ic2 = history.individual_count
-        # Invariant: same object returned (not a copy)
-        assert ic1 is ic2
+        # Invariant: values equivalent (defensive copy, not same object)
+        np.testing.assert_array_equal(ic1, ic2)
 
     def test_individual_count_cache_invalidated_after_append(self) -> None:
         """Cache is rebuilt (new object) after appending new rows."""
@@ -291,13 +293,13 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
         ic1 = history.individual_count
         assert ic1.shape[0] == 1
 
         row2 = np.zeros(row_size, dtype=np.float64)
         row2[0] = 1.0
-        history.append(HistoryBatch(schema=schema, rows=row2[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row2[np.newaxis, :]))
         ic2 = history.individual_count
         # Invariant: shape reflects new row
         assert ic2.shape[0] == 2
@@ -393,7 +395,7 @@ class TestReadOnlyCachedArrays:
 
         v1 = history.values
         v2 = history.values
-        assert v1 is v2
+        np.testing.assert_array_equal(v1, v2)
 
     def test_values_raw_mode_raises(self) -> None:
         """values raises ValueError in raw mode."""
@@ -417,7 +419,7 @@ class TestReadOnlyCachedArrays:
         history = History(schema)
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ss = history.sperm_storage
         # Invariant: returns None when layout says no sperm_storage
@@ -442,7 +444,7 @@ class TestReadOnlyCachedArrays:
             # Put a marker in the sperm region
             sperm_start = 1 + ind_size
             row[sperm_start] = float(tick * 100 + 1)
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ss = history.sperm_storage
         assert ss is not None
@@ -466,7 +468,7 @@ class TestReadOnlyCachedArrays:
         history = History(schema)
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ss = history.sperm_storage
         assert ss is not None
@@ -488,11 +490,12 @@ class TestReadOnlyCachedArrays:
         history = History(schema)
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ss1 = history.sperm_storage
         ss2 = history.sperm_storage
-        assert ss1 is ss2
+        assert ss1 is not None and ss2 is not None
+        np.testing.assert_array_equal(ss1, ss2)
 
     def test_sperm_storage_cache_invalidated(self) -> None:
         """sperm_storage cache invalidated after append."""
@@ -509,14 +512,14 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
         ss1 = history.sperm_storage
         assert ss1 is not None
         assert ss1.shape[0] == 1
 
         row2 = np.zeros(row_size, dtype=np.float64)
         row2[0] = 1.0
-        history.append(HistoryBatch(schema=schema, rows=row2[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row2[np.newaxis, :]))
         ss2 = history.sperm_storage
         assert ss2 is not None
         assert ss2.shape[0] == 2
@@ -538,12 +541,12 @@ class TestReadOnlyCachedArrays:
 
 
 # ============================================================================
-# 3. ticks property (sorted, cached)
+# 3. ticks property (strictly increasing, cached)
 # ============================================================================
 
 
 class TestTicksProperty:
-    """Invariant: ticks returns a sorted tuple and is cached."""
+    """Invariant: ticks returns the committed monotonic tuple and is cached."""
 
     def test_ticks_empty(self) -> None:
         """Empty history returns empty tuple."""
@@ -551,17 +554,12 @@ class TestTicksProperty:
         history = History(schema)
         assert history.ticks == ()
 
-    def test_ticks_sorted_tuple(self) -> None:
-        """ticks returns sorted tuple of all recorded tick values."""
+    def test_ticks_strictly_increasing_tuple(self) -> None:
+        """ticks preserves the validated strictly increasing record order."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(5, 5, start_tick=0)
-        # Shuffle insertion order
-        for idx in [3, 1, 4, 0, 2]:
-            history.append(
-                HistoryBatch(schema=schema, rows=rows[idx:idx + 1, :])
-            )
-        # Invariant: sorted ascending tuple
+        history._append(HistoryBatch(schema=schema, rows=rows))
         assert history.ticks == (0, 1, 2, 3, 4)
         assert isinstance(history.ticks, tuple)
 
@@ -570,7 +568,7 @@ class TestTicksProperty:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
 
         t1 = history.ticks
         t2 = history.ticks
@@ -582,13 +580,13 @@ class TestTicksProperty:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(2, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
 
         t1 = history.ticks
         assert t1 == (0, 1)
 
         row3 = np.array([[2.0, 0, 0, 0, 0]], dtype=np.float64)
-        history.append(HistoryBatch(schema=schema, rows=row3))
+        history._append(HistoryBatch(schema=schema, rows=row3))
         t2 = history.ticks
         # Invariant: includes new tick
         assert t2 == (0, 1, 2)
@@ -600,7 +598,7 @@ class TestTicksProperty:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
 
         t1 = history.ticks
         assert t1 == (0, 1, 2)
@@ -625,14 +623,14 @@ class TestTruncate:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(7, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
         assert len(history) == 7
 
         history.truncate(retain_until_tick=3)
         # Invariant: only ticks 0-3 remain
         assert len(history) == 4
         assert history.ticks == (0, 1, 2, 3)
-        arr = history.to_numpy()
+        arr = history._to_numpy()
         np.testing.assert_array_equal(
             arr[:, 0], np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float64)
         )
@@ -642,7 +640,7 @@ class TestTruncate:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(5, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
 
         history.truncate(retain_until_tick=4)
         # Invariant: all rows remain (4 is the last tick)
@@ -654,7 +652,7 @@ class TestTruncate:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5, start_tick=10)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
 
         with pytest.raises(ValueError, match="No records with tick <="):
             history.truncate(retain_until_tick=5)
@@ -680,7 +678,7 @@ class TestTruncate:
             row = np.zeros(row_size, dtype=np.float64)
             row[0] = float(tick)
             row[1 : 1 + ind_size] = float(tick * 10)
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ic_before = history.individual_count
         assert ic_before.shape[0] == 5
@@ -720,7 +718,7 @@ class TestRestoreState:
             row = np.zeros(row_size, dtype=np.float64)
             row[0] = float(tick)
             row[1 : 1 + ind_size] = marker
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         # Restore tick 1
         tick, ic, ss = history.restore_state(1)
@@ -745,7 +743,7 @@ class TestRestoreState:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         _, ic, ss = history.restore_state(0)
         # Invariant: shape matches layout
@@ -773,7 +771,7 @@ class TestRestoreState:
         # Put marker in sperm_storage region
         sperm_start = 1 + ind_size
         row[sperm_start : sperm_start + sperm_size] = 7.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         tick, ic, ss = history.restore_state(0)
         assert tick == 0
@@ -789,7 +787,7 @@ class TestRestoreState:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5, start_tick=0)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
 
         with pytest.raises(ValueError, match="Tick 99 not found"):
             history.restore_state(99)
@@ -835,7 +833,7 @@ class TestRestoreState:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         _, ic, ss = history.restore_state(0)
         assert ss is not None
@@ -874,7 +872,7 @@ class TestObserveWithObservation:
             row[0] = float(tick)
             ind = row[1 : 1 + ind_size].reshape(n_sexes, n_ages, n_ztypes)
             ind[0, tick % n_ages, 0] = val
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         # Build an Observation that selects ztype=0, all sexes, all ages
         # Use build_from_selectors with IndividualSelector
@@ -890,7 +888,7 @@ class TestObserveWithObservation:
             labels=("ztype0",),
             collapse_age=False,
             mask=mask,
-            population_fingerprint="test",
+            population_fingerprint=schema.population.fingerprint,
         )
 
         obs_hist = history.observe(observation)
@@ -906,7 +904,7 @@ class TestObserveWithObservation:
         assert len(obs_hist) == 2
 
         # Verify observation values
-        arr = obs_hist.to_numpy()
+        arr = obs_hist._to_numpy()
         # Row 0: tick=0, g0_sex0_age0=100
         assert arr[0, 0] == 0.0
         assert arr[0, 1] == 100.0
@@ -937,28 +935,26 @@ class TestObserveWithObservation:
         ind[0, 0, 0] = 10.0
         ind[0, 0, 1] = 20.0
         ind[0, 0, 2] = 30.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
-        # Legacy path
-        mask_legacy = np.zeros((2, n_sexes, n_ages, n_ztypes), dtype=np.float64)
-        mask_legacy[0, :, :, 0] = 1.0  # group 0: ztype 0
-        mask_legacy[1, :, :, 1] = 1.0  # group 1: ztype 1
-        mask_legacy[1, :, :, 2] = 1.0  # group 1: ztype 2
-        obs_legacy = history.observe(mask_legacy, ("g0", "g1"), False)
-
-        # Observation-object path (same mask)
+        # Build observation via Observation object
+        mask = np.zeros((2, n_sexes, n_ages, n_ztypes), dtype=np.float64)
+        mask[0, :, :, 0] = 1.0  # group 0: ztype 0
+        mask[1, :, :, 1] = 1.0  # group 1: ztype 1
+        mask[1, :, :, 2] = 1.0  # group 1: ztype 2
         from natal.output.observation import Observation
 
         observation = Observation(
             labels=("g0", "g1"),
             collapse_age=False,
-            mask=mask_legacy.copy(),
-            population_fingerprint="test",
+            mask=mask,
+            population_fingerprint=schema.population.fingerprint,
         )
         obs_new = history.observe(observation)
 
-        # Invariant: both produce identical output
-        np.testing.assert_array_equal(obs_legacy.to_numpy(), obs_new.to_numpy())
+        # Verify observation history values
+        assert obs_new.ticks == (0,)
+        assert obs_new.values.shape == (1, 2, 2, 2)
 
     def test_observe_derived_history_independent(self) -> None:
         """Adding rows to source history does not affect derived observation history."""
@@ -974,13 +970,16 @@ class TestObserveWithObservation:
         row[0] = 0.0
         ind = row[1 : 1 + ind_size].reshape(n_sexes, n_ages, n_ztypes)
         ind[0, 0, 0] = 100.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         from natal.output.observation import Observation
 
         mask = np.ones((1, n_sexes, n_ages, n_ztypes), dtype=np.float64)
         observation = Observation(
-            labels=("total",), collapse_age=False, mask=mask, population_fingerprint="test"
+            labels=("total",),
+            collapse_age=False,
+            mask=mask,
+            population_fingerprint=schema.population.fingerprint,
         )
         obs_hist = history.observe(observation)
         assert len(obs_hist) == 1
@@ -990,16 +989,16 @@ class TestObserveWithObservation:
         row2[0] = 1.0
         ind2 = row2[1 : 1 + ind_size].reshape(n_sexes, n_ages, n_ztypes)
         ind2[0, 0, 0] = 200.0
-        history.append(HistoryBatch(schema=schema, rows=row2[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row2[np.newaxis, :]))
         assert len(history) == 2
 
         # Invariant: derived history is independent — still has 1 record
         assert len(obs_hist) == 1
-        arr = obs_hist.to_numpy()
+        arr = obs_hist._to_numpy()
         assert arr[0, 0] == 0.0  # only tick 0
 
-    def test_observe_backward_compat_legacy(self) -> None:
-        """Legacy observe(mask, labels, collapse_age) still works correctly."""
+    def test_observe_with_explicit_observation(self) -> None:
+        """observe(Observation) produces correct observation-mode History."""
         n_sexes, n_ages, n_ztypes = 2, 2, 3
         ind_size = n_sexes * n_ages * n_ztypes
         raw_row_size = 1 + ind_size
@@ -1013,11 +1012,16 @@ class TestObserveWithObservation:
         ind = row[1 : 1 + ind_size].reshape(n_sexes, n_ages, n_ztypes)
         ind[0, 0, 0] = 50.0
         ind[1, 1, 1] = 30.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
-        # Legacy call
         mask = np.ones((1, n_sexes, n_ages, n_ztypes), dtype=np.float64)
-        obs_hist = history.observe(mask, ("total",), collapse_age=True)
+        obs = Observation(
+            labels=("total",),
+            collapse_age=True,
+            mask=mask.copy(),
+            population_fingerprint=layout.fingerprint,
+        )
+        obs_hist = history.observe(obs)
 
         assert obs_hist.schema.mode == "observation"
         assert obs_hist.schema.observation is not None
@@ -1049,6 +1053,10 @@ class TestObserveWithObservation:
             n_ages=n_ages,
             n_ztypes=n_ztypes,
         )
+        observation = replace(
+            observation,
+            population_fingerprint=raw_hist.schema.population.fingerprint,
+        )
 
         obs_hist = raw_hist.observe(observation)
 
@@ -1059,14 +1067,11 @@ class TestObserveWithObservation:
         # Invariant: row_size = 1 + 1*2*2 = 5
         assert obs_hist.schema.row_size == 5
 
-        # Invariant: total per tick matches raw history total
-        for tick in obs_hist.ticks:
-            obs_row = obs_hist.to_numpy()
-            # Find the row for this tick
-            idx = list(obs_hist.ticks).index(tick)
-            # Sum of observed values = sum of all individual counts at that tick
-            obs_sum = obs_row[idx, 1:].sum()
-            assert obs_sum > 0  # at least non-zero
+        # Invariant: total per tick exactly matches raw individual counts.
+        np.testing.assert_array_equal(
+            obs_hist.values.sum(axis=(1, 2, 3)),
+            raw_hist.individual_count.sum(axis=(1, 2, 3)),
+        )
 
     def test_observe_with_individual_selector_observation(
         self, simple_species
@@ -1091,78 +1096,87 @@ class TestObserveWithObservation:
             n_ages=int(pop.state.individual_count.shape[1]),
             n_ztypes=n_ztypes,
         )
+        observation = replace(
+            observation,
+            population_fingerprint=raw_hist.schema.population.fingerprint,
+        )
 
         obs_hist = raw_hist.observe(observation)
         assert obs_hist.schema.mode == "observation"
         assert obs_hist.schema.observation is not None
         assert obs_hist.schema.observation.labels == ("wt", "drive")
         assert len(obs_hist) == 3  # tick 0,1,2
+        np.testing.assert_array_equal(
+            obs_hist.values,
+            np.stack(
+                [
+                    observation.apply(record)
+                    for record in raw_hist.individual_count
+                ]
+            ),
+        )
 
 
 # ============================================================================
-# 7. Tick uniqueness (duplicate ticks silently skipped)
+# 7. Tick uniqueness and append ordering
 # ============================================================================
 
 
 class TestTickUniqueness:
-    """Invariant: duplicate ticks are silently skipped during append."""
+    """Invariant: invalid tick sequences fail atomically during append."""
 
-    def test_duplicate_single_tick_skipped(self) -> None:
-        """Appending a row with an already-seen tick does nothing."""
+    def test_duplicate_single_tick_rejected(self) -> None:
+        """Appending a row with an already-seen tick raises without mutation."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
 
         row = np.array([[0.0, 1, 2, 3, 4]], dtype=np.float64)
-        history.append(HistoryBatch(schema=schema, rows=row))
+        history._append(HistoryBatch(schema=schema, rows=row))
         assert len(history) == 1
 
-        # Same tick, different data
         row2 = np.array([[0.0, 99, 99, 99, 99]], dtype=np.float64)
-        history.append(HistoryBatch(schema=schema, rows=row2))
-        # Invariant: still 1 record, original data preserved
+        with pytest.raises(ValueError, match="already recorded|strictly increasing"):
+            history._append(HistoryBatch(schema=schema, rows=row2))
         assert len(history) == 1
-        # Invariant: the original row (with [1,2,3,4]) is kept, not overwritten
-        arr = history.to_numpy()
-        assert arr[0, 1] == 1.0  # NOT 99.0
+        arr = history._to_numpy()
+        np.testing.assert_array_equal(arr, row)
 
-    def test_duplicate_in_batch_skipped(self) -> None:
-        """Batch containing a mix of new and duplicate ticks: only new ones added."""
+    def test_duplicate_in_batch_rejected_atomically(self) -> None:
+        """A batch overlapping existing history commits none of its new rows."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         # Pre-populate with ticks 0, 1
-        history.append(
+        history._append(
             HistoryBatch(schema=schema, rows=_make_rows(2, 5, start_tick=0))
         )
         assert len(history) == 2
 
-        # Batch with ticks 1 (dup), 2 (new), 3 (new)
         batch_rows = _make_rows(3, 5, start_tick=1)
-        history.append(HistoryBatch(schema=schema, rows=batch_rows))
-        # Invariant: only ticks 2, 3 added; tick 1 skipped
-        assert len(history) == 4
-        assert history.ticks == (0, 1, 2, 3)
+        with pytest.raises(ValueError, match="already recorded|strictly increasing"):
+            history._append(HistoryBatch(schema=schema, rows=batch_rows))
+        assert len(history) == 2
+        assert history.ticks == (0, 1)
 
     def test_duplicate_with_eviction_interaction(self) -> None:
-        """Duplicate ticks don't count toward max_rows capacity."""
+        """A rejected duplicate does not trigger capacity eviction."""
         schema = _raw_schema(row_size=5)
         history = History(schema, max_rows=3)
 
         # Insert ticks 0, 1, 2
         for tick in range(3):
             row = np.array([[float(tick), 0, 0, 0, 0]], dtype=np.float64)
-            history.append(HistoryBatch(schema=schema, rows=row))
+            history._append(HistoryBatch(schema=schema, rows=row))
         assert history.ticks == (0, 1, 2)
 
-        # Try to insert duplicate tick 0 — should be skipped, no eviction
         row_dup = np.array([[0.0, 99, 99, 99, 99]], dtype=np.float64)
-        history.append(HistoryBatch(schema=schema, rows=row_dup))
-        # Invariant: still 3 records, tick 0 not evicted (it was merely "seen" again)
+        with pytest.raises(ValueError, match="already recorded|strictly increasing"):
+            history._append(HistoryBatch(schema=schema, rows=row_dup))
         assert len(history) == 3
         assert history.ticks == (0, 1, 2)
 
         # Insert new tick 3 — now eviction should happen (of tick 0)
         row3 = np.array([[3.0, 0, 0, 0, 0]], dtype=np.float64)
-        history.append(HistoryBatch(schema=schema, rows=row3))
+        history._append(HistoryBatch(schema=schema, rows=row3))
         assert len(history) == 3
         assert history.ticks == (1, 2, 3)
 
@@ -1187,7 +1201,7 @@ class TestCacheInvalidationAfterClear:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
         ic1 = history.individual_count
         assert ic1.shape[0] == 1
 
@@ -1212,7 +1226,7 @@ class TestCacheInvalidationAfterClear:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
         ss1 = history.sperm_storage
         assert ss1 is not None
         assert ss1.shape[0] == 1

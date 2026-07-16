@@ -18,6 +18,7 @@ import pytest
 
 import natal as nt
 from natal.numba.utils import numba_disabled
+from natal.patterns import IndividualSelector
 from natal.spatial.configurator import BatchSetting, SpatialConfigurator, batch_setting
 from natal.spatial.topology import HexGrid, SquareGrid
 
@@ -160,14 +161,35 @@ class TestBatchSetting:
 
     def test_batch_setting_spatial_fn_1param(self) -> None:
         """Spatial fn expand with 1 parameter (line 200)."""
-        fn = lambda i: float(i * 2)
+        def fn(i: int) -> float:
+            """Map a flat deme index to a deterministic value.
+
+            Args:
+                i: Flat deme index.
+
+            Returns:
+                ``float(i * 2)``.
+            """
+            return float(i * 2)
+
         bs = batch_setting(fn)
         result = bs.expand(4, SquareGrid(1, 4))
         assert result == [0.0, 2.0, 4.0, 6.0]
 
     def test_batch_setting_spatial_fn_2param(self) -> None:
         """Spatial fn expand with 2 parameters (lines 196-199)."""
-        fn = lambda r, c: float(r * 2 + c)
+        def fn(r: int, c: int) -> float:
+            """Map grid coordinates to a deterministic value.
+
+            Args:
+                r: Row index.
+                c: Column index.
+
+            Returns:
+                ``float(r * 2 + c)``.
+            """
+            return float(r * 2 + c)
+
         bs = batch_setting(fn)
         result = bs.expand(6, SquareGrid(2, 3))
         assert len(result) == 6
@@ -439,7 +461,7 @@ class TestObservation:
                 .reproduction(eggs_per_female=10)
                 .competition(carrying_capacity=1000)
                 .with_observation(
-                    groups={"wt": {"genotype": ["WT|WT"]}},
+                    groups={"wt": IndividualSelector(ztype="WT|WT")},
                     collapse_age=True,
                 )
                 .build()
@@ -447,9 +469,10 @@ class TestObservation:
             spatial.run(2)
 
         assert spatial.tick == 2
-        assert spatial.record_observation is not None
+        assert spatial.observation is not None
 
-    def test_with_observation_list(self) -> None:
+    def test_with_observation_selector(self) -> None:
+        """Build and run a spatial Observation from an IndividualSelector."""
         species = _simple_species("ObsList")
         with numba_disabled():
             spatial = (
@@ -465,14 +488,18 @@ class TestObservation:
                 .reproduction(eggs_per_female=10)
                 .competition(carrying_capacity=1000)
                 .with_observation(
-                    groups=[{"genotype": ["WT|WT"], "sex": ["female"]}],
+                    groups={
+                        "wt_female": IndividualSelector(
+                            ztype="WT|WT", sex="female"
+                        )
+                    },
                 )
                 .build()
             )
             spatial.run(2)
 
         assert spatial.tick == 2
-        assert spatial.record_observation is not None
+        assert spatial.observation is not None
 
 
 # ===========================================================================
@@ -1264,7 +1291,6 @@ class TestInitialStateWithSpermStorage:
     def test_initial_state_with_sperm_storage(self) -> None:
         species = _simple_species("InitSpermStore")
         topo = SquareGrid(1, 2)
-        n_genotypes = 2
         with numba_disabled():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=topo,
@@ -1393,14 +1419,17 @@ class TestObservationOnHeterogeneous:
                 )
                 .reproduction(eggs_per_female=10)
                 .competition(carrying_capacity=batch_setting([500, 1000]))
-                .with_observation(groups={"wt": {"genotype": ["WT|WT"]}}, collapse_age=True)
+                .with_observation(
+                    groups={"wt": IndividualSelector(ztype="WT|WT")},
+                    collapse_age=True,
+                )
                 .build()
             )
             spatial.run(2)
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.record_observation is not None
+        assert spatial.observation is not None
 
 
 # ===========================================================================

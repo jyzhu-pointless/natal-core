@@ -442,7 +442,9 @@ for i in range(pop.n_demes):
     print(f"deme {i}: {d.total_population_size}")
 ```
 
-Each deme is an instance of `AgeStructuredPopulation` or `DiscreteGenerationPopulation`, supporting all panmictic interfaces such as `output_current_state()` and `compute_allele_frequencies()`.
+Each deme is an `AgeStructuredPopulation` or
+`DiscreteGenerationPopulation`. The spatial container itself provides the
+canonical `observation`, `observe()`, and typed `history` interfaces.
 
 ### Reset and Control
 
@@ -460,19 +462,29 @@ pop.finish_simulation()
 
 ### Data Output
 
-`output_current_state()` and `output_history()` work the same as for panmictic populations, supporting observation rule filtering:
+The default spatial Observation is identity (one group per ZType) and preserves
+the complete deme axis. The default History records raw state:
 
 ```python
-# Current state snapshot
-state = pop.output_current_state()
+current = pop.observe()
+print(current.axes)  # ("group", "deme", "sex", "age")
 
-# History export with observation rules
-observation = pop.create_observation(
-    groups={"adult_wt": {"genotype": ["WT|WT"], "age": [2]}},
-    collapse_age=True,
-)
-history = pop.output_history(observation=observation)
+history = pop.history
+print(history.individual_count.shape)
+# (record, deme, sex, age, ztype)
+
+# Raw History can be projected later through the canonical observation
+observed_history = history.observe(pop.observation)
+print(observed_history.values.shape)
+# (record, group, deme, sex, age)
 ```
+
+With `collapse_age=True` at build time, both `observe().values` and
+observation-mode `history.values` remove the final age axis.
+Spatial `with_observation()` can also use `demes` to select one ordered deme set
+shared by every group, and `deme_mode="aggregate"` to sum and remove the deme
+axis. Raw History still stores every deme. `with_observation()` and
+`record_history()` are independent and build-time only.
 
 For detailed usage, see [Extracting Population Simulation Data](2_data_output.md).
 

@@ -442,7 +442,8 @@ for i in range(pop.n_demes):
     print(f"deme {i}: {d.total_population_size}")
 ```
 
-每个 deme 是 `AgeStructuredPopulation` 或 `DiscreteGenerationPopulation` 实例，支持 `output_current_state()`、`compute_allele_frequencies()` 等全部 panmictic 接口。
+每个 deme 是 `AgeStructuredPopulation` 或 `DiscreteGenerationPopulation` 实例；
+空间容器自身提供 canonical `observation`、`observe()` 和类型化 `history`。
 
 ### 重置与控制
 
@@ -460,19 +461,29 @@ pop.finish_simulation()
 
 ### 数据输出
 
-`output_current_state()` 和 `output_history()` 的用法与 panmictic 种群一致，支持观察规则筛选：
+Spatial Population 的默认 observation 是每个 ZType 一个分组、保留全部
+deme 轴的恒等观测，默认 History 记录 raw 状态：
 
 ```python
-# 当前状态快照
-state = pop.output_current_state()
+current = pop.observe()
+print(current.axes)  # ("group", "deme", "sex", "age")
 
-# 带观察规则的历史导出
-observation = pop.create_observation(
-    groups={"adult_wt": {"genotype": ["WT|WT"], "age": [2]}},
-    collapse_age=True,
-)
-history = pop.output_history(observation=observation)
+history = pop.history
+print(history.individual_count.shape)
+# (record, deme, sex, age, ztype)
+
+# raw History 可在事后用 canonical observation 投影
+observed_history = history.observe(pop.observation)
+print(observed_history.values.shape)
+# (record, group, deme, sex, age)
 ```
+
+若构建时设置 `collapse_age=True`，`observe().values` 和 observation-mode
+`history.values` 都会移除最后的 age 轴。空间 `with_observation()` 还可用
+`demes` 指定所有 group 共享的有序 deme 集合，并用
+`deme_mode="aggregate"` 求和且移除 deme 轴。Raw History 仍保存全部 deme。
+`with_observation()` 与 `record_history()` 只允许在 `build()` 前调用，二者
+相互独立。
 
 详细用法见 [提取种群模拟数据](2_data_output.md)。
 

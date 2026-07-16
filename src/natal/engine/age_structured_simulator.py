@@ -48,13 +48,25 @@ def import_config(pop: 'AgeStructuredPopulation', config: 'PopulationConfig') ->
     pop.import_config(config)
 
 
-def export_state(pop: 'AgeStructuredPopulation') -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
-    """Export population state. Prefer ``pop.export_state()`` directly."""
+def export_state(pop: 'AgeStructuredPopulation') -> NDArray[np.float64]:
+    """Export the flattened population state array.
+
+    Args:
+        pop: The population whose state should be exported.
+
+    Returns:
+        Flattened state array.
+    """
     return pop.export_state()
 
 
 def import_state(pop: 'AgeStructuredPopulation', state: 'PopulationState') -> None:
-    """Import state into population. Prefer ``pop.import_state()`` directly."""
+    """Import state into the population, resetting its history.
+
+    Args:
+        pop: The target population.
+        state: The state object to import.
+    """
     pop.import_state(state)
 
 # ============================================================================

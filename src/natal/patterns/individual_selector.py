@@ -6,13 +6,11 @@ population schema.  Fields within a single selector combine with AND;
 multiple values within a field combine with OR.  ``|`` and ``+`` both
 represent union of two selectors with OR semantics.
 
-Design:
-  - Each :class:`IndividualSelector` holds one or more *atoms*
-    (normalised field values).
-  - A single-argument constructor creates one atom.
-  - ``|`` / ``+`` merge the atom tuples from both operands.
-  - :meth:`compile` resolves patterns against an :class:`IndexRegistry`
-    and returns a boolean mask ``(n_sexes, n_ages, n_ztypes)``.
+Each :class:`IndividualSelector` holds one or more *atoms* (normalised
+field values).  A single-argument constructor creates one atom.
+``|`` / ``+`` merge the atom tuples from both operands.
+:meth:`compile` resolves patterns against an :class:`IndexRegistry`
+and returns a boolean mask ``(n_sexes, n_ages, n_ztypes)``.
   - Immutable + hashable → safe as dict key and fingerprint source.
 """
 

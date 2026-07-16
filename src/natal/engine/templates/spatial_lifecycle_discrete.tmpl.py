@@ -24,7 +24,6 @@ from natal.data import DiscretePopulationState, PopulationConfig
 from natal.engine.spatial_migrator import run_spatial_migration
 from natal.hooks.types import RESULT_CONTINUE, HookProgram
 from natal.numba.utils import njit_switch
-from natal.output.record import CompactMeta, build_observation_row_spatial
 from natal.spatial.topology import (
     HeterogeneousKernelParams,
     MigrationParams,
@@ -122,26 +121,16 @@ def RUN_FN_NAME(
     migration: MigrationParams,
     het_kernel: HeterogeneousKernelParams | None = None,
     record_interval: int = 0,
-    observation_mask: Optional[np.ndarray] = None,
-    compact_meta: Optional[CompactMeta] = None,
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], Optional[np.ndarray], bool]:
     """Execute multiple spatial ticks in sequence, with optional history recording.
 
-    Calls TICK_FN_NAME in a loop and optionally records flattened compact
+    Calls TICK_FN_NAME in a loop and optionally records flattened regular raw
     snapshots at each ``record_interval`` tick.
-    When ``observation_mask`` is provided, history stores observation-reduced
-    compact snapshots instead.
 
     Args:
         Same as TICK_FN_NAME, plus:
         n_steps: Number of ticks to execute.
         record_interval: Recording interval (``0`` means no recording).
-        observation_mask: Optional 4-D binary mask
-            ``(n_groups, n_sexes, n_ages, n_ztypes)``.
-        compact_meta: Optional ``CompactMeta`` with *offsets*, *deme_map*,
-            *n_demes_per_group*, *selected_n*, *mode_aggregate*, *row_size*.
-            ``None`` when recording raw state.
-
     Returns:
         ``((ind_count_all, sperm_store_all, tick), history_array_or_None, was_stopped)``.
     """
@@ -150,10 +139,7 @@ def RUN_FN_NAME(
     sperm = sperm_store_all.copy()
     tick_cur = tick
 
-    if observation_mask is not None:
-        flatten_size = 1 + cast(CompactMeta, compact_meta).row_size
-    else:
-        flatten_size = 1 + ind.size + sperm.size
+    flatten_size = 1 + ind.size + sperm.size
 
     if record_interval > 0:
         estimated_size = (n_steps // record_interval) + 2
@@ -165,13 +151,8 @@ def RUN_FN_NAME(
     if record_interval > 0 and (tick_cur % record_interval == 0):
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick_cur
-        if observation_mask is not None:
-            flat_state[1:] = build_observation_row_spatial(
-                ind, observation_mask, cast(CompactMeta, compact_meta),
-            )
-        else:
-            flat_state[1:1 + ind.size] = ind.flatten()
-            flat_state[1 + ind.size:] = sperm.flatten()
+        flat_state[1:1 + ind.size] = ind.flatten()
+        flat_state[1 + ind.size:] = sperm.flatten()
         history_array[history_count, :] = flat_state
         history_count += 1
 
@@ -187,13 +168,8 @@ def RUN_FN_NAME(
         if record_interval > 0 and (tick_cur % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick_cur
-            if observation_mask is not None:
-                flat_state[1:] = build_observation_row_spatial(
-                    ind, observation_mask, cast(CompactMeta, compact_meta),
-                )
-            else:
-                flat_state[1:1 + ind.size] = ind.flatten()
-                flat_state[1 + ind.size:] = sperm.flatten()
+            flat_state[1:1 + ind.size] = ind.flatten()
+            flat_state[1 + ind.size:] = sperm.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
 

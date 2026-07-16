@@ -11,7 +11,7 @@ NATAL 的模拟执行链路：
 阅读本章后，你应当能清楚回答两个问题：
 
 1. 一次 `pop.run(...)` 在内部做了哪些阶段计算。
-2. 何时使用 `run(...)`、`run_tick()`、`get_history()`、`export_state()`。
+2. 何时使用 `run(...)`、`run_tick()`、`pop.history`、`export_state()`。
 
 ## 1. 用户入口与执行路径
 
@@ -162,7 +162,7 @@ Spatial migration 相关内核现已按后端拆分到目录模块
 
 ```python
 pop.run(n_steps=200, record_every=10)
-history = pop.get_history()
+history = pop.history.individual_count
 ```
 
 实践建议：
@@ -176,9 +176,9 @@ history = pop.get_history()
 当你需要保存快照、跨脚本传递状态或做分叉实验时，可以使用：
 
 ```python
-state_flat, history = pop.export_state()
+state_flat = pop.export_state()
 # ... 保存或外部处理 ...
-pop.import_state(state_flat, history=history)
+pop.import_state(state_flat)
 ```
 
 典型场景：
@@ -200,7 +200,7 @@ pop.import_state(state_flat, history=history)
 
 1. 批量模拟：优先使用 `pop.run(...)`。
 2. 单步观察：使用 `pop.run_tick()`。
-3. 分析轨迹：搭配 `record_every` 与 `get_history()`。
+3. 分析轨迹：搭配 `record_every` 与 `pop.history`。
 4. 快照实验：使用 `export_state()` / `import_state()`。
 5. 行为扩展：使用 Hook，而不是自行拼接内核调用。
 
@@ -217,11 +217,11 @@ pop.run(n_steps=100, record_every=10)
 pop.run_tick()
 
 # 4) 获取历史
-history = pop.get_history()
+history = pop.history.individual_count
 
 # 5) 导出与恢复
-state_flat, hist = pop.export_state()
-pop.import_state(state_flat, history=hist)
+state_flat = pop.export_state()
+pop.import_state(state_flat)
 ```
 
 ## 11. 小结

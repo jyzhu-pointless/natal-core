@@ -6,6 +6,7 @@ import pytest
 import natal as nt
 from natal.configurator import Configurator, set_param
 from natal.data import build_custom_array, build_population_config
+from natal.patterns import IndividualSelector
 
 
 @pytest.fixture(scope="module")
@@ -774,9 +775,10 @@ class TestCustomAccumulate:
 class TestWithObservation:
     def test_sets_observation_groups(self, species):
         cfg = Configurator.from_species(species)
-        cfg.with_observation({"total": "*"}, collapse_age=True)
+        groups = {"total": IndividualSelector()}
+        cfg.with_observation(groups, collapse_age=True)
         assert hasattr(cfg, "_observation_groups")
-        assert cfg._observation_groups == {"total": "*"}
+        assert cfg._observation_groups == groups
         assert cfg._observation_collapse_age is True
 
 

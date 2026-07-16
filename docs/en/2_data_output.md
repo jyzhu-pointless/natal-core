@@ -21,34 +21,52 @@ The output format system provides multiple data export formats, supporting integ
 
 | Object | Purpose |
 |--------|---------|
-| **Population.create_observation(...)** | Recommended public entry point for building reusable observation objects |
-| **output_current_state / output_history** | Recommended public output API with built-in observation integration |
-| **ObservationFilter** | Advanced compilation helper class (only needed for low-level customization workflows) |
+| **pop.observation** | Immutable rule created at build time; present on every Population |
+| **pop.observe()** | Projects current state through the canonical observation |
+| **pop.history** | Typed `History` container with an immutable schema |
 
 ### Recommended Workflow
 
-Direct instantiation of `Observation` in business code is discouraged; prefer using the population-layer public methods.
+Define groups at build time with `with_observation()`. Its argument must be a
+non-empty ordered mapping whose keys are non-empty strings and whose values are
+`IndividualSelector` instances. A regular `dict` preserves insertion order;
+that order becomes the result's group-axis order.
 
 ```python
-# Create observation rules
-observation = pop.create_observation(
-    groups={
-        "adult_wt": {"genotype": ["WT|WT"], "age": [1]},
-        "drive_carriers": {"genotype": ["WT|Drive", "Drive|Drive"]}
-    },
-    collapse_age=False,
+import natal as nt
+
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species)
+    .initial_state(...)
+    .with_observation(
+        {
+            "adult_wt": nt.IndividualSelector(ztype="WT|WT", age=[1]),
+            "drive_carriers": (
+                nt.IndividualSelector(ztype="WT|Drive")
+                | nt.IndividualSelector(ztype="Drive|Drive")
+            ),
+        },
+        collapse_age=False,
+    )
+    .record_history(mode="raw")
+    .build()
 )
 
-# Get current state
-current = pop.output_current_state(observation=observation)
-print("Current observation data:", current["observed"])
+# Project current state; group is always the first axis
+current = pop.observe()
+print(current.axes)                 # ("group", "sex", "age")
+print(current.labels["group"])
+print(current.values)
 
-# Get historical data
-history = pop.output_history(observation=observation)
-print("Historical observation data:", history["observed"])
+# Raw History can be projected later through the same rule
+observed_history = pop.history.observe(pop.observation)
+print(observed_history.values.shape)  # (record, group, sex, age)
 ```
 
-This approach allows reusable observation definitions and defers dimension validity checking to the application/output stage.
+If `with_observation()` is omitted, the build installs an identity observation:
+one lossless group per ZType. Thus `pop.observation` and `pop.observe()` are
+always available on panmictic, age-structured, discrete-generation, and spatial
+Populations; they do not return `None`.
 
 ## Observation-Based History Recording (Compression Mode)
 
@@ -56,57 +74,61 @@ In large simulations (many genotypes, many demes), the storage cost of full raw 
 
 ### Comparison of Two Modes
 
-| Mode | Recorded Content | Size per Row | Re-parsing Needed on Export |
-|------|------------------|-------------|-----------------------------|
-| Raw | `[tick, ind.ravel(), sperm.ravel()]` | `1 + n_sexes x n_ages x n_geno + ...` | Yes, expand by genotype |
-| Observation | `[tick, observed.ravel()]` | `1 + n_groups x n_sexes x n_ages` | No, expand directly by group name |
+| Mode | Typed `History` data | Typical panmictic shape | Can be re-observed later? |
+|------|----------------------|---------------------------|---------------------------|
+| Raw (default) | `individual_count`, optional `sperm_storage` | `(record, sex, age, ztype)` | Yes |
+| Observation | `values` | `(record, group, sex, age)` | No; original ZTypes were discarded |
 
 When `n_groups << n_genotypes` (common scenario), the compression ratio is approximately `n_genotypes / n_groups`.
 
 ### Configuration Methods
 
-Both methods can activate observation mode:
+Observation rules and History mode are configured only at build time:
 
-**Method 1: Create Observation first, then set `record_observation`**
-
-```python
-obs = pop.create_observation(
-    groups={
-        "wt": {"genotype": ["WT|WT"]},
-        "het": {"genotype": ["WT|Dr"]},
-        "hom": {"genotype": ["Dr|Dr"]},
-    },
-    collapse_age=True,
-)
-pop.record_observation = obs  # Activate observation mode
-pop.run(n_steps=100, record_every=10)
-```
-
-**Method 2: Directly use `set_observations()`**
+**Method 1: Build-time — `with_observation()` + `record_history(mode="observation")` (recommended)**
 
 ```python
-pop.set_observations(
-    groups={
-        "wt": {"genotype": ["WT|WT"]},
-        "het": {"genotype": ["WT|Dr"]},
-        "hom": {"genotype": ["Dr|Dr"]},
-    },
-    collapse_age=True,
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species)
+    .initial_state(...)
+    .reproduction(eggs_per_female=50)
+    .competition(carrying_capacity=10000)
+    .with_observation(groups={
+        "wt": nt.IndividualSelector(ztype="WT|WT"),
+        "het": nt.IndividualSelector(ztype="WT|Dr"),
+        "hom": nt.IndividualSelector(ztype="Dr|Dr"),
+    }, collapse_age=True)
+    .record_history(mode="observation", max_rows=5000)
+    .build()
 )
 pop.run(n_steps=100, record_every=10)
 ```
 
-> **Recording rules are frozen at build time:** While `pop.record_observation` and `pop.set_observations()` work on live Populations for backward compatibility, the `Configurator.with_observation()` method (used in the build chain) raises `RuntimeError` if called after the Population has been built. The intended workflow is to set up recording rules before `build()` — see the [Configurator API](../api/configurator.md) for details.
+`record_history()` and `with_observation()` are **independent** — chain order
+does not matter. When `mode="observation"` is set without explicit
+`with_observation()`, an identity observation is auto-generated.
 
-Once `record_observation` is set, the kernel automatically uses observation aggregation mode during recording. `output_history()` automatically detects and selects the correct export path:
+**Method 2: Build-time — auto-identity observation (no explicit groups)**
 
 ```python
-history = pop.output_history()
-# Automatically exports in observation mode, each snapshot containing:
-# - tick
-# - labels: ["wt", "het", "hom"]
-# - observed: { "wt": { "female": ..., "male": ... }, ... }
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species)
+    .initial_state(...)
+    .reproduction(eggs_per_female=50)
+    .competition(carrying_capacity=10000)
+    .record_history(mode="observation")  # auto-generates identity observation
+    .build()
+)
 ```
+
+No `with_observation()` needed — one group per ZType is automatically created,
+providing lossless projection.
+
+Observation rules are frozen at Population build time via `with_observation()`
+and cannot be modified at runtime. This guarantees that all records in the same
+History have consistent semantics.
+
+Use `pop.history` for direct typed history access.
 
 ### Panmictic Example
 
@@ -127,28 +149,26 @@ pop = (
     })
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=10000)
+    .with_observation(
+        {
+            "wildtype": nt.IndividualSelector(ztype="WT|WT"),
+            "drive": (
+                nt.IndividualSelector(ztype="WT|Dr")
+                | nt.IndividualSelector(ztype="Dr|Dr")
+            ),
+        },
+        collapse_age=True,
+    )
+    .record_history(mode="observation")
     .build()
 )
 
-# Activate observation mode
-pop.set_observations(
-    groups={
-        "wildtype": {"genotype": ["WT|WT"]},
-        "drive_het": {"genotype": ["WT|Dr"]},
-        "drive_hom": {"genotype": ["Dr|Dr"]},
-    },
-    collapse_age=True,
-)
 pop.run(n_steps=100, record_every=10)
 
-# Export -- automatically uses observation mode
-history = pop.output_history()
-for snap in history["snapshots"]:
-    print(f"tick {snap['tick']}: {snap['observed']}")
-
-# Switch back to raw mode (schema rebuilds only when history is empty)
-pop.record_observation = None  # Disable observation mode
-# Subsequent run() calls will use raw recording
+# Current observation and History use the same canonical observation
+print(pop.observe().axes)        # ("group", "sex")
+print(pop.history.ticks)
+print(pop.history.values.shape)  # (record, group, sex)
 ```
 
 ### Spatial Example
@@ -177,115 +197,215 @@ spatial = (
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=10000)
     .migration(kernel=kernel, migration_rate=0.2)
+    .with_observation(
+        {
+            "wt": nt.IndividualSelector(ztype="WT|WT"),
+            "dr": (
+                nt.IndividualSelector(ztype="WT|Dr")
+                + nt.IndividualSelector(ztype="Dr|Dr")
+            ),
+        },
+        collapse_age=True,
+        demes=[2, 0],
+        deme_mode="preserve",
+    )
+    .record_history(mode="observation")
     .build()
 )
 
-# Activate observation mode
-spatial.set_observations(
-    groups={
-        "wt": {"genotype": ["WT|WT"]},
-        "dr": {"genotype": ["WT|Dr", "Dr|Dr"]},
-    },
-    collapse_age=True,
-)
 spatial.run(n_steps=50, record_every=5)
 
-# Export -- expanded per deme, with cross-deme aggregation
-history = spatial.output_history()
-for snap in history["snapshots"]:
-    print(f"tick {snap['tick']}")
-    for deme_key, deme_obs in snap["demes"].items():
-        print(f"  {deme_key}: {deme_obs}")
-    print(f"  aggregate: {snap['aggregate']}")
+# preserve keeps the shared deme axis in demes=[2, 0] order
+print(spatial.observe().axes)        # ("group", "deme", "sex")
+print(spatial.history.values.shape)  # (record, group, 2, sex)
 ```
 
 ### Post-hoc Observation (Without Modifying Recording Mode)
 
-If you don't want to change the recording mode but need to view history in observation format, you can pass the `observation` parameter:
+Raw mode preserves complete state, so the canonical observation can be applied
+after the simulation without changing the raw History:
 
 ```python
-obs = pop.create_observation(groups={
-    "females": {"sex": "female"},
-    "males": {"sex": "male"},
-})
+# Apply post-hoc observation to already-recorded raw history
+observed_history = pop.history.observe(pop.observation)
 
-# Post-hoc observation on already recorded raw history
-history = pop.output_history(observation=obs)
-# Note: If history is in raw mode (record_observation not set),
-# observations are recomputed per snapshot on export (slower but does not require re-running the simulation).
-# If history is in observation mode, the compressed data is read directly.
+# This returns a new observation-mode History; pop.history remains raw
+print(observed_history.values.shape)
+print(pop.history.individual_count.shape)
 ```
 
-### Spatial Deme Selector
+`History.observe()` compares the observation's Population-layout fingerprint
+with the History layout. It raises `ValueError` for an observation from another
+layout even when array shapes happen to match, preventing a grouping rule from
+being silently applied to the wrong species/ZType layout. Observation-mode
+History has already discarded original ZType data and cannot be projected again.
 
-In Spatial mode, group specs support the `"deme"` key to control which demes are included in the group:
+### Spatial History Axes
 
-```python
-spatial.set_observations(
-    groups={
-        "center_release": {
-            "genotype": ["Dr|Dr"],
-            "deme": [(1, 1)],          # Observe only the center deme
-        },
-        "all_wt": {
-            "genotype": ["WT|WT"],
-            "deme": "all",             # All demes (default)
-        },
-    },
-)
-```
+Spatial `with_observation()` uses `demes` to define one ordered deme set shared
+by every group. `deme_mode="preserve"` retains that shared axis, while
+`"aggregate"` sums and removes it. `demes=None` selects every deme by default.
+Public array shapes are:
 
-`"deme"` supports:
-- `"all"` or omitted: all demes
-- Integer list: flat indices, e.g., `[0, 2, 4]`
-- Coordinate list: `(row, col)` tuples, automatically resolved through topology
+| Data/mode | `collapse_age=False` | `collapse_age=True` |
+|-----------|----------------------|---------------------|
+| `spatial.observe().values`, preserve | `(group, selected_deme, sex, age)` | `(group, selected_deme, sex)` |
+| `spatial.observe().values`, aggregate | `(group, sex, age)` | `(group, sex)` |
+| raw `spatial.history.individual_count` | `(record, deme, sex, age, ztype)` | Not applicable; raw mode never collapses age |
+| observation `spatial.history.values`, preserve | `(record, group, selected_deme, sex, age)` | `(record, group, selected_deme, sex)` |
+| observation `spatial.history.values`, aggregate | `(record, group, sex, age)` | `(record, group, sex)` |
+
+Raw History always stores every deme, regardless of the Observation selection
+or aggregation mode.
+Even when a spatial Population has only one deme, raw arrays retain a length-one
+deme axis; only non-spatial Populations omit that axis.
 
 ### When to Use Observation Mode vs Post-hoc
 
 | Scenario | Recommended Approach |
 |----------|---------------------|
 | Detailed analysis requiring all genotype data | Raw history (default) |
-| Only care about time series of a few groups | `record_observation` observation mode |
-| Need to inspect history repeatedly with different groupings | Raw history + post-hoc `output_history(observation=obs)` |
-| Large-scale spatial (thousands of demes) | `record_observation` observation mode |
-| Memory-constrained environments | `record_observation` observation mode |
+| Only care about time series of a few groups | `record_history(mode="observation")` |
+| Need complete state and post-hoc projection | Raw history + `history.observe(pop.observation)` |
+| Large-scale spatial (thousands of demes) | `record_history(mode="observation")` |
+| Memory-constrained environments | `record_history(mode="observation")` |
 
 ## History Recording System
 
-### History Recording Configuration
+### Recording Mode and Capacity
 
-The population object has built-in history recording functionality with configurable recording frequency and storage format. The recording schema (mode, row size, layout) is **frozen at build time** and cannot change after the first row is recorded.
+The Configurator provides `record_history()` to set the recording mode and
+capacity during the build phase. This method is **independent** of
+`with_observation()` — chain order does not matter.
 
 ```python
-# Configure history recording
-pop.record_every = 10  # Record every 10 steps
-pop.max_history = 1000  # Maximum of 1000 snapshots
+# Build-time: configure recording mode and capacity
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species)
+    .initial_state(individual_count={"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .reproduction(eggs_per_female=50)
+    .competition(carrying_capacity=10000)
+    .record_history(mode="observation", max_rows=5000)  # observation mode, FIFO limit
+    .build()
+)
+```
 
+When `mode="observation"` is set without an explicit `with_observation()`, an
+**identity observation** (one group per ZType) is automatically generated,
+providing lossless projection without requiring manual group definitions.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `mode` | `"raw"` | `"raw"` for full-state recording; `"observation"` for compressed aggregate recording |
+| `max_rows` | `None` | Maximum snapshots to keep (FIFO eviction). `None` = unlimited |
+
+### Runtime Recording Configuration
+
+The population also exposes runtime recording controls for backward compatibility:
+
+```python
+pop.record_every = 10  # Record every 10 steps
+pop.max_history = 1000  # Maximum of 1000 snapshots (legacy)
+```
+
+The recording schema (mode, row size, layout) is **frozen at build time** and
+cannot change after the first row is recorded. Once configured via the
+Configurator, `pop.record_every` and `pop.max_history` only control the
+recording **frequency** and **legacy limit**, not the schema.
+
+```python
 # Run simulation and record history
 results = pop.run(n_steps=500, record_every=5)
 
-# Get history data
-history_data = pop.output_history()
-print("Number of history records:", len(history_data["snapshots"]))
-print("Last step data:", history_data["snapshots"][-1])
+# Get typed History data
+history = pop.history
+print("Number of history records:", history.n_records)
+print("Recording mode:", history.schema.mode)
 ```
 
 ### Accessing History Data
 
 ```python
-# Get full history
-full_history = pop.output_history()
-
-# output_history returns all recorded snapshots
-history = pop.output_history()
-
-# Get list of time steps in history
-ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
+# Every Population, including SpatialPopulation, owns one History container
+history = pop.history
+ticks = history.ticks
 print("Recorded time steps:", ticks)
+
+# Raw mode exposes complete individual counts
+if history.schema.mode == "raw":
+    print(history.individual_count.shape)
+    print(history.sperm_storage)  # None for discrete-generation populations
+else:
+    print(history.values.shape)
 
 # Clear history to save memory
 pop.clear_history()
 ```
+
+### pop.observation — Read-Only Observation Property
+
+Every Population exposes its canonical build-time observation through a
+read-only property:
+
+```python
+obs = pop.observation
+print(f"Groups: {obs.labels}")
+print(f"Collapse age: {obs.collapse_age}")
+```
+
+When no rule is configured explicitly, this is an identity observation with
+one group per ZType. It is frozen at build time and cannot be changed later.
+
+### pop.observe() — Project Current State
+
+Project the current population state through the configured observation and
+return a structured `ObservationResult`:
+
+```python
+result = pop.observe()
+print(f"Tick: {result.tick}")
+print(f"Axes: {result.axes}")       # ("group", "sex", "age")
+print(f"Values shape: {result.values.shape}")
+print(f"Group labels: {result.labels['group']}")
+```
+
+Group is always the first axis. With `collapse_age=True`, age is summed and the
+age axis is removed. For spatial results, `deme_mode="preserve"` retains deme
+immediately after group, while `"aggregate"` sums selected demes and removes
+that axis. Raises `RuntimeError` if the population has no state yet.
+
+### pop.record_snapshot() — Manual Recording
+
+Manually record the current stable state into history outside of `run()`:
+
+```python
+pop.run_tick()
+pop.record_snapshot()  # manually record after a single tick
+```
+
+Call it at a stable boundary between `run()` calls. If the current tick is
+already recorded, it raises `ValueError`. It raises `RuntimeError` on a
+finished population.
+
+### pop.restore_checkpoint(tick) — State Restoration
+
+Restore population state from a raw-mode history record at a specific tick.
+All records after that tick are removed:
+
+```python
+# Record raw history during simulation
+pop.run(n_steps=100, record_every=1)
+
+# Restore to tick 50
+pop.restore_checkpoint(tick=50)
+# Population state is now identical to what it was at tick 50
+# All history records after tick 50 are discarded
+```
+
+Only valid for raw-mode history (`mode="raw"`). Raises `ValueError` when
+mode is `"observation"` — observation-mode history does not retain the
+full-state data needed for restoration, so record raw history if you plan
+to use checkpoints.
 
 ### History Data Analysis
 
@@ -311,67 +431,59 @@ plt.show()
 ### Current State Output
 
 ```python
-# Get detailed snapshot of current state
-current_state = pop.output_current_state()
-print("Current state:", current_state)
-
-# Include zero-count genotype entries
-readable_state = pop.output_current_state(include_zero_counts=True)
-print("State with zero-counts:", readable_state)
-
-# Save to JSON file (suitable for transmission and storage)
-pop.output_current_state(output_path="state.json")
-print("State saved to state.json")
+# Project current population state through the canonical observation
+result = pop.observe()
+print("Tick:", result.tick)
+print("Axes:", result.axes)
+print("Labels:", result.labels)
+print("Values shape:", result.values.shape)
+print("Values:", result.values)
 ```
 
 ### Data Export
 
 ```python
-# Export as dictionary format (include zero-count genotypes)
-data_dict = pop.output_current_state(include_zero_counts=True)
+import json
+
+# Get current projected state as a structured result
+result = pop.observe()
+
+# Convert to a JSON-serializable dictionary
+data_dict = {
+    "tick": result.tick,
+    "axes": list(result.axes),
+    "labels": {k: list(v) for k, v in result.labels.items()},
+    "values": result.values.tolist(),
+}
 
 # Save to JSON file
-pop.output_current_state(output_path="state.json", indent=2)
-
-# Save to file
-import json
 with open("population_state.json", "w") as f:
     json.dump(data_dict, f, indent=2)
-
-# Export observation data (include zero-count genotypes)
-observation_data = pop.output_current_state(
-    observation=observation,
-    include_zero_counts=True
-)
 ```
 
 ### Integration with External Tools
 
 ```python
 import pandas as pd
-import numpy as np
 
-# Convert history data to pandas DataFrame
-def history_to_dataframe(history_data):
-    """Convert history records to DataFrame"""
+# Convert observation-mode history to pandas DataFrame
+def history_to_dataframe(observed_history):
+    """Convert observed history records to DataFrame"""
     data = []
-    for snapshot in history_data["snapshots"]:
+    group_labels = observed_history.labels["group"]
+    for i, tick in enumerate(observed_history.ticks):
         row = {
-            "tick": snapshot["tick"],
-            "total_population": snapshot["total_count"],
-            "females": snapshot["female_count"],
-            "males": snapshot["male_count"]
+            "tick": tick,
+            "total_population": observed_history.values[i].sum(),
         }
-        # Add observation data
-        if "observed" in snapshot:
-            for group_name, count in snapshot["observed"].items():
-                row[f"observed_{group_name}"] = count
+        for j, group in enumerate(group_labels):
+            row[group] = observed_history.values[i, j].sum()
         data.append(row)
-
     return pd.DataFrame(data)
 
 # Usage example
-history_df = history_to_dataframe(full_history)
+observed = pop.history.observe(pop.observation)
+history_df = history_to_dataframe(observed)
 print(history_df.head())
 ```
 
@@ -379,85 +491,50 @@ print(history_df.head())
 
 ### Group Format
 
-Observation rules support multiple group formats:
+Groups must be defined using `IndividualSelector` instances passed to
+`.with_observation()` at build time. Each key in the groups mapping becomes
+a group label, and its value is an `IndividualSelector` that selects the
+individuals belonging to that group.
 
-#### 1. Dictionary Format (Named Groups)
+`IndividualSelector` accepts the following keyword-only arguments:
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `ztype` | `str` | Diploid genotype string (e.g. `"WT|Dr"`) |
+| `gtype` | `str` | Haploid genotype string |
+| `sex` | `str` or `int` | `"female"`, `"male"`, or `0` / `1` |
+| `age` | `range`, `int`, or sequence of `int` | Age or age interval |
+
+Selectors can be combined with `|` (union) and `+` (intersection) operators:
 
 ```python
-groups = {
-    "all_females": {"sex": "female"},
-    "adults": {"age": [2, 3, 4, 5, 6, 7]},
-    "drive_carriers": {"genotype": ["WT|Drive", "Drive|Drive"]},
-    "juvenile_drive": {
-        "genotype": ["WT|Drive"],
-        "age": [0, 1],
-        "sex": "female"
-    },
-}
+# Union — individuals matching either selector
+combined = nt.IndividualSelector(ztype="WT|Dr") | nt.IndividualSelector(ztype="Dr|Dr")
+
+# Intersection — individuals matching both selectors
+both = nt.IndividualSelector(sex="female") + nt.IndividualSelector(age=range(2, 5))
 ```
 
-#### 2. Pattern Matching (Recommended)
+### Grouping Examples
 
 ```python
-groups = {
-    "target_female": {
-        # Ordered matching Maternal|Paternal
-        "genotype": "A1/B1|A2/B2; C1/D1|C2/D2",
-        "sex": "female",
-    },
-    "target_female_unordered": {
-        # Unordered matching (two homologous chromosome copies can be swapped)
-        "genotype": "A1/B1::A2/B2; C1/D1::C2/D2",
-        "sex": "female",
-    }
-}
-```
+# Single genotype group
+{"wt": nt.IndividualSelector(ztype="WT|WT")}
 
-### Selector Formats
+# Age range group
+{"adults": nt.IndividualSelector(age=range(2, 8))}
 
-#### Genotype Selector
+# Combined criteria
+{"juvenile_female": nt.IndividualSelector(sex="female", age=range(0, 2))}
 
-```python
-# String (comma-separated)
-{"genotype": "WT|WT"}
+# Union of genotypes
+{"drive_carriers": (
+    nt.IndividualSelector(ztype="WT|Drive")
+    | nt.IndividualSelector(ztype="Drive|Drive")
+)}
 
-# Pattern string (recommended)
-{"genotype": "A1/B1|A2/B2; C1/D1::C2/D2"}
-
-# String list
-{"genotype": ["WT|WT", "WT|Drive", "Drive|Drive"]}
-
-# Wildcard (all genotypes)
-{"genotype": "*"}
-```
-
-#### Sex Selector
-
-```python
-# String
-{"sex": "female"}  # or {"sex": "male"}
-
-# Integer
-{"sex": 0}  # Female, {"sex": 1} Male
-
-# List
-{"sex": ["female", "male"]}  # Both sexes
-```
-
-#### Age Selector
-
-```python
-# Explicit list
-{"age": [2, 3, 4]}
-
-# Closed interval tuple
-{"age": [2, 7]}  # ages 2,3,4,5,6,7
-
-# Interval list (union)
-{"age": [[0, 1], [4, 6]]}  # ages 0,1,4,5,6
-
-# Callable
-{"age": lambda a: a >= 2}  # age greater than or equal to 2
+# Wildcard — all genotypes (identity group)
+{"all": nt.IndividualSelector()}
 ```
 
 ## Practical Examples
@@ -465,50 +542,95 @@ groups = {
 ### Monitoring Gene Drive Spread
 
 ```python
-# Create observation rules specifically for monitoring gene drive
-drive_observation = pop.create_observation(
-    groups={
-        "wild_type": {"genotype": ["WT|WT"]},
-        "heterozygotes": {"genotype": ["WT|Drive"]},
-        "homozygotes": {"genotype": ["Drive|Drive"]},
-        "total_drive_carriers": {"genotype": ["WT|Drive", "Drive|Drive"]}
-    }
+import natal as nt
+
+species = nt.Species.from_dict(
+    name="drive_monitor",
+    structure={"chr1": {"loc": ["WT", "Drive"]}},
 )
 
-# Run simulation and monitor in real time
+pop = (
+    nt.DiscreteGenerationPopulation
+    .setup(species=species, name="drive_monitor", stochastic=False)
+    .initial_state(individual_count={
+        "female": {"WT|WT": 500, "Drive|WT": 50},
+        "male": {"WT|WT": 500, "Drive|WT": 50},
+    })
+    .reproduction(eggs_per_female=50)
+    .competition(carrying_capacity=10000)
+    .with_observation(
+        {
+            "wild_type": nt.IndividualSelector(ztype="WT|WT"),
+            "heterozygotes": nt.IndividualSelector(ztype="WT|Drive"),
+            "homozygotes": nt.IndividualSelector(ztype="Drive|Drive"),
+            "total_drive": (
+                nt.IndividualSelector(ztype="WT|Drive")
+                | nt.IndividualSelector(ztype="Drive|Drive")
+            ),
+        },
+        collapse_age=True,
+    )
+    .build()
+)
+
 for step in range(100):
     pop.run_tick()
-
     if step % 10 == 0:
-        current = pop.output_current_state(observation=drive_observation)
-        observed = current["observed"]
-        print(f"Step {step}: WT={observed['wild_type']}, "
-              f"Het={observed['heterozygotes']}, "
-              f"Hom={observed['homozygotes']}")
+        result = pop.observe()
+        group_map = {
+            name: i for i, name in enumerate(result.labels["group"])
+        }
+        values = result.values
+        print(f"Step {step}: "
+              f"WT={values[group_map['wild_type']].sum():.0f}, "
+              f"Het={values[group_map['heterozygotes']].sum():.0f}, "
+              f"Hom={values[group_map['homozygotes']].sum():.0f}")
 ```
 
 ### Age Structure Analysis
 
 ```python
-# Analyze population dynamics across different age groups
-age_observation = pop.create_observation(
-    groups={
-        "juveniles": {"age": [0, 1]},
-        "young_adults": {"age": [2, 3]},
-        "mature_adults": {"age": [4, 5]},
-        "old_adults": {"age": [6, 7]}
-    }
+import natal as nt
+
+species = nt.Species.from_dict(
+    name="age_analysis",
+    structure={"chr1": {"loc": ["WT", "Dr"]}},
 )
 
-# Get history data and analyze
-history = pop.output_history(observation=age_observation)
+pop = (
+    nt.DiscreteGenerationPopulation
+    .setup(species=species, name="age_demo", stochastic=False)
+    .initial_state(individual_count={
+        "female": {"WT|WT": 500, "Dr|WT": 50},
+        "male": {"WT|WT": 500, "Dr|WT": 50},
+    })
+    .reproduction(eggs_per_female=50)
+    .competition(carrying_capacity=10000)
+    .with_observation(
+        {
+            "juveniles": nt.IndividualSelector(age=range(0, 2)),
+            "young_adults": nt.IndividualSelector(age=range(2, 4)),
+            "mature_adults": nt.IndividualSelector(age=range(4, 6)),
+            "old_adults": nt.IndividualSelector(age=range(6, 8)),
+        },
+        collapse_age=True,
+    )
+    .record_history(mode="raw")
+    .build()
+)
 
-# Analyze age structure changes
-for snapshot in history["snapshots"]:
-    total = sum(snapshot["observed"].values())
+pop.run(n_steps=100, record_every=1)
+
+# Project raw history through the canonical observation
+observed = pop.history.observe(pop.observation)
+for i, tick in enumerate(observed.ticks):
+    values = observed.values[i]  # (group, sex)
+    total = float(values.sum())
     if total > 0:
-        juvenile_ratio = snapshot["observed"]["juveniles"] / total
-        print(f"Juvenile ratio: {juvenile_ratio:.3f}")
+        group_labels = observed.labels["group"]
+        juv_idx = group_labels.index("juveniles")
+        juvenile_ratio = values[juv_idx].sum() / total
+        print(f"Tick {tick}: juvenile ratio = {juvenile_ratio:.3f}")
 ```
 
 ## Best Practices
@@ -540,7 +662,17 @@ Increase the `record_every` interval, use `clear_history()` for periodic cleanup
 Observation rules themselves do not affect simulation performance, but frequent data extraction and storage may impact overall performance.
 
 ### Can I change recording rules after building the Population?
-Recording rules (observation mode vs raw mode) are frozen at build time if set via the Configurator's `with_observation()`. The `pop.record_observation` property setter can still change the mode for backward compatibility, but the `HistorySchema` only rebuilds when no rows have been recorded yet. Use `pop.create_observation()` for runtime queries without modifying the recording mode.
+No. The canonical observation and History schema are frozen by `build()`.
+Both `pop.update().with_observation(...)` and
+`pop.update().record_history(...)` raise `RuntimeError`. At runtime, read
+`pop.observation`, call `pop.observe()`, or call
+`pop.history.observe(pop.observation)` on raw History.
+
+### What's the difference between `record_history()` and `with_observation()`?
+`with_observation()` defines *which groups* to observe (the observation projection). `record_history()` sets *how to record* — raw full-state or compressed observation-mode. They are independent: you can have observation groups without compressed recording, or compressed recording without explicit groups (auto-identity).
+
+### Can I restore my population to a previous state?
+Yes, if you recorded raw history (`mode="raw"`), use `pop.restore_checkpoint(tick)`. It restores individual counts (and sperm storage when applicable) to the exact state at that tick. Observation-mode history cannot be used for checkpoint restoration because it does not retain per-genotype data.
 
 ---
 

@@ -280,46 +280,25 @@ print(state_view["individual_count"]["female"].keys())
 state_json = nt.population_to_readable_json(pop, indent=2)
 print(state_json[:240])
 
-# 3) Define reusable observation rules (recommended via the population API)
-observation = pop.create_observation(
-    groups={
-        "adult_drive_female": {
-            "genotype": "Drive::*",
-            "sex": "female",
-            "age": [2, 3, 4, 5, 6, 7],
-        },
-        "all_adults": {
-            "age": [2, 3, 4, 5, 6, 7],
-        },
-    },
-    collapse_age=False,
-)
+# 3) Define observation groups at build time via .with_observation()
+# (or use IndividualSelector directly — see the demos for examples)
 
-# 4) Export the current snapshot (state translation + observation)
-current_obs = pop.output_current_state(
-    observation=observation,
-    include_zero_counts=False,
-)
-print(current_obs["labels"])
-print(current_obs["observed"]["adult_drive_female"])
+# 4) Project current state through the canonical observation
+result = pop.observe()
+print(result.labels)
+print(result.values)
 
-# 5) Export historical observations (can be directly used for plotting/export)
-history_obs = pop.output_history(
-    observation=observation,
-    include_zero_counts=False,
-)
-print(history_obs["n_snapshots"])
-print(history_obs["snapshots"][0]["observed"]["all_adults"])
+# 5) Access typed history data
+history = pop.history
+print(f"Recorded {len(history)} ticks: {history.ticks}")
+
+# 6) Project history through the observation (post-hoc)
+obs_history = pop.history.observe(pop.observation)
+print(f"Observed history shape: {obs_history.values.shape}")
+print(f"Observed per-tick total: {obs_history.values.sum(axis=(1,2,3))}")
 ```
 
-It is recommended to use `output_current_state()` together with `output_history()`:
-
-- `observation` defines the observation targets (grouping and filtering rules)
-- The state translation API defines the export format (readable dict/JSON)
-
-If you prefer module-level functions, you can also use
-`nt.output_current_state(...)` and `nt.output_history(...)`; the semantics are
-equivalent to the population methods.
+Use `pop.observe()` to project the current state through the canonical observation, and `pop.history.observe(pop.observation)` to project recorded history.
 
 ### Corresponding Runnable Examples
 

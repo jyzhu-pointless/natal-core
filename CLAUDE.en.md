@@ -45,6 +45,8 @@ Project-specific rules:
 - **Use multiple-choice questions for clarifying decisions**: When the user needs to choose among viable alternatives (design trade-offs, naming, parameter values), use the AskUserQuestion tool to present 2–4 concrete options for direct selection. This avoids open-ended back-and-forth communication.
 - **Maintain the Tasks list**: For multi-step work, use TaskCreate/TaskUpdate to track progress. Keep task statuses up to date (pending → in_progress → completed) and don't leave zombie tasks behind. Trivial single-step operations don't need a task.
 - **Prefer dedicated tools over Bash**: Read/Glob/Grep/Edit/Write are more reliable than shell commands — they aren't blocked by the sandbox, produce stable output formats, and render better. Use Bash only for batch operations, pipe compositions, or tasks that dedicated tools cannot handle.
+- **Never commit or push without explicit permission**: Do not execute `git commit`, `git push`, or any form of submission unless the user explicitly requests it.
+- **Never modify `.gitignore`**: Do not alter `.gitignore` files unless the user explicitly requests it.
 
 ## Validation Gates
 
@@ -66,23 +68,47 @@ All three must pass before committing: `pytest` + `pyright` + `ruff check src de
 
 After every code change, you MUST follow this sequence. **Self-review is prohibited**:
 
-1. **`@tester`** — Generate strict tests for new or changed code, following `numerical-verification` standards and AGENTS.md test coverage rules.
+1. **`@tester`** — Generate strict tests following `numerical-verification` and `adversarial-review` standards. Must cover five test categories: **negative contract tests** (assert deleted interfaces are unreachable), **ownership tests** (assert returned ndarray/list/dict is a copy or read-only), **state-transition tests** (restore→run, finish→snapshot, import→run, clear→record), **axis-combination tests** (Cartesian product of configuration axes), **error-path tests** (invalid input raises correct exception with state unchanged). Every assertion must prove a numerical invariant.
 2. **Run `python scripts/generate_init_pyi.py`** — Regenerate stubs after public API changes so subsequent pyright checks work against the latest stubs.
-3. **`@evaluator`** — Perform a full audit: run `pytest` / `pyright` / `ruff` gates, load `code-review` and `numerical-verification` skills for code and test quality review, check docstring compliance, and check for `Any`/`object` abuse and `cast(Any)` violations.
+3. **`@evaluator`** — Perform **adversarial** review. The reviewer takes an attacker's stance, actively searching for evidence the code violates the spec, rather than merely verifying that gates pass. Must:
+   - Build a **ledger** from the spec: three lists — must-exist, must-not-exist, invariants
+   - Do a **full-repo search** (src/tests/demos/docs/stub) for every must-not-exist item, confirming they are unreachable
+   - **Attack** every invariant: ownership attacks (check ndarray references/write protection), state-machine attacks (restore→run, finish→snapshot), axis-combination attacks (Cartesian product enumeration)
+   - **Execute** every demo script and documented code example
+   - Run `pytest` / `pyright` / `ruff` gates, load `code-review`, `numerical-verification`, `adversarial-review` skills
+   - Use a **mechanical** verdict: `APPROVED` ⇔ zero hard-blockers
 4. **If the change involves public API (signatures, parameters, defaults, module renames, etc.), the primary agent invokes `@docs`** to sync documentation and code examples in `docs/zh/` and `docs/en/`.
 5. **The primary agent MUST NOT run `pytest`, `pyright`, or `ruff` on its own and claim "review passed."** These results must be independently verified by the evaluator, which produces a structured report.
 
 The change is only considered complete when the evaluator returns an `APPROVED` verdict.
 
+#### Evaluator Mandatory Rejection Criteria
+
+The evaluator **MUST** return `REJECTED` when any of the following conditions are met. **Severity does not soften a hard-blocker**: a missing comment on `Any` and a semantic breakage are treated identically.
+
+- **Test failures**: Any `FAILED` in `pytest`.
+- **Insufficient coverage**: Line coverage for new modules or new code in existing modules **< 95%**.
+- **Hard-blocker present**: REJECTED on any one of the following:
+  - **Must-not-exist violation**: spec-required deletion still accessible (including `getattr`, `__init__` re-export)
+  - **Invariant broken**: ownership leak (ndarray reference/non-write-protected), state-machine error (tick desync after restore), axis-combination crash
+  - **Demo/doc crash**: demo script or documented code example fails at runtime
+  - **Uncommented `Any` / `object`**
+  - **Uncommented `# type: ignore`**
+  - **`cast(Any, …)`**
+  - **Non-Google-style docstring section** or **missing type annotations on parameters/returns/attributes**
+- **Missing negative contract**: spec-flagged deletion without a corresponding assert-not-exists test.
+- **Missing ownership test**: public method returning a container (ndarray/list/dict) without a corresponding read-only/copy verification test.
+- **Uncovered state transitions**: key lifecycle sequences such as restore→run, finish→snapshot, import→run, clear→record are untested.
+
 ### Fix Policy
 
-- **Modified files**: All pyright / ruff / pytest failures must be fixed, regardless of whether they pre-existed.
+- **Modified files**: All pyright / ruff / pytest failures must be fixed. "Pre-existing failures" do not exist — if tests pass on `main` and fail on the branch, the change introduced a regression and must be fixed immediately.
 - **Files affected by the change**: If a signature or import change causes failures elsewhere, those must be fixed too.
 - **Pre-existing issues in untouched files**: Note and analyze them; fixing is encouraged but not required for the current commit.
-- **`cast(Any, …)` is forbidden**. Never use it to bypass type checking.
+- **`cast(Any, …)` is forbidden**. Never use it to bypass type checking. Any occurrence triggers REJECTION.
 - **Do not abuse `Any` or `object`**: parameter, return, and variable type annotations must use specific types — don't take shortcuts with `Any` or `object`. Adding new imports for type annotations is worth it. `Any` is acceptable only with a concrete, documented justification (e.g., `Callable[..., Any]` to mean "any callable").
 - **`cast(T, x)`** may be used only when static analysis cannot prove `x: T` at all (e.g., narrowing an `Optional` after a guard). Prefer type-narrowing assertions or restructuring first.
-- **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line.
+- **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line. Missing comment triggers REJECTION.
 
 ### Test Coverage
 

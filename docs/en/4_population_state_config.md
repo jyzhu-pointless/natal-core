@@ -148,7 +148,6 @@ The relevant API is located in `natal.output`:
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
 - `population_to_readable_dict` / `population_to_readable_json`
 - `population_history_to_readable_dict` / `population_history_to_readable_json`
-- `population_to_observation_dict` / `population_to_observation_json`
 
 Where:
 
@@ -173,21 +172,13 @@ hist_view = nt.population_history_to_readable_dict(pop)
 print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 ```
 
-If you need to apply observation rules directly during translation (see [Population Observation Rules](2_data_output.md)), use the observation integration interface:
+If you need to apply observation rules, use ``pop.observe()`` for the current state or ``pop.history.observe(pop.observation)`` for recorded history (see [Population Observation Rules](2_data_output.md)):
 
 ```python
-observed = nt.population_to_observation_dict(
-    pop,
-    groups={
-        "adult_wt_female": {
-            "genotype": ["WT|WT"],
-            "sex": "female",
-            "age": [1],
-        }
-    },
-    collapse_age=False,
-)
-print(observed["observed"]["adult_wt_female"])
+# Project current state through the canonical observation
+result = pop.observe()
+print(result.labels)
+print(result.values)
 ```
 
 If directly working with `PopulationState` / `DiscretePopulationState`, you can also call the corresponding functions and explicitly pass labels:

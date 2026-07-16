@@ -2,7 +2,6 @@
 
 from .history import (
     History,
-    HistoryBatch,
     HistorySchema,
     ObservationMetadata,
     PopulationLayout,
@@ -10,17 +9,13 @@ from .history import (
 )
 from .observation import (
     Observation,
-    ObservationFilter,
     ObservationResult,
     apply_rule,
     build_identity_observation,
 )
-from .record import CompactMeta, build_compact_metadata
 from .translation import (
     discrete_population_state_to_dict,
     discrete_population_state_to_json,
-    output_current_state,
-    output_history,
     population_history_to_readable_dict,
     population_history_to_readable_json,
     population_observation_history_to_readable_dict,
@@ -33,7 +28,6 @@ from .translation import (
     spatial_population_history_to_readable_json,
     spatial_population_observation_history_to_readable_dict,
     spatial_population_observation_history_to_readable_json,
-    spatial_population_output_history,
     spatial_population_to_observation_dict,
     spatial_population_to_observation_json,
     spatial_population_to_readable_dict,
@@ -41,23 +35,17 @@ from .translation import (
 )
 
 __all__ = [
-    "CompactMeta",
     "History",
-    "HistoryBatch",
     "HistorySchema",
     "Observation",
-    "ObservationFilter",
     "ObservationMetadata",
     "ObservationResult",
     "PopulationLayout",
     "SpatialHistoryLayout",
     "apply_rule",
-    "build_compact_metadata",
     "build_identity_observation",
     "discrete_population_state_to_dict",
     "discrete_population_state_to_json",
-    "output_current_state",
-    "output_history",
     "population_history_to_readable_dict",
     "population_history_to_readable_json",
     "population_observation_history_to_readable_dict",
@@ -70,7 +58,6 @@ __all__ = [
     "spatial_population_history_to_readable_json",
     "spatial_population_observation_history_to_readable_dict",
     "spatial_population_observation_history_to_readable_json",
-    "spatial_population_output_history",
     "spatial_population_to_observation_dict",
     "spatial_population_to_observation_json",
     "spatial_population_to_readable_dict",

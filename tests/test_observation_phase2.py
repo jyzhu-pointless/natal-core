@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import FrozenInstanceError
+from types import MappingProxyType
 from typing import Dict
 
 import numpy as np
@@ -87,12 +88,10 @@ def _make_ind_count_3d(
     exact numerical preservation after projection.
     """
     arr = np.zeros((n_sexes, n_ages, n_ztypes), dtype=np.float64)
-    base = 1
     for s in range(n_sexes):
         for a in range(n_ages):
             for z in range(n_ztypes):
-                arr[s, a, z] = float(base)
-                base += 1
+                arr[s, a, z] = float(100 * z + 10 * s + a + 1)
     return arr
 
 
@@ -101,12 +100,38 @@ def _make_ind_count_2d(
 ) -> NDArray[np.float64]:
     """Create a deterministic 2-D count array (discrete-generation style)."""
     arr = np.zeros((n_sexes, n_ztypes), dtype=np.float64)
-    base = 1
     for s in range(n_sexes):
         for z in range(n_ztypes):
-            arr[s, z] = float(base)
-            base += 1
+            arr[s, z] = float(100 * z + 10 * s + 1)
     return arr
+
+
+def _expected_identity_3d(
+    individual_count: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Move the source ZType axis to the public group-first position.
+
+    Args:
+        individual_count: Source ``(sex, age, ztype)`` array.
+
+    Returns:
+        ``(ztype, sex, age)`` identity-projected array.
+    """
+    return np.moveaxis(individual_count, -1, 0)
+
+
+def _expected_identity_2d(
+    individual_count: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Move the source ZType axis to the public group-first position.
+
+    Args:
+        individual_count: Source ``(sex, ztype)`` array.
+
+    Returns:
+        ``(ztype, sex)`` identity-projected array.
+    """
+    return np.moveaxis(individual_count, -1, 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -122,9 +147,9 @@ class TestObservationResult:
         values = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
         result = ObservationResult(
             tick=5,
-            values=values,
+            _values=values,
             axes=("group", "sex"),
-            labels={"group": ("g0", "g1")},
+            _labels=MappingProxyType({"group": ("g0", "g1")}),
         )
         assert result.tick == 5
         np.testing.assert_array_equal(result.values, values)
@@ -135,9 +160,9 @@ class TestObservationResult:
         """ObservationResult is immutable."""
         result = ObservationResult(
             tick=0,
-            values=np.zeros((1, 2), dtype=np.float64),
+            _values=np.zeros((1, 2), dtype=np.float64),
             axes=("group", "sex"),
-            labels={"group": ("g",)},
+            _labels=MappingProxyType({"group": ("g",)}),
         )
         with pytest.raises(FrozenInstanceError):
             result.tick = 99  # type: ignore[misc]  # testing frozen
@@ -147,9 +172,9 @@ class TestObservationResult:
         values = np.array([[10.0, 20.0]], dtype=np.float64)
         result = ObservationResult(
             tick=3,
-            values=values,
+            _values=values,
             axes=("group", "sex"),
-            labels={"group": ("carriers",)},
+            _labels=MappingProxyType({"group": ("carriers",)}),
         )
         d = result.to_dict()
         # Invariant: expected keys
@@ -167,9 +192,9 @@ class TestObservationResult:
         """to_dict() works with empty values array."""
         result = ObservationResult(
             tick=0,
-            values=np.zeros((0, 2), dtype=np.float64),
+            _values=np.zeros((0, 2), dtype=np.float64),
             axes=("group", "sex"),
-            labels={"group": ()},
+            _labels=MappingProxyType({"group": ()}),
         )
         d = result.to_dict()
         assert d["values"] == []
@@ -180,17 +205,17 @@ class TestObservationResult:
         values = np.array([[7.0, 8.0, 9.0]], dtype=np.float64)
         original = ObservationResult(
             tick=42,
-            values=values,
+            _values=values,
             axes=("group", "sex", "age"),
-            labels={"group": ("adults",)},
+            _labels=MappingProxyType({"group": ("adults",)}),
         )
         d = original.to_dict()
         # Reconstruct
         reconstructed = ObservationResult(
             tick=int(d["tick"]),
-            values=np.array(d["values"], dtype=np.float64),
+            _values=np.array(d["values"], dtype=np.float64),
             axes=tuple(d["axes"]),
-            labels={k: tuple(v) for k, v in d["labels"].items()},
+            _labels=MappingProxyType({k: tuple(v) for k, v in d["labels"].items()}),
         )
         assert reconstructed.tick == original.tick
         assert reconstructed.axes == original.axes
@@ -239,16 +264,16 @@ class TestBuildIdentityObservation:
         assert obs.n_groups == 3
 
     def test_labels_include_all_genotypes(self, phase2_registry: IndexRegistry) -> None:
-        """Labels contain all genotype strings, no @default suffix."""
+        """Labels contain each genotype together with its default slab."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=1, n_sexes=2
         )
         # All 3 genotypes should appear (unordered: WT|WT, WT|Dr, Dr|Dr)
         labels_set = set(obs.labels)
         assert len(labels_set) == 3
-        assert "WT|WT" in labels_set
-        assert "WT|Dr" in labels_set
-        assert "Dr|Dr" in labels_set
+        assert "WT|WT@default" in labels_set
+        assert "WT|Dr@default" in labels_set
+        assert "Dr|Dr@default" in labels_set
 
     def test_fingerprint_stable(self, phase2_registry: IndexRegistry) -> None:
         """Fingerprint is deterministic for same inputs."""
@@ -569,118 +594,98 @@ class TestApplyIdentity:
     def test_identity_3d_output_shape_no_collapse(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Identity apply on 3D input → 3D output."""
+        """Identity apply returns exact group-first coordinates."""
         obs = build_identity_observation(
-            phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
+            phase2_registry, n_ztypes=3, n_ages=4, n_sexes=2, collapse_age=False
         )
-        ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
+        ind_count = _make_ind_count_3d(n_sexes=2, n_ages=4, n_ztypes=3)
         result = obs.apply(ind_count)
-        # Invariant: 3-D output
-        assert result.ndim == 3
-        # Shape: (n_sexes, n_ages, n_ztypes) = (2, 2, 3) — identity reorders
-        assert result.shape == (2, 2, 3)
+        expected = _expected_identity_3d(ind_count)
+        assert result.shape == (3, 2, 4)
+        np.testing.assert_array_equal(result, expected)
 
     def test_identity_3d_output_shape_with_collapse(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Identity apply on 3D input with collapse_age → 2D output."""
+        """Collapsed identity sums only age in group-first coordinates."""
         obs = build_identity_observation(
-            phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=True
+            phase2_registry, n_ztypes=3, n_ages=4, n_sexes=2, collapse_age=True
         )
-        ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
+        ind_count = _make_ind_count_3d(n_sexes=2, n_ages=4, n_ztypes=3)
         result = obs.apply(ind_count)
-        # Invariant: 2-D output after collapse
-        assert result.ndim == 2
-        # Shape: (n_sexes, n_ztypes) = (2, 3)
-        assert result.shape == (2, 3)
+        expected = _expected_identity_3d(ind_count).sum(axis=-1)
+        assert result.shape == (3, 2)
+        np.testing.assert_array_equal(result, expected)
 
     def test_identity_total_sum_preserved_3d(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Identity apply preserves total sum (3D input, no collapse)."""
+        """Identity apply preserves every 3D coordinate, not only the total."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
         )
         ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
         result = obs.apply(ind_count)
-        # Invariant: total population conserved
-        assert result.sum() == ind_count.sum()
+        np.testing.assert_array_equal(result, _expected_identity_3d(ind_count))
 
     def test_identity_total_sum_preserved_3d_collapsed(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Identity apply preserves total sum (3D input, collapsed)."""
+        """Collapsed identity equals the exact group-first age sum."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=True
         )
         ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
         result = obs.apply(ind_count)
-        # Invariant: total population conserved even after age collapse
-        assert result.sum() == ind_count.sum()
+        expected = _expected_identity_3d(ind_count).sum(axis=-1)
+        np.testing.assert_array_equal(result, expected)
 
     def test_identity_3d_no_collapse_values_are_identity_permutation(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Identity projection is numerically lossless: sorted output == sorted input."""
+        """Identity projection is the exact ZType-to-group axis movement."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
         )
         ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
         result = obs.apply(ind_count)
-        # Invariant: every value in the input appears exactly once in the output
-        # (just reordered — identity_map = [0,1,2] maps each ztype to the
-        # corresponding group column)
-        np.testing.assert_array_equal(
-            np.sort(result.ravel()), np.sort(ind_count.ravel())
-        )
+        np.testing.assert_array_equal(result, _expected_identity_3d(ind_count))
 
     def test_identity_collapse_age_sum_invariant(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Collapsed result: each (sex, ztype) value = sum over age axis."""
+        """Collapsed result is group-first and sums only the age axis."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=True
         )
         ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
         result = obs.apply(ind_count)
-        # result[s, z] should == ind_count[s, :, z].sum()
-        for s in range(2):
-            for z in range(3):
-                expected = ind_count[s, :, z].sum()
-                assert result[s, z] == pytest.approx(expected)
+        expected = _expected_identity_3d(ind_count).sum(axis=-1)
+        np.testing.assert_array_equal(result, expected)
 
     def test_identity_2d_input_no_collapse(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Identity apply on 2D input → 2D output."""
+        """Identity apply on 2D input returns exact group-first coordinates."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=1, n_sexes=2, collapse_age=False
         )
         ind_count = _make_ind_count_2d(n_sexes=2, n_ztypes=3)
         result = obs.apply(ind_count)
-        # Invariant: 2-D output
-        assert result.ndim == 2
-        assert result.shape == (2, 3)
-        # Invariant: total sum preserved
-        assert result.sum() == ind_count.sum()
-        # Invariant: numerically lossless
-        np.testing.assert_array_equal(
-            np.sort(result.ravel()), np.sort(ind_count.ravel())
-        )
+        assert result.shape == (3, 2)
+        np.testing.assert_array_equal(result, _expected_identity_2d(ind_count))
 
     def test_identity_2d_input_with_collapse(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Identity apply on 2D input with collapse_age → same shape (no ages)."""
+        """collapse_age is a no-op for absent age but remains group-first."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=1, n_sexes=2, collapse_age=True
         )
         ind_count = _make_ind_count_2d(n_sexes=2, n_ztypes=3)
         result = obs.apply(ind_count)
-        # 2D input with collapse_age still produces 2D output
-        assert result.ndim == 2
-        assert result.shape == (2, 3)
-        assert result.sum() == ind_count.sum()
+        assert result.shape == (3, 2)
+        np.testing.assert_array_equal(result, _expected_identity_2d(ind_count))
 
     def test_identity_map_none_falls_through_to_mask(
         self, phase2_registry: IndexRegistry
@@ -693,19 +698,21 @@ class TestApplyIdentity:
 
         ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
         result = obs.apply(ind_count)
-        # Invariant: still produces 3-D output via lazy rebuild path
-        assert result.ndim == 3
-        # Invariant: total sum preserved (even through lazy path)
-        assert result.sum() == ind_count.sum()
+        np.testing.assert_array_equal(result, _expected_identity_3d(ind_count))
 
     def test_identity_unsupported_ndim_raises(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Unsupported ndim raises ValueError."""
+        """A non-spatial Observation rejects 4D counts with a stable error."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2
         )
-        with pytest.raises(ValueError, match="Unsupported individual_count ndim"):
+        assert obs.deme_indices is None
+        assert obs.axes == ("group", "sex", "age")
+        with pytest.raises(
+            ValueError,
+            match="^Unsupported individual_count ndim: 4$",
+        ):
             obs.apply(np.zeros((2, 2, 2, 2), dtype=np.float64))
 
 
@@ -746,7 +753,7 @@ class TestApplyLegacy:
         """Observation with mask=None rebuilds on apply()."""
         compiler = ObservationFilter(phase2_registry)
 
-        obs = compiler.create_observation(
+        obs = compiler.build_filter(
             groups={"total": {"genotype": "*"}},
             collapse_age=False,
         )
@@ -764,13 +771,34 @@ class TestApplyLegacy:
     ) -> None:
         """Lazy rebuild path still preserves total sum when all selected."""
         compiler = ObservationFilter(phase2_registry)
-        obs = compiler.create_observation(
+        obs = compiler.build_filter(
             groups={"total": {"genotype": "*"}}, collapse_age=False
         )
         ind_count = _make_ind_count_3d()
         result = obs.apply(ind_count)
         # Invariant: with '*' wildcard, sum over ztypes preserves total
         assert result.sum() == ind_count.sum()
+
+    def test_mask_none_lazy_collapse_age_folds_each_age_once(
+        self, phase2_registry: IndexRegistry
+    ) -> None:
+        """A delayed legacy mask must not collapse an already removed age axis."""
+        compiler = ObservationFilter(phase2_registry)
+        observation = compiler.build_filter(
+            groups={"total": {"genotype": "*"}},
+            collapse_age=True,
+        )
+        assert observation.mask is None
+        individual_count = _make_ind_count_3d()
+
+        expected = individual_count.sum(axis=(1, 2))[np.newaxis, :]
+        projected = observation.apply(individual_count)
+
+        assert projected.shape == (1, 2)
+        np.testing.assert_array_equal(projected, expected)
+        np.testing.assert_array_equal(
+            projected.sum(axis=0), individual_count.sum(axis=(1, 2))
+        )
 
     def test_2d_input_apply(
         self, phase2_registry: IndexRegistry
@@ -782,7 +810,7 @@ class TestApplyLegacy:
         dimensions at rebuild time.
         """
         compiler = ObservationFilter(phase2_registry)
-        obs = compiler.create_observation(
+        obs = compiler.build_filter(
             groups={"total": {"genotype": "*"}},
             collapse_age=False,
         )
@@ -802,7 +830,7 @@ class TestApplyLegacy:
     ) -> None:
         """Observation without registry raises on lazy rebuild."""
         compiler = ObservationFilter(phase2_registry)
-        obs = compiler.create_observation(
+        obs = compiler.build_filter(
             groups={"total": {"genotype": "*"}},
             collapse_age=False,
         )
@@ -830,14 +858,18 @@ class TestProject:
     def test_project_returns_observation_result(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """project() returns an ObservationResult."""
+        """project() returns an exact group-first ObservationResult."""
         obs = build_identity_observation(
-            phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
+            phase2_registry, n_ztypes=3, n_ages=4, n_sexes=2, collapse_age=False
         )
-        ind_count = _make_ind_count_3d()
+        ind_count = _make_ind_count_3d(n_ages=4)
         result = obs.project(ind_count, tick=10)
         assert isinstance(result, ObservationResult)
         assert result.tick == 10
+        assert result.axes == ("group", "sex", "age")
+        np.testing.assert_array_equal(
+            result.values, _expected_identity_3d(ind_count)
+        )
 
     def test_project_tick_preserved(
         self, phase2_registry: IndexRegistry
@@ -850,54 +882,67 @@ class TestProject:
         for tick in (0, 5, 99):
             result = obs.project(ind_count, tick=tick)
             assert result.tick == tick
+            np.testing.assert_array_equal(
+                result.values, _expected_identity_3d(ind_count)
+            )
 
     def test_project_axes_no_collapse_3d(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """project() with identity on 3D input → correct axes."""
+        """project() declares axes matching exact group-first values."""
         obs = build_identity_observation(
-            phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
+            phase2_registry, n_ztypes=3, n_ages=4, n_sexes=2, collapse_age=False
         )
-        ind_count = _make_ind_count_3d()
+        ind_count = _make_ind_count_3d(n_ages=4)
         result = obs.project(ind_count, tick=0)
-        # identity returns (n_sexes, n_ages, n_ztypes) = (2, 2, 3)
-        # ndim=3, collapse_age=False → axes = ("group", "sex", "age")
         assert result.axes == ("group", "sex", "age")
+        assert result.values.shape == (3, 2, 4)
+        np.testing.assert_array_equal(
+            result.values, _expected_identity_3d(ind_count)
+        )
 
     def test_project_axes_collapse_3d(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """project() with collapse_age → 2D axes."""
+        """Collapsed project removes age and returns its exact sum."""
         obs = build_identity_observation(
-            phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=True
+            phase2_registry, n_ztypes=3, n_ages=4, n_sexes=2, collapse_age=True
         )
-        ind_count = _make_ind_count_3d()
+        ind_count = _make_ind_count_3d(n_ages=4)
         result = obs.project(ind_count, tick=0)
-        # collapse_age=True, ndim=2 → axes = ("group", "sex")
         assert result.axes == ("group", "sex")
+        assert result.values.shape == (3, 2)
+        np.testing.assert_array_equal(
+            result.values, _expected_identity_3d(ind_count).sum(axis=-1)
+        )
 
     def test_project_labels_preserved(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Observation labels appear in project result."""
+        """Project labels preserve ZType order and always include slab."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
         )
         ind_count = _make_ind_count_3d()
         result = obs.project(ind_count, tick=0)
-        assert result.labels["group"] == obs.labels
+        assert result.labels["group"] == (
+            "WT|WT@default",
+            "WT|Dr@default",
+            "Dr|Dr@default",
+        )
 
     def test_project_values_match_apply(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """project().values ≡ apply() output."""
+        """project().values equal the independently derived axis movement."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
         )
         ind_count = _make_ind_count_3d()
-        projected = obs.apply(ind_count)
         result = obs.project(ind_count, tick=0)
-        np.testing.assert_array_equal(result.values, projected)
+        np.testing.assert_array_equal(
+            result.values, _expected_identity_3d(ind_count)
+        )
 
     def test_project_legacy_baked_mask(
         self, phase2_registry: IndexRegistry
@@ -1053,7 +1098,7 @@ class TestBackwardCompatibility:
     ) -> None:
         """create_observation() (with mask=None) still works and can apply."""
         compiler = ObservationFilter(phase2_registry)
-        obs = compiler.create_observation(
+        obs = compiler.build_filter(
             groups={"total": {"genotype": "*"}}, collapse_age=False
         )
         assert obs.mask is None
@@ -1265,24 +1310,20 @@ class TestEdgeCases:
             phase2_registry, n_ztypes=3, n_ages=1, n_sexes=2
         )
         ind_count = _make_ind_count_2d(n_sexes=2, n_ztypes=3)
-        # Should dispatch as 2D input
         result = obs.apply(ind_count)
-        assert result.ndim == 2
-        assert result.sum() == ind_count.sum()
+        np.testing.assert_array_equal(result, _expected_identity_2d(ind_count))
 
     def test_identity_groups_individually_correct(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Each identity group column = corresponding ztype column of input."""
+        """Each group plane equals the corresponding source ZType plane."""
         obs = build_identity_observation(
-            phase2_registry, n_ztypes=3, n_ages=2, n_sexes=2, collapse_age=False
+            phase2_registry, n_ztypes=3, n_ages=4, n_sexes=2, collapse_age=False
         )
-        ind_count = _make_ind_count_3d(n_sexes=2, n_ages=2, n_ztypes=3)
+        ind_count = _make_ind_count_3d(n_sexes=2, n_ages=4, n_ztypes=3)
         result = obs.apply(ind_count)
-        # result shape: (n_sexes, n_ages, n_ztypes) since identity_map is [0,1,2]
-        # So result[:, :, z] should == ind_count[:, :, z]
         for z in range(3):
-            np.testing.assert_array_equal(result[:, :, z], ind_count[:, :, z])
+            np.testing.assert_array_equal(result[z], ind_count[:, :, z])
 
     def test_lazy_rebuild_with_selectors(
         self, phase2_registry: IndexRegistry
@@ -1302,9 +1343,10 @@ class TestEdgeCases:
 
         ind_count = _make_ind_count_3d(n_ztypes=3)
         result = obs.apply(ind_count)
-        # Lazy rebuild via _rebuild_mask_dim
-        assert result.ndim == 3
-        assert result.shape[0] == 2  # 2 groups
+        expected_wt = ind_count[:, :, 0]
+        expected_dr_carriers = ind_count[:, :, 1:].sum(axis=-1)
+        np.testing.assert_array_equal(result[0], expected_wt)
+        np.testing.assert_array_equal(result[1], expected_dr_carriers)
 
     def test_fingerprint_format(self, phase2_registry: IndexRegistry) -> None:
         """All fingerprints are 16-char hex strings."""
@@ -1419,8 +1461,8 @@ class TestIdentityWithNonDefaultSlab:
         # Check @infected labels exist
         infected_labels = [label for label in labels_set if "@infected" in label]
         assert len(infected_labels) == 3
-        # Check default labels (no @default suffix)
-        default_labels = [label for label in labels_set if "@" not in label]
+        # Default slabs remain explicit so every label is self-describing.
+        default_labels = [label for label in labels_set if "@default" in label]
         assert len(default_labels) == 3
         # 'WT|WT@infected' format
         assert any("WT|WT@infected" in label for label in labels_set)
@@ -1458,7 +1500,7 @@ class TestBuildMaskWhenNone:
     ) -> None:
         """build_mask() works when Observation was created lazily (mask=None)."""
         compiler = ObservationFilter(phase2_registry)
-        obs = compiler.create_observation(
+        obs = compiler.build_filter(
             groups={"total": {"genotype": "*"}},
             collapse_age=False,
         )

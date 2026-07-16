@@ -149,7 +149,11 @@ def RUN_FN_NAME(
         )
         ind_count, tick = current_state
 
-        if record_interval > 0 and (tick % record_interval == 0):
+        if (
+            result == RESULT_CONTINUE
+            and record_interval > 0
+            and (tick % record_interval == 0)
+        ):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
             if observation_mask is not None:

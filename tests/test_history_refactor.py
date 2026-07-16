@@ -30,7 +30,15 @@ from natal.output.history import (
     PopulationLayout,
     SpatialHistoryLayout,
 )
-from natal.output.observation import ObservationFilter, apply_rule
+from natal.output.observation import Observation, ObservationFilter, apply_rule
+from natal.patterns import IndividualSelector
+
+
+@pytest.fixture(autouse=True)
+def _restore_numba_state() -> None:
+    """Ensure Numba is re-enabled after any test that disables it."""
+    yield
+    nt.enable_numba()
 
 # ============================================================================
 # Helpers
@@ -46,20 +54,6 @@ def _make_rows(
         rows[i, 0] = float(start_tick + i)
         rows[i, 1:] = float(start_tick + i) * seed  # marker value
     return rows
-
-
-def _sum_group_counts(group_data: dict) -> float:
-    """Sum all counts in a group entry regardless of nesting depth.
-
-    Handles both {sex: value} (2-level) and {sex: {age: value}} (3-level) formats.
-    """
-    total = 0.0
-    for sex_val in group_data.values():
-        if isinstance(sex_val, dict):
-            total += sum(sex_val.values())
-        else:
-            total += float(sex_val)
-    return total
 
 
 def _minimal_layout(
@@ -216,7 +210,7 @@ class TestHistoryAppend:
         rows[0, 0] = 0.0
         rows[1, 0] = 1.0
         batch = HistoryBatch(schema=schema, rows=rows)
-        history.append(batch)
+        history._append(batch)
         # Invariant: after appending 2 rows with distinct ticks, length == 2
         assert len(history) == 2
 
@@ -227,34 +221,35 @@ class TestHistoryAppend:
         history = History(s1)
         batch = HistoryBatch(schema=s_big, rows=np.ones((2, 10), dtype=np.float64))
         with pytest.raises(ValueError, match="does not match History schema"):
-            history.append(batch)
+            history._append(batch)
 
     def test_append_empty_batch_noop(self) -> None:
         """Appending zero-row batch does not change history."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         batch = HistoryBatch(schema=schema, rows=np.zeros((0, 5), dtype=np.float64))
-        history.append(batch)
+        history._append(batch)
         assert len(history) == 0  # invariant: still empty
 
-    def test_duplicate_tick_skipped(self) -> None:
-        """Appending a batch with same tick as last row skips duplicate."""
+    def test_duplicate_tick_rejected(self) -> None:
+        """Appending a repeated tick raises and preserves the original row."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         # First row: tick=1
         row1 = np.zeros(5, dtype=np.float64)
         row1[0] = 1.0
         batch1 = HistoryBatch(schema=schema, rows=row1[np.newaxis, :])
-        history.append(batch1)
+        history._append(batch1)
         assert len(history) == 1
 
         # Second batch: tick=1 again (same tick)
         row2 = np.zeros(5, dtype=np.float64)
         row2[0] = 1.0
         batch2 = HistoryBatch(schema=schema, rows=row2[np.newaxis, :])
-        history.append(batch2)
-        # Invariant: duplicate tick is skipped, length stays 1
+        with pytest.raises(ValueError, match="already recorded|strictly increasing"):
+            history._append(batch2)
         assert len(history) == 1
+        np.testing.assert_array_equal(history._to_numpy(), batch1.rows)
 
     def test_different_tick_appended(self) -> None:
         """Appending different ticks adds rows."""
@@ -263,7 +258,7 @@ class TestHistoryAppend:
         for tick in range(5):
             row = np.zeros(5, dtype=np.float64)
             row[0] = float(tick)
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
         assert len(history) == 5
 
 
@@ -279,7 +274,7 @@ class TestHistoryClear:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
         assert len(history) == 3
 
         history.clear()
@@ -294,9 +289,9 @@ class TestHistoryClear:
         """After clear, new rows can be appended to the same schema."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
-        history.append(HistoryBatch(schema=schema, rows=_make_rows(2, 5)))
+        history._append(HistoryBatch(schema=schema, rows=_make_rows(2, 5)))
         history.clear()
-        history.append(HistoryBatch(schema=schema, rows=_make_rows(3, 5)))
+        history._append(HistoryBatch(schema=schema, rows=_make_rows(3, 5)))
         assert len(history) == 3
 
 
@@ -311,7 +306,7 @@ class TestHistoryToNumpy:
     def test_empty_returns_zero_row_array(self) -> None:
         schema = _raw_schema(row_size=5)
         history = History(schema)
-        arr = history.to_numpy()
+        arr = history._to_numpy()
         # Invariant: (0, row_size) for empty history
         assert arr.shape == (0, 5)
         assert arr.dtype == np.float64
@@ -322,9 +317,9 @@ class TestHistoryToNumpy:
         for tick in range(3):
             row = np.arange(5, dtype=np.float64) + tick * 10
             row[0] = float(tick)
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
-        arr = history.to_numpy()
+        arr = history._to_numpy()
         # Invariant: shape = (n_records, schema.row_size)
         assert arr.shape == (3, 5)
         # Invariant: tick values preserved
@@ -343,7 +338,7 @@ class TestHistoryLenIter:
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(7, 5)
-        history.append(HistoryBatch(schema=schema, rows=rows))
+        history._append(HistoryBatch(schema=schema, rows=rows))
         assert len(history) == 7
         assert history.n_records == 7
 
@@ -353,7 +348,7 @@ class TestHistoryLenIter:
         for tick in range(4):
             row = np.zeros(5, dtype=np.float64)
             row[0] = float(tick)
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         ticks = [t for t, _ in history]
         assert ticks == [0, 1, 2, 3]
@@ -533,60 +528,48 @@ class TestHistoryObserve:
         schema = _obs_schema(row_size=5)
         history = History(schema)
         mask = np.ones((1, 2, 2, 6), dtype=np.float64)
+        obs = _direct_observation(labels=("g0",), mask=mask, fingerprint=schema.population.fingerprint)
         with pytest.raises(ValueError, match="only valid on raw-mode"):
-            history.observe(mask, ("g0",), False)
+            history.observe(obs)
 
     def test_observe_produces_observation_mode(self) -> None:
-        """Raw history → observe() → observation-mode History with correct labels."""
-        # Create a raw history with known individual counts.
-        # Layout: n_sexes=2, n_ages=2, n_ztypes=3
+        """Raw history → observe(Observation) → observation-mode History."""
         n_sexes, n_ages, n_ztypes = 2, 2, 3
-        ind_size = n_sexes * n_ages * n_ztypes  # 12
-        raw_row_size = 1 + ind_size  # 13 (no sperm_storage)
+        ind_size = n_sexes * n_ages * n_ztypes
+        raw_row_size = 1 + ind_size
 
         layout = _minimal_layout(n_ztypes=n_ztypes)
         schema = _raw_schema(layout, row_size=raw_row_size)
         history = History(schema)
 
-        # Build two ticks of synthetic data:
-        # tick 0: all individuals in (sex=0, age=0, ztype=0) = 100.0
-        # tick 1: all individuals in (sex=0, age=1, ztype=0) = 200.0
         for tick, val in [(0, 100.0), (1, 200.0)]:
             row = np.zeros(raw_row_size, dtype=np.float64)
             row[0] = float(tick)
             ind = row[1 : 1 + ind_size].reshape(n_sexes, n_ages, n_ztypes)
             ind[0, tick % n_ages, 0] = val
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
         assert len(history) == 2
 
-        # Observation mask: select ztype 0, all sexes, all ages
         mask = np.zeros((1, n_sexes, n_ages, n_ztypes), dtype=np.float64)
         mask[0, :, :, 0] = 1.0
-        labels = ("observed_z0",)
+        labels: Tuple[str, ...] = ("observed_z0",)
+        obs = _direct_observation(labels=labels, mask=mask, fingerprint=layout.fingerprint)
 
-        obs_history = history.observe(mask, labels, collapse_age=False)
+        obs_history = history.observe(obs)
 
-        # Invariant: result is observation-mode
         assert obs_history.schema.mode == "observation"
-        # Invariant: labels match
         assert obs_history.schema.observation.labels == labels
         assert obs_history.schema.observation.n_groups == 1
-        # Invariant: row_size = 1 + n_groups * n_sexes * n_ages = 1 + 1*2*2 = 5
         assert obs_history.schema.row_size == 5
 
-        # Invariant: observation values are correct
-        # tick 0: ind[0,0,0]=100 → observed[0,0,0] = 100, others = 0
-        arr = obs_history.to_numpy()
+        arr = obs_history._to_numpy()
         assert arr.shape == (2, 5)
-        # Row 0: tick=0, observed = [100, 0, 0, 0] (group 0, sex 0-age 0, sex 0-age 1, sex 1-age 0, sex 1-age 1)
-        assert arr[0, 0] == 0.0  # tick
-        assert arr[0, 1] == 100.0  # group0, sex0, age0
-        assert arr[0, 2] == 0.0  # group0, sex0, age1
-        assert arr[0, 3] == 0.0  # group0, sex1, age0
-        assert arr[0, 4] == 0.0  # group0, sex1, age1
-
-        # Row 1: tick=1, observed = [0, 200, 0, 0] (group 0 → sex0-age1 = 200)
+        assert arr[0, 0] == 0.0
+        assert arr[0, 1] == 100.0
+        assert arr[0, 2] == 0.0
+        assert arr[0, 3] == 0.0
+        assert arr[0, 4] == 0.0
         assert arr[1, 0] == 1.0
         assert arr[1, 1] == 0.0
         assert arr[1, 2] == 200.0
@@ -603,46 +586,58 @@ class TestHistoryObserve:
         schema = _raw_schema(layout, row_size=raw_row_size)
         history = History(schema)
 
-        # Single tick: ztype=0 has 10, ztype=1 has 20, ztype=2 has 30
         row = np.zeros(raw_row_size, dtype=np.float64)
         row[0] = 0.0
         ind = row[1 : 1 + ind_size].reshape(n_sexes, n_ages, n_ztypes)
         ind[0, 0, 0] = 10.0
         ind[0, 0, 1] = 20.0
         ind[0, 0, 2] = 30.0
-        history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+        history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
-        # Two groups: g0 selects ztype=0, g1 selects ztype={1,2}
         mask = np.zeros((2, n_sexes, n_ages, n_ztypes), dtype=np.float64)
-        mask[0, :, :, 0] = 1.0  # group 0: only ztype 0
-        mask[1, :, :, 1] = 1.0  # group 1: ztype 1 + 2
+        mask[0, :, :, 0] = 1.0
+        mask[1, :, :, 1] = 1.0
         mask[1, :, :, 2] = 1.0
         labels = ("g0", "g1_2")
+        obs = _direct_observation(labels=labels, mask=mask, fingerprint=layout.fingerprint)
 
-        obs_history = history.observe(mask, labels, collapse_age=False)
-        arr = obs_history.to_numpy()
+        obs_history = history.observe(obs)
+        arr = obs_history._to_numpy()
 
-        # row_size = 1 + 2*2*2 = 9
         assert obs_history.schema.row_size == 9
         assert arr.shape == (1, 9)
-        # tick
         assert arr[0, 0] == 0.0
-        # g0, sex0, age0: ztype=0 → 10
         assert arr[0, 1] == 10.0
-        # g0, sex0, age1: nothing → 0
         assert arr[0, 2] == 0.0
-        # g0, sex1, age0: nothing → 0
         assert arr[0, 3] == 0.0
-        # g0, sex1, age1: nothing → 0
         assert arr[0, 4] == 0.0
-        # g1, sex0, age0: ztypes 1+2 → 20+30 = 50
         assert arr[0, 5] == 50.0
-        # g1, sex0, age1: nothing → 0
         assert arr[0, 6] == 0.0
-        # g1, sex1, age0: nothing → 0
         assert arr[0, 7] == 0.0
-        # g1, sex1, age1: nothing → 0
         assert arr[0, 8] == 0.0
+
+
+def _direct_observation(
+    labels: Tuple[str, ...],
+    mask: NDArray[np.float64],
+    fingerprint: str,
+) -> Observation:
+    """Build an Observation directly from a pre-built mask for unit tests.
+
+    Args:
+        labels: Group labels.
+        mask: Binary selection mask.
+        fingerprint: Population layout fingerprint.
+
+    Returns:
+        Compiled Observation.
+    """
+    return Observation(
+        labels=labels,
+        collapse_age=False,
+        mask=mask.copy(),
+        population_fingerprint=fingerprint,
+    )
 
 
 # ============================================================================
@@ -665,7 +660,6 @@ class TestRecordingPlanFrozen:
         plan = RecordingPlan(schema=schema, observation_mask=mask)
         assert plan.schema is schema
         assert plan.observation_mask is mask
-        assert plan.compact_layout is None
 
 
 # ============================================================================
@@ -699,9 +693,11 @@ class TestCompileRecordingPlan:
 
         plan = compile_recording_plan(
             pop,
+            mode="raw",
             kind="discrete_generation",
             n_demes=1,
             has_sperm_storage=False,
+            observation=pop.observation,
         )
         assert plan.schema.mode == "raw"
         assert plan.schema.row_size == expected_raw_row_size
@@ -719,27 +715,18 @@ class TestCompileRecordingPlan:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=10)
             .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+            .with_observation(
+                groups={"group_a": IndividualSelector(ztype="WT|WT")}
+            )
             .build()
         )
-        ind = pop.state.individual_count
-        n_sexes, n_ages, n_ztypes = int(ind.shape[0]), int(ind.shape[1]), int(ind.shape[2])
-
-        obs_filter = ObservationFilter(pop.index_registry)
-        observation = obs_filter.build_filter(
-            diploid_genotypes=pop.species,
-            groups={"group_a": {"genotype": ["WT|WT"]}},
-            collapse_age=False,
-            n_sexes=n_sexes,
-            n_ages=n_ages,
-            n_ztypes=n_ztypes,
-        )
-
         plan = compile_recording_plan(
             pop,
+            mode="observation",
             kind="discrete_generation",
             n_demes=1,
             has_sperm_storage=False,
-            observation=observation,
+            observation=pop.observation,
         )
         assert plan.schema.mode == "observation"
         # row_size = 1 + 1 * 2 * 2 = 5
@@ -762,30 +749,22 @@ class TestCompileRecordingPlan:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=10)
             .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+            .with_observation(
+                groups={
+                    "wild": IndividualSelector(ztype="WT|WT"),
+                    "heterozygous": IndividualSelector(ztype="WT|Dr"),
+                    "drive": IndividualSelector(ztype="Dr|Dr"),
+                }
+            )
             .build()
-        )
-        ind = pop.state.individual_count
-        n_sexes, n_ages, n_ztypes = int(ind.shape[0]), int(ind.shape[1]), int(ind.shape[2])
-
-        obs_filter = ObservationFilter(pop.index_registry)
-        observation = obs_filter.build_filter(
-            diploid_genotypes=pop.species,
-            groups=[
-                {"genotype": ["WT|WT"]},
-                {"genotype": ["WT|Dr"]},
-                {"genotype": ["Dr|Dr"]},
-            ],
-            collapse_age=False,
-            n_sexes=n_sexes,
-            n_ages=n_ages,
-            n_ztypes=n_ztypes,
         )
         plan = compile_recording_plan(
             pop,
+            mode="observation",
             kind="discrete_generation",
             n_demes=1,
             has_sperm_storage=False,
-            observation=observation,
+            observation=pop.observation,
         )
         # row_size = 1 + n_groups * n_sexes * n_ages = 1 + 3 * 2 * 2 = 13
         assert plan.schema.row_size == 13
@@ -810,9 +789,11 @@ class TestCompileRecordingPlan:
 
         plan = compile_recording_plan(
             pop,
-            kind="discrete_generation",
+            mode="raw",
+            kind="spatial_discrete_generation",
             n_demes=3,
             has_sperm_storage=False,
+            observation=pop.observation,
         )
         layout = plan.schema.spatial_layout
         assert layout is not None
@@ -935,7 +916,7 @@ class TestObservationBuildMask:
         n_sexes, n_ages, n_ztypes = 2, 2, pop.state.individual_count.shape[2]
 
         obs_filter = ObservationFilter(pop.index_registry)
-        obs = obs_filter.create_observation(
+        obs = obs_filter.build_filter(
             diploid_genotypes=pop.species,
             groups={"total": {"genotype": "*"}},
             collapse_age=False,
@@ -966,43 +947,25 @@ class TestObservationCollapseAge:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=10)
             .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+            .with_observation(
+                groups={"total": IndividualSelector()}, collapse_age=True
+            )
             .build()
         )
         ind_count = pop.state.individual_count
-        n_sexes, n_ages, n_ztypes = (
-            int(ind_count.shape[0]),
-            int(ind_count.shape[1]),
-            int(ind_count.shape[2]),
-        )
+        obs = pop.observation
 
-        obs_filter = ObservationFilter(pop.index_registry)
-        obs = obs_filter.build_filter(
-            diploid_genotypes=pop.species,
-            groups={"total": {"genotype": "*"}},
-            collapse_age=True,
-            n_sexes=n_sexes,
-            n_ages=n_ages,
-            n_ztypes=n_ztypes,
-        )
-
-        # Invariant: collapse_age is recorded as metadata
         assert obs.collapse_age is True
 
         result = obs.apply(ind_count)
-        # Invariant: baked mask always produces 3-D output (n_groups, n_sexes, n_ages)
-        # even with collapse_age=True — the flag is metadata for downstream consumers
-        assert result.ndim == 3
-        assert result.shape[0] == 1  # 1 group
-        assert result.shape[1] == n_sexes
-        assert result.shape[2] == n_ages
-
-        # Invariant: total population sum is preserved
-        assert result.sum() == ind_count.sum()
+        expected = ind_count.sum(axis=(1, 2))[np.newaxis, :]
+        assert result.shape == (1, 2)
+        np.testing.assert_array_equal(result, expected)
 
     def test_collapse_age_flag_preserved(self, simple_species) -> None:
-        """collapse_age flag is preserved as metadata even though mask is always 4-D."""
+        """Collapsed values equal the full projection summed over age."""
         nt.disable_numba()
-        pop = (
+        pop_collapsed = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="collapse_cmp", stochastic=False
             )
@@ -1012,47 +975,32 @@ class TestObservationCollapseAge:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=10)
             .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+            .with_observation(
+                groups={"total": IndividualSelector()}, collapse_age=True
+            )
             .build()
         )
-        ind_count = pop.state.individual_count
-        n_sexes, n_ages, n_ztypes = (
-            int(ind_count.shape[0]),
-            int(ind_count.shape[1]),
-            int(ind_count.shape[2]),
+        pop_full = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=simple_species, name="collapse_full", stochastic=False
+            )
+            .initial_state(
+                individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}}
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=10)
+            .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+            .with_observation(
+                groups={"total": IndividualSelector()}, collapse_age=False
+            )
+            .build()
         )
 
-        obs_filter = ObservationFilter(pop.index_registry)
-
-        obs_collapsed = obs_filter.build_filter(
-            diploid_genotypes=pop.species,
-            groups={"total": {"genotype": "*"}},
-            collapse_age=True,
-            n_sexes=n_sexes,
-            n_ages=n_ages,
-            n_ztypes=n_ztypes,
-        )
-        obs_full = obs_filter.build_filter(
-            diploid_genotypes=pop.species,
-            groups={"total": {"genotype": "*"}},
-            collapse_age=False,
-            n_sexes=n_sexes,
-            n_ages=n_ages,
-            n_ztypes=n_ztypes,
-        )
-
-        # Invariant: collapse_age flag differs
-        assert obs_collapsed.collapse_age is True
-        assert obs_full.collapse_age is False
-
-        # Both apply() produce 3-D results with baked mask
-        collapsed = obs_collapsed.apply(ind_count)
-        full = obs_full.apply(ind_count)
-        assert collapsed.ndim == 3
-        assert full.ndim == 3
-
-        # Invariant: both produce the same sums (same "total" wildcard)
-        np.testing.assert_array_equal(collapsed, full)
-        assert collapsed.sum() == ind_count.sum()
+        collapsed = pop_collapsed.observe()
+        full = pop_full.observe()
+        assert collapsed.axes == ("group", "sex")
+        assert full.axes == ("group", "sex", "age")
+        np.testing.assert_array_equal(collapsed.values, full.values.sum(axis=-1))
 
 
 # ============================================================================
@@ -1080,7 +1028,7 @@ class TestObservationLazyRebuild:
         )
 
         obs_filter = ObservationFilter(pop.index_registry)
-        obs = obs_filter.create_observation(
+        obs = obs_filter.build_filter(
             diploid_genotypes=pop.species,
             groups={"total": {"genotype": "*"}},
             collapse_age=False,
@@ -1097,15 +1045,15 @@ class TestObservationLazyRebuild:
 
 
 # ============================================================================
-# 15. Regression: .with_observation() → run() → output_history()
+# 15. Regression: .with_observation() → canonical pop.observe()
 # ============================================================================
 
 
 class TestWithObservationRegression:
-    """Regression: with_observation chain → run → output_history produces correct dict."""
+    """Regression: with_observation installs only the canonical query rule."""
 
     def test_with_observation_output_history(self, simple_species) -> None:
-        """End-to-end: with_observation, run, output_history returns correct labels."""
+        """Explicit Observation projects exactly while History remains raw."""
         nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
@@ -1128,77 +1076,44 @@ class TestWithObservationRegression:
             )
             .with_observation(
                 groups={
-                    "drive_carriers": {
-                        "genotype": ["WT|Dr", "Dr|Dr"],
-                        "age": [1],
-                    },
-                    "wildtype": {
-                        "genotype": ["WT|WT"],
-                        "age": [1],
-                    },
+                    "drive_carriers": IndividualSelector(
+                        ztype="WT|Dr", age=1
+                    )
+                    | IndividualSelector(ztype="Dr|Dr", age=1),
+                    "wildtype": IndividualSelector(ztype="WT|WT", age=1),
                 },
                 collapse_age=True,
             )
             .build()
         )
 
-        pop.run(n_steps=3, record_every=1)
-
-        # Invariant: record_observation is set by with_observation
-        assert pop.record_observation is not None
-
-        report = pop.output_history(include_zero_counts=False)
-
-        # Invariant: report contains expected metadata
-        assert "state_type" in report
-        assert "n_snapshots" in report
-        assert report["n_snapshots"] == 4  # tick 0 + 3 steps
-        assert "labels" in report
-        assert set(report["labels"]) == {"drive_carriers", "wildtype"}
-        assert report["collapse_age"] is True
-
-        # Invariant: snapshots list has correct length
-        assert len(report["snapshots"]) == 4
-
-        # Invariant: first snapshot (tick 0) is the initial state
-        snapshot0 = report["snapshots"][0]
-        assert snapshot0["tick"] == 0
-        assert "observed" in snapshot0
-        # At tick 0 with initial state: WT|WT=180 per sex, WT|Dr=20 per sex at age 1
-        # wildtype group (WT|WT, age 1): female=180, male=180
-        # drive_carriers group (WT|Dr, age 1): female=20, male=20
-        # Dr|Dr does not exist at tick 0
-        # Output format: {group: {sex: {age: value}}} with age key from mask
-        obs0 = snapshot0["observed"]
-        assert obs0["wildtype"]["female"]["age_1"] == pytest.approx(180.0)
-        assert obs0["wildtype"]["male"]["age_1"] == pytest.approx(180.0)
-        assert obs0["drive_carriers"]["female"]["age_1"] == pytest.approx(20.0)
-        assert obs0["drive_carriers"]["male"]["age_1"] == pytest.approx(20.0)
+        result = pop.observe()
+        assert result.tick == 0
+        assert result.axes == ("group", "sex")
+        assert result.labels == {"group": ("drive_carriers", "wildtype")}
+        np.testing.assert_array_equal(
+            result.values,
+            np.array([[20.0, 20.0], [180.0, 180.0]], dtype=np.float64),
+        )
+        assert pop.history.schema.mode == "raw"
 
 
 # ============================================================================
-# 16. Raw history → post-hoc Observation == build-time Observation history
+# 16. Default and explicit Observation both keep default raw History
 # ============================================================================
 
 
 class TestRawVsObservationEquivalence:
-    """Invariant: Post-hoc observation on raw history == build-time observation-mode run."""
+    """Invariant: Observation choice is independent of default History mode."""
 
     def test_raw_posthoc_equals_observation_mode(self, simple_species) -> None:
-        """Same groups, same ticks → same observation totals per group.
-
-        Note: post-hoc apply() uses lazy rebuild with collapse_age=True
-        producing 2-D output, while build-time bakes a 4-D mask producing
-        3-D output with age keys.  We verify tick counts and group totals
-        match, proving the projection is mathematically equivalent.
-        """
+        """Identity and explicit rules both leave unspecified History raw."""
         nt.disable_numba()
 
-        # --- Build and run in raw mode (no with_observation) ---
-        pop_raw = (
+        pop_identity = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species,
-                name="equiv_raw",
+                name="identity_raw",
                 stochastic=False,
             )
             .initial_state(
@@ -1216,32 +1131,10 @@ class TestRawVsObservationEquivalence:
             )
             .build()
         )
-        pop_raw.run(n_steps=3, record_every=1)
-
-        # --- Create the same observation post-hoc ---
-        observation = pop_raw.create_observation(
-            groups={
-                "drive_carriers": {
-                    "genotype": ["WT|Dr", "Dr|Dr"],
-                    "age": [1],
-                },
-                "wildtype": {
-                    "genotype": ["WT|WT"],
-                    "age": [1],
-                },
-            },
-            collapse_age=True,
-        )
-        report_posthoc = pop_raw.output_history(
-            observation=observation,
-            include_zero_counts=False,
-        )
-
-        # --- Build and run in observation mode ---
-        pop_obs = (
+        pop_explicit = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species,
-                name="equiv_obs",
+                name="explicit_raw",
                 stochastic=False,
             )
             .initial_state(
@@ -1259,41 +1152,29 @@ class TestRawVsObservationEquivalence:
             )
             .with_observation(
                 groups={
-                    "drive_carriers": {
-                        "genotype": ["WT|Dr", "Dr|Dr"],
-                        "age": [1],
-                    },
-                    "wildtype": {
-                        "genotype": ["WT|WT"],
-                        "age": [1],
-                    },
+                    "drive_carriers": IndividualSelector(
+                        ztype="WT|Dr", age=1
+                    )
+                    | IndividualSelector(ztype="Dr|Dr", age=1),
+                    "wildtype": IndividualSelector(ztype="WT|WT", age=1),
                 },
                 collapse_age=True,
             )
             .build()
         )
-        pop_obs.run(n_steps=3, record_every=1)
-        report_buildtime = pop_obs.output_history(include_zero_counts=False)
 
-        # --- Compare ---
-        # Invariant: same number of snapshots
-        assert report_posthoc["n_snapshots"] == report_buildtime["n_snapshots"]
-
-        # Invariant: same labels
-        assert set(report_posthoc["labels"]) == set(report_buildtime["labels"])
-
-        # Invariant: per-tick per-group total counts match
-        for snap_a, snap_b in zip(
-            report_posthoc["snapshots"], report_buildtime["snapshots"]
-        ):
-            assert snap_a["tick"] == snap_b["tick"]
-            assert snap_a["observed"].keys() == snap_b["observed"].keys()
-            for group_label in snap_a["observed"]:
-                # Post-hoc (2-D output): {sex: value}
-                # Build-time (3-D output): {sex: {age: value}}
-                total_a = _sum_group_counts(snap_a["observed"][group_label])
-                total_b = _sum_group_counts(snap_b["observed"][group_label])
-                assert total_a == pytest.approx(total_b)
+        identity_result = pop_identity.observe()
+        explicit_result = pop_explicit.observe()
+        np.testing.assert_array_equal(
+            identity_result.values,
+            np.moveaxis(pop_identity.state.individual_count, -1, 0),
+        )
+        np.testing.assert_array_equal(
+            explicit_result.values,
+            np.array([[20.0, 20.0], [180.0, 180.0]], dtype=np.float64),
+        )
+        assert pop_identity.history.schema.mode == "raw"
+        assert pop_explicit.history.schema.mode == "raw"
 
 
 # ============================================================================
@@ -1328,9 +1209,9 @@ class TestHistoryToListDict:
             row[0] = float(tick)
             row[1] = float(tick * 10 + 1)  # marker value
             rows_data.append(row.copy())
-            history.append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
+            history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
-        items = history.to_list()
+        items = history._to_list()
         assert len(items) == 3
         for (tick, row), expected in zip(items, rows_data):
             assert tick == int(expected[0])

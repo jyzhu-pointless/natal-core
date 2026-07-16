@@ -11,32 +11,30 @@ translation includes sperm-storage tensors as well.
 
 ## Observation Output Helpers
 
-Use `output_current_state` and `output_history` for observation-centric output.
-Both helpers support:
+Use `pop.observe()` and `pop.history.observe(pop.observation)` for observation-centric output.
 
-- Building observation rules from `groups` directly.
-- Reusing a prebuilt observation object via `observation=...`.
-- Optional JSON file output through `output_path`.
+- `pop.observe()` returns an `ObservationResult` with projected current-state values.
+- `pop.history.observe(observation)` returns a projected observation-mode `History`.
 
-You can build reusable observations from the population API:
+Observation rules are configured during population setup:
 
 ```python
-observation = pop.create_observation(
-  groups={"adult_wt": {"genotype": ["WT|WT"], "age": [1]}},
-  collapse_age=False,
+from natal.patterns.individual_selector import IndividualSelector
+
+pop = nt.AgeStructuredPopulation.setup(
+    species=species,
+    configurator=(
+        nt.Configurator(species)
+        .with_observation({"adult_wt": IndividualSelector(ztype="WT|WT", age=[1])})
+        .record_history()
+    ),
 )
 
-current_payload = nt.output_current_state(
-  population=pop,
-  observation=observation,
-  output_path="outputs/current.json",
-)
+# Current state:
+current_payload = pop.observe().to_dict()
 
-history_payload = nt.output_history(
-  population=pop,
-  observation=observation,
-  output_path="outputs/history.json",
-)
+# Project history through observation:
+projected = pop.history.observe(pop.observation)
 ```
 
 ## History Translation Helpers
@@ -52,8 +50,8 @@ into readable per-tick state payloads.
 
 ### API behavior summary
 
-- Input `history` can be omitted; when omitted, the function attempts to call
-  `population.get_history()`.
+- Input `history` can be omitted; when omitted, the function reads from
+  `population.history`.
 - Each row in flattened history is parsed back into either
   `PopulationState` or `DiscretePopulationState` according to the current
   `population.state` type.

@@ -6,7 +6,7 @@ Migration engine were split into ``natal.engine.spatial_migrator``.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,7 +24,6 @@ from natal.engine.age_structured_simulator import (
 )
 from natal.engine.spatial_migrator import run_spatial_migration
 from natal.numba.utils import njit_switch
-from natal.output.record import CompactMeta, build_observation_row_spatial
 
 __all__ = [
     # No user-facing API for now
@@ -51,11 +50,10 @@ def run_spatial_tick(
     Returns:
         A tuple ``(ind_next, sperm_next, tick_next)``.
 
-    Design:
-        This kernel executes one full lifecycle per deme inside a single
-        ``prange`` region. Compared with stage-by-stage spatial passes, it
-        reduces synchronization points between parallel sections while
-        preserving per-deme lifecycle ordering.
+    This kernel executes one full lifecycle per deme inside a single
+    ``prange`` region. Compared with stage-by-stage spatial passes, it
+    reduces synchronization points between parallel sections while
+    preserving per-deme lifecycle ordering.
     """
     # Spatial ticks intentionally reuse the single-deme lifecycle ordering.
     # Offspring tensor is precomputed and shared across all demes.
@@ -249,8 +247,6 @@ def run_spatial_steps_with_migration(
     kernel_include_center: bool,
     migration_rate: NDArray[np.float64],
     record_interval: int = 0,
-    observation_mask: Optional[NDArray[np.float64]] = None,
-    compact_meta: Optional[CompactMeta] = None,
 ) -> Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
     """Execute multiple spatial ticks with migration and optional history recording.
 
@@ -271,14 +267,6 @@ def run_spatial_steps_with_migration(
         kernel_include_center: Whether kernel center is an outbound target.
         migration_rate: Fraction of each deme that migrates each tick.
         record_interval: History recording interval (0 = no recording).
-        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
-        group_offsets: Start position per group in compact row, from
-            ``build_compact_metadata``.
-        group_deme_map: ``(n_groups, max_demes)`` lookup, -1 padded.
-        group_n_demes: Valid deme entries per group.
-        mode_aggregate: Whether each group uses aggregate mode.
-        compact_row_size: Total float64 count for an observation snapshot row.
-
     Returns:
         A tuple ``(state_tuple, history, was_stopped)``.
     """
@@ -287,10 +275,7 @@ def run_spatial_steps_with_migration(
     sperm = sperm_store_all.copy()
     tick_cur = tick
 
-    if observation_mask is not None:
-        flatten_size = 1 + cast(CompactMeta, compact_meta).row_size
-    else:
-        flatten_size = 1 + ind.size + sperm.size
+    flatten_size = 1 + ind.size + sperm.size
 
     if record_interval > 0:
         estimated_size = (n_steps // record_interval) + 2
@@ -302,13 +287,8 @@ def run_spatial_steps_with_migration(
     if record_interval > 0 and (tick_cur % record_interval == 0):
         flat_state = np.zeros(flatten_size, dtype=np.float64)
         flat_state[0] = tick_cur
-        if observation_mask is not None:
-            flat_state[1:] = build_observation_row_spatial(
-                ind, observation_mask, cast(CompactMeta, compact_meta),
-            )
-        else:
-            flat_state[1:1 + ind.size] = ind.flatten()
-            flat_state[1 + ind.size:] = sperm.flatten()
+        flat_state[1:1 + ind.size] = ind.flatten()
+        flat_state[1 + ind.size:] = sperm.flatten()
         history_array[history_count, :] = flat_state
         history_count += 1
 
@@ -331,13 +311,8 @@ def run_spatial_steps_with_migration(
         if record_interval > 0 and (tick_cur % record_interval == 0):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick_cur
-            if observation_mask is not None:
-                flat_state[1:] = build_observation_row_spatial(
-                    ind, observation_mask, cast(CompactMeta, compact_meta),
-                )
-            else:
-                flat_state[1:1 + ind.size] = ind.flatten()
-                flat_state[1 + ind.size:] = sperm.flatten()
+            flat_state[1:1 + ind.size] = ind.flatten()
+            flat_state[1 + ind.size:] = sperm.flatten()
             history_array[history_count, :] = flat_state
             history_count += 1
 

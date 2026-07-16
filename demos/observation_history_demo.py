@@ -3,12 +3,12 @@
 Linear script version for slides: build -> run -> export a compact report.
 """
 
-
 from __future__ import annotations
 
 import json
 
 import natal as nt
+from natal.patterns import IndividualSelector
 
 nt.disable_numba()
 
@@ -44,38 +44,35 @@ population = (
         low_density_growth_rate=6.0,
         carrying_capacity=400,
     )
+    .with_observation(
+        groups={
+            "drive_carriers": IndividualSelector(ztype="WT|Dr") | IndividualSelector(ztype="Dr|Dr"),
+            "wildtype": IndividualSelector(ztype="WT|WT"),
+        },
+    )
+    .record_history(mode="raw")
     .build()
 )
 
 population.run(n_steps=5, record_every=1)
 
-groups: dict[str, dict[str, object]] = {
-    "drive_carriers": {
-        "genotype": ["WT::Dr", "Dr|Dr"],
-        "age": [1],
-    },
-    "wildtype": {
-        "genotype": "WT|WT",
-        "age": [1],
-    },
+# Current state via canonical observation
+current_result = population.observe()
+current_state = {
+    "tick": current_result.tick,
+    "axes": list(current_result.axes),
+    "labels": {k: list(v) for k, v in current_result.labels.items()},
+    "values": current_result.values.tolist(),
 }
 
-# Create a reusable observation object
-observation = population.create_observation(
-    groups=groups,
-    collapse_age=True,
-)
-
-# Use the population's built-in output methods with the reusable observation
-current_state = population.output_current_state(
-    observation=observation,
-    include_zero_counts=False,
-)
-
-history_report = population.output_history(
-    observation=observation,
-    include_zero_counts=False,
-)
+# History via post-hoc observation
+obs_hist = population.history.observe(population.observation)
+history_report = {
+    "ticks": list(obs_hist.ticks),
+    "axes": list(obs_hist.axes),
+    "labels": {"group": list(obs_hist.schema.observation.labels)},
+    "values": obs_hist.values.tolist(),
+}
 
 report = {
     "current_state": current_state,
@@ -83,4 +80,3 @@ report = {
 }
 
 print(json.dumps(report, ensure_ascii=False, indent=2))
-

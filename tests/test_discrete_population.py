@@ -132,21 +132,19 @@ class TestStateAndConfigInterop:
     def test_export_and_import_state_roundtrip(self):
         sp = _make_species("Disc_state_roundtrip")
         pop = _minimal_pop(sp, pop_name="Disc_state_roundtrip_pop")
-        pop.create_history_snapshot()
+        pop.record_snapshot()
 
-        state_flat, history = pop.export_state()
+        state_flat = pop.export_state()
         original_counts = pop._state.individual_count.copy()
 
         pop._state.individual_count.fill(0.0)
         pop._tick = 9
-        pop.clear_history()
 
-        pop.import_state(state_flat, history)
+        pop.import_state(state_flat)
 
         np.testing.assert_array_equal(pop._state.individual_count, original_counts)
         assert pop._tick == int(state_flat[0])
-        assert history is not None
-        np.testing.assert_array_equal(pop.get_history(), history)
+        assert pop.history.is_empty
 
     def test_import_state_accepts_state_object(self):
         sp = _make_species("Disc_state_object")
@@ -278,7 +276,7 @@ class TestHomingDriveIntegration:
         """Drive and R2 frequencies must match expected trajectory."""
         pop, sp = self._build_drive_pop()
         pop.run(5, record_every=1)
-        history = pop.get_history()
+        history = pop.history._to_numpy()
         reg = pop.index_registry
         n_gen = len(reg.index_to_genotype)
 
@@ -316,7 +314,7 @@ class TestHomingDriveIntegration:
         """Deterministic simulation must maintain exactly K individuals."""
         pop, _ = self._build_drive_pop()
         pop.run(30, record_every=1)
-        history = pop.get_history()
+        history = pop.history._to_numpy()
         reg = pop.index_registry
         n_gen = len(reg.index_to_genotype)
 

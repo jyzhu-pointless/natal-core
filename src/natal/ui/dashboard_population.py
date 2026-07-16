@@ -32,9 +32,8 @@ except ImportError:
     ui = None  # type: ignore[assignment]
 
 from natal.data import (
+    DiscretePopulationState,
     PopulationState,
-    parse_flattened_discrete_state,
-    parse_flattened_state,
 )
 from natal.population.age_structured import AgeStructuredPopulation
 from natal.ui.dashboard_helpers import (
@@ -196,30 +195,23 @@ class Dashboard:
             return float(rounded)
         return float(f"{value:.6g}")
 
-    def _compute_metrics_from_flat(self, tick: int, flat_state: np.ndarray) -> tuple[float, dict[str, float]]:
-        """Extract total population and allele frequencies from a flattened state array."""
-        config = self.pop._config  # type: ignore[reportPrivateUsage]
+    def _compute_metrics_from_counts(
+        self,
+        individual_count: np.ndarray,
+    ) -> tuple[float, dict[str, float]]:
+        """Extract total population and allele frequencies from typed counts.
+
+        Args:
+            individual_count: Count tensor with ``(sex, age, ztype)`` axes.
+
+        Returns:
+            Total count and allele-frequency mapping.
+        """
         registry = self.pop.registry
-        n_sexes = config.n_sexes
-        n_ages = config.n_ages
-        n_ztypes = config.n_ztypes
-
-        # Determine indices
-        # flat_state structure: [tick, individual_count(flattened), sperm_storage(flattened)...]
-        start_idx = 1
-        end_idx = 1 + n_sexes * n_ages * n_ztypes
-
-        # Extract individual_count
-        if flat_state.size < end_idx:
-            return 0, {} # Should not happen
-
-        ind_flat = flat_state[start_idx:end_idx]
-        total_pop = self._to_count(np.sum(ind_flat))
+        total_pop = self._to_count(np.sum(individual_count))
 
         # Compute allele frequencies
-        # Reshape to (n_sexes, n_ages, n_ztypes) then sum to (n_ztypes,)
-        ind_reshaped = ind_flat.reshape((n_sexes, n_ages, n_ztypes))
-        genotype_counts = ind_reshaped.sum(axis=(0, 1))
+        genotype_counts = individual_count.sum(axis=(0, 1))
 
         freqs = {}
         # We can reuse BasePopulation logic but optimized for numpy
@@ -274,6 +266,31 @@ class Dashboard:
 
         return total_pop, freqs
 
+    def _raw_history_state(
+        self,
+        index: int,
+    ) -> PopulationState | DiscretePopulationState:
+        """Rebuild one typed state from a raw History record.
+
+        Args:
+            index: Position in the History record axis.
+
+        Returns:
+            The age-structured or discrete state stored at that position.
+
+        Raises:
+            ValueError: If this population records observation history.
+        """
+        history = self.pop.history
+        if history.schema.mode != "raw":
+            raise ValueError("Dashboard state inspection requires raw history")
+        tick = history.ticks[index]
+        counts = history.individual_count[index]
+        sperm = history.sperm_storage
+        if sperm is None:
+            return DiscretePopulationState(tick, counts)
+        return PopulationState(tick, counts, sperm[index])
+
     def _rebuild_chart_history(self):
         """Re-populate chart data structures from population history."""
         # Clear current
@@ -282,7 +299,8 @@ class Dashboard:
         self._history_ticks = []
         self._last_chart_tick = -1
 
-        if not self.pop.history:
+        history = self.pop.history
+        if not history or history.schema.mode != "raw":
             return
 
         # Collect all known alleles from species upfront (for handling 0-frequency cases)
@@ -298,8 +316,9 @@ class Dashboard:
         # Only process every Nth point if history is huge to save UI load time
         # But max_history is usually small (5000), so process all.
 
-        for tick, flat_state in self.pop.history:
-            total_pop, freqs = self._compute_metrics_from_flat(tick, flat_state)
+        counts = history.individual_count
+        for index, tick in enumerate(history.ticks):
+            total_pop, freqs = self._compute_metrics_from_counts(counts[index])
             self._chart_history.append([tick, total_pop])
             self._history_ticks.append(tick)
 
@@ -346,26 +365,20 @@ class Dashboard:
                     'name': allele, 'data': [], 'color': get_allele_color(allele)
                 })
 
-        # 1. Collect all NEW snapshots from population history into local full-resolution buffers
-        # pop.history is a list of (tick, flat_state)
-        # We need to find where new data starts.
-        # Optim: check last item. If matching, verify backwards?
-        # Simple approach: iterate history.
+        # 1. Collect all NEW raw snapshots from population history into local
+        # full-resolution buffers. Observation history cannot provide the
+        # genotype counts required for allele-frequency charts.
 
-        new_points = []
+        new_points: list[tuple[int, float, dict[str, float]]] = []
 
-        # Access private history for speed/consistency
-        history = self.pop._history  # type: ignore[reportPrivateUsage]
-
-        # Optimization: start search from the end or assume append-only
-        # If history was cleared/rotated (max_history), we might need to handle gaps or full refresh
-        # For now, just scan for tick > last.
-
-        for tick, flat_state in history:
-            if tick > self._last_chart_tick:
-                total_pop, freqs = self._compute_metrics_from_flat(tick, flat_state)
-                new_points.append((tick, total_pop, freqs))  # type: ignore[reportUnknownMemberType]
-                self._last_chart_tick = tick
+        history = self.pop.history
+        if history.schema.mode == "raw":
+            counts = history.individual_count
+            for index, tick in enumerate(history.ticks):
+                if tick > self._last_chart_tick:
+                    total_pop, freqs = self._compute_metrics_from_counts(counts[index])
+                    new_points.append((tick, total_pop, freqs))
+                    self._last_chart_tick = tick
 
         # If current live state is newer than anything in history (e.g. record_every > 1), add it too
         if self.pop.tick > self._last_chart_tick:
@@ -824,17 +837,12 @@ class Dashboard:
 
         if include_history:
             history_list = []
-            n_sexes = self.pop._config.n_sexes
-            n_ages = self.pop._config.n_ages
-            n_ztypes = self.pop._config.n_ztypes
-            expected_ind_size = int(n_sexes * n_ages * n_ztypes)
-
-            for _tick, flat_state in self.pop.history:
-                if flat_state.size == 1 + expected_ind_size:
-                    state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
-                else:
-                    state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
-                history_list.append(semanticize_state(state_obj))  # type: ignore[reportUnknownMemberType]
+            history = self.pop.history
+            if history.schema.mode == "raw":
+                for index in range(len(history)):
+                    history_list.append(  # type: ignore[reportUnknownMemberType]  # nested serializer returns heterogeneous JSON mappings
+                        semanticize_state(self._raw_history_state(index))
+                    )
 
             if not history_list or history_list[-1]["tick"] != self.pop.tick:
                 history_list.append(semanticize_state(self.pop.state))  # type: ignore[reportUnknownMemberType]
@@ -1008,25 +1016,14 @@ class Dashboard:
         self.inspected_tick = tick
         self.inspection_mode = True
 
-        # Try to find state in history
-        # BasePopulation stores history as [(tick, flattened_array), ...]
-        # We need to find the one matching tick
-        history_record = next((rec for rec in self.pop._history if rec[0] == tick), None)
+        history = self.pop.history
+        try:
+            history_index = history.ticks.index(tick)
+        except ValueError:
+            history_index = None
 
-        if history_record:
-            flat_state = history_record[1]
-            # Parse state
-            n_sexes = self.pop._config.n_sexes
-            n_ages = self.pop._config.n_ages
-            n_ztypes = self.pop._config.n_ztypes
-
-            # Auto-detect state type based on flattened size
-            expected_ind_size = int(n_sexes * n_ages * n_ztypes)
-            if flat_state.size == 1 + expected_ind_size:
-                state_obj = parse_flattened_discrete_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
-            else:
-                state_obj = parse_flattened_state(flat_state, n_sexes, n_ages, n_ztypes, copy=False)
-
+        if history_index is not None and history.schema.mode == "raw":
+            state_obj = self._raw_history_state(history_index)
             self._update_inspection_view(state_obj, tick, is_history=True)  # type: ignore[reportArgumentType]
             self.tabs_main.set_value('inspection')
             ui.notify(f"Inspecting Tick {tick}")

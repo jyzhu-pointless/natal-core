@@ -319,6 +319,70 @@ RuntimeError: In 'NRT_adapt_ndarray_to_python', 'descr' is NULL
 - 非确定性：同一个提交可能通过或失败，取决于 pytest 的收集顺序
 - `main` 分支同样受影响（`143af2c`）：仅因测试文件更少而以有利的收集顺序通过
 
+### #23 ⚠️ 统一 Numba / Python 后端选择与测试缓存隔离
+
+**来源**：`refactor/history-observation` 分支调试。单独运行
+`TestMigrationKernelBank::test_kernel_bank_build_and_run` 时，默认
+`.numba_cache` 会让 Python 进程在 `_run_python_dispatch_tick()` 调用
+`run_spatial_migration()` 时直接以 `SIGABRT`（exit code 134）退出；代码不变，
+仅将 `NUMBA_CACHE_DIR` 指向全新临时目录后测试通过。
+
+**根因与设计问题**：
+
+- Numba 文件缓存不能识别被调用函数在其他文件中的变化，也会保留编译时读取的
+  全局常量；NATAL 的 lifecycle、migration、NamedTuple config 和 codegen 跨多个
+  文件组合，单个源文件时间戳不足以表达真实缓存 ABI。
+- `@njit_switch` 在模块导入时决定返回原始函数还是 `CPUDispatcher`；
+  `numba_disabled()` 只在运行时切换 `NUMBA_ENABLED`，无法把已经导入的
+  `CPUDispatcher` 还原成 Python 函数。因此 `with numba_disabled():` 不保证真正
+  走纯 Python fallback。
+- 测试目前混用四套控制方式：`numba_disabled()` 上下文、
+  `@pytest.mark.numba_off/on`、直接 `enable_numba()/disable_numba()`，以及
+  `NATAL_DISABLE_NUMBA=1` 的独立 pytest 进程。其语义和状态恢复规则不同。
+- `tests/conftest.py` 通过调整测试收集顺序规避缓存冲突，只是 workaround，无法
+  阻止单测、并行 worker、分支切换或 dirty worktree 命中不兼容的 native 缓存。
+
+**近期统一方案（优先实施）**：
+
+1. 后端只允许在进程启动、导入 `natal` 之前选择，统一为
+   `NATAL_BACKEND=python|numba`；Python 模式同时设置官方
+   `NUMBA_DISABLE_JIT=1`，不再把运行时 context manager 当作集成测试后端开关。
+2. 提供单一测试入口（例如 `scripts/test_backend.py`），分别启动 Python 与 Numba
+   两个 pytest 子进程；调用者不再手工组合 marker 和环境变量。
+3. marker 统一为 `python_backend`、`numba_backend`、`backend_parity`。Parity 测试
+   在两个独立进程分别对同一份独立数学期望断言，不在同一进程内切换后端。
+4. 测试运行使用独立缓存：
+   `/tmp/natal-core-tests/<run-id>/<backend>/<worker-id>`。不得读取或写入开发环境的
+   `.numba_cache`；隔离完成后删除 `tests/conftest.py` 的测试排序 workaround。
+5. 禁止集成测试直接调用 `enable_numba()` / `disable_numba()` 或使用
+   `numba_disabled()`；后者只保留给 `njit_switch` 自身的窄单元测试，并修正文档，
+   明确它只能影响后续装饰/分派选择。
+
+**持久缓存修复**：
+
+- 用户运行时仍可使用持久缓存，但目录必须按 Python cache tag、Numba/NumPy
+  版本、CPU 架构、显式 `NATAL_NUMBA_CACHE_ABI_VERSION` 和相关源文件内容 hash
+  分 namespace。
+- 必须 hash 实际文件内容，不能只使用 Git commit；否则 dirty worktree 的 ABI
+  变化无法触发新缓存。
+- fingerprint 变化时直接使用新目录，不尝试原地修复或探测旧 `.nbc`。native
+  缓存错误可能直接 abort/segfault，Python 层没有可靠的恢复机会。
+
+**长期后端 seam**：
+
+建立进程启动后冻结的 `ExecutionBackend`，由 `PythonBackend` 与 `NumbaBackend`
+两个 adapter 统一提供 lifecycle、steps 和 spatial migration 接口。Population 只
+依赖这个 seam；`njit_switch` 与缓存管理退回后端模块内部。完成该 seam 前，不应
+承诺支持导入后的运行时后端切换。
+
+**验收标准**：
+
+- 相同测试按任意顺序运行均不再触发 NRT 错误、SIGABRT 或 segfault。
+- Python backend 进程中的 `@njit` / `@njit_switch` 调用均进入原始 Python 函数。
+- Numba 与 Python parity 测试在独立进程中逐元素满足同一数值不变量。
+- pytest-xdist worker 和连续两次本地测试不共享可写缓存目录。
+- 删除测试排序 workaround 与集成测试中的运行时后端切换后，完整双后端门禁通过。
+
 
 ## 🟢 低优先级 — UX / 远期功能
 

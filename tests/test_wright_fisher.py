@@ -238,7 +238,7 @@ class TestWFEndToEnd:
 
         # Standard path
         pop.run(5)
-        h_std = pop.get_history()
+        h_std = pop.history._to_numpy()
 
         # WF path — deterministic mode
         wf_history = self._run_wf_loop(cfg, init, 5)
@@ -283,7 +283,7 @@ class TestWFEndToEnd:
 
         # Standard path
         pop.run(4)
-        h_std = pop.get_history()
+        h_std = pop.history._to_numpy()
 
         # WF path
         wf_history = self._run_wf_loop(cfg, init, 4)
@@ -329,18 +329,18 @@ class TestWFEndToEnd:
         object.__setattr__(pop_hook, "_config",
             pop_hook.config._replace(extreme_speed_mode=3))
         pop_hook.run(4)
-        h_hook = pop_hook.get_history()
+        h_hook = pop_hook.history._to_numpy()
 
         # Both should produce valid history
-        assert pop_ref.get_history().shape[0] == 5  # initial + 4 ticks
+        assert pop_ref.history._to_numpy().shape[0] == 5  # initial + 4 ticks
         assert h_hook.shape[0] == 5
 
         # Initial state (tick 0) should match
-        assert np.allclose(pop_ref.get_history()[0, 1:], h_hook[0, 1:])
+        assert np.allclose(pop_ref.history._to_numpy()[0, 1:], h_hook[0, 1:])
 
         # After hook fires at tick 2, the populations should diverge
         # (hook scales all adults by 0.5 → fewer offspring at tick 3)
-        ref_total = pop_ref.get_history()[3, 1:].sum()
+        ref_total = pop_ref.history._to_numpy()[3, 1:].sum()
         hook_total = h_hook[3, 1:].sum()
         assert hook_total < ref_total, (
             "Compiled WF hooks had no effect on population size"
@@ -430,7 +430,7 @@ class TestRegressionFixes:
             pop.config._replace(extreme_speed_mode=1))
 
         pop.run(3)
-        h = pop.get_history()
+        h = pop.history._to_numpy()
         # First entry should be tick 0 (initial state).
         assert int(h[0, 0]) == 0, f"First history tick should be 0, got {int(h[0, 0])}"
         # Should have 4 entries: tick 0, 1, 2, 3

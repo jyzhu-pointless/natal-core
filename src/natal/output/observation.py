@@ -1,18 +1,17 @@
 """Observation rules: compile group specs into numerical masks.
 
-Provides:
-  - :class:`Observation` — frozen projection rule with baked mask.
-  - :class:`ObservationResult` — result of projecting current state.
-  - :class:`ObservationFilter` — compiler for legacy dict-based groups
-    and the new :class:`IndividualSelector`-based groups.
-  - :func:`apply_rule` — standalone NUMPy projection.
-  - :func:`build_identity_observation` — identity observation, one
-    group per active ZType.
+The module provides :class:`Observation` (frozen projection rule with
+baked mask), :class:`ObservationResult` (result of projecting current
+state), :class:`ObservationFilter` (compiler for group specs and
+:class:`IndividualSelector`-based groups), :func:`apply_rule`
+(standalone numpy projection), and :func:`build_identity_observation`
+(identity observation, one group per active ZType).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,6 +19,8 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -33,6 +34,7 @@ from natal.registry.index import IndexRegistry
 from natal.utils.types import Sex
 
 if TYPE_CHECKING:
+    from natal.genetics import Species
     from natal.patterns.individual_selector import IndividualSelector
 
 __all__ = [
@@ -55,7 +57,7 @@ AgeSpec = Optional[
 ]
 
 SexSpec = Optional[Union[str, int, Sex, Iterable[Union[str, int, Sex]]]]
-GroupSpecDict = Dict[str, Any]
+GroupSpecDict = Dict[str, Any]  # Any: user-specified group values (str, int, list[str], ...)
 GroupsInput = Optional[
     Union[
         List[GroupSpecDict],
@@ -65,7 +67,7 @@ GroupsInput = Optional[
 ]
 
 
-def _build_fingerprint(*components: object) -> str:
+def _build_fingerprint(*components: object) -> str:  # object: any value with deterministic repr() — hashed via repr()
     import hashlib
 
     hasher = hashlib.sha256()
@@ -84,23 +86,36 @@ class ObservationResult:
 
     Attributes:
         tick: Tick at which the projection was taken.
-        values: Projected ndarray.  Axes order is described by ``axes``.
+        values: Projected ndarray (read-only defensive copy).
+            Axes order is described by ``axes``.
         axes: Axis names for ``values``, e.g. ``("group", "sex", "age")``.
-        labels: Per-axis label maps. Currently always ``{"group": ...}``.
+        labels: Per-axis immutable label map.
     """
 
     tick: int
-    values: NDArray[np.float64]
+    _values: NDArray[np.float64]
     axes: Tuple[str, ...]
-    labels: Dict[str, Tuple[str, ...]]
+    _labels: Mapping[str, Tuple[str, ...]]
 
-    def to_dict(self) -> Dict[str, object]:
+    @property
+    def values(self) -> NDArray[np.float64]:
+        """Return a read-only defensive copy of the projected values."""
+        result = self._values.copy()
+        result.flags.writeable = False
+        return result
+
+    @property
+    def labels(self) -> Mapping[str, Tuple[str, ...]]:
+        """Return the immutable per-axis label map."""
+        return self._labels
+
+    def to_dict(self) -> Dict[str, Any]:  # Any: JSON-serializable values, axes, and labels
         """Serialize to a JSON-friendly dict."""
         return {
             "tick": self.tick,
-            "values": self.values.tolist(),
+            "values": self._values.tolist(),
             "axes": list(self.axes),
-            "labels": {k: list(v) for k, v in self.labels.items()},
+            "labels": {k: list(v) for k, v in self._labels.items()},
         }
 
 
@@ -117,6 +132,10 @@ class Observation:
         mask: 4-D binary mask ``(n_groups, n_sexes, n_ages, n_ztypes)``
             or ``None`` when not yet baked.
         population_fingerprint: Hash derived from the layout when built.
+        deme_indices: Ordered spatial deme selection, or ``None`` for a
+            non-spatial Observation.
+        deme_mode: Whether a spatial projection preserves or aggregates the
+            selected deme axis.
         specs: Internal group specifications (removed in Phase 8).
         _selectors: ``IndividualSelector``-based group selectors
             (populated by the new :meth:`ObservationFilter.build_from_selectors`).
@@ -132,7 +151,9 @@ class Observation:
     collapse_age: bool
     mask: Optional[NDArray[np.float64]] = None
     population_fingerprint: str = ""
-    specs: Tuple[Tuple[str, Dict[str, Any]], ...] = field(default=())
+    deme_indices: Optional[Tuple[int, ...]] = None
+    deme_mode: Literal["preserve", "aggregate"] = "preserve"
+    specs: Tuple[Tuple[str, Dict[str, Any]], ...] = field(default=())  # Any: group spec values (str, int, list[str])
     _selectors: Optional[Tuple[IndividualSelector, ...]] = field(
         default=None, repr=False
     )
@@ -145,30 +166,53 @@ class Observation:
         """Number of observation groups."""
         return len(self.labels)
 
+    @property
+    def axes(self) -> Tuple[str, ...]:
+        """Axis names produced by :meth:`apply` for this Observation."""
+        axes: Tuple[str, ...] = ("group",)
+        if self.deme_indices is not None and self.deme_mode == "preserve":
+            axes += ("deme",)
+        axes += ("sex",)
+        if not self.collapse_age:
+            axes += ("age",)
+        return axes
+
     def apply(self, individual_count: NDArray[np.float64]) -> NDArray[np.float64]:
         """Project population counts using the baked-in mask.
 
         Args:
             individual_count: Count array of shape
-                ``(n_sexes, n_ages, n_ztypes)`` or ``(n_sexes, n_ztypes)``.
+                ``(n_sexes, n_ages, n_ztypes)``, ``(n_sexes, n_ztypes)``,
+                or spatial ``(n_demes, n_sexes, n_ages, n_ztypes)``.
 
         Returns:
-            Observed counts of shape ``(n_groups, n_sexes, n_ages)`` or
-            ``(n_groups, n_sexes)`` when ``collapse_age`` is ``True``.
+            Group-first observed counts whose axes equal :attr:`axes`.
+
+        Raises:
+            ValueError: If dimensions are unsupported, the spatial deme
+                selection is empty, or an index is outside the input.
         """
-        if individual_count.ndim not in (2, 3):
+        if individual_count.ndim not in (2, 3, 4):
+            raise ValueError(
+                f"Unsupported individual_count ndim: {individual_count.ndim}"
+            )
+
+        if individual_count.ndim == 4 and self.deme_indices is not None:
+            return self._apply_spatial(individual_count)
+        if individual_count.ndim == 4:
             raise ValueError(
                 f"Unsupported individual_count ndim: {individual_count.ndim}"
             )
 
         if self._is_identity and self._identity_map is not None:
             if individual_count.ndim == 3:
-                projected = individual_count[:, :, self._identity_map]
+                projected = np.moveaxis(
+                    individual_count[:, :, self._identity_map], -1, 0
+                ).copy()
                 if self.collapse_age:
-                    return projected.sum(axis=1)
+                    return projected.sum(axis=-1)
                 return projected
-            projected = individual_count[:, self._identity_map]
-            return projected
+            return np.moveaxis(individual_count[:, self._identity_map], -1, 0).copy()
 
         mask = self.mask
         if mask is None:
@@ -184,7 +228,71 @@ class Observation:
                 n_sexes, n_ages, n_ztypes, collapse_age=collapse
             )
 
-        return apply_rule(individual_count, mask)
+        projected = apply_rule(individual_count, mask)
+        # A lazily rebuilt legacy mask can already remove age. Only fold an
+        # age axis that is still present in the numerical result.
+        if (
+            self.collapse_age
+            and individual_count.ndim == 3
+            and projected.ndim == 3
+        ):
+            return projected.sum(axis=-1)
+        return projected
+
+    def _apply_spatial(
+        self,
+        individual_count: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Project a stacked spatial count tensor.
+
+        Args:
+            individual_count: Counts shaped
+                ``(deme, sex, age, ztype)``.
+
+        Returns:
+            Group-first values with deme preserved or aggregated according to
+            :attr:`deme_mode`.
+
+        Raises:
+            ValueError: If no demes are selected or an index is out of range.
+        """
+        selected_indices = self.deme_indices
+        if selected_indices is None:
+            selected_indices = tuple(range(individual_count.shape[0]))
+        if not selected_indices:
+            raise ValueError("Observation selects no demes")
+        if any(
+            index < 0 or index >= individual_count.shape[0]
+            for index in selected_indices
+        ):
+            raise ValueError(
+                "Observation deme selection is outside the population layout"
+            )
+
+        selected = individual_count[np.asarray(selected_indices, dtype=np.intp)]
+        if self._is_identity and self._identity_map is not None:
+            projected = np.moveaxis(
+                selected[:, :, :, self._identity_map], -1, 0
+            )
+        else:
+            mask = self.mask
+            if mask is None:
+                mask = self._rebuild_mask_dim(
+                    int(selected.shape[1]),
+                    int(selected.shape[2]),
+                    int(selected.shape[3]),
+                    collapse_age=False,
+                )
+            projected = np.sum(
+                mask[:, None, :, :, :] * selected[None, :, :, :, :],
+                axis=-1,
+            )
+
+        if self.collapse_age:
+            projected = projected.sum(axis=-1)
+        if self.deme_mode == "aggregate":
+            projected = projected.sum(axis=1)
+        return projected
 
     def build_mask(
         self,
@@ -203,7 +311,7 @@ class Observation:
             The binary mask.
         """
         if self.mask is not None:
-            return self.mask
+            return self.mask.copy()
         return self._rebuild_mask_dim(n_sexes, n_ages, n_ztypes, collapse_age=False)
 
     def _rebuild_mask_dim(
@@ -262,18 +370,21 @@ class Observation:
             )
         return ObservationResult(
             tick=tick,
-            values=projected,
+            _values=projected,
             axes=axes,
-            labels={"group": self.labels},
+            _labels=MappingProxyType({"group": self.labels}),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:  # Any: JSON-serializable group metadata
         """Serialize observation metadata for export."""
-        result: Dict[str, Any] = {
+        result: Dict[str, Any] = {  # Any: JSON-serializable group metadata
             "labels": list(self.labels),
             "collapse_age": self.collapse_age,
             "n_groups": self.n_groups,
         }
+        if self.deme_indices is not None:
+            result["demes"] = list(self.deme_indices)
+            result["deme_mode"] = self.deme_mode
         if self._is_identity:
             result["identity"] = True
         return result
@@ -285,17 +396,11 @@ class Observation:
 class ObservationFilter:
     """Compile group specs into a frozen :class:`Observation`.
 
-    Supports both the legacy dict-based group format and the new
-    :class:`IndividualSelector`-based format via
-    :meth:`build_from_selectors`.
-
-    Example (legacy)::
-
-        {"age": [2,3,4], "genotype": ["WT|WT"], "sex": ["male"]}
-
-    Example (new)::
-
-        IndividualSelector(ztype="*|Drive", sex="female")
+    Supports both the legacy dict-based group format (e.g.
+    ``{"age": [2,3,4], "genotype": ["WT|WT"], "sex": ["male"]}``)
+    and the new :class:`IndividualSelector`-based format via
+    :meth:`build_from_selectors` (e.g.
+    ``IndividualSelector(ztype="*|Drive", sex="female")``).
     """
 
     def __init__(self, registry: IndexRegistry) -> None:
@@ -303,8 +408,8 @@ class ObservationFilter:
 
     @staticmethod
     def resolve_diploid_genotypes(
-        diploid_genotypes: Optional[Union[Sequence[Any], Any]],
-    ) -> Optional[Sequence[Any]]:
+        diploid_genotypes: Optional[Union[Sequence[Any], Any]],  # Any: Genotype | HaploidGenotype | Species — duck-typed
+    ) -> Optional[Sequence[Any]]:  # Any: duck-typed genotype list
         if diploid_genotypes is None:
             return None
         cls_name = type(diploid_genotypes).__qualname__
@@ -378,6 +483,8 @@ class ObservationFilter:
         n_ages: int = 1,
         n_ztypes: Optional[int] = None,
         is_identity: bool = False,
+        deme_indices: Optional[Tuple[int, ...]] = None,
+        deme_mode: Literal["preserve", "aggregate"] = "preserve",
     ) -> Observation:
         """Compile :class:`IndividualSelector` groups into an :class:`Observation`.
 
@@ -390,6 +497,8 @@ class ObservationFilter:
             n_ztypes: Number of ZType entries.  When ``None``, the mask
                 is not pre-baked.
             is_identity: Mark as identity observation.
+            deme_indices: Ordered spatial deme selection.
+            deme_mode: Spatial selection mode.
 
         Returns:
             Frozen :class:`Observation`.
@@ -438,6 +547,8 @@ class ObservationFilter:
             collapse_age=bool(collapse_age),
             mask=mask,
             population_fingerprint=fingerprint,
+            deme_indices=deme_indices,
+            deme_mode=deme_mode,
             _selectors=selectors,
             _is_identity=is_identity,
             _identity_map=identity_map,
@@ -449,9 +560,9 @@ class ObservationFilter:
     @staticmethod
     def _normalize_group_specs(
         groups: GroupsInput,
-        diploid_genotypes: Optional[Sequence[Any]],
-    ) -> Tuple[List[Tuple[str, Dict[str, Any]]], Tuple[str, ...]]:
-        specs: List[Tuple[str, Dict[str, Any]]] = []
+        diploid_genotypes: Optional[Sequence[Any]],  # Any: duck-typed genotype objects
+    ) -> Tuple[List[Tuple[str, Dict[str, Any]]], Tuple[str, ...]]:  # Any: group spec values
+        specs: List[Tuple[str, Dict[str, Any]]] = []  # Any: group spec values
 
         if groups is None:
             if diploid_genotypes is None:
@@ -477,19 +588,19 @@ class ObservationFilter:
                     or hasattr(item, "age")
                     or hasattr(item, "sex")
                 ):
-                    spec_dict: Dict[str, Any] = {}
+                    spec_dict: Dict[str, Any] = {}  # Any: group spec values (str, int, list[str])
                     if (
                         hasattr(item, "genotype") and item.genotype is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
                     ):
-                        spec_dict["genotype"] = item.genotype  # type: ignore[union-attr]
+                        spec_dict["genotype"] = item.genotype  # type: ignore[union-attr]  # duck-typed GroupSpec
                     if (
-                        hasattr(item, "age") and item.age is not None  # type: ignore[union-attr]
+                        hasattr(item, "age") and item.age is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
                     ):
-                        spec_dict["age"] = item.age  # type: ignore[union-attr]
+                        spec_dict["age"] = item.age  # type: ignore[union-attr]  # duck-typed GroupSpec
                     if (
-                        hasattr(item, "sex") and item.sex is not None  # type: ignore[union-attr]
+                        hasattr(item, "sex") and item.sex is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
                     ):
-                        spec_dict["sex"] = item.sex  # type: ignore[union-attr]
+                        spec_dict["sex"] = item.sex  # type: ignore[union-attr]  # duck-typed GroupSpec
                     specs.append((name, spec_dict))
                 else:
                     specs.append((name, item))
@@ -506,15 +617,15 @@ class ObservationFilter:
                     if (
                         hasattr(item, "genotype") and item.genotype is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
                     ):
-                        spec_dict["genotype"] = item.genotype  # type: ignore[union-attr]
+                        spec_dict["genotype"] = item.genotype  # type: ignore[union-attr]  # duck-typed GroupSpec
                     if (
-                        hasattr(item, "age") and item.age is not None  # type: ignore[union-attr]
+                        hasattr(item, "age") and item.age is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
                     ):
-                        spec_dict["age"] = item.age  # type: ignore[union-attr]
+                        spec_dict["age"] = item.age  # type: ignore[union-attr]  # duck-typed GroupSpec
                     if (
-                        hasattr(item, "sex") and item.sex is not None  # type: ignore[union-attr]
+                        hasattr(item, "sex") and item.sex is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
                     ):
-                        spec_dict["sex"] = item.sex  # type: ignore[union-attr]
+                        spec_dict["sex"] = item.sex  # type: ignore[union-attr]  # duck-typed GroupSpec
                     specs.append((str(name), spec_dict))
                 else:
                     specs.append((str(name), item))
@@ -526,7 +637,7 @@ class ObservationFilter:
         n_sexes: int,
         n_ages: int,
         n_ztypes: int,
-        specs: Tuple[Tuple[str, Dict[str, Any]], ...],
+        specs: Tuple[Tuple[str, Dict[str, Any]], ...],  # Any: group spec values
         collapse_age: bool,
     ) -> NDArray[np.float64]:
         per_ztypes: List[List[int]] = []
@@ -618,7 +729,7 @@ class ObservationFilter:
 
     def _resolve_ztype_indices_from_spec(
         self,
-        gen_spec: Optional[Iterable[Any]],
+        gen_spec: Optional[Iterable[Any]],  # Any: duck-typed genotype or pattern
         n_ztypes: int,
     ) -> List[int]:
         if gen_spec is None:
@@ -626,7 +737,7 @@ class ObservationFilter:
 
         from natal.patterns import ZygoteTypePattern
 
-        species: Any = None
+        species: Species | None = None
         if self.registry.n_ztypes > 0:
             species = self.registry.index_to_genotype[0].species
 
@@ -646,20 +757,20 @@ class ObservationFilter:
         return sorted(set(out))
 
     def _get_gen_spec(
-        self, spec: Dict[str, Any]
-    ) -> Optional[Iterable[Any]]:
+        self, spec: Dict[str, Any]  # Any: group spec dict with str keys and mixed values
+    ) -> Optional[Iterable[Any]]:  # Any: duck-typed genotype or pattern
         return spec.get("genotype") or spec.get("genotypes")
 
-    def _get_sex_spec(self, spec: Dict[str, Any]) -> SexSpec:
+    def _get_sex_spec(self, spec: Dict[str, Any]) -> SexSpec:  # Any: group spec dict
         return spec.get("sex")
 
-    def _get_age_spec(self, spec: Dict[str, Any]) -> AgeSpec:
+    def _get_age_spec(self, spec: Dict[str, Any]) -> AgeSpec:  # Any: group spec dict
         return spec.get("age")
 
     def build_filter(
         self,
         *,
-        diploid_genotypes: Optional[Union[Sequence[Any], Any]] = None,
+        diploid_genotypes: Optional[Union[Sequence[Any], Any]] = None,  # Any: Sequence[Genotype] | HaploidGenotype | Species — duck-typed
         groups: GroupsInput = None,
         collapse_age: bool = False,
         n_sexes: int = 2,
@@ -722,32 +833,6 @@ class ObservationFilter:
             _registry=self.registry,
         )
 
-    def create_observation(
-        self,
-        *,
-        diploid_genotypes: Optional[Union[Sequence[Any], Any]] = None,
-        groups: GroupsInput = None,
-        collapse_age: bool = False,
-    ) -> Observation:
-        """Create a compiled ``Observation`` object.
-
-        The mask is not pre-baked — it will be rebuilt on first use.
-
-        Args:
-            diploid_genotypes: Optional genotype source for selector resolution.
-            groups: Group specification (None, list/tuple, or dict).
-            collapse_age: Whether the rule collapses age during projection.
-
-        Returns:
-            Compiled ``Observation`` instance.
-        """
-        return self.build_filter(
-            diploid_genotypes=diploid_genotypes,
-            groups=groups,
-            collapse_age=collapse_age,
-            n_ztypes=None,
-        )
-
 
 # ── Identity observation builder ─────────────────────────────────────────────
 
@@ -759,12 +844,14 @@ def build_identity_observation(
     n_sexes: int = 2,
     n_ages: int = 1,
     n_ztypes: Optional[int] = None,
+    deme_indices: Optional[Tuple[int, ...]] = None,
+    deme_mode: Literal["preserve", "aggregate"] = "preserve",
 ) -> Observation:
     """Build an identity observation — one group per active ZType.
 
-    Each group corresponds to exactly one ZType.  The label format is
-    ``"genotype@slab"`` (or just ``"genotype"`` when slab is ``"default"``),
-    guaranteeing stability and uniqueness.
+    Each group corresponds to exactly one ZType.  The label format is always
+    ``"genotype@slab"``, including the default slab, guaranteeing stability
+    and uniqueness.
 
     This identity observation is **numerically lossless** — projecting
     ``individual_count`` through it returns an array that is simply a
@@ -778,6 +865,8 @@ def build_identity_observation(
         n_ages: Number of age classes.
         n_ztypes: Number of ZType entries.  When ``None``, the mask is
             not pre-baked.
+        deme_indices: Ordered spatial deme selection.
+        deme_mode: Spatial selection mode.
 
     Returns:
         Identity :class:`Observation`.
@@ -791,10 +880,7 @@ def build_identity_observation(
 
     for i in range(effective_n_ztypes):
         gt, slab = index_registry.index_to_ztype[i]
-        if slab == "default":
-            label = str(gt)
-        else:
-            label = f"{gt}@{slab}"
+        label = f"{gt}@{slab}"
         groups[label] = IndividualSelector()
 
     fingerprint = _build_fingerprint(
@@ -820,6 +906,8 @@ def build_identity_observation(
         collapse_age=bool(collapse_age),
         mask=mask,
         population_fingerprint=fingerprint,
+        deme_indices=deme_indices,
+        deme_mode=deme_mode,
         _selectors=tuple(non_wildcard_selectors.values()),
         _is_identity=True,
         _identity_map=identity_map,

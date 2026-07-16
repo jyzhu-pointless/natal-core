@@ -1,13 +1,14 @@
 """Age-structured mosquito population simulation with homing drive.
 
 Demonstrates NATAL Core's age-structured population model with sperm
-storage, a homing drive genetic preset, and pattern-string observation
-filtering on a mosquito-like life cycle.
+storage, a homing drive genetic preset, and individual selector
+observation on a mosquito-like life cycle.
 """
 
 from collections.abc import Mapping, Sequence
 
 import natal as nt
+from natal.patterns import IndividualSelector
 
 # for type annotations only
 IndividualDistribution = Mapping[
@@ -57,9 +58,7 @@ initial_distribution: IndividualDistribution = {
 
 initial_sperm: SpermStorage = {
     "WT|WT": {
-        # Supported format 1: Dict - sparse mapping {age: count}
         "WT|WT": {2: 500.0, 3: 400.0, 4: 300.0, 5: 200.0, 6: 100.0},
-        # Supported format 2: List - dense list
         "WT|Dr": [0, 0, 3.0, 2.0, 1.0, 0, 0, 0],
     },
 }
@@ -95,29 +94,33 @@ pop = (nt.AgeStructuredPopulation
     )
     .presets(
         drive
-    ).build())
+    )
+    .with_observation(
+        groups={
+            "all_adults": IndividualSelector(age=range(2, 8)),
+            "dr_carriers": IndividualSelector(ztype="*|Dr", age=range(2, 6)),
+            "wild_type": IndividualSelector(ztype="WT|WT"),
+            "any_resistance": IndividualSelector(ztype="*|R2"),
+            "resistant_adults": IndividualSelector(ztype="*|R2", age=range(2, 6)),
+        },
+        collapse_age=False,
+    )
+    .build())
 
 pop.run(10, finish=True)
 
-# === Observation demo with pattern strings ===
-# Demonstrate pattern string functionality for flexible genotype filtering
-observation = pop.create_observation(
-    groups={
-        "all_adults": {"age": [2, 3, 4, 5, 6, 7]},
-        "dr_carriers": {"genotype": "Dr::*", "age": [2, 3, 4, 5]},  # Pattern: any with Dr
-        "wild_type": {"genotype": "WT|WT"},  # Exact genotype
-        "any_resistance": {"genotype": "R2::*"},  # Pattern: any with R2
-        "resistant_adults": {"genotype": "R2::*", "age": [2, 3, 4, 5]},  # R2 with adult age
-    },
-    collapse_age=False,
-)
+# Observation via canonical pop.observe()
+current = pop.observe()
 
-current_observation = pop.output_current_state(
-    observation=observation,
-    include_zero_counts=False,
-)
+print("\n--- Observation Output with IndividualSelector ---")
+print("Labels:", current.labels)
+print("Axes:", current.axes)
+print("Observed shape:", current.values.shape)
+print("Observed sum per group:", current.values.sum(axis=tuple(range(1, current.values.ndim))))
 
-print("\n--- Observation Output with Pattern Strings ---")
-print("Labels:", current_observation["labels"])
-print("Collapse Age:", current_observation["collapse_age"])
-print("Observed counts:", current_observation["observed"])
+# History observation
+obs_hist = pop.history.observe(pop.observation)
+print("\n--- History Observation ---")
+print("Ticks:", obs_hist.ticks)
+print("Axes:", obs_hist.axes)
+print("Values shape:", obs_hist.values.shape)

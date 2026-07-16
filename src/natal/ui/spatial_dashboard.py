@@ -907,16 +907,11 @@ class SpatialDashboard:
         self._allele_freq_history = {}
         self._last_chart_tick = -1
 
-        if not self.pop.history:
+        history = self.pop.history
+        if not history or history.schema.mode != "raw":
             return
 
         first_deme = self.pop.deme(0)
-        config = first_deme._config
-        n_demes = self.pop.n_demes
-        n_sexes = int(config.n_sexes)
-        n_ages = int(config.n_ages)
-        n_ztypes = int(config.n_ztypes)
-        ind_per_deme = n_sexes * n_ages * n_ztypes
         registry = first_deme.registry
 
         # Collect known allele names for zero-filling
@@ -926,9 +921,9 @@ class SpatialDashboard:
                 for gene in locus.alleles:
                     known_alleles.add(gene.name)
 
-        for tick, flat_state in self.pop.history:
-            ind_size = n_demes * ind_per_deme
-            ind_all = flat_state[1:1 + ind_size].reshape(n_demes, n_sexes, n_ages, n_ztypes)
+        counts = history.individual_count
+        for record_index, tick in enumerate(history.ticks):
+            ind_all = counts[record_index]
             total_pop = float(ind_all.sum())
 
             # Aggregate genotype counts across all demes
@@ -1422,9 +1417,11 @@ class SpatialDashboard:
         export_content = {"population_name": self.pop.name}
 
         if include_history:
-            from natal.output.translation import spatial_population_output_history
+            from natal.output.translation import (
+                spatial_population_history_to_readable_dict,
+            )
 
-            history_payload = spatial_population_output_history(self.pop)
+            history_payload = spatial_population_history_to_readable_dict(self.pop)
             export_content["history"] = history_payload  # type: ignore[reportArgumentType]
 
         if include_config:

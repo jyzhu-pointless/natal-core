@@ -10,9 +10,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    List,
     Optional,
-    Tuple,
 )
 
 import numpy as np
@@ -20,6 +18,8 @@ import numpy as np
 from natal.population._mixins._modifiers import ModifierPresetMixin
 
 if TYPE_CHECKING:
+    from natal.output.history import History
+    from natal.output.observation import Observation
     from natal.population.base import BasePopulation
 
 
@@ -31,14 +31,18 @@ class OutputMixin(ModifierPresetMixin):
     is called during ``reset``.
     """
 
-    # Declared here so pyright knows these come from the host class.
-    _finished: bool  # type: ignore[assignment]
-    _state: Any  # type: ignore[assignment]
-    _registry: Any  # type: ignore[assignment]
-    _history: List[Tuple[int, np.ndarray]]  # type: ignore[assignment]
-    max_history: int  # type: ignore[assignment]
-    name: str  # type: ignore[assignment]
-    species: Any  # type: ignore[assignment]
+    # Declared here for pyright visibility — host BasePopulation subclass
+    # provides these at runtime.  Any is required because pyright does not
+    # allow mixin attribute declarations to shadow base-class @property.
+    _finished: bool  # type: ignore[assignment]  # host provides at runtime
+    _state: Any  # type: ignore[assignment]  # host BasePopulation supplies the generic state
+    _registry: Any  # type: ignore[assignment]  # host provides at runtime
+    _observation: Observation | None  # type: ignore[assignment]  # host owns mutable policy
+    _history_obj: History | None  # type: ignore[assignment]  # host owns mutable row storage
+    _tick: int  # type: ignore[assignment]  # host owns mutable lifecycle state
+    max_history: int  # type: ignore[assignment]  # host provides at runtime
+    name: str  # type: ignore[assignment]  # host provides at runtime
+    species: Any  # type: ignore[assignment]  # host provides at runtime
 
     # ── Abstract query methods (from base.py:944-957) ──────────────
 
@@ -60,62 +64,69 @@ class OutputMixin(ModifierPresetMixin):
     # ── History management ─────────────────────────────────────────
     # From base.py:552-591
 
-    def _enforce_history_limit(self) -> None:
-        """Ensure history size does not exceed max_history by dropping oldest entries."""
-        if self.max_history > 0:
-            excess = len(self._history) - self.max_history
-            if excess > 0:
-                self._history = self._history[excess:]
+    def _record_current_snapshot(self, *, allow_existing: bool) -> None:
+        """Commit the current state to the unique History container.
 
-    def _append_to_history_obj(self, tick: int, flat_row: np.ndarray) -> None:
-        """Append a single (tick, flat_row) to ``_history_obj`` if available."""
-        history_obj = getattr(self, "_history_obj", None)
+        Args:
+            allow_existing: Whether an automatic run boundary may reuse the
+                already-recorded current tick without writing a second row.
+
+        Raises:
+            RuntimeError: If History, Population state, or Observation is not
+                initialized.
+            ValueError: If a strict snapshot repeats or precedes the latest
+                tick, or an automatic boundary is stale or has a different
+                payload.
+        """
+        history_obj = self._history_obj
         if history_obj is None:
-            return
+            raise RuntimeError("History is not initialized for this population.")
+        tick = int(self._tick)
+        if self._state is None:
+            raise RuntimeError("Population state is not initialized.")
+        state = self._state
+        if history_obj.schema.mode == "observation":
+            observation = self._observation
+            if observation is None:
+                raise RuntimeError("Observation is not initialized for this population.")
+            values = observation.apply(state.individual_count)
+            row = np.empty(history_obj.schema.row_size, dtype=np.float64)
+            row[0] = float(tick)
+            row[1:] = values.ravel()
+        else:
+            row = state.flatten_all()
         from natal.output.history import HistoryBatch
 
-        row = np.empty(1 + len(flat_row), dtype=np.float64)
-        row[0] = tick
-        row[1:] = flat_row
-        batch = HistoryBatch(
-            schema=history_obj.schema,
-            rows=row[np.newaxis, :],
-        )
-        history_obj.append(batch)
+        batch = HistoryBatch(schema=history_obj.schema, rows=row[np.newaxis, :])
+        if allow_existing:
+            history_obj._append_continuation(  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
+                batch
+            )
+        else:
+            if tick in history_obj.ticks:
+                raise ValueError(f"History already contains tick {tick}.")
+            history_obj._append(batch)  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
 
-    @abstractmethod
     def clear_history(self) -> None:
-        """Clear all recorded history states.
-
-        Subclasses must implement this to reset their history storage
-        (e.g., ``_history`` list and any subclass-specific history buffers).
-        """
-        pass
+        """Remove all rows while preserving the frozen History schema."""
+        if self._history_obj is not None:
+            self._history_obj.clear()
 
     def record_snapshot(self) -> None:
         """Record the current stable state into history.
 
         Must only be called when the engine is not running (between
-        ``run()`` calls).  Duplicate ticks are silently ignored.
+        ``run()`` calls). Duplicate ticks are rejected.
 
         Raises:
-            RuntimeError: If a population has already finished simulation.
+            RuntimeError: If the population is currently running.
+            ValueError: If the current tick is already recorded.
         """
-        if getattr(self, "_finished", False):
+        if getattr(self, "_running", False):
             raise RuntimeError(
-                "Cannot record snapshot on a finished population."
+                "Cannot record snapshot while the population is running."
             )
-        snapshot_fn = getattr(self, "create_history_snapshot", None)
-        if snapshot_fn is not None:
-            snapshot_fn()
-            return
-        record_fn = getattr(self, "_record_snapshot", None)
-        if record_fn is not None:
-            record_fn()
-            return
-        raise NotImplementedError(
-            f"{type(self).__qualname__} has no snapshot recording method."
-        )
+        self._record_current_snapshot(allow_existing=False)
 
     def restore_checkpoint(self, tick: int) -> None:
         """Restore population state from a raw-history record at *tick*.
@@ -152,15 +163,17 @@ class OutputMixin(ModifierPresetMixin):
                 if demes is not None and di < len(demes):
                     demes[di].state.individual_count[:] = ic[di]
                     demes[di]._tick = restored_tick
+                    if hasattr(demes[di], "_state") and demes[di]._state is not None:
+                        demes[di]._state = demes[di]._state._replace(
+                            n_tick=restored_tick
+                        )
         else:
             state.individual_count[:] = ic.reshape(state.individual_count.shape)
             if ss is not None and hasattr(state, "sperm_storage"):
                 state.sperm_storage[:] = ss.reshape(state.sperm_storage.shape)
+            self._state = state._replace(n_tick=restored_tick)
         self._tick = restored_tick
-        if "-" in history_obj.schema.population.kind:
-            history_obj.truncate(retain_until_tick=tick)
-        else:
-            history_obj.truncate(retain_until_tick=tick)
+        history_obj.truncate(retain_until_tick=tick)
 
     def _process_kernel_history(
         self,
@@ -169,7 +182,15 @@ class OutputMixin(ModifierPresetMixin):
     ) -> None:
         """Process and append history array returned from simulation engine.
 
-        Handles duplication checking (overlapping start/end ticks) and enforces limit.
+        Args:
+            history_new: Engine rows with tick in the first column, or ``None``.
+            clear_history_on_start: Whether to discard the existing timeline
+                before committing the engine rows.
+
+        Raises:
+            RuntimeError: If the population History is not initialized.
+            ValueError: If row shape, schema, ordering, or boundary payload is
+                inconsistent with the existing History.
         """
         if history_new is None or history_new.shape[0] == 0:
             return
@@ -177,23 +198,37 @@ class OutputMixin(ModifierPresetMixin):
         if clear_history_on_start:
             self.clear_history()
 
-        # Populate the new History container if available.
-        history_obj = getattr(self, "_history_obj", None)
-        if history_obj is not None:
-            from natal.output.history import HistoryBatch
+        history_obj = self._history_obj
+        if history_obj is None:
+            raise RuntimeError("History is not initialized for this population.")
+        from natal.output.history import HistoryBatch
 
-            batch = HistoryBatch(schema=history_obj.schema, rows=history_new)
-            history_obj.append(batch)
+        rows = history_new
+        schema = history_obj.schema
+        observation = schema.observation
+        if (
+            schema.mode == "observation"
+            and observation is not None
+            and observation.collapse_age
+            and rows.shape[1] != schema.row_size
+        ):
+            pop = schema.population
+            values = rows[:, 1:].reshape(
+                rows.shape[0],
+                observation.n_groups,
+                pop.n_sexes,
+                pop.n_ages,
+            ).sum(axis=-1)
+            collapsed = np.empty(
+                (rows.shape[0], schema.row_size), dtype=np.float64
+            )
+            collapsed[:, 0] = rows[:, 0]
+            collapsed[:, 1:] = values.reshape(rows.shape[0], -1)
+            rows = collapsed
 
-        for row_idx in range(history_new.shape[0]):
-            row = history_new[row_idx, :]
-            tick = int(row[0])
-            # Skip duplicate entry if continuing history (overlap check)
-            if not clear_history_on_start and self._history and self._history[-1][0] == tick:
-                continue
-            self._history.append((tick, row.copy()))
-
-        self._enforce_history_limit()
+        history_obj._append_continuation(  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
+            HistoryBatch(schema=schema, rows=rows)
+        )
 
     # ── Population queries ─────────────────────────────────────────
     # From base.py:963-982
@@ -258,7 +293,7 @@ class OutputMixin(ModifierPresetMixin):
         n_steps: int,
         record_every: Optional[int] = None,
         finish: bool = False
-    ) -> BasePopulation[Any]:
+    ) -> BasePopulation[Any]:  # Any: mixin does not own the generic T_State parameter
         """
         Run multi-step evolution.
         """

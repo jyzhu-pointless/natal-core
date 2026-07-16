@@ -453,7 +453,9 @@ class TestUnorderedFullLifecycle:
         ).initial_state(
             individual_count={"female": {"A|A": 100}, "male": {"A|a": 100}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
-        obs = pop.create_observation()
+        from natal.output.observation import ObservationFilter
+        obs_filter = ObservationFilter(pop.index_registry)
+        obs = obs_filter.build_filter(diploid_genotypes=pop.species)
         # Unordered: AA, Aa, aa = 3 genotypes (Aa == aA)
         assert len(obs.labels) == 3
         assert obs.labels == ("g0", "g1", "g2")

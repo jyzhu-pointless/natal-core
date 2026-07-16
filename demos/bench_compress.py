@@ -84,9 +84,9 @@ print(f"  Build time: {t_build_no:.3f}s")
 t0 = time.perf_counter()
 pop_no.run(N_TICKS, finish=True)
 t_run_no = time.perf_counter() - t0
-h_no = pop_no.get_history()
+h_no = pop_no.history.individual_count
 print(f"  Run {N_TICKS} ticks: {t_run_no:.3f}s")
-print(f"  Final total adults: {h_no[N_TICKS-1, 1:].sum():.0f}")
+print(f"  Final total adults: {h_no[N_TICKS-1, :, 1:, :].sum():.0f}")
 
 # ── WITH compression (compress=True) ──
 print("=" * 60)
@@ -132,9 +132,9 @@ print(f"  Build time: {t_build_yes:.3f}s")
 t0 = time.perf_counter()
 pop_yes.run(N_TICKS, finish=True)
 t_run_yes = time.perf_counter() - t0
-h_yes = pop_yes.get_history()
+h_yes = pop_yes.history.individual_count
 print(f"  Run {N_TICKS} ticks: {t_run_yes:.3f}s")
-print(f"  Final total adults: {h_yes[N_TICKS-1, 1:].sum():.0f}")
+print(f"  Final total adults: {h_yes[N_TICKS-1, :, 1:, :].sum():.0f}")
 
 # ── Correctness check ──
 print("=" * 60)
@@ -143,8 +143,8 @@ all_close = True
 
 # Per-tick total adults (quick summary).
 for tick in range(N_TICKS):
-    no = h_no[tick, 1:].sum()
-    yes = h_yes[tick, 1:].sum()
+    no = h_no[tick, :, 1:, :].sum()
+    yes = h_yes[tick, :, 1:, :].sum()
     diff = abs(no - yes)
     status = "✓" if diff < 1e-9 else "✗ DIFFER"
     if diff >= 1e-9:
@@ -158,8 +158,8 @@ final_no = h_no[N_TICKS - 1]
 final_yes = h_yes[N_TICKS - 1]
 # Compare per-genotype adult totals (age > 0).
 for g in range(min(final_no.shape[2], final_yes.shape[2])):
-    gt_no = final_no[1:, :, g].sum()
-    gt_yes = final_yes[1:, :, g].sum()
+    gt_no = final_no[:, 1:, g].sum()
+    gt_yes = final_yes[:, 1:, g].sum()
     if abs(gt_no - gt_yes) > 1e-9:
         all_close = False
         print(f"  GENOTYPE G{g}: no={gt_no:.1f} yes={gt_yes:.1f} DIFFER")

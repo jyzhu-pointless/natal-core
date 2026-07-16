@@ -135,14 +135,50 @@ Register named fields stored in `config.custom`. Hooks read/write via
 ### `with_observation(groups, *, collapse_age=False)`
 ```python
 cfg.with_observation({
-    "adult_female": {"genotype": ["WT|WT"], "sex": "female", "age": [1]},
+    "adult_female": nt.IndividualSelector(
+        ztype="WT|WT", sex="female", age=[1]
+    ),
 })
 ```
-Register observation groups, applied at `build()` time. `groups` can be a dict
-of name-to-spec, a list of specs, or `None` for one-group-per-genotype.
-`collapse_age` controls whether the age axis is collapsed in exports.
+Register the canonical observation applied by `pop.observe()`. `groups` must be
+a non-empty ordered mapping from non-empty string labels to
+`IndividualSelector` values. The mapping order becomes the group-axis order.
+`collapse_age=True` sums and removes the age axis.
 
-> **Build-time only:** Calling `with_observation()` on a live Population (via `pop.update().with_observation(...)`) raises `RuntimeError`. Recording rules are frozen at build time and cannot change afterwards. Use `pop.create_observation()` for runtime queries.
+Every built Population, including `SpatialPopulation`, has an immutable
+`pop.observation`. If `with_observation()` is omitted, `build()` installs an
+identity observation with one lossless group per ZType.
+
+> **Build-time only:** Calling `with_observation()` on a live Population via
+> `pop.update().with_observation(...)` raises `RuntimeError`. Observation rules
+> cannot change after `build()`.
+
+### `record_history(*, mode="raw", max_rows=None)`
+```python
+cfg.record_history(mode="observation", max_rows=5000)
+```
+Set the recording mode and capacity for the population's history. Must be called
+during the build phase — calling on a runtime Configurator raises `RuntimeError`.
+
+`with_observation()` and `record_history()` are **independent** — chain order
+does not matter. A `with_observation()` call defines which groups to observe;
+`record_history()` defines whether History stores full state or the values from
+that observation. Omitting both methods therefore gives an identity
+`pop.observation` and raw `pop.history`.
+
+| mode | Description |
+|------|-------------|
+| `"raw"` (default) | Full-state recording — every genotype count and sperm storage is stored per snapshot |
+| `"observation"` | Compressed — only values from the canonical observation are stored; an omitted `with_observation()` uses identity groups |
+
+`max_rows` controls FIFO eviction: when the number of stored records exceeds
+this value, the oldest entries are removed. `None` means unlimited.
+
+`pop.history` is a typed `History` container. Raw history exposes `ticks`,
+`individual_count`, and, where applicable, `sperm_storage`; observation-mode
+history exposes `ticks` and `values`. A raw history can be projected later with
+`pop.history.observe(pop.observation)`. This validates the Population layout
+fingerprint before applying the observation.
 
 ### `presets(*presets)`
 ```python
@@ -273,5 +309,4 @@ Configurator                  # base: setup, build, apply, presets, fitness, hoo
 ├── DiscreteConfigurator      # + competition(discrete), reproduction(discrete), survival(discrete)
 └── AgeStructuredConfigurator # + competition(Champer), reproduction(per-age), survival(per-age)
 ```
-
 

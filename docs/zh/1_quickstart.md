@@ -280,47 +280,25 @@ print(state_view["individual_count"]["female"].keys())
 state_json = nt.population_to_readable_json(pop, indent=2)
 print(state_json[:240])
 
-# 3) 定义可复用 observation 规则（推荐通过 population API）
-# 注意：`Drive::*` 匹配所有带 Drive 等位基因的基因型（:: 表示"染色体.位点: 等位基因"的通配模式）
-observation = pop.create_observation(
-    groups={
-        "adult_drive_female": {
-            "genotype": "Drive::*",
-            "sex": "female",
-            "age": [2, 3, 4, 5, 6, 7],
-        },
-        "all_adults": {
-            "age": [2, 3, 4, 5, 6, 7],
-        },
-    },
-    collapse_age=False,
-)
+# 3) 推荐在构建期通过 .with_observation() 定义 observation 分组
+#    （也可以直接使用 IndividualSelector —— 见 demos 示例）
 
-# 4) 导出当前快照（状态翻译 + observation）
-current_obs = pop.output_current_state(
-    observation=observation,
-    include_zero_counts=False,
-)
-print(current_obs["labels"])
-print(current_obs["observed"]["adult_drive_female"])
+# 4) 通过 canonical observation 投影当前状态
+result = pop.observe()
+print(result.labels)
+print(result.values)
 
-# 5) 导出历史 observation（可直接用于绘图/导出）
-history_obs = pop.output_history(
-    observation=observation,
-    include_zero_counts=False,
-)
-print(history_obs["n_snapshots"])
-print(history_obs["snapshots"][0]["observed"]["all_adults"])
+# 5) 直接访问类型化历史数据
+history = pop.history
+print(f"记录了 {len(history)} 个 tick：{history.ticks}")
+
+# 6) 对历史数据进行事后 observation 投影
+obs_history = pop.history.observe(pop.observation)
+print(f"观测历史形状: {obs_history.values.shape}")
+print(f"每 tick 总数: {obs_history.values.sum(axis=(1,2,3))}")
 ```
 
-推荐将 `output_current_state()` 与 `output_history()` 搭配使用：
-
-- `observation` 定义观测对象（分组与筛选规则）
-- 状态翻译 API 定义导出形式（可读 dict/JSON）
-
-如果你更偏好模块级函数，也可以使用
-`nt.output_current_state(...)` 和 `nt.output_history(...)`；语义与
-population 方法等价。
+使用 `pop.observe()` 获取通过 canonical observation 投影后的当前状态，用 `pop.history.observe(pop.observation)` 对已记录历史进行事后投影。
 
 ### 对应可运行示例
 

@@ -401,7 +401,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Restores individual counts and sperm storage to original values.
         """
         self._tick = 0
-        self._history = []
         if self._history_obj is not None:
             self._history_obj.clear()
         self._finished = False
@@ -503,165 +502,68 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         # kept here for completeness.
         self._config = config
 
-    def create_history_snapshot(self) -> None:
-        """Record current state to history records.
-
-        Saves the current tick and a flattened copy of state to _history.
-        When observation recording is enabled, produces observation-aggregated
-        rows instead of full raw state.
-        """
-        if self._observation_mask is not None:
-            from natal.output.record import build_observation_row_panmictic
-            observed = build_observation_row_panmictic(
-                self.state.individual_count, self._observation_mask,
-            )
-            flat = np.empty(1 + observed.size, dtype=np.float64)
-            flat[0] = float(self._tick)
-            flat[1:] = observed
-            self._history.append((self._tick, flat))
-        else:
-            flattened = self.state.flatten_all()
-            self._history.append((self._tick, flattened.copy()))
-
-        # Also populate the new History container.
-        if self._history_obj is not None:
-            row = self._history[-1][1].reshape(1, -1)
-            from natal.output.history import HistoryBatch
-            batch = HistoryBatch(schema=self._history_obj.schema, rows=row)
-            self._history_obj.append(batch)
-
-    def get_history(self) -> np.ndarray:
-        """Return history records as a 2D NumPy array.
-
-        Returns:
-            np.ndarray: Float64 array with shape
-                ``(n_snapshots, 1 + n_sexes*n_ages*n_ztypes + n_ages*n_ztypes^2)``,
-                where each row is a flattened snapshot state.
-
-        Raises:
-            ValueError: If no history is recorded.
-        """
-        if self._history_obj is not None:
-            result = self._history_obj.to_numpy()
-            if result.shape[0] == 0:
-                raise ValueError("No history recorded")
-            return result
-
-        if len(self._history) == 0:
-            raise ValueError("No history recorded")
-
-        # Stack flattened data of all snapshots
-        flat_array = np.array([rec[1] for rec in self._history], dtype=np.float64)
-        return flat_array
-
     def clear_history(self) -> None:
         """Clear history records."""
-        self._history.clear()
-        if self._history_obj is not None:
-            self._history_obj.clear()
+        self.history.clear()
 
-    def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
+    def export_state(self) -> NDArray[np.float64]:
         """Export population state as a flattened array.
 
         Returns:
-            Tuple[NDArray, Optional[NDArray]]: (state_flat, history).
-                state_flat: [n_tick, ind_count.ravel(), sperm_storage.ravel()]
-                history: Optional array of shape (n_snapshots, flatten_size).
+            NDArray: Flattened state array ``[n_tick, ind_count.ravel(), sperm_storage.ravel()]``.
         """
-        state_flat = self.state.flatten_all()
-        history: Optional[np.ndarray] = None
-        if self._history_obj is not None and not self._history_obj.is_empty:
-            history = self._history_obj.to_numpy()
-        elif self._history:
-            history = self.get_history()
-        return state_flat, history
+        return self.state.flatten_all()
 
-    def import_state(self, state: Union[PopulationState, NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]],
-                     history: Optional[np.ndarray] = None) -> None:
-        """Import state and optional history records.
+    def import_state(self, state: Union[PopulationState, NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]]) -> None:
+        """Import state and reset the history timeline.
+
+        All validation happens before any mutation — a failed import leaves the
+        population unchanged.
 
         Args:
             state: Flattened array, PopulationState object, or data dictionary.
-            history: Optional history 2D array.
         """
         from natal.data import PopulationState, parse_flattened_state
 
+        n_sexes, n_ages, n_ztypes = self.state.individual_count.shape
+
+        # ── Phase 1: parse and validate all inputs ──
         if isinstance(state, np.ndarray):
-            # Reconstruct state from flattened array
-            n_sexes, n_ages, n_ztypes = self.state.individual_count.shape
             state_obj = parse_flattened_state(state, n_sexes, n_ages, n_ztypes)
-            self.state.individual_count[:] = state_obj.individual_count
-            self.state.sperm_storage[:] = state_obj.sperm_storage
-            self._state = PopulationState(
-                n_tick=state_obj.n_tick,
-                individual_count=self.state.individual_count,
-                sperm_storage=self.state.sperm_storage,
-            )
-        elif isinstance(state, dict):
-            self.state.individual_count[:] = state['individual_count']
-            self.state.sperm_storage[:] = state['sperm_storage']
         elif isinstance(state, PopulationState):
-            self.state.individual_count[:] = state.individual_count
-            self.state.sperm_storage[:] = state.sperm_storage
-            self._state = PopulationState(
-                n_tick=state.n_tick,
-                individual_count=self.state.individual_count,
-                sperm_storage=self.state.sperm_storage,
+            state_obj = state
+        elif isinstance(state, dict):
+            state_obj = PopulationState(
+                n_tick=int(state.get("n_tick", self._tick)),
+                individual_count=np.asarray(state["individual_count"], dtype=np.float64),
+                sperm_storage=np.asarray(state["sperm_storage"], dtype=np.float64),
             )
         else:
-            self.state.individual_count[:] = state[0]
-            self.state.sperm_storage[:] = state[1]
+            if len(state) != 2:
+                raise ValueError(f"Tuple state must have length 2, got {len(state)}")
+            state_obj = PopulationState(
+                n_tick=self._tick,
+                individual_count=np.asarray(state[0], dtype=np.float64),
+                sperm_storage=np.asarray(state[1], dtype=np.float64),
+            )
 
-        if history is not None and history.shape[0] > 0:
-            self.clear_history()
-            for row_idx in range(history.shape[0]):
-                flat = history[row_idx, :]
-                tick = int(flat[0])
-                self._history.append((tick, flat.copy()))
-
-            # Also populate the new History container.
-            if self._history_obj is not None:
-                from natal.output.history import HistoryBatch
-                batch = HistoryBatch(schema=self._history_obj.schema, rows=history)
-                self._history_obj.append(batch)
+        # ── Phase 2: commit atomically ──
+        self.state.individual_count[:] = state_obj.individual_count
+        self.state.sperm_storage[:] = state_obj.sperm_storage
+        self._state = PopulationState(
+            n_tick=state_obj.n_tick,
+            individual_count=self.state.individual_count,
+            sperm_storage=self.state.sperm_storage,
+        )
+        self._tick = int(state_obj.n_tick)
+        self.clear_history()
 
     # ========================================================================
     # History restoration helpers
     # ========================================================================
 
-    def get_history_as_objects(self, indices: Optional[List[int]] = None) -> List[Tuple[int, PopulationState]]:
-        """Convert selected flattened snapshots back to PopulationState objects.
-
-        Args:
-            indices: List of snapshot indices to convert. If None, converts all.
-
-        Returns:
-            List[Tuple[int, PopulationState]]: List of (tick, state) tuples.
-
-        Raises:
-            IndexError: If an index is out of range.
-        """
-        if indices is None:
-            indices = list(range(len(self._history)))
-
-        from natal.data import parse_flattened_state
-        result: List[Tuple[int, PopulationState]] = []
-        for idx in indices:
-            if idx < 0 or idx >= len(self._history):
-                raise IndexError(f"History index {idx} out of range [0, {len(self._history)})")
-
-            tick, flattened = self._history[idx]
-            state = parse_flattened_state(
-                flattened,
-                n_sexes=2,
-                n_ages=self.config.n_ages,
-                n_ztypes=self.config.n_ztypes
-            )
-            result.append((tick, state))
-        return result
-
     def restore_checkpoint(self, tick: int) -> None:
-        """Restore the population to a specific history tick.
+        """Restore the population to a specific raw-history tick.
 
         Args:
             tick: The target tick number.
@@ -669,23 +571,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             ValueError: If no record is found for the specified tick.
         """
-        from natal.data import parse_flattened_state
-
-        for t, flattened in self._history:
-            if t == tick:
-                state = parse_flattened_state(
-                    flattened,
-                    n_sexes=2,
-                    n_ages=self.config.n_ages,
-                    n_ztypes=self.config.n_ztypes
-                )
-                # Copy state data directly.
-                self.state.individual_count[:] = state.individual_count
-                self.state.sperm_storage[:] = state.sperm_storage
-                self._tick = tick
-                return
-
-        raise ValueError(f"No history record found for tick {tick}")
+        super().restore_checkpoint(tick)
 
     # ========================================================================
     # Hooks system
@@ -747,70 +633,74 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 "Cannot run() again after finish=True."
             )
 
-        if record_every is None:
-            record_every = self.record_every
+        self._running = True
+        try:
+            if record_every is None:
+                record_every = self.record_every
 
-        if self.should_use_python_dispatch():
-            return self._run_python_dispatch(
-                n_steps=n_steps,
-                record_every=record_every,
-                finish=finish,
-                clear_history_on_start=clear_history_on_start,
+            if self.should_use_python_dispatch():
+                return self._run_python_dispatch(
+                    n_steps=n_steps,
+                    record_every=record_every,
+                    finish=finish,
+                    clear_history_on_start=clear_history_on_start,
+                )
+
+            config = sk.export_config(self)
+
+            wrappers = self.get_compiled_event_hooks()
+
+            assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
+
+            obs_mask = self._observation_mask
+            n_obs = len(self._observation.labels) if self._observation is not None else 0
+
+            if wrappers.run_fn is not None:
+                final_state_tuple, history_new, was_stopped = wrappers.run_fn(
+                    state=self.state,
+                    config=config,
+                    registry=wrappers.hooks.registry,
+                    n_ticks=n_steps,
+                    record_interval=record_every,
+                    observation_mask=obs_mask,
+                    n_obs_groups=n_obs,
+                )
+            else:
+                final_state_tuple, history_new, was_stopped = sk.run_with_hooks(
+                    state=self.state,
+                    config=config,
+                    registry=wrappers.hooks.registry,
+                    first_hook=wrappers.hooks.first,
+                    early_hook=wrappers.hooks.early,
+                    late_hook=wrappers.hooks.late,
+                    n_ticks=n_steps,
+                    record_interval=record_every,
+                    observation_mask=obs_mask,
+                    n_obs_groups=n_obs,
+                )
+
+            # Process final state (tuple format: ind_count, sperm, tick)
+            self._state = PopulationState(
+                n_tick=int(final_state_tuple[2]),
+                individual_count=final_state_tuple[0],
+                sperm_storage=final_state_tuple[1],
             )
+            self._tick = int(final_state_tuple[2])
 
-        config = sk.export_config(self)
+            # history_new is a 2D NDArray (n_snapshots, history_size)
+            self._process_kernel_history(history_new, clear_history_on_start)
 
-        wrappers = self.get_compiled_event_hooks()
+            # If terminated early by hooks, set _finished flag
+            if was_stopped:
+                self._finished = True
+                self.trigger_event("finish")
+            elif finish:
+                # Otherwise, if finish parameter is True, actively trigger finish
+                self.finish_simulation()
 
-        assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
-
-        obs_mask = self._observation_mask
-        n_obs = len(self._observation.labels) if self._observation is not None else 0
-
-        if wrappers.run_fn is not None:
-            final_state_tuple, history_new, was_stopped = wrappers.run_fn(
-                state=self.state,
-                config=config,
-                registry=wrappers.hooks.registry,
-                n_ticks=n_steps,
-                record_interval=record_every,
-                observation_mask=obs_mask,
-                n_obs_groups=n_obs,
-            )
-        else:
-            final_state_tuple, history_new, was_stopped = sk.run_with_hooks(
-                state=self.state,
-                config=config,
-                registry=wrappers.hooks.registry,
-                first_hook=wrappers.hooks.first,
-                early_hook=wrappers.hooks.early,
-                late_hook=wrappers.hooks.late,
-                n_ticks=n_steps,
-                record_interval=record_every,
-                observation_mask=obs_mask,
-                n_obs_groups=n_obs,
-            )
-
-        # Process final state (tuple format: ind_count, sperm, tick)
-        self._state = PopulationState(
-            n_tick=int(final_state_tuple[2]),
-            individual_count=final_state_tuple[0],
-            sperm_storage=final_state_tuple[1],
-        )
-        self._tick = int(final_state_tuple[2])
-
-        # history_new is a 2D NDArray (n_snapshots, history_size)
-        self._process_kernel_history(history_new, clear_history_on_start)
-
-        # If terminated early by hooks, set _finished flag
-        if was_stopped:
-            self._finished = True
-            self.trigger_event("finish")
-        elif finish:
-            # Otherwise, if finish parameter is True, actively trigger finish
-            self.finish_simulation()
-
-        return self
+            return self
+        finally:
+            self._running = False
 
     def run_tick(self) -> AgeStructuredPopulation:
         """
@@ -838,7 +728,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self.clear_history()
 
         if record_every > 0 and (self.tick % record_every == 0):
-            self.create_history_snapshot()
+            self._record_current_snapshot(allow_existing=True)
 
         was_stopped = False
         for _ in range(n_steps):
@@ -886,7 +776,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             )
 
             if record_every > 0 and (self.tick % record_every == 0):
-                self.create_history_snapshot()
+                self._record_current_snapshot(allow_existing=True)
 
         if was_stopped:
             self._finished = True

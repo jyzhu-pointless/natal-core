@@ -124,10 +124,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._index_registry: Optional[IndexRegistry] = None
         self._registry: Optional[IndexRegistry] = None
 
-        # Evolution history as (tick, flattened_array) tuples.
-        self._history: List[Tuple[int, np.ndarray]] = []
-
-        # New History data model (frozen at build time).
+        # Self-describing History data model (frozen at build time).
         self._history_obj: Optional[History] = None
         self._recording_plan: Optional[object] = None
 
@@ -292,13 +289,24 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
                 snap[2],
             ))
 
-        # --- runtime state (independent per deme) ---
-        # --- observation recording (independent per deme) ---
-        clone._observation = None
-        clone._observation_mask = None
+        # --- runtime output policy (immutable schema, independent rows) ---
+        clone._observation = self._observation
+        clone._observation_mask = (
+            None
+            if self._observation_mask is None
+            else self._observation_mask.copy()
+        )
+        clone._recording_plan = self._recording_plan
+        source_history = self._history_obj
+        if source_history is None:
+            clone._history_obj = None
+        else:
+            from natal.output.history import History
 
-        clone._history = []
-        clone._history_obj = None
+            clone._history_obj = History(
+                source_history.schema,
+                max_rows=source_history.max_rows,
+            )
         clone._finished = False
         clone._running = False
         clone.record_every = int(self.record_every)
@@ -402,22 +410,22 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         return self._species
 
     @property
-    def name(self) -> str:  # type: ignore[reportIncompatibleVariableOverride]
+    def name(self) -> str:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
         """The human-readable name of the population."""
         return self._name
 
     @name.setter
-    def name(self, value: str) -> None:  # type: ignore[reportIncompatibleVariableOverride]
+    def name(self, value: str) -> None:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
         """Set the population name."""
         self._name = value
 
     @property
-    def tick(self) -> int:  # type: ignore[reportIncompatibleVariableOverride]
+    def tick(self) -> int:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
         """The current simulation tick or generation index."""
         return self._tick
 
     @tick.setter
-    def tick(self, value: int) -> None:  # type: ignore[reportIncompatibleVariableOverride]
+    def tick(self, value: int) -> None:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
         """Set the current simulation tick."""
         self._tick = value
 
@@ -500,9 +508,18 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         return self._state
 
     @property
-    def history(self) -> List[Tuple[int, np.ndarray]]:
-        """A list of recorded historical states as ``(tick, flattened_array)`` tuples."""
-        return list(self._history)
+    def history(self) -> History:
+        """Return the self-describing History owned by this population.
+
+        Returns:
+            History whose immutable schema was frozen at build time.
+
+        Raises:
+            RuntimeError: If construction has not installed History yet.
+        """
+        if self._history_obj is None:
+            raise RuntimeError("Population History has not been initialized.")
+        return self._history_obj
 
     def _init_history_schema(
         self,
@@ -629,27 +646,29 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         pass
 
     @property
-    def observation(self) -> Optional[Observation]:
+    def observation(self) -> Observation:
         """The immutable :class:`Observation` for this population.
 
-        Returns ``None`` when no observation has been configured.
-        Once the population is built, the observation cannot be changed.
+        Configurator installs either an explicit rule or the canonical identity
+        rule before returning the built Population.
+
+        Raises:
+            RuntimeError: If the Observation has not been initialized yet.
         """
+        if self._observation is None:
+            raise RuntimeError("Population Observation has not been initialized.")
         return self._observation
 
-    def observe(self) -> Optional[ObservationResult]:
+    def observe(self) -> ObservationResult:
         """Project current state through the population's observation.
 
         Returns:
-            :class:`ObservationResult` with projected values, or ``None``
-            when no observation has been configured.
+            ObservationResult with projected values and explicit axes.
 
         Raises:
             RuntimeError: When state is not available yet.
         """
-        obs = self._observation
-        if obs is None:
-            return None
+        obs = self.observation
         state = getattr(self, "state", None)
         if state is None:
             raise RuntimeError("Population has no state to observe.")

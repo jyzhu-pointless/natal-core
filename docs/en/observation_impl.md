@@ -1,429 +1,205 @@
-# Observation History Recording: Developer Implementation Document
+# Observation and History Implementation
 
-This document is intended for NATAL Core maintainers and contributors. It details the implementation principles, data flow, and module responsibilities of observation-based history recording.
+This document is for NATAL Core maintainers and contributors. It explains the boundaries between the canonical Observation, typed History, and spatial recording paths. For the public workflow, see [Extracting Population Simulation Data](2_data_output.md).
 
-## Overall Architecture
+## Implementation Overview
 
-Observation history recording involves four layers, with parameters passed through NamedTuple bundles at the Kernel layer:
+An Observation only defines how to derive observed values from population state. History only defines which kind of snapshot to store. A RecordingPlan connects them at build time, but they remain independent concepts:
 
-```
-User-facing API         →  BasePopulation / SpatialPopulation's record_observation property
-                           SpatialPopulation's _spatial_topo / _migration_params / _compact_meta
-Observation layer      →  observation.py: Observation, ObservationFilter, build_mask
-                           observation_record.py: CompactMeta, build_observation_row_spatial
-Kernel layer           →  recording pathway in spatial_simulator.py
-                           spatial_lifecycle_*.tmpl.py code generation templates
-Export layer           →  state_translation.py: output_history / *observation_history_to_readable_dict
-```
+```text
+Configurator.with_observation(...)
+  → compile an immutable canonical Observation
 
-## NamedTuple Parameter Bundles
+Configurator.record_history(mode=...)
+  → select a raw or observation History schema
 
-To avoid passing 13+ scattered parameters across multiple function layers, the spatial kernel dispatch uses four NamedTuples to converge parameters:
-
-| NamedTuple | Definition Location | Parameters Converged | Lifecycle |
-|-----------|-------------------|--------------------|-----------|
-| `SpatialTopology` | `spatial_topology.py` | `rows`, `cols`, `wrap` | Fixed at construction time |
-| `MigrationParams` | `spatial_topology.py` | `kernel`, `include_center`, `rate`, `adjust_on_edge` | Fixed at construction time |
-| `HeterogeneousKernelParams` | `spatial_topology.py` | `deme_kernel_ids`, `d_row`, `d_col`, `weights`, `nnzs`, `total_sums`, `max_nnz` | Rebuilt each `run()` call |
-| `CompactMeta` | `observation_record.py` | `offsets`, `deme_map`, `n_demes_per_group`, `selected_n`, `mode_aggregate`, `row_size` | Rebuilt when `record_observation` is set |
-
-`migration_mode` and `adjacency` are not included in `MigrationParams` because they are dynamically resolved by `_effective_migration_route()` on each call (which can choose adjacency / kernel / auto), making them **routing strategies** rather than **migration parameters**.
-
-## Data Flow
-
-```
-User defines groups
-       ↓
-ObservationFilter.build_filter(groups) → Observation object (with labels, mask, collapse_age)
-       ↓
-BasePopulation._build_observation_mask(obs) → 4D float64 mask (n_groups, n_sexes, n_ages, n_genotypes)
-       ↓
-_build_deme_info() → demean_modes dict → build_compact_metadata() → CompactMeta
-       ↓
-mask + CompactMeta passed to Numba kernel (observation_mask + compact_meta parameters)
-       ↓
-kernel every record_every steps:
-  build_observation_row_spatial(ind, mask, compact_meta) → compact flat row
-  row = [tick, compact_row]
-       ↓
-Python layer: _process_kernel_history() → history.append((tick, row.copy()))
-       ↓
-Export: output_history() auto-detects record_observation → dispatches to *observation_history_to_readable_dict
+Population state
+  ├─ pop.observe() → ObservationResult
+  └─ sampling boundary → History
+       ├─ raw mode: store complete state
+       └─ observation mode: store the canonical Observation projection
 ```
 
-## Data Format Comparison
+Core modules and responsibilities:
 
-### Raw Mode (record_observation=None)
+| Module | Responsibility |
+|--------|----------------|
+| `output/observation.py` | Defines `Observation`, `ObservationResult`, `ObservationFilter`, and identity observations |
+| `output/history.py` | Defines immutable schemas, typed array views, and post-hoc projection of raw History |
+| `output/_recording.py` | Compiles the `RecordingPlan`, row width, and spatial layout at build time |
+| `output/record.py` | Provides uniform observation-row encoding for non-spatial engines |
+| `engine/templates/spatial_lifecycle_*.tmpl.py` | Runs the spatial lifecycle and returns regular raw batches |
+| `spatial/population.py` | Applies the canonical Observation at the spatial container boundary, then commits History |
 
-**Panmictic** per row:
-```
-[tick, ind[0,0,0], ind[0,0,1], ..., ind[n_sexes-1, n_ages-1, n_genotypes-1],
- sperm[0,0,0,0], ..., sperm[n_ages-1, n_genotypes-1, n_genotypes-1]]
-```
-Row size = `1 + n_sexes × n_ages × n_genotypes + n_ages × n_genotypes²`
+## Build-Time Public Interface
 
-**Spatial** per row:
-```
-[tick, flat_ind_deme_0, ..., flat_ind_deme_n-1, flat_sperm_deme_0, ..., flat_sperm_deme_n-1]
-```
-where `flat_ind_deme_d = ind_d[d].ravel()` (row size per deme = `n_sexes × n_ages × n_genotypes`)
-
-### Observation Mode (record_observation is set)
-
-**Panmictic** per row:
-```
-[tick, observed[0,0,0], observed[0,0,1], ..., observed[n_groups-1, n_sexes-1, n_ages-1]]
-```
-Row size = `1 + n_groups × n_sexes × n_ages`
-
-**Spatial** per row:
-```
-[tick, observed[0,0,0,0], ..., observed[n_demes-1, n_groups-1, n_sexes-1, n_ages-1]]
-```
-Row size = `1 + n_demes × n_groups × n_sexes × n_ages`
-
-## Core Module Details
-
-### 1. Observation System (observation.py)
-
-#### Observation Object
-
-`Observation` is a frozen dataclass containing:
-- `labels`: group label tuple `(name_0, name_1, ...)`
-- `collapse_age`: whether to collapse the age dimension
-- `mask`: optional baked-in 4-D binary mask `(n_groups, n_sexes, n_ages, n_ztypes)`
-- `population_fingerprint`: stable hash derived from layout components
-- `specs`: normalized group specifications (internal; will be removed in a future phase)
-- `_registry`: stored registry reference (used to rebuild mask on first use when not pre-baked)
-
-The `filter` and `diploid_genotypes` attributes have been removed — `Observation` no longer references `ObservationFilter` or `BasePopulation` at runtime.
-
-Key methods:
-- `apply(individual_count)` → `(n_groups, n_sexes, n_ages)`: applies observation projection to a given count array, rebuilding the mask from specs if not pre-baked
-- `build_mask(n_sexes, n_ages, n_genotypes)` → `(n_groups, n_sexes, n_ages, n_genotypes)`: returns the stored 4-D binary mask or rebuilds it from specs. This method always returns a 4-D mask (`collapse_age=False`) because the kernel requires the full 3rd dimension
-- `to_dict()` → metadata dict: serializes labels, collapse_age, n_groups and other metadata
-
-#### ObservationFilter
-
-`ObservationFilter(registry)` is a pure compiler that turns user-defined group specs into frozen `Observation` instances. Once compiled, the filter is no longer needed — the mask is baked in and no reverse references remain:
-- `build_filter(*, diploid_genotypes=None, groups=None, collapse_age=False, n_sexes=2, n_ages=1, n_ztypes=None)` → `Observation`: full compilation pipeline (keyword-only arguments). When `n_ztypes` is provided, the mask is baked immediately; otherwise it's rebuilt on first use
-- `create_observation(...)`: alias for `build_filter`
-- `build_mask_from_specs(...)` → 4D float64 mask: core compilation function, fills the mask via a loop:
-  ```python
-  for gi in range(n_groups):
-      for gidx in per_genotypes[gi]:
-          for s in per_sexes[gi]:
-              for a in range(n_ages):
-                  if per_age_preds[gi](a):
-                      mask[gi, s, a, gidx] = 1.0
-  ```
-
-#### apply_rule
-
-Pure function `apply_rule(individual_count, rule)` → `observed`:
-- 3D count × 4D mask: `sum(mask * count[None, :, :, :], axis=-1)`
-- 2D count × 3D mask (discrete generation + collapse_age): similar broadcast + sum
-
-### 2. Population Model Layer (base_population.py)
-
-#### record_observation Property
+Non-spatial Configurators use:
 
 ```python
-@property
-def record_observation(self) -> Optional[Observation]: ...
-
-@record_observation.setter
-def record_observation(self, obs: Optional[Observation]) -> None:
-    self._observation = obs
-    if obs is not None:
-        self._observation_mask = self._build_observation_mask(obs)
-    self._rebuild_history_schema_if_needed()
+.with_observation(groups, collapse_age=False)
 ```
 
-The setter compiles the 4D binary mask while setting the observation. `_observation_mask` is of type `NDArray[np.float64]` with shape `(n_groups, n_sexes, n_ages, n_genotypes)`.
-
-> **Immutable after build:** The `Configurator.with_observation()` method raises `RuntimeError` when called on a live Population (via `pop.update()`). Recording rules must be set during the build phase. The `record_observation` property setter remains available for backward compatibility but only rebuilds the schema when no rows have been recorded yet.
-
-#### set_observations Convenience Method
+The spatial Configurator additionally accepts a deme selection and processing mode:
 
 ```python
-def set_observations(self, groups, *, collapse_age=False):
-    obs_filter = ObservationFilter(self.index_registry)
-    self._observation = obs_filter.build_filter(
-        diploid_genotypes=self.species,
-        groups=groups,
-        collapse_age=collapse_age,
-    )
-    self._observation_mask = self._build_observation_mask(self._observation)
-    self._rebuild_history_schema_if_needed()
-```
-
-Internal flow: create `ObservationFilter` → `build_filter` → compile mask → store `_observation` and `_observation_mask` separately, then rebuild the History schema if the schema is still pristine (no rows recorded). Once any history rows exist, calling `set_observations()` updates the observation mask but the schema (row_size, mode) remains frozen.
-
-#### _clone Compatibility
-
-`_clone()` is used by `SpatialConfigurator` for efficient deme cloning. During cloning, `_observation` and `_observation_mask` are reset to `None` (lines 281-282), because each clone needs to set observations independently — the observation mask depends on the deme's state shape (although typically the same, explicit setting is required).
-
-### 3. Kernel Integration
-
-#### Panmictic Kernels (simulator.py)
-
-`run_with_hooks` / `run_discrete_with_hooks` internally call `build_observation_row_panmictic()`:
-
-```python
-if observation_mask is not None:
-    flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
-else:
-    flat_state[1:1+ind_size] = ind_count.ravel()
-    flat_state[1+ind_size:] = sperm_store.ravel()  # if applicable
-```
-
-Key parameters:
-- `observation_mask: Optional[NDArray[np.float64]]` — 4D mask
-- `build_observation_row_panmictic` is a standalone njit function in `observation_record.py`
-
-#### Spatial Kernels (observation_record.py)
-
-`build_observation_row_spatial()` is responsible for constructing the compact row, replacing the previous inline broadcast + `deme_selector` mask approach:
-
-```python
-# observation_record.py
-@njit_switch(cache=True)
-def build_observation_row_spatial(
-    individual_count: NDArray[np.float64],  # (n_demes, n_sexes, n_ages, n_genotypes)
-    observation_mask: NDArray[np.float64],  # (n_groups, n_sexes, n_ages, n_genotypes)
-    compact: CompactMeta,
-) -> NDArray[np.float64]:
-    for gi in range(len(compact.offsets)):
-        if compact.mode_aggregate[gi]:
-            # aggregate: sum selected demes into one chunk
-            agg = sum(observation_mask[gi] * individual_count[d] for d in selected)
-            result[offset:offset+sex_ages] = agg.ravel()
-        else:
-            for di in range(nd):
-                if di < compact.selected_n[gi]:
-                    # selected deme → real data
-                    result[...] = (observation_mask * ind).sum(axis=-1).ravel()
-                else:
-                    # unselected deme → -1.0 sentinel
-                    result[...] = -1.0
-```
-
-#### Deme Selection: Three Modes
-
-`CompactMeta` has three built-in per-group modes, controlled by the `"deme"` key in the group spec:
-
-| Mode | spec format | Recording behavior | Export behavior |
-|------|------------|-------------------|----------------|
-| `mask` (default) | `"deme": [0, 2]` or `list` | All `n_demes` written, unselected = `-1.0` | Unselected shown as `"masked"`, not included in aggregate |
-| `expand` | `"deme": {"demes": [0,2], "mode": "expand"}` | Only selected demes written | Only shows selected demes |
-| `aggregate` | `"deme": {"demes": [0,2], "mode": "aggregate"}` | Summed into one chunk | Single summary statistic |
-
-The -1.0 sentinel ensures that "deme truly 0 individuals" and "deme is masked" are distinguishable, avoiding the ambiguity of the old `deme_selector` zero-out approach.
-
-#### Codegen Passing Path and Template Signatures
-
-`_run_codegen_wrapper_steps()` passes NamedTuple bundles to templates:
-
-```python
-run_fn(
-    ind_all, sperm_all,
-    config_bank, deme_config_ids, registry, tick, n_steps,
-    adjacency, migration_mode,
-    self._spatial_topo,         # SpatialTopology (rows, cols, wrap)
-    self._migration_params,     # MigrationParams (kernel, include_center, rate, adjust_on_edge)
-    het,                        # HeterogeneousKernelParams | None
-    record_interval, observation_mask, compact_meta,
+.with_observation(
+    groups,
+    collapse_age=False,
+    demes=None,
+    deme_mode="preserve",
 )
 ```
 
-The template `RUN_FN_NAME` signature has been reduced from 35 parameters to 17:
+`groups` is an ordered mapping from non-empty labels to `IndividualSelector` instances. Its insertion order becomes the group-axis order in results.
+
+The spatial arguments have the following semantics:
+
+| Argument | Semantics |
+|----------|-----------|
+| `demes=None` | Select every deme in Population order |
+| `demes=[2, 0]` | Select demes 2 and 0, preserving that order |
+| `deme_mode="preserve"` | Keep one shared deme axis |
+| `deme_mode="aggregate"` | Sum selected demes and remove the deme axis |
+
+`demes` must be a non-empty, duplicate-free sequence of integer indices within the Population range. Every group shares the same ordered deme selection; separate groups cannot define different deme sets. `deme_mode` accepts only `"preserve"` and `"aggregate"`.
+
+The Observation and History schema are frozen by `build()`. A runtime Configurator cannot replace the `with_observation()` or `record_history()` rules.
+
+## Canonical Observation
+
+Every built Population has one canonical `Observation`. If the user does not call `with_observation()`, the build creates an identity observation with one group per active ZType. Identity observations avoid a quadratic dense mask and use a ZType index map for a lossless axis transformation.
+
+An `Observation` stores the following stable information:
+
+- `labels`: group-axis labels.
+- `collapse_age`: whether to sum and remove the age axis.
+- `population_fingerprint`: prevents applying the rule to an incompatible Population layout.
+- `deme_indices`: ordered spatial deme selection, or `None` for a non-spatial observation.
+- `deme_mode`: whether a spatial observation preserves or aggregates the deme axis.
+- A compiled selector mask, or a ZType index map for an identity observation.
+
+### Numerical Projection
+
+The age-structured non-spatial input shape is:
+
+```text
+(sex, age, ztype)
+```
+
+A regular observation produces a group-first result through this operation:
+
+```text
+mask[group, sex, age, ztype]
+  × count[sex, age, ztype]
+  → sum along ztype
+  → result[group, sex, age]
+```
+
+Spatial input adds a regular deme axis at the front:
+
+```text
+(deme, sex, age, ztype)
+```
+
+Spatial projection first slices by `deme_indices`, then applies the same selector masks to every selected deme. `preserve` retains the sliced deme axis; `aggregate` explicitly sums that axis. Finally, `collapse_age=True` sums and removes the age axis.
+
+This ordering guarantees two key invariants:
+
+```text
+preserve result == per-deme projection after directly slicing count in demes order
+aggregate result == preserve result summed along the deme axis
+```
+
+### Public Result Axes
+
+`pop.observe()` returns an `ObservationResult`; its `axes` explicitly describes the dimensions of `values`:
+
+| Mode | `collapse_age=False` | `collapse_age=True` |
+|------|----------------------|---------------------|
+| Non-spatial | `(group, sex, age)` | `(group, sex)` |
+| Spatial preserve | `(group, deme, sex, age)` | `(group, deme, sex)` |
+| Spatial aggregate | `(group, sex, age)` | `(group, sex)` |
+
+`labels["group"]` aligns one-to-one with the group axis. In preserve mode, the deme-axis order is exactly the order supplied through `demes`.
+
+## History and RecordingPlan
+
+`record_history()` independently selects the recording mode:
 
 ```python
-def RUN_FN_NAME(
-    ind, sperm, config_bank, deme_config_ids, registry, tick, n_steps,
-    adjacency, migration_mode,
-    spatial_topo: SpatialTopology,
-    migration: MigrationParams,
-    het_kernel: HeterogeneousKernelParams | None,
-    record_interval: int,
-    observation_mask: Optional[np.ndarray],
-    compact_meta: Optional[CompactMeta],
-) -> ...:
+.record_history(mode="raw", max_rows=None)
+.record_history(mode="observation", max_rows=None)
 ```
 
-Here `migration_mode` and `adjacency` are not included in `MigrationParams` because they are **routing strategies** (dynamically resolved by `_effective_migration_route()`), not **migration parameters** themselves.
+At build time, `compile_recording_plan()` creates an immutable `HistorySchema` and computes a fixed `row_size` from the Population layout, Observation axes, and History mode. A spatial schema also stores the complete deme count and raw payload width per deme.
 
-### 4. Spatial-Specific Path (spatial_population.py)
+### Raw Mode
 
-#### record_observation Property
+Spatial raw History always stores the complete state of every deme. It is unaffected by the Observation's `demes`, `deme_mode`, or `collapse_age`:
 
-When set, it automatically calls `_build_deme_info()` to parse the `"deme"` spec, then calls `build_compact_metadata()` to construct `CompactMeta`:
+| Data | Shape |
+|------|-------|
+| `history.individual_count` | `(record, deme, sex, age, ztype)` |
+| `history.sperm_storage` (age-structured) | `(record, deme, age, female_ztype, male_ztype)` |
 
-```python
-@record_observation.setter
-def record_observation(self, obs: Optional[Observation]) -> None:
-    self._observation = obs
-    if obs is not None:
-        ref_deme = self._demes[0]
-        state = ref_deme.state
-        self._observation_mask = obs.build_mask(...)
-        self._rebuild_compact_meta()   # → _build_deme_info() + build_compact_metadata()
+Raw History can therefore call `history.observe(observation)` later to create an independent observation-mode History without modifying the original History.
+
+### Observation Mode
+
+Observation History stores only the numerical result of the canonical Observation:
+
+| Mode | `collapse_age=False` | `collapse_age=True` |
+|------|----------------------|---------------------|
+| Non-spatial | `(record, group, sex, age)` | `(record, group, sex)` |
+| Spatial preserve | `(record, group, deme, sex, age)` | `(record, group, deme, sex)` |
+| Spatial aggregate | `(record, group, sex, age)` | `(record, group, sex)` |
+
+The schema's `ObservationMetadata` stores group labels, age-collapse state, ordered deme selection, and deme mode. Reading `history.values` therefore does not depend on mutable external state from the current Population.
+
+Observation History has discarded unrecorded ZTypes and unselected demes, so it cannot be projected post-hoc through a different Observation.
+
+## Spatial Recording Path
+
+Spatial recording does not execute the Observation inside the Numba wrapper. The wrapper runs lifecycle steps and migration, then returns a regular raw batch at stable tick boundaries:
+
+```text
+Numba spatial wrapper
+  → [tick, all deme individual_count, all deme sperm_storage]
+  → SpatialPopulation._process_kernel_history(...)
+       ├─ raw History: validate and commit the complete batch
+       └─ observation History:
+            reshape into regular spatial count
+            → canonical Observation.apply(...)
+            → commit the fixed-shape projected row
 ```
 
-> **Build-time only:** In spatial populations, the same immutability rule applies — recording rules must be set during the build phase via `SpatialConfigurator.with_observation()`. Calling it on a live spatial population raises `RuntimeError`.
+The Python fallback calls `_record_snapshot()` at the same stable tick boundaries. Raw mode commits complete spatial state, while observation mode calls the same `Observation.apply()`. Both backends therefore share the same Observation semantics and History schema; only the place where the raw batch is produced differs.
 
-`_build_deme_info()` parses the `"deme"` key in group specs, supporting three formats:
-- Missing / `"all"` → not in dict (default all demes)
-- `list[int | (row, col)]` → `("mask", flat_indices)`
-- `{"demes": [...], "mode": "aggregate" | "expand" | "mask"}` → dict format with new semantics
+The spatial wrapper transports raw batches to keep engine transport regular and fixed. The lifecycle kernel does not need to understand groups, deme selection, or aggregate rules. All Observation semantics remain concentrated in the canonical `Observation` and the spatial container boundary, rather than being reimplemented by the engine, Python fallback, and post-hoc projection paths.
 
-#### Python Dispatch Path
+## Removed Compact Spatial Layout
 
-When using Python dispatch (hook-aware fallback path), recording is triggered manually in the Python layer, reusing the same `build_observation_row_spatial()`:
+Spatial Observation no longer supports a different deme layout for each group. The following concepts from the old implementation have been removed from the spatial recording path:
 
-```python
-# run() → _should_use_python_dispatch() → True
-if record_every > 0 and (self._tick % record_every == 0):
-    self._record_snapshot()
-for _ in range(n_steps):
-    if self._run_python_dispatch_tick():
-        was_stopped = True
-        break
-    if record_every > 0 and (self._tick % record_every == 0):
-        self._record_snapshot()
-```
+- `CompactMeta` and `build_compact_metadata()`.
+- `build_observation_row_spatial()`.
+- Per-group `mask` / `expand` / `aggregate` layouts.
+- The `-1.0` sentinel for an unselected deme.
+- Ragged group offsets and different row widths per group.
 
-`_record_snapshot()` calls the standalone njit function in observation mode:
+Every group now shares one regular ndarray axis structure. Unselected demes are absent from preserve results and need no special numeric marker; a real zero count remains `0.0`. For different deme views, construct separate Observations from raw History, or record one wider shared selection and split it in caller code.
 
-```python
-if self._observation_mask is not None and self._compact_meta is not None:
-    row = build_observation_row_spatial(
-        ind_all, self._observation_mask, self._compact_meta,
-    )
-    flat = np.empty(1 + self._compact_meta.row_size, dtype=np.float64)
-    flat[0] = float(self._tick)
-    flat[1:] = row
-```
+## Maintenance Invariants
 
-### 5. Export Layer (state_translation.py)
+Changes to Observation or History recording should verify at least these numerical relationships:
 
-#### Automatic Dispatch Logic
+1. Spatial preserve is element-wise equal to per-deme projection after directly slicing in `demes` order.
+2. Spatial aggregate is element-wise equal to the preserve result summed along the deme axis.
+3. A spatial identity Observation loses no coordinate values in selected demes.
+4. `collapse_age=True` is element-wise equal to the uncollapsed result summed along age.
+5. Raw History retains every deme, ZType, and applicable sperm-storage value.
+6. Post-hoc projection of raw History is element-wise equal to `Observation.apply()` at the same tick.
+7. The Numba path and Python fallback produce identical ticks and payloads in deterministic simulations.
+8. Unselected demes require no sentinel representation, and real zero counts are not confused with selection state.
 
-```python
-def output_history(population, observation=None, groups=None, ...):
-    pop_obs = getattr(population, "record_observation", None)
-    if pop_obs is not None and observation is None and groups is None:
-        # Observation mode: directly parse compact snapshots
-        payload = population_observation_history_to_readable_dict(...)
-    else:
-        # Raw mode or post-hoc observation: re-parse each snapshot
-        payload = _build_history_observation_payload(...)
-```
-
-The spatial version is similar:
-
-```python
-def spatial_population_output_history(spatial_population, ...):
-    obs = getattr(spatial_population, "record_observation", None)
-    if obs is not None:
-        payload = spatial_population_observation_history_to_readable_dict(...)
-    else:
-        payload = spatial_population_history_to_readable_dict(...)
-```
-
-#### population_observation_history_to_readable_dict
-
-This function parses the compressed history array from observation mode. Workflow:
-1. Retrieve the `record_observation` labels and collapse_age
-2. For each row `[tick, observed.ravel()]`:
-   - Reshape to `(n_groups, n_sexes, n_ages)`
-   - Use `_build_observation_payload()` to convert the observed array into a nested dictionary `{sex: {age: {label: count}}}`
-3. Return a structure with labels and snapshots
-
-#### spatial_population_observation_history_to_readable_dict
-
-Similar to the panmictic version but with an additional deme dimension:
-1. For each row, reshape to `(n_demes, n_groups, n_sexes, n_ages)`
-2. Expand per-deme payload by deme
-3. Sum across demes to obtain aggregate
-
-#### _build_observation_payload Utility Function
-
-```python
-def _build_observation_payload(observed, labels, sex_labels, include_zero_counts):
-    """Convert an observed array to a nested dictionary {sex: {age: {label: count}}}"""
-```
-
-This function is a shared utility across all observation export paths, converting numeric arrays into human-readable nested dictionaries.
-
-#### Fallback Mechanism
-
-The observation history export functions (`population_observation_history_to_readable_dict`, `spatial_population_observation_history_to_readable_dict`) all include fallback logic:
-
-```python
-obs = getattr(population, "record_observation", None)
-if obs is None:
-    return population_history_to_readable_dict(population, ...)
-```
-
-This means even when called on old data without observations, these functions will not crash — they fall back to the raw history parsing path.
-
-### 6. Post-hoc Observation Path
-
-Post-hoc observation (without modifying the recording mode, only applying observations during export) is implemented through `_build_history_observation_payload`:
-
-```python
-def _build_history_observation_payload(population, history, observation, groups, collapse_age, ...):
-    # For each row of the history array:
-    # 1. Parse tick, individual_count, sperm_storage
-    # 2. Apply the observation or a temporarily constructed Observation
-    # 3. Assemble into observation-format payload
-```
-
-This path has higher performance overhead — it needs to reconstruct state from each history snapshot and re-apply the observation. It is suitable for short histories or scenarios where different grouping perspectives are needed after the fact.
-
-## Key Design Decisions
-
-### 1. Dual History Storage (Legacy + Self-describing)
-
-The codebase uses two parallel storage paths during the migration period:
-
-- **Legacy path:** `_history` is a `List[Tuple[int, NDArray[np.float64]]]` (raw or observation-aggregated), kept for backward compatibility with `pop.history`.
-- **New path:** `_history_obj` is a `History` instance with an immutable `HistorySchema`. Rows are stored as validated `HistoryBatch` objects conforming to the schema.
-
-The `.history` property currently returns legacy-style `List[Tuple[int, np.ndarray]]` from `_history`. The new `._history_obj` is internal; a public `.history` property backed by the new model is planned for a future release.
-
-Regardless of storage path, the flat row content is the same: raw flat state or observation-aggregated array. `clear_history()` clears both stores but always preserves the `HistorySchema`.
-
-### 2. 4D Mask Always Complete
-
-`Observation.build_mask()` always returns a 4D mask `(n_groups, n_sexes, n_ages, n_genotypes)`, even for discrete generation (age=1) or `collapse_age=True` scenarios. `collapse_age` is only stored as metadata in the Observation and is read by functions like `_build_observation_payload` during export.
-
-The reason is that the kernel requires a uniform memory layout — dynamically switching dimensions based on `collapse_age` within a Numba njit function would cause type instability.
-
-### 3. Kernel Observation Performs Aggregation Only, Not Selection
-
-The observation mask is used inside the kernel only for genotype dimension aggregation (`sum(axis=-1)`), not for filtering demes or sexes. Deme filtering is handled by `deme_selector` (spatial-specific), while the sex and age axes are not compressed — the `observed` array retains the `(n_sexes, n_ages)` dimensions.
-
-### 4. Spatial's _observation_mask is Shared
-
-All demes share the same `_observation_mask` (because the number of genotypes and genotype names are consistent across all demes). Only `deme_selector` is per-deme.
-
-## Verification Points
-
-When modifying observation recording-related code, ensure the following behaviors remain unchanged:
-
-1. **Raw data recording when no observation is set**: when `record_observation = None`, `run()` behaves identically to before
-2. **Backward compatibility of observation mode**: observation mode historical data can be correctly exported with `output_history()`
-3. **Post-hoc observation correctness**: `output_history(observation=obs)` produces consistent results in both raw history and observation history modes
-4. **Spatial aggregate verification**: the spatial aggregate from observation mode equals the per-deme grouped summation result
-5. **Clone compatibility**: demes cloned by `SpatialConfigurator` can independently set observations
-6. **Python dispatch path**: recording under the `_should_use_python_dispatch()` fallback path is also correct
-
-Test commands:
-```bash
-pytest                                       # all tests
-pyright src/natal/                            # type checking
-ruff check src/natal/                         # lint
-```
+Assertions must compare explicit axes and coordinate values. Comparing only totals or sorted flattened arrays cannot detect axis swaps or incorrect deme ordering.

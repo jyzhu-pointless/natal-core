@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 import numpy as np
 
@@ -20,7 +19,6 @@ from natal.data import (
     parse_flattened_discrete_state,
     parse_flattened_state,
 )
-from natal.output.record import CompactMeta
 
 if TYPE_CHECKING:
     from natal.output.observation import GroupsInput, Observation
@@ -33,8 +31,6 @@ __all__ = [
     "population_state_to_json",
     "discrete_population_state_to_dict",
     "discrete_population_state_to_json",
-    "output_current_state",
-    "output_history",
     "population_to_readable_dict",
     "population_to_readable_json",
     "population_history_to_readable_dict",
@@ -49,7 +45,6 @@ __all__ = [
     "spatial_population_history_to_readable_json",
     "spatial_population_observation_history_to_readable_dict",
     "spatial_population_observation_history_to_readable_json",
-    "spatial_population_output_history",
 ]
 
 
@@ -172,7 +167,7 @@ def population_state_to_dict(
     genotype_labels: Optional[Sequence[str]] = None,
     sex_labels: Optional[Sequence[str]] = None,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate an age-structured ``PopulationState`` to a readable dictionary.
 
     Args:
@@ -191,7 +186,7 @@ def population_state_to_dict(
     labels_genotype = _resolve_labels(n_ztypes, genotype_labels, "genotype")
     labels_sex = _resolve_labels(n_sexes, sex_labels or _default_sex_labels(n_sexes), "sex")
 
-    result: Dict[str, Any] = {
+    result: Dict[str, Any] = {  # Any: JSON-serializable
         "state_type": "PopulationState",
         "tick": int(state.n_tick),
         "dimensions": {
@@ -248,7 +243,7 @@ def discrete_population_state_to_dict(
     genotype_labels: Optional[Sequence[str]] = None,
     sex_labels: Optional[Sequence[str]] = None,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate a ``DiscretePopulationState`` to a readable dictionary.
 
     Args:
@@ -266,7 +261,7 @@ def discrete_population_state_to_dict(
     labels_genotype = _resolve_labels(n_ztypes, genotype_labels, "genotype")
     labels_sex = _resolve_labels(n_sexes, sex_labels or _default_sex_labels(n_sexes), "sex")
 
-    result: Dict[str, Any] = {
+    result: Dict[str, Any] = {  # Any: JSON-serializable
         "state_type": "DiscretePopulationState",
         "tick": int(state.n_tick),
         "dimensions": {
@@ -314,9 +309,9 @@ def discrete_population_state_to_json(
 
 
 def population_to_readable_dict(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate a population's current state to a readable dictionary.
 
     This helper automatically pulls genotype labels from
@@ -354,7 +349,7 @@ def population_to_readable_dict(
 
 
 def population_to_readable_json(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     include_zero_counts: bool = False,
     indent: int = 2,
 ) -> str:
@@ -377,16 +372,16 @@ def population_to_readable_json(
 
 
 def population_history_to_readable_dict(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     history: Optional[np.ndarray] = None,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate flattened history records into readable snapshot dictionaries.
 
     Args:
         population: Population instance that defines history shape and labels.
         history: Optional flattened history array. When ``None``, uses
-            ``population.get_history()``.
+            ``population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries in each
             snapshot payload.
 
@@ -403,14 +398,7 @@ def population_history_to_readable_dict(
 
     history_array: np.ndarray
     if history is None:
-        get_history = getattr(population, "get_history", None)  # type: ignore[union-attr]  # get_history defined on subclasses
-        if callable(get_history):
-            try:
-                history_array = cast(np.ndarray, get_history())
-            except ValueError:
-                history_array = np.zeros((0, 0), dtype=np.float64)
-        else:
-            history_array = np.zeros((0, 0), dtype=np.float64)
+        history_array = cast(np.ndarray, population.history._to_numpy())  # pyright: ignore[reportPrivateUsage]  # internal flatten seam
     else:
         history_array = cast(np.ndarray, np.asarray(history, dtype=np.float64))
 
@@ -419,7 +407,7 @@ def population_history_to_readable_dict(
             f"history must be a 2D array, got shape {history_array.shape}"
         )
 
-    snapshots: List[Dict[str, Any]] = []
+    snapshots: List[Dict[str, Any]] = []  # Any: JSON-serializable
     if isinstance(state, PopulationState):
         for idx in range(int(history_array.shape[0])):
             row = history_array[idx, :]
@@ -466,7 +454,7 @@ def population_history_to_readable_dict(
 
 
 def population_history_to_readable_json(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     history: Optional[np.ndarray] = None,
     include_zero_counts: bool = False,
     indent: int = 2,
@@ -476,7 +464,7 @@ def population_history_to_readable_json(
     Args:
         population: Population instance that defines history shape and labels.
         history: Optional flattened history array. When ``None``, uses
-            ``population.get_history()``.
+            ``population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries.
         indent: Indentation level used by ``json.dumps``.
 
@@ -496,7 +484,7 @@ def _build_observation_payload(
     labels: Sequence[str],
     sex_labels: Sequence[str],
     include_zero_counts: bool,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Convert a 2-D or 3-D observed array into a group/sex/age dictionary.
 
     ``observed`` is the result of applying an observation mask to population
@@ -514,7 +502,7 @@ def _build_observation_payload(
         A dict keyed by group name, each mapping sex (and optionally age)
         to summed counts.
     """
-    payload: Dict[str, Any] = {}
+    payload: Dict[str, Any] = {}  # Any: JSON-serializable
 
     if observed.ndim == 3:
         n_ages = int(observed.shape[2])
@@ -544,28 +532,14 @@ def _build_observation_payload(
     raise ValueError(f"Unsupported observed array ndim: {observed.ndim}")
 
 
-def _write_json_payload(
-    payload: Dict[str, Any],
-    output_path: Optional[Union[str, Path]],
-    indent: int,
-) -> None:
-    """Write a dict payload to a JSON file if ``output_path`` is provided."""
-    if output_path is None:
-        return
-
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=indent), encoding="utf-8")
-
-
 def _get_population_observation_payload(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     *,
     observation: Optional[Observation],
     groups: Optional[GroupsInput],
     collapse_age: bool,
     include_zero_counts: bool,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Build a current-state observation payload from a panmictic population.
 
     Reads the raw state, applies the observation mask in Python, and returns
@@ -587,10 +561,14 @@ def _get_population_observation_payload(
     n_sexes = int(state.individual_count.shape[0])
     sex_labels = _default_sex_labels(n_sexes)
 
-    resolved_observation = observation or population.create_observation(
-        groups=groups,
-        collapse_age=collapse_age,
-    )
+    if observation is None and groups is not None:
+        from natal.output.observation import ObservationFilter
+        observation = ObservationFilter(population.index_registry).build_filter(
+            diploid_genotypes=population.species,
+            groups=groups,
+            collapse_age=collapse_age,
+        )
+    resolved_observation = observation or population.observation
     observed = resolved_observation.apply(state.individual_count)
 
     return {
@@ -608,116 +586,22 @@ def _get_population_observation_payload(
 
 
 def _get_history_array(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     history: Optional[np.ndarray],
 ) -> np.ndarray:
     """Fetch history from the population or return a caller-supplied array."""
     if history is None:
-        get_history = getattr(population, "get_history", None)  # type: ignore[union-attr]  # get_history defined on subclasses
-        if callable(get_history):
-            try:
-                return cast(np.ndarray, get_history())
-            except ValueError:
-                return np.zeros((0, 0), dtype=np.float64)
-        return np.zeros((0, 0), dtype=np.float64)
+        return cast(np.ndarray, population.history._to_numpy())  # pyright: ignore[reportPrivateUsage]  # internal flatten seam
 
     return cast(np.ndarray, np.asarray(history, dtype=np.float64))
 
 
-def _build_history_observation_payload(
-    population: BasePopulation[Any],
-    *,
-    history: Optional[np.ndarray],
-    observation: Optional[Observation],
-    groups: Optional[GroupsInput],
-    collapse_age: bool,
-    include_zero_counts: bool,
-) -> Dict[str, Any]:
-    """Apply observation rules to each row of a raw (full-state) history.
-
-    Each history row is the full raw state ``[tick, ind.ravel(), sperm.ravel()]``.
-    This function parses every row, rebuilds ``PopulationState``, applies the
-    observation mask, and collects observation-shaped snapshots.
-
-    Args:
-        population: Population instance whose history is being exported.
-        history: Optional pre-fetched history. Falls back to
-            ``population.get_history()`` when ``None``.
-        observation: Pre-built ``Observation``. When given, ``groups`` and
-            ``collapse_age`` are ignored.
-        groups: Group specs passed to ``ObservationFilter.build_filter``.
-        collapse_age: Whether to collapse the age axis.
-        include_zero_counts: Whether to keep zero-valued entries.
-
-    Returns:
-        A dict with observation metadata and a list of per-snapshot entries.
-    """
-    state = population.state
-    n_sexes, n_ages, n_ztypes = state.individual_count.shape
-    sex_labels = _default_sex_labels(n_sexes)
-
-    history_array = _get_history_array(population, history)
-    if history_array.ndim != 2:
-        raise ValueError(f"history must be a 2D array, got shape {history_array.shape}")
-
-    resolved_observation = observation or population.create_observation(
-        groups=groups,
-        collapse_age=collapse_age,
-    )
-
-    snapshots: List[Dict[str, Any]] = []
-    for idx in range(int(history_array.shape[0])):
-        row = history_array[idx, :]
-        if isinstance(state, PopulationState):
-            parsed_state = parse_flattened_state(
-                row,
-                n_sexes=n_sexes,
-                n_ages=n_ages,
-                n_ztypes=n_ztypes,
-                copy=True,
-            )
-        elif isinstance(state, DiscretePopulationState):
-            parsed_state = parse_flattened_discrete_state(
-                row,
-                n_sexes=n_sexes,
-                n_ages=n_ages,
-                n_ztypes=n_ztypes,
-                copy=True,
-            )
-        else:
-            raise TypeError(f"Unsupported state type: {type(state).__name__}")
-
-        observed = resolved_observation.apply(parsed_state.individual_count)
-        snapshots.append(
-            {
-                "tick": int(parsed_state.n_tick),
-                "state_type": type(parsed_state).__name__,
-                "labels": list(resolved_observation.labels),
-                "observed": _build_observation_payload(
-                    observed=observed,
-                    labels=resolved_observation.labels,
-                    sex_labels=sex_labels,
-                    include_zero_counts=include_zero_counts,
-                ),
-            }
-        )
-
-    return {
-        "state_type": type(state).__name__,
-        "name": str(population.name),
-        "n_snapshots": int(history_array.shape[0]),
-        "collapse_age": bool(resolved_observation.collapse_age),
-        "labels": list(resolved_observation.labels),
-        "snapshots": snapshots,
-    }
-
-
 def population_observation_history_to_readable_dict(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     *,
     history: Optional[np.ndarray] = None,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate pre-recorded observation history into readable snapshot dicts.
 
     This is used when the population was run with ``record_observation`` set
@@ -726,26 +610,18 @@ def population_observation_history_to_readable_dict(
     ``(n_groups, n_sexes, n_ages)``, so no per-genotype data is stored.
 
     Falls back to ``population_history_to_readable_dict`` (raw state decoding)
-    if ``population.record_observation`` is ``None``.
+    if ``population.observation`` is the identity rule and the history is raw.
 
     Args:
-        population: Population instance with ``record_observation`` set.
+        population: Population instance.
         history: Optional flattened history array. When ``None``, uses
-            ``population.get_history()``.
+            ``population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries.
 
     Returns:
         A dictionary with observation metadata and per-snapshot entries.
     """
-    obs = population.record_observation
-    if obs is None:
-        return _build_history_observation_payload(
-            population, history=history, observation=None,
-            groups=None, collapse_age=False,
-            include_zero_counts=include_zero_counts,
-        )
-
-    assert obs is not None  # type-narrowing guard
+    obs = population.observation
     state = cast(PopulationState | DiscretePopulationState, population.state)
 
     n_sexes = int(state.individual_count.shape[0])
@@ -758,7 +634,7 @@ def population_observation_history_to_readable_dict(
     if history_array.ndim != 2:
         raise ValueError(f"history must be a 2D array, got shape {history_array.shape}")
 
-    snapshots: List[Dict[str, Any]] = []
+    snapshots: List[Dict[str, Any]] = []  # Any: JSON-serializable
     for idx in range(int(history_array.shape[0])):
         row = history_array[idx, :]
         tick = int(row[0])
@@ -787,7 +663,7 @@ def population_observation_history_to_readable_dict(
 
 
 def population_observation_history_to_readable_json(
-    population: BasePopulation[Any],
+    population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     *,
     history: Optional[np.ndarray] = None,
     include_zero_counts: bool = False,
@@ -802,172 +678,10 @@ def population_observation_history_to_readable_json(
     return json.dumps(payload, ensure_ascii=False, indent=indent)
 
 
-def output_current_state(
-    population: BasePopulation[Any],
-    *,
-    observation: Optional[Observation] = None,
-    groups: Optional[GroupsInput] = None,
-    collapse_age: bool = False,
-    include_zero_counts: bool = False,
-    output_path: Optional[Union[str, Path]] = None,
-    indent: int = 2,
-) -> Dict[str, Any]:
-    """Export the current population state with observation rules applied.
-
-    This function integrates ``natal.output.observation`` with state translation and
-    can optionally write the JSON payload to ``output_path``.
-
-    Args:
-        population: Population instance to observe.
-        observation: Optional prebuilt observation object. When provided,
-            ``groups`` and ``collapse_age`` are ignored.
-        groups: Observation groups passed to ``ObservationFilter.build_filter``.
-            When ``None``, one group per genotype index is used.
-        collapse_age: Whether observation rule generation collapses age axis.
-        include_zero_counts: Whether to keep zero-valued entries.
-        output_path: Optional JSON file path. When provided, the payload is
-            written to this file as UTF-8 JSON.
-        indent: Indentation used when writing JSON.
-
-    Returns:
-        A dictionary with observation metadata and observed counts.
-    """
-    payload = _get_population_observation_payload(
-        population,
-        observation=observation,
-        groups=groups,
-        collapse_age=collapse_age,
-        include_zero_counts=include_zero_counts,
-    )
-    _write_json_payload(payload, output_path, indent)
-    return payload
-
-
-def output_history(
-    population: BasePopulation[Any],
-    *,
-    observation: Optional[Observation] = None,
-    groups: Optional[GroupsInput] = None,
-    collapse_age: bool = False,
-    include_zero_counts: bool = False,
-    history: Optional[np.ndarray] = None,
-    output_path: Optional[Union[str, Path]] = None,
-    indent: int = 2,
-) -> Dict[str, Any]:
-    """Export the observation history for a population.
-
-    Args:
-        population: Population instance to observe.
-        observation: Optional prebuilt observation object. When provided,
-            ``groups`` and ``collapse_age`` are ignored.
-        groups: Observation groups passed to ``ObservationFilter.build_filter``.
-            When ``None``, one group per genotype index is used.
-        collapse_age: Whether observation rule generation collapses age axis.
-        include_zero_counts: Whether to keep zero-valued entries.
-        history: Optional flattened history array. When omitted, the population
-            history is fetched from ``population.get_history()``.
-        output_path: Optional JSON file path. When provided, the payload is
-            written to this file as UTF-8 JSON.
-        indent: Indentation used when writing JSON.
-
-    Returns:
-        A dictionary containing observation metadata and per-snapshot outputs.
-    """
-    # Auto-detect: prefer pre-recorded observation history when available and
-    # no explicit observation override is provided.  This avoids re-parsing
-    # the full raw state per snapshot.
-    pop_obs = population.record_observation
-    if pop_obs is not None and observation is None and groups is None:
-        payload = population_observation_history_to_readable_dict(
-            population=population,
-            history=history,
-            include_zero_counts=include_zero_counts,
-        )
-    else:
-        payload = _build_history_observation_payload(
-            population,
-            history=history,
-            observation=observation,
-            groups=groups,
-            collapse_age=collapse_age,
-            include_zero_counts=include_zero_counts,
-        )
-    _write_json_payload(payload, output_path, indent)
-    return payload
-
-
-def population_to_observation_dict(
-    population: BasePopulation[Any],
-    *,
-    observation: Optional[Observation] = None,
-    groups: Optional[GroupsInput] = None,
-    collapse_age: bool = False,
-    include_zero_counts: bool = False,
-) -> Dict[str, Any]:
-    """Post-hoc observation on a panmictic population's current state.
-
-    Delegates to :func:`output_current_state` with the same arguments.
-    Provided as a convenience wrapper for observation-specific workflows.
-
-    Args:
-        population: Panmictic population instance.
-        observation: Pre-built observation filter. When ``None``, one is
-            constructed from *groups* and *collapse_age*.
-        groups: Observation group specs used when *observation* is ``None``.
-        collapse_age: Whether the observation collapses the age axis.
-        include_zero_counts: Whether to keep zero-valued entries.
-
-    Returns:
-        Dictionary with observed state payload grouped by observation labels.
-    """
-    return output_current_state(
-        population,
-        observation=observation,
-        groups=groups,
-        collapse_age=collapse_age,
-        include_zero_counts=include_zero_counts,
-    )
-
-
-def population_to_observation_json(
-    population: BasePopulation[Any],
-    *,
-    observation: Optional[Observation] = None,
-    groups: Optional[GroupsInput] = None,
-    collapse_age: bool = False,
-    include_zero_counts: bool = False,
-    indent: int = 2,
-) -> str:
-    """Post-hoc observation on a panmictic population, serialized to JSON.
-
-    Delegates to :func:`output_current_state` and serializes the result.
-
-    Args:
-        population: Panmictic population instance.
-        observation: Pre-built observation filter. When ``None``, one is
-            constructed from *groups* and *collapse_age*.
-        groups: Observation group specs used when *observation* is ``None``.
-        collapse_age: Whether the observation collapses the age axis.
-        include_zero_counts: Whether to keep zero-valued entries.
-        indent: JSON indentation level.
-
-    Returns:
-        JSON string of the observed state payload.
-    """
-    payload = output_current_state(
-        population,
-        observation=observation,
-        groups=groups,
-        collapse_age=collapse_age,
-        include_zero_counts=include_zero_counts,
-    )
-    return json.dumps(payload, ensure_ascii=False, indent=indent)
-
-
 def spatial_population_to_readable_dict(
     spatial_population: SpatialPopulation,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate a ``SpatialPopulation`` into readable per-deme dictionaries.
 
     Args:
@@ -984,7 +698,7 @@ def spatial_population_to_readable_dict(
         n_ztypes,
     )
 
-    demes_payload: Dict[str, Any] = {}
+    demes_payload: Dict[str, Any] = {}  # Any: JSON-serializable  # Any: JSON-serializable
     for deme_idx, deme in enumerate(spatial_population.demes):
         demes_payload[f"deme_{deme_idx}"] = population_to_readable_dict(
             population=deme,
@@ -1026,7 +740,7 @@ def spatial_population_to_observation_dict(
     groups: Optional[GroupsInput] = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Post-hoc observation on the current spatial state (all demes + aggregate).
 
     Builds an ``Observation`` from the first deme's registry, applies it to
@@ -1043,10 +757,11 @@ def spatial_population_to_observation_dict(
     """
     from natal.output.observation import ObservationFilter
 
-    per_deme_payload: Dict[str, Any] = {}
+    per_deme_payload: Dict[str, Any] = {}  # Any: JSON-serializable  # Any: JSON-serializable
     for deme_idx, deme in enumerate(spatial_population.demes):
-        per_deme_payload[f"deme_{deme_idx}"] = population_to_observation_dict(
+        per_deme_payload[f"deme_{deme_idx}"] = _get_population_observation_payload(
             population=deme,
+            observation=None,
             groups=groups,
             collapse_age=collapse_age,
             include_zero_counts=include_zero_counts,
@@ -1057,14 +772,14 @@ def spatial_population_to_observation_dict(
     sex_labels = _default_sex_labels(n_sexes)
 
     obs_filter = ObservationFilter(spatial_population.deme(0).index_registry)
-    observation = obs_filter.create_observation(
+    observation = obs_filter.build_filter(
         diploid_genotypes=spatial_population.species,
         groups=groups,
         collapse_age=collapse_age,
     )
     observed = observation.apply(aggregate_state.individual_count)
 
-    aggregate_payload: Dict[str, Any] = {
+    aggregate_payload: Dict[str, Any] = {  # Any: JSON-serializable
         "state_type": "PopulationState",
         "tick": int(aggregate_state.n_tick),
         "collapse_age": bool(observation.collapse_age),
@@ -1123,7 +838,7 @@ def spatial_population_history_to_readable_dict(
     spatial_population: SpatialPopulation,
     history: Optional[np.ndarray] = None,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate recorded spatial history into per-deme readable snapshots.
 
     Each history snapshot contains one entry per deme with the same format
@@ -1132,7 +847,7 @@ def spatial_population_history_to_readable_dict(
     Args:
         spatial_population: Spatial population container.
         history: Optional stacked history array. When ``None``, uses
-            ``spatial_population.get_history()``.
+            ``spatial_population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries.
 
     Returns:
@@ -1150,7 +865,7 @@ def spatial_population_history_to_readable_dict(
     # Resolve history array
     history_array: np.ndarray
     if history is None:
-        history_array = spatial_population.get_history()
+        history_array = spatial_population.history._to_numpy()  # pyright: ignore[reportPrivateUsage]  # internal flatten seam
     else:
         history_array = cast(np.ndarray, np.asarray(history, dtype=np.float64))
 
@@ -1165,12 +880,12 @@ def spatial_population_history_to_readable_dict(
 
     is_discrete = isinstance(state, DiscretePopulationState)
 
-    snapshots: List[Dict[str, Any]] = []
+    snapshots: List[Dict[str, Any]] = []  # Any: JSON-serializable
     for row_idx in range(int(history_array.shape[0])):
         row = history_array[row_idx, :]
         tick = int(row[0])
 
-        per_deme: Dict[str, Any] = {}
+        per_deme: Dict[str, Any] = {}  # Any: JSON-serializable
         for d in range(n_demes):
             d_ind_start = 1 + d * ind_per_deme
             d_ind_end = 1 + (d + 1) * ind_per_deme
@@ -1224,7 +939,7 @@ def spatial_population_observation_history_to_readable_dict(
     *,
     history: Optional[np.ndarray] = None,
     include_zero_counts: bool = False,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate pre-recorded spatial observation history into readable dict.
 
     Each snapshot row is ``[tick, observed.ravel()]`` where ``observed`` has
@@ -1238,21 +953,13 @@ def spatial_population_observation_history_to_readable_dict(
     Args:
         spatial_population: Spatial population with ``record_observation`` set.
         history: Optional history array. When ``None``, uses
-            ``spatial_population.get_history()``.
+            ``spatial_population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries.
 
     Returns:
         A dictionary with observation metadata and per-tick, per-deme entries.
     """
-    obs = spatial_population.record_observation
-    if obs is None:
-        return spatial_population_history_to_readable_dict(
-            spatial_population=spatial_population,
-            history=history,
-            include_zero_counts=include_zero_counts,
-        )
-
-    assert obs is not None  # type-narrowing guard
+    obs = spatial_population.observation
 
     n_demes = spatial_population.n_demes
     first_deme = spatial_population.deme(0)
@@ -1265,79 +972,48 @@ def spatial_population_observation_history_to_readable_dict(
 
     history_array: np.ndarray
     if history is None:
-        history_array = spatial_population.get_history()
+        history_array = spatial_population.history._to_numpy()  # pyright: ignore[reportPrivateUsage]  # internal flatten seam
     else:
         history_array = cast(np.ndarray, np.asarray(history, dtype=np.float64))
 
     if history_array.ndim != 2:
         raise ValueError(f"history must be a 2D array, got shape {history_array.shape}")
 
-    compact = getattr(spatial_population, "_compact_meta", None)
-    sex_ages = n_sexes * n_ages
-    has_compact = compact is not None
-
-    snapshots: List[Dict[str, Any]] = []
+    snapshots: List[Dict[str, Any]] = []  # Any: JSON-serializable
     for idx in range(int(history_array.shape[0])):
         row = history_array[idx, :]
         tick = int(row[0])
 
-        collapse = bool(obs.collapse_age)
-        if collapse:
-            agg_arr: np.ndarray = np.zeros((n_groups, n_sexes), dtype=np.float64)
+        per_deme: Dict[str, Any] = {}  # Any: JSON-serializable
+        selected_demes = (
+            obs.deme_indices
+            if obs.deme_indices is not None
+            else tuple(range(n_demes))
+        )
+        age_shape = () if obs.collapse_age else (n_ages,)
+        if obs.deme_mode == "aggregate":
+            agg_arr = row[1:].reshape(n_groups, n_sexes, *age_shape)
+            per_deme["aggregate"] = _build_observation_payload(
+                observed=agg_arr,
+                labels=labels,
+                sex_labels=sex_labels,
+                include_zero_counts=include_zero_counts,
+            )
         else:
-            agg_arr = np.zeros((n_groups, n_sexes, n_ages), dtype=np.float64)
-
-        per_deme: Dict[str, Any] = {}
-
-        if has_compact:
-            meta = cast(CompactMeta, compact)
-
-            for gi in range(n_groups):
-                label = labels[gi]
-                off = int(meta.offsets[gi])
-                nd = int(meta.n_demes_per_group[gi])
-                sn = int(meta.selected_n[gi])
-
-                if meta.mode_aggregate[gi]:
-                    chunk = row[1 + off : 1 + off + sex_ages]
-                    obs_chunk = chunk.reshape(1, n_sexes, n_ages)
-                    entry = _build_observation_payload(
-                        observed=obs_chunk, labels=[label],
-                        sex_labels=sex_labels, include_zero_counts=include_zero_counts,
-                    )
-                    per_deme.setdefault("aggregate", {}).update(entry)
-                    chunk_2d = chunk.reshape(n_sexes, n_ages)
-                    if collapse:
-                        agg_arr[gi] += chunk_2d.sum(axis=1)
-                    else:
-                        agg_arr[gi] += chunk_2d
-                else:
-                    for di in range(nd):
-                        d = int(meta.deme_map[gi, di])
-                        chunk = row[1 + off + di * sex_ages : 1 + off + (di + 1) * sex_ages]
-                        if di >= sn:
-                            per_deme.setdefault(f"deme_{d}", {})[label] = "masked"
-                        else:
-                            obs_chunk = chunk.reshape(1, n_sexes, n_ages)
-                            entry = _build_observation_payload(
-                                observed=obs_chunk, labels=[label],
-                                sex_labels=sex_labels, include_zero_counts=include_zero_counts,
-                            )
-                            per_deme.setdefault(f"deme_{d}", {}).update(entry)
-                            chunk_2d = chunk.reshape(n_sexes, n_ages)
-                            if collapse:
-                                agg_arr[gi] += chunk_2d.sum(axis=1)
-                            else:
-                                agg_arr[gi] += chunk_2d
-        else:
-            observed = row[1:].reshape(n_demes, n_groups, n_sexes, n_ages)
-            for d in range(n_demes):
-                deme_obs = observed[d]
-                per_deme[f"deme_{d}"] = _build_observation_payload(
-                    observed=deme_obs, labels=labels,
-                    sex_labels=sex_labels, include_zero_counts=include_zero_counts,
+            observed = row[1:].reshape(
+                n_groups,
+                len(selected_demes),
+                n_sexes,
+                *age_shape,
+            )
+            for position, deme_index in enumerate(selected_demes):
+                per_deme[f"deme_{deme_index}"] = _build_observation_payload(
+                    observed=observed[:, position],
+                    labels=labels,
+                    sex_labels=sex_labels,
+                    include_zero_counts=include_zero_counts,
                 )
-            agg_arr = observed.sum(axis=0)
+            agg_arr = observed.sum(axis=1)
 
         aggregate_payload = _build_observation_payload(
             observed=agg_arr, labels=labels,
@@ -1378,7 +1054,7 @@ def spatial_population_observation_history_to_readable_json(
     Args:
         spatial_population: Spatial population container.
         history: Optional stacked history array. When ``None``, uses
-            ``spatial_population.get_history()``.
+            ``spatial_population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries.
         indent: JSON indentation level.
 
@@ -1407,7 +1083,7 @@ def spatial_population_history_to_readable_json(
     Args:
         spatial_population: Spatial population container.
         history: Optional stacked history array. When ``None``, uses
-            ``spatial_population.get_history()``.
+            ``spatial_population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries.
         indent: JSON indentation level.
 
@@ -1420,44 +1096,3 @@ def spatial_population_history_to_readable_json(
         include_zero_counts=include_zero_counts,
     )
     return json.dumps(payload, ensure_ascii=False, indent=indent)
-
-
-def spatial_population_output_history(
-    spatial_population: SpatialPopulation,
-    *,
-    history: Optional[np.ndarray] = None,
-    output_path: Optional[Union[str, Path]] = None,
-    indent: int = 2,
-) -> Dict[str, Any]:
-    """Export spatial history as a readable dictionary.
-
-    When ``spatial_population.record_observation`` is set, the observation
-    history path is used automatically.
-
-    Args:
-        spatial_population: Spatial population container.
-        history: Optional stacked history array. When ``None``, uses
-            ``spatial_population.get_history()``.
-        output_path: Optional JSON file path. When provided, the payload is
-            written to this file as UTF-8 JSON.
-        indent: Indentation used when writing JSON.
-
-    Returns:
-        Dictionary containing per-tick, per-deme readable payloads.
-    """
-    # Auto-detect pre-recorded observation history (same logic as output_history).
-    obs = spatial_population.record_observation
-    if obs is not None:
-        payload = spatial_population_observation_history_to_readable_dict(
-            spatial_population=spatial_population,
-            history=history,
-            include_zero_counts=False,
-        )
-    else:
-        payload = spatial_population_history_to_readable_dict(
-            spatial_population=spatial_population,
-            history=history,
-            include_zero_counts=False,
-        )
-    _write_json_payload(payload, output_path, indent)
-    return payload

@@ -1,4 +1,5 @@
 import natal as nt
+from natal.patterns import IndividualSelector
 
 sp = nt.Species.from_dict(
     name="TestSpecies",
@@ -57,27 +58,23 @@ pop = nt.DiscreteGenerationPopulation \
     ) \
     .presets(drive) \
     .hooks(release_drive_carriers) \
+    .with_observation(
+        groups={
+            "wildtype": IndividualSelector(ztype="WT|WT"),
+            "drive_het": IndividualSelector(ztype="WT|Dr"),
+            "drive_hom": IndividualSelector(ztype="Dr|Dr"),
+        },
+    ) \
     .build()
 
 pop.run(10000)
 
-# === Observation demo ===
-observation = pop.create_observation(
-    groups={
-        "wildtype": {"genotype": ["WT|WT"]},
-        "drive_het": {"genotype": ["WT::Dr"]},
-        "drive_hom": {"genotype": ["Dr|Dr"]},
-    },
-    collapse_age=True,
-)
-
-current_observation = pop.output_current_state(
-    observation=observation,
-    include_zero_counts=False,
-)
+# Observation via canonical pop.observe()
+current = pop.observe()
 
 print("\n--- Observation Output ---")
-print("Labels:", current_observation["labels"])
-print("Observed counts by genotype group:")
-for group_name, counts in current_observation["observed"].items():
-    print(f"  {group_name}: {counts}")
+print("Labels:", current.labels)
+print("Axes:", current.axes)
+print("Observed shape:", current.values.shape)
+for i, label in enumerate(current.labels["group"]):
+    print(f"  {label}: {current.values[i].tolist()}")

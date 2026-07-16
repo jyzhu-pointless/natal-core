@@ -11,7 +11,7 @@ This chapter describes the simulation execution pipeline of NATAL from a user's 
 After reading this chapter, you should be able to clearly answer two questions:
 
 1. What stage computations does a single `pop.run(...)` perform internally.
-2. When to use `run(...)`, `run_tick()`, `get_history()`, and `export_state()`.
+2. When to use `run(...)`, `run_tick()`, `pop.history`, and `export_state()`.
 
 ## 1. User Entry Points and Execution Path
 
@@ -159,7 +159,7 @@ If you have read the previous chapter, you can think of this chapter as "how `st
 
 ```python
 pop.run(n_steps=200, record_every=10)
-history = pop.get_history()
+history = pop.history.individual_count
 ```
 
 Practical advice:
@@ -173,9 +173,10 @@ Practical advice:
 When you need to save snapshots, transfer state across scripts, or run forking experiments, use:
 
 ```python
-state_flat, history = pop.export_state()
+state_flat = pop.export_state()
 # ... save or process externally ...
-pop.import_state(state_flat, history=history)
+pop.import_state(state_flat)
+# import_state() also clears the population's history, starting a fresh timeline
 ```
 
 Typical scenarios:
@@ -197,7 +198,7 @@ This provides two benefits:
 
 1. Batch simulations: Prefer `pop.run(...)`.
 2. Single-step observation: Use `pop.run_tick()`.
-3. Trajectory analysis: Combine `record_every` with `get_history()`.
+3. Trajectory analysis: Combine `record_every` with `pop.history`.
 4. Snapshot experiments: Use `export_state()` / `import_state()`.
 5. Behavior extension: Use Hooks rather than manually assembling kernel calls.
 
@@ -214,11 +215,11 @@ pop.run(n_steps=100, record_every=10)
 pop.run_tick()
 
 # 4) Retrieve history
-history = pop.get_history()
+history = pop.history.individual_count
 
 # 5) Export and restore
-state_flat, hist = pop.export_state()
-pop.import_state(state_flat, history=hist)
+state_flat = pop.export_state()
+pop.import_state(state_flat)
 ```
 
 ## 11. Chapter Summary

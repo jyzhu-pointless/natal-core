@@ -22,7 +22,6 @@ from natal.engine.discrete_generation_simulator import (
     run_discrete_reproduction,
     run_discrete_survival,
 )
-from natal.engine.simulation.discrete_generation import EPS
 from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
 from natal.hooks.types import (
     EVENT_EARLY,
@@ -106,7 +105,6 @@ def TICK_FN_NAME(
         return (ind_count, tick), RESULT_STOP
 
     ind_count = run_discrete_aging(ind_count)
-    ind_count = np.round(ind_count / EPS) * EPS
     return (ind_count, tick + 1), RESULT_CONTINUE
 
 
@@ -156,7 +154,11 @@ def RUN_FN_NAME(
         )
         ind_count, tick = current_state
 
-        if record_interval > 0 and (tick % record_interval == 0):
+        if (
+            result == RESULT_CONTINUE
+            and record_interval > 0
+            and (tick % record_interval == 0)
+        ):
             flat_state = np.zeros(flatten_size, dtype=np.float64)
             flat_state[0] = tick
             if observation_mask is not None:

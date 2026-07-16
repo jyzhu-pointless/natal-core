@@ -42,6 +42,8 @@
 - **善用选择题澄清细节**：当需要用户在多个可行方案之间做决策时（设计取舍、命名选择、参数值等），使用 AskUserQuestion 工具给出 2-4 个具体选项让用户直接选择，避免开放式追问造成沟通往返。
 - **维护 Tasks 列表**：多步骤任务使用 TaskCreate/TaskUpdate 跟踪进度。创建 task 后及时更新状态（pending → in_progress → completed），不要遗留僵尸 task。单步琐碎操作无需创建 task。
 - **优先使用专用工具**：Read/Glob/Grep/Edit/Write 等专用工具比 shell 命令更可靠（不会被沙箱拦截、输出格式稳定、渲染更友好）。仅在批量操作、管道组合、或专用工具无法实现时使用 Bash。
+- **禁止主动 commit / push**：除非用户明确要求，不得执行 `git commit`、`git push` 或任何形式的提交操作。
+- **禁止修改 `.gitignore`**：除非用户明确要求，不得改动 `.gitignore` 文件。
 
 ## 门禁检查
 
@@ -63,23 +65,47 @@ python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 
 每次完成代码修改后，必须按以下顺序执行，**禁止以自我审查代替**：
 
-1. **`@tester`** — 根据 `numerical-verification` 标准和 AGENTS.md 的测试覆盖规则，为新代码或变更代码生成严格测试。
+1. **`@tester`** — 根据 `numerical-verification` 和 `adversarial-review` 标准，为新代码或变更代码生成严格测试。必须覆盖五类测试：**负向合同测试**（assert 已删除接口不可访问）、**所有权测试**（assert 返回的 ndarray/list/dict 是副本或只读）、**状态转换测试**（restore→run、finish→snapshot、import→run、clear→record）、**轴组合测试**（配置轴的笛卡尔积枚举）、**错误路径测试**（无效输入抛正确异常且状态不变）。每条断言必须证明一个数值不变量。
 2. **运行 `python scripts/generate_init_pyi.py`** — 公开 API 变更后重新生成 stub，确保后续 pyright 检查基于最新 stub。
-3. **`@evaluator`** — 执行全面审查：运行 `pytest` / `pyright` / `ruff` 门禁检查，加载 `code-review` 和 `numerical-verification` skill 进行代码和测试质量审查，检查 docstring 合规性，检查 `Any`/`object` 滥用和 `cast(Any)` 禁令。
+3. **`@evaluator`** — 执行**对抗性**审查。审查者采取攻击者立场，主动寻找代码不符合 spec 的证据，而非仅验证门禁通过。必须：
+   - 从 spec 建立**账本**：must-exist、must-not-exist、invariants 三份清单
+   - 对每个 must-not-exist 项做**全仓搜索**（src/tests/demos/docs/stub），确认无法访问
+   - 对每个 invariant 执行**攻击**：所有权攻击（检查 ndarray 引用/写保护）、状态机攻击（restore→run、finish→snapshot）、轴组合攻击（笛卡尔积枚举）
+   - **实际执行**所有 demo 脚本和文档示例代码
+   - 运行 `pytest` / `pyright` / `ruff` 门禁，加载 `code-review`、`numerical-verification`、`adversarial-review` skill
+   - 判定为**机械规则**：`APPROVED` ⇔ 零 hard-blocker
 4. **若变更涉及公开 API（签名、参数、默认值、模块重命名等），主 agent 调用 `@docs`** 同步 `docs/zh/` 和 `docs/en/` 中的文档和示例代码。
 5. **主 agent 不得自行运行 `pytest`、`pyright`、`ruff` 并声称"已通过审查"**。这些命令的结果必须由 evaluator 独立验证并出具结构化报告。
 
 只有当 evaluator 给出 `APPROVED` 判定后，修改才算完成。
 
+#### evaluator 强制拒绝标准
+
+以下任一情况发生时，evaluator **必须**返回 `REJECTED`。**严重度不软化 hard-blocker**：一个缺少注释的 `Any` 和一项语义破坏同等对待。
+
+- **测试失败**：`pytest` 出现任何 FAILED。
+- **覆盖率不足**：新模块或已有模块新增代码的行覆盖率 **< 95%**。
+- **Hard-blocker 存在**：以下任一类问题出现一条即 REJECTED：
+  - **Must-not-exist 违规**：spec 要求删除的接口仍可访问（含 `getattr`、`__init__` 重导出）
+  - **Invariant 破坏**：所有权泄漏（ndarray 引用/非写保护）、状态机错误（restore 后 tick 不同步）、轴组合崩溃
+  - **Demo/doc 崩溃**：demo 脚本或文档示例代码实际运行报错
+  - **未注释的 `Any` / `object`**
+  - **未注释的 `# type: ignore`**
+  - **`cast(Any, …)`**
+  - **非 Google 风格 docstring section** 或 **缺少类型标注的参数/返回值/属性**
+- **负向合同缺失**：spec 标注为删除的接口，tests 中没有对应的 assert-not-exists 测试。
+- **所有权测试缺失**：返回容器（ndarray/list/dict）的公开方法，tests 中没有对应的只读/副本验证。
+- **状态转换未覆盖**：restore→run、finish→snapshot、import→run、clear→record 等关键生命周期序列未被测试。
+
 ### 修复策略
 
-- **修改的文件**：所有 pyright / ruff / pytest 报错必须修，无论是否预先存在。
+- **修改的文件**：所有 pyright / ruff / pytest 报错必须修。不存在"预先存在的失败"——如果 main 上通过而本分支失败，就是本分支引入的回归，必须立即修复。
 - **被改动波及的文件**：签名或 import 变更导致的其他文件报错也必须修。
-- **未修改文件的既有问题**：指出即可，不强制修。
-- **`cast(Any, …)` 禁止**。不能用它绕过类型检查。
+- **未修改文件的既有问题**：指出并分析；修复推荐但不强制当前提交必须完成。
+- **`cast(Any, …)` 禁止**。不能用它绕过类型检查。出现即 REJECTED。
 - **禁止滥用 `Any` 和 `object`**：参数、返回值、变量类型注解必须指向具体类型，不要偷懒用 `Any` 或 `object`。为导入类型而添加新的 import 是值得的。仅在有具体、书面理由（如泛型 `Callable[..., Any]` 表示"任意可调用对象"）时才可用 `Any`。
 - **`cast(T, x)`** 仅在静态分析完全无法证明 `x: T` 时可用（如 guard 后 narrow Optional）。优先用类型窄化断言或重构。
-- **`# type: ignore`** 是最后手段。每个 ignore 必须附带简短原因。
+- **`# type: ignore`** 是最后手段。每个 ignore 必须附带简短原因。缺少注释即 REJECTED。
 
 ### 测试覆盖
 

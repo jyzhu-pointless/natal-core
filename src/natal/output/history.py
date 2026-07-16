@@ -18,6 +18,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -42,7 +43,18 @@ __all__ = [
 ]
 
 
-def _build_fingerprint(*components: object) -> str:
+def _build_fingerprint(*components: object) -> str:  # object: any value with deterministic repr() — hashed via repr()
+    """Build a stable SHA-256 hash fingerprint from any number of hashable values.
+
+    Each component is converted via ``repr()`` and hashed, so any object
+    with a deterministic ``repr()`` is accepted.
+
+    Args:
+        *components: Arbitrary values whose ``repr()`` will be hashed.
+
+    Returns:
+        The first 16 hex characters of the SHA-256 digest.
+    """
     hasher = hashlib.sha256()
     for c in components:
         hasher.update(repr(c).encode("utf-8"))
@@ -173,11 +185,17 @@ class ObservationMetadata:
         labels: Observation group labels.
         collapse_age: Whether the age axis was collapsed.
         n_groups: Number of observation groups.
+        deme_indices: Ordered selected spatial demes, or ``None`` for
+            non-spatial observations.
+        deme_mode: Whether a spatial observation preserves or aggregates the
+            selected deme axis.
     """
 
     labels: Tuple[str, ...]
     collapse_age: bool
     n_groups: int
+    deme_indices: Optional[Tuple[int, ...]] = None
+    deme_mode: Literal["preserve", "aggregate"] = "preserve"
 
 
 @dataclass(frozen=True)
@@ -294,12 +312,36 @@ class History:
         return ticks
 
     @property
-    def individual_count(self) -> NDArray[np.float64]:
-        """Raw individual-count array ``(record, n_sexes, n_ages, n_ztypes)``.
+    def axes(self) -> Tuple[str, ...]:
+        """Axis names for the primary typed array exposed by this History."""
+        if self._schema.mode == "raw":
+            axes: Tuple[str, ...] = ("record",)
+            if self._schema.spatial_layout is not None:
+                axes += ("deme",)
+            return axes + ("sex", "age", "ztype")
 
-        Returns a cached read-only view of the full count tensor for
-        each recorded tick.  Non-spatial models omit the deme axis.
-        Only valid when ``schema.mode == "raw"``.
+        observation = self._schema.observation
+        assert observation is not None
+        axes = ("record", "group")
+        if (
+            observation.deme_indices is not None
+            and observation.deme_mode == "preserve"
+        ):
+            axes += ("deme",)
+        axes += ("sex",)
+        if not observation.collapse_age:
+            axes += ("age",)
+        return axes
+
+    @property
+    def individual_count(self) -> NDArray[np.float64]:
+        """Return the raw individual-count tensor for every recorded tick.
+
+        The shape is ``(record, sex, age, ztype)`` for non-spatial
+        populations and ``(record, deme, sex, age, ztype)`` for spatial
+        populations, including spatial populations with one deme. The
+        returned cached view is read-only. Only valid when
+        ``schema.mode == "raw"``.
 
         Raises:
             ValueError: If the schema mode is not ``"raw"``.
@@ -307,85 +349,131 @@ class History:
         if self._schema.mode != "raw":
             raise ValueError("individual_count is only available in raw mode")
         if self._cache_individual_count is not None:
-            return self._cache_individual_count
+            result = self._cache_individual_count.copy()
+            result.flags.writeable = False
+            return result
         pop = self._schema.population
+        is_spatial = self._schema.spatial_layout is not None
         n_records = len(self._rows)
-        arr = np.zeros(
-            (n_records, pop.n_sexes, pop.n_ages, pop.n_ztypes),
-            dtype=np.float64,
+        record_shape = (
+            (n_records, pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes)
+            if is_spatial
+            else (n_records, pop.n_sexes, pop.n_ages, pop.n_ztypes)
         )
+        arr = np.zeros(record_shape, dtype=np.float64)
         ind_size = pop.n_sexes * pop.n_ages * pop.n_ztypes
         for ri, row in enumerate(self._rows):
-            arr[ri] = row[1 : 1 + ind_size].reshape(
-                pop.n_sexes, pop.n_ages, pop.n_ztypes
+            total_ind_size = ind_size * pop.n_demes
+            target_shape = (
+                (pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes)
+                if is_spatial
+                else (pop.n_sexes, pop.n_ages, pop.n_ztypes)
             )
+            arr[ri] = row[1 : 1 + total_ind_size].reshape(target_shape)
         arr.flags.writeable = False
         self._cache_individual_count = arr
-        return arr
+        result = arr.copy()
+        result.flags.writeable = False
+        return result
 
     @property
     def sperm_storage(self) -> Optional[NDArray[np.float64]]:
-        """Raw sperm-storage array ``(record, n_ages, n_female, n_male)``.
+        """Return the raw sperm-storage tensor for every recorded tick.
 
-        ``None`` for discrete-generation populations.  Only valid when
+        The shape is ``(record, age, female_ztype, male_ztype)`` for
+        non-spatial populations and
+        ``(record, deme, age, female_ztype, male_ztype)`` for spatial
+        populations, including spatial populations with one deme. Returns
+        ``None`` for discrete-generation populations. Only valid when
         ``schema.mode == "raw"``.
+
+        Raises:
+            ValueError: If the schema mode is not ``"raw"``.
         """
         if self._schema.mode != "raw":
             raise ValueError("sperm_storage is only available in raw mode")
         if not self._schema.population.has_sperm_storage:
             return None
         if self._cache_sperm_storage is not None:
-            return self._cache_sperm_storage
+            result = self._cache_sperm_storage.copy()
+            result.flags.writeable = False
+            return result
         pop = self._schema.population
+        is_spatial = self._schema.spatial_layout is not None
         n_ztypes = pop.n_ztypes
         n_records = len(self._rows)
-        arr = np.zeros(
-            (n_records, pop.n_ages, n_ztypes, n_ztypes),
-            dtype=np.float64,
+        record_shape = (
+            (n_records, pop.n_demes, pop.n_ages, n_ztypes, n_ztypes)
+            if is_spatial
+            else (n_records, pop.n_ages, n_ztypes, n_ztypes)
         )
+        arr = np.zeros(record_shape, dtype=np.float64)
         ind_size = pop.n_sexes * pop.n_ages * pop.n_ztypes
         sperm_size = pop.n_ages * n_ztypes * n_ztypes
         for ri, row in enumerate(self._rows):
-            arr[ri] = row[1 + ind_size : 1 + ind_size + sperm_size].reshape(
-                pop.n_ages, n_ztypes, n_ztypes
+            ind_end = 1 + ind_size * pop.n_demes
+            sperm_end = ind_end + sperm_size * pop.n_demes
+            target_shape = (
+                (pop.n_demes, pop.n_ages, n_ztypes, n_ztypes)
+                if is_spatial
+                else (pop.n_ages, n_ztypes, n_ztypes)
             )
+            arr[ri] = row[ind_end:sperm_end].reshape(target_shape)
         arr.flags.writeable = False
         self._cache_sperm_storage = arr
-        return arr
+        result = arr.copy()
+        result.flags.writeable = False
+        return result
 
     @property
     def values(self) -> NDArray[np.float64]:
-        """Observed values ``(record, n_groups, n_sexes[, n_ages])``.
+        """Return observation-mode values for every recorded tick.
 
-        Only valid when ``schema.mode == "observation"``.
+        With age preserved, non-spatial and aggregate spatial observations
+        have shape ``(record, group, sex, age)``; preserve-mode spatial
+        observations have shape ``(record, group, deme, sex, age)``. A
+        preserve-mode spatial History keeps the deme axis even when it has
+        length one. With ``collapse_age=True``, the shapes become
+        ``(record, group, sex)`` and ``(record, group, deme, sex)``
+        respectively. Only valid when ``schema.mode == "observation"``.
+
+        Raises:
+            ValueError: If the schema mode is not ``"observation"``.
         """
         if self._schema.mode != "observation":
             raise ValueError("values is only available in observation mode")
         if self._cache_values is not None:
-            return self._cache_values
+            result = self._cache_values.copy()
+            result.flags.writeable = False
+            return result
         pop = self._schema.population
         obs_meta = self._schema.observation
         assert obs_meta is not None
         n_records = len(self._rows)
         n_groups = obs_meta.n_groups
         n_sexes = pop.n_sexes
-        n_ages = pop.n_ages
-        arr = np.zeros(
-            (n_records, n_groups, n_sexes, n_ages), dtype=np.float64
-        )
+        axis_shape: tuple[int, ...] = (n_groups,)
+        if obs_meta.deme_indices is not None and obs_meta.deme_mode == "preserve":
+            axis_shape += (len(obs_meta.deme_indices),)
+        axis_shape += (n_sexes,)
+        if not obs_meta.collapse_age:
+            axis_shape += (pop.n_ages,)
+        arr = np.zeros((n_records, *axis_shape), dtype=np.float64)
         for ri, row in enumerate(self._rows):
-            arr[ri] = row[1:].reshape(n_groups, n_sexes, n_ages)
+            arr[ri] = row[1:].reshape(axis_shape)
         arr.flags.writeable = False
         self._cache_values = arr
-        return arr
+        result = arr.copy()
+        result.flags.writeable = False
+        return result
 
     # ── Mutations ─────────────────────────────────────────────────────────
 
     def __len__(self) -> int:
         return len(self._rows)
 
-    def __iter__(self) -> object:
-        return iter(self.to_list())
+    def __iter__(self) -> Iterator[Tuple[int, NDArray[np.float64]]]:  # explicit Iterator for typed iteration
+        return iter(self._to_list())
 
     def _invalidate_cache(self) -> None:
         self._cache_individual_count = None
@@ -401,28 +489,70 @@ class History:
             self._seen_ticks.discard(int(evicted[0]))
             self._invalidate_cache()
 
-    def append(self, batch: HistoryBatch) -> None:
+    def _append(self, batch: HistoryBatch) -> None:
         """Append rows from a validated batch.
 
         Args:
             batch: Batch of rows; schema must match.
 
         Raises:
-            ValueError: If schemas mismatch or a tick is duplicated.
+            ValueError: If schemas mismatch, ticks repeat, or ticks are not
+                strictly increasing after the current tail.
         """
         if batch.schema != self._schema:
             raise ValueError("Batch schema does not match History schema")
         if batch.rows.shape[0] == 0:
             return
-        for ri in range(batch.rows.shape[0]):
+        ticks = tuple(int(tick) for tick in batch.rows[:, 0])
+        if any(current <= previous for previous, current in zip(ticks, ticks[1:])):
+            raise ValueError("History batch ticks must be strictly increasing and unique")
+        if any(tick in self._seen_ticks for tick in ticks):
+            raise ValueError("History batch contains a tick that is already recorded")
+        if self._rows and ticks[0] <= int(self._rows[-1][0]):
+            raise ValueError("History ticks must be appended in strictly increasing order")
+        for ri, tick in enumerate(ticks):
             row = batch.rows[ri, :].copy()
-            tick = int(row[0])
-            if tick in self._seen_ticks:
-                continue
             self._seen_ticks.add(tick)
             self._rows.append(row)
         self._invalidate_cache()
         self._evict_if_needed()
+
+    def _append_continuation(self, batch: HistoryBatch) -> None:
+        """Append an engine batch with one validated boundary overlap.
+
+        A continued engine run repeats its starting boundary as the first
+        batch row. That row may be omitted only when both its tick and payload
+        exactly equal the current History tail.
+
+        Args:
+            batch: Engine-produced rows using this History schema.
+
+        Raises:
+            ValueError: If schemas mismatch, the batch is stale, or an
+                overlapping boundary has different state data.
+        """
+        if batch.schema != self._schema:
+            raise ValueError("Batch schema does not match History schema")
+        rows = batch.rows
+        if rows.shape[0] == 0:
+            return
+        if self._rows:
+            last_row = self._rows[-1]
+            last_tick = int(last_row[0])
+            first_tick = int(rows[0, 0])
+            if first_tick < last_tick:
+                raise ValueError(
+                    "Kernel History starts before the latest recorded tick"
+                )
+            if first_tick == last_tick:
+                if not np.array_equal(rows[0], last_row):
+                    raise ValueError(
+                        "Kernel History boundary payload does not match the "
+                        "latest recorded state"
+                    )
+                rows = rows[1:, :]
+        if rows.shape[0] > 0:
+            self._append(HistoryBatch(schema=self._schema, rows=rows))
 
     def clear(self) -> None:
         """Remove all stored rows while preserving the schema."""
@@ -469,19 +599,30 @@ class History:
         if self._schema.mode != "raw":
             raise ValueError("Cannot restore state from observation-mode history.")
         pop = self._schema.population
-        ind_size = pop.n_sexes * pop.n_ages * pop.n_ztypes
+        is_spatial = self._schema.spatial_layout is not None
+        ind_per_deme = pop.n_sexes * pop.n_ages * pop.n_ztypes
+        ind_size = ind_per_deme * pop.n_demes
+        ind_shape = (
+            (pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes)
+            if is_spatial
+            else (pop.n_sexes, pop.n_ages, pop.n_ztypes)
+        )
 
         for row in self._rows:
             if int(row[0]) == tick:
-                ic = row[1 : 1 + ind_size].reshape(
-                    pop.n_sexes, pop.n_ages, pop.n_ztypes
-                ).copy()
+                ic = row[1 : 1 + ind_size].reshape(ind_shape).copy()
                 ss: Optional[NDArray[np.float64]] = None
                 if pop.has_sperm_storage:
                     n_ztypes = pop.n_ztypes
-                    sperm_size = pop.n_ages * n_ztypes * n_ztypes
+                    sperm_per_deme = pop.n_ages * n_ztypes * n_ztypes
+                    sperm_size = sperm_per_deme * pop.n_demes
+                    sperm_shape = (
+                        (pop.n_demes, pop.n_ages, n_ztypes, n_ztypes)
+                        if is_spatial
+                        else (pop.n_ages, n_ztypes, n_ztypes)
+                    )
                     ss = row[1 + ind_size : 1 + ind_size + sperm_size].reshape(
-                        pop.n_ages, n_ztypes, n_ztypes
+                        sperm_shape
                     ).copy()
                 return (tick, ic, ss)
 
@@ -489,102 +630,66 @@ class History:
 
     # ── Post-hoc observation ──────────────────────────────────────────────
 
-    def observe(
-        self,
-        observation: Observation | NDArray[np.float64],
-        labels: Optional[Tuple[str, ...]] = None,
-        collapse_age: bool = False,
-    ) -> History:
+    def observe(self, observation: Observation) -> History:
         """Create a new observation-mode History from raw history.
 
-        Supports two calling conventions:
-
-        *New*: Pass a compiled :class:`Observation`::
-            obs_hist = raw_hist.observe(observation)
-
-        *Legacy*: Pass a mask + labels + collapse_age::
-            obs_hist = raw_hist.observe(mask, ("g0",), collapse_age=False)
+        Projects every stored raw record through *observation*.
 
         Only valid when the current mode is ``"raw"``.
 
         Args:
-            observation: Compiled :class:`Observation` **or** NDArray
-                binary mask (legacy).
-            labels: Group labels (legacy, required when *observation*
-                is an ndarray).
-            collapse_age: Collapse age flag (legacy).
+            observation: Compiled :class:`Observation` whose layout fingerprint
+                must match this History's population layout.
 
         Returns:
             New ``History`` in observation mode.
 
         Raises:
-            ValueError: If mode is not ``"raw"``.
+            ValueError: If mode is not ``"raw"`` or the Observation layout
+                fingerprint does not match this History.
         """
         if self._schema.mode != "raw":
             raise ValueError(
                 "observe() is only valid on raw-mode History."
             )
 
-        if isinstance(observation, np.ndarray):
-            # legacy path
-            assert labels is not None
-            return self._observe_from_mask(observation, labels, collapse_age)
-
+        expected_fingerprint = self._schema.population.fingerprint
+        if observation.population_fingerprint != expected_fingerprint:
+            raise ValueError(
+                "Observation population layout does not match History: "
+                f"expected {expected_fingerprint}, got "
+                f"{observation.population_fingerprint or '<unset>'}."
+            )
         return self._observe_from_observation(observation)
 
-    def _observe_from_mask(
-        self,
-        observation_mask: NDArray[np.float64],
-        observation_labels: Tuple[str, ...],
-        collapse_age: bool,
-    ) -> History:
-        n_groups = len(observation_labels)
-        pop = self._schema.population
-        n_sexes = pop.n_sexes
-        n_ages = pop.n_ages
-        n_ztypes = pop.n_ztypes
-        obs_row_size = 1 + n_groups * n_sexes * n_ages
-        obs_meta = ObservationMetadata(
-            labels=observation_labels,
-            collapse_age=collapse_age,
-            n_groups=n_groups,
-        )
-        obs_schema = HistorySchema(
-            mode="observation",
-            population=pop,
-            row_size=obs_row_size,
-            observation=obs_meta,
-            spatial_layout=None,
-        )
-        obs_history = History(obs_schema)
-        from natal.output.observation import apply_rule
-
-        ind_size = n_sexes * n_ages * n_ztypes
-        for row in self._rows:
-            tick = row[0]
-            ind_count = row[1 : 1 + ind_size].reshape(
-                n_sexes, n_ages, n_ztypes
-            )
-            observed = apply_rule(ind_count, observation_mask)
-            flat = np.empty(obs_row_size, dtype=np.float64)
-            flat[0] = tick
-            flat[1:] = observed.ravel()
-            obs_history._rows.append(flat)
-
-        return obs_history
-
     def _observe_from_observation(self, observation: Observation) -> History:
+        """Project raw records through a layout-validated Observation.
+
+        Args:
+            observation: Canonical projection rule for this History layout.
+
+        Returns:
+            An independent observation-mode History.
+        """
         pop = self._schema.population
         n_sexes = pop.n_sexes
         n_ages = pop.n_ages
-        n_ztypes = pop.n_ztypes
         n_groups = observation.n_groups
-        obs_row_size = 1 + n_groups * n_sexes * n_ages
+        age_width = 1 if observation.collapse_age else n_ages
+        selected_demes = (
+            len(observation.deme_indices)
+            if observation.deme_indices is not None
+            and observation.deme_mode == "preserve"
+            else 1
+        )
+        obs_row_size = 1 + n_groups * selected_demes * n_sexes * age_width
 
         obs_meta = ObservationMetadata(
             labels=observation.labels,
             collapse_age=observation.collapse_age,
             n_groups=n_groups,
+            deme_indices=observation.deme_indices,
+            deme_mode=observation.deme_mode,
         )
         obs_schema = HistorySchema(
             mode="observation",
@@ -595,18 +700,11 @@ class History:
         )
         obs_history = History(obs_schema)
 
-        mask = observation.build_mask(
-            n_sexes=n_sexes, n_ages=n_ages, n_ztypes=n_ztypes
-        )
-        from natal.output.observation import apply_rule
-
-        ind_size = n_sexes * n_ages * n_ztypes
-        for row in self._rows:
+        counts = self.individual_count
+        for record_index, row in enumerate(self._rows):
             tick = row[0]
-            ind_count = row[1 : 1 + ind_size].reshape(
-                n_sexes, n_ages, n_ztypes
-            )
-            observed = apply_rule(ind_count, mask)
+            record_counts = counts[record_index]
+            observed = observation.apply(record_counts)
             flat = np.empty(obs_row_size, dtype=np.float64)
             flat[0] = tick
             flat[1:] = observed.ravel()
@@ -614,7 +712,7 @@ class History:
 
         return obs_history
 
-    def to_numpy(self) -> NDArray[np.float64]:
+    def _to_numpy(self) -> NDArray[np.float64]:
         """Return all history rows as a single 2-D array.
 
         Returns:
@@ -625,15 +723,15 @@ class History:
             return np.zeros((0, self._schema.row_size), dtype=np.float64)
         return np.array(self._rows, dtype=np.float64)
 
-    def to_list(self) -> List[Tuple[int, NDArray[np.float64]]]:
+    def _to_list(self) -> List[Tuple[int, NDArray[np.float64]]]:
         """Return history rows as ``(tick, flat_row)`` pairs.
 
         Returns:
-            List of ``(tick, row)`` tuples for legacy compatibility.
+            List of ``(tick, row)`` tuples. Each row is a defensive copy.
         """
-        return [(int(row[0]), row) for row in self._rows]
+        return [(int(row[0]), row.copy()) for row in self._rows]
 
-    def to_dict(self, *, include_zero_counts: bool = False) -> Dict[str, Any]:
+    def to_dict(self, *, include_zero_counts: bool = False) -> Dict[str, Any]:  # Any: JSON-serializable nested dict  # Any: nested dicts with mixed value types (str, int, float, list, dict)
         """Translate history to a readable dictionary.
 
         Args:
@@ -644,9 +742,42 @@ class History:
         """
         mode = self._schema.mode
         population = self._schema.population
-        snapshots: List[Dict[str, Any]] = []
+        snapshots: List[Dict[str, Any]] = []  # Any: JSON-serializable nested dict
 
         if mode == "raw":
+            spatial = self._schema.spatial_layout
+            if spatial is not None:
+                # spatial raw: rows are [tick, ind_all_demes.ravel(), sperm_all_demes.ravel()]
+                ind_per_deme = spatial.ind_per_deme
+                sperm_per_deme = spatial.sperm_per_deme
+                n_demes = spatial.n_demes
+                ind_size = ind_per_deme * n_demes
+                for row in self._rows:
+                    tick = int(row[0])
+                    record: Dict[str, Any] = {"tick": tick}
+                    per_deme: list[list[float]] = []
+                    payload = row[1:]
+                    for di in range(n_demes):
+                        start = di * ind_per_deme
+                        end = start + ind_per_deme
+                        per_deme.append(payload[start:end].tolist())
+                    record["individual_count_per_deme"] = per_deme
+                    if sperm_per_deme > 0:
+                        sperm_start = ind_size
+                        sperm_payload = payload[sperm_start:]
+                        per_deme_sperm: list[list[float]] = []
+                        for di in range(n_demes):
+                            s = di * sperm_per_deme
+                            e = s + sperm_per_deme
+                            per_deme_sperm.append(sperm_payload[s:e].tolist())
+                        record["sperm_storage_per_deme"] = per_deme_sperm
+                    snapshots.append(record)
+                return {
+                    "state_type": "SpatialPopulation",
+                    "n_snapshots": len(snapshots),
+                    "snapshots": snapshots,
+                }
+
             from natal.data import (
                 DiscretePopulationState,
                 PopulationState,
@@ -698,12 +829,44 @@ class History:
         assert self._schema.observation is not None
         obs_meta = self._schema.observation
         labels = list(obs_meta.labels)
+        n_demes = len(obs_meta.deme_indices) if obs_meta.deme_indices else 0
 
         for row in self._rows:
             tick = int(row[0])
-            observed = row[1:].reshape(
-                obs_meta.n_groups, population.n_sexes, population.n_ages
-            )
+            payload = row[1:]
+            if n_demes > 0 and obs_meta.deme_mode == "preserve":
+                if obs_meta.collapse_age:
+                    observed = payload.reshape(
+                        obs_meta.n_groups, n_demes, population.n_sexes,
+                    )
+                    obs_axes: Tuple[str, ...] = ("group", "deme", "sex")
+                else:
+                    observed = payload.reshape(
+                        obs_meta.n_groups, n_demes, population.n_sexes,
+                        population.n_ages,
+                    )
+                    obs_axes = ("group", "deme", "sex", "age")
+            elif n_demes > 0 and obs_meta.deme_mode == "aggregate":
+                if obs_meta.collapse_age:
+                    observed = payload.reshape(
+                        obs_meta.n_groups, population.n_sexes,
+                    )
+                    obs_axes = ("group", "sex")
+                else:
+                    observed = payload.reshape(
+                        obs_meta.n_groups, population.n_sexes, population.n_ages,
+                    )
+                    obs_axes = ("group", "sex", "age")
+            elif obs_meta.collapse_age:
+                observed = payload.reshape(
+                    obs_meta.n_groups, population.n_sexes,
+                )
+                obs_axes = ("group", "sex")
+            else:
+                observed = payload.reshape(
+                    obs_meta.n_groups, population.n_sexes, population.n_ages,
+                )
+                obs_axes = ("group", "sex", "age")
             snapshots.append(
                 {
                     "tick": tick,
@@ -714,6 +877,7 @@ class History:
                         labels=labels,
                         sex_labels=list(population.sex_labels),
                         include_zero_counts=include_zero_counts,
+                        axes=obs_axes,
                     ),
                 }
             )
@@ -731,11 +895,11 @@ class History:
 
 
 def _state_to_dict(
-    state: Any,
+    state: Any,  # Any: accepts PopulationState or DiscretePopulationState
     sex_labels: List[str],
     genotype_labels: List[str],
     include_zero_counts: bool,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     from natal.data import PopulationState
 
     n_ages = int(state.individual_count.shape[1])
@@ -756,7 +920,7 @@ def _state_to_dict(
                 sex_block[age_key] = geno_block
         payload[sex_name] = sex_block
 
-    result: Dict[str, Any] = {"tick": int(state.n_tick)}
+    result: Dict[str, Any] = {"tick": int(state.n_tick)}  # Any: JSON-serializable nested dict
     result["individual_count"] = payload
 
     sperm_storage = getattr(state, "sperm_storage", None)
@@ -787,10 +951,50 @@ def _build_observation_payload(
     labels: List[str],
     sex_labels: List[str],
     include_zero_counts: bool,
-) -> Dict[str, Any]:
+    axes: Optional[Tuple[str, ...]] = None,
+) -> Dict[str, Any]:  # Any: JSON-serializable nested dict  # Any: nested dicts with mixed value types (str, int, float, list, dict)
+    """Build a nested-dict payload from an observed array with known axes.
+
+    Args:
+        observed: Observed ndarray.
+        labels: Group labels for the first axis.
+        sex_labels: Sex labels.
+        include_zero_counts: Whether to include zero values.
+        axes: Explicit axis names. When ``None``, inferred from ndim.
+            Supported: ``("group", "sex")``, ``("group", "sex", "age")``,
+            ``("group", "deme", "sex")``, ``("group", "deme", "sex", "age")``.
+    """
+    if axes is not None:
+        # Explicit axis-based serialization
+        n_groups = len(labels)
+        payload: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
+        for g in range(n_groups):
+            g_payload: Any = _serialize_with_axes(observed[g], axes[1:], sex_labels, include_zero_counts)  # Any: recursive JSON-serializable
+            payload[labels[g]] = g_payload
+        return payload
+
+    if observed.ndim == 4:
+        n_demes = int(observed.shape[1])
+        payload = {}
+        for group_idx, group_name in enumerate(labels):
+            deme_block: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
+            for d in range(n_demes):
+                sex_age_block: Dict[str, Dict[str, float]] = {}
+                for sex_idx, sex_name in enumerate(sex_labels):
+                    age_block: Dict[str, float] = {}
+                    for age_idx in range(int(observed.shape[3])):
+                        value = float(observed[group_idx, d, sex_idx, age_idx])
+                        if include_zero_counts or value != 0.0:
+                            age_block[f"age_{age_idx}"] = value
+                    if include_zero_counts or age_block:
+                        sex_age_block[sex_name] = age_block
+                deme_block[f"deme_{d}"] = sex_age_block
+            payload[group_name] = deme_block
+        return payload
+
     if observed.ndim == 3:
         n_ages = int(observed.shape[2])
-        payload: Dict[str, Any] = {}
+        payload: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
         for group_idx, group_name in enumerate(labels):
             sex_age_block: Dict[str, Dict[str, float]] = {}
             for sex_idx, sex_name in enumerate(sex_labels):
@@ -816,3 +1020,50 @@ def _build_observation_payload(
         return payload
 
     raise ValueError(f"Unsupported observed array ndim: {observed.ndim}")
+
+
+def _serialize_with_axes(
+    arr: np.ndarray,
+    axes: Tuple[str, ...],
+    sex_labels: List[str],
+    include_zero_counts: bool,
+) -> Any:  # Any: recursive JSON-serializable dict/list/float
+    """Recursively serialize an ndarray using explicit axis names.
+
+    Args:
+        arr: Sub-array to serialize.
+        axes: Remaining axis names from outer to inner.
+        sex_labels: Sex labels used when the current axis is ``"sex"``.
+        include_zero_counts: Whether to keep zero-valued entries.
+
+    Returns:
+        Nested dict, or float scalar at leaf.
+    """
+    if len(axes) == 0:
+        return float(arr)
+    axis = axes[0]
+    rest = axes[1:]
+    if axis == "sex":
+        result: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
+        for si, sex_name in enumerate(sex_labels):
+            value: Any = _serialize_with_axes(arr[si], rest, sex_labels, include_zero_counts)  # Any: recursive JSON-serializable
+            if include_zero_counts or (isinstance(value, (int, float)) and value != 0.0) or (isinstance(value, dict) and value):
+                result[sex_name] = value
+        return result
+    if axis == "age":
+        n_ages = int(arr.shape[0])
+        result = {}
+        for ai in range(n_ages):
+            value = _serialize_with_axes(arr[ai], rest, sex_labels, include_zero_counts)
+            if include_zero_counts or (isinstance(value, (int, float)) and value != 0.0) or (isinstance(value, dict) and value):
+                result[f"age_{ai}"] = value
+        return result
+    if axis == "deme":
+        n_demes = int(arr.shape[0])
+        result = {}
+        for di in range(n_demes):
+            value = _serialize_with_axes(arr[di], rest, sex_labels, include_zero_counts)
+            if include_zero_counts or (isinstance(value, (int, float)) and value != 0.0) or (isinstance(value, dict) and value):
+                result[f"deme_{di}"] = value
+        return result
+    return float(arr)

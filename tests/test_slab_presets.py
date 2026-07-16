@@ -107,7 +107,7 @@ class TestWolbachiaEndToEnd:
         ).build()
 
         pop.run(3)
-        h = pop.get_history()
+        h = pop.history._to_numpy()
         assert h.shape[0] >= 4  # initial + 3 ticks
 
 class TestPresetIntegration:

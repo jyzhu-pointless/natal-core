@@ -1,429 +1,205 @@
-# Observation 历史记录：开发者实现文档
+# Observation 与 History 实现解析
 
-本文档面向 NATAL Core 的维护者和贡献者，详细说明 observation-based history recording 的实现原理、数据流和各模块职责。
+本文档面向 NATAL Core 的维护者和贡献者，说明 canonical Observation、类型化 History 以及空间记录路径之间的职责边界。公开用法参见 [提取种群模拟数据](2_data_output.md)。
 
-## 整体架构
+## 实现概览
 
-Observation 历史记录涉及四个层次，并通过 NamedTuple 参数束在 Kernel 层传递：
+Observation 只定义“怎样从种群状态得到观测结果”，History 只定义“保存哪一种快照”。两者在构建阶段由 RecordingPlan 连接，但仍是独立概念：
 
-```
-用户层 API          →  BasePopulation / SpatialPopulation 的 record_observation 属性
-                       SpatialPopulation 的 _spatial_topo / _migration_params / _compact_meta
-Observation 层     →  observation.py: Observation, ObservationFilter, build_mask
-                       observation_record.py: CompactMeta, build_observation_row_spatial
-Kernel 层          →  spatial_simulator.py 中的 recording 通路
-                       spatial_lifecycle_*.tmpl.py 代码生模板
-导出层             →  state_translation.py: output_history / *observation_history_to_readable_dict
-```
+```text
+Configurator.with_observation(...)
+  → 编译不可变的 canonical Observation
 
-## NamedTuple 参数束
+Configurator.record_history(mode=...)
+  → 选择 raw 或 observation History schema
 
-为避免散落的 13+ 个参数在多层函数间传递，空间内核调度使用四个 NamedTuple 收敛参数：
-
-| NamedTuple | 定义位置 | 收敛的参数 | 生命周期 |
-|-----------|---------|-----------|---------|
-| `SpatialTopology` | `spatial_topology.py` | `rows`, `cols`, `wrap` | 构造时固化 |
-| `MigrationParams` | `spatial_topology.py` | `kernel`, `include_center`, `rate`, `adjust_on_edge` | 构造时固化 |
-| `HeterogeneousKernelParams` | `spatial_topology.py` | `deme_kernel_ids`, `d_row`, `d_col`, `weights`, `nnzs`, `total_sums`, `max_nnz` | 每次 `run()` 重建 |
-| `CompactMeta` | `observation_record.py` | `offsets`, `deme_map`, `n_demes_per_group`, `selected_n`, `mode_aggregate`, `row_size` | `record_observation` 设置时重建 |
-
-`migration_mode` 和 `adjacency` 不包含在 `MigrationParams` 中，因为它们由 `_effective_migration_route()` 在每次调用时动态解析（可选择 adjacency / kernel / auto），属于**路由策略**而非**迁移参数**。
-
-## 数据流
-
-```
-用户定义 groups
-       ↓
-ObservationFilter.build_filter(groups) → Observation 对象（含 labels、mask、collapse_age）
-       ↓
-BasePopulation._build_observation_mask(obs) → 4D float64 mask (n_groups, n_sexes, n_ages, n_genotypes)
-       ↓
-_build_deme_info() → demean_modes dict → build_compact_metadata() → CompactMeta
-       ↓
-mask + CompactMeta 传入 Numba kernel（observation_mask + compact_meta 参数）
-       ↓
-kernel 每个 record_every 步：
-  build_observation_row_spatial(ind, mask, compact_meta) → 紧凑 flat row
-  row = [tick, compact_row]
-       ↓
-Python 层：_process_kernel_history() → history.append((tick, row.copy()))
-       ↓
-导出：output_history() 自动检测 record_observation →  dispatch 到 *observation_history_to_readable_dict
+Population state
+  ├─ pop.observe() → ObservationResult
+  └─ sampling boundary → History
+       ├─ raw mode: 保存完整状态
+       └─ observation mode: 保存 canonical Observation 的投影结果
 ```
 
-## 数据格式对比
+核心模块及职责：
 
-### 原始模式（record_observation=None）
+| 模块 | 职责 |
+|------|------|
+| `output/observation.py` | 定义 `Observation`、`ObservationResult`、`ObservationFilter` 与恒等观测 |
+| `output/history.py` | 定义不可变 schema、类型化数组视图、raw History 的事后投影 |
+| `output/_recording.py` | 在构建阶段编译 `RecordingPlan`、行宽与空间布局 |
+| `output/record.py` | 为非空间引擎提供统一的观测行编码 |
+| `engine/templates/spatial_lifecycle_*.tmpl.py` | 运行空间生命周期并传回规则化 raw batch |
+| `spatial/population.py` | 在空间容器边界应用 canonical Observation，再提交 History |
 
-**Panmictic** 每行：
-```
-[tick, ind[0,0,0], ind[0,0,1], ..., ind[n_sexes-1, n_ages-1, n_genotypes-1],
- sperm[0,0,0,0], ..., sperm[n_ages-1, n_genotypes-1, n_genotypes-1]]
-```
-行大小 = `1 + n_sexes × n_ages × n_genotypes + n_ages × n_genotypes²`
+## 构建阶段的公开接口
 
-**Spatial** 每行：
-```
-[tick, flat_ind_deme_0, ..., flat_ind_deme_n-1, flat_sperm_deme_0, ..., flat_sperm_deme_n-1]
-```
-其中 `flat_ind_deme_d = ind_d[d].ravel()`（每个 deme 的行大小 = `n_sexes × n_ages × n_genotypes`）
-
-### 观测模式（record_observation 已设置）
-
-**Panmictic** 每行：
-```
-[tick, observed[0,0,0], observed[0,0,1], ..., observed[n_groups-1, n_sexes-1, n_ages-1]]
-```
-行大小 = `1 + n_groups × n_sexes × n_ages`
-
-**Spatial** 每行：
-```
-[tick, observed[0,0,0,0], ..., observed[n_demes-1, n_groups-1, n_sexes-1, n_ages-1]]
-```
-行大小 = `1 + n_demes × n_groups × n_sexes × n_ages`
-
-## 核心模块详解
-
-### 1. Observation 系统（observation.py）
-
-#### Observation 对象
-
-`Observation` 是不可变 dataclass，包含：
-- `labels`: 分组标签元组 `(name_0, name_1, ...)`
-- `collapse_age`: 是否压缩年龄维度
-- `mask`（可选）: 预烘焙的 4D 二进制掩码 `(n_groups, n_sexes, n_ages, n_ztypes)`
-- `population_fingerprint`: 基于布局组件的稳定性哈希
-- `specs`: 内部标准化分组规格（即将弃用）
-- `_registry`: 内部注册表引用（首次使用且 mask 未烘焙时重建）
-
-已移除 `filter` 和 `diploid_genotypes` 属性——`Observation` 不再持有 `ObservationFilter` 或 `BasePopulation` 的引用。
-
-关键方法：
-- `apply(individual_count)` → `(n_groups, n_sexes, n_ages)`：对给定的 count 数组执行观测投影，若 mask 未预烘焙则从 specs 重建
-- `build_mask(n_sexes, n_ages, n_genotypes)` → `(n_groups, n_sexes, n_ages, n_genotypes)`：返回存储的 4D 二进制掩码，若无则从 specs 重建。该方法始终返回 4D 掩码（`collapse_age=False`），因为 kernel 需要完整的第 3 维
-- `to_dict()` → metadata dict：序列化 labels、collapse_age、n_groups 等元数据
-
-#### ObservationFilter
-
-`ObservationFilter(registry)` 是纯粹的编译器，将用户定义的 group specs 编译为不可变 `Observation` 实例。编译完成后不再需要 filter——掩码已烘焙到 Observation 中，不留反向引用：
-- `build_filter(*, diploid_genotypes=None, groups=None, collapse_age=False, n_sexes=2, n_ages=1, n_ztypes=None)` → `Observation`：完整编译流程（仅限关键字参数）。提供 `n_ztypes` 时立即烘焙掩码，否则首次使用时重建
-- `create_observation(...)`：`build_filter` 的别名
-- `build_mask_from_specs(...)` → 4D float64 mask：核心编译函数，循环填充 mask：
-  ```python
-  for gi in range(n_groups):
-      for gidx in per_genotypes[gi]:
-          for s in per_sexes[gi]:
-              for a in range(n_ages):
-                  if per_age_preds[gi](a):
-                      mask[gi, s, a, gidx] = 1.0
-  ```
-
-#### apply_rule
-
-纯函数 `apply_rule(individual_count, rule)` → `observed`：
-- 3D count × 4D mask：`sum(mask * count[None, :, :, :], axis=-1)`
-- 2D count × 3D mask（discrete generation + collapse_age）：类似 broadcast + sum
-
-### 2. 人口模型层（base_population.py）
-
-#### record_observation 属性
+非空间 Configurator 使用：
 
 ```python
-@property
-def record_observation(self) -> Optional[Observation]: ...
-
-@record_observation.setter
-def record_observation(self, obs: Optional[Observation]) -> None:
-    self._observation = obs
-    if obs is not None:
-        self._observation_mask = self._build_observation_mask(obs)
-    self._rebuild_history_schema_if_needed()
+.with_observation(groups, collapse_age=False)
 ```
 
-Setter 在设置 observation 的同时编译 4D 二进制掩码。`_observation_mask` 的类型是 `NDArray[np.float64]`，shape `(n_groups, n_sexes, n_ages, n_genotypes)`。
-
-> **构建后不可变：** `Configurator.with_observation()` 在活动 Population 上调用时会抛出 `RuntimeError`。录制规则必须在构建阶段设置。`record_observation` 属性 setter 为了向后兼容仍然可用，但仅在尚无历史记录时重建 schema。
-
-#### set_observations 快捷方式
+空间 Configurator 额外接受 deme 选择与处理方式：
 
 ```python
-def set_observations(self, groups, *, collapse_age=False):
-    obs_filter = ObservationFilter(self.index_registry)
-    self._observation = obs_filter.build_filter(
-        diploid_genotypes=self.species,
-        groups=groups,
-        collapse_age=collapse_age,
-    )
-    self._observation_mask = self._build_observation_mask(self._observation)
-    self._rebuild_history_schema_if_needed()
-```
-
-内部流程：创建 `ObservationFilter` → `build_filter` → 编译 mask → 分别存储 `_observation` 和 `_observation_mask`，然后重建 History schema（如果 schema 尚为初始状态且无历史数据）。一旦有历史记录，`set_observations()` 仍能更新 mask，但 schema（row_size、mode）保持冻结。
-
-#### _clone 的兼容性
-
-`_clone()` 被 `SpatialConfigurator` 用于高效克隆 deme。克隆时 `_observation` 和 `_observation_mask` 被重置为 `None`（第 281-282 行），因为每个克隆需独立设置观测——observation mask 取决于 deme 的 state shape（虽然通常一样，但需要显式设置）。
-
-### 3. Kernel 集成
-
-#### Panmictic 内核（simulator.py）
-
-`run_with_hooks` / `run_discrete_with_hooks` 内部调用 `build_observation_row_panmictic()`：
-
-```python
-if observation_mask is not None:
-    flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
-else:
-    flat_state[1:1+ind_size] = ind_count.ravel()
-    flat_state[1+ind_size:] = sperm_store.ravel()  # 如有
-```
-
-关键参数：
-- `observation_mask: Optional[NDArray[np.float64]]` — 4D 掩码
-- `build_observation_row_panmictic` 是 `observation_record.py` 中的独立 njit 函数
-
-#### Spatial 内核（observation_record.py）
-
-`build_observation_row_spatial()` 负责紧凑行的构建，替代了原先内联的 broadcast + `deme_selector` 掩码方式：
-
-```python
-# observation_record.py
-@njit_switch(cache=True)
-def build_observation_row_spatial(
-    individual_count: NDArray[np.float64],  # (n_demes, n_sexes, n_ages, n_genotypes)
-    observation_mask: NDArray[np.float64],  # (n_groups, n_sexes, n_ages, n_genotypes)
-    compact: CompactMeta,
-) -> NDArray[np.float64]:
-    for gi in range(len(compact.offsets)):
-        if compact.mode_aggregate[gi]:
-            # aggregate: 选中 deme 求和为一个 chunk
-            agg = sum(observation_mask[gi] * individual_count[d] for d in selected)
-            result[offset:offset+sex_ages] = agg.ravel()
-        else:
-            for di in range(nd):
-                if di < compact.selected_n[gi]:
-                    # 选中 deme → 真实数据
-                    result[...] = (observation_mask * ind).sum(axis=-1).ravel()
-                else:
-                    # 未选中 deme → -1.0 sentinel
-                    result[...] = -1.0
-```
-
-#### Deme 选择：三种模式
-
-`CompactMeta` 内置三种 per-group 模式，由 group spec 中的 `"deme"` 键控制：
-
-| 模式 | spec 格式 | 记录行为 | 导出行为 |
-|------|---------|---------|---------|
-| `mask`（默认） | `"deme": [0, 2]` 或 `list` | 全 `n_demes` 写入，未选中 = `-1.0` | 未选中显示 `"masked"`，不参与 aggregate |
-| `expand` | `"deme": {"demes": [0,2], "mode": "expand"}` | 仅写入选中 deme | 仅展示选中 deme |
-| `aggregate` | `"deme": {"demes": [0,2], "mode": "aggregate"}` | 求和为一个 chunk | 单个统计量 |
-
--1.0 sentinel 确保"deme 真正 0 只"和"被 mask 掉"可区分，避免了旧 `deme_selector` 归零方式的歧义。
-
-#### Codegen 传递路径与模板签名
-
-`_run_codegen_wrapper_steps()` 使用 NamedTuple 束传递到模板：
-
-```python
-run_fn(
-    ind_all, sperm_all,
-    config_bank, deme_config_ids, registry, tick, n_steps,
-    adjacency, migration_mode,
-    self._spatial_topo,         # SpatialTopology (rows, cols, wrap)
-    self._migration_params,     # MigrationParams (kernel, include_center, rate, adjust_on_edge)
-    het,                        # HeterogeneousKernelParams | None
-    record_interval, observation_mask, compact_meta,
+.with_observation(
+    groups,
+    collapse_age=False,
+    demes=None,
+    deme_mode="preserve",
 )
 ```
 
-模板 `RUN_FN_NAME` 签名从原先 35 个参数精简为 17 个：
+`groups` 是从非空标签到 `IndividualSelector` 的有序映射。其插入顺序成为结果的 group 轴顺序。
+
+空间参数的约束如下：
+
+| 参数 | 语义 |
+|------|------|
+| `demes=None` | 按 Population 顺序选择全部 deme |
+| `demes=[2, 0]` | 选择 deme 2 和 0，并保留这个顺序 |
+| `deme_mode="preserve"` | 保留一个共享的 deme 轴 |
+| `deme_mode="aggregate"` | 对选中的 deme 求和并移除 deme 轴 |
+
+`demes` 必须是非空、无重复且位于 Population 范围内的整数序列。所有 group 共享同一个有序 deme 选择；不能为不同 group 指定不同的 deme 集合。`deme_mode` 只接受 `"preserve"` 和 `"aggregate"`。
+
+Observation 和 History schema 在 `build()` 时冻结。运行时 Configurator 不允许更换 `with_observation()` 或 `record_history()` 规则。
+
+## Canonical Observation
+
+每个 Population 构建后都有一个 canonical `Observation`。如果用户没有调用 `with_observation()`，构建过程会生成恒等观测：每个活跃 ZType 对应一个 group。恒等观测不会创建二次方大小的 dense mask，而是使用 ZType 索引映射完成无损轴变换。
+
+`Observation` 保存以下稳定信息：
+
+- `labels`：group 轴标签。
+- `collapse_age`：是否沿 age 轴求和并移除该轴。
+- `population_fingerprint`：用于阻止把规则应用到不匹配的 Population 布局。
+- `deme_indices`：空间观测的有序 deme 选择；非空间观测为 `None`。
+- `deme_mode`：空间观测保留还是聚合 deme 轴。
+- 编译后的 selector mask，或恒等观测的 ZType 索引映射。
+
+### 数值投影
+
+年龄结构的非空间输入形状是：
+
+```text
+(sex, age, ztype)
+```
+
+普通观测通过以下运算得到 group-first 结果：
+
+```text
+mask[group, sex, age, ztype]
+  × count[sex, age, ztype]
+  → 沿 ztype 求和
+  → result[group, sex, age]
+```
+
+空间输入在最前面增加规则化 deme 轴：
+
+```text
+(deme, sex, age, ztype)
+```
+
+空间投影先按 `deme_indices` 切片，再对每个选中 deme 应用同一组 selector mask。`preserve` 保留切片后的 deme 轴；`aggregate` 对该轴显式求和。最后，`collapse_age=True` 会对 age 轴求和并移除它。
+
+这套顺序保证两个关键不变量：
+
+```text
+preserve 结果 == 对原始 count 按有序 demes 直接切片后逐 deme 投影
+aggregate 结果 == preserve 结果沿 deme 轴求和
+```
+
+### 公开结果轴
+
+`pop.observe()` 返回 `ObservationResult`，其中 `values` 的轴由 `axes` 明确描述：
+
+| 模式 | `collapse_age=False` | `collapse_age=True` |
+|------|----------------------|---------------------|
+| 非空间 | `(group, sex, age)` | `(group, sex)` |
+| 空间 preserve | `(group, deme, sex, age)` | `(group, deme, sex)` |
+| 空间 aggregate | `(group, sex, age)` | `(group, sex)` |
+
+`labels["group"]` 与 group 轴一一对应。preserve 模式下的 deme 轴顺序严格等于 `demes` 参数的顺序。
+
+## History 与 RecordingPlan
+
+`record_history()` 独立选择记录模式：
 
 ```python
-def RUN_FN_NAME(
-    ind, sperm, config_bank, deme_config_ids, registry, tick, n_steps,
-    adjacency, migration_mode,
-    spatial_topo: SpatialTopology,
-    migration: MigrationParams,
-    het_kernel: HeterogeneousKernelParams | None,
-    record_interval: int,
-    observation_mask: Optional[np.ndarray],
-    compact_meta: Optional[CompactMeta],
-) -> ...:
+.record_history(mode="raw", max_rows=None)
+.record_history(mode="observation", max_rows=None)
 ```
 
-其中 `migration_mode` 和 `adjacency` 不纳入 `MigrationParams`，因为它们属于**路由策略**（由 `_effective_migration_route()` 动态解析），而非**迁移参数**本身。
+`compile_recording_plan()` 在构建时创建不可变的 `HistorySchema`，并据 Population 布局、Observation 轴及 History mode 计算固定 `row_size`。空间 schema 额外保存完整 deme 数量与每个 deme 的 raw payload 宽度。
 
-### 4. Spatial 特有路径（spatial_population.py）
+### Raw mode
 
-#### record_observation 属性
+空间 raw History 始终保存所有 deme 的完整状态，不受 Observation 中 `demes`、`deme_mode` 或 `collapse_age` 影响：
 
-设置时自动调用 `_build_deme_info()` 解析 `"deme"` spec，再调用 `build_compact_metadata()` 构建 `CompactMeta`：
+| 数据 | 形状 |
+|------|------|
+| `history.individual_count` | `(record, deme, sex, age, ztype)` |
+| `history.sperm_storage`（年龄结构） | `(record, deme, age, female_ztype, male_ztype)` |
 
-```python
-@record_observation.setter
-def record_observation(self, obs: Optional[Observation]) -> None:
-    self._observation = obs
-    if obs is not None:
-        ref_deme = self._demes[0]
-        state = ref_deme.state
-        self._observation_mask = obs.build_mask(...)
-        self._rebuild_compact_meta()   # → _build_deme_info() + build_compact_metadata()
+因此，raw History 可在事后调用 `history.observe(observation)`，生成独立的 observation-mode History，原 History 保持不变。
+
+### Observation mode
+
+Observation History 只保存 canonical Observation 的数值结果：
+
+| 模式 | `collapse_age=False` | `collapse_age=True` |
+|------|----------------------|---------------------|
+| 非空间 | `(record, group, sex, age)` | `(record, group, sex)` |
+| 空间 preserve | `(record, group, deme, sex, age)` | `(record, group, deme, sex)` |
+| 空间 aggregate | `(record, group, sex, age)` | `(record, group, sex)` |
+
+schema 中的 `ObservationMetadata` 保存 group 标签、年龄折叠状态、有序 deme 选择与 deme mode，因此读取 `history.values` 不需要依赖当前 Population 的可变外部状态。
+
+Observation History 已经丢弃未记录的 ZType 与未选择的 deme 信息，不能再换一套 Observation 做事后投影。
+
+## 空间记录路径
+
+空间记录不在 Numba wrapper 内执行 Observation。wrapper 的职责是运行生命周期、迁移，并在稳定 tick 边界返回规则化 raw batch：
+
+```text
+Numba spatial wrapper
+  → [tick, all deme individual_count, all deme sperm_storage]
+  → SpatialPopulation._process_kernel_history(...)
+       ├─ raw History: 验证并提交完整 batch
+       └─ observation History:
+            reshape 为规则化空间 count
+            → canonical Observation.apply(...)
+            → 提交固定形状的投影行
 ```
 
-> **仅构建阶段：** spatial 种群同样遵循不可变规则——录制规则必须通过 `SpatialConfigurator.with_observation()` 在构建阶段设置。在活动 Population 上调用会抛出 `RuntimeError`。
+Python fallback 在相同的稳定 tick 边界调用 `_record_snapshot()`。raw mode 提交完整空间状态；observation mode 调用同一个 `Observation.apply()`。因此两个后端共享相同的 Observation 语义和 History schema，只是 raw batch 的产生位置不同。
 
-`_build_deme_info()` 解析 group spec 中的 `"deme"` 键，支持三种格式：
-- 缺失 / `"all"` → 不在 dict 中（默认全 deme）
-- `list[int | (row, col)]` → `("mask", flat_indices)`
-- `{"demes": [...], "mode": "aggregate" | "expand" | "mask"}` → dict 格式新语义
+空间 wrapper 传 raw batch 的原因是保持 engine transport 规则且固定：生命周期内核不需要理解 group、deme selection 或 aggregate 规则。Observation 的所有语义集中在 canonical `Observation` 和空间容器边界，避免 engine、Python fallback 与事后投影各自实现一套规则。
 
-#### Python Dispatch 路径
+## 已删除的 compact 空间布局
 
-当使用 Python dispatch（hook-aware 回退路径）时，recording 在 Python 层手动打点，复用同一 `build_observation_row_spatial()`：
+空间 Observation 不再支持按 group 定义不同的 deme 布局。旧实现中的以下概念已从空间记录路径删除：
 
-```python
-# run() → _should_use_python_dispatch() → True
-if record_every > 0 and (self._tick % record_every == 0):
-    self._record_snapshot()
-for _ in range(n_steps):
-    if self._run_python_dispatch_tick():
-        was_stopped = True
-        break
-    if record_every > 0 and (self._tick % record_every == 0):
-        self._record_snapshot()
-```
+- `CompactMeta` 与 `build_compact_metadata()`。
+- `build_observation_row_spatial()`。
+- per-group `mask` / `expand` / `aggregate` 布局。
+- 用 `-1.0` 表示未选择 deme 的 sentinel。
+- ragged group offsets 与每组不同的 row width。
 
-`_record_snapshot()` 在观测模式下调用独立 njit 函数：
+现在所有 group 共用同一个规则 ndarray 轴结构。未选择的 deme 不会写入 preserve 结果，也不需要特殊数值标记；真正的零计数仍然就是 `0.0`。需要不同 deme 视角时，可以从 raw History 分别构造多套 Observation，或先记录更宽的统一选择再由调用方分离。
 
-```python
-if self._observation_mask is not None and self._compact_meta is not None:
-    row = build_observation_row_spatial(
-        ind_all, self._observation_mask, self._compact_meta,
-    )
-    flat = np.empty(1 + self._compact_meta.row_size, dtype=np.float64)
-    flat[0] = float(self._tick)
-    flat[1:] = row
-```
+## 维护不变量
 
-### 5. 导出层（state_translation.py）
+修改 Observation 或 History 记录路径时，至少应验证以下数值关系：
 
-#### 自动分发逻辑
+1. 空间 preserve 与按 `demes` 顺序直接切片后的逐 deme 投影逐元素相等。
+2. 空间 aggregate 与 preserve 结果沿 deme 轴求和逐元素相等。
+3. 空间恒等 Observation 在选中 deme 上不丢失任何坐标值。
+4. `collapse_age=True` 与未折叠结果沿 age 轴求和逐元素相等。
+5. raw History 保留所有 deme、ZType 及适用的 sperm storage。
+6. raw History 的事后投影与同 tick 的 `Observation.apply()` 逐元素相等。
+7. Numba 路径与 Python fallback 在确定性模拟中产生相同 ticks 和相同 payload。
+8. 未选择的 deme 不依赖 sentinel 表示，真实零计数不会与选择状态混淆。
 
-```python
-def output_history(population, observation=None, groups=None, ...):
-    pop_obs = getattr(population, "record_observation", None)
-    if pop_obs is not None and observation is None and groups is None:
-        # 观测模式：直接解析压缩快照
-        payload = population_observation_history_to_readable_dict(...)
-    else:
-        # 原始模式或 post-hoc 观测：按每个快照重新解析
-        payload = _build_history_observation_payload(...)
-```
-
-Spatial 版本类似：
-
-```python
-def spatial_population_output_history(spatial_population, ...):
-    obs = getattr(spatial_population, "record_observation", None)
-    if obs is not None:
-        payload = spatial_population_observation_history_to_readable_dict(...)
-    else:
-        payload = spatial_population_history_to_readable_dict(...)
-```
-
-#### population_observation_history_to_readable_dict
-
-这个函数解析观测模式压缩后的历史数组。流程：
-1. 获取 `record_observation` 的 labels 和 collapse_age
-2. 对每一行 `[tick, observed.ravel()]`：
-   - 按 `(n_groups, n_sexes, n_ages)` 做 reshape
-   - 用 `_build_observation_payload()` 将 observed 数组转为 `{sex: {age: {label: count}}}` 嵌套字典
-3. 返回带 labels 和 snapshots 的结构
-
-#### spatial_population_observation_history_to_readable_dict
-
-类似 panmictic 版本，但多了一个 deme 维度：
-1. 对每一行 reshape 为 `(n_demes, n_groups, n_sexes, n_ages)`
-2. 按 deme 展开 per-deme payload
-3. 跨 deme 求和得到 aggregate
-
-#### _build_observation_payload 工具函数
-
-```python
-def _build_observation_payload(observed, labels, sex_labels, include_zero_counts):
-    """将 observed 数组转为嵌套字典 {sex: {age: {label: count}}}"""
-```
-
-这个函数是所有观测导出路径的公共工具，将数字数组转为人类可读的嵌套字典。
-
-#### 回退机制
-
-观测历史的导出函数（`population_observation_history_to_readable_dict`、`spatial_population_observation_history_to_readable_dict`）都包含回退逻辑：
-
-```python
-obs = getattr(population, "record_observation", None)
-if obs is None:
-    return population_history_to_readable_dict(population, ...)
-```
-
-这意味着即使在没有 observation 的旧数据上调用这些函数也不会崩溃——它们会回退到原始历史解析路径。
-
-### 6. Post-hoc 观测路径
-
-post-hoc 观测（不修改 recording 模式，仅在导出时应用观测）通过 `_build_history_observation_payload` 实现：
-
-```python
-def _build_history_observation_payload(population, history, observation, groups, collapse_age, ...):
-    # 对历史数组的每一行：
-    # 1. 解析出 tick、individual_count、sperm_storage
-    # 2. 用 observation 或临时构建的 Observation 做 apply
-    # 3. 组装为观测格式的 payload
-```
-
-这个路径的性能开销较大——需要对每个历史快照重建 state 并重新 apply observation。适用于历史较短或事后需要不同分组视角的场景。
-
-## 关键设计决策
-
-### 1. 双路径历史存储（旧版 + 自描述）
-
-迁移期间代码库使用两套并行的存储路径：
-
-- **旧路径：** `_history` 是 `List[Tuple[int, NDArray[np.float64]]]`（原始或观测聚合），为 `pop.history` 保持向后兼容。
-- **新路径：** `_history_obj` 是 `History` 实例，附带不可变的 `HistorySchema`。行以经过验证的 `HistoryBatch` 对象存储，符合 schema 约束。
-
-`.history` 属性目前从 `_history` 返回旧版 `List[Tuple[int, np.ndarray]]`。新的 `._history_obj` 为内部属性；未来版本计划提供基于新模型的 `.history` 属性。
-
-无论存储路径如何，扁平行的内容相同：原始扁平 state 或观测聚合数组。`clear_history()` 清空两个存储但始终保留 `HistorySchema`。
-
-### 2. 4D Mask 始终完整
-
-`Observation.build_mask()` 始终返回 4D mask `(n_groups, n_sexes, n_ages, n_genotypes)`，即使是 discrete generation（年龄=1）或 `collapse_age=True` 的场景。`collapse_age` 仅作为 metadata 存储在 Observation 中，在导出时被 `_build_observation_payload` 等函数读取。
-
-原因是 kernel 需要统一的 memory layout——在 Numba njit 函数中根据 `collapse_age` 动态切换维度会导致类型不稳定。
-
-### 3. Kernel Observation 只做聚合，不做选择
-
-Observation mask 在 kernel 内部只用于 genotype 维度聚合（`sum(axis=-1)`），不用于筛选 deme 或 sex。Deme 筛选由 `deme_selector` 完成（spatial 特有），sex 和 age 轴不做压缩——`observed` 数组保留 `(n_sexes, n_ages)` 维度。
-
-### 4. Spatial 的 _observation_mask 共享
-
-所有 deme 共享同一个 `_observation_mask`（因为 genotype 数量和基因型名称在所有 deme 中一致）。只有 `deme_selector` 是 per-deme 的。
-
-## 验证要点
-
-修改 observation recording 相关代码时，需要确保以下行为不变：
-
-1. **无 observation 时记录原始数据**：`record_observation = None` 时，`run()` 的行为与之前完全一致
-2. **观测模式的回退兼容**：观测模式的历史数据可以用 `output_history()` 正确导出
-3. **Post-hoc 观测正确性**：`output_history(observation=obs)` 在原始历史和观测历史两种模式下都返回一致的结果
-4. **Spatial 聚合验证**：观测模式的 spatial aggregate 等于所有 deme 按分组求和的结果
-5. **Clone 兼容**：`SpatialConfigurator` 克隆后的 deme 能独立设置 observation
-6. **Python dispatch 路径**：`_should_use_python_dispatch()` 回退路径下的 recording 同样正确
-
-测试命令：
-```bash
-pytest                                       # 所有测试
-pyright src/natal/                            # 类型检查
-ruff check src/natal/                         # lint
-```
+断言应比较明确的轴和逐坐标值；只比较总和或排序后的扁平数组无法发现轴交换和 deme 顺序错误。

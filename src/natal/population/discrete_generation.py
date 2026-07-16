@@ -54,7 +54,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     """Population with strict non-overlapping generations."""
 
     @staticmethod
-    def _to_discrete_config(config: object) -> DiscretePopulationConfig:
+    def _to_discrete_config(config: object) -> DiscretePopulationConfig:  # object: accepts PopulationConfig or dict from replay
         """Normalize any config to ``DiscretePopulationConfig``.
 
         For the deprecated builder path, assembles a ``DiscretePopulationConfig``
@@ -129,7 +129,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     def __init__(
         self,
         species: Species,
-        population_config: object,
+        population_config: object,  # object: accepts PopulationConfig, dict, or None — validated in _to_discrete_config
         name: Optional[str] = None,
         index_registry: Optional[IndexRegistry] = None,
         initial_individual_count: Optional[
@@ -176,8 +176,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         cfg_init_ind = self.config.initial_individual_count
         if cfg_init_ind.shape == self.state.individual_count.shape:
             self.state.individual_count[:] = cfg_init_ind
-
-        self._history_shape = (1 + n_sexes * n_ages * n_ztypes,)
 
         # An explicit distribution overrides the config default. We zero out
         # the array first because _distribute_initial_population accumulates.
@@ -347,22 +345,76 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 f"Population '{self.name}' has finished. Cannot run() again after finish=True."
             )
 
-        # Wright-Fisher extreme-speed path: single multinomial draw per tick.
-        if getattr(self.config, "extreme_speed_mode", 0) > 0:
-            record_every_resolved = record_every if record_every is not None else self.record_every
+        self._running = True
+        try:
+            # Wright-Fisher extreme-speed path: single multinomial draw per tick.
+            if getattr(self.config, "extreme_speed_mode", 0) > 0:
+                record_every_resolved = record_every if record_every is not None else self.record_every
+                if self.should_use_python_dispatch():
+                    return self._run_wright_fisher(
+                        n_steps=n_steps,
+                        record_every=record_every_resolved,
+                        finish=finish,
+                        clear_history_on_start=clear_history_on_start,
+                    )
+
+                wrappers = self.get_compiled_event_hooks()
+                if wrappers.run_wf_fn is None:
+                    return self._run_wright_fisher(
+                        n_steps=n_steps,
+                        record_every=record_every_resolved,
+                        finish=finish,
+                        clear_history_on_start=clear_history_on_start,
+                    )
+
+                obs_mask = self._observation_mask
+                n_obs = len(self._observation.labels) if self._observation is not None else 0
+
+                final_state_tuple, history_new, was_stopped = wrappers.run_wf_fn(
+                    state=self.state,
+                    config=self.config,
+                    registry=wrappers.hooks.registry,
+                    n_ticks=n_steps,
+                    record_interval=record_every_resolved,
+                    observation_mask=obs_mask,
+                    n_obs_groups=n_obs,
+                )
+
+                self._state = DiscretePopulationState(
+                    n_tick=int(final_state_tuple[1]),
+                    individual_count=final_state_tuple[0],
+                )
+                self._tick = int(final_state_tuple[1])
+                self._process_kernel_history(history_new, clear_history_on_start)
+
+                if was_stopped:
+                    self._finished = True
+                    self.trigger_event("finish")
+                elif finish:
+                    self.finish_simulation()
+
+                return self
+
+            if record_every is None:
+                record_every = self.record_every
             if self.should_use_python_dispatch():
-                return self._run_wright_fisher(
+                return self._run_python_dispatch(
                     n_steps=n_steps,
-                    record_every=record_every_resolved,
+                    record_every=record_every,
                     finish=finish,
                     clear_history_on_start=clear_history_on_start,
                 )
 
             wrappers = self.get_compiled_event_hooks()
-            if wrappers.run_wf_fn is None:
-                return self._run_wright_fisher(
+            assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
+
+            # No compiled wrapper available -- codegen may have failed (no hooks
+            # registered, incompatible hook types, or cache miss). Fall back to
+            # the pure Python dispatch loop which is functionally identical.
+            if wrappers.run_discrete_fn is None:
+                return self._run_python_dispatch(
                     n_steps=n_steps,
-                    record_every=record_every_resolved,
+                    record_every=record_every,
                     finish=finish,
                     clear_history_on_start=clear_history_on_start,
                 )
@@ -370,12 +422,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             obs_mask = self._observation_mask
             n_obs = len(self._observation.labels) if self._observation is not None else 0
 
-            final_state_tuple, history_new, was_stopped = wrappers.run_wf_fn(
+            final_state_tuple, history_new, was_stopped = wrappers.run_discrete_fn(
                 state=self.state,
                 config=self.config,
                 registry=wrappers.hooks.registry,
                 n_ticks=n_steps,
-                record_interval=record_every_resolved,
+                record_interval=record_every,
                 observation_mask=obs_mask,
                 n_obs_groups=n_obs,
             )
@@ -387,6 +439,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._tick = int(final_state_tuple[1])
             self._process_kernel_history(history_new, clear_history_on_start)
 
+            # A STOP result from any hook means the simulation ended early; mark
+            # finished so that downstream code and the caller know not to continue.
             if was_stopped:
                 self._finished = True
                 self.trigger_event("finish")
@@ -394,60 +448,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 self.finish_simulation()
 
             return self
-
-        if record_every is None:
-            record_every = self.record_every
-        if self.should_use_python_dispatch():
-            return self._run_python_dispatch(
-                n_steps=n_steps,
-                record_every=record_every,
-                finish=finish,
-                clear_history_on_start=clear_history_on_start,
-            )
-
-        wrappers = self.get_compiled_event_hooks()
-        assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
-
-        # No compiled wrapper available -- codegen may have failed (no hooks
-        # registered, incompatible hook types, or cache miss). Fall back to
-        # the pure Python dispatch loop which is functionally identical.
-        if wrappers.run_discrete_fn is None:
-            return self._run_python_dispatch(
-                n_steps=n_steps,
-                record_every=record_every,
-                finish=finish,
-                clear_history_on_start=clear_history_on_start,
-            )
-
-        obs_mask = self._observation_mask
-        n_obs = len(self._observation.labels) if self._observation is not None else 0
-
-        final_state_tuple, history_new, was_stopped = wrappers.run_discrete_fn(
-            state=self.state,
-            config=self.config,
-            registry=wrappers.hooks.registry,
-            n_ticks=n_steps,
-            record_interval=record_every,
-            observation_mask=obs_mask,
-            n_obs_groups=n_obs,
-        )
-
-        self._state = DiscretePopulationState(
-            n_tick=int(final_state_tuple[1]),
-            individual_count=final_state_tuple[0],
-        )
-        self._tick = int(final_state_tuple[1])
-        self._process_kernel_history(history_new, clear_history_on_start)
-
-        # A STOP result from any hook means the simulation ended early; mark
-        # finished so that downstream code and the caller know not to continue.
-        if was_stopped:
-            self._finished = True
-            self.trigger_event("finish")
-        elif finish:
-            self.finish_simulation()
-
-        return self
+        finally:
+            self._running = False
 
     def _run_wright_fisher(
         self,
@@ -482,10 +484,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         # Record initial state snapshot (mirrors compiled WF wrapper and
         # _run_python_dispatch which both record tick-0 before the loop).
         if record_every > 0 and (state.n_tick % record_every == 0):
-            snapshot_init = state.individual_count.ravel().copy()
-            self._history.append((state.n_tick, snapshot_init))
-            self._append_to_history_obj(state.n_tick, snapshot_init)  # type: ignore[attr-defined]  # OutputMixin mixin
-            self._enforce_history_limit()
+            self._tick = state.n_tick
+            self._record_current_snapshot(allow_existing=True)
 
         was_stopped = False
         for _ in range(n_steps):
@@ -534,10 +534,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._state = state  # keep self._state in sync for hooks
 
             if record_every > 0 and (next_tick % record_every == 0):
-                snapshot: np.ndarray = state.individual_count.ravel().copy()
-                self._history.append((next_tick, snapshot))
-                self._append_to_history_obj(next_tick, snapshot)  # type: ignore[attr-defined]  # OutputMixin mixin
-                self._enforce_history_limit()
+                self._tick = next_tick
+                self._record_current_snapshot(allow_existing=True)
 
             # No EARLY / LATE hooks — WF fuses reproduction + survival
             # + aging into one atomic step with no intermediate stages.
@@ -577,7 +575,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self.clear_history()
 
         if record_every > 0 and (self._tick % record_every == 0):
-            self.create_history_snapshot()
+            self._record_current_snapshot(allow_existing=True)
 
         was_stopped = False
         for _ in range(n_steps):
@@ -628,7 +626,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             )
 
             if record_every > 0 and (self._tick % record_every == 0):
-                self.create_history_snapshot()
+                self._record_current_snapshot(allow_existing=True)
 
         if was_stopped:
             self._finished = True
@@ -641,7 +639,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     def reset(self) -> None:
         """Reset tick, history, and population state to initial values."""
         self._tick = 0
-        self._history = []
         if self._history_obj is not None:
             self._history_obj.clear()
         self._finished = False
@@ -669,61 +666,17 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """Return the total number of male individuals."""
         return int(round(np.sum(self.state.individual_count[int(Sex.MALE.value)])))
 
-    def get_history(self) -> np.ndarray:
-        """Return recorded history as a 2-D ndarray (rows × flattened state)."""
-        if self._history_obj is not None:
-            return self._history_obj.to_numpy()
-
-        if len(self._history) == 0:
-            return np.zeros((0, self._history_shape[0]), dtype=np.float64)
-        return np.array([rec[1] for rec in self._history], dtype=np.float64)
-
     def clear_history(self) -> None:
         """Remove all recorded history snapshots."""
-        self._history.clear()
-        if self._history_obj is not None:
-            self._history_obj.clear()
+        self.history.clear()
 
-    def create_history_snapshot(self) -> None:
-        """Record a snapshot of the current state into history.
-
-        When observation recording is enabled, produces observation-aggregated
-        rows instead of full raw state.
-        """
-        if self._observation_mask is not None:
-            from natal.output.record import build_observation_row_panmictic
-            observed = build_observation_row_panmictic(
-                self.state.individual_count, self._observation_mask,
-            )
-            flat = np.empty(1 + observed.size, dtype=np.float64)
-            flat[0] = float(self._tick)
-            flat[1:] = observed
-            self._history.append((self._tick, flat))
-        else:
-            flattened = self.state.flatten_all()
-            self._history.append((self._tick, flattened.copy()))
-        self._enforce_history_limit()
-
-        # Also populate the new History container.
-        if self._history_obj is not None:
-            row = self._history[-1][1].reshape(1, -1)
-            from natal.output.history import HistoryBatch
-            batch = HistoryBatch(schema=self._history_obj.schema, rows=row)
-            self._history_obj.append(batch)
-
-    def export_state(self) -> Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
-        """Export the current state and history as flat arrays.
+    def export_state(self) -> NDArray[np.float64]:
+        """Export the current state as a flat array.
 
         Returns:
-            Tuple of ``(state_flat, history)`` where history may be None.
+            NDArray: Flattened state array.
         """
-        state_flat = self.state.flatten_all()
-        history: Optional[np.ndarray] = None
-        if self._history_obj is not None and not self._history_obj.is_empty:
-            history = self._history_obj.to_numpy()
-        elif self._history:
-            history = self.get_history()
-        return state_flat, history
+        return self.state.flatten_all()
 
     @property
     def config(self) -> DiscretePopulationConfig:
@@ -734,26 +687,24 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """Return a copy of the current configuration."""
         return self.config
 
-    def import_config(self, config: object) -> None:
+    def import_config(self, config: object) -> None:  # object: accepts PopulationConfig or dict — validated in _to_discrete_config
         """Replace the current configuration with *config*."""
         self._config = self._to_discrete_config(config)  # type: ignore[assignment]  # covariant narrow: DiscretePopulationConfig is a subtype of PopulationConfig
 
     def import_state(
         self,
         state: Union[DiscretePopulationState, NDArray[np.float64], Dict[str, np.ndarray]],
-        history: Optional[NDArray[np.float64]] = None,
     ) -> None:
-        """Replace the current state and optionally history.
+        """Replace the current state and reset the history timeline.
+
+        All validation happens before any mutation — a failed import leaves the
+        population unchanged.
 
         Args:
             state: New state as a ``DiscretePopulationState``, flat ndarray,
                 or dict with ``individual_count`` key.
-            history: Optional 2-D history array to restore.
         """
-        # Accept three representations to support checkpoints from
-        # export_state(), numpy serialization, and external tooling.
-        assert isinstance(state, (np.ndarray, DiscretePopulationState, dict)), \
-            "state must be a DiscretePopulationState, flattened ndarray, or dict"
+        # ── Phase 1: parse and validate all inputs ──
         if isinstance(state, np.ndarray):
             state_obj = parse_flattened_discrete_state(
                 state,
@@ -769,26 +720,13 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 individual_count=np.asarray(state["individual_count"], dtype=np.float64),
             )
 
+        # ── Phase 2: commit atomically ──
         self._state = DiscretePopulationState(
             n_tick=int(state_obj.n_tick),
             individual_count=state_obj.individual_count.copy(),
         )
         self._tick = int(state_obj.n_tick)
-
-        # Rebuild the history buffer row by row from a dense 2-D array as
-        # exported by export_state / get_history.
-        if history is not None and history.shape[0] > 0:
-            self.clear_history()
-            for row_idx in range(history.shape[0]):
-                flat = history[row_idx, :]
-                tick = int(flat[0])
-                self._history.append((tick, flat.copy()))
-
-            # Also populate the new History container.
-            if self._history_obj is not None:
-                from natal.output.history import HistoryBatch
-                batch = HistoryBatch(schema=self._history_obj.schema, rows=history)
-                self._history_obj.append(batch)
+        self.clear_history()
 
     @property
     def state(self) -> DiscretePopulationState:

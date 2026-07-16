@@ -1,41 +1,45 @@
 """Mutable wrapper for PopulationConfig, with a chainable API.
 
-Functionality:
-  - Read/write config fields through a chainable API.
-  - Register custom named parameters (stored as a structured numpy array).
-  - Freeze changes back to an immutable NamedTuple via ``_replace``
-    (cheap — all ndarray fields are shared by reference).
-  - ``_pop_ref`` write-back: when wired to a live Population via
-    ``for_population()``, config mutations propagate back to the
-    Population automatically through ``set_config()``.
+Provides read/write access to config fields through a chainable API,
+registration of custom named parameters stored as structured numpy arrays,
+and freeze-back to an immutable NamedTuple via ``_replace`` (cheap — all
+ndarray fields are shared by reference).  When wired to a live Population
+through ``for_population()``, config mutations propagate back to the
+Population automatically through ``set_config()``.
 
-Why this module exists:
-  ``PopulationConfig`` / ``DiscretePopulationConfig`` are immutable
-  NamedTuples — fields cannot be modified once created.  However,
-  during simulation setup (and inside hooks at runtime), parameters
-  need real-time adjustment.  The ``Configurator`` provides a mutable
-  layer on top: all modifications write into the config arrays
-  in-place, and the final immutable config is materialised via
-  ``build()``.
+``PopulationConfig`` and ``DiscretePopulationConfig`` are immutable
+NamedTuples whose fields cannot be modified once created.  During
+simulation setup and inside hooks at runtime, however, parameters need
+real-time adjustment.  The ``Configurator`` provides a mutable layer on
+top: all modifications write into the config arrays in-place, and the
+final immutable config is materialised via ``build()``.
 
-  The adapter class ``ConfigContext`` lets genetic presets and
-  modifiers operate on config arrays without needing a live Population
-  object.  The standalone :func:`set_param` function is also usable
-  from within Numba-compiled hooks via ``objmode``.
+The adapter class ``ConfigContext`` lets genetic presets and modifiers
+operate on config arrays without needing a live Population object.  The
+standalone :func:`set_param` function is also usable from within
+Numba-compiled hooks via ``objmode``.
 
-Key classes:
-  - ``Configurator`` — base class with chainable domain methods.
-  - ``DiscreteConfigurator`` — subclass for non-overlapping generations.
-  - ``AgeStructuredConfigurator`` — subclass for overlapping generations.
+Key classes are ``Configurator`` (base with chainable domain methods),
+``DiscreteConfigurator`` (non-overlapping generations), and
+``AgeStructuredConfigurator`` (overlapping generations).
 
-See also:
-  :func:`set_param` — low-level scalar writer.
-  :func:`hook_set_param` — Numba-safe wrapper for use in hooks.
+See also :func:`set_param` (low-level scalar writer) and
+:func:`hook_set_param` (Numba-safe wrapper for use in hooks).
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Self, Sequence, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Literal,
+    Mapping,
+    Optional,
+    Self,
+    Sequence,
+    cast,
+)
 
 import numpy as np
 from numba import (  # pyright: ignore[reportMissingTypeStubs]
@@ -65,6 +69,7 @@ if TYPE_CHECKING:
     from natal.configurator.age_structured import AgeStructuredConfigurator
     from natal.configurator.discrete import DiscreteConfigurator
     from natal.modifiers.module import GameteModifier, ZygoteModifier
+    from natal.patterns import IndividualSelector
     from natal.population.age_structured import AgeStructuredPopulation
     from natal.population.base import BasePopulation
     from natal.population.discrete_generation import DiscreteGenerationPopulation
@@ -96,6 +101,46 @@ _EQUILIBRIUM_SENSITIVE_KEYS: frozenset[str] = frozenset({
     "reproduction.eggs_per_female",
     "reproduction.sex_ratio",
 })
+
+
+def normalize_observation_groups(groups: object) -> dict[str, IndividualSelector]:
+    """Validate the runtime boundary for observation group definitions.
+
+    ``object`` is intentional here: Python callers can pass values that do not
+    satisfy the public type annotation, and this boundary must reject them with
+    the documented exception instead of failing later during compilation.
+
+    Args:
+        groups: Runtime value supplied to ``with_observation()``.
+
+    Returns:
+        A new insertion-ordered mapping of validated labels and selectors.
+
+    Raises:
+        TypeError: If the value is not a mapping of selectors.
+        ValueError: If the mapping or a label is empty.
+    """
+    from collections.abc import Mapping as MappingABC
+
+    from natal.patterns import IndividualSelector
+
+    if not isinstance(groups, MappingABC):
+        raise TypeError("groups must be a non-empty mapping of IndividualSelector values")
+    if not groups:
+        raise ValueError("groups must be non-empty")
+    typed_groups = cast(Mapping[object, object], groups)
+    normalized: dict[str, IndividualSelector] = {}
+    for label, selector in typed_groups.items():
+        if not isinstance(label, str):
+            raise TypeError("Observation group labels must be strings")
+        if not label:
+            raise ValueError("Observation group labels must be non-empty")
+        if not isinstance(selector, IndividualSelector):
+            raise TypeError(
+                f"Observation group {label!r} must use IndividualSelector"
+            )
+        normalized[label] = selector
+    return normalized
 
 
 # ── Core runtime setter ────────────────────────────────────────────────────────
@@ -383,6 +428,12 @@ class Configurator:
         self._compress: bool = False
         self._compression_applied: bool = False
         self._declared_zygote_types: set[str] | set[int] | None = None
+
+        # Observation and History are independent build-time policies.
+        self._observation_groups: Mapping[str, IndividualSelector] | None = None
+        self._observation_collapse_age = False
+        self._record_history_mode: Literal["raw", "observation"] = "raw"
+        self._record_history_max_rows: int | None = None
 
     @property
     def config(self) -> PopulationConfig | DiscretePopulationConfig:
@@ -958,7 +1009,7 @@ class Configurator:
 
     def with_observation(
         self,
-        groups: object,
+        groups: Mapping[str, IndividualSelector],
         *,
         collapse_age: bool = False,
     ) -> Self:
@@ -968,8 +1019,7 @@ class Configurator:
         Calling this on a runtime Configurator raises ``RuntimeError``.
 
         Args:
-            groups: Observation groups (dict of name→spec, list of specs,
-                or None for one-group-per-genotype).
+            groups: Non-empty ordered mapping from labels to selectors.
             collapse_age: Whether to collapse the age axis in exports.
 
         Returns:
@@ -977,21 +1027,22 @@ class Configurator:
 
         Raises:
             RuntimeError: When called on a runtime Configurator.
+            TypeError: If groups is not a mapping of selectors.
+            ValueError: If groups or a group label is empty.
         """
         if self._pop_ref is not None:
             raise RuntimeError(
                 "with_observation() is only valid during the build phase. "
-                "Recording rules cannot change after the Population has been built. "
-                "Use pop.create_observation() for runtime queries."
+                "Observation rules cannot change after the Population has been built."
             )
-        self._observation_groups = groups
+        self._observation_groups = normalize_observation_groups(groups)
         self._observation_collapse_age = collapse_age
         return self
 
     def record_history(
         self,
         *,
-        mode: str = "raw",
+        mode: Literal["raw", "observation"] = "raw",
         max_rows: Optional[int] = None,
     ) -> Self:
         """Set the recording mode and capacity for this population's history.
@@ -1014,7 +1065,7 @@ class Configurator:
 
         Raises:
             RuntimeError: When called on a runtime Configurator.
-            ValueError: When mode is not ``"raw"`` or ``"observation"``.
+            ValueError: When mode is invalid or ``max_rows`` is less than one.
         """
         if self._pop_ref is not None:
             raise RuntimeError(
@@ -1026,7 +1077,11 @@ class Configurator:
             raise ValueError(
                 f"mode must be 'raw' or 'observation', got {mode!r}"
             )
-        self._record_history_mode: str = mode
+        if max_rows is not None and max_rows < 1:
+            raise ValueError(
+                f"max_rows must be >= 1 or None, got {max_rows}"
+            )
+        self._record_history_mode = mode
         self._record_history_max_rows: Optional[int] = max_rows
         return self
 
@@ -1319,12 +1374,6 @@ class Configurator:
                 hooks=hooks,
             )
 
-        # Apply observation groups if registered.
-        obs_groups = getattr(self, "_observation_groups", None)
-        if obs_groups is not None:
-            collapse = getattr(self, "_observation_collapse_age", False)
-            pop.set_observations(obs_groups, collapse_age=collapse)
-
         # Compile and freeze the recording plan.
         self._compile_recording_plan(pop)
         return pop
@@ -1349,33 +1398,50 @@ class Configurator:
             kind = "age_structured"
             has_sperm = True
 
-        observation = getattr(pop, "_observation", None)
-        compact_meta = getattr(pop, "_compact_meta", None)
+        from natal.output.observation import ObservationFilter
 
-        record_mode = getattr(self, "_record_history_mode", None)
-        max_rows = getattr(self, "_record_history_max_rows", None)
-
-        if record_mode == "observation" and observation is None:
-            # auto-generate identity observation
-            n_ztypes = pop.index_registry.n_ztypes
+        obs_groups = self._observation_groups
+        if obs_groups is None:
             observation = build_identity_observation(
                 pop.index_registry,
-                n_ztypes=n_ztypes,
+                n_ztypes=pop.index_registry.n_ztypes,
                 n_sexes=pop.config.n_sexes,
                 n_ages=pop.config.n_ages,
             )
-            pop._observation = observation  # type: ignore[reportPrivateUsage]
+        else:
+            observation = ObservationFilter(pop.index_registry).build_from_selectors(
+                groups=dict(obs_groups),
+                collapse_age=self._observation_collapse_age,
+                n_sexes=pop.config.n_sexes,
+                n_ages=pop.config.n_ages,
+                n_ztypes=pop.index_registry.n_ztypes,
+            )
+        pop._observation = observation  # type: ignore[reportPrivateUsage]  # build-time installation of the immutable canonical rule
+        record_mode = self._record_history_mode
+        max_rows = self._record_history_max_rows
 
         plan = compile_recording_plan(
             pop,
+            mode=record_mode,
             kind=kind,
             n_demes=1,
             has_sperm_storage=has_sperm,
             observation=observation,
-            compact_meta=compact_meta,
         )
-        pop._recording_plan = plan  # type: ignore[reportPrivateUsage]
-        pop._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]
+        from dataclasses import replace
+
+        observation = replace(
+            observation,
+            population_fingerprint=plan.schema.population.fingerprint,
+        )
+        pop._observation = observation  # type: ignore[reportPrivateUsage]  # bind canonical rule to the frozen PopulationLayout
+        # ``_observation_mask`` is an engine recording input, not the
+        # canonical query rule. Keeping it ``None`` in raw mode prevents the
+        # lifecycle wrapper from silently switching the row layout merely
+        # because every Population now owns an Observation.
+        pop._observation_mask = plan.observation_mask  # type: ignore[reportPrivateUsage]  # frozen engine input derived from RecordingPlan
+        pop._recording_plan = plan  # type: ignore[reportPrivateUsage]  # configurator sets private attr on population
+        pop._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]  # configurator sets private attr
 
 
 # ── Numba hook wrapper ─────────────────────────────────────────────────────────
@@ -1401,7 +1467,3 @@ def hook_set_param(config: object, name: str, value: float) -> None:
     """
     with objmode():
         set_param(config, name, value)  # pyright: ignore[reportArgumentType] — objmode converts njit types to Python
-
-
-
-

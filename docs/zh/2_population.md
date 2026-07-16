@@ -95,7 +95,7 @@ pop.run_tick()
 # 模拟多步，打印每步状态
 for _ in range(100):
     pop.run_tick()
-    print(pop.output_current_state())
+    print(pop.observe().values)
 ```
 
 ### 批量模拟
@@ -149,27 +149,27 @@ print(f"Var 等位基因频率: {var_freq}")
 
 ### 历史记录配置
 
-种群对象内置历史记录功能，可配置记录频率和存储格式：
+在 `build()` 前选择历史模式和容量；默认模式是 `"raw"`，默认容量不限：
 
 ```python
-# 配置历史记录
-pop.record_every = 10  # 每10步记录一次
-pop.max_history = 1000  # 最多保存1000个快照
+pop = (
+    nt.DiscreteGenerationPopulation.setup(sp)
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500})
+    .record_history(mode="raw", max_rows=1000)
+    .build()
+)
 
 # 运行模拟并记录历史
-results = pop.run(n_steps=500, record_every=5)
+pop.run(n_steps=500, record_every=5)
 ```
 
 ### 历史数据访问
 
 ```python
-# 获取完整历史记录
-full_history = pop.output_history()
-print("历史记录数量:", len(full_history["snapshots"]))
-print("最后一步数据:", full_history["snapshots"][-1])
-
-# 获取历史记录的时间步列表
-ticks = [snapshot["tick"] for snapshot in full_history["snapshots"]]
+history = pop.history
+print("历史记录数量:", history.n_records)
+print("个体计数形状:", history.individual_count.shape)
+ticks = history.ticks
 print("记录的时间步:", ticks)
 ```
 
@@ -188,13 +188,28 @@ results = pop.run(n_steps=100, record_every=5)
 ### 当前状态输出
 
 ```python
-# 获取当前状态的详细快照
-current_state = pop.output_current_state()
-print("当前状态:", current_state)
+# 获取当前状态投影
+result = pop.observe()
+print("观测轴:", result.axes)
+print("观测值:", result.values)
 
-# 包含零计数组的输出
-detailed_state = pop.output_current_state(include_zero_counts=True)
-print("详细状态:", detailed_state)
+# 使用 IndividualSelector 在构建时定义自定义 observation
+from natal.patterns import IndividualSelector
+
+pop = (
+    nt.DiscreteGenerationPopulation.setup(sp)
+    .with_observation(
+        groups={"adult": IndividualSelector(age=[1])},
+        collapse_age=True,
+    )
+    .initial_state(...)
+    .competition(...)
+    .build()
+)
+
+# pop.observe() 自动使用配置的 observation
+detailed = pop.observe()
+print("详细状态:", detailed)
 ```
 
 ### 与观察规则集成
@@ -202,22 +217,13 @@ print("详细状态:", detailed_state)
 结合观察规则可从种群状态中提取特定子群体的数据，详细方法参见 [提取种群模拟数据](2_data_output.md)。
 
 ```python
-# 创建观察规则
-observation = pop.create_observation(
-    groups={
-        "adult_wt": {"genotype": ["WT|WT"], "age": [1]},
-        "drive_carriers": {"genotype": ["WT|Drive", "Drive|Drive"]}
-    },
-    collapse_age=False,
-)
+# 每个 Population 都有 canonical observation；未配置时为恒等观测
+current = pop.observe()
+print(current.axes)  # ("group", "sex", "age")
 
-# 使用观察规则获取当前状态
-current = pop.output_current_state(observation=observation)
-print("当前观察数据:", current["observed"])
-
-# 使用观察规则获取历史数据
-history = pop.output_history(observation=observation)
-print("历史观察数据:", history["observed"])
+# raw History 可以事后应用同一 observation
+observed_history = pop.history.observe(pop.observation)
+print(observed_history.values.shape)
 ```
 
 ## 重置和重新开始

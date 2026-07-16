@@ -3,6 +3,7 @@
 import numpy as np
 
 import natal as nt
+from natal.patterns import IndividualSelector
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ class TestWolbachiaMaternalTransmission:
             nt.Wolbachia(name="wMel", viability_scaling=1.0),
         ).build()
         pop.run(3)
-        h = pop.get_history()
+        h = pop.history._to_numpy()
         assert h.shape[0] >= 4
         # Population should grow (neutral, no competition)
         totals = h[:, 1:].sum(axis=1)
@@ -121,7 +122,7 @@ class TestNSlabsIntegration:
         }).competition(juvenile_growth_mode=0).build()
         assert pop.config.n_ztypes == 6  # 3 unordered genotypes × 2 slabs
         pop.run(3)
-        h = pop.get_history()
+        h = pop.history._to_numpy()
         assert h.shape[0] >= 4
 
     def test_initial_state_slab_distribution(self):
@@ -168,7 +169,7 @@ class TestCompressionIntegration:
         }).competition(juvenile_growth_mode=0).build()
         assert pop.config.n_ztypes == 1
         pop.run(3)
-        h = pop.get_history()
+        h = pop.history._to_numpy()
         assert h.shape[0] >= 4
 
     def test_compressed_vs_uncompressed_equivalent(self):
@@ -192,8 +193,8 @@ class TestCompressionIntegration:
         pop_no.run(3)
         pop_yes.run(3)
 
-        h_no = pop_no.get_history()
-        h_yes = pop_yes.get_history()
+        h_no = pop_no.history._to_numpy()
+        h_yes = pop_yes.history._to_numpy()
         # Totals should match (same initial conditions, same genetics)
         for tick in range(4):
             assert abs(h_no[tick, 1:].sum() - h_yes[tick, 1:].sum()) < 1e-9, \
@@ -241,7 +242,7 @@ class TestCompressionIntegration:
         assert pop.config.n_ztypes > 0
         assert pop.config.n_gtypes > 0
         pop.run(2)
-        assert pop.get_history().shape[0] >= 2
+        assert pop.history._to_numpy().shape[0] >= 2
 
 
 # ── Full repair: n_slabs > 1 correctness across all modules ────────────
@@ -365,14 +366,16 @@ class TestNSlabsFullRepair:
                 "female": {"A|A": {1: 50}}, "male": {"A|A": {1: 50}},
             })
             .competition(juvenile_growth_mode=0)
-            .with_observation([
-                {"genotype": ["A|A"]},
-                {"genotype": ["a|a"]},
-            ])
+            .with_observation(
+                groups={
+                    "A_homozygous": IndividualSelector(ztype="A|A"),
+                    "a_homozygous": IndividualSelector(ztype="a|a"),
+                }
+            )
             .build()
         )
         pop.run(3)
-        h = pop.get_history()
+        h = pop.history._to_numpy()
         assert h.shape[0] >= 4
 
     def test_preset_viability_all_slabs(self):
@@ -678,8 +681,7 @@ class TestRegressionFixes:
             .build()
         )
         pop.run(2)
-        h = pop.get_history()
+        h = pop.history._to_numpy()
         assert h.shape[0] == 3  # tick 0, 1, 2
         assert not np.any(np.isnan(h[:, 1:])), "no NaN in population counts"
         assert h[1, 1:].sum() > 0  # population survived
-

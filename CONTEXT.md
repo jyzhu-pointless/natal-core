@@ -76,6 +76,7 @@ src/natal/
 │   │   └── diploid.py         # GenotypePattern, ZygoteTypePattern
 │   ├── parser.py              # GenotypePatternParser
 │   ├── selector.py            # GenotypeSelector + resolve_zygote_type
+│   ├── individual_selector.py # IndividualSelector：基于模式的个体过滤索引
 │   └── __init__.py
 │
 ├── presets/                   # 🎯 遗传预设 ✅
@@ -123,6 +124,8 @@ src/natal/
 │
 ├── output/                    # 📤 数据输出 ✅
 │   ├── observation.py         # Observation 类、GroupsInput、过滤规则
+│   ├── history.py             # History / HistorySchema / HistoryBatch 自描述存储
+│   ├── _recording.py          # RecordingPlan：冻结的记录计划
 │   ├── record.py              # CompactMeta、引擎端记录构建器
 │   ├── translation.py         # 状态格式化输出
 │   └── __init__.py
@@ -193,15 +196,30 @@ fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子�
 - `modifiers/gamete_conversion.py` + `modifiers/zygote_conversion.py`：从 `presets/` 迁入，原名不变
 - `presets/__init__.py`、`configurator/_fitness.py`：保留向后兼容的 shim
 
+#### `output/` — History / Observation 重构（2026-07-15）
+
+重构观测和历史记录的数据模型与生命周期。详见 `.opencode/history_observation_refactor_report.md`。核心变更：
+
+- `patterns/individual_selector.py`：从 Observation 中提取独立的个体选择器，供 Hook、Preset 等复用
+- `output/_recording.py`：RecordingPlan，在构建期冻结 schema + mask + meta
+- `output/history.py`：History / HistorySchema / HistoryBatch 自描述存储，支持 `max_rows` 环形缓冲
+- `output/observation.py`：ObservationResult 结构化结果、auto-identity observation
+- `configurator/_base.py` + `spatial/configurator.py`：`record_history()` 构建期配置入口
+- `population/base.py`：`pop.observation` / `pop.observe()` / `pop.record_snapshot()` / `pop.restore_checkpoint()`
+- `population/_mixins/`：ObservationMixin + OutputMixin（记录写入与 checkpoint）
+
+#### `population/base.py` — BasePopulation mixin 拆分
+
+BasePopulation 从 1743 行拆分为一组 mixin + 532 行核心 ABC：
+
+- `HookManagerMixin`：Hook 程序构建、编译缓存管理
+- `ModifierPresetMixin`：修饰器和预设集合管理
+- `ObservationMixin`：Observation 属性访问
+- `OutputMixin`：历史记录写入、snapshot / checkpoint
+
 ### 🔴 高优先级
 
-#### `population/base.py` — BasePopulation ABC 深度重构（fitness/ 完成后进行）
-
-- 大量用不上的逻辑（Hook 程序构建、编译缓存管理）
-- 与子类（AgeStructuredPopulation / DiscreteGenerationPopulation）边界模糊，很多逻辑下沉到了子类构造函数，但 ABC 仍持有不属于基类的状态
-- Hook 管理、历史记录、事件派发均混杂在 ABC 中
-- 建议拆分为 mixin（HookPlanMixin、HistoryMixin、ModifierMixin、ObservationMixin），核心 ABC 只保留生命周期契约
-- 注意：`from natal.configurator import Configurator` 的 TYPE_CHECKING 延迟加载在拆分时必须保持
+（当前无高优先级待办）
 
 ### 🟡 中优先级
 
