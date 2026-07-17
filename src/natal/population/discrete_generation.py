@@ -28,7 +28,6 @@ from numpy.typing import NDArray
 from natal.data import (
     DiscretePopulationConfig,
     DiscretePopulationState,
-    PopulationConfig,
     parse_flattened_discrete_state,
 )
 from natal.engine.discrete_generation_simulator import (
@@ -50,86 +49,68 @@ if TYPE_CHECKING:
 __all__ = ["DiscreteGenerationPopulation"]
 
 
+def _require_discrete_config(config: object) -> DiscretePopulationConfig:
+    """Validate that *config* is a well-formed ``DiscretePopulationConfig``.
+
+    The two config models (``PopulationConfig`` for age-structured,
+    ``DiscretePopulationConfig`` for discrete-generation) are independent
+    NamedTuples with no cross-model conversion.  This helper enforces the
+    type boundary at every entry point that stores a config on a
+    ``DiscreteGenerationPopulation`` (``__init__``, ``import_config``):
+    it rejects any other type — including ``PopulationConfig`` and dict —
+    with ``TypeError``, and rejects a ``DiscretePopulationConfig`` whose
+    discrete-generation invariants are violated with ``ValueError``.
+
+    The discrete-generation engine hardcodes a 2-age lifecycle
+    (age 0 = offspring, age 1 = reproducing adult; adults are replaced
+    every tick).  A config with ``n_ages != 2``, ``new_adult_age != 1``,
+    or ``adult_ages != [1]`` would run but produce silently wrong dynamics,
+    so it is rejected up front rather than silently normalised.
+
+    Args:
+        config: The candidate config object.
+
+    Returns:
+        *config* itself, narrowed to ``DiscretePopulationConfig``.
+
+    Raises:
+        TypeError: If *config* is not a ``DiscretePopulationConfig``.
+        ValueError: If *config* is a ``DiscretePopulationConfig`` but
+            ``n_ages != 2``, ``new_adult_age != 1``, or
+            ``adult_ages != [1]``.
+    """
+    if not isinstance(config, DiscretePopulationConfig):
+        raise TypeError(
+            f"DiscreteGenerationPopulation requires a "
+            f"DiscretePopulationConfig, got {type(config).__name__}. "
+            f"PopulationConfig and other types are not accepted — the two "
+            f"config models are independent; build a "
+            f"DiscretePopulationConfig via Configurator.for_discrete() "
+            f"or build_discrete_engine_config()."
+        )
+    if config.n_ages != 2 or config.new_adult_age != 1:
+        raise ValueError(
+            f"DiscretePopulationConfig must satisfy the discrete-generation "
+            f"invariants: n_ages == 2 and new_adult_age == 1, got "
+            f"n_ages={config.n_ages}, new_adult_age={config.new_adult_age}. "
+            f"The discrete engine hardcodes a 2-age lifecycle."
+        )
+    expected_adult_ages = np.array([1], dtype=np.int64)
+    if not np.array_equal(config.adult_ages, expected_adult_ages):
+        raise ValueError(
+            f"DiscretePopulationConfig.adult_ages must be [1], got "
+            f"{config.adult_ages!r}."
+        )
+    return config
+
+
 class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     """Population with strict non-overlapping generations."""
-
-    @staticmethod
-    def _to_discrete_config(config: object) -> DiscretePopulationConfig:  # object: accepts PopulationConfig or dict from replay
-        """Normalize any config to ``DiscretePopulationConfig``.
-
-        For the deprecated builder path, assembles a ``DiscretePopulationConfig``
-        directly from a ``PopulationConfig``'s arrays — no public conversion
-        function needed.  The modern Configurator path builds
-        ``DiscretePopulationConfig`` independently via
-        ``build_discrete_engine_config``.
-        """
-        if isinstance(config, DiscretePopulationConfig):
-            return config._replace(
-                n_ages=2,
-                new_adult_age=1,
-                adult_ages=np.array([1], dtype=np.int64),
-            )
-        if isinstance(config, PopulationConfig):
-            cfg = config
-            return DiscretePopulationConfig(
-                stochastic=cfg.stochastic,
-                continuous_sampling=cfg.continuous_sampling,
-                n_sexes=int(cfg.n_sexes),
-                n_ages=int(cfg.n_ages),
-                n_ztypes=cfg.n_ztypes,
-                n_gtypes=cfg.n_gtypes,
-                n_glabs=cfg.n_glabs,
-                n_slabs=cfg.n_slabs,
-                female_age_based_fertility=cfg.female_age_based_fertility,
-                viability_fitness=cfg.viability_fitness,
-                fecundity_fitness=cfg.fecundity_fitness,
-                zygote_viability_fitness=cfg.zygote_viability_fitness,
-                sexual_selection_fitness=cfg.sexual_selection_fitness,
-                age_based_relative_competition_strength=cfg.age_based_relative_competition_strength,
-                eggs_per_female=cfg.eggs_per_female,
-                fixed_egg_count=cfg.fixed_egg_count,
-                sex_ratio=cfg.sex_ratio,
-                sperm_displacement_rate=cfg.sperm_displacement_rate,
-                female_adult_mating_rate=float(cfg.age_based_mating_rates[0, 1]),
-                male_adult_mating_rate=float(cfg.age_based_mating_rates[1, 1]),
-                reproduction_rate=float(cfg.age_based_reproduction_rates[1]),
-                female_age0_survival=float(cfg.age_based_survival_rates[0, 0]),
-                male_age0_survival=float(cfg.age_based_survival_rates[1, 0]),
-                female_fertility=float(cfg.female_age_based_fertility[0]),
-                zygotes_to_gametes_map=cfg.zygotes_to_gametes_map,
-                gametes_to_zygotes_map=cfg.gametes_to_zygotes_map,
-                offspring_tensor=cfg.offspring_tensor,
-                meiosis_f=cfg.zygotes_to_gametes_map[0],
-                meiosis_m=cfg.zygotes_to_gametes_map[1],
-                fecundity_f=cfg.fecundity_fitness[0],
-                fecundity_m=cfg.fecundity_fitness[1],
-                viability_f=cfg.viability_fitness[0, 0, :],
-                viability_m=cfg.viability_fitness[1, 0, :],
-                has_sex_chromosomes=cfg.has_sex_chromosomes,
-                female_ztype_compatibility=cfg.female_ztype_compatibility,
-                male_ztype_compatibility=cfg.male_ztype_compatibility,
-                female_only_by_sex_chrom=cfg.female_only_by_sex_chrom,
-                male_only_by_sex_chrom=cfg.male_only_by_sex_chrom,
-                juvenile_growth_mode=cfg.juvenile_growth_mode,
-                carrying_capacity=cfg.carrying_capacity,
-                expected_competition_strength=cfg.expected_competition_strength,
-                expected_survival_rate=cfg.expected_survival_rate,
-                low_density_growth_rate=cfg.low_density_growth_rate,
-                generation_time=cfg.generation_time,
-                new_adult_age=1,
-                adult_ages=np.array([1], dtype=np.int64),
-                initial_individual_count=cfg.initial_individual_count,
-                initial_sperm_storage=cfg.initial_sperm_storage,
-                hook_slot=int(cfg.hook_slot),
-                extreme_speed_mode=0,
-                custom=cfg.custom,
-            )
-        raise TypeError(f"Expected PopulationConfig or DiscretePopulationConfig, got {type(config)}")
 
     def __init__(
         self,
         species: Species,
-        population_config: object,  # object: accepts PopulationConfig, dict, or None — validated in _to_discrete_config
+        population_config: DiscretePopulationConfig,
         name: Optional[str] = None,
         index_registry: Optional[IndexRegistry] = None,
         initial_individual_count: Optional[
@@ -139,9 +120,33 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     ):
         """Initialize a discrete-generation population.
 
-        Constructs the population from a species definition and configuration,
-        sets up genotype registries and the initial age-by-genotype distribution,
-        and registers hooks for event-driven intervention.
+        Constructs the population from a species definition and a
+        ``DiscretePopulationConfig``, sets up genotype registries and the
+        initial age-by-genotype distribution, and registers hooks for
+        event-driven intervention.
+
+        Args:
+            species: Genetic architecture describing loci, alleles and
+                chromosome structure.
+            population_config: A fully initialised
+                ``DiscretePopulationConfig``.  A ``PopulationConfig`` or
+                other type is rejected with ``TypeError`` — the two config
+                models are independent; build a ``DiscretePopulationConfig``
+                via ``Configurator.for_discrete()`` or
+                ``build_discrete_engine_config()``.
+            name: Human-readable population name.  Defaults to
+                ``"DiscreteGenerationPop"``.
+            index_registry: Optional shared registry for index compression.
+            initial_individual_count: Optional per-sex, per-genotype
+                initial distribution that overrides the config default.
+            hooks: Event hook registrations to apply.
+
+        Raises:
+            TypeError: If *population_config* is not a
+                ``DiscretePopulationConfig``.
+            ValueError: If *population_config* violates the discrete
+                generation invariants (``n_ages == 2``, ``new_adult_age
+                == 1``, ``adult_ages == [1]``).
         """
         if name is None:
             name = "DiscreteGenerationPop"
@@ -151,7 +156,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if index_registry is not None:
             self._index_registry = index_registry
 
-        self._config = self._to_discrete_config(population_config)  # type: ignore[assignment]  # covariant narrow: DiscretePopulationConfig is a subtype of PopulationConfig
+        self._config = _require_discrete_config(population_config)
 
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
@@ -198,13 +203,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             n_demes=1,
             has_sperm_storage=False,
         )
-
-    def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
-        """Clone this population with a new name and optional config override."""
-        clone = super()._clone(name, config=config)  # type: ignore[arg-type]  # subclass accepts DiscretePopulationConfig, super expects PopulationConfig
-        if config is not None:
-            object.__setattr__(clone, "_config", self._to_discrete_config(config))  # type: ignore[assignment]  # bypasses type check for covariant _config override
-        return clone
 
     @classmethod
     def setup(
@@ -687,9 +685,21 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """Return a copy of the current configuration."""
         return self.config
 
-    def import_config(self, config: object) -> None:  # object: accepts PopulationConfig or dict — validated in _to_discrete_config
-        """Replace the current configuration with *config*."""
-        self._config = self._to_discrete_config(config)  # type: ignore[assignment]  # covariant narrow: DiscretePopulationConfig is a subtype of PopulationConfig
+    def import_config(self, config: DiscretePopulationConfig) -> None:
+        """Replace the current configuration with *config*.
+
+        Args:
+            config: A ``DiscretePopulationConfig`` to install on this
+                population.  A ``PopulationConfig`` or other type is
+                rejected with ``TypeError``.
+
+        Raises:
+            TypeError: If *config* is not a ``DiscretePopulationConfig``.
+            ValueError: If *config* violates the discrete-generation
+                invariants (``n_ages == 2``, ``new_adult_age == 1``,
+                ``adult_ages == [1]``).
+        """
+        self._config = _require_discrete_config(config)
 
     def import_state(
         self,

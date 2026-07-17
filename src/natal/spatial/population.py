@@ -55,6 +55,7 @@ from natal.spatial.topology import (
 
 if TYPE_CHECKING:
     from natal.configurator import Configurator
+    from natal.modifiers.module import GameteModifier, ZygoteModifier
     from natal.output.history import History
     from natal.output.observation import Observation, ObservationResult
     from natal.presets import GeneticPreset
@@ -202,12 +203,6 @@ class _SpatialUpdate:
     as ``SpatialConfigurator`` at build time.
     """
 
-    # Chain methods that support BatchSetting expansion across demes.
-    _BATCHABLE_METHODS = frozenset({
-        "competition", "reproduction", "survival", "initial_state",
-        "fitness", "custom", "setup",
-    })
-
     def __init__(
         self, spatial_pop: SpatialPopulation, *, deme: int | None = None,
     ) -> None:
@@ -259,24 +254,84 @@ class _SpatialUpdate:
         return self
 
     def modifiers(
-        self, **kwargs: object,  # object: Python **kwargs convention; values validated at call site
+        self,
+        gamete_modifiers: list[GameteModifier] | None = None,
+        zygote_modifiers: list[ZygoteModifier] | None = None,
     ) -> _SpatialUpdate:
-        self._dispatch_scalar("modifiers", kwargs)
+        """Register gamete / zygote modifiers on target deme(s).
+
+        Args:
+            gamete_modifiers: Sequence of ``GameteModifier`` instances
+                affecting meiosis (genotype → gamete mapping).
+            zygote_modifiers: Sequence of ``ZygoteModifier`` instances
+                affecting fertilisation (gamete → zygote mapping).
+
+        Returns:
+            Self for chaining.
+        """
+        if self._deme is not None:
+            self._pop.update_deme(self._deme).modifiers(
+                gamete_modifiers=gamete_modifiers,
+                zygote_modifiers=zygote_modifiers,
+            )
+            return self
+
+        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
+        for d in self._pop.demes:
+            old_config = d.config
+            cid = id(old_config)
+
+            if gamete_modifiers:
+                for mod in gamete_modifiers:
+                    d.add_gamete_modifier(mod, refresh=False)
+            if zygote_modifiers:
+                for mod in zygote_modifiers:
+                    d.add_zygote_modifier(mod, refresh=False)
+
+            if cid in updated_configs:
+                d.set_config(updated_configs[cid])
+                continue
+            if gamete_modifiers or zygote_modifiers:
+                d.refresh_modifier_maps()
+            updated_configs[cid] = d.config
         return self
 
     def presets(self, *presets: GeneticPreset) -> _SpatialUpdate:
-        from natal.configurator import Configurator
-
         if self._deme is not None:
             self._pop.update_deme(self._deme).presets(*presets)
             return self
-        seen: set[int] = set()
-        for config in (d.config for d in self._pop.demes):
-            cid = id(config)
-            if cid in seen:
+
+        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
+        # Modifier callables built by the representative deme of each
+        # config-sharing group.  Followers share these by reference so
+        # that all demes in a group have identical _gamete_modifiers /
+        # _zygote_modifiers — otherwise preset.gamete_modifier(d) would
+        # create a fresh callable per deme, and semantically equivalent
+        # but numerically different closures produce diverging maps when
+        # any follower later calls refresh_modifiers() (F3×Refresh).
+        shared_gamete: list[Any] = []
+        shared_zygote: list[Any] = []
+
+        for d in self._pop.demes:
+            old_config = d.config
+            cid = id(old_config)
+
+            # add_preset has identity-based persistent dedup, so calling
+            # it with the same object twice (or across two presets()
+            # calls) is a no-op.  No per-call seen_presets needed.
+            for p in presets:
+                d.add_preset(p)
+
+            if cid in updated_configs:
+                d._gamete_modifiers = list(shared_gamete)  # pyright: ignore[reportPrivateUsage]
+                d._zygote_modifiers = list(shared_zygote)  # pyright: ignore[reportPrivateUsage]
+                d.set_config(updated_configs[cid])
                 continue
-            seen.add(cid)
-            Configurator.for_config(config).presets(*presets)
+            d.refresh_modifiers()
+            shared_gamete = list(d._gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
+            shared_zygote = list(d._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
+            d.reapply_preset_fitness()
+            updated_configs[cid] = d.config
         return self
 
     def reconfigure_preset(
@@ -285,46 +340,81 @@ class _SpatialUpdate:
         """Reconfigure a preset parameter on target deme(s).
 
         Single-deme delegates to ``update_deme()`` → ``reconfigure_preset()``.
-        All-deme iterates unique configs with dedup by ``id()``.
+        All-deme applies changes once, then rebuilds derived modifier lists
+        per deme and recomputes maps per shared config group.
+
+        Validation happens entirely before any mutation (validate-commit
+        two-phase): if any target deme lacks the preset registration or an
+        attribute name is invalid, the exception is raised and neither the
+        preset object nor any deme's config is changed.
+
+        A preset object registered on more than one deme cannot be
+        reconfigured on a single deme — the shared object would be mutated
+        for all demes while only the target deme's maps are rebuilt,
+        leaving the others in an inconsistent state.  Use all-deme
+        ``update().reconfigure_preset()`` instead, or register distinct
+        preset instances per deme.
         """
 
+        # ── Single-deme path ──
         if self._deme is not None:
+            # Forbid reconfiguring a preset shared across multiple demes:
+            # setattr mutates the shared preset object in place, affecting
+            # all demes that hold a reference, but only the target deme's
+            # maps are rebuilt — the others would run with stale tensors
+            # while their preset metadata reflects the new parameter.
+            sharing_demes = [
+                i for i, d in enumerate(self._pop.demes)
+                if preset in d._presets  # pyright: ignore[reportPrivateUsage]
+            ]
+            if len(sharing_demes) > 1:
+                raise ValueError(
+                    f"Preset {preset.name!r} is registered on "
+                    f"{len(sharing_demes)} demes (indices {sharing_demes}). "
+                    f"Single-deme reconfigure_preset would mutate the shared "
+                    f"preset object but only rebuild deme {self._deme}'s "
+                    f"maps, leaving the others inconsistent. Use "
+                    f"update().reconfigure_preset() to reconfigure all "
+                    f"demes, or register distinct preset instances per deme."
+                )
             self._pop.update_deme(self._deme).reconfigure_preset(preset, **changes)
             return self
 
-        from natal.configurator import Configurator
+        # ── All-deme path: validate phase (zero side effects) ──
+        for d in self._pop.demes:
+            if preset not in d._presets:  # pyright: ignore[reportPrivateUsage]
+                raise ValueError(
+                    f"Preset {preset.name!r} is not registered on deme "
+                    f"{d._name!r}. Use presets() to register it first."  # pyright: ignore[reportPrivateUsage]
+                )
+        for attr in changes:
+            if not hasattr(preset, attr):
+                raise AttributeError(
+                    f"{type(preset).__name__} {preset.name!r} has no "
+                    f"attribute {attr!r}."
+                )
 
-        # reconfigure_preset modifies the preset in-place (setattr) then
-        # calls refresh_modifiers() + reapply_preset_fitness() which replaces
-        # via _replace().  id(d.config) dedup alone misses demes sharing
-        # the old config reference.  Track old→new config so every deme
-        # gets the new config, whether it was the one processed or shared.
+        # ── Commit phase ──
+        for attr, value in changes.items():
+            setattr(preset, attr, value)
+
+        from natal.engine.simulation.age_structured import sync_equilibrium_metrics
+
         updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
         for d in self._pop.demes:
             old_config = d.config
             cid = id(old_config)
+
+            d.refresh_modifiers(rebuild_maps=False)
+
             if cid in updated_configs:
                 d.set_config(updated_configs[cid])
                 continue
-            Configurator.for_population(d).reconfigure_preset(preset, **changes)
-            new_config = d.config
-            if new_config is not old_config:
-                updated_configs[cid] = new_config
-        return self
 
-    def hooks(self, *hook_items: Callable[..., object]) -> _SpatialUpdate:  # object: hook callback return type varies
-        from natal.configurator import Configurator
-
-        if self._deme is not None:
-            self._pop.update_deme(self._deme).hooks(*hook_items)
-            return self
-        seen: set[int] = set()
-        for config in (d.config for d in self._pop.demes):
-            cid = id(config)
-            if cid in seen:
-                continue
-            seen.add(cid)
-            Configurator.for_config(config).hooks(*hook_items)
+            d.refresh_modifier_maps()
+            d.reapply_preset_fitness()
+            sync_equilibrium_metrics(d.config)
+            updated_configs[cid] = d.config
         return self
 
     def _apply_batch_or_scalar(
@@ -366,11 +456,19 @@ class _SpatialUpdate:
     ) -> None:
         """Apply scalar kwargs to target deme(s) via the full Configurator method.
 
-        Previously used ``set_param`` per-parameter for float/int/bool values
-        and the full method only for ``custom``/``fitness``/``modifiers``.
-        That silently skipped list/dict/callable values and failed on Python
-        bool fields.  Now every method call goes through the Configurator,
-        which handles all parameter types correctly.
+        For ``fitness`` — the only method with non-idempotent in-place
+        writes (``mode='multiply'``) — deduplicates by the identity of the
+        4 fitness tensor arrays rather than by config shell identity.  This
+        prevents multiply from being applied multiple times to the same
+        shared array when heterogeneous config shells share fitness tensors
+        (e.g., ``_build_variant_config``'s shallow copy shares all
+        non-replaced arrays across variant groups).
+
+        For all other methods, in-place writes are idempotent (absolute
+        assignment via ``field[()] = value``), so shell-identity dedup is
+        safe: even if the same array is written twice, the result is the
+        same.  Shell-identity dedup also correctly broadcasts ``_replace``
+        changes (e.g., ``fixed_egg_count``) to all demes sharing a shell.
         """
         from natal.configurator import Configurator
 
@@ -379,16 +477,60 @@ class _SpatialUpdate:
             getattr(cfg, method_name)(**kwargs)
             return
 
-        # Apply to all unique configs — deduplicate by object identity.
-        seen: set[int] = set()
+        # Fitness tensors are the write-set for the array-identity dedup.
+        # They are shared as a block across variant config shells (all 4
+        # come from the same build_config_maps call), so checking all 4
+        # identities correctly identifies the sharing group.
+        _FITNESS_FIELDS = (
+            "viability_fitness", "fecundity_fitness",
+            "sexual_selection_fitness", "zygote_viability_fitness",
+        )
+        use_array_dedup = method_name == "fitness"
+
+        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
+        written_arrays: set[int] = set()
+
         for d in self._pop.demes:
-            config = d.config
-            cid = id(config)
-            if cid in seen:
-                continue
-            seen.add(cid)
-            cfg = Configurator.for_population(d)
-            getattr(cfg, method_name)(**kwargs)
+            old_config = d.config
+            cid = id(old_config)
+
+            if use_array_dedup:
+                # Skip if all fitness arrays have already been written
+                # in-place — the write has propagated through the shared
+                # arrays to this deme already.
+                array_ids = {
+                    id(getattr(old_config, f))
+                    for f in _FITNESS_FIELDS if hasattr(old_config, f)
+                }
+                if array_ids <= written_arrays:
+                    if cid in updated_configs:
+                        d.set_config(updated_configs[cid])
+                    continue
+                cfg = Configurator.for_population(d)
+                getattr(cfg, method_name)(**kwargs)
+                written_arrays.update(array_ids)
+                updated_configs[cid] = d.config
+            else:
+                if cid in updated_configs:
+                    d.set_config(updated_configs[cid])
+                    continue
+                cfg = Configurator.for_population(d)
+                getattr(cfg, method_name)(**kwargs)
+                updated_configs[cid] = d.config
+
+
+_DETACH_FIELDS: tuple[str, ...] = (
+    "carrying_capacity", "eggs_per_female", "sex_ratio",
+    "sperm_displacement_rate", "low_density_growth_rate",
+    "juvenile_growth_mode", "expected_competition_strength",
+    "expected_survival_rate", "generation_time",
+    "viability_fitness", "fecundity_fitness",
+    "sexual_selection_fitness", "zygote_viability_fitness",
+    "custom",
+    "age_based_survival_rates", "age_based_mating_rates",
+    "age_based_reproduction_rates", "female_age_based_fertility",
+    "age_based_relative_competition_strength",
+)
 
 
 class SpatialPopulation:
@@ -869,28 +1011,42 @@ class SpatialPopulation:
         return _SpatialUpdate(self, deme=deme)
 
     def update_deme(self, demi: int) -> Configurator:
-        """Get a Configurator for a specific deme with clone-on-write."""
+        """Get a Configurator for a specific deme with clone-on-write.
+
+        Per-field detach: for each mutable config array in
+        ``_DETACH_FIELDS``, check whether any other deme shares the same
+        array object.  Only shared fields are copied into a private
+        config; unshared fields stay by reference.
+
+        This replaces the old ``carrying_capacity`` identity proxy, which
+        used a single field to infer the sharing state of the entire
+        config.  That inference breaks when different config shells share
+        some arrays but not others — for example, when a user calls
+        ``set_config(config._replace(carrying_capacity=new_K))`` on one
+        deme, producing a shell with a private K but shared fitness
+        arrays.  The K-proxy would see "K is unique → no sharing → no
+        detach", and a subsequent in-place fitness write would penetrate
+        to every deme sharing those arrays.
+        """
         from natal.configurator import Configurator
 
         target = self._demes[demi]
         config = target.config
 
-        k_array = config.carrying_capacity
-        shared_count = sum(
-            1 for d in self._demes if d.config.carrying_capacity is k_array
-        )
-        if shared_count > 1:
-            private = config._replace(
-                carrying_capacity=config.carrying_capacity.copy(),
-                eggs_per_female=config.eggs_per_female.copy(),
-                sex_ratio=config.sex_ratio.copy(),
-                sperm_displacement_rate=config.sperm_displacement_rate.copy(),
-                low_density_growth_rate=config.low_density_growth_rate.copy(),
-                juvenile_growth_mode=config.juvenile_growth_mode.copy(),
-                expected_competition_strength=config.expected_competition_strength.copy(),
-                expected_survival_rate=config.expected_survival_rate.copy(),
-                generation_time=config.generation_time.copy(),
-            )
+        copied: dict[str, Any] = {}
+        for field in _DETACH_FIELDS:
+            if not hasattr(config, field):
+                continue
+            field_array = getattr(config, field)
+            # Detach if any other deme shares this exact array object.
+            if any(
+                getattr(d.config, field, None) is field_array
+                for j, d in enumerate(self._demes) if j != demi
+            ):
+                copied[field] = field_array.copy()
+
+        if copied:
+            private = config._replace(**copied)
             object.__setattr__(target, '_config', private)
             config = private
 

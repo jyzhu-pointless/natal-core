@@ -289,6 +289,14 @@ def build_discrete_engine_config(
     fertility = np.ones(n_ages, dtype=np.float64)
     fertility[0] = 0.0
 
+    # Pop stochastic / continuous_sampling once into locals; both
+    # build_config_maps and the DiscretePopulationConfig constructor need
+    # them, and a double kwargs.pop would silently fall back to the default
+    # on the second read (a pre-existing bug that gave stochastic=True even
+    # when the caller passed False).
+    stochastic_val = bool(kwargs.pop("stochastic", True))
+    continuous_sampling_val = bool(kwargs.pop("continuous_sampling", False))
+
     m = build_config_maps(
         n_genotypes=n_genotypes,
         n_gtypes=n_gtypes,
@@ -299,8 +307,8 @@ def build_discrete_engine_config(
         gamete_labels=gamete_labels,
         somatic_labels=somatic_labels,
         new_adult_age=new_adult_age,
-        stochastic=bool(kwargs.pop("stochastic", True)),
-        continuous_sampling=bool(kwargs.pop("continuous_sampling", False)),
+        stochastic=stochastic_val,
+        continuous_sampling=continuous_sampling_val,
         age_based_mating_rates=mating,
         age_based_reproduction_rates=reproduction,
         age_based_survival_rates=survival,
@@ -331,8 +339,8 @@ def build_discrete_engine_config(
     )
 
     return DiscretePopulationConfig(
-        stochastic=bool(kwargs.pop("stochastic", True)),
-        continuous_sampling=bool(kwargs.pop("continuous_sampling", False)),
+        stochastic=stochastic_val,
+        continuous_sampling=continuous_sampling_val,
         n_sexes=m.n_sexes,
         n_ages=m.n_ages,
         n_ztypes=m.n_g_compressed,

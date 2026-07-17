@@ -243,6 +243,19 @@ class HomingDrive(GeneticPreset):
             return None
         return self._resolve_bound_gene(self._str_cas9_allele)
 
+    @staticmethod
+    def _rate_at(rate: float | tuple[float, float], sex: Sex) -> float:
+        """Return per-sex rate, normalising a scalar to both sexes.
+
+        ``__init__`` resolves scalar input to a ``(female, male)`` tuple
+        via :meth:`_resolve_rates`, but :meth:`reconfigure_preset` writes
+        back via ``setattr`` which may restore a plain ``float``.  This
+        helper handles both forms transparently.
+        """
+        if isinstance(rate, (int, float)):
+            return float(rate)
+        return rate[sex]
+
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Implement homing in heterozygous parents, germline resistance, and Cas9 deposition.
 
@@ -263,8 +276,8 @@ class HomingDrive(GeneticPreset):
         # So Rule 2 (Resistance) only acts on the targets that FAILED Rule 1 (Homing).
         rule_set = GameteConversionRuleSet(f"{self.name}_Homing")
         for sex in (Sex.FEMALE, Sex.MALE):
-            homing_rate = self.drive_conversion_rate[sex]
-            res_rate = self.late_germline_resistance_formation_rate[sex]
+            homing_rate = HomingDrive._rate_at(self.drive_conversion_rate, sex)
+            res_rate = HomingDrive._rate_at(self.late_germline_resistance_formation_rate, sex)
 
             # 1. Homing (Target -> Drive)
             # Examples: If homing_rate is 0.7, 70% of targets become Drive. 30% pass to the next rule.
@@ -357,7 +370,7 @@ class HomingDrive(GeneticPreset):
             return count_allele_copies(gt, target) > 0
 
         for sex in (Sex.FEMALE, Sex.MALE):
-            rate = self.embryo_resistance_formation_rate[sex]
+            rate = HomingDrive._rate_at(self.embryo_resistance_formation_rate, sex)
             if rate > 0:
                 m_glab = None
                 p_glab = None

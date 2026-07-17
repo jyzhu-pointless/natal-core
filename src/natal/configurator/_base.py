@@ -721,6 +721,14 @@ class Configurator:
         index compression, so that genotype selectors resolve to compressed
         indices.
 
+        .. note::
+
+            ``initial_state()`` is a build-time operation and is **not**
+            available at runtime via ``pop.update()``.  The initial
+            distribution is baked into the config at construction time;
+            changing it after the population has been built has no effect
+            on the ongoing simulation state.
+
         Args:
             individual_count: Per-sex, per-genotype initial counts.
                 Nested as ``{sex: {genotype_selector: count}}``.
@@ -997,9 +1005,17 @@ class Configurator:
 
         Returns:
             Self for chaining.
+
+        Raises:
+            RuntimeError: When called on a runtime Configurator
+                (i.e. via ``pop.update().hooks()``).  Use
+                ``pop.set_hook()`` for runtime hook registration.
         """
-        # Lazy allocation: most chain methods never touch hooks, so
-        # we avoid creating the list until the first .hooks() call.
+        if self._pop_ref is not None:
+            raise RuntimeError(
+                "hooks can only be registered at build time. "
+                "Use pop.set_hook() for runtime hook registration."
+            )
         if not hasattr(self, "_hook_items"):
             self._hook_items: list[_HookItem] = []
         self._hook_items.extend(hook_items)
@@ -1095,14 +1111,38 @@ class Configurator:
         method clears the modifier lists first, then re-applies the preset
         so it writes onto a clean slate.
 
+        Validation happens entirely before any mutation: if the preset is
+        not registered or an attribute name is invalid, the exception is
+        raised and the preset object is left unchanged (error-path state
+        invariant).
+
         Args:
             preset: A preset previously registered via :meth:`presets`.
             **changes: Attribute name / value pairs to update on *preset*.
 
         Returns:
             Self for chaining.
+
+        Raises:
+            ValueError: If *preset* is not registered on this population.
+            AttributeError: If any key in *changes* is not an attribute of
+                *preset*.
+            RuntimeError: If called without a live Population backref.
         """
-        for attr, value in changes.items():
+        # ── Validate phase (zero side effects) ──
+        if self._pop_ref is None:
+            raise RuntimeError(
+                "reconfigure_preset() requires a live Population. "
+                "Use pop.update().reconfigure_preset(...) or "
+                "Configurator.for_population(pop).reconfigure_preset(...)."
+            )
+        pop = self._pop_ref
+        if preset not in pop._presets:  # pyright: ignore[reportPrivateUsage]
+            raise ValueError(
+                f"Preset {preset.name!r} is not registered on this "
+                f"population. Use presets() to register it first."
+            )
+        for attr in changes:
             if not hasattr(preset, attr):
                 raise AttributeError(
                     f"{type(preset).__name__} {preset.name!r} has no "
@@ -1110,19 +1150,14 @@ class Configurator:
                     f"parameter — this would silently create a stray attribute "
                     f"on the preset object."
                 )
+
+        # ── Commit phase ──
+        for attr, value in changes.items():
             setattr(preset, attr, value)
 
-        if self._pop_ref is not None:
-            pop = self._pop_ref
-            pop.refresh_modifiers()
-            pop.reapply_preset_fitness()
-            self._config = pop.config
-        else:
-            raise RuntimeError(
-                "reconfigure_preset() requires a live Population. "
-                "Use pop.update().reconfigure_preset(...) or "
-                "Configurator.for_population(pop).reconfigure_preset(...)."
-            )
+        pop.refresh_modifiers()
+        pop.reapply_preset_fitness()
+        self._config = pop.config
 
         from natal.engine.simulation.age_structured import sync_equilibrium_metrics
         sync_equilibrium_metrics(self._config)

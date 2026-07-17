@@ -85,6 +85,48 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 
 ---
 
+## Spatial Runtime Update 重构 — 延期决策（2026-07-18）
+
+> 本节记录 `.opencode/plans/fix-spatial-update-spec.md` 重构审查中明确**不应随当前增量一并实现**的设计决策。当前重构维持现状（离散代保留 sync、CONCAVE 模式照旧消费 `expected_*`），以下三项留待后续单独评审。
+
+### SU-D1 🎨 离散代竞争语义收敛（FIXED-only vs 全模式）
+
+**不纳入当前重构。** 当前重构维持现状：离散代 CONCAVE/LOGISTIC 模式消费 `expected_competition_strength` 与 `expected_survival_rate` 两个由 `compute_equilibrium_metrics` 从 K/eggs_per_female/sex_ratio/存活/交配/繁殖率推导的均衡校准常数；FIXED/NO_COMPETITION 只读 K。三个离散 demo（`discrete.py`、`discrete_ui.py`、`spatial_hex_discrete.py`）和测试辅助均用 `"concave"`，落入 Beverton-Holt 分支（`discrete_generation_simulator.py:108-114`），消费 `expected_*`。
+
+未来若要收敛为 FIXED-only，必须先解决：
+
+- 入口需拒绝 CONCAVE/LOGISTIC 模式（`DiscreteConfigurator.competition()` 校验 `juvenile_growth_mode ∈ {NO_COMPETITION, FIXED}`）。
+- `set_param` 对离散代跳过自动 sync 的现状（`_base.py:247`）从"由 Configurator 方法层兜底"变为"永不 sync"，需删除 `DiscreteConfigurator.competition()/reproduction()` 末尾的 `self._sync_equilibrium()` 调用。
+- 三个 demo + 测试辅助的 `juvenile_growth_mode="concave"` 必须迁移到 `"fixed"`——**这是模型语义改动**：调节曲线从平滑 Beverton-Holt（`r/(ratio·(r−1)+1) × expected_surv`）变为硬截断（`min(1, K/N₀)`），过渡动态和低密度增长行为都不同。需单独评审是否可接受。
+- `compute_equilibrium_metrics` 的离散分支（`_base.py:1217-1228` 手工组装 survival/mating 数组）是否仍有其他消费方需审计。
+
+设计时应优先判断"离散代是否应彻底移除 `expected_*` 字段"（连同 `age_based_relative_competition_strength`，见 SU-D3），而非仅切换模式。
+
+### SU-D2 🎨 `competition_strength` 在 `new_adult_age=1` 下静默 no-op
+
+**不纳入当前重构。** `parameters.jsonc:39` 的 `competition_strength` 参数写入 `age_based_relative_competition_strength[1]`（`config_path=[1]`）。当 `new_adult_age=1` 时：
+
+- 期望侧：`compute_equilibrium_metrics` 的求和循环 `range(1, new_adult_age)` = `range(1, 1)` 为空，index 1 永不入算；
+- 实际侧：`compute_actual_competition_strength` 只加权 `age < new_adult_age`（即只到 age 0），index 1 同样不入算。
+
+结果：`pop.update().competition(competition_strength=2.0)` 在离散代（恒 `new_adult_age=1`）和任何 `new_adult_age=1` 的年龄结构配置下都是**静默 no-op**——写入成功、不报错、零效果。与 F5（hooks 静默 no-op）同类缺陷。
+
+后续设计应：
+
+- 离散代入口对 `competition_strength` 显式拒绝（`ValueError`，提示该参数仅多龄幼虫 `new_adult_age≥2` 有效）；
+- 文档注明 `competition_strength` 实际语义是"第 1 龄（第二个年龄）幼虫的相对竞争权重"，只在 `new_adult_age≥2` 时有意义；
+- 考虑是否提供 age-0 权重的合法调节入口（目前 rel[0] 由 `np.ones` 默认固定为 1.0，无用户可调路径）。
+
+### SU-D3 🎨 离散代 `age_based_relative_competition_strength` 仅为兼容层
+
+**不纳入当前重构。** 离散代 `new_adult_age=1`，只有 age-0 幼虫参与竞争（成体每 tick 全部替换，不进入密度调节），所以数学上只有一个竞争权重有意义——`rel[0]`。且 `rel[0]` 必须 = 1，否则均衡点偏移到 `rel[0]×K`（ratio=1 时招募数 = `produced_age_0 × expected_surv × s0 = rel[0]×K`），K 失去"承载力"含义。
+
+实际侧引擎根本不做加权（`run_discrete_survival` 用 `total_age_0` 原始总数；WF 路径注释明说 "only age-0 juveniles compete, actual_competition_strength is just the total juvenile count"）。`(2,)` 数组仅服务于与共享 `compute_equilibrium_metrics` 代码的兼容（`config.py:240-245` 注释 "kept for spatial builder compat; inactive in discrete" 已部分覆盖此意）。
+
+后续若做 SU-D1 的 FIXED-only 收敛，可一并移除该字段在离散代的消费；否则维持现状（默认 `np.ones`，rel[0]=1.0 自洽）。
+
+---
+
 ## 🔴 高优先级 — 正确性 / 阻塞项
 
 ### #2 ✅ Selector + custom hook 调用约定统一

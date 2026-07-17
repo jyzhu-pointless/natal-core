@@ -206,7 +206,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._pending_hooks.clear()
         self.hook_executor = None
 
-    def _clone(self, name: str, config: Optional[PopulationConfig] = None) -> Any:
+    def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
         """Create a lightweight functional copy sharing compiled state and config.
 
         Used by ``SpatialBuilder`` to efficiently clone template demes without
@@ -214,9 +214,18 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         compiled hooks, index registry, modifier pipelines, and config arrays
         with the template. Only state arrays and history are independent.
 
+        The *config* is stored by reference (no copy, no conversion): for a
+        homogeneous spatial build every clone shares the same config object,
+        which is what gives ``_dispatch_scalar`` its identity-based dedup
+        invariant.  Subclasses must not re-normalise or ``_replace`` the
+        config here — that would split shells and break the dedup.
+
         Args:
             name: Unique name for the clone.
-            config: Optional ``PopulationConfig`` to use (default: template's config).
+            config: Optional config to use (default: template's config).
+                Accepts either ``PopulationConfig`` or
+                ``DiscretePopulationConfig``; the two models are
+                independent and no cross-model conversion is performed.
 
         Returns:
             A new population instance of the same type with shared compiled state.

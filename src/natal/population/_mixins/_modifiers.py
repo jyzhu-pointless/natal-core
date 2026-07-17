@@ -83,7 +83,7 @@ class ModifierPresetMixin(HookManagerMixin):
             if patch:
                 apply_preset_fitness_patch(self, patch)  # type: ignore[arg-type]
 
-    def refresh_modifiers(self) -> None:
+    def refresh_modifiers(self, rebuild_maps: bool = True) -> None:
         """Rebuild derived modifier lists and maps from _presets + _manual_*.
 
         Presets are applied in priority order, then manual modifiers are
@@ -91,11 +91,11 @@ class ModifierPresetMixin(HookManagerMixin):
         gametes_to_zygotes_map, offspring_tensor) are rebuilt from the
         combined list.
 
-        .. note::
-
-            This method does **not** touch fitness tensors.  Callers that
-            need a full fitness rebuild should also call
-            :meth:`reapply_preset_fitness`.
+        Args:
+            rebuild_maps: If ``True`` (default), also call
+                :meth:`refresh_modifier_maps`.  Set to ``False`` when the
+                caller plans to batch multiple modifier registrations and
+                will call :meth:`refresh_modifier_maps` once afterward.
         """
         self._gamete_modifiers.clear()
         self._zygote_modifiers.clear()
@@ -113,7 +113,8 @@ class ModifierPresetMixin(HookManagerMixin):
                 ))
         self._gamete_modifiers.extend(self._manual_gamete)
         self._zygote_modifiers.extend(self._manual_zygote)
-        self.refresh_modifier_maps()
+        if rebuild_maps:
+            self.refresh_modifier_maps()
 
     def refresh_modifier_maps(self) -> None:
         """Rebuild the three modifier maps from current modifier lists.
@@ -269,10 +270,19 @@ class ModifierPresetMixin(HookManagerMixin):
     def add_preset(self, preset: GeneticPreset) -> None:
         """Add a preset to this population.
 
+        Registration is idempotent by object identity: if the exact same
+        preset instance is already in ``_presets``, this is a no-op.
+        This prevents double-registration when ``presets(drive)`` is
+        called twice — the alternative (appending twice) would cause
+        ``refresh_modifiers()`` to build two copies of the preset's
+        gamete/zygote modifier, double-applying its effect in the
+        offspring tensor.
+
         Args:
             preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
         """
-        self._presets.append(preset)
+        if not any(p is preset for p in self._presets):
+            self._presets.append(preset)
 
     def apply_preset(self, preset: GeneticPreset) -> None:
         """Apply a genetic preset to this population.

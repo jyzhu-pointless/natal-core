@@ -4,7 +4,7 @@ import natal as nt
 from natal.population.discrete_generation import DiscreteGenerationPopulation
 from natal.data import (
     NO_COMPETITION,
-    build_population_config,
+    build_discrete_engine_config,
     initialize_gamete_map,
     initialize_zygote_map,
 )
@@ -93,22 +93,16 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         n_glabs=1,
     )
 
-    config = build_population_config(
+    config = build_discrete_engine_config(
         n_genotypes=len(diploid_genotypes),
         n_gtypes=len(haploid_genotypes),
-        n_sexes=2,
-        n_ages=2,
         n_glabs=1,
         stochastic=False,
         continuous_sampling=False,
-        age_based_survival_rates=np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float64),
-        age_based_mating_rates=np.array([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64),
-        female_age_based_fertility=np.array([0.0, 1.0], dtype=np.float64),
         viability_fitness=np.ones((2, 2, len(diploid_genotypes)), dtype=np.float64),
         fecundity_fitness=np.ones((2, len(diploid_genotypes)), dtype=np.float64),
         sexual_selection_fitness=np.ones((len(diploid_genotypes), len(diploid_genotypes)), dtype=np.float64),
         age_based_relative_competition_strength=np.array([1.0, 1.0], dtype=np.float64),
-        new_adult_age=1,
         eggs_per_female=1.0,
         fixed_egg_count=True,
         carrying_capacity=1.0e12,
@@ -267,22 +261,16 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
         n_glabs=1,
     )
 
-    config = build_population_config(
+    config = build_discrete_engine_config(
         n_genotypes=len(diploid_genotypes),
         n_gtypes=len(haploid_genotypes),
-        n_sexes=2,
-        n_ages=2,
         n_glabs=1,
         stochastic=False,
         continuous_sampling=False,
-        age_based_survival_rates=np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float64),
-        age_based_mating_rates=np.array([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64),
-        female_age_based_fertility=np.array([0.0, 1.0], dtype=np.float64),
         viability_fitness=np.ones((2, 2, len(diploid_genotypes)), dtype=np.float64),
         fecundity_fitness=np.ones((2, len(diploid_genotypes)), dtype=np.float64),
         sexual_selection_fitness=np.ones((len(diploid_genotypes), len(diploid_genotypes)), dtype=np.float64),
         age_based_relative_competition_strength=np.array([1.0, 1.0], dtype=np.float64),
-        new_adult_age=1,
         eggs_per_female=1.0,
         fixed_egg_count=True,
         carrying_capacity=1.0e12,
@@ -369,22 +357,16 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
         n_glabs=1,
     )
 
-    config = build_population_config(
+    config = build_discrete_engine_config(
         n_genotypes=len(diploid_genotypes),
         n_gtypes=len(haploid_genotypes),
-        n_sexes=2,
-        n_ages=2,
         n_glabs=1,
         stochastic=False,
         continuous_sampling=False,
-        age_based_survival_rates=np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float64),
-        age_based_mating_rates=np.array([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64),
-        female_age_based_fertility=np.array([0.0, 1.0], dtype=np.float64),
         viability_fitness=np.ones((2, 2, len(diploid_genotypes)), dtype=np.float64),
         fecundity_fitness=np.ones((2, len(diploid_genotypes)), dtype=np.float64),
         sexual_selection_fitness=np.ones((len(diploid_genotypes), len(diploid_genotypes)), dtype=np.float64),
         age_based_relative_competition_strength=np.array([1.0, 1.0], dtype=np.float64),
-        new_adult_age=1,
         eggs_per_female=1.0,
         fixed_egg_count=True,
         carrying_capacity=1.0e12,

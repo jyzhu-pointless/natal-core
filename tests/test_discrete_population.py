@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.data import DiscretePopulationState
+from natal.data import DiscretePopulationState, PopulationConfig
 
 
 def _make_species(name: str = "DiscSp"):
@@ -31,6 +31,32 @@ def _minimal_pop(sp, *, pop_name: str = "DiscPop", stochastic: bool = False):
         .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
         .build()
     )
+
+
+def _build_age_structured_config(sp: nt.Species) -> PopulationConfig:
+    """Build a minimal ``PopulationConfig`` via the age-structured builder.
+
+    Used by the negative-contract tests to obtain a real ``PopulationConfig``
+    (independent model) that must be rejected by the discrete-generation
+    entry points.  Building via the public Configurator path is less brittle
+    than hand-constructing the 40-field NamedTuple.
+    """
+    age_pop = (
+        nt.AgeStructuredPopulation
+        .setup(species=sp, name="AgePop", stochastic=False)
+        .age_structure(n_ages=2, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": {1: 100}},
+                "male": {"WT|WT": {1: 100}},
+            }
+        )
+        .reproduction(eggs_per_female=10)
+        .competition(carrying_capacity=1000, low_density_growth_rate=6.0,
+                     juvenile_growth_mode="concave")
+        .build()
+    )
+    return age_pop.export_config()
 
 
 class TestBuildAndSetup:
@@ -164,23 +190,85 @@ class TestStateAndConfigInterop:
         np.testing.assert_array_equal(pop._state.individual_count, custom_counts)
         assert pop._tick == 11
 
-    def test_import_config_normalizes_age_settings(self):
-        sp = _make_species("Disc_config_roundtrip")
-        pop = _minimal_pop(sp, pop_name="Disc_config_roundtrip_pop")
+    def test_import_config_rejects_non_normalized_discrete_config(self):
+        """import_config rejects a DiscretePopulationConfig with n_ages != 2.
 
-        updated = pop.export_config()._replace(
+        The discrete-generation engine hardcodes a 2-age lifecycle; a config
+        with violated invariants is rejected with ValueError rather than
+        silently normalised.  The population's config must be unchanged
+        after the exception (error-path state invariant).
+        """
+        sp = _make_species("Disc_config_reject_nages")
+        pop = _minimal_pop(sp, pop_name="Disc_config_reject_nages_pop")
+
+        original_config = pop.export_config()
+        bad = original_config._replace(
             n_ages=5,
             new_adult_age=3,
             adult_ages=np.array([3, 4], dtype=np.int64),
         )
 
-        pop.import_config(updated)
+        with pytest.raises(ValueError, match="n_ages"):
+            pop.import_config(bad)
 
-        cfg = pop.export_config()
-        assert cfg.n_ages == 2
-        assert cfg.new_adult_age == 1
-        np.testing.assert_array_equal(cfg.adult_ages, np.array([1], dtype=np.int64))
-        assert cfg.n_ztypes == updated.n_ztypes
+        # State unchanged after the exception.
+        assert pop.export_config() is original_config
+        assert pop.export_config().n_ages == 2
+        assert pop.export_config().new_adult_age == 1
+
+    def test_import_config_rejects_population_config(self):
+        """import_config rejects a PopulationConfig with TypeError.
+
+        The two config models are independent; no cross-model conversion is
+        performed.  A PopulationConfig built for an age-structured population
+        must not be installable on a discrete-generation population.
+        """
+        sp = _make_species("Disc_config_reject_pc")
+        pop = _minimal_pop(sp, pop_name="Disc_config_reject_pc_pop")
+
+        age_config = _build_age_structured_config(sp)
+
+        original_config = pop.export_config()
+        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+            pop.import_config(age_config)
+        assert pop.export_config() is original_config
+
+    def test_import_config_rejects_dict(self):
+        """import_config rejects a dict with TypeError — no dict path exists."""
+        sp = _make_species("Disc_config_reject_dict")
+        pop = _minimal_pop(sp, pop_name="Disc_config_reject_dict_pop")
+
+        original_config = pop.export_config()
+        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+            pop.import_config({"n_ages": 2})  # type: ignore[arg-type]
+        assert pop.export_config() is original_config
+
+    def test_constructor_rejects_population_config(self):
+        """DiscreteGenerationPopulation.__init__ rejects PopulationConfig."""
+        sp = _make_species("Disc_ctor_reject_pc")
+
+        age_config = _build_age_structured_config(sp)
+
+        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+            nt.DiscreteGenerationPopulation(
+                species=sp,
+                population_config=age_config,
+            )
+
+    def test_import_config_accepts_valid_discrete_config(self):
+        """import_config accepts a valid DiscretePopulationConfig unchanged.
+
+        Positive contract: a well-formed config is stored by reference
+        (identity preserved), no conversion or copy.
+        """
+        sp = _make_species("Disc_config_accept")
+        pop = _minimal_pop(sp, pop_name="Disc_config_accept_pop")
+
+        new_config = pop.export_config()._replace(stochastic=True)
+        pop.import_config(new_config)
+
+        assert pop.export_config() is new_config
+        assert pop.export_config().stochastic is True
 
 
 class TestMixedGenotypes:

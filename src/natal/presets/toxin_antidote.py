@@ -148,6 +148,19 @@ class ToxinAntidoteDrive(GeneticPreset):
         """Gene: The disrupted (cleaved) allele produced by target disruption."""
         return self._resolve_bound_gene(self._str_disrupted_allele)
 
+    @staticmethod
+    def _rate_at(rate: float | tuple[float, float], sex: Sex) -> float:
+        """Return per-sex rate, normalising a scalar to both sexes.
+
+        ``__init__`` resolves scalar input to a ``(female, male)`` tuple
+        via :meth:`_resolve_rates`, but :meth:`reconfigure_preset` writes
+        back via ``setattr`` which may restore a plain ``float``.  This
+        helper handles both forms transparently.
+        """
+        if isinstance(rate, (int, float)):
+            return float(rate)
+        return rate[sex]
+
     def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
         """Implement target disruption in the germline of drive carriers."""
         def drive_carrier_filter(gt: Genotype) -> bool:
@@ -156,7 +169,7 @@ class ToxinAntidoteDrive(GeneticPreset):
 
         rule_set = GameteConversionRuleSet(f"{self.name}_GermlineDisruption")
         for sex in (Sex.FEMALE, Sex.MALE):
-            rate = self.conversion_rate[sex]
+            rate = ToxinAntidoteDrive._rate_at(self.conversion_rate, sex)
             if rate > 0:
                 rule_set.add_allele_convert(
                     from_allele=self.target_allele,
@@ -186,7 +199,7 @@ class ToxinAntidoteDrive(GeneticPreset):
             return count_allele_copies(gt, self.drive_allele) > 0
 
         for sex in (Sex.FEMALE, Sex.MALE):
-            rate = self.embryo_disruption_rate[sex]
+            rate = ToxinAntidoteDrive._rate_at(self.embryo_disruption_rate, sex)
             if rate > 0:
                 m_glab = self.cas9_deposition_glab if sex == Sex.FEMALE else None
                 p_glab = self.cas9_deposition_glab if (sex == Sex.MALE and self.use_paternal_deposition) else None
