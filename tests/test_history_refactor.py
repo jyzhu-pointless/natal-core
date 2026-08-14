@@ -15,10 +15,11 @@ invariant).  Covers:
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 import natal as nt
 from natal.output._recording import RecordingPlan, compile_recording_plan
@@ -77,12 +78,17 @@ def _minimal_layout(
 
 
 def _raw_schema(layout: Optional[PopulationLayout] = None, row_size: int = 25) -> HistorySchema:
+    """Build a raw history schema with optional layout and width overrides."""
     if layout is None:
         layout = _minimal_layout()
     return HistorySchema(mode="raw", population=layout, row_size=row_size)
 
 
-def _obs_meta(labels: tuple = ("group_0",), collapse_age: bool = False) -> ObservationMetadata:
+def _obs_meta(
+    labels: tuple[str, ...] = ("group_0",),
+    collapse_age: bool = False,
+) -> ObservationMetadata:
+    """Build observation metadata for named test groups."""
     return ObservationMetadata(labels=labels, collapse_age=collapse_age, n_groups=len(labels))
 
 
@@ -91,6 +97,7 @@ def _obs_schema(
     row_size: int = 5,
     obs_meta_val: Optional[ObservationMetadata] = None,
 ) -> HistorySchema:
+    """Build an observation-mode history schema for tests."""
     if layout is None:
         layout = _minimal_layout()
     if obs_meta_val is None:
@@ -160,6 +167,7 @@ class TestHistoryBatchValidation:
     """Invariant: HistoryBatch enforces 2-D rows and row width == schema.row_size."""
 
     def test_valid_batch_constructs(self) -> None:
+        """Accept rows whose dimensions match the schema."""
         schema = _raw_schema(row_size=5)
         rows = np.ones((3, 5), dtype=np.float64)
         batch = HistoryBatch(schema=schema, rows=rows)
@@ -167,11 +175,13 @@ class TestHistoryBatchValidation:
         np.testing.assert_array_equal(batch.rows, rows)
 
     def test_1d_rows_rejected(self) -> None:
+        """Reject a one-dimensional row buffer."""
         schema = _raw_schema(row_size=5)
         with pytest.raises(ValueError, match="rows must be 2-D"):
             HistoryBatch(schema=schema, rows=np.ones(5, dtype=np.float64))
 
     def test_row_width_mismatch_rejected(self) -> None:
+        """Reject rows whose width differs from the schema."""
         schema = _raw_schema(row_size=5)
         with pytest.raises(ValueError, match="does not match schema row_size"):
             HistoryBatch(schema=schema, rows=np.ones((2, 7), dtype=np.float64))
@@ -203,6 +213,7 @@ class TestHistoryAppend:
     """Invariant: History.append rejects batches with non-matching schema."""
 
     def test_append_valid_batch(self) -> None:
+        """Append a valid batch and retain both rows."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         # Two rows with different ticks
@@ -215,6 +226,7 @@ class TestHistoryAppend:
         assert len(history) == 2
 
     def test_schema_mismatch_rejected(self) -> None:
+        """Reject a batch built for a different schema."""
         s1 = _raw_schema(row_size=5)
         # Construct genuinely different schemas with different row_size
         s_big = _raw_schema(row_size=10)
@@ -271,6 +283,7 @@ class TestHistoryClear:
     """Invariant: clear() removes all rows but keeps the schema unchanged."""
 
     def test_clear_preserves_schema(self) -> None:
+        """Remove all rows without replacing the schema."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5)
@@ -304,6 +317,7 @@ class TestHistoryToNumpy:
     """Invariant: to_numpy() shape = (n_records, row_size)."""
 
     def test_empty_returns_zero_row_array(self) -> None:
+        """Represent empty history with a correctly typed zero-row array."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         arr = history._to_numpy()
@@ -312,6 +326,7 @@ class TestHistoryToNumpy:
         assert arr.dtype == np.float64
 
     def test_n_rows_returns_n_by_row_size(self) -> None:
+        """Return one flat row per stored record."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         for tick in range(3):
@@ -335,6 +350,7 @@ class TestHistoryLenIter:
     """Invariant: len(history) == len(list(history)) == n_records."""
 
     def test_len_matches_n_records(self) -> None:
+        """Keep the length protocol synchronized with ``n_records``."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(7, 5)
@@ -343,6 +359,7 @@ class TestHistoryLenIter:
         assert history.n_records == 7
 
     def test_iter_yields_all_rows(self) -> None:
+        """Yield every stored tick exactly once in order."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         for tick in range(4):
@@ -649,12 +666,14 @@ class TestRecordingPlanFrozen:
     """Invariant: RecordingPlan cannot be mutated after construction."""
 
     def test_recording_plan_frozen(self) -> None:
+        """Prevent mutation of a compiled recording plan."""
         schema = _raw_schema(row_size=25)
         plan = RecordingPlan(schema=schema)
         with pytest.raises(FrozenInstanceError):
             plan.schema = schema  # type: ignore[misc]  # testing frozen dataclass mutation guard
 
     def test_recording_plan_attributes(self) -> None:
+        """Retain the schema and observation mask supplied at construction."""
         schema = _obs_schema(row_size=5)
         mask = np.ones((1, 2, 2, 6), dtype=np.float64)
         plan = RecordingPlan(schema=schema, observation_mask=mask)
@@ -865,6 +884,7 @@ class TestObservationBuildMask:
     """Invariant: build_mask() returns a mask of shape (n_groups, n_sexes, n_ages, n_ztypes)."""
 
     def test_build_mask_shape(self, simple_species) -> None:
+        """Build a four-dimensional mask with the configured axes."""
         nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
@@ -936,6 +956,7 @@ class TestObservationCollapseAge:
     """Invariant: collapse_age=True produces (n_groups, n_sexes)-shaped output."""
 
     def test_collapse_age_output_shape(self, simple_species) -> None:
+        """Remove the age axis when observation requests age collapse."""
         nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
@@ -1186,6 +1207,7 @@ class TestSpatialHistoryLayout:
     """Invariant: SpatialHistoryLayout stores correct per-deme sizes."""
 
     def test_construction(self) -> None:
+        """Retain all per-deme layout dimensions."""
         layout = SpatialHistoryLayout(n_demes=5, ind_per_deme=24, sperm_per_deme=0)
         assert layout.n_demes == 5
         assert layout.ind_per_deme == 24
@@ -1201,6 +1223,7 @@ class TestHistoryToListDict:
     """Invariant: to_list() returns correct (tick, row) pairs."""
 
     def test_to_list_matches_appended(self) -> None:
+        """Return defensive rows matching the appended ticks and values."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows_data = []

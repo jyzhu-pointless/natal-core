@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.data import extract_gamete_frequencies_by_glab
+from natal.data import initialize_gamete_map
 from natal.genetics import Gene, Genotype, HaploidGenotype
 from natal.modifiers.conditions import Condition
 from natal.modifiers.module import (
@@ -633,9 +633,43 @@ class GameteConversionRuleSet:
         ztype_to_matrix = self.to_matrix(population)
 
         n_glabs = int(population.config.n_glabs)
-        zygotes_to_gametes_map = population.config.zygotes_to_gametes_map
         haploid_genotypes = population.registry.index_to_haplo
-        n_gtypes = population.registry.n_gtypes
+        # Conversion modifiers describe a transformation from Mendelian
+        # inheritance.  Reusing the population's current map would feed an
+        # already converted distribution back through the same rule whenever
+        # modifiers are refreshed or a preset is reconfigured.
+        full_mendelian_map = initialize_gamete_map(
+            haploid_genotypes=haploid_genotypes,
+            diploid_genotypes=population.registry.index_to_genotype,
+            n_glabs=n_glabs,
+            n_slabs=int(population.config.n_slabs),
+        )
+        full_ztype_index = {
+            (genotype, slab): (
+                genotype_idx * len(population.registry.slab_labels) + slab_idx
+            )
+            for genotype_idx, genotype in enumerate(population.registry.index_to_genotype)
+            for slab_idx, slab in enumerate(population.registry.slab_labels)
+        }
+        full_gtype_index = {
+            (haplotype, glab): (
+                haplotype_idx * len(population.registry.glab_labels) + glab_idx
+            )
+            for haplotype_idx, haplotype in enumerate(haploid_genotypes)
+            for glab_idx, glab in enumerate(population.registry.glab_labels)
+        }
+        active_ztypes = [
+            full_ztype_index[ztype] for ztype in population.registry.index_to_ztype
+        ]
+        active_gtypes = [
+            full_gtype_index[gtype] for gtype in population.registry.index_to_gtype
+        ]
+        # Compression keeps arbitrary entries from the flat ZType/GType axes;
+        # project by domain identity instead of assuming either axis remains a
+        # genotype×label Cartesian product.
+        mendelian_gamete_map = full_mendelian_map[
+            :, active_ztypes, :
+        ][:, :, active_gtypes]
 
         def gamete_modifier_func(*_args: object, **_kwargs: object) -> Dict[Tuple[int, int], Dict[int, float]]:
             """Apply all conversion rules to gamete frequencies.
@@ -645,21 +679,12 @@ class GameteConversionRuleSet:
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
 
             for (sex_idx, ztype_idx), M in ztype_to_matrix.items():
-                initial_freqs = extract_gamete_frequencies_by_glab(
-                    zygotes_to_gametes_map,
-                    sex_idx,
-                    ztype_idx,
-                    haploid_genotypes,
-                    n_glabs,
-                )
-                if not initial_freqs:
+                # Both operands use the registry's active flat GType axis, so
+                # this also works when compression retained only a sparse set
+                # of (haplotype, glab) pairs.
+                freq_vec = mendelian_gamete_map[sex_idx, ztype_idx]
+                if not np.any(freq_vec > 1e-12):
                     continue
-
-                freq_vec = np.zeros(n_gtypes, dtype=np.float64)
-                for (hg, glab_idx), freq in initial_freqs.items():
-                    glab_str = population.registry.glab_labels[glab_idx]
-                    gtype_idx = population.registry.gtype_index(hg, glab_str)
-                    freq_vec[gtype_idx] = freq
 
                 converted_vec = freq_vec @ M
 

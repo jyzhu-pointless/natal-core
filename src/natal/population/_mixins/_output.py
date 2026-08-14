@@ -151,27 +151,11 @@ class OutputMixin(ModifierPresetMixin):
                 "restoration."
             )
         restored_tick, ic, ss = history_obj.restore_state(tick)
-        state = getattr(self, "state", None)
-        if state is None:
-            raise RuntimeError("Population has no state object.")
-
-        n_demes = getattr(self, "n_demes", 1)
-
-        if ic.ndim == 4 and n_demes > 1:
-            for di in range(min(n_demes, ic.shape[0])):
-                demes = getattr(self, "_demes", None)
-                if demes is not None and di < len(demes):
-                    demes[di].state.individual_count[:] = ic[di]
-                    demes[di]._tick = restored_tick
-                    if hasattr(demes[di], "_state") and demes[di]._state is not None:
-                        demes[di]._state = demes[di]._state._replace(
-                            n_tick=restored_tick
-                        )
-        else:
-            state.individual_count[:] = ic.reshape(state.individual_count.shape)
-            if ss is not None and hasattr(state, "sperm_storage"):
-                state.sperm_storage[:] = ss.reshape(state.sperm_storage.shape)
-            self._state = state._replace(n_tick=restored_tick)
+        state = self._state
+        state.individual_count[:] = ic.reshape(state.individual_count.shape)
+        if ss is not None and hasattr(state, "sperm_storage"):
+            state.sperm_storage[:] = ss.reshape(state.sperm_storage.shape)
+        self._state = state._replace(n_tick=restored_tick)
         self._tick = restored_tick
         history_obj.truncate(retain_until_tick=tick)
 

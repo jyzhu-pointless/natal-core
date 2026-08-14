@@ -11,7 +11,7 @@ import pkgutil
 from pathlib import Path
 from typing import Any, Dict, List, cast
 
-__version__ = "0.1.3"
+__version__ = "0.2.0b"
 
 # Maps exported symbol names to the module that defines them.
 #

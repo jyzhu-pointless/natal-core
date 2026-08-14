@@ -68,6 +68,17 @@ GroupsInput = Optional[
 
 
 def _build_fingerprint(*components: object) -> str:  # object: any value with deterministic repr() — hashed via repr()
+    """Hash values through their deterministic representations.
+
+    ``object`` is intentional because the implementation only calls
+    ``repr()``, which every Python object provides.
+
+    Args:
+        *components: Values whose representations form the hash input.
+
+    Returns:
+        The first 16 hexadecimal characters of a SHA-256 digest.
+    """
     import hashlib
 
     hasher = hashlib.sha256()
@@ -257,8 +268,7 @@ class Observation:
             ValueError: If no demes are selected or an index is out of range.
         """
         selected_indices = self.deme_indices
-        if selected_indices is None:
-            selected_indices = tuple(range(individual_count.shape[0]))
+        assert selected_indices is not None
         if not selected_indices:
             raise ValueError("Observation selects no demes")
         if any(
@@ -321,6 +331,20 @@ class Observation:
         n_ztypes: int,
         collapse_age: bool = False,
     ) -> NDArray[np.float64]:
+        """Recompile a missing mask for concrete population dimensions.
+
+        Args:
+            n_sexes: Number of sex entries.
+            n_ages: Number of age entries.
+            n_ztypes: Number of ZType entries.
+            collapse_age: Whether the compiled mask omits the age axis.
+
+        Returns:
+            Rebuilt floating-point selection mask.
+
+        Raises:
+            ValueError: If this observation has no registry reference.
+        """
         registry = self._registry
         if registry is None:
             raise ValueError("Cannot rebuild mask: no registry reference stored")
@@ -404,12 +428,27 @@ class ObservationFilter:
     """
 
     def __init__(self, registry: IndexRegistry) -> None:
+        """Initialize a compiler for one index registry.
+
+        Args:
+            registry: Registry used to resolve genotype and ZType selectors.
+        """
         self.registry = registry
 
     @staticmethod
     def resolve_diploid_genotypes(
         diploid_genotypes: Optional[Union[Sequence[Any], Any]],  # Any: Genotype | HaploidGenotype | Species — duck-typed
     ) -> Optional[Sequence[Any]]:  # Any: duck-typed genotype list
+        """Normalize supported genotype containers to a genotype sequence.
+
+        Args:
+            diploid_genotypes: Genotype sequence, haploid genotype, Species,
+                or ``None``.
+
+        Returns:
+            A resolved genotype sequence, the original sequence, or ``None``
+            when resolution is unavailable.
+        """
         if diploid_genotypes is None:
             return None
         cls_name = type(diploid_genotypes).__qualname__
@@ -562,6 +601,18 @@ class ObservationFilter:
         groups: GroupsInput,
         diploid_genotypes: Optional[Sequence[Any]],  # Any: duck-typed genotype objects
     ) -> Tuple[List[Tuple[str, Dict[str, Any]]], Tuple[str, ...]]:  # Any: group spec values
+        """Normalize legacy observation groups to labeled dictionaries.
+
+        Args:
+            groups: Legacy group mapping or ordered group sequence.
+            diploid_genotypes: Genotypes used to construct identity groups.
+
+        Returns:
+            Normalized labeled specs and their labels.
+
+        Raises:
+            ValueError: If identity groups are requested without genotypes.
+        """
         specs: List[Tuple[str, Dict[str, Any]]] = []  # Any: group spec values
 
         if groups is None:
@@ -640,6 +691,18 @@ class ObservationFilter:
         specs: Tuple[Tuple[str, Dict[str, Any]], ...],  # Any: group spec values
         collapse_age: bool,
     ) -> NDArray[np.float64]:
+        """Compile legacy group dictionaries into a numerical mask.
+
+        Args:
+            n_sexes: Number of sex entries.
+            n_ages: Number of age entries.
+            n_ztypes: Number of ZType entries.
+            specs: Labeled legacy group specifications.
+            collapse_age: Whether to omit the age axis from the mask.
+
+        Returns:
+            Binary floating-point mask indexed by group and selected axes.
+        """
         per_ztypes: List[List[int]] = []
         per_sexes: List[List[int]] = []
         per_age_preds: List[Callable[[int], bool]] = []
@@ -682,6 +745,14 @@ class ObservationFilter:
 
     @staticmethod
     def _make_age_predicate(age_spec: AgeSpec) -> Callable[[int], bool]:
+        """Compile an age specification into a membership predicate.
+
+        Args:
+            age_spec: Wildcard, explicit ages, ranges, or existing predicate.
+
+        Returns:
+            Predicate returning whether an age is selected.
+        """
         if age_spec is None:
             return lambda a: True
         if callable(age_spec):
@@ -708,6 +779,15 @@ class ObservationFilter:
 
     @staticmethod
     def _resolve_sexes(spec_sex: SexSpec, n_sexes: int) -> List[int]:
+        """Resolve a legacy sex specification to valid axis indices.
+
+        Args:
+            spec_sex: Sex wildcard, label, integer, enum, or iterable.
+            n_sexes: Number of available sex entries.
+
+        Returns:
+            Sorted unique selected sex indices.
+        """
         if spec_sex is None:
             return list(range(n_sexes))
         if isinstance(spec_sex, (str, int, Sex)):
@@ -732,6 +812,15 @@ class ObservationFilter:
         gen_spec: Optional[Iterable[Any]],  # Any: duck-typed genotype or pattern
         n_ztypes: int,
     ) -> List[int]:
+        """Resolve legacy genotype selectors to ZType indices.
+
+        Args:
+            gen_spec: Genotype indices, patterns, or ``None`` wildcard.
+            n_ztypes: Number of available ZTypes.
+
+        Returns:
+            Sorted unique selected ZType indices.
+        """
         if gen_spec is None:
             return list(range(n_ztypes))
 
@@ -759,12 +848,36 @@ class ObservationFilter:
     def _get_gen_spec(
         self, spec: Dict[str, Any]  # Any: group spec dict with str keys and mixed values
     ) -> Optional[Iterable[Any]]:  # Any: duck-typed genotype or pattern
+        """Extract the genotype selector from a legacy group dictionary.
+
+        Args:
+            spec: Legacy group specification.
+
+        Returns:
+            Genotype selectors or ``None``.
+        """
         return spec.get("genotype") or spec.get("genotypes")
 
     def _get_sex_spec(self, spec: Dict[str, Any]) -> SexSpec:  # Any: group spec dict
+        """Extract the sex selector from a legacy group dictionary.
+
+        Args:
+            spec: Legacy group specification.
+
+        Returns:
+            Sex selector or ``None``.
+        """
         return spec.get("sex")
 
     def _get_age_spec(self, spec: Dict[str, Any]) -> AgeSpec:  # Any: group spec dict
+        """Extract the age selector from a legacy group dictionary.
+
+        Args:
+            spec: Legacy group specification.
+
+        Returns:
+            Age selector or ``None``.
+        """
         return spec.get("age")
 
     def build_filter(

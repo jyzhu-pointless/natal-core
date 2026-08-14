@@ -69,6 +69,15 @@ def _raw_schema(
     layout: PopulationLayout | None = None,
     row_size: int = 25,
 ) -> HistorySchema:
+    """Build a raw history schema for tests.
+
+    Args:
+        layout: Optional population layout override.
+        row_size: Flat width of each history row.
+
+    Returns:
+        Raw-mode history schema.
+    """
     if layout is None:
         layout = _minimal_layout()
     return HistorySchema(mode="raw", population=layout, row_size=row_size)

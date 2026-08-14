@@ -3,10 +3,11 @@ from __future__ import annotations
 import unittest
 import uuid
 
-import natal as nt
+import numpy as np
 
-from natal.presets import ToxinAntidoteDrive
+import natal as nt
 from natal.genetics import Species
+from natal.presets import ToxinAntidoteDrive
 
 
 class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):
@@ -225,6 +226,37 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
 
         self.assertEqual(len(dist), 1)
         self.assertAlmostEqual(dist.get(drive_disrupted_idx, 0.0), 1.0)
+
+    def test_scalar_rate_after_reconfigure_preserves_conversion_distribution(self) -> None:
+        """A scalar runtime rate matches an equivalent two-sex configuration."""
+        preset = ToxinAntidoteDrive(
+            name="TA_RuntimeScalar",
+            drive_allele="Drive",
+            target_allele="WT",
+            disrupted_allele="Disrupted",
+            conversion_rate=0.0,
+            embryo_disruption_rate=0.0,
+        )
+        self.population.update().presets(preset)
+
+        self.population.update().reconfigure_preset(preset, conversion_rate=0.4)
+
+        reference_population = _build_population(self.species)
+        reference = ToxinAntidoteDrive(
+            name="TA_RuntimeTupleReference",
+            drive_allele="Drive",
+            target_allele="WT",
+            disrupted_allele="Disrupted",
+            conversion_rate=(0.4, 0.4),
+            embryo_disruption_rate=0.0,
+        )
+        reference_population.update().presets(reference)
+
+        self.assertEqual(preset.conversion_rate, 0.4)
+        np.testing.assert_array_equal(
+            self.population.config.offspring_tensor,
+            reference_population.config.offspring_tensor,
+        )
 
 
 class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):

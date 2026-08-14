@@ -198,7 +198,7 @@ fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子�
 
 #### `output/` — History / Observation 重构（2026-07-15）
 
-重构观测和历史记录的数据模型与生命周期。详见 `.opencode/history_observation_refactor_report.md`。核心变更：
+重构观测和历史记录的数据模型与生命周期。核心变更：
 
 - `patterns/individual_selector.py`：从 Observation 中提取独立的个体选择器，供 Hook、Preset 等复用
 - `output/_recording.py`：RecordingPlan，在构建期冻结 schema + mask + meta

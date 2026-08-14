@@ -35,13 +35,13 @@ Population state
 
 非空间 Configurator 使用：
 
-```python
+```text
 .with_observation(groups, collapse_age=False)
 ```
 
 空间 Configurator 额外接受 deme 选择与处理方式：
 
-```python
+```text
 .with_observation(
     groups,
     collapse_age=False,
@@ -126,7 +126,7 @@ aggregate 结果 == preserve 结果沿 deme 轴求和
 
 `record_history()` 独立选择记录模式：
 
-```python
+```text
 .record_history(mode="raw", max_rows=None)
 .record_history(mode="observation", max_rows=None)
 ```

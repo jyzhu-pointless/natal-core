@@ -1,13 +1,13 @@
 import numpy as np
 
 import natal as nt
-from natal.population.discrete_generation import DiscreteGenerationPopulation
 from natal.data import (
     NO_COMPETITION,
     build_discrete_engine_config,
     initialize_gamete_map,
     initialize_zygote_map,
 )
+from natal.population.discrete_generation import DiscreteGenerationPopulation
 
 
 def _has_chromosome(haploid: object, chromosome: object) -> bool:

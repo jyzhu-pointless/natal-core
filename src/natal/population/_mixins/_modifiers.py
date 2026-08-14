@@ -14,6 +14,8 @@ from typing import (
     Tuple,
 )
 
+import numpy as np
+
 from natal.population._mixins._hooks import HookManagerMixin
 
 if TYPE_CHECKING:
@@ -164,29 +166,59 @@ class ModifierPresetMixin(HookManagerMixin):
             registry=self._index_registry,
         )
 
-        # Step 2: Build the gametogenesis map.  For each diploid genotype
-        # and sex, produce a probability distribution over the resulting
-        # haploid gametes per gamete label.
-        zygotes_to_gametes_map = initialize_gamete_map(
+        # Step 2: Build full Mendelian maps, then project them onto the
+        # registry's active flat axes.  Compression may retain arbitrary
+        # (genotype, slab) and (haplotype, glab) entries, so neither active
+        # axis is necessarily a Cartesian product.
+        full_z2g = initialize_gamete_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             n_slabs=n_slabs,
-            gamete_modifiers=gamete_funcs,
         )
-
-        # Step 3: Build the fusion map.  For each pair of haploid gametes
-        # (one maternal, one paternal), determine the resulting diploid
-        # offspring genotype index.
-        gametes_to_zygotes_map = initialize_zygote_map(
+        full_g2z = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
             n_glabs=n_glabs,
             n_slabs=n_slabs,
-            zygote_modifiers=zygote_funcs,
+            unordered=self._species.unordered,
         )
+        full_ztype_index = {
+            (genotype, slab): genotype_idx * n_slabs + slab_idx
+            for genotype_idx, genotype in enumerate(diploid_genotypes)
+            for slab_idx, slab in enumerate(self._registry.slab_labels)
+        }
+        full_gtype_index = {
+            (haplotype, glab): haplotype_idx * n_glabs + glab_idx
+            for haplotype_idx, haplotype in enumerate(haploid_genotypes)
+            for glab_idx, glab in enumerate(self._registry.glab_labels)
+        }
+        active_ztypes = [
+            full_ztype_index[ztype] for ztype in self._registry.index_to_ztype
+        ]
+        active_gtypes = [
+            full_gtype_index[gtype] for gtype in self._registry.index_to_gtype
+        ]
+        zygotes_to_gametes_map = full_z2g[
+            :, active_ztypes, :
+        ][:, :, active_gtypes]
+        gametes_to_zygotes_map = full_g2z[
+            active_gtypes, :, :
+        ][:, active_gtypes, :][:, :, active_ztypes]
 
-        # Step 5: Compute the full offspring probability tensor by
+        # Step 3: Apply all wrappers in priority order on the already-projected
+        # axes, so their compressed indices address the correct entries.
+        for modifier in gamete_funcs:
+            zygotes_to_gametes_map = modifier(zygotes_to_gametes_map)
+        for modifier in zygote_funcs:
+            gametes_to_zygotes_map = modifier(gametes_to_zygotes_map)
+        # Configs from different demes share one Numba NamedTuple type.  Keep
+        # array layout stable as well as dtype/shape so a typed.List can hold
+        # refreshed and untouched deme configs together.
+        zygotes_to_gametes_map = np.ascontiguousarray(zygotes_to_gametes_map)
+        gametes_to_zygotes_map = np.ascontiguousarray(gametes_to_zygotes_map)
+
+        # Step 4: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
         # the fusion map.  The result is a 4-D array indexed by
         # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
@@ -204,8 +236,9 @@ class ModifierPresetMixin(HookManagerMixin):
             n_ztypes=n_g,
             n_gtypes=n_hg,
         )
+        offspring_tensor = np.ascontiguousarray(offspring_tensor)
 
-        # Step 6: Persist all three maps into the config via shallow copy.
+        # Step 5: Persist all three maps into the config via shallow copy.
         self._config = self._config._replace(
             zygotes_to_gametes_map=zygotes_to_gametes_map,
             gametes_to_zygotes_map=gametes_to_zygotes_map,

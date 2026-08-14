@@ -96,6 +96,7 @@ class PopulationLayout:
     fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
+        """Derive the immutable layout fingerprint from all schema fields."""
         object.__setattr__(
             self,
             "fingerprint",
@@ -217,6 +218,12 @@ class HistorySchema:
     spatial_layout: Optional[SpatialHistoryLayout] = None
 
     def __post_init__(self) -> None:
+        """Validate that the storage mode and metadata agree.
+
+        Raises:
+            ValueError: If observation metadata contradicts the mode or the
+                row width is not positive.
+        """
         if self.mode == "observation" and self.observation is None:
             raise ValueError("observation-mode schema requires ObservationMetadata")
         if self.mode == "raw" and self.observation is not None:
@@ -240,6 +247,12 @@ class HistoryBatch:
     rows: NDArray[np.float64]
 
     def __post_init__(self) -> None:
+        """Validate the dimensionality and width of the batch rows.
+
+        Raises:
+            ValueError: If rows are not two-dimensional or do not match the
+                schema width.
+        """
         if self.rows.ndim != 2:
             raise ValueError(f"rows must be 2-D, got {self.rows.ndim}-D")
         if self.rows.shape[1] != self.schema.row_size:
@@ -273,6 +286,15 @@ class History:
         *,
         max_rows: Optional[int] = None,
     ) -> None:
+        """Initialize empty history storage for an immutable schema.
+
+        Args:
+            schema: Schema shared by every stored batch.
+            max_rows: Optional positive FIFO capacity.
+
+        Raises:
+            ValueError: If ``max_rows`` is less than one.
+        """
         if max_rows is not None and max_rows < 1:
             raise ValueError(f"max_rows must be >= 1 or None, got {max_rows}")
         self._schema = schema
@@ -470,18 +492,22 @@ class History:
     # ── Mutations ─────────────────────────────────────────────────────────
 
     def __len__(self) -> int:
+        """Return the number of stored records."""
         return len(self._rows)
 
     def __iter__(self) -> Iterator[Tuple[int, NDArray[np.float64]]]:  # explicit Iterator for typed iteration
+        """Iterate over defensive copies paired with their ticks."""
         return iter(self._to_list())
 
     def _invalidate_cache(self) -> None:
+        """Discard all array and tick views derived from stored rows."""
         self._cache_individual_count = None
         self._cache_sperm_storage = None
         self._cache_values = None
         self._cache_ticks = None
 
     def _evict_if_needed(self) -> None:
+        """Evict oldest rows until the configured capacity is satisfied."""
         if self.max_rows is None:
             return
         while len(self._rows) > self.max_rows:
@@ -900,6 +926,17 @@ def _state_to_dict(
     genotype_labels: List[str],
     include_zero_counts: bool,
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
+    """Serialize one population state to the legacy nested dictionary shape.
+
+    Args:
+        state: Age-structured or discrete population state.
+        sex_labels: Labels corresponding to the state sex axis.
+        genotype_labels: Labels corresponding to the state ZType axis.
+        include_zero_counts: Whether zero-valued entries are retained.
+
+    Returns:
+        JSON-serializable state data keyed by tick and count category.
+    """
     from natal.data import PopulationState
 
     n_ages = int(state.individual_count.shape[1])
@@ -951,7 +988,7 @@ def _build_observation_payload(
     labels: List[str],
     sex_labels: List[str],
     include_zero_counts: bool,
-    axes: Optional[Tuple[str, ...]] = None,
+    axes: Tuple[str, ...],
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict  # Any: nested dicts with mixed value types (str, int, float, list, dict)
     """Build a nested-dict payload from an observed array with known axes.
 
@@ -960,66 +997,21 @@ def _build_observation_payload(
         labels: Group labels for the first axis.
         sex_labels: Sex labels.
         include_zero_counts: Whether to include zero values.
-        axes: Explicit axis names. When ``None``, inferred from ndim.
-            Supported: ``("group", "sex")``, ``("group", "sex", "age")``,
+        axes: Explicit axis names. Supported: ``("group", "sex")``,
+            ``("group", "sex", "age")``,
             ``("group", "deme", "sex")``, ``("group", "deme", "sex", "age")``.
     """
-    if axes is not None:
-        # Explicit axis-based serialization
-        n_groups = len(labels)
-        payload: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
-        for g in range(n_groups):
-            g_payload: Any = _serialize_with_axes(observed[g], axes[1:], sex_labels, include_zero_counts)  # Any: recursive JSON-serializable
-            payload[labels[g]] = g_payload
-        return payload
-
-    if observed.ndim == 4:
-        n_demes = int(observed.shape[1])
-        payload = {}
-        for group_idx, group_name in enumerate(labels):
-            deme_block: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
-            for d in range(n_demes):
-                sex_age_block: Dict[str, Dict[str, float]] = {}
-                for sex_idx, sex_name in enumerate(sex_labels):
-                    age_block: Dict[str, float] = {}
-                    for age_idx in range(int(observed.shape[3])):
-                        value = float(observed[group_idx, d, sex_idx, age_idx])
-                        if include_zero_counts or value != 0.0:
-                            age_block[f"age_{age_idx}"] = value
-                    if include_zero_counts or age_block:
-                        sex_age_block[sex_name] = age_block
-                deme_block[f"deme_{d}"] = sex_age_block
-            payload[group_name] = deme_block
-        return payload
-
-    if observed.ndim == 3:
-        n_ages = int(observed.shape[2])
-        payload: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
-        for group_idx, group_name in enumerate(labels):
-            sex_age_block: Dict[str, Dict[str, float]] = {}
-            for sex_idx, sex_name in enumerate(sex_labels):
-                age_block: Dict[str, float] = {}
-                for age_idx in range(n_ages):
-                    value = float(observed[group_idx, sex_idx, age_idx])
-                    if include_zero_counts or value != 0.0:
-                        age_block[f"age_{age_idx}"] = value
-                if include_zero_counts or age_block:
-                    sex_age_block[sex_name] = age_block
-            payload[group_name] = sex_age_block
-        return payload
-
-    if observed.ndim == 2:
-        payload = {}
-        for group_idx, group_name in enumerate(labels):
-            sex_value_block: Dict[str, float] = {}
-            for sex_idx, sex_name in enumerate(sex_labels):
-                value = float(observed[group_idx, sex_idx])
-                if include_zero_counts or value != 0.0:
-                    sex_value_block[sex_name] = value
-            payload[group_name] = sex_value_block
-        return payload
-
-    raise ValueError(f"Unsupported observed array ndim: {observed.ndim}")
+    n_groups = len(labels)
+    payload: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
+    for group_index in range(n_groups):
+        group_payload: Any = _serialize_with_axes(  # Any: recursive JSON value
+            observed[group_index],
+            axes[1:],
+            sex_labels,
+            include_zero_counts,
+        )
+        payload[labels[group_index]] = group_payload
+    return payload
 
 
 def _serialize_with_axes(

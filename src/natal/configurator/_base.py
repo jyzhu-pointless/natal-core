@@ -29,6 +29,7 @@ See also :func:`set_param` (low-level scalar writer) and
 
 from __future__ import annotations
 
+from copy import copy, deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -404,6 +405,9 @@ class Configurator:
         # then applied when maps are rebuilt.
         self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
+        # Preset identity must survive build() so runtime refresh and
+        # reconfiguration can reconstruct modifiers from the original recipes.
+        self._presets: list[GeneticPreset] = []
 
         # Accumulated kwargs for custom structured-array fields.  Each
         # .custom() call adds to this dict; build_custom_array() is called
@@ -828,26 +832,89 @@ class Configurator:
             Self for chaining.
         """
         if self._pop_ref is not None:
-            # Collect presets, then apply in priority order.
-            for preset in presets:
-                self._pop_ref.add_preset(preset)
-            self._pop_ref.refresh_modifiers()
-            self._pop_ref.reapply_preset_fitness()
-            self._config = self._pop_ref.config
+            pop = self._pop_ref
+            original_config = pop.config
+            original_presets = pop.presets
+            original_gamete = pop.gamete_modifiers
+            original_zygote = pop.zygote_modifiers
+            preset_bindings: list[tuple[GeneticPreset, Species | None]] = [
+                (preset, preset._bound_species)  # pyright: ignore[reportPrivateUsage]  # rollback must preserve binding after a failed first registration.
+                for preset in presets
+            ]
+            # Fitness writers mutate arrays in place.  Rebuild against an
+            # isolated config so an exception can restore the exact original
+            # config identity and every observable array.
+            pop.set_config(deepcopy(original_config))
+            try:
+                for preset in presets:
+                    pop.add_preset(preset)
+                pop.refresh_modifiers()
+                pop.reapply_preset_fitness()
+            except Exception:
+                pop._presets = original_presets  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores internal registration metadata.
+                pop._gamete_modifiers = original_gamete  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
+                pop._zygote_modifiers = original_zygote  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
+                pop.set_config(original_config)
+                for preset, bound_species in preset_bindings:
+                    preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
+                self._config = original_config
+                raise
+            self._config = pop.config
             return self
 
         from natal.presets import apply_preset_to_population
 
-        ctx = self._make_ctx()
-        ctx.presets = list(presets)
+        new_presets: list[GeneticPreset] = []
         for preset in presets:
-            apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType]
-        # Trigger map rebuild for cytoplasmic presets (which have no
-        # gamete/zygote modifiers and thus do not auto-trigger rebuilds).
-        has_cytoplasmic = any(isinstance(p, CytoplasmicPreset) for p in presets)
-        if has_cytoplasmic:
-            rebuild_config_maps(ctx)
-        self._sync_from_ctx(ctx)
+            if any(registered is preset for registered in self._presets) or any(
+                registered is preset for registered in new_presets
+            ):
+                continue
+            new_presets.append(preset)
+        if not new_presets:
+            return self
+
+        original_config = self._config
+        original_registry = self._registry
+        original_gamete = list(self.gamete_modifiers)
+        original_zygote = list(self.zygote_modifiers)
+        original_presets = list(self._presets)
+        original_compression_applied = self._compression_applied
+        preset_bindings: list[tuple[GeneticPreset, Species | None]] = [
+            (preset, preset._bound_species)  # pyright: ignore[reportPrivateUsage]  # rollback must preserve binding after a failed build-time registration.
+            for preset in new_presets
+        ]
+        # Preset fitness and modifier rebuilding may mutate arrays in place.
+        # Work against an isolated config and publish it only after every new
+        # preset has completed successfully.
+        if isinstance(original_config, DiscretePopulationConfig):
+            isolated_config: PopulationConfig | DiscretePopulationConfig = deepcopy(
+                original_config
+            )
+        else:
+            isolated_config = deepcopy(original_config)
+        self._config = isolated_config
+        self._presets.extend(new_presets)
+        try:
+            ctx = self._make_ctx()
+            ctx.presets = list(self._presets)
+            for preset in new_presets:
+                apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType]
+            # Cytoplasmic presets have no gamete/zygote modifier that would
+            # otherwise trigger a map rebuild.
+            if any(isinstance(p, CytoplasmicPreset) for p in new_presets):
+                rebuild_config_maps(ctx)
+            self._sync_from_ctx(ctx)
+        except Exception:
+            self._config = original_config
+            self._registry = original_registry
+            self.gamete_modifiers = original_gamete
+            self.zygote_modifiers = original_zygote
+            self._presets = original_presets
+            self._compression_applied = original_compression_applied
+            for preset, bound_species in preset_bindings:
+                preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
+            raise
         return self
 
     def modifiers(
@@ -1127,6 +1194,7 @@ class Configurator:
             ValueError: If *preset* is not registered on this population.
             AttributeError: If any key in *changes* is not an attribute of
                 *preset*.
+            TypeError: If a changed value is incompatible with the preset.
             RuntimeError: If called without a live Population backref.
         """
         # ── Validate phase (zero side effects) ──
@@ -1150,6 +1218,24 @@ class Configurator:
                     f"parameter — this would silently create a stray attribute "
                     f"on the preset object."
                 )
+
+        # Exercise the complete rebuild on an isolated population before
+        # mutating the registered preset.  Calling only the recipe factories
+        # is insufficient because a custom modifier may fail later, when its
+        # returned callable is invoked by refresh_modifier_maps().
+        candidate = copy(preset)
+        for attr, value in changes.items():
+            setattr(candidate, attr, value)
+        trial = pop._clone(  # pyright: ignore[reportPrivateUsage]
+            f"{pop.name}__preset_validation__",
+            config=deepcopy(pop.config),
+        )
+        trial._presets = [  # pyright: ignore[reportPrivateUsage]
+            candidate if registered is preset else registered
+            for registered in trial._presets  # pyright: ignore[reportPrivateUsage]
+        ]
+        trial.refresh_modifiers()
+        trial.reapply_preset_fitness()
 
         # ── Commit phase ──
         for attr, value in changes.items():
@@ -1408,6 +1494,14 @@ class Configurator:
                 name=name,
                 hooks=hooks,
             )
+
+        # Configurator applies modifiers before Population construction.  Carry
+        # both the recipe objects and their current derived callables across the
+        # boundary so refresh_modifiers() and reconfigure_preset() behave the
+        # same for build-time and runtime preset registration.
+        pop._presets = list(self._presets)  # pyright: ignore[reportPrivateUsage]
+        pop._gamete_modifiers = list(self.gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
+        pop._zygote_modifiers = list(self.zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
 
         # Compile and freeze the recording plan.
         self._compile_recording_plan(pop)

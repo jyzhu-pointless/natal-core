@@ -9,6 +9,7 @@ from natal.spatial.configurator import batch_setting
 
 @pytest.fixture(scope="module")
 def species():
+    """Build the minimal species shared by spatial update tests."""
     return nt.Species.from_dict(
         name="__test_spatial_update__",
         structure={"auto": {"A": ["WT"]}},
@@ -416,6 +417,20 @@ def test_spatialconfigurator_for_population_deleted() -> None:
     )
 
 
+def test_spatialconfigurator_private_update_deleted() -> None:
+    """The duplicate configurator-layer _SpatialUpdate must stay deleted."""
+    import natal.spatial.configurator as spatial_configurator
+
+    assert not hasattr(spatial_configurator, "_SpatialUpdate")
+
+
+def test_spatial_update_batchable_methods_constant_deleted(homogeneous_pop) -> None:
+    """Runtime dispatch must not depend on the deleted method-name allowlist."""
+    updater_type = type(homogeneous_pop.update())
+
+    assert not hasattr(updater_type, "_BATCHABLE_METHODS")
+
+
 def test_configurator_for_population_still_exists() -> None:
     """Configurator.for_population (non-spatial) must still be accessible."""
     from natal.configurator import Configurator
@@ -631,17 +646,12 @@ class TestPresetsModifiersSideEffects:
             target_allele="WT",
             drive_conversion_rate=0.95,
         )
-        # Capture Mendelian baseline before preset
-        baseline = pop.deme(0).config.offspring_tensor.copy()
-
         pop.update().presets(drive)
 
-        # After drive, offspring_tensor must differ from Mendelian
         ot0 = pop.deme(0).config.offspring_tensor
         import numpy as np
-        assert not np.array_equal(ot0, baseline), (
-            "offspring_tensor unchanged — drive preset had no effect"
-        )
+        assert ot0[0, 1, 0] == pytest.approx(0.025)
+        np.testing.assert_allclose(ot0.sum(axis=-1), 1.0)
         # All demes share the same config => same offspring_tensor
         for i in range(1, 4):
             np.testing.assert_array_equal(
@@ -656,8 +666,6 @@ class TestPresetsModifiersSideEffects:
         sp = _species_with_drive("__presets_meta_disc")
         pop = _build_homogeneous_discrete(sp)
 
-        baseline = pop.deme(0).config.offspring_tensor.copy()
-
         drive = HomingDrive(
             name="__test_drive_meta_disc__",
             drive_allele="Dr",
@@ -668,9 +676,8 @@ class TestPresetsModifiersSideEffects:
 
         ot0 = pop.deme(0).config.offspring_tensor
         import numpy as np
-        assert not np.array_equal(ot0, baseline), (
-            "offspring_tensor unchanged — drive preset had no effect (discrete)"
-        )
+        assert ot0[0, 1, 0] == pytest.approx(0.025)
+        np.testing.assert_allclose(ot0.sum(axis=-1), 1.0)
         for i in range(1, 4):
             np.testing.assert_array_equal(
                 pop.deme(i).config.offspring_tensor, ot0,
@@ -697,24 +704,19 @@ class TestPresetsModifiersSideEffects:
         )
         pop.update().presets(drive)
 
-        # After presets, tensor must be non-Mendelian
-        baseline = _build_homogeneous_age(sp).deme(0).config.offspring_tensor
         import numpy as np
-        assert not np.array_equal(
-            pop.deme(0).config.offspring_tensor, baseline,
-        ), "Drive preset had no effect"
-        assert len(pop.deme(0).gamete_modifiers) > 0, "No gamete modifiers after presets"
+        expected_tensor = pop.deme(0).config.offspring_tensor.copy()
+        assert expected_tensor[0, 1, 0] == pytest.approx(0.025)
+        assert len(pop.deme(0).gamete_modifiers) == 1
 
         # Call refresh_modifiers on deme 0
         pop.deme(0).refresh_modifiers()
 
-        # After refresh, tensor must still be non-Mendelian (drive preserved)
-        assert not np.array_equal(
-            pop.deme(0).config.offspring_tensor, baseline,
-        ), "Refresh destroyed drive — offspring_tensor reverted to Mendelian"
-        assert len(pop.deme(0).gamete_modifiers) > 0, (
-            "Gamete modifiers lost after refresh"
+        np.testing.assert_array_equal(
+            pop.deme(0).config.offspring_tensor,
+            expected_tensor,
         )
+        assert len(pop.deme(0).gamete_modifiers) == 1
         # Sanity: population can still run
         pop.run(1)
         assert pop.tick == 1
@@ -754,9 +756,7 @@ class TestPresetsModifiersSideEffects:
         pop.deme(1).refresh_modifiers()
 
         # Drive modifiers are still present (not lost).
-        assert len(pop.deme(1).gamete_modifiers) > 0, (
-            "Gamete modifiers lost after cross-deme refresh"
-        )
+        assert len(pop.deme(1).gamete_modifiers) == 1
         # The population can still run.
         pop.run(2)
         assert pop.tick == 2
@@ -764,6 +764,34 @@ class TestPresetsModifiersSideEffects:
             assert not np.any(np.isnan(pop.deme(i).state.individual_count)), (
                 f"Deme {i} state contains NaN after run"
             )
+
+    def test_presets_keep_modifier_group_for_noncontiguous_shared_configs(self):
+        """An A/B/A config layout must reuse each group's own modifier closure."""
+        from natal.presets import HomingDrive
+
+        sp = _species_with_drive("__presets_noncontiguous_groups")
+        pop = _build_homogeneous_age(sp)
+        # Detach only deme 1, leaving the original shared config in the
+        # non-contiguous positions 0, 2, and 3.
+        pop.update(deme=1).competition(carrying_capacity=700)
+        assert pop.deme(0).config is pop.deme(2).config
+        assert pop.deme(1).config is not pop.deme(0).config
+
+        drive = HomingDrive(
+            name="__noncontiguous_group_drive__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.8,
+        )
+        pop.update().presets(drive)
+
+        modifier_a0 = pop.deme(0).gamete_modifiers[0][2]
+        modifier_b = pop.deme(1).gamete_modifiers[0][2]
+        modifier_a2 = pop.deme(2).gamete_modifiers[0][2]
+        assert modifier_a2 is modifier_a0
+        assert modifier_b is not modifier_a0
+        assert pop.deme(2).config is pop.deme(0).config
+        assert pop.deme(1).config is not pop.deme(0).config
 
     def test_presets_dedup_same_instance(self):
         """Passing the same preset instance twice via update().presets()
@@ -792,12 +820,7 @@ class TestPresetsModifiersSideEffects:
         assert len(pop.deme(0)._presets) == 1, (
             f"Expected 1 preset after dedup, got {len(pop.deme(0)._presets)}"
         )
-        # Drive effect must still be present
-        import numpy as np
-        baseline = _build_homogeneous_age(sp).deme(0).config.offspring_tensor
-        assert not np.array_equal(
-            pop.deme(0).config.offspring_tensor, baseline,
-        ), "Dedup should not remove the drive effect"
+        assert pop.deme(0).config.offspring_tensor[0, 1, 0] == pytest.approx(0.025)
 
     def test_modifiers_metadata_all_demes(self):
         """update().modifiers(gamete_modifiers=[...]) applies to all demes."""
@@ -806,15 +829,45 @@ class TestPresetsModifiersSideEffects:
 
         # A no-op gamete modifier
         def _noop(*args, **kwargs):
+            """Return no modifier changes for metadata propagation testing."""
             return {}
 
         pop.update().modifiers(gamete_modifiers=[_noop])
 
         for i in range(4):
             deme = pop.deme(i)
-            assert len(deme.gamete_modifiers) > 0, (
-                f"Deme {i}: expected >0 gamete modifiers, got 0"
-            )
+            assert len(deme.gamete_modifiers) == 1
+
+    def test_zygote_modifier_propagates_once_to_shared_demes(self):
+        """All-deme zygote registration preserves one shared config identity."""
+        sp = _species_with_drive("__zygote_modifier_all")
+        pop = _build_homogeneous_age(sp)
+
+        def _noop(*args, **kwargs):
+            """Return no zygote changes while testing spatial propagation."""
+            return {}
+
+        pop.update().modifiers(zygote_modifiers=[_noop])
+
+        shared_config = pop.deme(0).config
+        for i in range(4):
+            assert len(pop.deme(i).zygote_modifiers) == 1
+            assert pop.deme(i).config is shared_config
+
+    def test_single_deme_modifier_does_not_register_on_other_demes(self):
+        """Single-deme modifier dispatch changes only the selected deme."""
+        sp = _species_with_drive("__gamete_modifier_single")
+        pop = _build_homogeneous_age(sp)
+
+        def _noop(*args, **kwargs):
+            """Return no gamete changes while testing single-deme dispatch."""
+            return {}
+
+        pop.update(deme=0).modifiers(gamete_modifiers=[_noop])
+
+        assert len(pop.deme(0).gamete_modifiers) == 1
+        for i in range(1, 4):
+            assert len(pop.deme(i).gamete_modifiers) == 0
 
     def test_modifiers_persist_after_run(self):
         """Modifiers registered via update() survive a run cycle."""
@@ -822,6 +875,7 @@ class TestPresetsModifiersSideEffects:
         pop = _build_homogeneous_age(sp)
 
         def _noop(*args, **kwargs):
+            """Return no modifier changes while exercising run persistence."""
             return {}
 
         pop.update().modifiers(gamete_modifiers=[_noop])
@@ -857,6 +911,46 @@ class TestReconfigurePreset:
         with pytest.raises(ValueError):
             pop.update().reconfigure_preset(unreg, drive_conversion_rate=0.3)
 
+    def test_build_time_reconfigure_requires_live_population(self):
+        """Build-time configurators reject reconfiguration without mutation."""
+        from natal.presets import HomingDrive
+
+        sp = _species_with_drive("__reconfig_build_time")
+        configurator = nt.AgeStructuredPopulation.setup(species=sp)
+        drive = HomingDrive(
+            name="__build_time__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.8,
+        )
+
+        with pytest.raises(RuntimeError, match="live Population"):
+            configurator.reconfigure_preset(drive, drive_conversion_rate=0.2)
+
+        assert drive.drive_conversion_rate == (0.8, 0.8)
+
+    def test_panmictic_unregistered_preset_preserves_config_and_state(self):
+        """Panmictic validation rejects an unknown preset atomically."""
+        from natal.presets import HomingDrive
+
+        sp = _species_with_drive("__reconfig_panmictic_unregistered")
+        deme = _build_homogeneous_age(sp).deme(0)
+        drive = HomingDrive(
+            name="__panmictic_unregistered__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.8,
+        )
+        original_config = deme.config
+        original_counts = deme.state.individual_count.copy()
+
+        with pytest.raises(ValueError, match="not registered"):
+            deme.update().reconfigure_preset(drive, drive_conversion_rate=0.2)
+
+        assert drive.drive_conversion_rate == (0.8, 0.8)
+        assert deme.config is original_config
+        np.testing.assert_array_equal(deme.state.individual_count, original_counts)
+
     def test_reconfigure_homing_rate_float_runs(self):
         """Reconfiguring drive_conversion_rate to a float and running succeeds."""
         from natal.presets import HomingDrive
@@ -875,10 +969,9 @@ class TestReconfigurePreset:
         # Preset is registered on all 4 demes (shared object), so
         # all-deme reconfigure is the correct path.
         pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
-        # Attribute must be updated
         assert drive.drive_conversion_rate == 0.3
+        assert pop.deme(0).config.offspring_tensor[0, 1, 0] == pytest.approx(0.35)
 
-        # Run must succeed
         pop.run(1)
         assert pop.tick == 1
         import numpy as np
@@ -942,6 +1035,28 @@ class TestReconfigurePreset:
                 pop.deme(i).config.offspring_tensor, original_tensors[i],
             )
 
+    def test_partially_registered_preset_validates_all_demes_before_commit(self):
+        """A later missing registration rejects before changing the preset."""
+        from natal.presets import HomingDrive
+
+        sp = _species_with_drive("__reconfig_partial_registration")
+        pop = _build_homogeneous_age(sp)
+        drive = HomingDrive(
+            name="__partial_registration__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.8,
+        )
+        pop.update(deme=0).presets(drive)
+        original_configs = [pop.deme(i).config for i in range(4)]
+
+        with pytest.raises(ValueError, match="not registered on deme"):
+            pop.update().reconfigure_preset(drive, drive_conversion_rate=0.2)
+
+        assert drive.drive_conversion_rate == (0.8, 0.8)
+        for i in range(4):
+            assert pop.deme(i).config is original_configs[i]
+
     def test_shared_preset_single_deme_reconfigure_forbidden(self):
         """Single-deme reconfigure on a shared preset → ValueError.
 
@@ -962,7 +1077,7 @@ class TestReconfigurePreset:
         )
         pop.update().presets(drive)  # registered on all 4 demes
 
-        original_rate = unreg_rate = drive.drive_conversion_rate
+        original_rate = drive.drive_conversion_rate
         with pytest.raises(ValueError, match="registered on 4 demes"):
             pop.update(deme=0).reconfigure_preset(drive, drive_conversion_rate=0.3)
 
@@ -1003,12 +1118,14 @@ class TestReconfigurePreset:
             drive_conversion_rate=0.9,
         )
         pop.update().presets(drive)
+        original_configs = [pop.deme(i).config for i in range(4)]
 
         with pytest.raises(AttributeError, match="nonexistent_param"):
             pop.update().reconfigure_preset(drive, nonexistent_param=42)
 
-        # Preset not mutated (no stray attribute created).
         assert not hasattr(drive, "nonexistent_param")
+        for i in range(4):
+            assert pop.deme(i).config is original_configs[i]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1034,6 +1151,7 @@ class TestHooksRuntimeRejection:
         )
 
         def _dummy_hook(state, config, deme_id):
+            """Provide a hook value that must be rejected by runtime update."""
             return 0
 
         with pytest.raises(RuntimeError, match="hooks"):

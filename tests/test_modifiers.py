@@ -786,6 +786,17 @@ class TestZygoteModifierE2E:
         assert pair_result.get(wt_dr_z, 0.0) == pytest.approx(0.25, rel=1e-4)
         assert pair_result.get(dr_dr_z, 0.0) == pytest.approx(0.25, rel=1e-4)
 
+        pop.add_zygote_modifier(modifier, name="test_exact", refresh=True)
+        expected_map = pop.config.gametes_to_zygotes_map.copy()
+
+        pop.refresh_modifiers()
+        pop.refresh_modifiers()
+
+        np.testing.assert_array_equal(
+            pop.config.gametes_to_zygotes_map,
+            expected_map,
+        )
+
 
 # ============================================================================
 # Modifier tensor invariants

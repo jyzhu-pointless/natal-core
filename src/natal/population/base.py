@@ -15,12 +15,12 @@ import hashlib
 from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     Dict,
     Generic,
     List,
     Optional,
+    Self,
     Tuple,
     TypeVar,
     Union,
@@ -206,7 +206,11 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._pending_hooks.clear()
         self.hook_executor = None
 
-    def _clone(self, name: str, config: PopulationConfig | DiscretePopulationConfig | None = None) -> Any:
+    def _clone(
+        self,
+        name: str,
+        config: PopulationConfig | DiscretePopulationConfig | None = None,
+    ) -> Self:
         """Create a lightweight functional copy sharing compiled state and config.
 
         Used by ``SpatialBuilder`` to efficiently clone template demes without
@@ -475,18 +479,18 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
     @property
     def presets(self) -> List[GeneticPreset]:
-        """Return the presets applied to this population."""
-        return self._presets
+        """Return a snapshot of the presets applied to this population."""
+        return list(self._presets)
 
     @property
     def gamete_modifiers(self) -> List[tuple[int, str | None, GameteModifier]]:
-        """Return the list of registered gamete modifiers."""
-        return self._gamete_modifiers
+        """Return a snapshot of the registered gamete modifiers."""
+        return list(self._gamete_modifiers)
 
     @property
     def zygote_modifiers(self) -> List[tuple[int, str | None, ZygoteModifier]]:
-        """Return the list of registered zygote modifiers."""
-        return self._zygote_modifiers
+        """Return a snapshot of the registered zygote modifiers."""
+        return list(self._zygote_modifiers)
 
     @abstractmethod
     def update(self) -> Configurator:
@@ -536,26 +540,21 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         kind: str,
         n_demes: int = 1,
         has_sperm_storage: bool = False,
-        observation: Optional[Observation] = None,
     ) -> None:
-        """Build and freeze the self-describing History schema.
+        """Install the temporary raw History schema used during construction.
 
-        Called once at the end of ``__init__`` by each Population subclass.
-        The schema cannot change after this point.
+        Configurator replaces this schema with the final compiled recording
+        plan before returning the built population.
 
         Args:
             kind: One of ``"age_structured"``, ``"discrete_generation"``.
             n_demes: Number of demes (1 for panmictic).
             has_sperm_storage: Whether sperm storage arrays are present.
-            observation: Optional compiled Observation for observation-mode
-                recording.
         """
         from natal.output.history import (
             History,
             HistorySchema,
-            ObservationMetadata,
             PopulationLayout,
-            SpatialHistoryLayout,
         )
 
         state = self.state
@@ -577,42 +576,16 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             registry=self.index_registry,
         )
 
-        obs_meta = None
-        if observation is not None:
-            obs_meta = ObservationMetadata(
-                labels=observation.labels,
-                collapse_age=observation.collapse_age,
-                n_groups=len(observation.labels),
-            )
-
-        spatial_layout = None
-        if n_demes > 1:
-            spatial_layout = SpatialHistoryLayout(
-                n_demes=n_demes,
-                ind_per_deme=n_sexes * n_ages * n_ztypes,
-                sperm_per_deme=n_ages * n_ztypes * n_ztypes if has_sperm_storage else 0,
-            )
-
-        if observation is not None:
-            obs_mask = self._observation_mask
-            if obs_mask is not None:
-                n_groups = obs_mask.shape[0]
-                row_size = 1 + n_groups * n_sexes * n_ages
-            else:
-                row_size = 1 + len(observation.labels) * n_sexes * n_ages
-            mode: str = "observation"
-        else:
-            ind_size = n_sexes * n_ages * n_ztypes
-            sperm_size = n_ages * n_ztypes * n_ztypes if has_sperm_storage else 0
-            row_size = 1 + ind_size * n_demes + sperm_size * n_demes
-            mode = "raw"
+        ind_size = n_sexes * n_ages * n_ztypes
+        sperm_size = n_ages * n_ztypes * n_ztypes if has_sperm_storage else 0
+        row_size = 1 + ind_size * n_demes + sperm_size * n_demes
 
         schema = HistorySchema(
-            mode=mode,
+            mode="raw",
             population=layout,
             row_size=row_size,
-            observation=obs_meta,
-            spatial_layout=spatial_layout,
+            observation=None,
+            spatial_layout=None,
         )
         self._history_obj = History(schema)
 

@@ -37,6 +37,7 @@ from typing import (
     Union,
 )
 
+from natal.data import initialize_zygote_map
 from natal.genetics import Gene, Genotype, HaploidGenotype
 from natal.modifiers.conditions import Condition
 from natal.modifiers.module import (
@@ -496,6 +497,40 @@ class ZygoteConversionRuleSet:
             A zero-argument callable implementing ``ZygoteModifier``.
         """
         rules = self.rules
+        haploid_genotypes = population.registry.index_to_haplo
+        diploid_genotypes = population.registry.index_to_genotype
+        full_mendelian_map = initialize_zygote_map(
+            haploid_genotypes=haploid_genotypes,
+            diploid_genotypes=diploid_genotypes,
+            n_glabs=int(population.config.n_glabs),
+            n_slabs=int(population.config.n_slabs),
+            unordered=population.species.unordered,
+        )
+        full_gtype_index = {
+            (haplotype, glab): (
+                haplotype_idx * len(population.registry.glab_labels) + glab_idx
+            )
+            for haplotype_idx, haplotype in enumerate(haploid_genotypes)
+            for glab_idx, glab in enumerate(population.registry.glab_labels)
+        }
+        full_ztype_index = {
+            (genotype, slab): (
+                genotype_idx * len(population.registry.slab_labels) + slab_idx
+            )
+            for genotype_idx, genotype in enumerate(diploid_genotypes)
+            for slab_idx, slab in enumerate(population.registry.slab_labels)
+        }
+        active_gtypes = [
+            full_gtype_index[gtype] for gtype in population.registry.index_to_gtype
+        ]
+        active_ztypes = [
+            full_ztype_index[ztype] for ztype in population.registry.index_to_ztype
+        ]
+        # A compressed registry is a sparse flat index, not necessarily the
+        # haplotype×glab or genotype×slab Cartesian product.
+        mendelian_zygote_map = full_mendelian_map[
+            active_gtypes, :, :
+        ][:, active_gtypes, :][:, :, active_ztypes]
 
         def zygote_modifier_func(*_args: object, **_kwargs: object) -> Dict[
             Tuple[int, int], Dict[int, float]
@@ -510,7 +545,10 @@ class ZygoteConversionRuleSet:
                 (gt, slab): zidx for zidx, (gt, slab) in enumerate(ztype_list)
             }
 
-            baseline_g2z = population.config.gametes_to_zygotes_map
+            # Rules must always start from Mendelian inheritance.  Reading the
+            # live config here would apply the same conversion repeatedly after
+            # refresh_modifiers() or reconfigure_preset().
+            baseline_g2z = mendelian_zygote_map
             n_c = baseline_g2z.shape[0]
 
             # Resolve glab names to indices for all rules

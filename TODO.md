@@ -1,6 +1,6 @@
 # TODO
 
-> 最后审计：2026-06-21。新增 v0.3.0 四大功能设计（索引压缩、Somatic Label、引擎优化、极速模式），详见 `v0.3.0-acceleration-and-compression-design.html`。
+> 最后审计：2026-08-15。已完成事项迁入本地 `TODO.legacy.md`；本文件只保留未完成或部分完成的工作。
 >
 > 排序逻辑：正确性 bug > 性能优化 > UX 改进 > 代码质量。同一档内，部分完成 > 未开始 > 仅设计。
 >
@@ -14,7 +14,7 @@
 
 ## History / Observation 重构协调与延期设计（2026-07-15）
 
-> 本节记录 `.codex/plans/history_observation_refactor_plan.md` grill session 中已经讨论、但明确不应随当前增量重构一并实现的设计。当前重构只实现构建期 canonical Observation、单模式 History、post-hoc observation、`record_snapshot()` 和 raw checkpoint restore。
+> 本节记录此前 grill session 中已经讨论、但明确不应随当前增量重构一并实现的设计。当前重构只实现构建期 canonical Observation、单模式 History、post-hoc observation、`record_snapshot()` 和 raw checkpoint restore。
 
 ### HO-C1 📋 natal-inferencer 接口协调
 
@@ -27,6 +27,20 @@ natal-core 的最终接口稳定后，在 `natal-inferencer` 单独实施：
 - 增加跨仓库集成测试，覆盖默认 identity 与显式 Observation。
 
 natal-core 不为此保留 `record_observation` shim；两个项目尚未发布，可以直接协调升级。
+
+### HO-C2 📋 Observation rule 匹配结果聚合语义
+
+`natal-inferencer` 已提出：一条显式 observation rule 匹配到多个项时，对外应返回这些匹配项的总和，而不是把每个匹配项分别返回。
+
+**当前暂不修改。** `natal-inferencer` 仍依赖现有的分项结果结构；单独修改 natal-core 会破坏其输入形状、标签或索引约定。该变更必须与 inferencer 迁移协调完成，不能作为 core 内部的独立修复。
+
+后续实施时必须满足：
+
+- 聚合边界是一条具名 observation rule；每条 rule 只产生一个对应的聚合结果。
+- 聚合值在数值上等于该 rule 所有匹配项的显式求和，不能漏计或重复计数。
+- 多条 rule 分别独立聚合；同一项同时匹配多条 rule 时，应分别计入各自结果。
+- 默认 identity Observation 的逐 ZType 返回语义不随本项自动改变，除非另行评审。
+- natal-core、`natal-inferencer` 及跨仓库集成测试应在同一次兼容性迁移中更新。
 
 ### HO-D1 🎨 Hook 条件触发与 tick 内记录
 
@@ -85,9 +99,27 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 
 ---
 
+## 本地工具与排除工作后续
+
+### TOOL-D1 📋 放行 adversarial-review skill
+
+当前 `.opencode/skills/adversarial-review/SKILL.md` 仅存在于本地，并被
+`.gitignore` 的 `.opencode/*` 规则排除。当前机器可以执行该审查流程，但新
+clone 无法从仓库恢复。后续如需让审查流程自包含，应只放行并跟踪该 skill，
+其余 `.opencode` 内容继续忽略。
+
+### TOOL-D2 📋 重新评审 cluster benchmark 工作
+
+`benchmarks/mgdrive1/cluster/` 与
+`tests/test_northstar_cluster_orchestration.py` 当前按决定排除，不属于已跟踪
+benchmark 或门禁范围。后续只有在 cluster 调度实现准备纳入仓库时，才移除
+对应 ignore，并连同可复现环境、测试和运行说明一起评审。
+
+---
+
 ## Spatial Runtime Update 重构 — 延期决策（2026-07-18）
 
-> 本节记录 `.opencode/plans/fix-spatial-update-spec.md` 重构审查中明确**不应随当前增量一并实现**的设计决策。当前重构维持现状（离散代保留 sync、CONCAVE 模式照旧消费 `expected_*`），以下三项留待后续单独评审。
+> 本节记录此前重构审查中明确**不应随当前增量一并实现**的设计决策。当前重构维持现状（离散代保留 sync、CONCAVE 模式照旧消费 `expected_*`），以下三项留待后续单独评审。
 
 ### SU-D1 🎨 离散代竞争语义收敛（FIXED-only vs 全模式）
 
@@ -124,22 +156,9 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 实际侧引擎根本不做加权（`run_discrete_survival` 用 `total_age_0` 原始总数；WF 路径注释明说 "only age-0 juveniles compete, actual_competition_strength is just the total juvenile count"）。`(2,)` 数组仅服务于与共享 `compute_equilibrium_metrics` 代码的兼容（`config.py:240-245` 注释 "kept for spatial builder compat; inactive in discrete" 已部分覆盖此意）。
 
 后续若做 SU-D1 的 FIXED-only 收敛，可一并移除该字段在离散代的消费；否则维持现状（默认 `np.ones`，rel[0]=1.0 自洽）。
-
 ---
 
 ## 🔴 高优先级 — 正确性 / 阻塞项
-
-### #2 ✅ Selector + custom hook 调用约定统一
-
-**已完成**（`refactor/selector-hook-calling-convention` 分支）：
-
-- **Selector hooks**：Numba 路径 wrapper 不再提取 `ind_count`/`tick`，直接转发 `(state, config, deme_id=deme_id, selector_kwargs...)`。Python 路径 `py_wrapper` 从 `(population)` 改为 `(state, config, deme_id=-1)`。`_compile_selector_njit_wrapper` 模板化。
-- **Custom hooks**（无向后兼容）：`_normalize_njit_fn` 和 `_normalize_py_hook` 不做旧约定检测。`test_hook_priority_mixed.py`（2 测试）和 `test_spatial_population_run.py`（3 测试）的旧约定 hook 已迁移到 `(state, config, deme_id)`。
-- **测试覆盖**：25 测试按 `@pytest.mark.numba_on` / `numba_off` 分区，新增 2 个 Numba 端到端测试 + 8 个 Python fallback 测试。
-- **其余修复**：`test_lifecycle_wrappers.py` 中 2 个测试加了 `@pytest.mark.numba_on`（原无标记，Numba 禁用时错误运行）。
-- **剩余**：`test_spatial_population_integration.py` 3 个测试 — `_replace(low_density_growth_rate=1.7)` 导致字段退化为 Python float（非 0-d ndarray），在 `age_structured_simulator.py:289` 的 `[()]` 索引处崩溃。见下方 #17。
-
----
 
 ## 🟡 中优先级 — 性能 / 可维护性
 
@@ -155,14 +174,8 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 - 三种路径的 flatten 格式因生命周期类型不同（discrete / structured / spatial compact），但录制时机和条件判断逻辑相同
 - 改善方向：将 `flatten_size` 计算和 `flat_state` 填充抽成 `@njit` 辅助函数，按生命周期类型参数化
 
-### #4 🎨 修饰器矩阵化 —— Sequential Cascade → 矩阵乘法
+### #4 ⚠️ Zygote modifier 矩阵化与稀疏表示
 
-**状态**：✅ 已实现。`GameteConversionRuleSet.to_matrix(population)` 编译 rules 为
-`{(sex, ztype): (n_gtypes, n_gtypes)}` dense float64 矩阵，
-`to_gamete_modifier()` 通过 `freq_vec @ M` 替代旧 `_compute_converted_gamete_freqs`
-逐 rule 迭代。旧 Cascade 函数已删除（~114 行）。
-
-**剩余工作**：
 - zygote 侧仍使用 Dict[Genotype, float] 逐 rule 迭代，未矩阵化
 - `ModifierMatrix` 稀疏表示未实现（当前 dense 在 n_gtypes ≤ 250 时足够快）
 
@@ -194,90 +207,56 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 - 未必是定值，可与亲本中 Cas9 copies（或表达时间）有关
 - 可支持 heterozygotes / homozygotes 不同配置
 
-### #8 ✅ Selector hook 测试增强
-
-**来源**：`code-quality-review-report.html` #12, #15
-
-**已完成**（同 #2 一起修复）：
-- `test_hook_selector_mode.py` 新增 8 个测试（共 23 个），覆盖 `desc.selectors` 值验证 + Python fallback 端到端调用
-- `TestSelectorResolution`：验证单选/通配符/多选/int 选择器解析为正确的 int32 索引数组
-- `TestPythonFallbackEndToEnd`：实际调用 `desc.py_wrapper(state, config, deme_id)` 验证 expand/aggregate/deme_id/multi-genotype 路径的功能正确性
-
 ### #9 ⚠️ 重复的 modifier map 重建逻辑
 
 **来源**：`code-quality-review-report.html` #5
 
-**此分支改动**：refresh 系统重构已移除 `discrete_generation_population` 中的冗余副本（原为父方法逐字覆写）。剩余双重实现：`BasePopulation.refresh_modifier_maps()` 与 `Configurator._rebuild_config_maps()`，两者策略不同（从头构建 vs 从 Mendelian blueprint 基线叠加），仍有维护二元性。
+**当前状态**：离散代中的冗余覆写已经移除。剩余双重实现是
+`ModifierPresetMixin.refresh_modifier_maps()` 与 `Configurator._rebuild_config_maps()`；两者分别服务运行时和构建期，但必须维持相同的 Mendelian 基线与压缩轴投影语义。
 
-**优先级理由**：🟡 维护负担——三处任意一处的改动可能遗漏同步到其他两处。
+**优先级理由**：🟡 维护负担——任一入口的改动都可能遗漏同步到另一入口。
 
-- 提取公共核心为独立辅助函数，三处共享
-- 删除 `discrete_generation_population` 的覆写方法（完全等同于父方法，可直接 `super()`）
+- 提取公共核心为独立辅助函数，由两个入口共享
 
-### #10 📋 Configurator 对弃用 builder 模块的耦合
+### #9.1 📋 Preset modifier 定向重编译与后缀重建
 
-**来源**：`code-quality-review-report.html` #11
+**来源**：2026-08-15 conversion refresh 修复后的架构讨论。
 
-**此分支改动**：无。`configurator.py` 中 5 个方法依赖 `population_builder` 的 utility 函数（如 `resolve_age_param`）。
+**当前行为**：`reconfigure_preset(preset, ...)` 能按对象身份找到被修改的
+preset，但 `refresh_modifiers()` 仍会清空全部派生 modifier，按 priority 重新调用
+所有 preset 的 `gamete_modifier()` / `zygote_modifier()`，随后从 Mendelian 基线重放
+完整 modifier 列表并重算 `offspring_tensor` 和 preset fitness。
 
-**优先级理由**：🟡 架构债务。`configurator.py`（新模块）依赖 `population_builder.py`（弃用模块）的方向是反的。
+并非所有 modifier 都是矩阵：`GameteConversionRuleSet` 只在单个 ruleset 内编译并
+组合 GType 转换矩阵；zygote conversion 仍生成分布字典，fitness 使用 patch，自定义
+modifier 则是不透明 callable。不同 preset 修改同一行时，目前也尚未正式定义应当
+“顺序转换”还是“后者覆盖”。在明确该组合语义前，不能安全地直接加入后缀缓存。
 
-- 将共享工具函数迁移至 `population_config.py`，与 commit `1b62a3c` 的 `build_custom_array` 迁移模式一致
+**优先级理由**：🟡 架构与运行时配置性能。preset 数量较多或压缩映射较大时，修改
+一个参数却重新解析全部规则会产生不必要开销；但 `offspring_tensor` 的全量卷积可能
+仍是主要成本，应先基准测试再决定是否引入占用大量内存的中间 checkpoint。
 
-### #11 📋 Modifier 效果端到端测试
+**建议分阶段实现**：
 
-**来源**：`code-quality-review-report.html` #14
+1. 为派生 modifier 保存明确的 preset owner 身份和 priority，不依赖名称前缀关联。
+2. 先实现低风险版本：只重新编译发生变化的 preset，复用其他 preset 的已编译产物；
+   map 仍从 Mendelian 基线重放全部已编译阶段，`offspring_tensor` 仍完整重算。
+3. 统一内部阶段接口，明确 gamete、zygote、fitness 和 custom modifier 的输入/输出及
+   跨 preset 组合语义。
+4. 仅在基准证明值得时，缓存每个 preset 之前的 map checkpoint，修改第 N 个 preset
+   时恢复 N-1 的结果并只重放 `[N, end)`；同时定义 registry/compression、preset
+   增删、priority 变化和 manual modifier 变化时的缓存失效规则。
 
-**此分支改动**：无。`test_gamete_and_zygote_modifier_together` 未验证实际的 `genotype_to_gametes_map` 或 `offspring_tensor` 改变。
+**验收要求**：
 
-**优先级理由**：🟡 测试只验证 modifier 不崩溃，不验证其效果正确性。
-
-- 添加非平凡 modifier 的端到端效果测试（验证 genotype_to_gametes_map 或 offspring_tensor 改变）
-
-### #11.2 ✅ `BatchSetting` 类型安全 —— 泛型化消除 `Any` 泄漏
-
-**来源**：2026-07-09 代码审查。`BatchSetting` 从入口到出口一路 `Any`，类型信息完全丢失。
-
-**已完成**（`fix/compress-once-ztype-refactor` 分支）：
-- `BatchSetting(Generic[_T])`：`expand() → List[_T]`，`first_value() → Optional[_T]`
-- `batch_setting()` 返回 `BatchSetting[_T]`
-- 所有未参数化的 `BatchSetting` 引用改为 `BatchSetting[Any]`
-
-**涉及文件**：`src/natal/spatial/configurator.py`、`src/natal/spatial/population.py`
-
-### #11.3 ✅ `_compress_once` 重构 —— ztype 作为一等公民，消除 genotype 字符串中转
-
-**来源**：2026-07-09 PR #32 Copilot review Comment 1+2+3 的共同根因。
-
-**已完成**（`fix/compress-once-ztype-refactor` 分支）：
-- `union: set[str]` → `seeds: set[int]`，返回值同步
-- 模板构建前置，种子从 `initial_individual_count` 非零 z_idx 收集
-- Hook refs 和 declared 字符串经 `_resolve_declared_to_ints` 转 ztype int
-- 整数 `declared_zygote_types` 直接入种子
-- `extra_declared` 改为 `set[int]`，合并逻辑简化
-
-**涉及文件**：`src/natal/spatial/configurator.py`
-
-### #11.4 ✅ 删除 `wrap_gamete_modifier` / `wrap_zygote_modifier` / `build_modifier_wrappers` 的死参数 `expand_to_ztypes`
-
-**来源**：2026-07-09 PR #32 Copilot review Comment 3 的反向分析。
-
-**已完成**（`fix/compress-once-ztype-refactor` 分支）：
-- `src/natal/modifiers/module.py`：三个函数签名中删除参数及 docstring，转发代码移除
-- `src/natal/configurator/_registry_builder.py`：调用方移除 `expand_to_ztypes=...` 传参
+- 重配置结果与相同最终参数的 fresh build 逐元素一致
+- 覆盖多个 preset 修改重叠行与不重叠行、相同/不同 priority、custom modifier
+- 覆盖 age/discrete/spatial、compress 开关和稀疏 GType/ZType
+- 记录“仅定向重编译”和“checkpoint 后缀重建”的时间、峰值内存及 break-even preset 数
 
 ### #11.5 ⚠️ Modifier 系统：genotype vs ztype 概念混用 + 冗余参数
 
 **来源**：2026-07-10 `expand_to_ztypes` 清理后的进一步审计。
-
-**已完成的子项**（`feature/spatial-compress-unified` 分支）：
-- ✅ 冗余参数清理：`_resolve_gidx`、`_apply_comp_map` 等 7 个旧函数删除，统一层 `_resolve_ztype_key`/`_resolve_gtype_key` 仅接受 registry
-- ✅ `CytoplasmicPreset` 特判消除：`gamete_modifier()` 和 `zygote_modifier()` 返回真实 modifier，`isinstance(preset, CytoplasmicPreset)` 全部删除
-- ✅ 手动 glab 公式清理：`module.py:555-556` 删除（统一层替代），`cytoplasmic.py` 中 glab 索引改走 registry
-- ✅ `build_compression_mask` 死参数 `n_glabs`/`n_slabs` 删除，G→n_zt/HL→n_gt 重命名
-- ✅ `_compress_once` ztype 一等公民化，`seeds: set[int]` 替代 `union: set[str]`
-- ✅ `batch_setting` 泛型化 `Generic[_T]`
-- ✅ `gamete_conversion.py` + `zygote_conversion.py` ztype/gtype 适配
 
 **遗留子项**：
 - 📋 命名修正：`GameteModifier` Protocol docstring 中 `genotype_idx` → `ztype_idx`、`_write_zygote_mapping` docstring、`_normalize_zygote_val` docstring
@@ -292,12 +271,6 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 
 **优先级理由**：🟡 `_apply_target_with_sperm` 是最复杂的执行路径（virgin/sperm 拆分、随机采样、负值检测），其 bug 会静默破坏 sperm 数据。
 
-**已完成**：`d3aab26` 补充了 25 个测试：
-- `_apply_target_with_sperm` / `_apply_target_without_sperm` 14 个单元测试
-- `stop_if_zero` / `stop_if_extinction` / 条件不满足 3 个 E2E 测试
-- `Op.scale/sample/kill/subtract` 4 个 E2E 测试
-- 边界 case（空 hook、单 hook、同 priority）4 个测试
-
 **遗留**：
 - `test_hook_kernel_ops.py` 需转换为 pytest 格式（所有 Op 类型的运行时测试当前仅在直接执行时运行）
 - `execute_csr_event_program_with_state` 无直接单元测试（已被模板间接覆盖）
@@ -310,22 +283,11 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 > 以下条目由 `refactor/hooks-naming` 的对抗式 code review workflow 发现。模块路径已重命名，但文档/注释/缓存中仍有旧引用。
 > 本分支已修复 `src/` 和 `tests/` 范围内的全部 stale 引用（6 处）。`docs/` 和 `.numba_cache/` 不在此分支范围。
 
-### #14 📋 文档引用过时的模块路径
+### #14 ⚠️ 文档中仍有过时的 `hook_executor` 字段
 
-`docs/` 下 8 个 .md 文件引用已删除或已移动的路径：
-
-| 文件 | 旧路径 | 正确路径 |
-|------|--------|---------|
-| `docs/en/spatial_lifecycle_wrapper.md` | `natal/hooks/compiler.py`（4 处） | `engine/lifecycle_wrappers.py` |
-| `docs/zh/spatial_lifecycle_wrapper.md` | 同上（4 处） | 同上 |
-| `docs/en/caching_and_codegen.md` | `natal/hooks/compiler.py`, `natal.hooks.executor` | `compile/codegen.py`, `runtime/csr_kernel.py` |
-| `docs/zh/caching_and_codegen.md` | 同上 | 同上 |
-| `docs/zh/spatial_builder.md` | `hook_executor` | `runtime/fallback` |
-| `docs/en/spatial_builder.md` | 同上 | 同上 |
-| `docs/zh/spatial_configurator.md` | `hook_executor` | `runtime/fallback` |
-| `docs/en/spatial_configurator.md` | 同上 | 同上 |
-
-**注意**：`compiler.py` 引用实为 **PR #9**（`lifecycle_wrappers` 拆分）时引入的遗留，非本分支新增。
+`natal/hooks/compiler.py` 和 `natal.hooks.executor` 等旧模块路径已经清理；目前仅剩
+`docs/{zh,en}/spatial_builder.md` 与 `spatial_configurator.md` 共 8 处
+`hook_executor` 字段说明，与当前运行时结构不一致。
 
 ### #15 📋 `.numba_cache/` 缓存模块包含旧 import 路径
 
@@ -428,9 +390,7 @@ RuntimeError: In 'NRT_adapt_ndarray_to_python', 'descr' is NULL
 
 ## 🟢 低优先级 — UX / 远期功能
 
-### #12 ⚠️ Spatial API：migration kernel 边界效应优化
-
-**此分支改动**：三项子任务中，`batch_setting()`、`deme_selector` 局部 hook 在 main 上已完成；`pop.update()` / `_SpatialUpdate` / clone-on-write 是本分支实现（见已完成附录）。仅剩 migration kernel 边界效应优化未做。
+### #12 📋 Spatial migration kernel 边界效应优化
 
 **优先级理由**：🟢 功能优化，不涉及正确性。基础的 `apply_migration_adjacency`、`build_gaussian_kernel` 等已在 `spatial_topology.py` 中可用。
 
@@ -550,55 +510,19 @@ config.low_density_growth_rate[()]  # 0-d indexing → float[()] → TypeError
 
 > 以下四大功能详见 `v0.3.0-acceleration-and-compression-design.html` 综合设计方案。
 
-### #18 🎨 基因型及配子索引压缩
+### #19 ⚠️ Somatic Label (slab) 的转换能力补全
 
-**来源**：2026-06-21 设计讨论。用户需求：母本/父本对称性压缩（n² → n(n+1)/2）、修饰器可达性闭环分析、完全连锁配子空间压缩。
+Somatic Label、扁平 ZType/GType 索引、slab-aware fitness/hook/observation、压缩及
+`CytoplasmicPreset` 已实现。原设计中的独立 4-D state 方案已被扁平 ZType 方案取代。
+仍缺少通用的 slab 转换 API：
 
-**优先级理由**：🟡 架构增强。offspring_tensor 三次方压缩（单 locus k=10: 100³ → 55³，6× 内存缩减）。对大型基因组模拟有显著空间和时间收益。但需要仔细处理兼容性（hook、observation、preset 均通过 index 访问状态）。
-
-**设计方案**：
-
-1. **压缩模式**：`NONE`（当前 dense）| `MATERNAL_PATERNAL`（合并 A|a ≡ a|A）| `REACHABLE`（BFS 可达性分析）| `FULL_LINKAGE`（完全连锁配子压缩）| `AUTO`（自动检测）。
-
-2. **可达性分析（BFS）**：从 `initial_individual_count > 0` 的基因型 + `declared_genotypes`（手动声明）出发，通过 `offspring_tensor[gf, gm, go] > 0` 边 BFS 到不动点。保守分析（假设所有 (gf, gm) 对都可共存）。
-
-3. **配置入口**：`Configurator.setup(compress_indices=True)` 或 `compression_mode="mp"`。支持 `declared_genotypes=["A|A", "A|a"]` 手动强制保留。
-
-4. **实现路径**（~590 行，6 文件）：
-   - `index_registry.py`：实现 `compact()` + `CompressionMap` 数据类 + `compute_genotype_reachability()` + `compute_gamete_reachability()`（~180 行）
-   - `population_config.py`：新增 `n_genotypes_compressed`、`compress_map` 等字段 + `compress_population_config()`（~140 行）
-   - `configurator.py`：build 管线集成（~30 行）
-   - `engine/simulation/*.py`：确保引擎正确处理压缩维度（~40 行）
-   - 测试：可达性 BFS 单元 + 端到端压缩 + 对称性验证（~200 行）
-
-**不改**：Hook 签名、Observation API、Preset 系统（均通过名称/选择器访问，不直接依赖 index）。
-
-### #19 🎨 Somatic Label (slab) + 基因型压缩 → 统一 EffectiveGenotypeSpace
-
-**来源**：2026-06-21 设计讨论。用户需求：对称于 gamete label 的个体级标记系统。**关键洞察**（用户提出）：引擎对 index 完全透明——`g = int(fert_f.shape[0])`，`for go in range(g)`。压缩和 slab 在引擎看来只是 `G_total = G_comp × n_slabs` 的基数变化，两个变换正交组合。统一设计节省约 52% 代码量（975 vs 2,040 行）。
-
-**优先级理由**：🟡 架构增强。与 #18 基因型压缩共用 GenotypeSpace 基础设施。默认 n_slabs=1 + 无压缩 → 零行为变化。
-
-**优先级理由**：🟡 重大架构变更。牵涉 12+ 文件、~1,450 行。建议推迟到 v0.4.0。默认 `n_slabs=1` 时零破坏、零性能损失。
-
-**设计方案**：
-
-1. **维度扩展**：`individual_count: (2, A, G) → (2, A, G, S)`。`sperm_storage: (A, G, G) → (A, G, S, G)`（保留雌性 slab，雄性 donor 可选保留）。`viability_fitness`、`fecundity_fitness` 等 fitness 数组也扩展 slab 维度。
-
-2. **三类 Slab 转换**：
+1. **三类 Slab 转换**：
    - `T_zygotic`（glab → slab）：受精时，给定母本 glab、父本 glab、合子基因型 → 子代 slab 分布
    - `T_gametic`（slab → glab）：减数分裂时，给定个体 slab、基因型、性别 → 配子 glab 分布
    - `T_somatic`（slab → slab）：每 tick 存活阶段，个体 slab 转换（如 Cas9 表达衰退）
 
-3. **Slab 压缩**：与 #18 基��型压缩同模式——计算 slab 可达闭包 → 构建 compress_map → 重塑数组。
-
-4. **实现路径**（~1,450 行，12+ 文件）：
-   - Phase 1（数据结构）：Species 新增 `somatic_labels`、IndexRegistry 新增 slab 索引、PopulationConfig 新增 `n_slabs`/转换矩阵、PopulationState 重塑（~200 行）
-   - Phase 2（引擎适配）：所有 `@njit_switch` 函数 + 4 个模板文件更新索引循环（~500 行）
-   - Phase 3（上层 API）：Configurator `.somatic_labels()`、修饰器 slab-aware、Hook 适配、Preset 适配（~400 行）
-   - Phase 4（压缩 + 测试）：`compute_slab_reachability()` + `compress_slab_dimension()` + 全覆盖（~350 行）
-
-5. **向后兼容**：默认 `n_slabs=1`，引擎 `if n_slabs == 1: skip slab loop` 避免性能损失。所有现有测试无修改通过。
+2. 提供 `add_slab_convert` 等公开 DSL，替代 `CytoplasmicPreset` 内部的自制循环。
+3. 如需 tick 间 `T_somatic`，需明确它在生命周期中的执行阶段和 Hook 顺序。
 
 ### #20 🎨 仿真引擎性能优化审计
 
@@ -606,11 +530,13 @@ config.low_density_growth_rate[()]  # 0-d indexing → float[()] → TypeError
 
 **优先级理由**：🟡 性能工程。4 个纳入 v0.3.0，2 个推迟。均为纯优化，不改行为。
 
-**纳入 v0.3.0 的优化**：
+**已完成**：offspring tensor 已由 `@njit_switch` 的
+`compute_offspring_probability_tensor()` 计算，且避免构造 O(G²·HL²) 中间数组。
+
+**仍待评估的优化**：
 
 | ID | 优化 | 难度 | 预期收益 | 行数 |
 |----|------|------|---------|------|
-| #A | offspring_tensor Numba 化 | 低 | 3-5×（modifier 变更时） | ~100 |
 | #B | CSR prange 并行化 | 中 | 2-4×（G≥200 时，per-op 内 genotype 维度并行） | ~120 |
 | #C | 交配矩阵缓存 | 低 | ~30% 交配计算开销 | ~80 |
 | #D | 内存分配复用（TickBuffers） | 中 | 减少 40-60% 分配调用 | ~200 |
@@ -619,55 +545,10 @@ config.low_density_growth_rate[()]  # 0-d indexing → float[()] → TypeError
 - #E（deme 间负载均衡）：仅在 deme 间个体数差异 >10× 时有意义，大多数均匀场景无收益。
 - #F（观测录制路径统一）：与 TODO #3 重复，维护收益 > 性能收益。
 
-### #21 🎨 离散世代极速模式（Wright-Fisher）
-
-**来源**：2026-06-21 设计讨论。用户需求：离散世代模型的极速模式——每 tick 单次多项分布抽样替代逐步模拟（mate → fertilize → survive），建模有效种群大小。
-
-**优先级理由**：🟡 新模式。实现成本最低（~660 行），与现有完整模式完全解耦。计算量降低 10-100×。
-
-**设计方案**：
-
-1. **三种采样模式**：
-   - `DETERMINISTIC`：无限种群极限，无随机性。适用于平衡分析、参数扫描。
-   - `MULTINOMIAL`：标准 Wright-Fisher 单次多项分布抽样。适用于群体遗传学标准建模。
-   - `POISSON`：独立泊松抽样。适用于极大 N（>10⁵），比多项分布快 ~2×。
-
-2. **核心计算**：
-   ```
-   p[go] = Σ_{gf,gm} freq_f[gf] · freq_m[gm] · sexual_selection[gf,gm]
-           · offspring_tensor[gf, gm, go] · eggs · sex_ratio
-   new_count = Multinomial(N_eff, p)
-   ```
-   跳过：交配对抽样、受精抽样、存活抽样（均合并到 p 的权重中）。
-
-3. **随机性差异**：极速模式轻微低估方差（缺少交配阶段的额外二项抽样），但差异 <5%。此时 N 的含义从"普查种群大小"变为"有效种群大小"——这是群体遗传学标准做法。文档需明确说明。
-
-4. **限制**：仅支持离散世代模型。不支持精子置换、`fixed_egg_count=True`（可实现）、性染色体（可实现）。Hook 兼容性有限（per-individual kill/add 无意义）。
-
-5. **实现路径**（~660 行，7 文件）：
-   - `engine/simulation/discrete_generation.py`：新增 `compute_expected_offspring_wf()` @njit 函数（~80 行）
-   - `engine/discrete_generation_simulator.py`：新增 `run_extreme_speed_tick()`（~60 行）
-   - `population_config.py`：添加 `extreme_speed_mode` 和 `extreme_speed_N_eff`（~20 行）
-   - `discrete_generation_population.py`：`run()` 中检测极速模式分支（~40 行）
-   - `engine/templates/`：新增 `lifecycle_extreme_speed.tmpl.py`（~120 行）
-   - `engine/lifecycle_wrappers.py`：编译管线扩展（~40 行）
-   - 测试：中性等价性 + 选择场景 + 边界条件（~300 行）
-
-6. **API**：
-   ```python
-   cfg = Configurator.for_discrete(species).setup(
-       extreme_speed=True,
-       extreme_speed_mode="multinomial",
-   ).build()
-   # 或运行时切换
-   pop.enable_extreme_speed(mode="multinomial")
-   ```
-
 ### 远期功能
 
 - Global hooks
 - Sparse（import / states）
-- ✅ **Hook 系统分层重构** — PR #9（拆分层级）+ PR #11（命名 + 子目录 + 模板化）已完成。最终结构：`hooks/entry/`（装饰器/声明式/selector）、`hooks/compile/`（容器/codegen）、`hooks/runtime/`（CSR 内核/Python 回退）。详见已完成附录。
 
 ## initialization / finish 现状
 
@@ -686,72 +567,12 @@ initialization 目前也在 Python 事件体系里，不在 kernel 执行路径�
 
 ---
 
-## 已完成附录
-
-> 以下条目已实现，从活跃 TODO 中移除。按完成来源分组。
-
-### 本分支完成
-
-- **ZType 注册表重构（第一阶段）** — `feat/ztype-registry` 分支。将分散在 15 个文件、60+ 处的 `g·n_slabs + slab` 算术公式替换为扁平字典 ZType/GType 索引空间。新增 `_ztype_to_index`、`_gtype_to_index` 字典，`ztype_index()`、`gtype_index()` 方法，计算属性（`genotype_to_index`、`index_to_genotype` 等），扁平掩码压缩（`compress(ztype_mask, gtype_mask)` 无 `n_slabs` 参数）。删除 `compress_hg_glab`、`compress_genotype_index`、`decompress_genotype_index`、`axis_sizes`、`update_n_ztypes`。Hook `_resolve_genotypes` 修复为使用 ZType 索引展开。Oracle 验证通过。
-- **ZType 全量修复（第二阶段）** — 系统性修复 `genotype_to_index` 在使用 n_slabs>1 时的 50+ 处静默错误。所有 pattern 字符串解析统一走 `ZygoteTypePattern`。删除 `genotype_to_index`、`genotype_index()`、`_ensure_genotype_registered()`、`_UnorderedGenotypeDict`。修复观察系统在 n_slabs>1 时的崩溃（mask 维度 `n_genotypes` → `n_ztypes`）。7 个 n_slabs>1 回归测试。参数重命名 `genotype_idx` → `ztype_idx`。状态：997 passed，pyright 0，ruff clean。
-
-- **refresh 系统重构** — `rebuild_from_presets()` 拆为 `refresh_modifiers()`（public，仅 modifier 重建）+ `_reapply_preset_fitness()`（private，fitness 重置和重应用）。删除了 `refresh_modifier_maps()` public wrapper。`add_gamete_modifier` / `add_zygote_modifier` 的 `refresh` 参数现在只控制是否立即重建 maps，派生列表写入无条件发生。修复了 `rebuild_from_presets` 静默覆盖手动 fitness 的问题——`refresh_modifiers()` 不碰 fitness，只有 `apply_preset()` / `presets()` / `reconfigure_preset()` 会调用 `_reapply_preset_fitness()`。
-- **#2** `expected_num_new_adult_females` — 旧机制（`base_expected_num_new_adult_females` + `get_effective_expected_adult_females()`）已全部移除。新机制通过 `Configurator.competition()` 接收参数，流经 `_compute_carrying_capacity_params()` 转换为 `external_expected_eggs`。两个专用测试验证。
-- **#8 部分** `pop.update()` / `_SpatialUpdate` — 空间模型的运行时 config 修改 API，clone-on-write 语义，`test_spatial_update.py` 覆盖。
-- **`parameters.jsonc` alias 修复** — `eggs_per_female` 的 alias 从冗余同名修正为 `expected_eggs_per_female`（保留向后兼容）。
-
-### main 上已完成（本分支分歧前）
-
-- **#3** Spatial 并行 — `prange` per-deme 并行分发（main: `7e4266a`）。非并行条件仅剩 Numba 禁用或 legacy Python hook。
-- **#8 部分** `batch_setting()` + `deme_selector` 局部 hook — `spatial_builder.py` 中已有的 `BatchSetting` 类和 `set_hook(deme_selector=...)`。
-- **#9** Spatial UI — `spatial_dashboard.py`（75KB，198 方法），热图渲染、deme config 信息、local hooks 显示、landscape genotype freq。
-- **#10** General UI — Observation 集成 + UI 导出。本分支仅做兼容适配。
-
-### `refactor/hooks-naming` 分支完成（PR #9 后续）
-
-- **#1** 混用 CSR + njit Hook priority 调度 — `feat/unified-hook-priority-dispatch` 已实现（PR #8 合并），生成统一 njit 函数按 priority 交错执行。
-- **Hook 系统分层重构** — `CompiledEventHooks` 拆分为纯容器 + `LifecycleWrappers`（engine 层）+ codegen 管线分离；`executor.py` 拆分为 `csr_kernel.py`（CSR 热循环）+ `fallback.py`（Python 回退）。
-- **hooks 命名 + 目录重组** — `compiler.py` 拆为 `entry/decorator.py` + `compile/container.py` + `compile/codegen.py`；重命名为 `entry/` `compile/` `runtime/` 三个子包。
-- **compile_combined_hook 模板化** — 从 50 行手拼字符串改为 `PLACEHOLDER_` + `str.replace` + `setattr` 模板驱动，与 `compile_unified_event_hook` 风格一致。
-- **CLAUDE.md** — 新增三条项目规范（AskUserQuestion 选择题、Tasks 列表维护、优先使用专用工具）。
-
-### `refactor/selector-hook-calling-convention` 分支完成（当前分支）
-
-- **#2** Selector + custom hook 调用约定统一 — Numba 和 Python 路径统一为 `(state, config, deme_id=-1, selector_kwargs...)`。Custom hook 新增 `ind_count` 首参数检测，自动 wrapping 映射 `(state, config, deme_id)` → `(state.individual_count, state.n_tick, ...)`。修复了 `test_hook_priority_mixed.py`（2 测试）和 `test_spatial_population_run.py`（2 测试）的 Python fallback 崩溃。
-- **#8** Selector hook 测试增强 — 25 测试按 `@pytest.mark.numba_on` / `numba_off` 分区。`TestSelectorResolution` 验证 `desc.selectors` 解析值；`TestPythonFallbackEndToEnd` 实际调用 `py_wrapper`；Numba 路径新增 `deme_id` 转发和多基因型选择器测试。
-- **模板化** — `_compile_selector_njit_wrapper` 从内联字符串拼接改为 `selector_wrapper.tmpl.py` 模板驱动。
-- **类型规范** — `selector.py` + `decorator.py` 消除 `Any`/`object` 滥用，改用 `PopulationState`、`PopulationConfig`、`int | NDArray[np.int32]` 等具体类型。CLAUDE.md 新增"禁止滥用 Any 和 object"规则。
-- **Test marker 修复** — `test_lifecycle_wrappers.py` 中 2 个测试从无标记改为 `@pytest.mark.numba_on`。
-- **发现 #17** — `NATAL_DISABLE_NUMBA=1` 全量运行发现 9 个既有失败。修复 6 个（hook 约定 + marker），剩余 3 个为 `_replace()` 0-d ndarray 退化问题。
-
----
-
 ## Conversion Ruleset 重构（2026-07-10 grill session）
-
-### ✅ Stage 1 完成 — DSL 基础 + 特判消除
-
-**已完成**（`feature/spatial-compress-unified` 分支）：
-
-1. **Condition DSL**（`src/natal/modifiers/conditions.py`）：
-   - `sex()`、`ztype_has()`、`slab()`、`is_maternal()`、`is_paternal()` + `&`/`|` 组合
-2. **新 API**：
-   - `GameteRuleSet.add_glab_convert(from_glab, to_glab, rate, when=...)` — 替代 `add_hg_convert(hg→hg, target_glab=...)` 的语义拐弯
-   - `ZygoteRuleSet.add_glab_redirect(from_glab, to_glab, when=...)` — zygote-level glab redirect
-   - 旧 API 保留，新 API 内部委托到旧 API
-3. **Preset 迁移**：
-   - HomingDrive + ToxinAntidote：Cas9 沉积标注从 `add_hg_convert` → `add_glab_convert`
-   - CytoplasmicPreset：走 modifier 协议，`isinstance` 特判消除
-4. **ztype/gtype 适配**：
-   - `gamete_conversion.py`：`index_to_genotype` → `index_to_ztype`，`genotype_idx` → `ztype_idx`
-   - `zygote_conversion.py`：同上 + `g = row.argmax()` 后直接用 ztype 索引
 
 ### 📋 Stage 2 待做 — 剩余迁移
 
-1. ✅ `RuleSet.to_matrix(registry)` — 已实现（`1f06109`），CytoplasmicPreset 已在用
-2. ✅ `when` 条件接线 — 已实现（`8d70791`），gamete/zygote modifier 均已支持
-3. `add_slab_convert` — gamete/zygote 端 slab 操作（当前 CytoplasmicPreset 自制循环）
-4. `_compute_converted_gamete_freqs` 替换为矩阵乘法
-5. `extract_gamete_frequencies_by_glab` 调用精简（CytoplasmicPreset 路径仍保留）
+1. `add_slab_convert` — gamete/zygote 端 slab 操作（当前 CytoplasmicPreset 自制循环）
+2. `extract_gamete_frequencies_by_glab` 调用精简（CytoplasmicPreset 路径仍保留）
 
 ### 剩余 P2 命名清理（grill list #8-#16）
 

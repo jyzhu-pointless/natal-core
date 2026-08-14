@@ -547,6 +547,19 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 sperm_storage=np.asarray(state[1], dtype=np.float64),
             )
 
+        expected_individual_shape = self.state.individual_count.shape
+        if state_obj.individual_count.shape != expected_individual_shape:
+            raise ValueError(
+                "individual_count shape mismatch: expected "
+                f"{expected_individual_shape}, got {state_obj.individual_count.shape}"
+            )
+        expected_sperm_shape = self.state.sperm_storage.shape
+        if state_obj.sperm_storage.shape != expected_sperm_shape:
+            raise ValueError(
+                "sperm_storage shape mismatch: expected "
+                f"{expected_sperm_shape}, got {state_obj.sperm_storage.shape}"
+            )
+
         # ── Phase 2: commit atomically ──
         self.state.individual_count[:] = state_obj.individual_count
         self.state.sperm_storage[:] = state_obj.sperm_storage

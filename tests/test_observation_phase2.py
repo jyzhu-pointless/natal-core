@@ -1221,6 +1221,7 @@ class TestNGroups:
     """Invariant: n_groups == len(labels)."""
 
     def test_single_group(self, phase2_registry: IndexRegistry) -> None:
+        """Report one group for a single labeled rule."""
         compiler = ObservationFilter(phase2_registry)
         obs = compiler.build_filter(
             groups={"g0": {"genotype": ["WT|WT"]}},
@@ -1232,6 +1233,7 @@ class TestNGroups:
         assert obs.n_groups == len(obs.labels)
 
     def test_multi_group(self, phase2_registry: IndexRegistry) -> None:
+        """Report one group for each explicit rule."""
         compiler = ObservationFilter(phase2_registry)
         obs = compiler.build_filter(
             groups=[
@@ -1247,6 +1249,7 @@ class TestNGroups:
         assert obs.n_groups == len(obs.labels)
 
     def test_identity_n_groups(self, phase2_registry: IndexRegistry) -> None:
+        """Report one identity group for each registry ZType."""
         obs = build_identity_observation(
             phase2_registry, n_ztypes=3
         )

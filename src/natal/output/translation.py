@@ -543,8 +543,8 @@ def _get_population_observation_payload(
     """Build a current-state observation payload from a panmictic population.
 
     Reads the raw state, applies the observation mask in Python, and returns
-    a dict compatible with ``output_current_state``.  When ``observation`` is
-    provided ``groups`` and ``collapse_age`` are ignored.
+    a structured current-state payload. When ``observation`` is provided,
+    ``groups`` and ``collapse_age`` are ignored.
 
     Args:
         population: Population instance to observe.
@@ -604,8 +604,8 @@ def population_observation_history_to_readable_dict(
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate pre-recorded observation history into readable snapshot dicts.
 
-    This is used when the population was run with ``record_observation`` set
-    and the kernel recorded compressed observation snapshots. Each row is
+    This is used when the population History schema stores observation-mode
+    snapshots. Each row is
     ``[tick, observed.ravel()]`` where ``observed`` has shape
     ``(n_groups, n_sexes, n_ages)``, so no per-genotype data is stored.
 
@@ -947,11 +947,11 @@ def spatial_population_observation_history_to_readable_dict(
     function expands per-deme observation payloads and a cross-deme aggregate
     (sum over all demes).
 
-    Falls back to ``spatial_population_history_to_readable_dict`` (raw state
-    decoding) if ``spatial_population.record_observation`` is ``None``.
+    The canonical ``spatial_population.observation`` supplies the immutable
+    projection metadata used to decode every snapshot.
 
     Args:
-        spatial_population: Spatial population with ``record_observation`` set.
+        spatial_population: Spatial population with a canonical Observation.
         history: Optional history array. When ``None``, uses
             ``spatial_population.history._to_numpy()``.
         include_zero_counts: Whether to keep zero-valued entries.

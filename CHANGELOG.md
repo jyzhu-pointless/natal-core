@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- **History / Observation API**: replace mutable runtime observation creation
+  and legacy output helpers with a canonical build-time `Observation`, a
+  self-describing `History`, `pop.observe()`, `pop.record_snapshot()`, and raw
+  checkpoint restoration. Deleted legacy interfaces are not retained as
+  compatibility aliases.
+
+### New Features
+
+- **Composable individual selectors**: add immutable `IndividualSelector`
+  rules over ZType, sex, and age coordinates.
+- **Structured history storage**: add immutable schemas, bounded history,
+  read-only result ownership, post-hoc observation, and lifecycle-safe state
+  restoration.
+
+### Bug Fixes
+
+- **Spatial runtime updates**: validate complete per-deme updates before commit,
+  preserve shared configuration identity, and propagate replacement configs to
+  every affected deme without leaving partial state on failure.
+- **Preset modifier refresh**: rebuild gamete and zygote conversions from the
+  Mendelian baseline so repeated refresh or runtime reconfiguration cannot
+  compound drive rates; preserve build-time preset registration after `build()`.
+
+### Changed
+
+- **Spatial update internals**: replace the private `_SpatialUpdate` facade and
+  method-name batching table with typed Configurator dispatch and explicit
+  `batch_setting()` values.
+
 ## v0.2.0b (2026.7.14)
 
 ### Breaking Changes

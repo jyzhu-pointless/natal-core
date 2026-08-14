@@ -21,11 +21,11 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Collection,
-    Dict,
     FrozenSet,
     Iterable,
     Optional,
     Tuple,
+    TypedDict,
     Union,
 )
 
@@ -48,10 +48,33 @@ SexInput = Optional[Union[Sex, str, int, Collection[Union[Sex, str, int]]]]
 AgeInput = Optional[Union[int, range, Collection[int]]]
 
 
+class _SelectorAtomDict(TypedDict, total=False):
+    """Serialized fields for one selector atom."""
+
+    ztype: list[str]
+    sex: list[int]
+    age: list[int]
+    all: bool
+
+
+class _SelectorDict(TypedDict):
+    """Serialized representation of an individual selector."""
+
+    atoms: list[_SelectorAtomDict]
+
+
 # ── Normalisers ─────────────────────────────────────────────────────────────
 
 
 def _to_tuple_age(value: AgeInput) -> Tuple[int, ...]:
+    """Normalize an age input to sorted unique integer values.
+
+    Args:
+        value: Age value, range, collection, or ``None`` wildcard.
+
+    Returns:
+        Normalized age values, or an empty tuple for a wildcard.
+    """
     if value is None:
         return ()
     if isinstance(value, range):
@@ -62,6 +85,17 @@ def _to_tuple_age(value: AgeInput) -> Tuple[int, ...]:
 
 
 def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
+    """Normalize a sex input to sorted unique integer values.
+
+    Args:
+        value: Sex value, collection, or ``None`` wildcard.
+
+    Returns:
+        Normalized sex values, or an empty tuple for a wildcard.
+
+    Raises:
+        ValueError: If a string is not a recognized sex label.
+    """
     if value is None:
         return ()
     if isinstance(value, (Sex, int)):
@@ -108,6 +142,17 @@ def _to_tuple_ztype(value: ZTypeSpec) -> Tuple[str, ...]:
 
 
 def _build_fingerprint(*components: object) -> str:
+    """Hash arbitrary deterministically representable values.
+
+    ``object`` is intentional because this function only requires ``repr()``,
+    which every Python object provides.
+
+    Args:
+        *components: Values whose representations form the hash input.
+
+    Returns:
+        The first 16 hexadecimal characters of a SHA-256 digest.
+    """
     hasher = hashlib.sha256()
     for c in components:
         hasher.update(repr(c).encode("utf-8"))
@@ -132,14 +177,17 @@ class _SelectorAtom:
 
     @property
     def wildcard_ztype(self) -> bool:
+        """Whether this atom accepts every ZType."""
         return len(self.ztype_patterns) == 0
 
     @property
     def wildcard_sex(self) -> bool:
+        """Whether this atom accepts every sex."""
         return len(self.sex_values) == 0
 
     @property
     def wildcard_age(self) -> bool:
+        """Whether this atom accepts every age."""
         return len(self.age_values) == 0
 
 
@@ -187,7 +235,7 @@ class IndividualSelector:
         ztype: ZTypeSpec = None,
         sex: SexInput = None,
         age: AgeInput = None,
-    ):
+    ) -> None:
         """Create a single-atom selector (fields AND together).
 
         Args:
@@ -212,11 +260,33 @@ class IndividualSelector:
     # ── Boolean union ────────────────────────────────────────────────────
 
     def __or__(self, other: object) -> IndividualSelector:
+        """Return the union with another selector.
+
+        ``object`` is required by Python's binary-operation protocol so an
+        unsupported right operand can return ``NotImplemented``.
+
+        Args:
+            other: Candidate selector to combine with this selector.
+
+        Returns:
+            A selector containing both sets of atoms, or ``NotImplemented``
+            for an unsupported operand.
+        """
         if not isinstance(other, IndividualSelector):
             return NotImplemented  # Python data model requires object param for binary ops
         return IndividualSelector._from_atoms(self._atoms + other._atoms)
 
     def __add__(self, other: object) -> IndividualSelector:
+        """Return the selector union using the additive alias.
+
+        ``object`` is required by Python's binary-operation protocol.
+
+        Args:
+            other: Candidate selector to combine with this selector.
+
+        Returns:
+            The same union produced by :meth:`__or__`, or ``NotImplemented``.
+        """
         if not isinstance(other, IndividualSelector):
             return NotImplemented
         return self | other
@@ -241,6 +311,7 @@ class IndividualSelector:
         return False
 
     def __repr__(self) -> str:
+        """Return a readable expression of the selector's OR branches."""
         descs: list[str] = []
         for atom in self._atoms:
             parts: list[str] = []
@@ -343,6 +414,16 @@ class IndividualSelector:
         index_registry: IndexRegistry,
         n_ztypes: int,
     ) -> list[int]:
+        """Resolve one atom's ZType patterns to registry indices.
+
+        Args:
+            atom: Selector atom to resolve.
+            index_registry: Registry supplying ZType mappings.
+            n_ztypes: Number of available ZTypes.
+
+        Returns:
+            Matched ZType indices in stable order.
+        """
         if atom.wildcard_ztype:
             return list(range(n_ztypes))
 
@@ -379,6 +460,15 @@ class IndividualSelector:
         atom: _SelectorAtom,
         n_sexes: int,
     ) -> list[int]:
+        """Resolve one atom's sex values against the available axis.
+
+        Args:
+            atom: Selector atom to resolve.
+            n_sexes: Number of available sex entries.
+
+        Returns:
+            Valid selected sex indices.
+        """
         if atom.wildcard_sex:
             return list(range(n_sexes))
         return [v for v in atom.sex_values if 0 <= v < n_sexes]
@@ -388,17 +478,26 @@ class IndividualSelector:
         atom: _SelectorAtom,
         n_ages: int,
     ) -> list[int]:
+        """Resolve one atom's age values against the available axis.
+
+        Args:
+            atom: Selector atom to resolve.
+            n_ages: Number of available age entries.
+
+        Returns:
+            Valid selected age indices.
+        """
         if atom.wildcard_age:
             return list(range(n_ages))
         return [v for v in atom.age_values if 0 <= v < n_ages]
 
     # ── Serialisation helpers ─────────────────────────────────────────────
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> _SelectorDict:
         """Serialise selector to a human-readable dict (for export)."""
-        atoms_list: list[Dict[str, object]] = []
+        atoms_list: list[_SelectorAtomDict] = []
         for atom in self._atoms:
-            atom_dict: Dict[str, object] = {}
+            atom_dict: _SelectorAtomDict = {}
             if not atom.wildcard_ztype:
                 atom_dict["ztype"] = list(atom.ztype_patterns)
             if not atom.wildcard_sex:

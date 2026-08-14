@@ -111,6 +111,49 @@ class TestConfiguratorBuild:
         assert cfg._config.n_ages == 2
         assert cfg._config.n_ztypes > 0
 
+    def test_homing_build_and_refresh_use_mendelian_baseline(
+        self, simple_species: nt.Species,
+    ) -> None:
+        """Initial construction and repeated refresh preserve exact drive rates."""
+        drive = nt.HomingDrive(
+            name="__build_refresh_baseline__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.95,
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({
+                "female": {"WT|Dr": [0, 100]},
+                "male": {"WT|Dr": [0, 100]},
+            })
+            .competition(carrying_capacity=500)
+            .presets(drive)
+            .build()
+        )
+        registry = pop.index_registry
+        heterozygote = registry.ztype_index(
+            simple_species.get_genotype_from_str("WT|Dr"), "default",
+        )
+        wt = registry.gtype_index(
+            simple_species.get_haploid_genotype_from_str("WT"), "default",
+        )
+        dr = registry.gtype_index(
+            simple_species.get_haploid_genotype_from_str("Dr"), "default",
+        )
+        expected = pop.config.zygotes_to_gametes_map.copy()
+
+        for sex in (0, 1):
+            assert expected[sex, heterozygote, wt] == pytest.approx(0.025)
+            assert expected[sex, heterozygote, dr] == pytest.approx(0.975)
+            assert expected[sex, heterozygote].sum() == pytest.approx(1.0)
+
+        pop.refresh_modifiers()
+        pop.refresh_modifiers()
+
+        np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, expected)
+
     def test_age_structure_changes_dimensions(self, species):
         cfg = Configurator.from_species(species).age_structure(n_ages=6, new_adult_age=3)
         assert cfg._config.n_ages == 6
@@ -809,6 +852,46 @@ class TestModifiersCombined:
 
 
 class TestReconfigurePreset:
+    def test_reconfigure_homing_conversion_restarts_from_mendelian_baseline(
+        self, simple_species: nt.Species,
+    ) -> None:
+        """Runtime rate changes replace rather than compound drive conversion."""
+        drive = nt.HomingDrive(
+            name="__reconfigure_conversion_baseline__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.95,
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({
+                "female": {"WT|Dr": [0, 100]},
+                "male": {"WT|Dr": [0, 100]},
+            })
+            .competition(carrying_capacity=500)
+            .presets(drive)
+            .build()
+        )
+
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+
+        registry = pop.index_registry
+        heterozygote = registry.ztype_index(
+            simple_species.get_genotype_from_str("WT|Dr"), "default",
+        )
+        wt = registry.gtype_index(
+            simple_species.get_haploid_genotype_from_str("WT"), "default",
+        )
+        dr = registry.gtype_index(
+            simple_species.get_haploid_genotype_from_str("Dr"), "default",
+        )
+        for sex in (0, 1):
+            row = pop.config.zygotes_to_gametes_map[sex, heterozygote]
+            assert row[wt] == pytest.approx(0.35)
+            assert row[dr] == pytest.approx(0.65)
+            assert row.sum() == pytest.approx(1.0)
+
     def test_reconfigure_updates_viability(self, fitness_species):
         from natal.presets import HomingDrive
 

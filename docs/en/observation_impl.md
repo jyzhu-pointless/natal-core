@@ -35,13 +35,13 @@ Core modules and responsibilities:
 
 Non-spatial Configurators use:
 
-```python
+```text
 .with_observation(groups, collapse_age=False)
 ```
 
 The spatial Configurator additionally accepts a deme selection and processing mode:
 
-```python
+```text
 .with_observation(
     groups,
     collapse_age=False,
@@ -126,7 +126,7 @@ aggregate result == preserve result summed along the deme axis
 
 `record_history()` independently selects the recording mode:
 
-```python
+```text
 .record_history(mode="raw", max_rows=None)
 .record_history(mode="observation", max_rows=None)
 ```

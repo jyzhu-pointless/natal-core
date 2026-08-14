@@ -7,6 +7,7 @@ Each deme is represented by one concrete ``BasePopulation`` subclass instance.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import copy, deepcopy
 from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
@@ -298,10 +299,39 @@ class _SpatialUpdate:
 
     def presets(self, *presets: GeneticPreset) -> _SpatialUpdate:
         if self._deme is not None:
-            self._pop.update_deme(self._deme).presets(*presets)
+            target = self._pop.deme(self._deme)
+            original_config = target.config
+            try:
+                self._pop.update_deme(self._deme).presets(*presets)
+            except Exception:
+                # update_deme() performs clone-on-write before Configurator's
+                # transaction starts, so restore the caller-visible shared
+                # config identity as well as Configurator's internal rollback.
+                target.set_config(original_config)
+                raise
             return self
 
-        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
+        snapshots = [
+            (
+                d.config,
+                d.presets,
+                d.gamete_modifiers,
+                d.zygote_modifiers,
+            )
+            for d in self._pop.demes
+        ]
+        preset_bindings: list[tuple[GeneticPreset, Species | None]] = [
+            (preset, preset._bound_species)  # pyright: ignore[reportPrivateUsage]  # rollback must preserve binding after a failed first registration.
+            for preset in presets
+        ]
+        modifier_groups: dict[
+            int,
+            tuple[
+                PopulationConfig | DiscretePopulationConfig,
+                list[tuple[int, str | None, GameteModifier]],
+                list[tuple[int, str | None, ZygoteModifier]],
+            ],
+        ] = {}
         # Modifier callables built by the representative deme of each
         # config-sharing group.  Followers share these by reference so
         # that all demes in a group have identical _gamete_modifiers /
@@ -309,29 +339,44 @@ class _SpatialUpdate:
         # create a fresh callable per deme, and semantically equivalent
         # but numerically different closures produce diverging maps when
         # any follower later calls refresh_modifiers() (F3×Refresh).
-        shared_gamete: list[Any] = []
-        shared_zygote: list[Any] = []
+        try:
+            for d in self._pop.demes:
+                old_config = d.config
+                cid = id(old_config)
 
-        for d in self._pop.demes:
-            old_config = d.config
-            cid = id(old_config)
+                # add_preset has identity-based persistent dedup, so calling
+                # it with the same object twice (or across two presets()
+                # calls) is a no-op.  No per-call seen_presets needed.
+                for p in presets:
+                    d.add_preset(p)
 
-            # add_preset has identity-based persistent dedup, so calling
-            # it with the same object twice (or across two presets()
-            # calls) is a no-op.  No per-call seen_presets needed.
-            for p in presets:
-                d.add_preset(p)
-
-            if cid in updated_configs:
-                d._gamete_modifiers = list(shared_gamete)  # pyright: ignore[reportPrivateUsage]
-                d._zygote_modifiers = list(shared_zygote)  # pyright: ignore[reportPrivateUsage]
-                d.set_config(updated_configs[cid])
-                continue
-            d.refresh_modifiers()
-            shared_gamete = list(d._gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
-            shared_zygote = list(d._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
-            d.reapply_preset_fitness()
-            updated_configs[cid] = d.config
+                if cid in modifier_groups:
+                    shared_config, shared_gamete, shared_zygote = modifier_groups[cid]
+                    d._gamete_modifiers = list(shared_gamete)  # pyright: ignore[reportPrivateUsage]
+                    d._zygote_modifiers = list(shared_zygote)  # pyright: ignore[reportPrivateUsage]
+                    d.set_config(shared_config)
+                    continue
+                # Fitness patches mutate arrays in place.  Give each config
+                # group an isolated copy so every earlier group can be rolled
+                # back by identity if a later modifier build fails.
+                d.set_config(deepcopy(old_config))
+                d.refresh_modifiers()
+                d.reapply_preset_fitness()
+                modifier_groups[cid] = (
+                    d.config,
+                    list(d._gamete_modifiers),  # pyright: ignore[reportPrivateUsage]
+                    list(d._zygote_modifiers),  # pyright: ignore[reportPrivateUsage]
+                )
+        except Exception:
+            for d, snapshot in zip(self._pop.demes, snapshots):
+                old_config, old_presets, old_gamete, old_zygote = snapshot
+                d._presets = old_presets  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores registration metadata.
+                d._gamete_modifiers = old_gamete  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived metadata.
+                d._zygote_modifiers = old_zygote  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived metadata.
+                d.set_config(old_config)
+            for preset, bound_species in preset_bindings:
+                preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
+            raise
         return self
 
     def reconfigure_preset(
@@ -393,6 +438,25 @@ class _SpatialUpdate:
                     f"{type(preset).__name__} {preset.name!r} has no "
                     f"attribute {attr!r}."
                 )
+
+        # Validate a complete rebuild against every target registry before
+        # mutating the shared preset object.  Different demes may have distinct
+        # compressed axes, and a custom modifier may defer failure until its
+        # returned callable is invoked during map rebuilding.
+        candidate = copy(preset)
+        for attr, value in changes.items():
+            setattr(candidate, attr, value)
+        for d in self._pop.demes:
+            trial = d._clone(  # pyright: ignore[reportPrivateUsage]
+                f"{d.name}__preset_validation__",
+                config=deepcopy(d.config),
+            )
+            trial._presets = [  # pyright: ignore[reportPrivateUsage]
+                candidate if registered is preset else registered
+                for registered in trial._presets  # pyright: ignore[reportPrivateUsage]
+            ]
+            trial.refresh_modifiers()
+            trial.reapply_preset_fitness()
 
         # ── Commit phase ──
         for attr, value in changes.items():
@@ -1033,7 +1097,7 @@ class SpatialPopulation:
         target = self._demes[demi]
         config = target.config
 
-        copied: dict[str, Any] = {}
+        copied: dict[str, NDArray[np.generic]] = {}
         for field in _DETACH_FIELDS:
             if not hasattr(config, field):
                 continue
@@ -1270,22 +1334,6 @@ class SpatialPopulation:
                 deme._tick = restored_tick  # type: ignore[attr-defined]  # private attr on base population
         self._tick = restored_tick
         history_obj.truncate(retain_until_tick=tick)
-
-    def _write_history_obj(self, tick: int, flat_row: NDArray[np.float64]) -> None:
-        """Append a single (tick, flat_row) to ``_history_obj`` if available."""
-        history_obj = getattr(self, "_history_obj", None)
-        if history_obj is None:
-            return
-        from natal.output.history import HistoryBatch
-
-        row = np.empty(1 + len(flat_row), dtype=np.float64)
-        row[0] = tick
-        row[1:] = flat_row
-        batch = HistoryBatch(
-            schema=history_obj.schema,
-            rows=row[np.newaxis, :],
-        )
-        history_obj._append(batch)
 
     @property
     def hooks(self) -> LifecycleWrappers:
@@ -2175,7 +2223,10 @@ class SpatialPopulation:
         """
         return any(deme.has_mixed_hook_types() for deme in self._demes)
 
-    def get_compiled_hooks(self, event: Optional[str] = None) -> list[Any]:
+    def get_compiled_hooks(
+        self,
+        event: Optional[str] = None,
+    ) -> list[CompiledHookDescriptor]:
         """Get compiled hook descriptors, optionally filtered by event.
 
         Args:

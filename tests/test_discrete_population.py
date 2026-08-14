@@ -216,6 +216,23 @@ class TestStateAndConfigInterop:
         assert pop.export_config().n_ages == 2
         assert pop.export_config().new_adult_age == 1
 
+    def test_import_config_rejects_non_normalized_adult_ages(self):
+        """Reject an invalid adult-age axis without changing config or state."""
+        sp = _make_species("Disc_config_reject_adult_ages")
+        pop = _minimal_pop(sp, pop_name="Disc_config_reject_adult_ages_pop")
+
+        original_config = pop.export_config()
+        original_counts = pop.state.individual_count.copy()
+        bad = original_config._replace(
+            adult_ages=np.array([0], dtype=np.int64),
+        )
+
+        with pytest.raises(ValueError, match="adult_ages"):
+            pop.import_config(bad)
+
+        assert pop.export_config() is original_config
+        np.testing.assert_array_equal(pop.state.individual_count, original_counts)
+
     def test_import_config_rejects_population_config(self):
         """import_config rejects a PopulationConfig with TypeError.
 
@@ -424,6 +441,62 @@ class TestHomingDriveIntegration:
         np.testing.assert_array_equal(
             pop1._state.individual_count,
             pop2._state.individual_count,
+        )
+
+    def test_reconfigure_refresh_run_matches_fresh_final_configuration(self) -> None:
+        """End-to-end runtime updates match a freshly built reference population."""
+        sp = _make_species("Disc_drive_refresh_e2e")
+
+        def build_population(
+            name: str, rate: float,
+        ) -> tuple[nt.DiscreteGenerationPopulation, nt.HomingDrive]:
+            """Build one deterministic drive population and return its preset."""
+            drive = nt.HomingDrive(
+                name=f"{name}_drive",
+                drive_allele="Dr",
+                target_allele="WT",
+                drive_conversion_rate=rate,
+            )
+            pop = (
+                nt.DiscreteGenerationPopulation.setup(
+                    species=sp, name=name, stochastic=False,
+                )
+                .initial_state(individual_count={
+                    "female": {"WT|Dr": 500},
+                    "male": {"WT|WT": 500},
+                })
+                .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+                .reproduction(eggs_per_female=10)
+                .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+                .presets(drive)
+                .build()
+            )
+            return pop, drive
+
+        updated, original_drive = build_population("Disc_drive_updated", 0.95)
+        reference, _ = build_population("Disc_drive_reference", 0.3)
+
+        updated.update().reconfigure_preset(
+            original_drive, drive_conversion_rate=0.3,
+        )
+        updated.refresh_modifiers()
+        updated.refresh_modifiers()
+
+        np.testing.assert_array_equal(
+            updated.config.offspring_tensor,
+            reference.config.offspring_tensor,
+        )
+        updated.run(4)
+        reference.run(4)
+
+        assert updated.tick == 4
+        assert reference.tick == 4
+        # Each generation has 500 initial females × 10 eggs, split equally
+        # by sex; the resulting five-fold growth gives 1000 × 5**4.
+        assert updated.state.individual_count.sum() == pytest.approx(625000.0)
+        np.testing.assert_array_equal(
+            updated.state.individual_count,
+            reference.state.individual_count,
         )
 
     def test_stochastic_runs_without_error(self):

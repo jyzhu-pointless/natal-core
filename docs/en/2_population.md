@@ -154,7 +154,7 @@ capacity are the defaults:
 ```python
 pop = (
     nt.DiscreteGenerationPopulation.setup(sp)
-    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500})
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .record_history(mode="raw", max_rows=1000)
     .build()
 )

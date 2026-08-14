@@ -10,7 +10,7 @@ applies the canonical Observation before committing typed History rows.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Optional, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -23,13 +23,27 @@ if TYPE_CHECKING:
 __all__ = ["RecordingPlan"]
 
 
+class _RecordingState(Protocol):
+    """State fields required while compiling a recording plan."""
+
+    @property
+    def individual_count(self) -> NDArray[np.float64]:
+        """Individual-count tensor used to derive recording dimensions."""
+        ...
+
+
 class _HasStateAndRegistry(Protocol):
     """Minimal protocol for objects that carry state and a registry."""
 
     @property
-    def state(self) -> object: ...
+    def state(self) -> _RecordingState:
+        """Population state containing the individual-count tensor."""
+        ...
+
     @property
-    def index_registry(self) -> IndexRegistry: ...
+    def index_registry(self) -> IndexRegistry:
+        """Registry used to label the population layout."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -78,8 +92,8 @@ def compile_recording_plan(
         SpatialHistoryLayout,
     )
 
-    state = population.state  # type: ignore[union-attr]  # duck-typed population
-    ind = cast(NDArray[np.float64], state.individual_count)  # type: ignore[union-attr]  # duck-typed state
+    state = population.state
+    ind = state.individual_count
     n_sexes = int(ind.shape[0])
     n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
     n_ztypes = int(ind.shape[-1])

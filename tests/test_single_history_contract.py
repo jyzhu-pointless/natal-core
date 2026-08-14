@@ -1065,3 +1065,57 @@ def test_age_reset_clears_typed_history_and_restores_initial_state() -> None:
     assert population.history.ticks == ()
     np.testing.assert_array_equal(population.state.individual_count, initial_count)
     np.testing.assert_array_equal(population.state.sperm_storage, initial_sperm)
+
+
+def test_age_import_rejects_bad_sperm_shape_without_mutation() -> None:
+    """A failed age-state import preserves arrays, tick, and History."""
+    population = _build_population("age", "raw", "age_atomic_import")
+    population.record_snapshot()
+    initial_count = population.state.individual_count.copy()
+    initial_sperm = population.state.sperm_storage.copy()
+    initial_tick = population.tick
+    initial_history = population.history.individual_count
+    replacement_count = np.full_like(initial_count, 17.0)
+
+    with pytest.raises(ValueError, match="sperm_storage shape"):
+        population.import_state(
+            {
+                "n_tick": 42,
+                "individual_count": replacement_count,
+                "sperm_storage": np.zeros((0,), dtype=np.float64),
+            }
+        )
+
+    np.testing.assert_array_equal(population.state.individual_count, initial_count)
+    np.testing.assert_array_equal(population.state.sperm_storage, initial_sperm)
+    assert population.tick == initial_tick
+    assert population.history.ticks == (initial_tick,)
+    np.testing.assert_array_equal(
+        population.history.individual_count,
+        initial_history,
+    )
+
+
+def test_discrete_import_rejects_bad_count_shape_without_mutation() -> None:
+    """A failed discrete-state import preserves state, tick, and History."""
+    population = _build_population("discrete", "raw", "discrete_atomic_import")
+    population.record_snapshot()
+    initial_count = population.state.individual_count.copy()
+    initial_tick = population.tick
+    initial_history = population.history.individual_count
+
+    with pytest.raises(ValueError, match="individual_count shape"):
+        population.import_state(
+            {
+                "n_tick": 42,
+                "individual_count": np.zeros((1,), dtype=np.float64),
+            }
+        )
+
+    np.testing.assert_array_equal(population.state.individual_count, initial_count)
+    assert population.tick == initial_tick
+    assert population.history.ticks == (initial_tick,)
+    np.testing.assert_array_equal(
+        population.history.individual_count,
+        initial_history,
+    )

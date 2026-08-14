@@ -730,6 +730,13 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 individual_count=np.asarray(state["individual_count"], dtype=np.float64),
             )
 
+        expected_shape = self.state.individual_count.shape
+        if state_obj.individual_count.shape != expected_shape:
+            raise ValueError(
+                "individual_count shape mismatch: expected "
+                f"{expected_shape}, got {state_obj.individual_count.shape}"
+            )
+
         # ── Phase 2: commit atomically ──
         self._state = DiscretePopulationState(
             n_tick=int(state_obj.n_tick),
