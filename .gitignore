@@ -12,6 +12,10 @@ wheels/
 # Temporary files
 tmpdocs/
 .numba_cache/*
+cluster-packages/
+benchmark-results
+benchmarks/mgdrive1/cluster/
+tests/test_northstar_cluster_orchestration.py
 
 .DS_Store
 

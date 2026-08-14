@@ -514,6 +514,47 @@ class TestComputeMatingProbabilityMatrix:
         assert np.allclose(P[0], [0.0, 10.0/30, 20.0/30])
         assert np.allclose(P.sum(axis=1), 1.0)
 
+    def test_subnormal_male_counts_are_treated_as_absent(self) -> None:
+        """Treat a subnormal effective male population as extinct."""
+        n_ztypes = 2
+        sel_matrix = np.ones((n_ztypes, n_ztypes), dtype=np.float64)
+        subnormal = np.nextafter(0.0, 1.0)
+        male_counts = np.array([subnormal, subnormal], dtype=np.float64)
+
+        python_impl = getattr(
+            compute_mating_probability_matrix,
+            "py_func",
+            compute_mating_probability_matrix,
+        )
+        probabilities = python_impl(
+            sel_matrix, male_counts, n_ztypes
+        )
+
+        assert np.all(np.isfinite(probabilities))
+        assert np.array_equal(probabilities, np.zeros((2, 2)))
+
+    def test_small_resolvable_male_counts_are_normalized(self) -> None:
+        """Normalize a finite male population just above the extinction threshold."""
+        n_ztypes = 2
+        sel_matrix = np.ones((n_ztypes, n_ztypes), dtype=np.float64)
+        resolvable_total = np.nextafter(1e-10, np.inf)
+        male_counts = resolvable_total * np.array(
+            [0.2, 0.8],
+            dtype=np.float64,
+        )
+
+        python_impl = getattr(
+            compute_mating_probability_matrix,
+            "py_func",
+            compute_mating_probability_matrix,
+        )
+        probabilities = python_impl(
+            sel_matrix, male_counts, n_ztypes
+        )
+
+        assert np.all(np.isfinite(probabilities))
+        assert np.allclose(probabilities, [[0.2, 0.8], [0.2, 0.8]])
+
 
 # ===========================================================================
 # sample_mating (deterministic)
@@ -601,6 +642,35 @@ class TestSampleMating:
         assert S.shape == (1, 2, 2)
         assert S.sum() > 0
         assert np.isfinite(S).all()
+
+    def test_continuous_mating_ignores_subnormal_male_population(self) -> None:
+        """Keep continuous mating finite when effective males are subnormal."""
+        n_ages = 1
+        n_ztypes = 2
+        female_counts = np.array([[10.0, 5.0]], dtype=np.float64)
+        sperm_store = np.zeros((1, 2, 2), dtype=np.float64)
+        subnormal = np.nextafter(0.0, 1.0)
+        mating_prob = compute_mating_probability_matrix(
+            np.ones((2, 2), dtype=np.float64),
+            np.array([subnormal, subnormal], dtype=np.float64),
+            n_ztypes,
+        )
+
+        updated = sample_mating(
+            female_counts,
+            sperm_store,
+            mating_prob,
+            np.ones(1, dtype=np.float64),
+            sperm_displacement_rate=0.05,
+            adult_start_idx=0,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
+            stochastic=True,
+            continuous_sampling=True,
+        )
+
+        assert np.all(np.isfinite(updated))
+        assert np.array_equal(updated, np.zeros((1, 2, 2)))
 
     def test_no_adults(self) -> None:
         n_ages = 2

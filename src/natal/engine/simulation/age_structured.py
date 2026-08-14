@@ -64,10 +64,12 @@ def compute_mating_probability_matrix(
             P[gf, gm] = val
             row_sum += val
 
-        if row_sum > 0.0:
-            inv = 1.0 / row_sum
+        # Subnormal weighted counts are biologically extinct at the model's
+        # resolution. Taking their reciprocal can overflow and contaminate
+        # downstream Dirichlet/Gamma sampling with NaN or infinity.
+        if np.isfinite(row_sum) and row_sum > EPS:
             for gm in range(g):
-                P[gf, gm] *= inv
+                P[gf, gm] /= row_sum
         else:
             for gm in range(g):
                 P[gf, gm] = 0.0

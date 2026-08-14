@@ -430,6 +430,76 @@ def _multinomial_numpy(
 # Continuous sampling utilities
 # ============================================================================
 
+_CONTINUOUS_SAMPLING_RESOLUTION_LIMIT: float = float(2**104)
+_GAMMA_NORMAL_APPROXIMATION_THRESHOLD: float = 1e8
+_MAX_GAMMA_ATTEMPTS: int = 1024
+
+
+@njit_switch(cache=True)
+def _bounded_gamma(shape: float) -> float:
+    """Sample a unit-scale Gamma variate with bounded rejection attempts.
+
+    Args:
+        shape: Positive finite Gamma shape parameter.
+
+    Returns:
+        A Gamma sample, or the distribution mean if numerical degeneration
+        prevents acceptance within the fixed attempt budget.
+    """
+    if shape >= _CONTINUOUS_SAMPLING_RESOLUTION_LIMIT:
+        return shape
+    # For large shape, Gamma skewness is negligible while the rejection
+    # formula below loses variance through cancellation of O(shape) terms.
+    if shape >= _GAMMA_NORMAL_APPROXIMATION_THRESHOLD:
+        sample = shape + np.sqrt(shape) * np.random.normal()
+        return max(sample, 0.0)
+
+    magic = 1.0 + np.log(4.5)
+    if shape > 1.0:
+        inverse_scale = np.sqrt(2.0 * shape - 1.0)
+        shifted_shape = shape - np.log(4.0)
+        proposal_scale = shape + inverse_scale
+        for _ in range(_MAX_GAMMA_ATTEMPTS):
+            uniform_1 = np.random.random()
+            if not 1e-7 < uniform_1 < 0.9999999:
+                continue
+            uniform_2 = 1.0 - np.random.random()
+            logit = (
+                np.log(uniform_1 / (1.0 - uniform_1)) / inverse_scale
+            )
+            proposal = shape * np.exp(logit)
+            product = uniform_1 * uniform_1 * uniform_2
+            log_acceptance = (
+                shifted_shape + proposal_scale * logit - proposal
+            )
+            if (
+                log_acceptance + magic - 4.5 * product >= 0.0
+                or log_acceptance >= np.log(product)
+            ):
+                return proposal
+        return shape
+
+    if shape == 1.0:
+        return -np.log(1.0 - np.random.random())
+
+    coefficient = (np.e + shape) / np.e
+    for _ in range(_MAX_GAMMA_ATTEMPTS):
+        scaled_uniform = coefficient * np.random.random()
+        if scaled_uniform <= 1.0:
+            proposal = scaled_uniform ** (1.0 / shape)
+        else:
+            proposal = -np.log(
+                (coefficient - scaled_uniform) / shape
+            )
+        acceptance_uniform = np.random.random()
+        if scaled_uniform > 1.0:
+            if acceptance_uniform <= proposal ** (shape - 1.0):
+                return proposal
+        elif acceptance_uniform <= np.exp(-proposal):
+            return proposal
+    return shape
+
+
 @njit_switch(cache=True)
 def _continuous_poisson(lam: float) -> float:
     """Use Gamma distribution to continuousize Poisson distribution.
@@ -442,10 +512,17 @@ def _continuous_poisson(lam: float) -> float:
 
     Returns:
         Value sampled from Gamma(λ, 1)
+
+    Raises:
+        ValueError: If ``lam`` is not finite.
     """
+    if not np.isfinite(lam):
+        raise ValueError("continuous_poisson(): lam must be finite")
+    if lam >= _CONTINUOUS_SAMPLING_RESOLUTION_LIMIT:
+        return lam
     if lam <= EPS:
         return 0.0
-    return np.random.gamma(lam, 1.0)
+    return _bounded_gamma(lam)
 
 
 @njit_switch(cache=True)
@@ -461,7 +538,12 @@ def _continuous_binomial(n: float, p: float) -> float:
 
     Returns:
         Continuous count value (float between 0 and n)
+
+    Raises:
+        ValueError: If ``n`` or ``p`` is not finite.
     """
+    if not np.isfinite(n) or not np.isfinite(p):
+        raise ValueError("continuous_binomial(): n and p must be finite")
     if p <= EPS:
         return 0.0
     if p >= 1.0 - EPS:
@@ -484,7 +566,13 @@ def _continuous_binomial(n: float, p: float) -> float:
     alpha = max(alpha, EPS)
     beta_val = max(beta_val, EPS)
 
-    proportion = np.random.beta(alpha, beta_val)
+    numerator = _bounded_gamma(alpha)
+    denominator_component = _bounded_gamma(beta_val)
+    proportion = (
+        0.0
+        if numerator == 0.0
+        else numerator / (numerator + denominator_component)
+    )
     # Return "continuous count" rather than proportion: count = n * proportion
     return proportion * n
 
@@ -507,11 +595,17 @@ def _continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: 
         out_counts: Pre-allocated output array with shape (k,). Will be filled with
             continuous category counts that sum to approximately n (modified in-place).
 
-    Returns:
-        None (results written directly to out_counts).
+    Raises:
+        ValueError: If ``n`` or any probability is not finite.
     """
     k = len(p_array)
-
+    if not np.isfinite(n):
+        raise ValueError("continuous_multinomial(): n must be finite")
+    for i in range(k):
+        if not np.isfinite(p_array[i]):
+            raise ValueError(
+                "continuous_multinomial(): probabilities must be finite"
+            )
     # Performance optimization and numerical protection: for extremely small sample sizes, use deterministic allocation directly.
     if n <= 1.0 + EPS:
         for i in range(k):
@@ -531,7 +625,7 @@ def _continuous_multinomial(n: float, p_array: NDArray[np.float64], out_counts: 
             # If probability is extremely low, set to 0 directly
             val = 0.0
         else:
-            val = float(np.random.gamma(alpha, 1.0))  # pyright: ignore
+            val = _bounded_gamma(alpha)
 
         out_counts[i] = val
         sum_gamma += val
@@ -613,4 +707,3 @@ else:
     continuous_binomial = _continuous_binomial
     continuous_multinomial = _continuous_multinomial
     set_numba_seed = _set_numba_seed_numpy
-
