@@ -15,7 +15,7 @@ from typing import Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.data import PopulationConfig
+from natal.data import DiscretePopulationConfig, PopulationConfig
 from natal.engine.migration.adjacency import apply_spatial_adjacency_mode
 from natal.engine.migration.kernel import (
     apply_spatial_kernel_migration,
@@ -133,7 +133,7 @@ def run_spatial_migration(
     topology_wrap: bool,
     migration_kernel: NDArray[np.float64],
     kernel_include_center: bool,
-    config: PopulationConfig,
+    config: PopulationConfig | DiscretePopulationConfig,
     migration_rate: NDArray[np.float64],
     adjust_migration_on_edge: bool = False,
     deme_kernel_ids: NDArray[np.int64] | None = None,

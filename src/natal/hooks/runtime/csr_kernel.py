@@ -34,7 +34,7 @@ path for all cells.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -432,7 +432,7 @@ def _execute_single_csr_hook(
     deme_selector_offsets: np.ndarray,
     deme_selector_data: np.ndarray,
     individual_count: np.ndarray,
-    sperm_storage: np.ndarray,
+    sperm_storage: Optional[np.ndarray],
     has_sperm_storage: bool,
     tick: int,
     stochastic: bool,
@@ -553,7 +553,7 @@ def _execute_single_csr_hook(
                         else:
                             target = current
 
-                        if sex_idx == 0 and has_sperm_storage:
+                        if sex_idx == 0 and sperm_storage is not None:
                             individual_count[sex_idx, age, zidx] = _apply_target_with_sperm(
                                 current,
                                 target,
@@ -622,7 +622,7 @@ def execute_csr_event_arrays(
     deme_selector_data: np.ndarray,
     event_id: int,
     individual_count: np.ndarray,
-    sperm_storage: np.ndarray,
+    sperm_storage: Optional[np.ndarray],
     has_sperm_storage: bool,
     tick: int,
     stochastic: bool,
@@ -700,7 +700,7 @@ def execute_csr_event_program_with_state(
     program: HookProgram,
     event_id: int,
     individual_count: np.ndarray,
-    sperm_storage: np.ndarray,
+    sperm_storage: Optional[np.ndarray],
     tick: int,
     stochastic: bool,
     has_sperm_storage: bool,
@@ -717,8 +717,8 @@ def execute_csr_event_program_with_state(
         program: Compiled HookProgram containing all declarative ops.
         event_id: Which event to execute (EVENT_FIRST=0, EVENT_EARLY=1, …).
         individual_count: 3-D array ``[sex, age, genotype]``, mutated in-place.
-        sperm_storage: 3-D array ``[age, genotype, gamete_male]``.  Pass a
-            dummy ``(0,0,0)`` array for discrete-generation models.
+        sperm_storage: 3-D array ``[age, genotype, gamete_male]`` or
+            ``None`` when *has_sperm_storage* is False (discrete models).
         tick: Current simulation tick (used for ``when`` clause evaluation).
         stochastic: Whether to use stochastic survival sampling.
         has_sperm_storage: Whether *sperm_storage* contains real data.

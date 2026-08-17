@@ -49,9 +49,10 @@ def test_mixed_priority_ordering_first_event() -> None:
     observed: dict[str, float] = {}
 
     @hook(event="first", priority=0)
-    def first_python(population: nt.DiscreteGenerationPopulation) -> None:
+    def first_python(state, config, deme_id) -> None:
+        _ = config, deme_id
         calls.append("python_first")
-        observed["first_python_seen"] = float(population.state.individual_count[1, 1, 0])
+        observed["first_python_seen"] = float(state.individual_count[1, 1, 0])
 
     @hook(event="first", priority=1)
     def first_njit(state, config, deme_id):
@@ -65,9 +66,10 @@ def test_mixed_priority_ordering_first_event() -> None:
         return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
 
     @hook(event="early", priority=0)
-    def early_probe(population: nt.DiscreteGenerationPopulation) -> None:
+    def early_probe(state, config, deme_id) -> None:
+        _ = config, deme_id
         calls.append("python_early_probe")
-        observed["early_seen"] = float(population.state.individual_count[1, 1, 0])
+        observed["early_seen"] = float(state.individual_count[1, 1, 0])
 
     pop.set_hook("first", first_csr)
     pop.set_hook("first", first_njit)
@@ -89,9 +91,10 @@ def test_mixed_priority_ordering_early_event() -> None:
     observed: dict[str, float] = {}
 
     @hook(event="early", priority=0)
-    def early_python(population: nt.DiscreteGenerationPopulation) -> None:
+    def early_python(state, config, deme_id) -> None:
+        _ = config, deme_id
         calls.append("python_early")
-        observed["early_python_seen"] = float(population.state.individual_count[1, 1, 0])
+        observed["early_python_seen"] = float(state.individual_count[1, 1, 0])
 
     @hook(event="early", priority=1)
     def early_njit(state, config, deme_id):
@@ -105,9 +108,10 @@ def test_mixed_priority_ordering_early_event() -> None:
         return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
 
     @hook(event="late", priority=0)
-    def late_probe(population: nt.DiscreteGenerationPopulation) -> None:
+    def late_probe(state, config, deme_id) -> None:
+        _ = config, deme_id
         calls.append("python_late_probe")
-        observed["late_seen"] = float(population.state.individual_count[1, 1, 0])
+        observed["late_seen"] = float(state.individual_count[1, 1, 0])
 
     pop.set_hook("early", early_csr)
     pop.set_hook("early", early_njit)
@@ -126,8 +130,8 @@ def test_numba_disabled_python_hook_runs_via_run_without_manual_trigger() -> Non
     pop = _build_discrete_population("python_hook_auto_run")
     calls: List[str] = []
 
-    def python_hook(population: nt.DiscreteGenerationPopulation) -> None:
-        _ = population
+    def python_hook(state, config, deme_id) -> None:
+        _ = state, config, deme_id
         calls.append("called")
 
     pop.set_hook("first", python_hook)

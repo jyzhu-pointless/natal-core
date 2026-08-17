@@ -225,7 +225,7 @@ def my_hook(state, config, deme_id=-1):
     return 0  # RESULT_CONTINUE
 ```
 
-自定义 Hook 使用签名 `(state, config, deme_id=-1)`。`deme_id` 在 panmictic 种群中默认为 `-1`。返回 `0` 继续模拟，返回 `RESULT_STOP` 结束模拟。关于基于选择器的 Hook、Numba 编译细节以及 Hook 内运行时参数修改，参见 [高级 Hook 教程](3_advanced_hooks.md)。
+自定义 Hook 使用签名 `(state, config, deme_id=-1)`。 该签名是唯一受支持的形式：旧的单参数（population）Hook 会被显式拒绝，而不会再被猜测执行。`deme_id` 在 panmictic 种群中默认为 `-1`。返回 `0` 继续模拟，返回 `RESULT_STOP` 结束模拟。关于基于选择器的 Hook、Numba 编译细节以及 Hook 内运行时参数修改，参见 [高级 Hook 教程](3_advanced_hooks.md)。
 
 ## Hook 内修改参数
 

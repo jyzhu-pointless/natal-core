@@ -4,8 +4,6 @@ Orchestrate the three lifecycle stages using dedicated discrete algorithms.
 Each function takes ``DiscretePopulationConfig``.
 """
 
-import numpy as np
-from numpy.typing import NDArray
 
 import natal.engine.simulation.age_structured as alg
 from natal.data import (
@@ -13,6 +11,7 @@ from natal.data import (
     LOGISTIC,
     NO_COMPETITION,
     DiscretePopulationConfig,
+    DiscretePopulationState,
 )
 from natal.engine.simulation.discrete_generation import (
     fertilize_discrete,
@@ -32,11 +31,23 @@ __all__ = [
 
 @njit_switch(cache=True)
 def run_discrete_reproduction(
-    ind_count: NDArray[np.float64],
+    state: DiscretePopulationState,
     cfg: DiscretePopulationConfig,
-) -> NDArray[np.float64]:
-    """One tick of discrete reproduction: mate → fertilize → offspring in age 0."""
-    ind_count = ind_count.copy()
+) -> DiscretePopulationState:
+    """Run one tick of discrete reproduction.
+
+    Mating allocation, fertilization, and offspring placement into age 0 are
+    performed on a copy of *state*.  ``n_tick`` is preserved; the lifecycle
+    orchestrator advances it after aging.
+
+    Args:
+        state: Current discrete population state.
+        cfg: Discrete population configuration.
+
+    Returns:
+        New discrete population state with age-0 offspring filled.
+    """
+    ind_count = state.individual_count.copy()
     n_ztypes = cfg.n_ztypes
     stochastic = cfg.stochastic
     continuous = cfg.continuous_sampling
@@ -45,7 +56,9 @@ def run_discrete_reproduction(
     males = ind_count[1, 1, :]
     effective_males = males * cfg.male_adult_mating_rate
     if effective_males.sum() == 0.0 or females.sum() == 0.0:
-        return ind_count
+        return DiscretePopulationState(
+            n_tick=state.n_tick, individual_count=ind_count,
+        )
 
     mating_prob = alg.compute_mating_probability_matrix(
         cfg.sexual_selection_fitness, effective_males, n_ztypes,
@@ -73,7 +86,9 @@ def run_discrete_reproduction(
 
     ind_count[0, 0, :] = n_f
     ind_count[1, 0, :] = n_m
-    return ind_count
+    return DiscretePopulationState(
+        n_tick=state.n_tick, individual_count=ind_count,
+    )
 
 
 # ── Stage B: survival ────────────────────────────────────────────────────────
@@ -81,11 +96,19 @@ def run_discrete_reproduction(
 
 @njit_switch(cache=True)
 def run_discrete_survival(
-    ind_count: NDArray[np.float64],
+    state: DiscretePopulationState,
     cfg: DiscretePopulationConfig,
-) -> NDArray[np.float64]:
-    """Juvenile density regulation then genotype viability selection."""
-    ind_count = ind_count.copy()
+) -> DiscretePopulationState:
+    """Run juvenile density regulation and genotype viability selection.
+
+    Args:
+        state: Current discrete population state.
+        cfg: Discrete population configuration.
+
+    Returns:
+        New discrete population state after survival.
+    """
+    ind_count = state.individual_count.copy()
     n_ztypes = cfg.n_ztypes
     stochastic = cfg.stochastic
     continuous = cfg.continuous_sampling
@@ -137,7 +160,9 @@ def run_discrete_survival(
         ind_count[0, 0, :] = f_rec * s_f
         ind_count[1, 0, :] = m_rec * s_m
 
-    return ind_count
+    return DiscretePopulationState(
+        n_tick=state.n_tick, individual_count=ind_count,
+    )
 
 
 # ── Stage C: aging ───────────────────────────────────────────────────────────
@@ -145,12 +170,26 @@ def run_discrete_survival(
 
 @njit_switch(cache=True)
 def run_discrete_aging(
-    ind_count: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """Shift age-0 juveniles to age-1 adults.  Old adults are discarded."""
-    ind_count = ind_count.copy()
+    state: DiscretePopulationState,
+    cfg: DiscretePopulationConfig,
+) -> DiscretePopulationState:
+    """Shift age-0 juveniles to age-1 adults.
+
+    Old adults are discarded.  ``cfg`` is accepted for the unified
+    ``(state, config) -> state`` stage signature and is unused.
+
+    Args:
+        state: Current discrete population state.
+        cfg: Discrete population configuration (unused).
+
+    Returns:
+        New discrete population state after aging.
+    """
+    ind_count = state.individual_count.copy()
     ind_count[0, 1, :] = ind_count[0, 0, :]
     ind_count[0, 0, :] = 0.0
     ind_count[1, 1, :] = ind_count[1, 0, :]
     ind_count[1, 0, :] = 0.0
-    return ind_count
+    return DiscretePopulationState(
+        n_tick=state.n_tick, individual_count=ind_count,
+    )

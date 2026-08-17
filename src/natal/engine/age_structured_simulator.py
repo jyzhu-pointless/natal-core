@@ -1,6 +1,6 @@
 """Pure-function simulation engine run outside Population with Numba support."""
 
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,61 +13,13 @@ from natal.data import (
     PopulationConfig,
     PopulationState,
 )
-from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
-from natal.hooks.types import (
-    EVENT_EARLY,
-    EVENT_FIRST,
-    EVENT_LATE,
-    RESULT_CONTINUE,
-    RESULT_STOP,
-    HookProgram,
-)
 from natal.numba import compat as nbc
 from natal.numba.compat import binomial
 from natal.numba.utils import njit_switch
-from natal.output.record import build_observation_row_panmictic
-
-if TYPE_CHECKING:
-    from natal.population.age_structured import AgeStructuredPopulation
 
 __all__ = [
     # No user-facing API for now
 ]
-
-# ============================================================================
-# Export/import helpers (lightweight wrappers; call population methods directly)
-# ============================================================================
-
-def export_config(pop: 'AgeStructuredPopulation') -> 'PopulationConfig':
-    """Export population configuration. Prefer ``pop.export_config()`` directly."""
-    return pop.export_config()
-
-
-def import_config(pop: 'AgeStructuredPopulation', config: 'PopulationConfig') -> None:
-    """Import configuration into population. Prefer ``pop.import_config()`` directly."""
-    pop.import_config(config)
-
-
-def export_state(pop: 'AgeStructuredPopulation') -> NDArray[np.float64]:
-    """Export the flattened population state array.
-
-    Args:
-        pop: The population whose state should be exported.
-
-    Returns:
-        Flattened state array.
-    """
-    return pop.export_state()
-
-
-def import_state(pop: 'AgeStructuredPopulation', state: 'PopulationState') -> None:
-    """Import state into the population, resetting its history.
-
-    Args:
-        pop: The target population.
-        state: The state object to import.
-    """
-    pop.import_state(state)
 
 # ============================================================================
 # Core: separated stage functions (reproduction, survival, aging)
@@ -215,33 +167,37 @@ def run_reproduction_with_precomputed_offspring_probability(
 
 @njit_switch(cache=True)
 def run_reproduction(
-    ind_count: NDArray[np.float64],
-    sperm_store: NDArray[np.float64],
+    state: PopulationState,
     config: PopulationConfig,
-) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+) -> PopulationState:
     """Run reproduction stage: mating, sperm-store update, and offspring generation.
 
     Args:
-        ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
-        sperm_store: Sperm-store array ``(n_ages, n_ztypes, n_ztypes)``.
+        state: Current population state.
         config: PopulationConfig object.
 
     Returns:
-        Tuple[ind_count, sperm_store]: Updated arrays.
+        New population state with updated individual counts and sperm store.
+        ``n_tick`` is preserved; the lifecycle orchestrator advances it after
+        aging.
     """
-    return run_reproduction_with_precomputed_offspring_probability(
-        ind_count=ind_count,
-        sperm_store=sperm_store,
+    ind_count, sperm_store = run_reproduction_with_precomputed_offspring_probability(
+        ind_count=state.individual_count,
+        sperm_store=state.sperm_storage,
         config=config,
         offspring_probability=config.offspring_tensor,
+    )
+    return PopulationState(
+        n_tick=state.n_tick,
+        individual_count=ind_count,
+        sperm_storage=sperm_store,
     )
 
 @njit_switch(cache=True)
 def run_survival(
-    ind_count: NDArray[np.float64],
-    sperm_store: NDArray[np.float64],
+    state: PopulationState,
     config: PopulationConfig,
-) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+) -> PopulationState:
     """Run survival stage: apply survival/viability and juvenile recruitment.
 
     New flow:
@@ -250,15 +206,14 @@ def run_survival(
     3. Perform density-dependent juvenile recruitment
 
     Args:
-        ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
-        sperm_store: Sperm-store array ``(n_ages, n_ztypes, n_ztypes)``.
+        state: Current population state.
         config: PopulationConfig instance.
 
     Returns:
-        Tuple[ind_count, sperm_store]: Updated individual counts and sperm store.
+        New population state with updated individual counts and sperm store.
     """
-    ind_count = ind_count.copy()
-    sperm_store = sperm_store.copy()
+    ind_count = state.individual_count.copy()
+    sperm_store = state.sperm_storage.copy()
     n_ages = config.n_ages
     n_ztypes = config.n_ztypes
     stochastic = config.stochastic
@@ -376,26 +331,28 @@ def run_survival(
         n_ages
     )
 
-    return ind_count, sperm_store
+    return PopulationState(
+        n_tick=state.n_tick,
+        individual_count=ind_count,
+        sperm_storage=sperm_store,
+    )
 
 @njit_switch(cache=True)
 def run_aging(
-    ind_count: NDArray[np.float64],
-    sperm_store: NDArray[np.float64],
+    state: PopulationState,
     config: PopulationConfig,
-) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+) -> PopulationState:
     """Run aging stage: advance age classes.
 
     Args:
-        ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
-        sperm_store: Sperm-store array.
+        state: Current population state.
         config: PopulationConfig instance.
 
     Returns:
-        Tuple[ind_count, sperm_store]: Updated arrays.
+        New population state with advanced age classes.
     """
-    ind_count = ind_count.copy()
-    sperm_store = sperm_store.copy()
+    ind_count = state.individual_count.copy()
+    sperm_store = state.sperm_storage.copy()
 
     n_ages = config.n_ages
 
@@ -407,205 +364,8 @@ def run_aging(
     ind_count[:, 0, :] = 0.0
     sperm_store[0, :, :] = 0.0
 
-    return ind_count, sperm_store
-
-
-# ============================================================================
-# Hook-enabled Lifecycle Functions (replaces codegen kernel_wrappers)
-# ============================================================================
-
-@njit_switch(cache=True)
-def _event_with_hooks(
-    registry: HookProgram,
-    event_id: int,
-    ind_count: NDArray[np.float64],
-    sperm_store: NDArray[np.float64],
-    tick: int,
-    stochastic: bool,
-    has_sperm_storage: bool,
-    continuous_sampling: bool,
-    combined_hook: Callable[..., Any],
-) -> int:
-    """Execute one event: CSR declarative operations then combined njit hook.
-
-    Args:
-        registry: HookProgram CSR data.
-        event_id: Numeric event id (EVENT_FIRST, EVENT_EARLY, EVENT_LATE).
-        ind_count: Individual count array (modified in-place by CSR ops).
-        sperm_store: Sperm storage array (modified in-place by CSR ops).
-        tick: Current tick number.
-        stochastic: Whether sampling is stochastic.
-        has_sperm_storage: Whether sperm storage is active.
-        continuous_sampling: Whether to use continuous sampling.
-        combined_hook: A compiled @njit combined hook function.
-
-    Returns:
-        RESULT_CONTINUE (0) or RESULT_STOP (1).
-    """
-    result = execute_csr_event_program_with_state(
-        registry, event_id, ind_count, sperm_store, tick,
-        stochastic, has_sperm_storage, continuous_sampling,
+    return PopulationState(
+        n_tick=state.n_tick,
+        individual_count=ind_count,
+        sperm_storage=sperm_store,
     )
-    if result != RESULT_CONTINUE:
-        return RESULT_STOP
-    return combined_hook(ind_count, tick)
-
-
-@njit_switch(cache=True)
-def run_tick_with_hooks(
-    state: PopulationState,
-    config: PopulationConfig,
-    registry: HookProgram,
-    first_hook: Callable[..., Any],
-    early_hook: Callable[..., Any],
-    late_hook: Callable[..., Any],
-) -> tuple[tuple[NDArray[np.float64], NDArray[np.float64], int], int]:
-    """Execute one age-structured tick with hook execution.
-
-    Replaces the generated ``__RUN_TICK_NAME__`` wrapper from codegen.
-
-    Args:
-        state: Current PopulationState.
-        config: PopulationConfig with simulation parameters.
-        registry: HookProgram CSR data for declarative operations.
-        first_hook: Combined njit function for ``first`` event.
-        early_hook: Combined njit function for ``early`` event.
-        late_hook: Combined njit function for ``late`` event.
-
-    Returns:
-        A tuple ``(state_tuple, result_code)`` where ``state_tuple`` is
-        ``(ind_count, sperm_storage, tick)`` and ``result_code`` is
-        ``RESULT_CONTINUE`` or ``RESULT_STOP``.
-    """
-    ind_count = state.individual_count.copy()
-    sperm_store = state.sperm_storage.copy()
-    tick = state.n_tick
-    stochastic = bool(config.stochastic)
-    use_continuous = bool(config.continuous_sampling)
-
-    # First event
-    result = _event_with_hooks(
-        registry, EVENT_FIRST, ind_count, sperm_store, tick,
-        stochastic, True, use_continuous, first_hook,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-
-    ind_count, sperm_store = run_reproduction(ind_count, sperm_store, config)
-
-    # Early event
-    result = _event_with_hooks(
-        registry, EVENT_EARLY, ind_count, sperm_store, tick,
-        stochastic, True, use_continuous, early_hook,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-
-    ind_count, sperm_store = run_survival(ind_count, sperm_store, config)
-
-    # Late event
-    result = _event_with_hooks(
-        registry, EVENT_LATE, ind_count, sperm_store, tick,
-        stochastic, True, use_continuous, late_hook,
-    )
-    if result != RESULT_CONTINUE:
-        return (ind_count, sperm_store, tick), RESULT_STOP
-
-    ind_count, sperm_store = run_aging(ind_count, sperm_store, config)
-    return (ind_count, sperm_store, tick + 1), RESULT_CONTINUE
-
-
-@njit_switch(cache=True)
-def run_with_hooks(
-    state: PopulationState,
-    config: PopulationConfig,
-    registry: HookProgram,
-    first_hook: Callable[..., Any],
-    early_hook: Callable[..., Any],
-    late_hook: Callable[..., Any],
-    n_ticks: int,
-    record_interval: int = 0,
-    observation_mask: Optional[NDArray[np.float64]] = None,
-    n_obs_groups: int = 0,
-) -> tuple[tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
-    """Execute multiple age-structured ticks with hook execution and history recording.
-
-    Replaces the generated ``__RUN_NAME__`` wrapper from codegen.
-
-    Args:
-        state: Current PopulationState.
-        config: PopulationConfig.
-        registry: HookProgram CSR data.
-        first_hook: Combined njit function for ``first`` event.
-        early_hook: Combined njit function for ``early`` event.
-        late_hook: Combined njit function for ``late`` event.
-        n_ticks: Number of ticks to execute.
-        record_interval: History recording interval (0 = no recording).
-        observation_mask: Optional 4D mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
-            When set, history records observation-aggregated rows.  Panmictic
-            does not need ``CompactMeta`` — the row layout is uniform
-            ``(n_groups, n_sexes, n_ages)`` with no deme axis.
-        n_obs_groups: Number of observation groups.
-
-    Returns:
-        A tuple ``(state_tuple, history, was_stopped)``.
-    """
-    was_stopped = False
-    ind_count = state.individual_count.copy()
-    sperm_store = state.sperm_storage.copy()
-    tick = state.n_tick
-
-    if observation_mask is not None:
-        n_sexes_ = ind_count.shape[0]
-        n_ages_ = ind_count.shape[1]
-        flatten_size = 1 + n_obs_groups * n_sexes_ * n_ages_
-    else:
-        flatten_size = 1 + ind_count.size + sperm_store.size
-
-    if record_interval > 0:
-        estimated_size = (n_ticks // record_interval) + 2
-        history_array = np.zeros((estimated_size, flatten_size), dtype=np.float64)
-    else:
-        history_array = np.zeros((0, flatten_size), dtype=np.float64)
-    history_count = 0
-
-    if record_interval > 0 and (tick % record_interval == 0):
-        flat_state = np.zeros(flatten_size, dtype=np.float64)
-        flat_state[0] = tick
-        if observation_mask is not None:
-            flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
-        else:
-            flat_state[1:1 + ind_count.size] = ind_count.flatten()
-            flat_state[1 + ind_count.size:] = sperm_store.flatten()
-        history_array[history_count, :] = flat_state
-        history_count += 1
-
-    for _ in range(n_ticks):
-        temp_state = PopulationState(
-            n_tick=tick, individual_count=ind_count, sperm_storage=sperm_store,
-        )
-        current_state, result = run_tick_with_hooks(
-            temp_state, config, registry, first_hook, early_hook, late_hook,
-        )
-        ind_count, sperm_store, tick = current_state
-
-        if record_interval > 0 and (tick % record_interval == 0):
-            flat_state = np.zeros(flatten_size, dtype=np.float64)
-            flat_state[0] = tick
-            if observation_mask is not None:
-                flat_state[1:] = build_observation_row_panmictic(ind_count, observation_mask)
-            else:
-                flat_state[1:1 + ind_count.size] = ind_count.flatten()
-                flat_state[1 + ind_count.size:] = sperm_store.flatten()
-            history_array[history_count, :] = flat_state
-            history_count += 1
-
-        if result != RESULT_CONTINUE:
-            was_stopped = True
-            break
-
-    if record_interval > 0:
-        history_result = history_array[:history_count, :]
-    else:
-        history_result = None
-    return (ind_count, sperm_store, tick), history_result, was_stopped

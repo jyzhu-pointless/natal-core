@@ -75,14 +75,15 @@ class TestFinalizeHooks:
 
     @pytest.mark.numba_off
     def test_plain_function_registered(self, simple_species: nt.Species) -> None:
-        """Plain callable (no @hook decorator) is registered in traditional _hooks.
+        """Plain 3-param callable (no @hook decorator) registers in _hooks.
 
         Requires Numba disabled because ``set_hook()`` rejects plain Python
         callables when Numba is on.
         """
         calls: list[int] = []
 
-        def plain_hook(population):
+        def plain_hook(state, config, deme_id):
+            _ = config, deme_id
             calls.append(1)
             return 0
 

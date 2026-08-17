@@ -106,7 +106,6 @@ typeCheckingMode = "strict"
 [tool.hatch.build.targets.wheel]
 packages = ["src/natal"]
 artifacts = [
-    "src/natal/engine/templates/*.tmpl.py",
     "src/natal/hooks/templates/*.tmpl.py",
     "natal.svg",
     "natal-brand.svg",

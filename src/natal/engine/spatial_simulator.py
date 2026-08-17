@@ -16,10 +16,10 @@ try:
 except ImportError:
     prange = range  # type: ignore[assignment]
 
-from natal.data import PopulationConfig
+from natal.data import PopulationConfig, PopulationState
 from natal.engine.age_structured_simulator import (
     run_aging,
-    run_reproduction_with_precomputed_offspring_probability,
+    run_reproduction,
     run_survival,
 )
 from natal.engine.spatial_migrator import run_spatial_migration
@@ -60,25 +60,17 @@ def run_spatial_tick(
     for deme_id in prange(ind_count_all.shape[0]):
         # Work on one deme-local pair of arrays; there are no cross-deme reads
         # until the migration stage, so this section is parallel-safe.
-        ind_d, sperm_d = run_reproduction_with_precomputed_offspring_probability(
-            ind_count=ind_count_all[deme_id],
-            sperm_store=sperm_store_all[deme_id],
-            config=config,
-            offspring_probability=config.offspring_tensor,
+        deme_state = PopulationState(
+            n_tick=tick,
+            individual_count=ind_count_all[deme_id],
+            sperm_storage=sperm_store_all[deme_id],
         )
+        deme_state = run_reproduction(deme_state, config)
         # Keep lifecycle order identical to non-spatial single-population engine.
-        ind_d, sperm_d = run_survival(
-            ind_count=ind_d,
-            sperm_store=sperm_d,
-            config=config,
-        )
-        ind_d, sperm_d = run_aging(
-            ind_count=ind_d,
-            sperm_store=sperm_d,
-            config=config,
-        )
-        ind_count_all[deme_id] = ind_d
-        sperm_store_all[deme_id] = sperm_d
+        deme_state = run_survival(deme_state, config)
+        deme_state = run_aging(deme_state, config)
+        ind_count_all[deme_id] = deme_state.individual_count
+        sperm_store_all[deme_id] = deme_state.sperm_storage
 
     return ind_count_all, sperm_store_all, int(tick) + 1
 
@@ -110,25 +102,17 @@ def run_spatial_tick_heterogeneous(
     for deme_id in prange(ind_count_all.shape[0]):
         cfg = config_bank[int(deme_config_ids[deme_id])]
 
-        ind_d, sperm_d = run_reproduction_with_precomputed_offspring_probability(
-            ind_count=ind_count_all[deme_id],
-            sperm_store=sperm_store_all[deme_id],
-            config=cfg,
-            offspring_probability=cfg.offspring_tensor,
+        deme_state = PopulationState(
+            n_tick=tick,
+            individual_count=ind_count_all[deme_id],
+            sperm_storage=sperm_store_all[deme_id],
         )
-        ind_d, sperm_d = run_survival(
-            ind_count=ind_d,
-            sperm_store=sperm_d,
-            config=cfg,
-        )
-        ind_d, sperm_d = run_aging(
-            ind_count=ind_d,
-            sperm_store=sperm_d,
-            config=cfg,
-        )
+        deme_state = run_reproduction(deme_state, cfg)
+        deme_state = run_survival(deme_state, cfg)
+        deme_state = run_aging(deme_state, cfg)
 
-        ind_count_all[deme_id] = ind_d
-        sperm_store_all[deme_id] = sperm_d
+        ind_count_all[deme_id] = deme_state.individual_count
+        sperm_store_all[deme_id] = deme_state.sperm_storage
 
     return ind_count_all, sperm_store_all, int(tick) + 1
 

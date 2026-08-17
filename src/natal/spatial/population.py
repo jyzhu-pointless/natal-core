@@ -25,6 +25,7 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
+import natal.engine.lifecycle as lifecycle_engine
 from natal.data import (
     DiscretePopulationConfig,
     DiscretePopulationState,
@@ -2357,16 +2358,23 @@ class SpatialPopulation:
             otherwise ``False`` after migration is applied.
         """
         for deme in self._demes:
-            had_record_every = hasattr(deme, "record_every")
-            previous_record_every = getattr(deme, "record_every", 0)
-            try:
-                deme.record_every = 0
-                deme.run_tick()
-            finally:
-                if had_record_every:
-                    deme.record_every = previous_record_every
+            run_lifecycle = getattr(deme, "_run_python_lifecycle", None)
+            if run_lifecycle is not None:
+                if hasattr(deme.state, "sperm_storage"):
+                    tick_fn = lifecycle_engine.run_structured_tick
                 else:
-                    delattr(deme, "record_every")
+                    tick_fn = lifecycle_engine.run_discrete_tick
+                run_lifecycle(
+                    tick_fn=tick_fn,
+                    n_steps=1,
+                    record_every=0,
+                    finish=False,
+                    clear_history_on_start=False,
+                )
+            else:
+                # Lightweight test doubles and third-party deme adapters keep
+                # implementing ``run_tick()`` directly.
+                deme.run_tick()
             if bool(getattr(deme, "_finished", False)):
                 return True
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     List,
     Optional,
@@ -25,18 +26,14 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
+import natal.engine.lifecycle as lifecycle_engine
+import natal.numba.utils as _numba_utils
 from natal.data import (
     DiscretePopulationConfig,
     DiscretePopulationState,
     parse_flattened_discrete_state,
 )
-from natal.engine.discrete_generation_simulator import (
-    run_discrete_aging,
-    run_discrete_reproduction,
-    run_discrete_survival,
-)
 from natal.genetics import Genotype, Species
-from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP
 from natal.population.base import BasePopulation
 from natal.registry.index import IndexRegistry
 from natal.utils.types import Sex
@@ -322,8 +319,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     ) -> DiscreteGenerationPopulation:
         """Run the population for *n_steps* ticks.
 
-        Uses the pre-compiled discrete lifecycle wrapper when Numba is
-        enabled; falls back to a Python dispatch loop otherwise.
+        Uses the generated lifecycle wrapper when Numba is enabled and the
+        pure-Python unified lifecycle loop otherwise.
 
         Args:
             n_steps: Number of ticks to simulate.
@@ -345,30 +342,58 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._running = True
         try:
+            record_every_resolved = (
+                record_every if record_every is not None else self.record_every
+            )
+
             # Wright-Fisher extreme-speed path: single multinomial draw per tick.
             if getattr(self.config, "extreme_speed_mode", 0) > 0:
-                record_every_resolved = record_every if record_every is not None else self.record_every
-                if self.should_use_python_dispatch():
-                    return self._run_wright_fisher(
-                        n_steps=n_steps,
-                        record_every=record_every_resolved,
-                        finish=finish,
-                        clear_history_on_start=clear_history_on_start,
-                    )
-
+                tick_fn = lifecycle_engine.run_wf_tick
                 wrappers = self.get_compiled_event_hooks()
-                if wrappers.run_wf_fn is None:
-                    return self._run_wright_fisher(
+                if _numba_utils.NUMBA_ENABLED and wrappers.run_wf_fn is not None:
+                    assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
+                    obs_mask = self._observation_mask
+                    n_obs = len(self._observation.labels) if self._observation is not None else 0
+
+                    final_state_tuple, history_new, was_stopped = wrappers.run_wf_fn(
+                        state=self.state,
+                        config=self.config,
+                        registry=wrappers.hooks.registry,
+                        n_ticks=n_steps,
+                        record_interval=record_every_resolved,
+                        observation_mask=obs_mask,
+                        n_obs_groups=n_obs,
+                    )
+                    self._state = DiscretePopulationState(
+                        n_tick=int(final_state_tuple[1]),
+                        individual_count=final_state_tuple[0],
+                    )
+                    self._tick = int(final_state_tuple[1])
+                    self._process_kernel_history(history_new, clear_history_on_start)
+                else:
+                    return self._run_python_lifecycle(
+                        tick_fn=tick_fn,
                         n_steps=n_steps,
                         record_every=record_every_resolved,
                         finish=finish,
                         clear_history_on_start=clear_history_on_start,
                     )
 
+                if was_stopped:
+                    self._finished = True
+                    self.trigger_event("finish")
+                elif finish:
+                    self.finish_simulation()
+                return self
+
+            tick_fn = lifecycle_engine.run_discrete_tick
+            wrappers = self.get_compiled_event_hooks()
+            if _numba_utils.NUMBA_ENABLED and wrappers.run_discrete_fn is not None:
+                assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
                 obs_mask = self._observation_mask
                 n_obs = len(self._observation.labels) if self._observation is not None else 0
 
-                final_state_tuple, history_new, was_stopped = wrappers.run_wf_fn(
+                final_state_tuple, history_new, was_stopped = wrappers.run_discrete_fn(
                     state=self.state,
                     config=self.config,
                     registry=wrappers.hooks.registry,
@@ -377,68 +402,21 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                     observation_mask=obs_mask,
                     n_obs_groups=n_obs,
                 )
-
                 self._state = DiscretePopulationState(
                     n_tick=int(final_state_tuple[1]),
                     individual_count=final_state_tuple[0],
                 )
                 self._tick = int(final_state_tuple[1])
                 self._process_kernel_history(history_new, clear_history_on_start)
-
-                if was_stopped:
-                    self._finished = True
-                    self.trigger_event("finish")
-                elif finish:
-                    self.finish_simulation()
-
-                return self
-
-            if record_every is None:
-                record_every = self.record_every
-            if self.should_use_python_dispatch():
-                return self._run_python_dispatch(
+            else:
+                return self._run_python_lifecycle(
+                    tick_fn=tick_fn,
                     n_steps=n_steps,
-                    record_every=record_every,
+                    record_every=record_every_resolved,
                     finish=finish,
                     clear_history_on_start=clear_history_on_start,
                 )
 
-            wrappers = self.get_compiled_event_hooks()
-            assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
-
-            # No compiled wrapper available -- codegen may have failed (no hooks
-            # registered, incompatible hook types, or cache miss). Fall back to
-            # the pure Python dispatch loop which is functionally identical.
-            if wrappers.run_discrete_fn is None:
-                return self._run_python_dispatch(
-                    n_steps=n_steps,
-                    record_every=record_every,
-                    finish=finish,
-                    clear_history_on_start=clear_history_on_start,
-                )
-
-            obs_mask = self._observation_mask
-            n_obs = len(self._observation.labels) if self._observation is not None else 0
-
-            final_state_tuple, history_new, was_stopped = wrappers.run_discrete_fn(
-                state=self.state,
-                config=self.config,
-                registry=wrappers.hooks.registry,
-                n_ticks=n_steps,
-                record_interval=record_every,
-                observation_mask=obs_mask,
-                n_obs_groups=n_obs,
-            )
-
-            self._state = DiscretePopulationState(
-                n_tick=int(final_state_tuple[1]),
-                individual_count=final_state_tuple[0],
-            )
-            self._tick = int(final_state_tuple[1])
-            self._process_kernel_history(history_new, clear_history_on_start)
-
-            # A STOP result from any hook means the simulation ended early; mark
-            # finished so that downstream code and the caller know not to continue.
             if was_stopped:
                 self._finished = True
                 self.trigger_event("finish")
@@ -449,97 +427,93 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         finally:
             self._running = False
 
-    def _run_wright_fisher(
+    def _run_python_lifecycle(
         self,
+        tick_fn: Callable[..., tuple[DiscretePopulationState, int]],
         n_steps: int,
         record_every: int,
         finish: bool,
         clear_history_on_start: bool,
     ) -> DiscreteGenerationPopulation:
-        """Run using the Wright-Fisher extreme-speed path.
+        """Run the pure-Python unified lifecycle loop.
 
-        Only FIRST hooks are supported — they fire before the WF tick.
-        EARLY and LATE have no natural insertion point because the WF
-        tick fuses reproduction, survival, and aging into one step.
-        Both compiled (CSR + njit) and Python-fallback hooks are
-        dispatched through ``trigger_event``.
+        Hook execution is delegated to ``trigger_event`` so all hook types
+        keep their existing dispatch semantics.  The CSR registry passed to
+        the lifecycle loop is therefore the empty program.
+
+        Args:
+            tick_fn: Unified single-tick function.
+            n_steps: Number of ticks to execute.
+            record_every: Recording interval.  ``0`` disables recording.
+            finish: Whether to finish the population after the run.
+            clear_history_on_start: Whether to clear history first.
+
+        Returns:
+            This population after the run.
         """
-        from natal.engine.simulation.discrete_generation import run_wf_loop
+        self.ensure_hook_executor()
+        registry = self._create_empty_hook_program()
+
+        def first_hook(
+            state: DiscretePopulationState,
+            config: DiscretePopulationConfig,
+            deme_id: int,
+        ) -> int:
+            """Execute the ``first`` event against *state*."""
+            _ = config, deme_id
+            self._state = state
+            self._tick = int(state.n_tick)
+            return self.trigger_event("first", deme_id=deme_id)
+
+        def early_hook(
+            state: DiscretePopulationState,
+            config: DiscretePopulationConfig,
+            deme_id: int,
+        ) -> int:
+            """Execute the ``early`` event against *state*."""
+            _ = config, deme_id
+            self._state = state
+            self._tick = int(state.n_tick)
+            return self.trigger_event("early", deme_id=deme_id)
+
+        def late_hook(
+            state: DiscretePopulationState,
+            config: DiscretePopulationConfig,
+            deme_id: int,
+        ) -> int:
+            """Execute the ``late`` event against *state*."""
+            _ = config, deme_id
+            self._state = state
+            self._tick = int(state.n_tick)
+            return self.trigger_event("late", deme_id=deme_id)
 
         if clear_history_on_start:
             self.clear_history()
 
-        # Build the HookExecutor lazily — covers CSR, njit custom,
-        # selector, and Python wrapper hooks.
-        self.ensure_hook_executor()
-
-        state = self._state
-        assert state is not None, "Population state must be initialized before running"
-
-        cfg = self.config
-        mode = cfg.extreme_speed_mode
-
-        # Record initial state snapshot (mirrors compiled WF wrapper and
-        # _run_python_dispatch which both record tick-0 before the loop).
-        if record_every > 0 and (state.n_tick % record_every == 0):
-            self._tick = state.n_tick
+        if record_every > 0 and (self.tick % record_every == 0):
             self._record_current_snapshot(allow_existing=True)
 
-        was_stopped = False
-        for _ in range(n_steps):
-            # Keep self._tick in sync so that hook ``when`` conditions
-            # and CSR condition programs see the correct tick.
-            self._tick = state.n_tick
+        def record_fn(state: DiscretePopulationState) -> None:
+            """Record *state* through the normal History path."""
+            self._state = state
+            self._tick = int(state.n_tick)
+            self._record_current_snapshot(allow_existing=True)
 
-            # ---- FIRST hooks (before reproduction) ----
-            if self.trigger_event("first", deme_id=-1) == RESULT_STOP:
-                was_stopped = True
-                break
-
-            # ---- WF tick (reproduction + survival + aging) ----
-            new_ind = run_wf_loop(
-                ind_count=state.individual_count,
-                n_ticks=1,
-                offspring_tensor=cfg.offspring_tensor,
-                fecundity_f=cfg.fecundity_f,
-                fecundity_m=cfg.fecundity_m,
-                sexual_selection=cfg.sexual_selection_fitness,
-                viability_f=cfg.viability_f,
-                viability_m=cfg.viability_m,
-                eggs_per_female=float(cfg.eggs_per_female[()]),
-                sex_ratio=float(cfg.sex_ratio[()]),
-                female_compat=cfg.female_ztype_compatibility,
-                male_compat=cfg.male_ztype_compatibility,
-                female_only=cfg.female_only_by_sex_chrom,
-                male_only=cfg.male_only_by_sex_chrom,
-                has_sex_chromosomes=cfg.has_sex_chromosomes,
-                mode=mode,
-                stochastic=cfg.stochastic,
-                mating_rate_f=cfg.female_adult_mating_rate,
-                mating_rate_m=cfg.male_adult_mating_rate,
-                reproduction_rate=cfg.reproduction_rate,
-                carrying_capacity=float(cfg.carrying_capacity[()]),
-                juvenile_growth_mode=int(cfg.juvenile_growth_mode[()]),
-                low_density_growth_rate=float(cfg.low_density_growth_rate[()]),
-                expected_competition_strength=float(cfg.expected_competition_strength[()]),
-                expected_survival_rate=float(cfg.expected_survival_rate[()]),
-            )
-
-            next_tick = state.n_tick + 1
-            state = DiscretePopulationState(
-                n_tick=next_tick, individual_count=new_ind,
-            )
-            self._state = state  # keep self._state in sync for hooks
-
-            if record_every > 0 and (next_tick % record_every == 0):
-                self._tick = next_tick
-                self._record_current_snapshot(allow_existing=True)
-
-            # No EARLY / LATE hooks — WF fuses reproduction + survival
-            # + aging into one atomic step with no intermediate stages.
-
-        self._state = state
-        self._tick = state.n_tick
+        final_state, was_stopped = lifecycle_engine.run(
+            tick_fn=tick_fn,
+            state=self.state,
+            config=self.config,
+            registry=registry,
+            first_hook=first_hook,
+            early_hook=early_hook,
+            late_hook=late_hook,
+            deme_id=-1,
+            n_steps=n_steps,
+            record_every=record_every,
+            record_fn=record_fn,
+        )
+        self._state = final_state
+        self._tick = int(final_state.n_tick)
 
         if was_stopped:
             self._finished = True
@@ -556,83 +530,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             Self for chaining.
         """
         return self.run(n_steps=1, record_every=self.record_every)
-
-    def _run_python_dispatch(
-        self,
-        n_steps: int,
-        record_every: int,
-        finish: bool,
-        clear_history_on_start: bool,
-    ) -> DiscreteGenerationPopulation:
-        """Run simulation ticks using the Python fallback path (no Numba)."""
-        from natal.data import DiscretePopulationState
-
-        self.ensure_hook_executor()
-
-        if clear_history_on_start:
-            self.clear_history()
-
-        if record_every > 0 and (self._tick % record_every == 0):
-            self._record_current_snapshot(allow_existing=True)
-
-        was_stopped = False
-        for _ in range(n_steps):
-            # Each tick begins with the "first" hook window, giving
-            # pre-reproduction intervention a chance to inspect or modify
-            # state. A hook returning STOP short-circuits the whole run.
-            if self.trigger_event("first", deme_id=-1) != RESULT_CONTINUE:
-                was_stopped = True
-                break
-
-            # Produce offspring (age 0) from adults (age 1) using fecundity,
-            # sex ratio, and density-dependent competition from the config.
-            self.state.individual_count[:] = run_discrete_reproduction(
-                self.state.individual_count,
-                self.config,  # pyright: ignore[reportArgumentType]
-            )
-
-            # "Early" hooks fire after reproduction but before survival,
-            # allowing interventions such as juvenile mortality modifiers.
-            if self.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
-                was_stopped = True
-                break
-
-            # Age-independent survival reduces counts based on viability
-            # parameters, applied uniformly across all age classes.
-            self.state.individual_count[:] = run_discrete_survival(
-                self.state.individual_count,
-                self.config,  # pyright: ignore[reportArgumentType]
-            )
-
-            # "Late" hooks fire after survival, the last opportunity to
-            # inspect or alter state before the tick's life cycle ends.
-            if self.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
-                was_stopped = True
-                break
-
-            # Age all individuals by one year: offspring mature into
-            # adults, and the previous adult cohort becomes the new
-            # reproducing class.
-            self.state.individual_count[:] = run_discrete_aging(
-                self.state.individual_count,
-            )
-
-            self._tick += 1
-            self._state = DiscretePopulationState(
-                n_tick=int(self._tick),
-                individual_count=self.state.individual_count,
-            )
-
-            if record_every > 0 and (self._tick % record_every == 0):
-                self._record_current_snapshot(allow_existing=True)
-
-        if was_stopped:
-            self._finished = True
-            self.trigger_event("finish")
-        elif finish:
-            self.finish_simulation()
-
-        return self
 
     def reset(self) -> None:
         """Reset tick, history, and population state to initial values."""

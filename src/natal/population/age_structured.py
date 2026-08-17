@@ -25,10 +25,10 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.engine.age_structured_simulator as sk
+import natal.engine.lifecycle as lifecycle_engine
+import natal.numba.utils as _numba_utils
 from natal.data import PopulationConfig, PopulationState
 from natal.genetics import Genotype, Species
-from natal.hooks.types import RESULT_CONTINUE
 from natal.population.base import BasePopulation, HookRegistrationMap
 from natal.registry.index import IndexRegistry
 from natal.utils.types import Sex
@@ -615,7 +615,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             tuple: A Numba-compatible configuration tuple.
         """
-        return sk.export_config(self)
+        return self.export_config()
 
     def run(
         self,
@@ -624,7 +624,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         finish: bool = False,
         clear_history_on_start: bool = False
     ) -> AgeStructuredPopulation:
-        """Run multi-step evolution using optimized simulation engine.
+        """Run multi-step evolution using the unified lifecycle engine.
 
         Args:
             n_steps: Number of steps to evolve.
@@ -639,7 +639,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             RuntimeError: If the population is already finished and cannot continue.
         """
-
         if self._finished:
             raise RuntimeError(
                 f"Population '{self.name}' has finished. "
@@ -651,24 +650,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             if record_every is None:
                 record_every = self.record_every
 
-            if self.should_use_python_dispatch():
-                return self._run_python_dispatch(
-                    n_steps=n_steps,
-                    record_every=record_every,
-                    finish=finish,
-                    clear_history_on_start=clear_history_on_start,
-                )
-
-            config = sk.export_config(self)
-
+            config = self.export_config()
             wrappers = self.get_compiled_event_hooks()
-
             assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
 
-            obs_mask = self._observation_mask
-            n_obs = len(self._observation.labels) if self._observation is not None else 0
+            if _numba_utils.NUMBA_ENABLED and wrappers.run_fn is not None:
+                obs_mask = self._observation_mask
+                n_obs = len(self._observation.labels) if self._observation is not None else 0
 
-            if wrappers.run_fn is not None:
                 final_state_tuple, history_new, was_stopped = wrappers.run_fn(
                     state=self.state,
                     config=config,
@@ -678,42 +667,117 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     observation_mask=obs_mask,
                     n_obs_groups=n_obs,
                 )
+
+                self._state = PopulationState(
+                    n_tick=int(final_state_tuple[2]),
+                    individual_count=final_state_tuple[0],
+                    sperm_storage=final_state_tuple[1],
+                )
+                self._tick = int(final_state_tuple[2])
+                self._process_kernel_history(history_new, clear_history_on_start)
             else:
-                final_state_tuple, history_new, was_stopped = sk.run_with_hooks(
-                    state=self.state,
-                    config=config,
-                    registry=wrappers.hooks.registry,
-                    first_hook=wrappers.hooks.first,
-                    early_hook=wrappers.hooks.early,
-                    late_hook=wrappers.hooks.late,
-                    n_ticks=n_steps,
-                    record_interval=record_every,
-                    observation_mask=obs_mask,
-                    n_obs_groups=n_obs,
+                return self._run_python_lifecycle(
+                    tick_fn=lifecycle_engine.run_structured_tick,
+                    n_steps=n_steps,
+                    record_every=record_every,
+                    finish=finish,
+                    clear_history_on_start=clear_history_on_start,
                 )
 
-            # Process final state (tuple format: ind_count, sperm, tick)
-            self._state = PopulationState(
-                n_tick=int(final_state_tuple[2]),
-                individual_count=final_state_tuple[0],
-                sperm_storage=final_state_tuple[1],
-            )
-            self._tick = int(final_state_tuple[2])
-
-            # history_new is a 2D NDArray (n_snapshots, history_size)
-            self._process_kernel_history(history_new, clear_history_on_start)
-
-            # If terminated early by hooks, set _finished flag
             if was_stopped:
                 self._finished = True
                 self.trigger_event("finish")
             elif finish:
-                # Otherwise, if finish parameter is True, actively trigger finish
                 self.finish_simulation()
 
             return self
         finally:
             self._running = False
+
+    def _run_python_lifecycle(
+        self,
+        tick_fn: Callable[..., tuple[PopulationState, int]],
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> AgeStructuredPopulation:
+        """Run the pure-Python unified lifecycle loop.
+
+        Hook execution is delegated to ``trigger_event`` so CSR declarative
+        hooks, njit hooks, Python wrapper hooks, and legacy plain callbacks
+        keep their existing dispatch semantics.  The CSR registry passed to
+        the lifecycle loop is therefore the empty program.
+
+        Args:
+            tick_fn: Unified single-tick function.
+            n_steps: Number of ticks to execute.
+            record_every: Recording interval.  ``0`` disables recording.
+            finish: Whether to finish the population after the run.
+            clear_history_on_start: Whether to clear history first.
+
+        Returns:
+            This population after the run.
+        """
+        self.ensure_hook_executor()
+        registry = self._create_empty_hook_program()
+
+        def first_hook(state: PopulationState, config: PopulationConfig, deme_id: int) -> int:
+            """Execute the ``first`` event against *state*."""
+            _ = config, deme_id
+            self._state = state
+            self._tick = int(state.n_tick)
+            return self.trigger_event("first", deme_id=deme_id)
+
+        def early_hook(state: PopulationState, config: PopulationConfig, deme_id: int) -> int:
+            """Execute the ``early`` event against *state*."""
+            _ = config, deme_id
+            self._state = state
+            self._tick = int(state.n_tick)
+            return self.trigger_event("early", deme_id=deme_id)
+
+        def late_hook(state: PopulationState, config: PopulationConfig, deme_id: int) -> int:
+            """Execute the ``late`` event against *state*."""
+            _ = config, deme_id
+            self._state = state
+            self._tick = int(state.n_tick)
+            return self.trigger_event("late", deme_id=deme_id)
+
+        if clear_history_on_start:
+            self.clear_history()
+
+        if record_every > 0 and (self.tick % record_every == 0):
+            self._record_current_snapshot(allow_existing=True)
+
+        def record_fn(state: PopulationState) -> None:
+            """Record *state* through the normal History path."""
+            self._state = state
+            self._tick = int(state.n_tick)
+            self._record_current_snapshot(allow_existing=True)
+
+        final_state, was_stopped = lifecycle_engine.run(
+            tick_fn=tick_fn,
+            state=self.state,
+            config=self.config,
+            registry=registry,
+            first_hook=first_hook,
+            early_hook=early_hook,
+            late_hook=late_hook,
+            deme_id=-1,
+            n_steps=n_steps,
+            record_every=record_every,
+            record_fn=record_fn,
+        )
+        self._state = final_state
+        self._tick = int(final_state.n_tick)
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
 
     def run_tick(self) -> AgeStructuredPopulation:
         """
@@ -726,78 +790,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             RuntimeError: If the population is already finished and cannot continue.
         """
         return self.run(n_steps=1, record_every=self.record_every, clear_history_on_start=False)
-
-    def _run_python_dispatch(
-        self,
-        n_steps: int,
-        record_every: int,
-        finish: bool,
-        clear_history_on_start: bool,
-    ) -> AgeStructuredPopulation:
-        """Python-level simulation loop using HookExecutor for event dispatch."""
-        self.ensure_hook_executor()
-
-        if clear_history_on_start:
-            self.clear_history()
-
-        if record_every > 0 and (self.tick % record_every == 0):
-            self._record_current_snapshot(allow_existing=True)
-
-        was_stopped = False
-        for _ in range(n_steps):
-            if self.trigger_event("first", deme_id=-1) != RESULT_CONTINUE:
-                was_stopped = True
-                break
-
-            ind_next, sperm_next = sk.run_reproduction(
-                self.state.individual_count,
-                self.state.sperm_storage,
-                self.config,
-            )
-            self.state.individual_count[:] = ind_next
-            self.state.sperm_storage[:] = sperm_next
-
-            if self.trigger_event("early", deme_id=-1) != RESULT_CONTINUE:
-                was_stopped = True
-                break
-
-            ind_next, sperm_next = sk.run_survival(
-                self.state.individual_count,
-                self.state.sperm_storage,
-                self.config,
-            )
-            self.state.individual_count[:] = ind_next
-            self.state.sperm_storage[:] = sperm_next
-
-            if self.trigger_event("late", deme_id=-1) != RESULT_CONTINUE:
-                was_stopped = True
-                break
-
-            ind_next, sperm_next = sk.run_aging(
-                self.state.individual_count,
-                self.state.sperm_storage,
-                self.config,
-            )
-            self.state.individual_count[:] = ind_next
-            self.state.sperm_storage[:] = sperm_next
-
-            self._tick += 1
-            self._state = PopulationState(
-                n_tick=self.tick,
-                individual_count=self.state.individual_count,
-                sperm_storage=self.state.sperm_storage,
-            )
-
-            if record_every > 0 and (self.tick % record_every == 0):
-                self._record_current_snapshot(allow_existing=True)
-
-        if was_stopped:
-            self._finished = True
-            self.trigger_event("finish")
-        elif finish:
-            self.finish_simulation()
-
-        return self
 
     def get_age_distribution(self, sex: str = 'both') -> np.ndarray:
         """Return the age distribution for the requested sex.

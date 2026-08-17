@@ -22,18 +22,18 @@ loaded as a module, and the resulting ``@njit_switch(cache=True)``
 functions are stable and cacheable.  Module globals (hook functions,
 HookProgram arrays) are injected via ``setattr`` after loading.
 
-Template files live in:
-- ``engine/templates/`` — lifecycle wrapper templates
-- ``hooks/templates/`` — unified mixed-type dispatch templates
+Hook codegen template files live in ``hooks/templates/``; lifecycle source
+is embedded from ``natal.engine.lifecycle``, so there are no engine
+templates.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
 import natal.numba.utils as _numba_utils
+from natal.engine.lifecycle import assemble_lifecycle_module
 from natal.hooks.compile.codegen import (
     build_filtered_hook_program,
     compile_combined_hook,
@@ -51,15 +51,6 @@ from natal.hooks.types import (
     stable_callable_identity,
     write_codegen_module,
 )
-
-# Template directory for lifecycle wrapper templates.
-_ENGINE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
-
-
-def _read_engine_template(name: str) -> str:
-    """Read a lifecycle codegen template from ``engine/templates/``."""
-    return (_ENGINE_TEMPLATE_DIR / name).read_text(encoding="utf-8")
-
 
 # ---------------------------------------------------------------------------
 # LifecycleWrappers — container for compiled lifecycle loop functions
@@ -115,50 +106,21 @@ class LifecycleWrappers:
 # ---------------------------------------------------------------------------
 
 
-def _gen_lifecycle_source(
-    is_discrete: bool,
-    tick_fn_name: str,
-    run_fn_name: str,
-) -> str:
-    """Read a lifecycle template and substitute function name placeholders.
-
-    Args:
-        is_discrete: ``True`` for discrete-generation, ``False`` for
-            age-structured.
-        tick_fn_name: Name to substitute for ``TICK_FN_NAME``.
-        run_fn_name: Name to substitute for ``RUN_FN_NAME``.
-
-    Returns:
-        The template source with placeholders replaced.
-    """
-    name = (
-        "lifecycle_discrete_v2.tmpl.py"
-        if is_discrete
-        else "lifecycle_structured.tmpl.py"
-    )
-    return _read_engine_template(name).replace("TICK_FN_NAME", tick_fn_name).replace(
-        "RUN_FN_NAME", run_fn_name
-    )
-
-
 def compile_lifecycle_wrapper(
-    is_discrete: bool,
+    mode: str,
     first_hook: HookCallable,
     early_hook: HookCallable,
     late_hook: HookCallable,
 ) -> tuple[HookCallable, HookCallable]:
     """Generate a lifecycle wrapper module with hooks as module globals.
 
-    Each unique ``(first, early, late)`` hook combination gets its own
-    Numba ``@njit(cache=True)`` function keyed by source-code hash.
-    This is the mechanism that makes hook compilation survive process
-    restarts — Numba cannot do this with function-valued parameters,
-    so we generate source code and inject hooks as module globals.
+    Each unique hook combination gets its own Numba ``@njit(cache=True)``
+    function keyed by source-code hash.  Source functions live in
+    ``natal.engine.lifecycle`` and are assembled into a generated module by
+    ``assemble_lifecycle_module``; there are no template files.
 
     Args:
-        is_discrete: If ``True``, generate discrete-generation wrappers
-            using ``DiscretePopulationConfig``.  If ``False``, generate
-            age-structured wrappers with sperm storage.
+        mode: ``"structured"``, ``"discrete"``, or ``"wf"``.
         first_hook: Combined njit function for the ``first`` event.
         early_hook: Combined njit function for the ``early`` event.
         late_hook: Combined njit function for the ``late`` event.
@@ -167,16 +129,17 @@ def compile_lifecycle_wrapper(
         ``(tick_fn, run_fn)`` — the tick function executes one lifecycle
         tick; the run function loops for ``n_ticks`` with history recording.
     """
-    mode = "discrete" if is_discrete else "structured"
-    parts = ["lifecycle_" + mode] + [
-        stable_callable_identity(fn) for fn in [first_hook, early_hook, late_hook]
-    ]
+    if mode == "wf":
+        key_hooks = [first_hook]
+    else:
+        key_hooks = [first_hook, early_hook, late_hook]
+    parts = ["lifecycle_" + mode] + [stable_callable_identity(fn) for fn in key_hooks]
     key = hash_key(parts)
     module_stem = f"lifecycle_{mode}_{key}"
     tick_fn_name = f"_lifecycle_tick_{key}"
     run_fn_name = f"_lifecycle_run_{key}"
 
-    source = _gen_lifecycle_source(is_discrete, tick_fn_name, run_fn_name)
+    source = assemble_lifecycle_module(mode, tick_fn_name, run_fn_name)
     module_path = write_codegen_module(module_stem, source)
     module = load_codegen_module(module_stem, module_path)
 
@@ -185,76 +148,6 @@ def compile_lifecycle_wrapper(
     setattr(module, "_LATE_HOOK", late_hook)  # noqa: B010
 
     return getattr(module, tick_fn_name), getattr(module, run_fn_name)
-
-
-def compile_wf_lifecycle_wrapper(
-    first_hook: HookCallable,
-) -> tuple[HookCallable, HookCallable]:
-    """Generate a Wright-Fisher lifecycle wrapper.
-
-    Uses ``lifecycle_wf.tmpl.py`` — same hook-injection pattern as
-    ``compile_lifecycle_wrapper``, but only FIRST hooks are supported
-    (EARLY/LATE have no natural insertion point in the fused WF tick).
-
-    Args:
-        first_hook: Combined njit function for the ``first`` event.
-
-    Returns:
-        ``(tick_fn, run_fn)``.
-    """
-    parts = ["lifecycle_wf"] + [stable_callable_identity(first_hook)]
-    key = hash_key(parts)
-    module_stem = f"lifecycle_wf_{key}"
-    tick_fn_name = f"_lifecycle_wf_tick_{key}"
-    run_fn_name = f"_lifecycle_wf_run_{key}"
-
-    source = (
-        _read_engine_template("lifecycle_wf.tmpl.py")
-        .replace("TICK_FN_NAME", tick_fn_name)
-        .replace("RUN_FN_NAME", run_fn_name)
-    )
-    module_path = write_codegen_module(module_stem, source)
-    module = load_codegen_module(module_stem, module_path)
-
-    setattr(module, "_FIRST_HOOK", first_hook)  # noqa: B010
-
-    return getattr(module, tick_fn_name), getattr(module, run_fn_name)
-
-
-def _gen_spatial_lifecycle_source(
-    is_discrete: bool,
-    tick_fn_name: str,
-    run_fn_name: str,
-    panmictic_stem: str,
-    panmictic_tick_fn_name: str,
-) -> str:
-    """Read a spatial lifecycle template and substitute placeholders.
-
-    The spatial template wraps the panmictic tick inside ``prange``,
-    running one tick per deme in parallel.
-
-    Args:
-        is_discrete: ``True`` for discrete-generation.
-        tick_fn_name: Spatial tick function name.
-        run_fn_name: Spatial run function name.
-        panmictic_stem: Module stem of the corresponding panmictic wrapper.
-        panmictic_tick_fn_name: Tick function name in the panmictic module.
-
-    Returns:
-        The template source with placeholders replaced.
-    """
-    name = (
-        "spatial_lifecycle_discrete.tmpl.py"
-        if is_discrete
-        else "spatial_lifecycle_structured.tmpl.py"
-    )
-    return (
-        _read_engine_template(name)
-        .replace("PANMICTIC_TICK_FN_NAME", panmictic_tick_fn_name)
-        .replace("PANMICTIC_STEM", panmictic_stem)
-        .replace("TICK_FN_NAME", tick_fn_name)
-        .replace("RUN_FN_NAME", run_fn_name)
-    )
 
 
 def compile_spatial_lifecycle_wrapper(
@@ -299,12 +192,12 @@ def compile_spatial_lifecycle_wrapper(
     tick_fn_name = f"_spatial_tick_{spatial_key}"
     run_fn_name = f"_spatial_run_{spatial_key}"
 
-    source = _gen_spatial_lifecycle_source(
-        is_discrete,
+    source = assemble_lifecycle_module(
+        "spatial_discrete" if is_discrete else "spatial_structured",
         tick_fn_name,
         run_fn_name,
-        panmictic_stem,
-        panmictic_tick_fn_name,
+        panmictic_stem=panmictic_stem,
+        panmictic_tick_fn_name=panmictic_tick_fn_name,
     )
     module_path = write_codegen_module(module_stem, source)
     module = load_codegen_module(module_stem, module_path)
@@ -312,7 +205,6 @@ def compile_spatial_lifecycle_wrapper(
     return getattr(module, tick_fn_name), getattr(module, run_fn_name)
 
 
-# ---------------------------------------------------------------------------
 # Main integration pipeline
 # ---------------------------------------------------------------------------
 
@@ -501,14 +393,16 @@ def compile_lifecycle_wrappers(
 
     if _numba_utils.NUMBA_ENABLED:
         result.run_tick_fn, result.run_fn = compile_lifecycle_wrapper(
-            False, first_hook, early_hook, late_hook
+            "structured", first_hook, early_hook, late_hook
         )
         result.run_discrete_tick_fn, result.run_discrete_fn = (
-            compile_lifecycle_wrapper(True, first_d, early_d, late_d)
+            compile_lifecycle_wrapper("discrete", first_d, early_d, late_d)
         )
 
-        # Wright-Fisher wrapper — FIRST → run_wf_tick (no EARLY/LATE).
-        _, result.run_wf_fn = compile_wf_lifecycle_wrapper(first_d)
+        # Wright-Fisher wrapper — FIRST → fused tick (no EARLY/LATE).
+        _, result.run_wf_fn = compile_lifecycle_wrapper(
+            "wf", first_d, hooks.early, hooks.late
+        )
 
         if include_spatial_wrappers:
             result.spatial_tick_fn, result.spatial_run_fn = (

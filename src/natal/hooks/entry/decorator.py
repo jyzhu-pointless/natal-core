@@ -153,12 +153,11 @@ def _has_required_parameters(func: HookCallable) -> bool:
     return False
 
 
-def _is_declarative_population_hook(func: HookCallable) -> bool:
-    """Return ``True`` if *func* accepts a single required parameter.
+def _has_single_required_parameter(func: HookCallable) -> bool:
+    """Return ``True`` if *func* accepts exactly one required parameter.
 
-    This is a heuristic: single-parameter functions are treated as
-    "declarative population hooks" (legacy style) rather than custom
-    hooks.  Functions with zero or multiple params are not.
+    Legacy single-parameter population hooks are no longer supported; the
+    unified hook signature is ``(state, config, deme_id) -> int``.
     """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
@@ -314,15 +313,20 @@ def hook(
                     "pop.set_hook('event', hook)"
                 )
 
+            # The unified hook signature is (state, config, deme_id).
+            # Legacy single-parameter population hooks are rejected rather
+            # than guessed so a typo cannot silently change hook semantics.
+            if selectors is None and _has_single_required_parameter(func):
+                raise TypeError(
+                    f"Hook '{func.__name__}' has 1 parameter; hooks must "
+                    "accept (state, config, deme_id) -> int, or use no "
+                    "parameters for the declarative Op-list style."
+                )
+
             # Detect hook type from decorator metadata + function signature.
-            # Priority: explicit selectors > explicit custom > has params
-            # (and not a single-param pop hook) > declarative (returns ops).
             has_required_params = _has_required_parameters(func)
-            is_decl_pop_hook = _is_declarative_population_hook(func)
             is_custom_or_selector = (
-                custom
-                or selectors is not None
-                or (has_required_params and not is_decl_pop_hook)
+                custom or selectors is not None or has_required_params
             )
 
             if is_custom_or_selector:
@@ -402,25 +406,6 @@ def hook(
                                     "n_ages": pop.config.n_ages,
                                 },
                             )
-            elif is_decl_pop_hook:
-                # Legacy single-parameter population hook (Python only).
-                if NUMBA_ENABLED:
-                    raise TypeError(
-                        f"Python hook '{func.__name__}' is not allowed "
-                        "when Numba is enabled.  Please convert it to "
-                        "@njit or use declarative Op hooks."
-                    )
-                desc = CompiledHookDescriptor(
-                    name=func.__name__,
-                    event=actual_event,
-                    priority=priority,
-                    deme_selector=actual_deme_selector,
-                    py_wrapper=func,
-                    meta={
-                        "n_ztypes": pop.index_registry.n_ztypes,
-                        "n_ages": pop.config.n_ages,
-                    },
-                )
             else:
                 # ---- Declarative hook (returns List[HookOp]) ----
                 # The function is called ONCE at registration time.  Its

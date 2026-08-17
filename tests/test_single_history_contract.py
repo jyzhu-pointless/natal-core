@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import natal as nt
+import natal.engine.lifecycle as lifecycle_engine
 from natal.hooks import Op, hook
 from natal.numba.utils import numba_disabled, numba_enabled
 from natal.output import History, HistorySchema, PopulationLayout
@@ -862,26 +863,47 @@ def test_spatial_python_dispatch_suppresses_only_deme_history(
     with numba_disabled():
         population = _spatial_population("spatial_python_single_history")
         run_tick_calls: list[str] = []
-        original_run_tick = nt.DiscreteGenerationPopulation.run_tick
+        seen_record_every: list[int] = []
+        original_run = nt.DiscreteGenerationPopulation._run_python_lifecycle
 
-        def tracked_run_tick(
+        def tracked_run(
             deme: nt.DiscreteGenerationPopulation,
+            tick_fn: object,
+            n_steps: int,
+            record_every: int,
+            finish: bool,
+            clear_history_on_start: bool,
         ) -> nt.DiscreteGenerationPopulation:
-            """Record the delegated deme name before running one tick.
+            """Record the delegated deme name and disabled deme recording.
 
             Args:
-                deme: The deme whose run_tick is being tracked.
+                deme: The deme whose unified lifecycle is being tracked.
+                tick_fn: The unified single-tick function.
+                n_steps: Number of ticks (always one for spatial delegation).
+                record_every: Per-deme recording interval (must be zero).
+                finish: Whether the delegated run finishes the deme.
+                clear_history_on_start: Whether the delegated run clears
+                    deme history first.
 
             Returns:
                 The same deme object after one tick.
             """
+            _ = tick_fn, n_steps, finish, clear_history_on_start
             run_tick_calls.append(deme.name)
-            return original_run_tick(deme)
+            seen_record_every.append(record_every)
+            return original_run(
+                deme,
+                tick_fn=lifecycle_engine.run_discrete_tick,
+                n_steps=n_steps,
+                record_every=record_every,
+                finish=finish,
+                clear_history_on_start=clear_history_on_start,
+            )
 
         monkeypatch.setattr(
             nt.DiscreteGenerationPopulation,
-            "run_tick",
-            tracked_run_tick,
+            "_run_python_lifecycle",
+            tracked_run,
         )
         original_intervals = (3, 5)
         for deme, interval in zip(population.demes, original_intervals):
@@ -892,6 +914,7 @@ def test_spatial_python_dispatch_suppresses_only_deme_history(
         population.run(1, record_every=1)
 
     assert tuple(run_tick_calls) == tuple(deme.name for deme in population.demes)
+    assert seen_record_every == [0, 0]
     assert tuple(deme.record_every for deme in population.demes) == original_intervals
     assert tuple(deme.history.ticks for deme in population.demes) == ((), ())
     assert population.history.ticks == (0, 1)
@@ -948,15 +971,26 @@ def test_spatial_recording_suppression_restores_after_deme_exception(
         else:
             delattr(first, "record_every")
         seen_intervals: list[int] = []
-        expected_error = RuntimeError("deme run_tick sentinel")
+        expected_error = RuntimeError("deme lifecycle sentinel")
 
-        def failing_run_tick(
+        def failing_run(
             deme: nt.DiscreteGenerationPopulation,
+            tick_fn: object,
+            n_steps: int,
+            record_every: int,
+            finish: bool,
+            clear_history_on_start: bool,
         ) -> nt.DiscreteGenerationPopulation:
-            """Record the suppressed interval before raising the sentinel.
+            """Record the delegated interval before raising the sentinel.
 
             Args:
                 deme: The deme whose interval is being inspected.
+                tick_fn: The unified single-tick function.
+                n_steps: Number of ticks (always one for spatial delegation).
+                record_every: Per-deme recording interval (must be zero).
+                finish: Whether the delegated run finishes the deme.
+                clear_history_on_start: Whether the delegated run clears
+                    deme history first.
 
             Returns:
                 Never returns; always raises.
@@ -964,16 +998,17 @@ def test_spatial_recording_suppression_restores_after_deme_exception(
             Raises:
                 RuntimeError: Always, as a simulation sentinel.
             """
-            seen_intervals.append(deme.record_every)
+            _ = deme, tick_fn, n_steps, finish, clear_history_on_start
+            seen_intervals.append(record_every)
             raise expected_error
 
         monkeypatch.setattr(
             nt.DiscreteGenerationPopulation,
-            "run_tick",
-            failing_run_tick,
+            "_run_python_lifecycle",
+            failing_run,
         )
 
-        with pytest.raises(RuntimeError, match="deme run_tick sentinel") as captured:
+        with pytest.raises(RuntimeError, match="deme lifecycle sentinel") as captured:
             population.run(1, record_every=1)
 
     assert captured.value is expected_error

@@ -120,5 +120,30 @@ def test_population_api_rejects_hook_python_wrapper_when_numba_enabled():
         _ = population
 
     with numba_enabled():
-        with pytest.raises(TypeError, match="Python hook"):
+        with pytest.raises(TypeError, match="hooks must accept"):
             pop.set_hook("first", py_wrapper_hook)
+
+
+@pytest.mark.numba_off
+def test_population_api_rejects_one_param_hook_when_numba_disabled() -> None:
+    """Legacy 1-param decorated hooks are rejected instead of guessed."""
+    pop = _build_population_for_numba_set_hook_test()
+
+    @hook(event="first")
+    def legacy_population_hook(population) -> None:  # pragma: no cover - rejected before execution
+        _ = population
+
+    with pytest.raises(TypeError, match="hooks must accept"):
+        pop.set_hook("first", legacy_population_hook)
+
+
+@pytest.mark.numba_off
+def test_population_api_rejects_one_param_plain_hook_when_numba_disabled() -> None:
+    """Plain 1-param callbacks are rejected instead of being guessed."""
+    pop = _build_population_for_numba_set_hook_test()
+
+    def legacy_hook(population) -> None:  # pragma: no cover - rejected before execution
+        _ = population
+
+    with pytest.raises(TypeError, match="Legacy 1-parameter"):
+        pop.set_hook("first", legacy_hook)

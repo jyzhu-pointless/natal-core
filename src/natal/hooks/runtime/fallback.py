@@ -92,9 +92,8 @@ class HookExecutor:
         1. CSR plan — unpacks arrays and calls ``execute_csr_event_arrays``
            with a single-hook wrapper.  Aborts on ``RESULT_STOP``.
         2. njit function — calls ``desc.njit_fn(state, config, deme_id)``.
-        3. Python wrapper — calls with population (1-param) or
-           ``(state, config, deme_id)`` (3-param).  Only allowed when
-           Numba is disabled.
+        3. Python wrapper — calls ``(state, config, deme_id)``.  Only
+           allowed when Numba is disabled.
 
         Returns:
             ``RESULT_CONTINUE`` or ``RESULT_STOP``.
@@ -104,12 +103,10 @@ class HookExecutor:
 
         ind_count = population.state.individual_count
 
-        # Resolve runtime state flags.
+        # Resolve runtime state flags.  No dummy sperm array is created:
+        # the CSR kernel accepts ``None`` when no sperm storage exists.
         sperm_store = getattr(population.state, "sperm_storage", None)
         has_sperm_storage = sperm_store is not None and sperm_store.size > 0
-        if not has_sperm_storage:
-            sperm_store = np.zeros((0, 0, 0), dtype=np.float64)
-        assert sperm_store is not None
         stochastic = bool(getattr(getattr(population, "_config", None), "stochastic", False))
         continuous_sampling = bool(
             getattr(getattr(population, "_config", None), "continuous_sampling", False)
@@ -171,20 +168,7 @@ class HookExecutor:
                         "when Numba is enabled."
                     )
                 try:
-                    import inspect
-
-                    sig = inspect.signature(desc.py_wrapper)
-                    params = list(sig.parameters.values())
-                    if len(params) == 1:
-                        desc.py_wrapper(population)
-                    elif len(params) == 3:
-                        desc.py_wrapper(population.state, population.config, deme_id)
-                    else:
-                        raise TypeError(
-                            f"py_wrapper hook '{desc.name}' has {len(params)} "
-                            "parameters; must have 1 (population) or 3 "
-                            "(state, config, deme_id)."
-                        )
+                    desc.py_wrapper(population.state, population.config, deme_id)
                 except Exception as e:
                     raise RuntimeError(f"Error in py_wrapper hook '{desc.name}': {e}") from e
 

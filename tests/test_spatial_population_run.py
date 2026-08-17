@@ -356,10 +356,11 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
     from numba import njit
 
     @hook(event="first", priority=0)
-    def first_python(population):  # type: ignore[no-untyped-def]
+    def first_python(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = config, deme_id
         idx = int(idx_np[0])
         calls_np[idx] = 0
-        observed_first_py_np[idx // 2] = float(population.state.individual_count[1, 1, 0])
+        observed_first_py_np[idx // 2] = float(state.individual_count[1, 1, 0])
         idx_np[0] += 1
 
     @njit
@@ -380,9 +381,10 @@ def test_spatial_mixedpriority_ordering_runs_in_run_tick_and_run():
         return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
 
     @hook(event="early", priority=0)
-    def early_probe(population):  # type: ignore[no-untyped-def]
+    def early_probe(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = config, deme_id
         idx = int(early_idx_np[0])
-        observed_early_probe_np[idx] = float(population.state.individual_count[1, 1, 0])
+        observed_early_probe_np[idx] = float(state.individual_count[1, 1, 0])
         early_idx_np[0] += 1
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
@@ -480,10 +482,11 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     from numba import njit
 
     @hook(event="first", priority=0)
-    def d0_py(population):  # type: ignore[no-untyped-def]
+    def d0_py(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = config, deme_id
         idx = int(idx_np[0])
         calls_np[idx] = 0
-        observed_d0_py_np[0] = float(population.state.individual_count[1, 1, 0])
+        observed_d0_py_np[0] = float(state.individual_count[1, 1, 0])
         idx_np[0] += 1
 
     @njit
@@ -501,14 +504,16 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
         return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
 
     @hook(event="early", priority=0)
-    def d0_early(population):  # type: ignore[no-untyped-def]
-        observed_d0_early_np[0] = float(population.state.individual_count[1, 1, 0])
+    def d0_early(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = config, deme_id
+        observed_d0_early_np[0] = float(state.individual_count[1, 1, 0])
 
     @hook(event="first", priority=2)
-    def d1_py(population):  # type: ignore[no-untyped-def]
+    def d1_py(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = config, deme_id
         idx = int(idx_np[0])
         calls_np[idx] = 2
-        observed_d1_py_np[0] = float(population.state.individual_count[1, 1, 0])
+        observed_d1_py_np[0] = float(state.individual_count[1, 1, 0])
         idx_np[0] += 1
 
     @njit
@@ -526,8 +531,9 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
         return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=5.0)]
 
     @hook(event="early", priority=0)
-    def d1_early(population):  # type: ignore[no-untyped-def]
-        observed_d1_early_np[0] = float(population.state.individual_count[1, 1, 0])
+    def d1_early(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = config, deme_id
+        observed_d1_early_np[0] = float(state.individual_count[1, 1, 0])
 
     d0.set_hook("first", d0_csr)
     d0.set_hook("first", d0_njit)
@@ -694,7 +700,10 @@ def test_compact_plan_folds_identical_sequences_to_wildcard() -> None:
 
     assert len(compact) == 1
     assert compact[0].deme_selector == "*"
-    assert compact[0].njit_fn is not None
+    if nt.is_numba_enabled():
+        assert compact[0].njit_fn is not None
+    else:
+        assert compact[0].py_wrapper is not None
 
 
 def test_compact_plan_preserves_expanded_view() -> None:
@@ -876,7 +885,10 @@ def test_set_hook_shared_storage_registers_once() -> None:
     assert count_after == count_before + 1
 
     compact = sp._collect_compact_spatial_hooks()
-    custom_slots = [d for d in compact if d.njit_fn is not None]
+    if nt.is_numba_enabled():
+        custom_slots = [d for d in compact if d.njit_fn is not None]
+    else:
+        custom_slots = [d for d in compact if d.py_wrapper is not None]
     assert len(custom_slots) == 1
     assert custom_slots[0].deme_selector == "*"
 
@@ -941,8 +953,9 @@ def test_set_hook_subset_python_hook_no_leak() -> None:
     sp = _build_quiescent_age_pop(species, n_demes)
 
     @hook(event="first", priority=0)
-    def py_hook(population):  # type: ignore[no-untyped-def]
-        population.state.individual_count[0, 1, 0] += 1.0
+    def py_hook(state, config, deme_id):  # type: ignore[no-untyped-def]
+        _ = config, deme_id
+        state.individual_count[0, 1, 0] += 1.0
 
     with numba_disabled():
         sp.set_hook("first", py_hook, deme_selector=target)

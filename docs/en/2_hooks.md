@@ -233,7 +233,7 @@ def my_hook(state, config, deme_id=-1):
     return 0  # RESULT_CONTINUE
 ```
 
-Custom hooks use the signature `(state, config, deme_id=-1)`. `deme_id`
+Custom hooks use the signature `(state, config, deme_id=-1)`. This is the only supported form: legacy one-parameter (population) hooks are now rejected explicitly instead of being guessed. `deme_id`
 defaults to `-1` for panmictic populations. Return `0` to continue or
 `RESULT_STOP` to end the simulation. For selector-based hooks, Numba
 compilation details, and runtime parameter modification inside hooks,

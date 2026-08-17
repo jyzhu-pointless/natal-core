@@ -61,8 +61,8 @@ def _empty_program() -> HookProgram:
 def test_executor_filters_py_wrapper_by_deme_selector():
     calls = []
 
-    def only_deme_two(pop):
-        _ = pop
+    def only_deme_two(state, config, deme_id):
+        _ = state, config, deme_id
         calls.append("d2")
 
     desc = CompiledHookDescriptor(

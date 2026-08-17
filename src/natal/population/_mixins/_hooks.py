@@ -6,6 +6,7 @@ BasePopulation ABC to its core lifecycle contract.
 
 from __future__ import annotations
 
+import inspect
 import warnings
 from typing import (
     TYPE_CHECKING,
@@ -19,6 +20,12 @@ from typing import (
 
 import numpy as np
 
+from natal.data import (
+    DiscretePopulationConfig,
+    DiscretePopulationState,
+    PopulationConfig,
+    PopulationState,
+)
 from natal.numba.utils import is_numba_enabled
 
 if TYPE_CHECKING:
@@ -48,6 +55,11 @@ class HookManagerMixin:
     # Declared here so pyright knows these come from the host class.
     ALLOWED_EVENTS: list[str]  # type: ignore[assignment]
     tick: int  # type: ignore[assignment]
+    # ``object`` is a host-contract declaration only: BasePopulation owns the
+    # typed ``state``/``config`` properties; this mixin just routes plain
+    # hooks and narrows through ``cast`` at the call site.
+    state: object
+    config: object
     hook_entries: dict[str, list[HookEntry]]
     compiled_hook_descriptors: list[CompiledHookDescriptor]
     hook_executor: Optional[HookExecutor]
@@ -72,13 +84,13 @@ class HookManagerMixin:
         - selector hook -> ``py_wrapper`` or ``njit_fn`` (mode dependent)
         - numba hook -> ``njit_fn``
 
-        Plain Python functions are still registered in traditional ``_hooks``
-        for backward-compatible execution.
+        Plain Python functions use the unified ``(state, config, deme_id)``
+        signature and are stored in the traditional ``_hooks`` map.
 
         Args:
             event_name: Event name (must exist in ``ALLOWED_EVENTS``).
             func: Callback function, supported forms include:
-                  - plain function: ``func(population)``
+                  - plain function: ``func(state, config, deme_id)``
                   - declarative ``@hook`` function: returns ``[Op.scale(...), ...]``
                   - selector ``@hook(selectors={...})`` function
             hook_id: Numeric execution priority (optional, auto-assigned if omitted).
@@ -94,7 +106,7 @@ class HookManagerMixin:
 
         Examples:
             >>> # Plain function (backward compatible)
-            >>> pop.set_hook('first', lambda p: print(f'Step {p.tick}'))
+            >>> pop.set_hook('first', lambda state, config, deme_id: print(f'Step {state.n_tick}'))
             >>>
             >>> # Declarative @hook function (auto-compiled)
             >>> @hook()
@@ -130,6 +142,28 @@ class HookManagerMixin:
                 "Python-layer hooks are not allowed when Numba is enabled. "
                 "Use @hook(...) with a compilable body or disable Numba."
             )
+
+        if hook_meta is None:
+            # The unified hook signature is (state, config, deme_id).
+            # Reject the legacy single-parameter population hook instead of
+            # guessing which shape the user intended.
+            sig = inspect.signature(func)
+            required_params = [
+                param
+                for param in sig.parameters.values()
+                if param.default is inspect.Signature.empty
+                and param.kind
+                in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+            ]
+            if len(required_params) == 1:
+                raise TypeError(
+                    "Hooks must accept (state, config, deme_id) -> int. "
+                    "Legacy 1-parameter population hooks are no longer "
+                    "supported; use @hook(...) or a 3-parameter plain hook."
+                )
 
         if compile and hook_meta is not None:
             # Use the hook's register method with event override
@@ -200,9 +234,20 @@ class HookManagerMixin:
                 result = self.hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)  # type: ignore[arg-type]  # mixin, self is BasePopulation at runtime
                 return result
 
-        # Fallback to traditional _hooks for compatibility.
+        # Fallback to traditional plain hooks.  They use the unified
+        # (state, config, deme_id) signature and may return RESULT_STOP.
+        from natal.hooks import RESULT_STOP
+
+        state = cast(
+            PopulationState | DiscretePopulationState, self.state
+        )
+        config = cast(
+            PopulationConfig | DiscretePopulationConfig, self.config
+        )
         for _, _, hook in self.hook_entries.get(event_name, []):
-            hook(self)
+            result = hook(state, config, deme_id)
+            if result == RESULT_STOP:
+                return RESULT_STOP
 
         return RESULT_CONTINUE
 
@@ -299,20 +344,6 @@ class HookManagerMixin:
             if len(kinds) > 1:
                 return True
         return False
-
-    def should_use_python_dispatch(self) -> bool:
-                """Return whether this population should run with Python event dispatch.
-
-                Policy:
-                        - When Numba is disabled, any registered hook type uses Python
-                            dispatch so py/declarative/njit hooks share one sequential path.
-                        - When Numba is enabled, mixed hook-type timelines are handled by
-                            unified njit functions generated in ``CompiledEventHooks.from_compiled_hooks``,
-                            so no Python fallback is needed.
-                """
-                if not is_numba_enabled():
-                        return self.has_python_hooks() or len(self.get_compiled_hooks()) > 0
-                return False
 
     def ensure_hook_executor(self) -> None:
         """Build HookExecutor lazily for Python event-dispatch paths."""
