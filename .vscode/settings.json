@@ -2,5 +2,10 @@
   "files.trimTrailingWhitespace": true,
   "files.insertFinalNewline": true,
   "python.analysis.autoImportCompletions": true,
-  "C_Cpp_Runner.msvcBatchPath": ""
+  "C_Cpp_Runner.msvcBatchPath": "",
+  "rust-analyzer.server.extraEnv": {
+    "RUSTC": "${userHome}/.cargo/bin/rustc"
+  },
+  "rust-analyzer.cargo.sysroot": "discover",
+  "rust-analyzer.cargo.sysrootSrc": "/opt/homebrew/opt/rust/lib/rustlib/src/rust/library"
 }

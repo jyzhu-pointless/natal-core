@@ -1,0 +1,20 @@
+[package]
+name = "natal-engine-core"
+version = "0.1.0"
+edition = "2021"
+description = "Rust backend prototype for NATAL Core simulation kernels"
+license = "MIT"
+
+[lib]
+name = "_engine_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+numpy = "0.23.0"
+pyo3 = { version = "0.23.5", features = ["extension-module"] }
+rand = "0.10.2"
+rand_distr = "0.6.0"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

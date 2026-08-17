@@ -110,3 +110,8 @@ artifacts = [
     "natal.svg",
     "natal-brand.svg",
 ]
+
+[tool.maturin]
+manifest-path = "rust/Cargo.toml"
+module-name = "natal._engine_rs"
+python-source = "src"

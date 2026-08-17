@@ -57,12 +57,13 @@ pytest                          # Run all tests
 pyright                         # Type checking (strict mode)
 ruff check src demos             # Lint check
 ruff check src demos --fix       # Lint auto-fix
+python scripts/check_rust.py    # Rust: fmt + clippy + check (optional rust-analyzer diagnostics)
 python scripts/generate_init_pyi.py  # Regenerate stub after public API changes
 ```
 
 The virtual environment is auto-activated — run commands directly.
 
-All three must pass before committing: `pytest` + `pyright` + `ruff check src demos`. No suppression, no workarounds.
+The Python gates and the Rust hard gates must pass before committing: `pytest` + `pyright` + `ruff check src demos`, plus `python scripts/check_rust.py` (any failure in its `cargo fmt --check`, `cargo clippy -- -D warnings`, or `cargo check --all-targets` fails the gate; rust-analyzer diagnostics are optional and non-blocking). No suppression, no workarounds.
 
 ### Review Workflow
 
@@ -75,10 +76,10 @@ After every code change, you MUST follow this sequence. **Self-review is prohibi
    - Do a **full-repo search** (src/tests/demos/docs/stub) for every must-not-exist item, confirming they are unreachable
    - **Attack** every invariant: ownership attacks (check ndarray references/write protection), state-machine attacks (restore→run, finish→snapshot), axis-combination attacks (Cartesian product enumeration)
    - **Execute** every demo script and documented code example
-   - Run `pytest` / `pyright` / `ruff` gates, load `code-review`, `numerical-verification`, `adversarial-review` skills
+   - Run `pytest` / `pyright` / `ruff` / `python scripts/check_rust.py` gates, load `code-review`, `numerical-verification`, `adversarial-review` skills
    - Use a **mechanical** verdict: `APPROVED` ⇔ zero hard-blockers
 4. **If the change involves public API (signatures, parameters, defaults, module renames, etc.), the primary agent invokes `@docs`** to sync documentation and code examples in `docs/zh/` and `docs/en/`.
-5. **The primary agent MUST NOT run `pytest`, `pyright`, or `ruff` on its own and claim "review passed."** These results must be independently verified by the evaluator, which produces a structured report.
+5. **The primary agent MUST NOT run `pytest`, `pyright`, `ruff`, or `python scripts/check_rust.py` on its own and claim "review passed."** These results must be independently verified by the evaluator, which produces a structured report.
 
 The change is only considered complete when the evaluator returns an `APPROVED` verdict.
 
@@ -87,6 +88,7 @@ The change is only considered complete when the evaluator returns an `APPROVED` 
 The evaluator **MUST** return `REJECTED` when any of the following conditions are met. **Severity does not soften a hard-blocker**: a missing comment on `Any` and a semantic breakage are treated identically.
 
 - **Test failures**: Any `FAILED` in `pytest`.
+- **Rust hard gate failure**: Any non-zero `cargo fmt --check`, `cargo clippy -- -D warnings`, or `cargo check --all-targets` (run through `python scripts/check_rust.py`). Optional rust-analyzer diagnostics do not constitute rejection.
 - **Insufficient coverage**: Line coverage for new modules or new code in existing modules **< 95%**.
 - **Hard-blocker present**: REJECTED on any one of the following:
   - **Must-not-exist violation**: spec-required deletion still accessible (including `getattr`, `__init__` re-export)
@@ -102,7 +104,7 @@ The evaluator **MUST** return `REJECTED` when any of the following conditions ar
 
 ### Fix Policy
 
-- **Modified files**: All pyright / ruff / pytest failures must be fixed. "Pre-existing failures" do not exist — if tests pass on `main` and fail on the branch, the change introduced a regression and must be fixed immediately.
+- **Modified files**: All pyright / ruff / pytest / cargo fmt / cargo clippy / cargo check failures must be fixed. "Pre-existing failures" do not exist — if tests pass on `main` and fail on the branch, the change introduced a regression and must be fixed immediately.
 - **Files affected by the change**: If a signature or import change causes failures elsewhere, those must be fixed too.
 - **Pre-existing issues in untouched files**: Note and analyze them; fixing is encouraged but not required for the current commit.
 - **`cast(Any, …)` is forbidden**. Never use it to bypass type checking. Any occurrence triggers REJECTION.

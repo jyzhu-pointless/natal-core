@@ -29,6 +29,7 @@ import natal.engine.lifecycle as lifecycle_engine
 import natal.numba.utils as _numba_utils
 from natal.data import PopulationConfig, PopulationState
 from natal.genetics import Genotype, Species
+from natal.hooks.types import CompiledHookDescriptor
 from natal.population.base import BasePopulation, HookRegistrationMap
 from natal.registry.index import IndexRegistry
 from natal.utils.types import Sex
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from natal.configurator import (
         AgeStructuredConfigurator,
     )
+    from natal.engine.backends.rust_backend import RustLifecycleBackend
 
 __all__ = ["AgeStructuredPopulation"]
 
@@ -122,6 +124,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self.state.sperm_storage[:] = cfg_init_sperm
 
         self.snapshots = {}
+        self._rust_lifecycle_backend: RustLifecycleBackend | None = None
 
         if initial_individual_count is not None:
             self.state.individual_count.fill(0.0)
@@ -617,6 +620,114 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         return self.export_config()
 
+    def enable_rust_backend(self, seed: int = 0) -> AgeStructuredPopulation:
+        """Enable the Rust lifecycle backend for subsequent runs.
+
+        The Rust backend executes CSR declarative hooks only.  If this
+        population contains custom hook callables, this method raises so the
+        caller can keep using the Numba path; ``run()`` also falls back to
+        Numba automatically when custom hooks are present.
+
+        The backend snapshots the current configuration and hook program.
+        Call this after all hook registration and config updates; runtime
+        ``pop.update()`` changes after enabling require disabling and
+        re-enabling the backend.
+
+        Args:
+            seed: Seed for the Rust RNG used in stochastic simulations.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: If the Rust extension is unavailable or custom hooks
+                are registered.
+        """
+        from natal.engine.backends.rust_backend import (
+            RustLifecycleBackend,
+            rust_backend_available,
+        )
+
+        if not rust_backend_available():
+            raise RuntimeError(
+                "natal._engine_rs is not available; build it with `maturin develop` "
+                "before enabling the Rust backend."
+            )
+        if self._has_non_csr_hooks():
+            raise RuntimeError(
+                "Rust backend only supports CSR declarative hooks. "
+                "Keep the Numba backend for custom hook callables."
+            )
+        self._rust_lifecycle_backend = RustLifecycleBackend(
+            self.config,
+            self._build_hook_program(),
+            seed=seed,
+        )
+        return self
+
+    def disable_rust_backend(self) -> AgeStructuredPopulation:
+        """Disable the Rust backend and return to the Numba/Python path.
+
+        Returns:
+            Self for chaining.
+        """
+        self._rust_lifecycle_backend = None
+        return self
+
+    @property
+    def using_rust_backend(self) -> bool:
+        """Return whether the Rust lifecycle backend is currently enabled.
+
+        Returns:
+            True when ``enable_rust_backend()`` has been called and no custom
+            hooks were added afterwards.
+        """
+        return self._rust_lifecycle_backend is not None and not self._has_non_csr_hooks()
+
+    def _has_non_csr_hooks(self) -> bool:
+        """Return whether any compiled hook needs a Python/Numba callable."""
+        descriptors = cast(
+            List[CompiledHookDescriptor],
+            getattr(self, "compiled_hook_descriptors", []),
+        )
+        return any(
+            desc.plan is None
+            and (desc.njit_fn is not None or desc.py_wrapper is not None)
+            for desc in descriptors
+        )
+
+    def _run_rust_lifecycle(
+        self,
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> AgeStructuredPopulation:
+        """Run the Rust batch kernel and commit its history rows."""
+        backend = self._rust_lifecycle_backend
+        if backend is None:
+            raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
+
+        observation_mask = self._observation_mask
+        final_state, history_new, was_stopped = backend.run(
+            self.state,
+            n_steps=n_steps,
+            record_every=record_every,
+            observation_mask=observation_mask,
+        )
+
+        self._state = final_state
+        self._tick = int(final_state.n_tick)
+        self._process_kernel_history(history_new, clear_history_on_start)
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
+
     def run(
         self,
         n_steps: int,
@@ -649,6 +760,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         try:
             if record_every is None:
                 record_every = self.record_every
+
+            if self._rust_lifecycle_backend is not None and not self._has_non_csr_hooks():
+                return self._run_rust_lifecycle(
+                    n_steps=n_steps,
+                    record_every=record_every,
+                    finish=finish,
+                    clear_history_on_start=clear_history_on_start,
+                )
 
             config = self.export_config()
             wrappers = self.get_compiled_event_hooks()

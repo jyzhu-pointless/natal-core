@@ -54,12 +54,13 @@ pytest                          # 运行全部测试
 pyright                         # 类型检查（strict mode）
 ruff check src demos             # Lint 检查
 ruff check src demos --fix       # Lint 自动修复
+python scripts/check_rust.py    # Rust：fmt + clippy + check（rust-analyzer 可选诊断）
 python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 ```
 
 虚拟环境已自动激活，直接运行命令即可。
 
-提交前必须通过 **全部三项**：`pytest` + `pyright` + `ruff check src demos`。不压制、不绕过。
+提交前必须通过 **Python 三项与 Rust 硬门禁**：`pytest` + `pyright` + `ruff check src demos`，以及 `python scripts/check_rust.py`（其内部的 `cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo check --all-targets` 任一失败即门禁失败；rust-analyzer 诊断为可选，不阻断）。不压制、不绕过。
 
 ### 审查流程
 
@@ -72,10 +73,10 @@ python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
    - 对每个 must-not-exist 项做**全仓搜索**（src/tests/demos/docs/stub），确认无法访问
    - 对每个 invariant 执行**攻击**：所有权攻击（检查 ndarray 引用/写保护）、状态机攻击（restore→run、finish→snapshot）、轴组合攻击（笛卡尔积枚举）
    - **实际执行**所有 demo 脚本和文档示例代码
-   - 运行 `pytest` / `pyright` / `ruff` 门禁，加载 `code-review`、`numerical-verification`、`adversarial-review` skill
+   - 运行 `pytest` / `pyright` / `ruff` / `python scripts/check_rust.py` 门禁，加载 `code-review`、`numerical-verification`、`adversarial-review` skill
    - 判定为**机械规则**：`APPROVED` ⇔ 零 hard-blocker
 4. **若变更涉及公开 API（签名、参数、默认值、模块重命名等），主 agent 调用 `@docs`** 同步 `docs/zh/` 和 `docs/en/` 中的文档和示例代码。
-5. **主 agent 不得自行运行 `pytest`、`pyright`、`ruff` 并声称"已通过审查"**。这些命令的结果必须由 evaluator 独立验证并出具结构化报告。
+5. **主 agent 不得自行运行 `pytest`、`pyright`、`ruff`、`python scripts/check_rust.py` 并声称"已通过审查"**。这些命令的结果必须由 evaluator 独立验证并出具结构化报告。
 
 只有当 evaluator 给出 `APPROVED` 判定后，修改才算完成。
 
@@ -84,6 +85,7 @@ python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 以下任一情况发生时，evaluator **必须**返回 `REJECTED`。**严重度不软化 hard-blocker**：一个缺少注释的 `Any` 和一项语义破坏同等对待。
 
 - **测试失败**：`pytest` 出现任何 FAILED。
+- **Rust 硬门禁失败**：`cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo check --all-targets` 任一非零（通过 `python scripts/check_rust.py` 执行）。rust-analyzer 可选诊断不构成拒绝理由。
 - **覆盖率不足**：新模块或已有模块新增代码的行覆盖率 **< 95%**。
 - **Hard-blocker 存在**：以下任一类问题出现一条即 REJECTED：
   - **Must-not-exist 违规**：spec 要求删除的接口仍可访问（含 `getattr`、`__init__` 重导出）
@@ -99,7 +101,7 @@ python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
 
 ### 修复策略
 
-- **修改的文件**：所有 pyright / ruff / pytest 报错必须修。不存在"预先存在的失败"——如果 main 上通过而本分支失败，就是本分支引入的回归，必须立即修复。
+- **修改的文件**：所有 pyright / ruff / pytest / cargo fmt / cargo clippy / cargo check 报错必须修。不存在"预先存在的失败"——如果 main 上通过而本分支失败，就是本分支引入的回归，必须立即修复。
 - **被改动波及的文件**：签名或 import 变更导致的其他文件报错也必须修。
 - **未修改文件的既有问题**：指出并分析；修复推荐但不强制当前提交必须完成。
 - **`cast(Any, …)` 禁止**。不能用它绕过类型检查。出现即 REJECTED。
