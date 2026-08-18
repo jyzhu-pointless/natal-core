@@ -11,9 +11,12 @@ use rand::rngs::SmallRng;
 
 use crate::rng::{binomial, clamp01, continuous_binomial, EPS};
 
+/// Result code indicating the simulation should continue.
 pub const RESULT_CONTINUE: i32 = 0;
+/// Result code indicating a hook requested an early stop.
 pub const RESULT_STOP: i32 = 1;
 
+// Opcode values mirror ``OpType`` in ``natal.hooks.types``.
 const OP_SCALE: i64 = 0;
 const OP_SET: i64 = 1;
 const OP_ADD: i64 = 2;
@@ -25,6 +28,7 @@ const OP_STOP_IF_BELOW: i64 = 7;
 const OP_STOP_IF_ABOVE: i64 = 8;
 const OP_STOP_IF_EXTINCTION: i64 = 9;
 
+// Condition opcodes mirror ``natal.hooks.types`` (atomic 0..6, RPN 100+).
 const COND_ALWAYS: i64 = 0;
 const COND_TICK_EQ: i64 = 1;
 const COND_TICK_MOD: i64 = 2;
@@ -36,6 +40,24 @@ const COND_OP_AND: i64 = 100;
 const COND_OP_OR: i64 = 101;
 const COND_OP_NOT: i64 = 102;
 
+/// Rust mirror of the Python CSR ``HookProgram`` flat arrays.
+///
+/// The CSR layout is intentionally identical to ``natal.hooks.types.HookProgram``
+/// so the Rust interpreter can consume the same serialized arrays without
+/// reformatting on the Python side.
+///
+/// ## Fields
+/// - `n_events`: Number of lifecycle events (usually 4).
+/// - `n_hooks`: Total number of hooks across all events.
+/// - `hook_offsets`: Event -> hook range offsets.
+/// - `op_offsets`: Hook -> operation range offsets.
+/// - `op_types`: Operation opcode per operation.
+/// - `zidx_offsets` / `zidx_data`: Genotype index ranges per operation.
+/// - `age_offsets` / `age_data`: Age index ranges per operation.
+/// - `sex_masks`: Two boolean sex masks per operation (female, male).
+/// - `params`: Numeric parameter per operation.
+/// - `condition_offsets` / `condition_types` / `condition_params`: RPN conditions.
+/// - `deme_selector_*`: Per-hook deme selectors for spatial runs.
 #[derive(Default)]
 pub struct HookProgram {
     pub n_events: i64,
@@ -57,6 +79,19 @@ pub struct HookProgram {
     pub deme_selector_data: Vec<i64>,
 }
 
+/// Evaluate one atomic tick condition.
+///
+/// Atomic conditions are ``always``, ``tick ==``, ``tick %``, and comparison
+/// operators.  Values above ``COND_TICK_GT`` are not atomic and are handled by
+/// the RPN evaluator.
+///
+/// ## Parameters
+/// - `cond_type`: Condition opcode.
+/// - `cond_param`: Numeric parameter.
+/// - `tick`: Current simulation tick.
+///
+/// ## Returns
+/// ``true`` when the atomic condition holds.
 fn atomic_condition(cond_type: i64, cond_param: i64, tick: i64) -> bool {
     match cond_type {
         COND_ALWAYS => true,
@@ -70,6 +105,20 @@ fn atomic_condition(cond_type: i64, cond_param: i64, tick: i64) -> bool {
     }
 }
 
+/// Evaluate an RPN condition program.
+///
+/// The condition arrays form a stack program: atomic conditions push booleans
+/// and ``AND`` / ``OR`` / ``NOT`` operators consume stack entries.
+///
+/// ## Parameters
+/// - `cond_types`: Condition opcode array.
+/// - `cond_params`: Condition parameter array.
+/// - `cond_start`: Start index of this operation's condition.
+/// - `cond_end`: End index (exclusive).
+/// - `tick`: Current simulation tick.
+///
+/// ## Returns
+/// ``true`` if the condition program evaluates to a single true value.
 fn eval_condition(
     cond_types: &[i64],
     cond_params: &[i64],
@@ -77,6 +126,8 @@ fn eval_condition(
     cond_end: usize,
     tick: i64,
 ) -> bool {
+    // RPN evaluation: atomic tokens push 0/1; logical operators consume
+    // the stack.  An empty program is treated as always-true.
     if cond_end <= cond_start {
         return true;
     }
@@ -123,7 +174,20 @@ fn eval_condition(
     stack.len() == 1 && stack[0] != 0
 }
 
+/// Return whether a hook's deme selector matches the current ``deme_id``.
+///
+/// Selector types: 0 = all demes, 1 = single deme, 2 = inclusive range
+/// ``[lo, hi)``, 3 = explicit list.
+///
+/// ## Parameters
+/// - `program`: Hook program containing selector arrays.
+/// - `hook_idx`: Index of the hook.
+/// - `deme_id`: Current deme id.
+///
+/// ## Returns
+/// ``true`` when the hook should run for this deme.
 fn deme_matches(program: &HookProgram, hook_idx: usize, deme_id: i64) -> bool {
+    // Selector 0 is global; 1 is a single deme; 2 is [lo, hi); 3 is a list.
     let sel_type = program.deme_selector_types[hook_idx];
     let start = program.deme_selector_offsets[hook_idx] as usize;
     let end = program.deme_selector_offsets[hook_idx + 1] as usize;
@@ -151,6 +215,17 @@ fn deme_matches(program: &HookProgram, hook_idx: usize, deme_id: i64) -> bool {
     }
 }
 
+/// Sample survivors from ``n_base`` with deterministic or stochastic semantics.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `n_base`: Current count before mortality.
+/// - `survival_prob`: Survival probability.
+/// - `stochastic_flag`: Whether to sample stochastically.
+/// - `dirichlet_flag`: Whether continuous/Dirichlet sampling is enabled.
+///
+/// ## Returns
+/// The number of survivors as ``f64``.
 fn sample_survivors(
     rng: &mut SmallRng,
     n_base: f64,
@@ -158,6 +233,8 @@ fn sample_survivors(
     stochastic_flag: bool,
     dirichlet_flag: bool,
 ) -> f64 {
+    // Deterministic path multiplies by probability.
+    // Stochastic path uses discrete binomial or continuous binomial.
     if n_base <= 0.0 {
         return 0.0;
     }
@@ -170,6 +247,20 @@ fn sample_survivors(
     n_base * survival_prob
 }
 
+/// Apply a target count to a male/non-sperm-storing state slot.
+///
+/// If the target is below the current count, survivors are sampled with
+/// probability ``target / current``; otherwise the target is kept unchanged.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `current_count`: Current count.
+/// - `target_count`: Desired count after operation.
+/// - `stochastic_flag`: Whether to sample stochastically.
+/// - `dirichlet_flag`: Whether continuous sampling is enabled.
+///
+/// ## Returns
+/// The new count for the slot.
 fn apply_target_without_sperm(
     rng: &mut SmallRng,
     current_count: f64,
@@ -177,6 +268,8 @@ fn apply_target_without_sperm(
     stochastic_flag: bool,
     dirichlet_flag: bool,
 ) -> f64 {
+    // If the target is not a reduction, keep the current value.
+    // Otherwise sample survivors with probability target/current.
     let current_count = if stochastic_flag && !dirichlet_flag {
         current_count.round()
     } else {
@@ -198,6 +291,25 @@ fn apply_target_without_sperm(
     )
 }
 
+/// Apply a target count to a female slot while scaling stored sperm.
+///
+/// For female slots, reducing the count must also reduce stored sperm.  The
+/// function scales each sperm category and separately samples surviving
+/// virgins so the total remains consistent.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `current_count`: Current female count.
+/// - `target_count`: Desired count after operation.
+/// - `sperm_row`: Mutable sperm counts for this female genotype.
+/// - `stochastic_flag`: Whether to sample stochastically.
+/// - `dirichlet_flag`: Whether continuous sampling is enabled.
+///
+/// ## Returns
+/// The new female count after applying mortality to sperm and virgins.
+///
+/// ## Panics
+/// Panics if the state is inconsistent (`n_virgins < 0`).
 fn apply_target_with_sperm(
     rng: &mut SmallRng,
     current_count: f64,
@@ -206,6 +318,8 @@ fn apply_target_with_sperm(
     stochastic_flag: bool,
     dirichlet_flag: bool,
 ) -> f64 {
+    // Female reductions must also reduce stored sperm.
+    // Scale each sperm category and sample surviving virgins independently.
     let current_count = if stochastic_flag && !dirichlet_flag {
         current_count.round()
     } else {
@@ -260,6 +374,27 @@ fn apply_target_with_sperm(
 }
 
 impl HookProgram {
+    /// Execute all CSR hooks for one lifecycle event in priority order.
+    ///
+    /// The method iterates hooks belonging to ``event_id``, filters by deme
+    /// selector, evaluates each operation's condition, and applies mutating or
+    /// stop-checking operations.  It mirrors ``natal.hooks.runtime.csr_kernel``.
+    ///
+    /// ## Parameters
+    /// - `rng`: Random number generator for stochastic operations.
+    /// - `event_id`: Lifecycle event index (first/early/late/finish).
+    /// - `individual_count`: Mutable flat state array.
+    /// - `sperm_storage`: Mutable flat sperm array (empty for discrete).
+    /// - `n_sexes`: Number of sexes.
+    /// - `n_ages`: Number of age classes.
+    /// - `n_ztypes`: Number of zygote types.
+    /// - `tick`: Current tick.
+    /// - `stochastic`: Stochastic sampling flag.
+    /// - `continuous_sampling`: Continuous sampling flag.
+    /// - `deme_id`: Current deme id.
+    ///
+    /// ## Returns
+    /// ``RESULT_CONTINUE`` (0) or ``RESULT_STOP`` (1) if a stop operation triggered.
     pub fn execute_event(
         &self,
         rng: &mut SmallRng,
@@ -274,6 +409,9 @@ impl HookProgram {
         continuous_sampling: bool,
         deme_id: i64,
     ) -> i32 {
+        // Iterate hooks in serialized order, respecting deme selectors.
+        // For each operation: evaluate condition, apply mutation or stop check.
+        // Stop operations short-circuit the whole event immediately.
         if event_id < 0 || event_id >= self.n_events || self.n_hooks == 0 {
             return RESULT_CONTINUE;
         }

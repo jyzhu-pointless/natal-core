@@ -132,6 +132,74 @@ def test_observation_mode_history_matches_numba(species: Species) -> None:
     assert np.array_equal(rust_pop.history._rows, reference.history._rows)
 
 
+def test_setup_backend_auto_and_rust(species: Species) -> None:
+    """Build-time backend selection must enable or disable Rust."""
+    auto_pop = (
+        Configurator.from_species(species)
+        .age_structure(4, 2)
+        .setup(stochastic=False, name="auto_pop", backend="auto")
+        .build()
+    )
+    rust_pop = (
+        Configurator.from_species(species)
+        .age_structure(4, 2)
+        .setup(stochastic=False, name="rust_pop", backend="rust")
+        .build()
+    )
+    numba_pop = (
+        Configurator.from_species(species)
+        .age_structure(4, 2)
+        .setup(stochastic=False, name="numba_pop", backend="numba")
+        .build()
+    )
+    assert auto_pop.using_rust_backend is True
+    assert rust_pop.using_rust_backend is True
+    assert numba_pop.using_rust_backend is False
+
+
+def test_auto_backend_falls_back_with_custom_hooks(species: Species) -> None:
+    """backend=auto must silently keep Numba for custom hooks."""
+    pop = (
+        Configurator.from_species(species)
+        .age_structure(4, 2)
+        .setup(stochastic=False, name="auto_custom", backend="auto")
+        .initial_state(individual_count={"female": {"A|A": 20}, "male": {"A|A": 20}})
+        .hooks(_custom_noop_hook)
+        .build()
+    )
+    assert pop.using_rust_backend is False
+    pop.run(2)
+    assert pop.tick == 2
+
+
+def test_backend_python_forces_python_fallback(species: Species) -> None:
+    """backend=python must bypass Rust and Numba compiled paths."""
+    pop = (
+        Configurator.from_species(species)
+        .age_structure(4, 2)
+        .setup(stochastic=False, name="python_pop", backend="python")
+        .initial_state(individual_count={"female": {"A|A": 20}, "male": {"A|A": 20}})
+        .build()
+    )
+    assert pop.using_rust_backend is False
+    assert pop._python_backend is True
+    pop.run(3, record_every=1)
+    assert pop.tick == 3
+
+
+def test_runtime_config_update_rebuilds_rust_backend(species: Species) -> None:
+    """pop.update() in-place changes must be picked up before the next run."""
+    reference = _build_population(species, "runtime_ref")
+    rust_pop = _build_population(species, "runtime_rust").enable_rust_backend(seed=11)
+    reference.update().competition(carrying_capacity=500.0)
+    rust_pop.update().competition(carrying_capacity=500.0)
+    reference.run(5, record_every=1, clear_history_on_start=True)
+    rust_pop.run(5, record_every=1, clear_history_on_start=True)
+    assert rust_pop.using_rust_backend is True
+    assert np.array_equal(rust_pop.state.individual_count, reference.state.individual_count)
+    assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
+
+
 def test_custom_hooks_block_rust_enablement(species: Species) -> None:
     """Custom callable hooks must force the population to stay on Numba."""
     pop = (

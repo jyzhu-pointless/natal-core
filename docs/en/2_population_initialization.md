@@ -376,7 +376,7 @@ Key differences between the discrete generation model and the age-structured mod
 
 ### `setup(...)`
 
-Parameters are consistent with the age-structured model: `name`, `stochastic`, `continuous_sampling`, `fixed_egg_count`, `species`. `species` is required to define the genetic structure of the population.
+Parameters are consistent with the age-structured model: `name`, `stochastic`, `continuous_sampling`, `fixed_egg_count`, `species`, plus `backend` (`"auto"` / `"rust"` / `"python"` / `"numba"`, default `"numba"`). `species` is required to define the genetic structure of the population.
 
 ### `initial_state(...)`
 

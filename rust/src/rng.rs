@@ -9,10 +9,23 @@ use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use rand_distr::{Binomial, Distribution, Gamma, Normal, Poisson};
 
+/// Small positive tolerance used for boundary decisions.
+///
+/// Values at or below ``EPS`` are treated as zero in most stochastic kernels.
 pub const EPS: f64 = 1e-10;
 const RESOLUTION_LIMIT: f64 = 2.028_240_960_365_167e31;
 const GAMMA_NORMAL_APPROXIMATION_THRESHOLD: f64 = 1e8;
 
+/// Clamp a value into ``[0, 1]`` while preserving Python NaN semantics.
+///
+/// ## Parameters
+/// - `x`: Input probability or rate.
+///
+/// ## Returns
+/// ``0.0`` if `x` is non-positive, ``1.0`` if `x` is at least one, otherwise `x`.
+///
+/// ## Notes
+/// NaN is returned unchanged, matching the Python helper used by the reference engine.
 #[allow(clippy::manual_clamp)] // if-chain preserves Python _clamp01 NaN semantics
 pub fn clamp01(x: f64) -> f64 {
     if x <= 0.0 {
@@ -24,15 +37,32 @@ pub fn clamp01(x: f64) -> f64 {
     }
 }
 
+/// Create a new ``SmallRng`` from a u64 seed.
+///
+/// ## Parameters
+/// - `seed`: Seed value.
+///
+/// ## Returns
+/// A deterministic ``SmallRng`` instance.
 pub fn new_rng(seed: u64) -> SmallRng {
     SmallRng::seed_from_u64(seed)
 }
 
 /// Sample Binomial(n, p) and return the count as ``f64``.
 ///
-/// Boundary cases mirror the Python fast path: p <= 0 or n <= 0 return 0,
-/// p >= 1 returns n.
+/// Boundary cases mirror the Python fast path: ``p <= 0`` or ``n <= 0`` return
+/// zero, and ``p >= 1`` returns ``n``.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `n`: Number of trials.
+/// - `p`: Success probability.
+///
+/// ## Returns
+/// The sampled count as ``f64``.
 pub fn binomial(rng: &mut SmallRng, n: i64, p: f64) -> f64 {
+    // Fast-path boundary cases before constructing the distribution.
+    // This matches the Python helper exactly for n <= 0, p <= 0, p >= 1.
     if n <= 0 || p <= 0.0 {
         return 0.0;
     }
@@ -43,7 +73,17 @@ pub fn binomial(rng: &mut SmallRng, n: i64, p: f64) -> f64 {
     dist.sample(rng) as f64
 }
 
+/// Sample a Poisson count, with extreme and large-lambda guards.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `lambda`: Mean of the Poisson distribution.
+///
+/// ## Returns
+/// The sampled count as ``f64``.  Very large lambdas return the mean directly
+/// to avoid numerical overflow.
 pub fn poisson(rng: &mut SmallRng, lambda: f64) -> f64 {
+    // Guard tiny and huge lambdas to avoid numerical issues in rand_distr.
     if lambda <= EPS {
         return 0.0;
     }
@@ -60,7 +100,16 @@ pub fn poisson(rng: &mut SmallRng, lambda: f64) -> f64 {
 /// Python falls back to the mean for extreme or degenerate shapes; the same
 /// guards are kept here.  The intermediate sampling algorithm may differ from
 /// NumPy's while preserving the Gamma distribution.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `shape`: Gamma shape parameter.
+///
+/// ## Returns
+/// A Gamma-distributed sample as ``f64``.
 pub fn gamma(rng: &mut SmallRng, shape: f64) -> f64 {
+    // Use mean for degenerate/extreme shapes; approximate with Normal
+    // for large shapes; otherwise sample a standard Gamma.
     if shape >= RESOLUTION_LIMIT {
         return shape;
     }
@@ -78,8 +127,19 @@ pub fn gamma(rng: &mut SmallRng, shape: f64) -> f64 {
         .sample(rng)
 }
 
-/// Continuous analogue of Poisson(λ): Gamma(λ, 1), matching Python's
-/// moment-matching semantics.
+/// Continuous analogue of Poisson(lambda): Gamma(lambda, 1).
+///
+/// This matches Python's moment-matching semantics for continuous sampling.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `lambda`: Mean.
+///
+/// ## Returns
+/// A continuous non-negative sample as ``f64``.
+///
+/// ## Panics
+/// Panics if `lambda` is not finite.
 pub fn continuous_poisson(rng: &mut SmallRng, lambda: f64) -> f64 {
     if !lambda.is_finite() {
         panic!("continuous_poisson(): lambda must be finite");
@@ -91,7 +151,20 @@ pub fn continuous_poisson(rng: &mut SmallRng, lambda: f64) -> f64 {
 }
 
 /// Continuous analogue of Binomial(n, p) via a Beta-distributed proportion.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `n`: Continuous population size.
+/// - `p`: Success probability.
+///
+/// ## Returns
+/// A continuous sample in ``[0, n]``.
+///
+/// ## Panics
+/// Panics if `n` or `p` is not finite.
 pub fn continuous_binomial(rng: &mut SmallRng, n: f64, p: f64) -> f64 {
+    // Represent the continuous binomial as a Beta proportion times n.
+    // For small n the proportion is replaced by the mean to avoid instability.
     if !n.is_finite() || !p.is_finite() {
         panic!("continuous_binomial(): n and p must be finite");
     }
@@ -122,7 +195,15 @@ pub fn continuous_binomial(rng: &mut SmallRng, n: f64, p: f64) -> f64 {
 ///
 /// This is the same algorithm used by NumPy and by ``nbc.multinomial``; the
 /// last category receives the remaining trials.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `n`: Number of trials.
+/// - `p`: Probability vector.
+/// - `out`: Output slice, overwritten with category counts.
 pub fn multinomial(rng: &mut SmallRng, n: i64, p: &[f64], out: &mut [f64]) {
+    // Sequential conditional binomial draws; the final category receives
+    // whatever trials remain, preserving the total exactly.
     for slot in out.iter_mut() {
         *slot = 0.0;
     }
@@ -150,7 +231,19 @@ pub fn multinomial(rng: &mut SmallRng, n: i64, p: &[f64], out: &mut [f64]) {
 }
 
 /// Continuous analogue of Multinomial(n, p) via normalized Gamma draws.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `n`: Continuous total.
+/// - `p`: Probability vector.
+/// - `out`: Output slice, overwritten with category counts.
+///
+/// ## Notes
+/// A final correction pass keeps the sum close to `n` when floating-point
+/// rounding would otherwise drift.
 pub fn continuous_multinomial(rng: &mut SmallRng, n: f64, p: &[f64], out: &mut [f64]) {
+    // Draw independent Gamma variates and normalize to the target total.
+    // A final correction handles floating-point drift in the sum.
     if n <= 1.0 + EPS {
         for (slot, &prob) in out.iter_mut().zip(p.iter()) {
             *slot = n * prob;

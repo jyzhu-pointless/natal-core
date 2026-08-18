@@ -71,6 +71,7 @@ NATAL Core 提供两种主要的种群类型：
 | `stochastic` | `bool` | 是否采用随机采样 | `True` | reproduction / survival 等采样阶段 | `True` 表示随机，`False` 表示确定性；调参阶段建议先使用 `False` |
 | `continuous_sampling` | `bool` | 采样策略选择 | `False` | 概率采样细节 | 控制采样方式，大多数场景保持默认即可 |
 | `fixed_egg_count` | `bool` | 产卵数是否固定 | `False` | reproduction | `True` 表示固定产卵数，`False` 更接近随机产卵过程 |
+| `backend` | `str` | 生命周期后端选择 | `"numba"` | 每 tick 生命周期 | `"auto"` 自动选择 Rust/Numba；`"rust"` 强制 Rust；`"python"` 强制纯 Python fallback |
 | `species` | `Species` | 物种对象 | 必填 | 全流程 | 定义种群的遗传结构，是配置的核心参数 |
 
 ### `age_structure(...)` – 年龄结构
@@ -386,7 +387,7 @@ def release_drive_carriers():
 
 ### `setup(...)`
 
-参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
+参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`，并新增 `backend`（`"auto"` / `"rust"` / `"python"` / `"numba"`，默认 `"numba"`）。其中 `species` 是必填参数，用于定义种群的遗传结构。
 
 ### `initial_state(...)`
 

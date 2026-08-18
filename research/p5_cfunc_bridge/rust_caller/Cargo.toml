@@ -1,0 +1,12 @@
+[package]
+name = "natal-p5-cfunc-caller"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal Rust FFI caller used to spike Numba cfunc hooks for NATAL P5"
+
+[lib]
+name = "p5_cfunc_caller"
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = 3

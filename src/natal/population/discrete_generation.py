@@ -16,6 +16,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -34,6 +35,7 @@ from natal.data import (
     parse_flattened_discrete_state,
 )
 from natal.genetics import Genotype, Species
+from natal.hooks.types import CompiledHookDescriptor
 from natal.population.base import BasePopulation
 from natal.registry.index import IndexRegistry
 from natal.utils.types import Sex
@@ -42,6 +44,7 @@ if TYPE_CHECKING:
     from natal.configurator import (
         DiscreteConfigurator,
     )
+    from natal.engine.backends.rust_backend import RustDiscreteLifecycleBackend
 
 __all__ = ["DiscreteGenerationPopulation"]
 
@@ -185,6 +188,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self.state.individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
 
+        self._python_backend = False
+        self._rust_lifecycle_backend: RustDiscreteLifecycleBackend | None = None
+        self._rust_backend_seed: int | None = None
+        self._rust_backend_signature: str | None = None
+
         # Keep a pristine copy so reset() can restore the starting state.
         self._initial_population_snapshot = (
             self.state.individual_count.copy(),
@@ -209,6 +217,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
+        backend: Literal["auto", "rust", "numba", "python"] = "numba",
         *,
         compress: bool = False,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
@@ -233,6 +242,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             fixed_egg_count=fixed_egg_count,
+            backend=backend,
             compress=compress,
             declared_zygote_types=declared_zygote_types,
         )
@@ -310,6 +320,152 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 self.state.individual_count[sex_idx, 0, z_idx] = age0_count
                 self.state.individual_count[sex_idx, 1, z_idx] = age1_count
 
+    def enable_rust_backend(self, seed: int = 0) -> DiscreteGenerationPopulation:
+        """Enable the Rust backend for subsequent runs.
+
+        The Rust backend executes CSR declarative hooks only.  Call this
+        after all hook registration and config updates; runtime updates
+        after enabling require disabling and re-enabling the backend.
+
+        Args:
+            seed: Seed for the Rust RNG.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: If the Rust extension is unavailable or custom hooks
+                are registered.
+        """
+        from natal.engine.backends.rust_backend import (
+            RustDiscreteLifecycleBackend,
+            rust_backend_available,
+            rust_backend_signature,
+        )
+
+        if not rust_backend_available():
+            raise RuntimeError(
+                "natal._engine_rs is not available; build it with `maturin develop` "
+                "before enabling the Rust backend."
+            )
+        if self._has_non_csr_hooks():
+            raise RuntimeError(
+                "Rust backend only supports CSR declarative hooks. "
+                "Keep the Numba backend for custom hook callables."
+            )
+        hook_program = self._build_hook_program()
+        self._rust_lifecycle_backend = RustDiscreteLifecycleBackend(
+            self.config,
+            hook_program,
+            seed=seed,
+        )
+        self._rust_backend_seed = seed
+        self._rust_backend_signature = rust_backend_signature(
+            self.config, hook_program
+        )
+        return self
+
+    def disable_rust_backend(self) -> DiscreteGenerationPopulation:
+        """Disable the Rust backend and return to the Numba/Python path.
+
+        Returns:
+            Self for chaining.
+        """
+        self._rust_lifecycle_backend = None
+        self._rust_backend_seed = None
+        self._rust_backend_signature = None
+        return self
+
+    def refresh_rust_backend(self) -> DiscreteGenerationPopulation:
+        """Rebuild the Rust backend from the current config and hooks.
+
+        Call this after ``pop.update()`` when Rust was enabled before the
+        update.  Runtime config replacement is detected automatically, but
+        this method is the explicit synchronisation point for in-place
+        scalar updates.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: If the backend was never enabled or custom hooks
+                are now registered.
+        """
+        if self._rust_backend_seed is None:
+            raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
+        return self.enable_rust_backend(seed=self._rust_backend_seed)
+
+    @property
+    def using_rust_backend(self) -> bool:
+        """Return whether the Rust backend is currently active.
+
+        Returns:
+            True when enabled and no custom hooks are present.
+        """
+        return (
+            getattr(self, "_rust_lifecycle_backend", None) is not None
+            and not self._has_non_csr_hooks()
+        )
+
+    def _has_non_csr_hooks(self) -> bool:
+        """Return whether any compiled hook needs a Python/Numba callable."""
+        descriptors = cast(
+            List[CompiledHookDescriptor],
+            getattr(self, "compiled_hook_descriptors", []),
+        )
+        return any(
+            desc.plan is None
+            and (desc.njit_fn is not None or desc.py_wrapper is not None)
+            for desc in descriptors
+        )
+
+    def _sync_rust_backend(self) -> None:
+        """Rebuild the Rust session when config or hook arrays changed."""
+        if self._rust_backend_seed is None:
+            return
+        from natal.engine.backends.rust_backend import rust_backend_signature
+
+        signature = rust_backend_signature(self.config, self._build_hook_program())
+        if (
+            getattr(self, "_rust_lifecycle_backend", None) is None
+            or signature != self._rust_backend_signature
+        ):
+            self.refresh_rust_backend()
+
+    def _run_rust_lifecycle(
+        self,
+        n_steps: int,
+        record_every: int,
+        finish: bool,
+        clear_history_on_start: bool,
+    ) -> DiscreteGenerationPopulation:
+        """Run the Rust batch kernel and commit its history rows."""
+        self._sync_rust_backend()
+        backend = self._rust_lifecycle_backend
+        if backend is None:
+            raise RuntimeError(
+                "Rust backend is not enabled; call enable_rust_backend() first."
+            )
+
+        final_state, history_new, was_stopped = backend.run(
+            self.state,
+            n_steps=n_steps,
+            record_every=record_every,
+            observation_mask=self._observation_mask,
+        )
+
+        self._state = final_state
+        self._tick = int(final_state.n_tick)
+        self._process_kernel_history(history_new, clear_history_on_start)
+
+        if was_stopped:
+            self._finished = True
+            self.trigger_event("finish")
+        elif finish:
+            self.finish_simulation()
+
+        return self
+
     def run(
         self,
         n_steps: int = 1,
@@ -346,11 +502,26 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 record_every if record_every is not None else self.record_every
             )
 
+            if (
+                getattr(self, "_rust_lifecycle_backend", None) is not None
+                and not self._has_non_csr_hooks()
+            ):
+                return self._run_rust_lifecycle(
+                    n_steps=n_steps,
+                    record_every=record_every_resolved,
+                    finish=finish,
+                    clear_history_on_start=clear_history_on_start,
+                )
+
             # Wright-Fisher extreme-speed path: single multinomial draw per tick.
             if getattr(self.config, "extreme_speed_mode", 0) > 0:
                 tick_fn = lifecycle_engine.run_wf_tick
                 wrappers = self.get_compiled_event_hooks()
-                if _numba_utils.NUMBA_ENABLED and wrappers.run_wf_fn is not None:
+                if (
+                    _numba_utils.NUMBA_ENABLED
+                    and not getattr(self, "_python_backend", False)
+                    and wrappers.run_wf_fn is not None
+                ):
                     assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
                     obs_mask = self._observation_mask
                     n_obs = len(self._observation.labels) if self._observation is not None else 0
@@ -388,7 +559,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
             tick_fn = lifecycle_engine.run_discrete_tick
             wrappers = self.get_compiled_event_hooks()
-            if _numba_utils.NUMBA_ENABLED and wrappers.run_discrete_fn is not None:
+            if (
+                _numba_utils.NUMBA_ENABLED
+                and not getattr(self, "_python_backend", False)
+                and wrappers.run_discrete_fn is not None
+            ):
                 assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
                 obs_mask = self._observation_mask
                 n_obs = len(self._observation.labels) if self._observation is not None else 0

@@ -18,22 +18,58 @@ use crate::rng::{
     multinomial, poisson, EPS,
 };
 
+/// Juvenile growth mode: no density regulation.
 const NO_COMPETITION: i64 = 0;
+/// Juvenile growth mode: fixed carrying-capacity ceiling.
 const FIXED: i64 = 1;
+/// Juvenile growth mode: logistic density regulation.
 const LOGISTIC: i64 = 2;
+/// Juvenile growth mode: Beverton-Holt density regulation.
 const BEVERTON_HOLT: i64 = 3;
 
+/// Row-major flat index for ``(sex, age, ztype)``.
+///
+/// ## Parameters
+/// - `sex`: Sex index (0 female, 1 male).
+/// - `age`: Age class index.
+/// - `ztype`: Zygote type index.
+/// - `n_ages`: Number of age classes.
+/// - `n_ztypes`: Number of zygote types.
+///
+/// ## Returns
+/// Flat index into the individual-count slice.
 #[inline]
 fn ind_idx(sex: usize, age: usize, ztype: usize, n_ages: usize, n_ztypes: usize) -> usize {
     (sex * n_ages + age) * n_ztypes + ztype
 }
 
+/// Row-major flat index for ``(age, female_ztype, male_ztype)``.
+///
+/// ## Parameters
+/// - `age`: Female age class.
+/// - `female_ztype`: Female zygote type.
+/// - `male_ztype`: Male zygote type.
+/// - `n_ztypes`: Number of zygote types.
+///
+/// ## Returns
+/// Flat index into the sperm-storage slice.
 #[inline]
 fn sperm_idx(age: usize, female_ztype: usize, male_ztype: usize, n_ztypes: usize) -> usize {
     (age * n_ztypes + female_ztype) * n_ztypes + male_ztype
 }
 
+/// Normalize male mating weights into a female x male probability matrix.
+///
+/// Each female row is proportional to ``sexual_selection_fitness * male_count``.
+/// Rows with zero or non-finite totals become all-zero so no matings are produced.
+///
+/// ## Parameters
+/// - `cfg`: Simulation config.
+/// - `male_counts`: Effective adult male counts per zygote type.
+/// - `out`: Output matrix of shape ``(n_ztypes, n_ztypes)``, overwritten.
 fn compute_mating_probability_matrix(cfg: &SimConfig, male_counts: &[f64], out: &mut [f64]) {
+    // Each female row is proportional to sexual_selection_fitness * male_count.
+    // Rows are normalized; zero/non-finite rows become all-zero so no matings occur.
     let n_ztypes = cfg.n_ztypes;
     for gf in 0..n_ztypes {
         let mut row_sum = 0.0;
@@ -54,6 +90,18 @@ fn compute_mating_probability_matrix(cfg: &SimConfig, male_counts: &[f64], out: 
     }
 }
 
+/// Sample matings, displace stored sperm, and add new sperm for adult females.
+///
+/// For each adult female age/genotype the function computes virgin matings,
+/// remating events that displace old sperm, and multinomial allocation of new
+/// sperm among male zygote types.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `female_counts`: Female counts per age/genotype (flat).
+/// - `sperm`: Mutable sperm-storage slice.
+/// - `mating_prob`: Precomputed female x male mating probabilities.
 fn sample_mating(
     rng: &mut SmallRng,
     cfg: &SimConfig,
@@ -61,6 +109,11 @@ fn sample_mating(
     sperm: &mut [f64],
     mating_prob: &[f64],
 ) {
+    // For each adult female age/genotype:
+    // 1. Compute virgins = females not already carrying sperm.
+    // 2. Sample new virgin matings (binomial/continuous).
+    // 3. Sample remating events that displace old sperm.
+    // 4. Distribute new sperm using the mating probability row.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let adult_start = cfg.adult_start_age;
@@ -165,7 +218,23 @@ fn sample_mating(
     }
 }
 
+/// Turn stored sperm pairs into age-0 offspring counts.
+///
+/// Offspring production accounts for fecundity, female fertility, reproduction
+/// rate, offspring genotype probabilities, and sex assignment.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `sperm`: Stored sperm slice.
+/// - `n_f`: Output female age-0 counts per zygote type.
+/// - `n_m`: Output male age-0 counts per zygote type.
 fn fertilize(rng: &mut SmallRng, cfg: &SimConfig, sperm: &[f64], n_f: &mut [f64], n_m: &mut [f64]) {
+    // Convert stored sperm pairs into age-0 offspring:
+    // - Egg count depends on female/male fecundity and female fertility.
+    // - Stochastic reproduction uses binomial/poisson counts.
+    // - Offspring genotypes are drawn from the offspring tensor.
+    // - Sex is assigned according to sex ratio or sex-chromosome rules.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let adult_start = cfg.adult_start_age;
@@ -315,12 +384,32 @@ fn fertilize(rng: &mut SmallRng, cfg: &SimConfig, sperm: &[f64], n_f: &mut [f64]
     }
 }
 
+/// Run the age-structured reproduction stage in place.
+///
+/// The stage aggregates effective adult males, builds mating probabilities,
+/// samples matings into stored sperm, fertilizes to age-0 offspring, and
+/// applies zygote viability to newborns.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `sperm`: Mutable sperm-storage flat slice.
+///
+/// ## Returns
+/// ``Ok(())`` on success, or a descriptive error string for invalid states.
 pub fn reproduction(
     rng: &mut SmallRng,
     cfg: &SimConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
 ) -> Result<(), String> {
+    // Age-structured reproduction pipeline:
+    // 1. Aggregate effective adult males (mating-rate weighted).
+    // 2. Build female x male mating probabilities.
+    // 3. Sample matings and update stored sperm.
+    // 4. Fertilize stored sperm into age-0 offspring.
+    // 5. Apply zygote viability to newborns.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let mut effective_male_counts = vec![0.0; n_ztypes];
@@ -390,7 +479,22 @@ pub fn reproduction(
     Ok(())
 }
 
+/// Compute juvenile density-regulation scaling for the current tick.
+///
+/// Supported modes are no competition, fixed carrying capacity, logistic,
+/// and Beverton-Holt.  The returned factor is multiplied into age-0 totals.
+///
+/// ## Parameters
+/// - `cfg`: Simulation config.
+/// - `ind`: Current individual-count flat slice.
+///
+/// ## Returns
+/// A non-negative scaling factor.
 fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
+    // Juvenile density regulation by growth mode:
+    // - NO_COMPETITION: 1.0 (no regulation).
+    // - FIXED: cap total age-0 at carrying capacity.
+    // - LOGISTIC / BEVERTON_HOLT: use competition ratio and growth rate.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let mut total_age_0 = 0.0;
@@ -438,7 +542,20 @@ fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
     }
 }
 
+/// Apply the juvenile scaling factor by resampling age-0 counts.
+///
+/// Stochastic mode uses multinomial/continuous multinomial sampling;
+/// deterministic mode scales each category proportionally.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `scaling`: Scaling factor from [`scaling_factor`].
 fn recruit_juveniles(rng: &mut SmallRng, cfg: &SimConfig, ind: &mut [f64], scaling: f64) {
+    // Resample age-0 counts so the total equals total * scaling.
+    // Stochastic mode uses multinomial/continuous multinomial;
+    // deterministic mode scales each category proportionally.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let stochastic = cfg.stochastic;
@@ -502,6 +619,22 @@ fn recruit_juveniles(rng: &mut SmallRng, cfg: &SimConfig, ind: &mut [f64], scali
     }
 }
 
+/// Stochastic survival that also scales stored sperm for surviving females.
+///
+/// Female survival must keep the relationship between counts and stored sperm
+/// consistent: each sperm category is scaled independently and virgins survive
+/// with the same probability.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `sperm`: Mutable sperm-storage flat slice.
+/// - `s_combined_f`: Combined female survival rates per age/genotype.
+/// - `s_combined_m`: Combined male survival rates per age/genotype.
+///
+/// ## Returns
+/// ``Ok(())`` or an error if the state is inconsistent.
 fn sample_survival_with_sperm(
     rng: &mut SmallRng,
     cfg: &SimConfig,
@@ -510,6 +643,9 @@ fn sample_survival_with_sperm(
     s_combined_f: &[f64],
     s_combined_m: &[f64],
 ) -> Result<(), String> {
+    // Stochastic female survival must keep stored sperm consistent:
+    // surviving sperm categories are scaled, and virgins survive independently.
+    // Males are sampled with a simple binomial.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let continuous = cfg.continuous_sampling;
@@ -585,6 +721,14 @@ fn sample_survival_with_sperm(
     Ok(())
 }
 
+/// Deterministic survival: multiply counts and stored sperm by survival rates.
+///
+/// ## Parameters
+/// - `cfg`: Simulation config.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `sperm`: Mutable sperm-storage flat slice.
+/// - `s_combined_f`: Combined female survival rates.
+/// - `s_combined_m`: Combined male survival rates.
 fn apply_survival_deterministic(
     cfg: &SimConfig,
     ind: &mut [f64],
@@ -592,6 +736,8 @@ fn apply_survival_deterministic(
     s_combined_f: &[f64],
     s_combined_m: &[f64],
 ) {
+    // Deterministic survival multiplies every count and sperm category
+    // by the combined age/viability survival probability.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     for age in 0..n_ages {
@@ -606,12 +752,30 @@ fn apply_survival_deterministic(
     }
 }
 
+/// Run the age-structured survival stage in place.
+///
+/// The stage first applies juvenile density regulation, builds combined
+/// age/viability survival rates, and then applies stochastic or deterministic
+/// survival.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `sperm`: Mutable sperm-storage flat slice.
+///
+/// ## Returns
+/// ``Ok(())`` on success, or an error string for invalid states.
 pub fn survival(
     rng: &mut SmallRng,
     cfg: &SimConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
 ) -> Result<(), String> {
+    // Survival pipeline:
+    // 1. Apply juvenile density regulation (scaling).
+    // 2. Build combined age x viability survival rates.
+    // 3. Apply stochastic or deterministic survival.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let scaling = scaling_factor(cfg, ind);
@@ -647,7 +811,18 @@ pub fn survival(
     }
 }
 
+/// Advance ages by one tick and clear the newborn age class.
+///
+/// Every age class shifts down one slot (oldest is dropped), then age 0 is
+/// zeroed for both individual counts and stored sperm.
+///
+/// ## Parameters
+/// - `cfg`: Simulation config.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `sperm`: Mutable sperm-storage flat slice.
 pub fn aging(cfg: &SimConfig, ind: &mut [f64], sperm: &mut [f64]) {
+    // Shift every age class down by one, dropping the oldest class.
+    // Then zero the newborn age class (age 0) for counts and sperm.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     for age in (1..n_ages).rev() {
@@ -677,6 +852,22 @@ pub fn aging(cfg: &SimConfig, ind: &mut [f64], sperm: &mut [f64]) {
     }
 }
 
+/// Run one full age-structured tick with hooks in the reference stage order.
+///
+/// Stage order: first hook -> reproduction -> early hook -> survival -> late
+/// hook -> aging.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `hooks`: CSR hook program.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `sperm`: Mutable sperm-storage flat slice.
+/// - `tick`: Current tick.
+/// - `deme_id`: Current deme id.
+///
+/// ## Returns
+/// ``Ok(0)`` for continue, ``Ok(1)`` if a hook requested stop, or an error string.
 pub fn run_tick(
     rng: &mut SmallRng,
     cfg: &SimConfig,
@@ -686,6 +877,8 @@ pub fn run_tick(
     tick: i64,
     deme_id: i64,
 ) -> Result<i32, String> {
+    // One structured tick follows the Python reference order:
+    // first hook -> reproduction -> early hook -> survival -> late hook -> aging.
     let mut result = hooks.execute_event(
         rng,
         0,
@@ -745,13 +938,26 @@ pub fn run_tick(
     Ok(0)
 }
 
-/// Run up to ``n_ticks`` complete ticks inside Rust and optionally record
-/// flattened history rows.
+/// Run up to ``n_ticks`` complete ticks inside Rust and optionally record flattened history rows.
 ///
 /// Recording mirrors the Numba ``_run_loop_structured`` layout:
 /// ``[tick, individual_count..., sperm_storage...]`` in raw mode, or
 /// ``[tick, observed...]`` where each observation group is summed over the
 /// ztype axis before flattening.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `cfg`: Simulation config.
+/// - `hooks`: CSR hook program.
+/// - `ind`: Mutable individual-count flat slice.
+/// - `sperm`: Mutable sperm-storage flat slice.
+/// - `tick`: Starting tick.
+/// - `n_ticks`: Number of ticks to run.
+/// - `record_interval`: Record every N ticks; 0 disables recording.
+/// - `observation_mask`: Optional observation mask.
+///
+/// ## Returns
+/// ``(final_tick, flat_history, n_rows, was_stopped)``.
 pub fn run_batch(
     rng: &mut SmallRng,
     cfg: &SimConfig,
@@ -762,7 +968,10 @@ pub fn run_batch(
     n_ticks: i64,
     record_interval: i64,
     observation_mask: Option<&[f64]>,
-) -> Result<(i64, Vec<Vec<f64>>, bool), String> {
+) -> Result<(i64, Vec<f64>, usize, bool), String> {
+    // Loop n_ticks entirely in Rust.
+    // When recording is enabled, append a history row at the requested interval.
+    // Stops requested by hooks terminate the loop early.
     let n_sexes = 2;
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
@@ -782,19 +991,18 @@ pub fn run_batch(
     };
 
     let mut current_tick = tick;
-    let mut history: Vec<Vec<f64>> = Vec::new();
+    let mut history: Vec<f64> = Vec::new();
+    let mut n_rows: usize = 0;
 
-    let record_row = |history: &mut Vec<Vec<f64>>,
+    let record_row = |history: &mut Vec<f64>,
                       ind: &[f64],
                       sperm: &[f64],
                       observation_mask: Option<&[f64]>,
                       observation_groups: usize,
                       current_tick: i64| {
-        let mut row = Vec::new();
-        row.push(current_tick as f64);
+        history.push(current_tick as f64);
         match observation_mask {
             Some(mask) => {
-                row.reserve(observation_groups * n_sexes * n_ages);
                 for group in 0..observation_groups {
                     for sex in 0..n_sexes {
                         for age in 0..n_ages {
@@ -805,17 +1013,16 @@ pub fn run_batch(
                                     ((group * n_sexes + sex) * n_ages + age) * n_ztypes + ztype;
                                 total += ind[state_idx] * mask[mask_idx];
                             }
-                            row.push(total);
+                            history.push(total);
                         }
                     }
                 }
             }
             None => {
-                row.extend_from_slice(ind);
-                row.extend_from_slice(sperm);
+                history.extend_from_slice(ind);
+                history.extend_from_slice(sperm);
             }
         }
-        history.push(row);
     };
 
     if record_interval > 0 && current_tick % record_interval == 0 {
@@ -827,12 +1034,13 @@ pub fn run_batch(
             observation_groups,
             current_tick,
         );
+        n_rows += 1;
     }
 
     for _ in 0..n_ticks {
         let result = run_tick(rng, cfg, hooks, ind, sperm, current_tick, -1)?;
         if result != 0 {
-            return Ok((current_tick, history, true));
+            return Ok((current_tick, history, n_rows, true));
         }
         current_tick += 1;
         if record_interval > 0 && current_tick % record_interval == 0 {
@@ -844,8 +1052,9 @@ pub fn run_batch(
                 observation_groups,
                 current_tick,
             );
+            n_rows += 1;
         }
     }
 
-    Ok((current_tick, history, false))
+    Ok((current_tick, history, n_rows, false))
 }

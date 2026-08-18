@@ -641,6 +641,7 @@ class Configurator:
         continuous_sampling: bool | None = None,
         fixed_egg_count: bool | None = None,
         compress: bool = False,
+        backend: Literal["auto", "rust", "numba", "python"] | None = None,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
         declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
     ) -> Self:
@@ -670,6 +671,11 @@ class Configurator:
                 distributions instead of discrete counts.
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
             compress: If ``True``, enable full index compression at build time.
+            backend: Lifecycle backend selector used by ``build()``.
+                ``None`` preserves any earlier setting; ``"numba"`` preserves
+                the legacy JIT path; ``"python"`` forces the pure-Python
+                fallback; ``"auto"`` selects Rust when available and CSR-only;
+                ``"rust"`` forces the Rust backend.
             declared_zygote_types: Optional sequence of genotype selectors to protect
                 from compression pruning.
 
@@ -680,6 +686,8 @@ class Configurator:
             self._name = name
         if compress:
             self._compress = True
+        if backend is not None:
+            self._backend: Literal["auto", "rust", "numba", "python"] = backend
         if declared_genotypes is not None:
             import warnings
             warnings.warn(
@@ -1502,6 +1510,22 @@ class Configurator:
         pop._presets = list(self._presets)  # pyright: ignore[reportPrivateUsage]
         pop._gamete_modifiers = list(self.gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
         pop._zygote_modifiers = list(self.zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
+
+        # Apply the requested lifecycle backend.  ``auto`` silently falls
+        # back to Numba when the Rust extension is unavailable or custom
+        # hooks are present; ``rust`` propagates the failure.
+        backend = getattr(self, "_backend", "numba")
+        if backend == "python":
+            pop._python_backend = True  # pyright: ignore[reportPrivateUsage]
+        elif backend in ("auto", "rust"):
+            from natal.engine.backends.rust_backend import rust_backend_available
+
+            if backend == "rust" or rust_backend_available():
+                try:
+                    pop.enable_rust_backend()  # type: ignore[reportAttributeAccessIssue]  # both concrete Population classes expose this method
+                except RuntimeError:
+                    if backend == "rust":
+                        raise
 
         # Compile and freeze the recording plan.
         self._compile_recording_plan(pop)

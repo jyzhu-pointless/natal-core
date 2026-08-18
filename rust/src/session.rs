@@ -1,7 +1,7 @@
 //! PyO3 session object owning configuration copies, RNG state, and the
 //! compiled CSR hook program.
 
-use numpy::{PyArray2, PyReadonlyArray4, PyReadwriteArray3, PyUntypedArrayMethods};
+use numpy::{PyArray2, PyArrayMethods, PyReadonlyArray4, PyReadwriteArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rand::rngs::SmallRng;
@@ -11,6 +11,19 @@ use crate::hooks::HookProgram;
 use crate::lifecycle;
 use crate::rng::new_rng;
 
+/// Validate and return mutable slices for age-structured state arrays.
+///
+/// ## Parameters
+/// - `ind`: PyO3 writable array for individual counts.
+/// - `sperm`: PyO3 writable array for sperm storage.
+/// - `n_ages`: Expected age count.
+/// - `n_ztypes`: Expected zygote type count.
+///
+/// ## Returns
+/// A pair of mutable flat slices.
+///
+/// ## Errors
+/// Returns ``PyValueError`` if shapes do not match the config.
 fn array_slices<'a>(
     ind: &'a mut PyReadwriteArray3<'_, f64>,
     sperm: &'a mut PyReadwriteArray3<'_, f64>,
@@ -38,10 +51,20 @@ fn array_slices<'a>(
     Ok((ind_slice, sperm_slice))
 }
 
+/// Convert internal kernel error strings into ``PyRuntimeError``.
+///
+/// ## Parameters
+/// - `err`: Internal error message.
+///
+/// ## Returns
+/// A ``PyRuntimeError`` for Python callers.
 fn map_lifecycle_error(err: String) -> PyErr {
     PyRuntimeError::new_err(err)
 }
 
+/// PyO3-exported stateful session for the age-structured Rust backend.
+///
+/// Owns a ``SimConfig`` snapshot, the Rust RNG, and a CSR hook program.
 #[pyclass(name = "EngineSession")]
 pub struct EngineSession {
     cfg: SimConfig,
@@ -51,6 +74,14 @@ pub struct EngineSession {
 
 #[pymethods]
 impl EngineSession {
+    /// Create an age-structured session from a Python config and an optional seed.
+    ///
+    /// ## Parameters
+    /// - `config`: Python ``PopulationConfig``.
+    /// - `seed`: RNG seed.
+    ///
+    /// ## Returns
+    /// A new ``EngineSession``.
     #[new]
     #[pyo3(signature = (config, seed=0))]
     fn new(config: &Bound<'_, PyAny>, seed: u64) -> PyResult<Self> {
@@ -63,6 +94,9 @@ impl EngineSession {
     }
 
     /// Replace the declarative CSR hook program used by ``tick``.
+    ///
+    /// ## Parameters
+    /// - `program`: Python CSR ``HookProgram``.
     fn set_hook_program(&mut self, program: &Bound<'_, PyAny>) -> PyResult<()> {
         self.hooks = HookProgram::from_python(program)?;
         Ok(())
@@ -74,11 +108,18 @@ impl EngineSession {
     }
 
     /// Reseed the Rust RNG used by stochastic sampling.
+    ///
+    /// ## Parameters
+    /// - `seed`: New seed.
     fn reseed(&mut self, seed: u64) {
         self.rng = new_rng(seed);
     }
 
     /// Run the reproduction stage in place.
+    ///
+    /// ## Parameters
+    /// - `ind`: Mutable individual-count array.
+    /// - `sperm`: Mutable sperm-storage array.
     fn reproduction(
         &mut self,
         mut ind: PyReadwriteArray3<'_, f64>,
@@ -91,6 +132,10 @@ impl EngineSession {
     }
 
     /// Run the survival stage in place.
+    ///
+    /// ## Parameters
+    /// - `ind`: Mutable individual-count array.
+    /// - `sperm`: Mutable sperm-storage array.
     fn survival(
         &mut self,
         mut ind: PyReadwriteArray3<'_, f64>,
@@ -103,6 +148,10 @@ impl EngineSession {
     }
 
     /// Run the aging stage in place.
+    ///
+    /// ## Parameters
+    /// - `ind`: Mutable individual-count array.
+    /// - `sperm`: Mutable sperm-storage array.
     fn aging(
         &mut self,
         mut ind: PyReadwriteArray3<'_, f64>,
@@ -119,6 +168,15 @@ impl EngineSession {
     /// Returns ``0`` (continue) or ``1`` (a hook requested a stop).  The tick
     /// value is *not* advanced here; the Python adapter owns tick bookkeeping
     /// exactly like ``natal.engine.lifecycle``.
+    ///
+    /// ## Parameters
+    /// - `ind`: Mutable individual-count array.
+    /// - `sperm`: Mutable sperm-storage array.
+    /// - `tick`: Current tick.
+    /// - `deme_id`: Current deme id.
+    ///
+    /// ## Returns
+    /// ``0`` or ``1``.
     fn tick(
         &mut self,
         mut ind: PyReadwriteArray3<'_, f64>,
@@ -146,6 +204,9 @@ impl EngineSession {
     /// returned.  When ``record_interval > 0``, flattened history rows are
     /// returned as a 2-D NumPy array whose row layout mirrors the Numba
     /// ``_run_loop_structured`` kernel.
+    ///
+    /// ## Returns
+    /// ``(final_tick, history, was_stopped)``.
     #[allow(clippy::too_many_arguments)] // PyO3 boundary mirrors the Numba run_fn signature.
     #[pyo3(signature = (individual_count, sperm_storage, tick, n_ticks, record_interval, observation_mask=None))]
     fn run<'py>(
@@ -158,6 +219,8 @@ impl EngineSession {
         record_interval: i64,
         observation_mask: Option<PyReadonlyArray4<'py, f64>>,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
+        // Copy the observation mask if present, run the Rust batch loop, and
+        // copy the flattened history into a NumPy 2-D array.
         let (ind_slice, sperm_slice) = array_slices(
             &mut individual_count,
             &mut sperm_storage,
@@ -173,7 +236,7 @@ impl EngineSession {
             None => None,
         };
 
-        let (final_tick, rows, was_stopped) = lifecycle::run_batch(
+        let (final_tick, flat_history, n_rows, was_stopped) = lifecycle::run_batch(
             &mut self.rng,
             &self.cfg,
             &self.hooks,
@@ -186,12 +249,29 @@ impl EngineSession {
         )
         .map_err(map_lifecycle_error)?;
 
-        let history = PyArray2::<f64>::from_vec2(py, &rows)
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let n_cols = if n_rows == 0 {
+            0
+        } else {
+            flat_history.len() / n_rows
+        };
+        let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);
+        history
+            .readwrite()
+            .as_slice_mut()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?
+            .copy_from_slice(&flat_history);
         Ok((final_tick, history, was_stopped))
     }
 }
 
+/// Extract an int32/int64 1-D array into a ``Vec<i64>``.
+///
+/// ## Parameters
+/// - `obj`: Python object.
+/// - `name`: Attribute name.
+///
+/// ## Returns
+/// A ``Vec<i64>`` copy.
 fn extract_i64_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<i64>> {
     use numpy::PyReadonlyArray1;
     let value = obj.getattr(name)?;
@@ -206,12 +286,28 @@ fn extract_i64_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<i64>> {
     )))
 }
 
+/// Extract a float64 1-D array into a ``Vec<f64>``.
+///
+/// ## Parameters
+/// - `obj`: Python object.
+/// - `name`: Attribute name.
+///
+/// ## Returns
+/// A ``Vec<f64>`` copy.
 fn extract_f64_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<f64>> {
     use numpy::PyReadonlyArray1;
     let array = obj.getattr(name)?.extract::<PyReadonlyArray1<'_, f64>>()?;
     Ok(array.as_slice()?.to_vec())
 }
 
+/// Extract a boolean/float64 1-D array into a ``Vec<bool>``.
+///
+/// ## Parameters
+/// - `obj`: Python object.
+/// - `name`: Attribute name.
+///
+/// ## Returns
+/// A ``Vec<bool>`` copy.
 fn extract_bool_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<bool>> {
     use numpy::PyReadonlyArray1;
     let value = obj.getattr(name)?;
@@ -226,6 +322,14 @@ fn extract_bool_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<bool>>
     )))
 }
 
+/// Extract an int64 scalar, accepting 0-d NumPy arrays.
+///
+/// ## Parameters
+/// - `obj`: Python object.
+/// - `name`: Attribute name.
+///
+/// ## Returns
+/// The scalar as ``i64``.
 fn extract_i64_scalar(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
     let value = obj.getattr(name)?;
     if let Ok(scalar) = value.extract::<i64>() {
@@ -235,7 +339,14 @@ fn extract_i64_scalar(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
 }
 
 impl HookProgram {
-    fn from_python(program: &Bound<'_, PyAny>) -> PyResult<Self> {
+    /// Deserialize a Python CSR ``HookProgram`` into the Rust mirror.
+    ///
+    /// ## Parameters
+    /// - `program`: Python ``HookProgram``.
+    ///
+    /// ## Returns
+    /// A ``HookProgram`` with copied flat arrays.
+    pub(crate) fn from_python(program: &Bound<'_, PyAny>) -> PyResult<Self> {
         let n_hooks = extract_i64_scalar(program, "n_hooks")?;
         Ok(Self {
             n_events: extract_i64_scalar(program, "n_events")?,

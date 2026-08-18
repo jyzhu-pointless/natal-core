@@ -14,6 +14,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     Sequence,
     Set,
@@ -124,7 +125,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self.state.sperm_storage[:] = cfg_init_sperm
 
         self.snapshots = {}
+        self._python_backend = False
         self._rust_lifecycle_backend: RustLifecycleBackend | None = None
+        self._rust_backend_seed: int | None = None
+        self._rust_backend_signature: str | None = None
 
         if initial_individual_count is not None:
             self.state.individual_count.fill(0.0)
@@ -158,6 +162,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
+        backend: Literal["auto", "rust", "numba", "python"] = "numba",
         *,
         compress: bool = False,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
@@ -184,6 +189,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts
                 so each female produces exactly the specified number of eggs.
                 Defaults to ``False``.
+            backend: Lifecycle backend selector.  ``"auto"`` chooses Rust when
+                the extension is available and only CSR hooks are registered;
+                ``"rust"`` forces Rust; ``"python"`` forces the pure-Python
+                fallback; ``"numba"`` (default) preserves the legacy JIT path.
             compress: If ``True``, enable full index compression at build
                 time, pruning unreachable GTypes and ZTypes to shrink
                 internal arrays. Defaults to ``False``.
@@ -218,6 +227,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             fixed_egg_count=fixed_egg_count,
+            backend=backend,
             compress=compress,
             declared_zygote_types=declared_zygote_types,
         )
@@ -646,6 +656,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         from natal.engine.backends.rust_backend import (
             RustLifecycleBackend,
             rust_backend_available,
+            rust_backend_signature,
         )
 
         if not rust_backend_available():
@@ -658,10 +669,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 "Rust backend only supports CSR declarative hooks. "
                 "Keep the Numba backend for custom hook callables."
             )
+        hook_program = self._build_hook_program()
         self._rust_lifecycle_backend = RustLifecycleBackend(
             self.config,
-            self._build_hook_program(),
+            hook_program,
             seed=seed,
+        )
+        self._rust_backend_seed = seed
+        self._rust_backend_signature = rust_backend_signature(
+            self.config, hook_program
         )
         return self
 
@@ -672,7 +688,28 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             Self for chaining.
         """
         self._rust_lifecycle_backend = None
+        self._rust_backend_seed = None
+        self._rust_backend_signature = None
         return self
+
+    def refresh_rust_backend(self) -> AgeStructuredPopulation:
+        """Rebuild the Rust backend from the current config and hooks.
+
+        Call this after ``pop.update()`` when Rust was enabled before the
+        update.  Runtime config replacement is detected automatically, but
+        this method is the explicit synchronisation point for in-place
+        scalar updates.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: If the backend was never enabled or custom hooks
+                are now registered.
+        """
+        if self._rust_backend_seed is None:
+            raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
+        return self.enable_rust_backend(seed=self._rust_backend_seed)
 
     @property
     def using_rust_backend(self) -> bool:
@@ -696,6 +733,19 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             for desc in descriptors
         )
 
+    def _sync_rust_backend(self) -> None:
+        """Rebuild the Rust session when config or hook arrays changed."""
+        if self._rust_backend_seed is None:
+            return
+        from natal.engine.backends.rust_backend import rust_backend_signature
+
+        signature = rust_backend_signature(self.config, self._build_hook_program())
+        if (
+            self._rust_lifecycle_backend is None
+            or signature != self._rust_backend_signature
+        ):
+            self.refresh_rust_backend()
+
     def _run_rust_lifecycle(
         self,
         n_steps: int,
@@ -704,6 +754,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         clear_history_on_start: bool,
     ) -> AgeStructuredPopulation:
         """Run the Rust batch kernel and commit its history rows."""
+        self._sync_rust_backend()
         backend = self._rust_lifecycle_backend
         if backend is None:
             raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
@@ -773,7 +824,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             wrappers = self.get_compiled_event_hooks()
             assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
 
-            if _numba_utils.NUMBA_ENABLED and wrappers.run_fn is not None:
+            if (
+                _numba_utils.NUMBA_ENABLED
+                and not getattr(self, "_python_backend", False)
+                and wrappers.run_fn is not None
+            ):
                 obs_mask = self._observation_mask
                 n_obs = len(self._observation.labels) if self._observation is not None else 0
 

@@ -2470,6 +2470,178 @@ class SpatialPopulation:
         self._process_kernel_history(history_new, clear_history_on_start)
         return bool(was_stopped)
 
+    def enable_rust_backend(self, seed: int = 0) -> SpatialPopulation:
+        """Enable the Rust spatial backend for subsequent runs.
+
+        This first integration supports age-structured spatial populations
+        with CSR-only hooks.  The Rust backend runs the per-deme lifecycle
+        and then applies dense-adjacency or topology-kernel migration using
+        the Rust migration kernels.
+
+        Args:
+            seed: Base seed; deme *d* uses ``seed + d``.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: If the Rust extension is unavailable, the spatial
+                population is discrete, custom hooks are present, or the
+                migration configuration is not yet supported.
+        """
+        from natal.engine.backends.rust_backend import (
+            RustHeterogeneousSpatialLifecycleBackend,
+            rust_backend_available,
+        )
+
+        if not rust_backend_available():
+            raise RuntimeError(
+                "natal._engine_rs is not available; build it with `maturin develop` "
+                "before enabling the Rust backend."
+            )
+        if getattr(self._demes[0], "_has_non_csr_hooks", lambda: False)():
+            raise RuntimeError(
+                "Rust spatial backend only supports CSR declarative hooks. "
+                "Keep the Numba backend for custom hook callables."
+            )
+
+        config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
+        if self._is_discrete_demes():
+            from natal.engine.backends.rust_backend import RustDiscreteLifecycleBackend
+
+            config_bank_list = cast(list[DiscretePopulationConfig], config_bank)
+            self._rust_discrete_spatial_backends = [
+                RustDiscreteLifecycleBackend(cfg, None, seed=seed + idx)
+                for idx, cfg in enumerate(config_bank_list)
+            ]
+            self._rust_spatial_backend = None
+            self._rust_spatial_seed = seed
+            return self
+
+        config_bank_list = cast(list[PopulationConfig], config_bank)
+        compiled_hooks = self._collect_compact_spatial_hooks()
+        hook_program = self._build_hook_program(compiled_hooks)
+        self._rust_spatial_backend = RustHeterogeneousSpatialLifecycleBackend(
+            config_bank_list,
+            deme_config_ids,
+            hook_program=hook_program,
+            seed=seed,
+        )
+        self._rust_spatial_seed = seed
+        return self
+
+    def disable_rust_backend(self) -> SpatialPopulation:
+        """Disable the Rust spatial backend.
+
+        Returns:
+            Self for chaining.
+        """
+        self._rust_spatial_backend = None
+        self._rust_discrete_spatial_backends = None
+        self._rust_spatial_seed = None
+        return self
+
+    @property
+    def using_rust_backend(self) -> bool:
+        """Return whether the Rust spatial backend is enabled.
+
+        Returns:
+            True when enabled and no unsupported custom hooks are present.
+        """
+        return (
+            (
+                getattr(self, "_rust_spatial_backend", None) is not None
+                or getattr(self, "_rust_discrete_spatial_backends", None) is not None
+            )
+            and not getattr(self._demes[0], "_has_non_csr_hooks", lambda: False)()
+        )
+
+    def _run_rust_spatial_tick(self) -> bool:
+        """Run one spatial tick through the Rust lifecycle and migration."""
+        from natal.engine.backends.rust_backend import (
+            rust_migrate_adjacency_deterministic,
+            rust_migrate_adjacency_stochastic,
+            rust_migrate_kernel_deterministic,
+            rust_migrate_kernel_stochastic,
+        )
+
+        ind_all, sperm_all = self._stack_deme_state_arrays()
+        if self._is_discrete_demes():
+            backends = getattr(self, "_rust_discrete_spatial_backends", None)
+            if backends is None:
+                raise RuntimeError("Rust spatial backend is not enabled.")
+            _, deme_config_ids = self._heterogeneous_config_bank_and_ids()
+            new_ind = np.zeros_like(ind_all)
+            for deme_id, deme in enumerate(self._demes):
+                backend = backends[int(deme_config_ids[deme_id])]
+                state = DiscretePopulationState(
+                    n_tick=self._tick,
+                    individual_count=deme.state.individual_count,
+                )
+                next_state, _ = backend.run_tick(state)
+                new_ind[deme_id] = next_state.individual_count
+            ind_all = new_ind
+            next_tick = self._tick + 1
+        else:
+            backend = getattr(self, "_rust_spatial_backend", None)
+            if backend is None:
+                raise RuntimeError("Rust spatial backend is not enabled.")
+            ind_all, sperm_all, next_tick = backend.run(ind_all, sperm_all, self._tick)
+        config = cast(PopulationConfig, self._migration_config())
+        stochastic = bool(config.stochastic)
+        continuous = bool(config.continuous_sampling)
+        rate = self._migration_params.rate
+        params = self._migration_params
+
+        if params.mode_code == 0:
+            if stochastic:
+                ind_all, sperm_all = rust_migrate_adjacency_stochastic(
+                    ind_all, sperm_all, params.adjacency, rate,
+                    int(self._rust_spatial_seed or 0), continuous,
+                )
+            else:
+                ind_all, sperm_all = rust_migrate_adjacency_deterministic(
+                    ind_all, sperm_all, params.adjacency, rate,
+                )
+        elif params.mode_code == 1:
+            if stochastic:
+                ind_all, sperm_all = rust_migrate_kernel_stochastic(
+                    ind_all, sperm_all, params.kernel,
+                    bool(self._spatial_topo.wrap), bool(params.include_center),
+                    rate, int(self._rust_spatial_seed or 0), continuous,
+                )
+            else:
+                ind_all, sperm_all = rust_migrate_kernel_deterministic(
+                    ind_all, sperm_all, params.kernel,
+                    bool(self._spatial_topo.wrap), bool(params.include_center),
+                    rate,
+                )
+        else:
+            raise RuntimeError(f"Unsupported migration mode {params.mode_code}")
+
+        self._apply_stacked_state(ind_all, sperm_all, int(next_tick))
+        return False
+
+    def _run_rust_spatial_steps(
+        self,
+        n_steps: int,
+        record_every: int,
+        clear_history_on_start: bool,
+    ) -> bool:
+        """Run multiple spatial ticks through the Rust backend with recording."""
+        if clear_history_on_start:
+            self.clear_history()
+        was_stopped = False
+        if record_every > 0 and (self._tick % record_every == 0):
+            self._record_snapshot(allow_existing=True)
+        for _ in range(n_steps):
+            if self._run_rust_spatial_tick():
+                was_stopped = True
+                break
+            if record_every > 0 and (self._tick % record_every == 0):
+                self._record_snapshot(allow_existing=True)
+        return was_stopped
+
     def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick via the spatial kernel.
 
@@ -2481,7 +2653,9 @@ class SpatialPopulation:
         """
         self._ensure_demes_runnable(context="run spatial tick")
 
-        if self._should_use_python_dispatch():
+        if self.using_rust_backend:
+            was_stopped = self._run_rust_spatial_tick()
+        elif self._should_use_python_dispatch():
             # Hook-aware fallback: preserve per-deme local hook semantics.
             was_stopped = self._run_python_dispatch_tick()
         else:
@@ -2526,7 +2700,13 @@ class SpatialPopulation:
             if clear_history_on_start:
                 self.clear_history()
 
-            if self._should_use_python_dispatch():
+            if self.using_rust_backend:
+                was_stopped = self._run_rust_spatial_steps(
+                    n_steps,
+                    record_every=record_every,
+                    clear_history_on_start=False,
+                )
+            elif self._should_use_python_dispatch():
                 # Hook-aware fallback: keep local hook timeline semantics.
                 was_stopped = False
                 if record_every > 0 and (self._tick % record_every == 0):

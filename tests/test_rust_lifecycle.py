@@ -167,6 +167,21 @@ def test_declarative_hook_tick_matches_reference(deterministic_pop: object) -> N
     assert np.array_equal(rust_next.sperm_storage, reference_next.sperm_storage)
 
 
+def test_run_tick_inplace_mutates_and_shares_arrays(deterministic_pop: object) -> None:
+    """The explicit in-place entry point avoids state-array copies."""
+    config = deterministic_pop.config
+    state = _make_state(config, seed=5678)
+    backend = RustLifecycleBackend(config, _empty_hook_program(), seed=0)
+    original_ind = state.individual_count.copy()
+
+    next_state, result = backend.run_tick_inplace(state)
+
+    assert result == 0
+    assert next_state.individual_count is state.individual_count
+    assert next_state.sperm_storage is state.sperm_storage
+    assert not np.array_equal(state.individual_count, original_ind)
+
+
 def test_declarative_stop_hook_matches_reference(deterministic_pop: object) -> None:
     """A stop_if_above hook must stop at the first event and keep the tick."""
     config = deterministic_pop.config
@@ -224,16 +239,19 @@ def test_stochastic_totals_are_distributionally_equivalent(stochastic_pop: objec
 
     for index in range(replicates):
         state = _make_state(config, seed=10_000 + index)
+        state.sperm_storage.fill(0.0)
         backend = RustLifecycleBackend(config, _empty_hook_program(), seed=20_000 + index)
         for _ in range(ticks):
             state, result = backend.run_tick(state)
             assert result == 0
         rust_totals.append(float(state.individual_count.sum()))
 
+        initial = _make_state(config, seed=10_000 + index)
+        initial.sperm_storage.fill(0.0)
         reference_state = PopulationState(
-            n_tick=state.n_tick,
-            individual_count=_make_state(config, seed=10_000 + index).individual_count,
-            sperm_storage=_make_state(config, seed=10_000 + index).sperm_storage,
+            n_tick=initial.n_tick,
+            individual_count=initial.individual_count,
+            sperm_storage=initial.sperm_storage,
         )
         for _ in range(ticks):
             reference_state, result = run_structured_tick(
