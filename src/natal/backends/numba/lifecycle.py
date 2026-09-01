@@ -15,6 +15,7 @@ functions directly.  There are no lifecycle template files anymore.
 
 from __future__ import annotations
 
+import functools
 import inspect
 import re
 from typing import TYPE_CHECKING, Callable, Optional, TypeVar
@@ -1122,6 +1123,12 @@ _LOOP_SOURCES = {
 _HOOK_PARAMS = ["first_hook", "early_hook", "late_hook"]
 
 
+# Memoised: the assembled source depends only on the string arguments and the
+# (immutable at runtime) module sources, yet assembly costs several ms of
+# getsource + token rewriting per call — batch scans used to pay it on every
+# run() of every replicate.  Function names are stable identity hashes, so
+# structurally identical populations share cache entries.
+@functools.lru_cache(maxsize=256)
 def assemble_lifecycle_module(
     mode: str,
     tick_fn_name: str,
