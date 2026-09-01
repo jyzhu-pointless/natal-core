@@ -24,7 +24,7 @@ else:
 class SpeciesMappingMixin:
     """Mapping methods for Species — genotype ordering, gamete/zygote maps, config blueprint.
 
-    Provides unordered genotype canonicalisation and methods to build the
+    Provides unordered genotype canonicalization and methods to build the
     genotype-to-gamete and gamete-to-zygote transition maps used by the
     simulation engine.
     """
@@ -36,7 +36,7 @@ class SpeciesMappingMixin:
     ) -> Genotype:
         """Return a canonical Genotype where maternal/paternal order is irrelevant.
 
-        Canonicalises per-locus: at each locus the maternal allele has the
+        Canonicalizes per-locus: at each locus the maternal allele has the
         smaller :meth:`Locus.allele_index`.  When individual alleles must be
         swapped between the two haploid genomes (multi-locus free combination)
         new :class:`HaploidGenotype` objects are assembled so that every

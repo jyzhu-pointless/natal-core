@@ -2,7 +2,7 @@
 ``natal.backends.numba``.
 
 This shim preserves the legacy import path (and the top-level lazy-export
-table) during the Phase-0 directory reorganisation; it will be removed once
+table) during the Phase-0 directory reorganization; it will be removed once
 the migration completes.
 """
 

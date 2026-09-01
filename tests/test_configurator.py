@@ -1253,7 +1253,7 @@ class TestFitnessEdgeCases:
 
 
 class TestCompetitionOrdering:
-    """Verify K auto-detection behaviour with initial_state ordering."""
+    """Verify K auto-detection behavior with initial_state ordering."""
 
     def test_competition_before_initial_state_uses_default_k(self, species):
         """When competition() is called before initial_state(), K auto-detection

@@ -150,7 +150,7 @@ def main() -> int:
         '"""Forwarding shim: the ``{m}`` package now lives at\n'
         '``natal.{d}.{m}``.\n\n'
         "This module preserves the legacy import path during the Phase-0\n"
-        "directory reorganisation; it will be removed once the migration\n"
+        "directory reorganization; it will be removed once the migration\n"
         'completes.\n"""\n\n'
         "{imports}\n"
         "{aliases}\n"

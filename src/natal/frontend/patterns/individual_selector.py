@@ -6,7 +6,7 @@ population schema.  Fields within a single selector combine with AND;
 multiple values within a field combine with OR.  ``|`` and ``+`` both
 represent union of two selectors with OR semantics.
 
-Each :class:`IndividualSelector` holds one or more *atoms* (normalised
+Each :class:`IndividualSelector` holds one or more *atoms* (normalized
 field values).  A single-argument constructor creates one atom.
 ``|`` / ``+`` merge the atom tuples from both operands.
 :meth:`compile` resolves patterns against an :class:`IndexRegistry`
@@ -63,7 +63,7 @@ class _SelectorDict(TypedDict):
     atoms: list[_SelectorAtomDict]
 
 
-# ── Normalisers ─────────────────────────────────────────────────────────────
+# ── Normalizers ─────────────────────────────────────────────────────────────
 
 
 def _to_tuple_age(value: AgeInput) -> Tuple[int, ...]:
@@ -124,7 +124,7 @@ def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
 
 
 def _to_tuple_ztype(value: ZTypeSpec) -> Tuple[str, ...]:
-    """Normalise a ztype spec to a tuple of canonical string patterns."""
+    """Normalize a ztype spec to a tuple of canonical string patterns."""
     if value is None:
         return ()
     if isinstance(value, str):
@@ -164,7 +164,7 @@ def _build_fingerprint(*components: object) -> str:
 
 @dataclass(frozen=True)
 class _SelectorAtom:
-    """Normalised single-selector atom: fields AND together.
+    """Normalized single-selector atom: fields AND together.
 
     All attributes are public (no leading underscore) so the owning
     :class:`IndividualSelector` can read them without triggering
@@ -225,7 +225,7 @@ class IndividualSelector:
         union = drive_females | infected_adults
 
     Attributes:
-        _atoms: Private tuple of normalised :class:`_SelectorAtom` instances.
+        _atoms: Private tuple of normalized :class:`_SelectorAtom` instances.
     """
 
     _atoms: Tuple[_SelectorAtom, ...]
@@ -252,7 +252,7 @@ class IndividualSelector:
 
     @classmethod
     def _from_atoms(cls, atoms: Iterable[_SelectorAtom]) -> IndividualSelector:
-        """Internal factory: create from pre-normalised atoms (no copy)."""
+        """Internal factory: create from pre-normalized atoms (no copy)."""
         sel = object.__new__(cls)
         object.__setattr__(sel, "_atoms", tuple(atoms))
         return sel
@@ -491,10 +491,10 @@ class IndividualSelector:
             return list(range(n_ages))
         return [v for v in atom.age_values if 0 <= v < n_ages]
 
-    # ── Serialisation helpers ─────────────────────────────────────────────
+    # ── Serialization helpers ─────────────────────────────────────────────
 
     def to_dict(self) -> _SelectorDict:
-        """Serialise selector to a human-readable dict (for export)."""
+        """Serialize selector to a human-readable dict (for export)."""
         atoms_list: list[_SelectorAtomDict] = []
         for atom in self._atoms:
             atom_dict: _SelectorAtomDict = {}

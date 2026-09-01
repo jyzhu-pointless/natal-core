@@ -85,7 +85,7 @@ def compile_combined_hook(
     ds_list: List[DemeSelector] = deme_selectors if deme_selectors is not None else []
     needs_guard = any(ds != "*" for ds in ds_list)
 
-    # Single-hook, no guard — return the function directly (optimisation).
+    # Single-hook, no guard — return the function directly (optimization).
     if not needs_guard and len(njit_fns) == 1:
         return njit_fns[0]
 
@@ -237,7 +237,7 @@ def compile_unified_event_hook(
     if len(schedule) == 0:
         return noop_hook
 
-    # Single-njit, no guard → return directly (optimisation).
+    # Single-njit, no guard → return directly (optimization).
     ds_list: List[DemeSelector] = deme_selectors if deme_selectors is not None else []
     if len(schedule) == 1 and schedule[0][0] == "njit" and len(njit_fns) == 1:
         if not ds_list or ds_list[0] == "*":
@@ -415,7 +415,7 @@ def build_filtered_hook_program(
             sel = hook.deme_selector
 
             def _append_deme_sel(s: DemeSelector) -> None:
-                """Append a serialised deme selector entry for *s*."""
+                """Append a serialized deme selector entry for *s*."""
                 # Called for every hook to keep arrays aligned with n_hooks.
                 if s == "*":
                     all_deme_sel_types.append(0)

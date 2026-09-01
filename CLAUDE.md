@@ -8,6 +8,8 @@
 
 默认使用中文回答。仅在用户明确使用英文提问时用英文回复。
 
+**代码与文档中的英语一律使用美式拼写**：identifier、docstring、注释、commit message 均如此。常见转换：`-ise/-isation` → `-ize/-ization`（initialize/materialize/normalize）、`-our` → `-or`（behavior/color）、`-re` → `-er`（center）、`modelling` → `modeling`。注意排除本身就以 `-ise` 结尾的合法美式词（comprise、exercise、raise、noise、wise 等）。
+
 ## 规范引用
 
 以下文件定义本项目的编码、文档和测试规范，按优先级排列：

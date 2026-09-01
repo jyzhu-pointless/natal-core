@@ -9,7 +9,7 @@ simulation loop.  It:
    compiled event hooks.
 2. Provides ``compile_lifecycle_wrappers()`` — the main factory that takes
    compiled hook descriptors and a ``HookProgram`` registry, runs the full
-   code generation pipeline, and returns a fully initialised
+   code generation pipeline, and returns a fully initialized
    ``LifecycleWrappers`` ready for use by population models.
 
 ----
@@ -237,7 +237,7 @@ def compile_lifecycle_wrappers(
             lifecycle wrappers.
 
     Returns:
-        A fully initialised ``LifecycleWrappers`` ready for use by
+        A fully initialized ``LifecycleWrappers`` ready for use by
         the population model.
     """
     if _numba_utils.NUMBA_ENABLED:

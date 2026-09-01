@@ -266,7 +266,7 @@ class _SpatialUpdate:
             gamete_modifiers: Sequence of ``GameteModifier`` instances
                 affecting meiosis (genotype → gamete mapping).
             zygote_modifiers: Sequence of ``ZygoteModifier`` instances
-                affecting fertilisation (gamete → zygote mapping).
+                affecting fertilization (gamete → zygote mapping).
 
         Returns:
             Self for chaining.

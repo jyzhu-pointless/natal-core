@@ -2,12 +2,12 @@
 
 Consumes contract data through generic kernels whose signatures take runtime
 dimension parameters.  Compilation artefacts are cached by (dimensions,
-execution flags, custom-hook function-table fingerprint) so that specialisation
+execution flags, custom-hook function-table fingerprint) so that specialization
 is recovered at the cache layer while the contract surface stays stateless.
 
 The existing lifecycle codegen assets (source extraction via
 ``inspect.getsource``, stable hashing, ``.numba_cache``) migrate here as the
-internal materialisation mechanism for the custom-hook function table.
+internal materialization mechanism for the custom-hook function table.
 """
 
 from .compat import (

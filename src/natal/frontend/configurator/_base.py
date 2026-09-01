@@ -12,7 +12,7 @@ NamedTuples whose fields cannot be modified once created.  During
 simulation setup and inside hooks at runtime, however, parameters need
 real-time adjustment.  The ``Configurator`` provides a mutable layer on
 top: all modifications write into the config arrays in-place, and the
-final immutable config is materialised via ``build()``.
+final immutable config is materialized via ``build()``.
 
 The adapter class ``ConfigContext`` lets genetic presets and modifiers
 operate on config arrays without needing a live Population object.  The
@@ -942,7 +942,7 @@ class Configurator:
             gamete_modifiers: List of :class:`~natal.frontend.modifiers.GameteModifier`
                 instances affecting meiosis (genotype → gamete mapping).
             zygote_modifiers: List of :class:`~natal.frontend.modifiers.ZygoteModifier`
-                instances affecting fertilisation (gamete → zygote mapping).
+                instances affecting fertilization (gamete → zygote mapping).
 
         Returns:
             Self for chaining.
@@ -1379,7 +1379,7 @@ class Configurator:
         name: str | None = None,
         hooks: HookMap | None = None,
     ) -> DiscreteGenerationPopulation | AgeStructuredPopulation:
-        """Finalise the config and create a Population.
+        """Finalize the config and create a Population.
 
         This is the terminal method of the build chain::
 

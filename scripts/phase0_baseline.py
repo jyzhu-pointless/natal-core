@@ -1,7 +1,7 @@
 """Phase-0 refactor baseline: freeze deterministic simulation outputs.
 
 Records SHA-256 digests of population state arrays for a fixed set of
-deterministic scenarios.  The Phase-0 directory reorganisation must reproduce
+deterministic scenarios.  The Phase-0 directory reorganization must reproduce
 these digests bit-for-bit; later phases use this file as the numeric lock for
 the "new Reference path vs. legacy Numba path" comparison.
 

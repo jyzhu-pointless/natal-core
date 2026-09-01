@@ -207,7 +207,7 @@ def test_compile_with_numba_disabled() -> None:
 
 
 # ---------------------------------------------------------------------------
-# compile_lifecycle_wrappers — single hook optimisation
+# compile_lifecycle_wrappers — single hook optimization
 # ---------------------------------------------------------------------------
 
 
@@ -224,7 +224,7 @@ def test_compile_single_njit_hook_no_guard_returns_directly() -> None:
     )
     with numba_disabled():
         wrappers = compile_lifecycle_wrappers([desc], registry=None)
-        # The hook should be the original function (direct return optimisation).
+        # The hook should be the original function (direct return optimization).
         assert wrappers.hooks.early is fn
 
 

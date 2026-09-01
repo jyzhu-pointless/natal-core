@@ -8,7 +8,7 @@ and ``age_structured.py``.
 Function overview:
   - ``resolve_age_param()`` — convert flexible survival specs
     (scalar, list, dict, callable) into a 1-D float array.
-  - ``resolve_growth_mode()`` — normalise juvenile growth mode
+  - ``resolve_growth_mode()`` — normalize juvenile growth mode
     string or int to the internal integer constant.
   - ``resolve_carrying_capacity()`` — determine K from the three
     available sources (explicit, legacy alias, or initial state).
@@ -178,7 +178,7 @@ def resolve_age_param(
 
 
 def resolve_growth_mode(mode: Union[int, str]) -> int:
-    """Normalise a juvenile growth mode specification to the internal integer constant.
+    """Normalize a juvenile growth mode specification to the internal integer constant.
 
     Accepts either the string name (case-insensitive: ``"logistic"``,
     ``"concave"``, ``"beverton_holt"``, ``"fixed"``, ``"linear"``,
@@ -193,7 +193,7 @@ def resolve_growth_mode(mode: Union[int, str]) -> int:
         The canonical integer constant.
 
     Raises:
-        ValueError: If the string is not recognised or the integer is
+        ValueError: If the string is not recognized or the integer is
             not a valid constant.
     """
     if isinstance(mode, int):

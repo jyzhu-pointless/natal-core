@@ -195,7 +195,7 @@ class TestStateAndConfigInterop:
 
         The discrete-generation engine hardcodes a 2-age lifecycle; a config
         with violated invariants is rejected with ValueError rather than
-        silently normalised.  The population's config must be unchanged
+        silently normalized.  The population's config must be unchanged
         after the exception (error-path state invariant).
         """
         sp = _make_species("Disc_config_reject_nages")

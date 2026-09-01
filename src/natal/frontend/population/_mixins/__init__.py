@@ -1,6 +1,6 @@
 """Mixins for BasePopulation — decompose the population ABC into focused concerns.
 
-This package extracts reusable behaviour from
+This package extracts reusable behavior from
 :mod:`natal.frontend.population.base` into separate mixin modules:
 
 - ``_hooks``: Hook registration, compilation, and lifecycle integration.

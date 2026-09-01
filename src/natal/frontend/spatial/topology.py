@@ -61,9 +61,9 @@ class MigrationParams(NamedTuple):
     Attributes:
         kernel: Migration kernel weight matrix.  A ``(1, 1)`` zero array
             when no kernel is set (adjacency mode).
-        include_center: Whether the kernel centre contributes outbound mass.
+        include_center: Whether the kernel center contributes outbound mass.
         rate: Fraction of each deme that migrates per tick.
-        adjust_on_edge: Whether boundary demes normalise to match internal
+        adjust_on_edge: Whether boundary demes normalize to match internal
             total outbound rate.
         adjacency: Dense ``(n_demes, n_demes)`` outbound migration matrix.
         mode_code: Backend selector (``0`` = adjacency, ``1`` = kernel).
@@ -419,14 +419,14 @@ def build_gaussian_kernel(
     """Build a normalized Gaussian migration kernel for a grid topology.
 
     The kernel is a ``(size, size)`` matrix where each entry ``[r, c]`` is
-    the outbound migration weight from a virtual centre cell to the grid
-    cell at offset ``(r - centre, c - centre)``. Distances are computed
+    the outbound migration weight from a virtual center cell to the grid
+    cell at offset ``(r - center, c - center)``. Distances are computed
     via the topology's ``COS_OPPOSITE_ANGLE``, so the correct metric is
     used for square grids (Cartesian) vs hex grids (oblique /
     law-of-cosines).
 
     At runtime the spatial migration kernel slides this matrix over every
-    source deme and re-normalises valid destinations at boundaries.
+    source deme and re-normalizes valid destinations at boundaries.
 
     Args:
         topology_cls: Grid topology class (e.g. ``SquareGrid``, ``HexGrid``)
@@ -443,7 +443,7 @@ def build_gaussian_kernel(
             Mutually exclusive with ``sigma``.
 
     Returns:
-        Normalised ``(size, size)`` float64 kernel summing to 1.
+        Normalized ``(size, size)`` float64 kernel summing to 1.
 
     Raises:
         ValueError: If ``size`` is even, both ``sigma`` and

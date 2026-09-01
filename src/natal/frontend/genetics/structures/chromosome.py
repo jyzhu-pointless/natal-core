@@ -75,7 +75,7 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         """Initialize a Chromosome structure.
 
         Sets up the sex chromosome type, registers with the parent Species,
-        adds any pre-existing loci, and initialises the recombination map.
+        adds any pre-existing loci, and initializes the recombination map.
 
         Args:
             name: Chromosome name.
@@ -136,7 +136,7 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
                 or ``None`` (defaults to autosome).
 
         Raises:
-            ValueError: If the string value is not recognised.
+            ValueError: If the string value is not recognized.
         """
         assert isinstance(sex_type, (SexChromosomeType, str, type(None))), f"Expected SexChromosomeType or str, got {type(sex_type).__name__}"
         if sex_type is None:

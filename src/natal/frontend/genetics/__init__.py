@@ -1,10 +1,10 @@
 """Genetics subpackage — genetic structures and entities.
 
-This subpackage defines the complete genetic architecture modelling layer:
+This subpackage defines the complete genetic architecture modeling layer:
 - **Structures**: Blueprint types (:class:`~natal.frontend.genetics.structures.species.Species`,
   :class:`~natal.frontend.genetics.structures.chromosome.Chromosome`,
   :class:`~natal.frontend.genetics.structures.locus.Locus`) that define the
-  hierarchical organisation of a species' genome.
+  hierarchical organization of a species' genome.
 - **Entities**: Runtime instances (:class:`~natal.frontend.genetics.entities.gene.Gene`,
   :class:`~natal.frontend.genetics.entities.haplotype.Haplotype`,
   :class:`~natal.frontend.genetics.entities.haplotype.HaploidGenotype`,

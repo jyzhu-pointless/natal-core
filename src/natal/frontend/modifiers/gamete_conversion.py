@@ -89,7 +89,7 @@ class GameteGtypeConversionRule:
         source_glab: Optional[Union[str, int]] = None,
         target_glab: Optional[Union[str, int]] = None,
     ) -> None:
-        """Initialise a haploid-genome-level gamete conversion rule.
+        """Initialize a haploid-genome-level gamete conversion rule.
 
         Args:
             hg_match: Either a specific ``HaploidGenotype`` instance
@@ -214,7 +214,7 @@ class GameteGlabConversionRule:
         genotype_filter: _GenotypeFilter = None,
         when: Optional[Condition] = None,
     ) -> None:
-        """Initialise a gamete-label conversion rule.
+        """Initialize a gamete-label conversion rule.
 
         Args:
             from_glab: Source gamete label (str, int, or ``None`` to match

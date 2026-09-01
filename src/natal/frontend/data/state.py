@@ -47,7 +47,7 @@ class PopulationState(NamedTuple):
     ) -> PopulationState:
         """Create a PopulationState with optionally provided arrays.
 
-        If arrays are not provided, they are initialised to zeros.
+        If arrays are not provided, they are initialized to zeros.
 
         Args:
             n_ztypes: Number of zygote types (diploid genotype types after slab expansion).

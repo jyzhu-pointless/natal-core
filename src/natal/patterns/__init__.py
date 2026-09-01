@@ -2,7 +2,7 @@
 ``natal.frontend.patterns``.
 
 This module preserves the legacy import path during the Phase-0 directory
-reorganisation.  New code should import from ``natal.frontend.patterns``;
+reorganization.  New code should import from ``natal.frontend.patterns``;
 this shim (and the legacy path) will be removed once the migration completes.
 """
 import sys as _sys

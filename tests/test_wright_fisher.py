@@ -350,7 +350,7 @@ class TestWFEndToEnd:
         cfg = _make_neutral_config()
         ind = cfg.initial_individual_count.copy()
 
-        with pytest.raises(ValueError, match="Unrecognised extreme_speed_mode"):
+        with pytest.raises(ValueError, match="Unrecognized extreme_speed_mode"):
             run_wf_tick(
                 ind_count=ind,
                 offspring_tensor=cfg.offspring_tensor,

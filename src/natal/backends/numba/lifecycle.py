@@ -1123,7 +1123,7 @@ _LOOP_SOURCES = {
 _HOOK_PARAMS = ["first_hook", "early_hook", "late_hook"]
 
 
-# Memoised: the assembled source depends only on the string arguments and the
+# Memoized: the assembled source depends only on the string arguments and the
 # (immutable at runtime) module sources, yet assembly costs several ms of
 # getsource + token rewriting per call — batch scans used to pay it on every
 # run() of every replicate.  Function names are stable identity hashes, so
@@ -1142,7 +1142,7 @@ def assemble_lifecycle_module(
     function, and one multi-tick run function.  Hook parameters in the tick
     source are rewritten to module globals (``_FIRST_HOOK``,
     ``_EARLY_HOOK``, ``_LATE_HOOK``) which are injected with ``setattr``
-    after loading, matching the previous template behaviour.
+    after loading, matching the previous template behavior.
 
     Args:
         mode: One of ``"structured"``, ``"discrete"``, ``"wf"``,

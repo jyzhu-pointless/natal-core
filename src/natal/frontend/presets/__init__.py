@@ -39,8 +39,8 @@ def __getattr__(name: str) -> object:
 
     ``_fitness`` imports from ``natal.frontend.fitness._patch`` at module
     level, while ``_patch`` imports type helpers from ``presets._types``.
-    Re-exporting eagerly makes the package-initialisation order sensitive
-    (importing fitness first used to leave ``_patch`` partially initialised
+    Re-exporting eagerly makes the package-initialization order sensitive
+    (importing fitness first used to leave ``_patch`` partially initialized
     when ``presets.__init__`` reached ``_fitness``).  PEP 562 deferral
     breaks that cycle for every import order.
     """

@@ -1,10 +1,10 @@
-"""Contract tests for the Phase-0 directory reorganisation forwarding shims.
+"""Contract tests for the Phase-0 directory reorganization forwarding shims.
 
-The reorganisation moved 13 frontend packages to ``natal/frontend/<mod>``,
+The reorganization moved 13 frontend packages to ``natal/frontend/<mod>``,
 split the engine across ``natal/backends/{reference,numba,rust}``, and moved
 the top-level ``natal.numba`` to ``natal.backends.numba``.  Every legacy path
 survives as a forwarding shim (literal ``__all__`` re-export plus
-``sys.modules`` submodule aliasing).  These tests pin the "zero behaviour
+``sys.modules`` submodule aliasing).  These tests pin the "zero behavior
 change" promise through five invariant classes:
 
 1. Forwarding identity (ownership): a name resolved via the legacy path IS
@@ -242,7 +242,7 @@ def _run_clean_interpreter(code: str) -> subprocess.CompletedProcess[str]:
 
     A subprocess is required because import-order bugs are process-global:
     once ``sys.modules`` is populated in this pytest process, the failure
-    mode (a partially-initialised module) can no longer be reproduced.
+    mode (a partially-initialized module) can no longer be reproduced.
     """
     return subprocess.run(
         [sys.executable, "-c", code],
@@ -269,7 +269,7 @@ assert (natal.frontend.presets.apply_preset_fitness_patch
         is natal.frontend.fitness._patch.apply_preset_fitness_patch)
 """,
     # The historical crash trigger: importing the deep private module first
-    # used to leave ``_patch`` partially initialised for ``presets``.
+    # used to leave ``_patch`` partially initialized for ``presets``.
     "private-patch-first": """
 import natal.frontend.fitness._patch
 import natal.frontend.presets
@@ -323,7 +323,7 @@ def test_import_order_independence(order_name: str) -> None:
     """A clean interpreter imports the cycle-involved modules in any order.
 
     Invariant: the PEP 562 deferral in ``frontend/presets/__init__.py`` and
-    ``frontend/presets/_fitness.py`` must make package initialisation
+    ``frontend/presets/_fitness.py`` must make package initialization
     order-insensitive — every ordering below exits 0 (imports succeed AND
     the deferred re-export still resolves to the canonical object).
     """

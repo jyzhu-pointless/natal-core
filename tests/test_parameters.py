@@ -19,7 +19,7 @@ class TestParamDescriptor:
     """Construction and immutability of ParamDescriptor."""
 
     def test_construction_defaults(self):
-        """Defaults match documented behaviour."""
+        """Defaults match documented behavior."""
         desc = ParamDescriptor(
             domain="test",
             name="foo",
@@ -141,7 +141,7 @@ class TestParameterFieldMapping:
 
 
 class TestParametersByDomain:
-    """Organisation of parameters by domain."""
+    """Organization of parameters by domain."""
 
     def test_known_domains(self):
         """All expected domains are present."""

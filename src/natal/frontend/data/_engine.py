@@ -1,6 +1,6 @@
 """Engine-level building and compression helpers.
 
-This private module contains functions for initialising gamete/zygote maps,
+This private module contains functions for initializing gamete/zygote maps,
 building a ``DiscretePopulationConfig``, building custom arrays, and
 compressing configs.
 """

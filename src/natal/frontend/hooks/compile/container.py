@@ -60,7 +60,7 @@ class CompiledEventHooks:
     _event_hooks: Dict[str, HookCallable]
 
     def __init__(self) -> None:
-        """Initialise all event hooks to no-op and registry to None."""
+        """Initialize all event hooks to no-op and registry to None."""
         self.first = _noop_hook
         self.early = _noop_hook
         self.late = _noop_hook

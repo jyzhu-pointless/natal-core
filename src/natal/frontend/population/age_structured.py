@@ -697,7 +697,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         Call this after ``pop.update()`` when Rust was enabled before the
         update.  Runtime config replacement is detected automatically, but
-        this method is the explicit synchronisation point for in-place
+        this method is the explicit synchronization point for in-place
         scalar updates.
 
         Returns:

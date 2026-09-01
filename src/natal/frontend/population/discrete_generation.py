@@ -65,7 +65,7 @@ def _require_discrete_config(config: object) -> DiscretePopulationConfig:
     (age 0 = offspring, age 1 = reproducing adult; adults are replaced
     every tick).  A config with ``n_ages != 2``, ``new_adult_age != 1``,
     or ``adult_ages != [1]`` would run but produce silently wrong dynamics,
-    so it is rejected up front rather than silently normalised.
+    so it is rejected up front rather than silently normalized.
 
     Args:
         config: The candidate config object.
@@ -128,7 +128,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Args:
             species: Genetic architecture describing loci, alleles and
                 chromosome structure.
-            population_config: A fully initialised
+            population_config: A fully initialized
                 ``DiscretePopulationConfig``.  A ``PopulationConfig`` or
                 other type is rejected with ``TypeError`` — the two config
                 models are independent; build a ``DiscretePopulationConfig``
@@ -381,7 +381,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         Call this after ``pop.update()`` when Rust was enabled before the
         update.  Runtime config replacement is detected automatically, but
-        this method is the explicit synchronisation point for in-place
+        this method is the explicit synchronization point for in-place
         scalar updates.
 
         Returns:

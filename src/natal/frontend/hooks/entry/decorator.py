@@ -62,7 +62,7 @@ class DecoratedHookFn(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Signature normalisation helpers
+# Signature normalization helpers
 # ---------------------------------------------------------------------------
 
 

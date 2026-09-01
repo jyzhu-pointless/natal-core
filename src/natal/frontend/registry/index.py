@@ -204,7 +204,7 @@ class IndexRegistry:
     def register_genotype(self, genotype_id: Genotype) -> List[int]:
         """Register a genotype and auto-cross-product with all slab labels.
 
-        If ``slab_labels`` is empty it is auto-initialised to ``["default"]``.
+        If ``slab_labels`` is empty it is auto-initialized to ``["default"]``.
         Each (genotype, slab) pair becomes a ZType entry.
 
         Args:
@@ -224,7 +224,7 @@ class IndexRegistry:
     def register_haplogenotype(self, haplo_id: HaploidGenotype) -> list[int]:
         """Register a haplogenotype and auto-cross-product with all glab labels.
 
-        If ``glab_labels`` is empty it is auto-initialised to ``["default"]``.
+        If ``glab_labels`` is empty it is auto-initialized to ``["default"]``.
         Each (haplogenotype, glab) pair becomes a GType entry.
 
         Args:

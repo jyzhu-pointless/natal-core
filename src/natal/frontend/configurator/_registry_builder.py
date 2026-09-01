@@ -103,7 +103,7 @@ class ConfigContext:
         registry: IndexRegistry,
         compress: bool = False,
     ) -> None:
-        """Initialise the adapter with species, config, and registry.
+        """Initialize the adapter with species, config, and registry.
 
         Args:
             species: The genetic architecture for the population.

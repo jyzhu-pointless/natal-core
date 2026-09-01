@@ -254,7 +254,7 @@ class DiscreteConfigurator(Configurator):
         """Build and return a ``DiscreteGenerationPopulation``.
 
         Extracts discrete-specific scalars from stored override values
-        before handing off to the base ``build()`` for finalisation.
+        before handing off to the base ``build()`` for finalization.
         """
         # Extract scalars that replace the default values burned into
         # DiscretePopulationConfig at construction time.  This is the

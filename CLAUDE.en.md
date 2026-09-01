@@ -10,6 +10,8 @@
 
 (This English version of CLAUDE.md exists for internationalization convenience — the project's working language remains Chinese.)
 
+**All English in code and docs uses American spelling**: identifiers, docstrings, comments, and commit messages alike. Common conversions: `-ise/-isation` → `-ize/-ization` (initialize/materialize/normalize), `-our` → `-or` (behavior/color), `-re` → `-er` (center), `modelling` → `modeling`. Exclude legitimate American words that happen to end in `-ise` (comprise, exercise, raise, noise, wise, ...).
+
 ## Spec References
 
 The following files define the coding, documentation, and testing standards for this project,

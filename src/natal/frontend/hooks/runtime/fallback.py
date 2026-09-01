@@ -47,7 +47,7 @@ class HookExecutor:
         registry: HookProgram,
         hooks_by_event: Dict[int, List[CompiledHookDescriptor]],
     ) -> None:
-        """Initialise with a pre-built registry and descriptor map.
+        """Initialize with a pre-built registry and descriptor map.
 
         Args:
             registry: HookProgram for CSR operations (may be empty).
@@ -64,7 +64,7 @@ class HookExecutor:
     ) -> HookExecutor:
         """Group descriptors by event_id and sort by priority.
 
-        Descriptors without a recognised event_id or without any
+        Descriptors without a recognized event_id or without any
         execution payload are silently skipped.
         """
         hooks_by_event: Dict[int, List[CompiledHookDescriptor]] = defaultdict(list)

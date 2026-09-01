@@ -245,7 +245,7 @@ class HomingDrive(GeneticPreset):
 
     @staticmethod
     def _rate_at(rate: float | tuple[float, float], sex: Sex) -> float:
-        """Return per-sex rate, normalising a scalar to both sexes.
+        """Return per-sex rate, normalizing a scalar to both sexes.
 
         ``__init__`` resolves scalar input to a ``(female, male)`` tuple
         via :meth:`_resolve_rates`, but :meth:`reconfigure_preset` writes

@@ -1,6 +1,6 @@
 name: bench
 
-# Performance guard.  Guards the Phase-2 risk (Numba specialisation moving to
+# Performance guard.  Guards the Phase-2 risk (Numba specialization moving to
 # shape-keyed caches) by comparing a fixed benchmark set against the stored
 # baseline JSON.  Manual runs compare against the checked-in baseline; drift
 # beyond the threshold opens an issue rather than failing the build.

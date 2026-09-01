@@ -165,7 +165,7 @@ class GeneticStructure(Generic[E]):
         """Initialize a GeneticStructure.
 
         Sets up the entity registry, resolves species binding (from
-        *species*, *parent*, or self for a top-level Species), initialises
+        *species*, *parent*, or self for a top-level Species), initializes
         the child-structure registry if applicable, and registers with the
         parent.
 

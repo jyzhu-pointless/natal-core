@@ -34,7 +34,7 @@ def _get_fitness_array(
         The corresponding fitness ndarray from *config*.
 
     Raises:
-        ValueError: If *field_name* is not recognised.
+        ValueError: If *field_name* is not recognized.
     """
     if field_name == "viability":
         return config.viability_fitness  # type: ignore[return-value]  # union-narrowing false positive
@@ -232,7 +232,7 @@ def write_fitness_field(
                         )
             else:
                 raise TypeError(
-                    f"Unrecognised key in fitness value dict: {first_key!r}. "
+                    f"Unrecognized key in fitness value dict: {first_key!r}. "
                     f"Expected 'female'/'male' (sex-keyed) or int (age-keyed)."
                 )
         else:

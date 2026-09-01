@@ -295,7 +295,7 @@ class AgeStructuredConfigurator(Configurator):
     def build(
         self, name: str | None = None, hooks: HookMap | None = None,
     ) -> AgeStructuredPopulation:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported class forward ref
-        """Finalise the config and create an ``AgeStructuredPopulation``.
+        """Finalize the config and create an ``AgeStructuredPopulation``.
 
         Delegates to :meth:`Configurator.build` which syncs equilibrium
         metrics, runs optional index compression, builds the custom

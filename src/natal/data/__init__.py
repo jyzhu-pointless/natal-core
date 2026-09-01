@@ -2,7 +2,7 @@
 ``natal.frontend.data``.
 
 This module preserves the legacy import path during the Phase-0
-directory reorganisation; it will be removed once the migration
+directory reorganization; it will be removed once the migration
 completes.
 """
 import sys as _sys

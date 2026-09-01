@@ -28,7 +28,7 @@ from natal.frontend.presets._types import (
 # The ``fitness._patch`` re-exports below are deferred through module-level
 # ``__getattr__``: ``_patch`` imports type helpers from ``presets._types`` at
 # module level, so an eager import here would make ``presets/__init__`` fail
-# whenever ``fitness._patch`` is imported first (partially-initialised module).
+# whenever ``fitness._patch`` is imported first (partially-initialized module).
 # ``make_fitness_patch_given_allele_scaling`` above does NOT depend on
 # ``_patch`` and stays eagerly defined.
 _PATCH_REEXPORTS = frozenset({

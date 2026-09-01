@@ -102,7 +102,7 @@ class ZygoteZtypeConversionRule:
         maternal_glab: Optional[Union[str, int]] = None,
         paternal_glab: Optional[Union[str, int]] = None,
     ) -> None:
-        """Initialise a zygote conversion rule.
+        """Initialize a zygote conversion rule.
 
         Args:
             genotype_match: Either a specific ``Genotype`` instance (matched
@@ -200,7 +200,7 @@ class ZygoteGlabRedirectRule:
         name: Optional[str] = None,
         when: Optional[Condition] = None,
     ) -> None:
-        """Initialise a glab-redirect rule.
+        """Initialize a glab-redirect rule.
 
         Args:
             from_glab: Source gamete label (on the maternal gamete).
@@ -273,7 +273,7 @@ class ZygoteAlleleConversionRule:
         maternal_glab: Optional[Union[str, int]] = None,
         paternal_glab: Optional[Union[str, int]] = None,
     ) -> None:
-        """Initialise an allele-level zygote conversion rule.
+        """Initialize an allele-level zygote conversion rule.
 
         Args:
             from_allele: Source allele (string name or ``Gene`` object).

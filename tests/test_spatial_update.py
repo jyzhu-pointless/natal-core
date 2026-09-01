@@ -892,7 +892,7 @@ class TestPresetsModifiersSideEffects:
 
 
 class TestReconfigurePreset:
-    """reconfigure_preset validation and behaviour."""
+    """reconfigure_preset validation and behavior."""
 
     def test_unregistered_preset_raises_valueerror(self):
         """reconfigure_preset on an unregistered preset → ValueError."""

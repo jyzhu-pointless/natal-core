@@ -221,7 +221,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         The *config* is stored by reference (no copy, no conversion): for a
         homogeneous spatial build every clone shares the same config object,
         which is what gives ``_dispatch_scalar`` its identity-based dedup
-        invariant.  Subclasses must not re-normalise or ``_replace`` the
+        invariant.  Subclasses must not re-normalize or ``_replace`` the
         config here — that would split shells and break the dedup.
 
         Args:

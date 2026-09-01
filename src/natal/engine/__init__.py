@@ -1,6 +1,6 @@
 """Forwarding shim: the ``engine`` package has been split across backends.
 
-Phase-0 reorganisation relocated every engine module:
+Phase-0 reorganization relocated every engine module:
 
 - ``natal.engine.simulation``        -> ``natal.backends.reference.simulation``
 - ``natal.engine.migration``         -> ``natal.backends.reference.migration``

@@ -341,7 +341,7 @@ def run_wf_tick(
             age 0 = offspring (filled by this function).
         offspring_tensor: Precomputed ``P[gf, gm, go]``, shape ``(g, g, g)``.
         fecundity_f, fecundity_m: Per-genotype fecundity, shape ``(g,)``.
-        sexual_selection: Row-normalised mating preference, shape ``(g, g)``.
+        sexual_selection: Row-normalized mating preference, shape ``(g, g)``.
         viability_f, viability_m: Age-0 survival fitness, shape ``(g,)``.
         eggs_per_female: Expected eggs per reproducing female.
         sex_ratio: Global female fraction at birth (unused when
@@ -365,7 +365,7 @@ def run_wf_tick(
     # Validate mode early — before the O(g³) expected-offspring computation.
     if mode not in (_WF_DETERMINISTIC, _WF_MULTINOMIAL, _WF_POISSON):
         raise ValueError(
-            f"Unrecognised extreme_speed_mode={mode}. "
+            f"Unrecognized extreme_speed_mode={mode}. "
             f"Expected 1 (MULTINOMIAL), 2 (POISSON), or 3 (DETERMINISTIC)."
         )
 
@@ -387,7 +387,7 @@ def run_wf_tick(
         if nf <= 0.0:
             continue
 
-        # Row-normalise by sexual-selection-weighted effective male count.
+        # Row-normalize by sexual-selection-weighted effective male count.
         row_sum = np.dot(sexual_selection[gf, :], effective_m)
         if row_sum <= 0.0:
             continue

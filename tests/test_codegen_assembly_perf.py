@@ -4,12 +4,12 @@ Background (2026-09 regression): commit 624cfb7 rewrote wrapper assembly to
 ``inspect.getsource`` extraction + token-level identifier rewriting, which
 costs several ms per call.  Because assembly ran on every ``run()`` of every
 replicate, batch parameter scans (e.g. ``demos/drive_ridl_remake_batch.py``)
-doubled in wall time (20 s -> 40 s per scan).  The fix memoises
+doubled in wall time (20 s -> 40 s per scan).  The fix memoizes
 ``assemble_lifecycle_module`` with ``functools.lru_cache``.
 
 These tests pin the *mechanism* (not wall time, which is noisy on CI):
 
-1. ``assemble_lifecycle_module`` is memoised on its string arguments.
+1. ``assemble_lifecycle_module`` is memoized on its string arguments.
 2. Structurally identical populations share assembled modules across
    ``run()`` calls — the second run adds cache hits, never new misses.
 3. A steady-state ``run()`` performs few Python-level calls (the regression
@@ -49,7 +49,7 @@ def _build_population(seed: int) -> nt.AgeStructuredPopulation:
     )
 
 
-def test_assemble_lifecycle_module_is_memoised() -> None:
+def test_assemble_lifecycle_module_is_memoized() -> None:
     """Direct unit guard: same string arguments must not re-assemble."""
     assemble_lifecycle_module.cache_clear()
     args = ("structured", "_perf_tick_a", "_perf_run_a")
@@ -69,7 +69,7 @@ def test_structural_repeat_runs_share_assembly() -> None:
     before = assemble_lifecycle_module.cache_info()
 
     # A fresh population object with identical structure: its run must hit
-    # the memoised assembly, not assemble again.
+    # the memoized assembly, not assemble again.
     pop_b = _build_population(2)
     pop_b.run(3, record_every=0)
     after = assemble_lifecycle_module.cache_info()

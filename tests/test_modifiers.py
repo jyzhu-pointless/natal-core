@@ -54,7 +54,7 @@ class TestResolveGtypeKey:
         assert _resolve_gtype_key(42, registry) == 42
 
     def test_unknown_key_raises(self, simple_species):
-        """Unrecognised key type raises KeyError."""
+        """Unrecognized key type raises KeyError."""
         registry = IndexRegistry()
         with pytest.raises(KeyError):
             _resolve_gtype_key(object(), registry)

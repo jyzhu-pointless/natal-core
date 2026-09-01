@@ -305,7 +305,7 @@ def _make_hashable(value: Any) -> Any:  # Any param+return: accepts arbitrary ty
     """
     if isinstance(value, np.ndarray):
         # ndarray.tobytes() is order-sensitive — different layouts or dtypes
-        # produce different bytes, which is the desired behaviour.
+        # produce different bytes, which is the desired behavior.
         return ("__ndarray__", value.tobytes())
     if isinstance(value, dict):
         d = cast(Dict[Any, Any], value)
@@ -831,7 +831,7 @@ class SpatialConfigurator:
             1. **Record** the raw kwargs (including BatchSetting objects) in
                ``_replay_log`` — used later by ``_build_template_for_group``
                to replay the full builder pipeline for each config group.
-            2. **Delegate** a sanitised version to the template builder —
+            2. **Delegate** a sanitized version to the template builder —
                ``BatchSetting`` values are replaced with their first element
                so the single-deme builder can proceed through its build()
                pipeline without errors.
@@ -866,7 +866,7 @@ class SpatialConfigurator:
         # for full replay in _build_template_for_group.
         self._replay_log.append((method_name, dict(kwargs)))
 
-        # Delegate sanitised kwargs to template builder.
+        # Delegate sanitized kwargs to template builder.
         template_method = getattr(self._template, method_name)
         filtered = {k: v for k, v in concrete.items() if v is not None}
         template_method(**filtered)
@@ -1517,7 +1517,7 @@ class SpatialConfigurator:
           ``_replace()`` when possible.
 
         Returns:
-            A ``SpatialPopulation`` with all demes initialised.
+            A ``SpatialPopulation`` with all demes initialized.
         """
         if not self._batch_settings:
             return self._build_homogeneous()
@@ -1666,7 +1666,7 @@ class SpatialConfigurator:
                     None,
                 ))
             else:
-                # Fallback: parameter not recognised by _can_use_replace
+                # Fallback: parameter not recognized by _can_use_replace
                 # (e.g. fitness dict, custom modifier). Full builder replay —
                 # all arrays freshly allocated, no sharing with base_config.
                 group_template = self._build_template_for_group(

@@ -18,7 +18,7 @@ Every hook execution function returns an int:
     All operations completed; proceed to the next hook.
 ``RESULT_SKIP`` (0, alias)
     Hook not applicable in this context (e.g. wrong deme).  Same runtime
-    behaviour as ``RESULT_CONTINUE``; the distinct name is for readability.
+    behavior as ``RESULT_CONTINUE``; the distinct name is for readability.
 ``RESULT_STOP`` (1)
     Abort the current event immediately.  Subsequent hooks for the same
     event are skipped, but the next event still executes normally.
@@ -82,7 +82,7 @@ def njit_deme_selector_matches(
     data: np.ndarray,
     deme_id: int,
 ) -> bool:
-    """Numba-compatible deme selector check against serialised arrays.
+    """Numba-compatible deme selector check against serialized arrays.
 
     The selector is encoded in the HookProgram's ``deme_selector_*``
     arrays with these *sel_type* values:
@@ -239,7 +239,7 @@ eval_csr_condition_program = _eval_csr_condition_program
 # ---------------------------------------------------------------------------
 #
 # Hook operations express a *target count* (e.g. "set to 20", "scale by 0.5").
-# When target < current, removal is modelled as *survival* — each individual
+# When target < current, removal is modeled as *survival* — each individual
 # survives with probability = target / current.  This keeps ``Op.scale(0.5)``
 # semantically identical to "50 % survival" and ensures sperm storage scaling
 # stays coherent.
@@ -444,7 +444,7 @@ def _execute_single_csr_hook(
     flattened ``HookProgram`` arrays, it:
 
     1. Bounds-checks *hook_idx* (returns ``RESULT_SKIP`` if invalid).
-    2. Checks the serialised deme selector (returns ``RESULT_SKIP`` if
+    2. Checks the serialized deme selector (returns ``RESULT_SKIP`` if
        *deme_id* doesn't match).
     3. Iterates over the hook's operations — ``op_offsets[hook_idx]``
        to ``op_offsets[hook_idx + 1]``.
