@@ -68,18 +68,41 @@ def iter_public_modules(package_dir: Path) -> list[tuple[str, list[str]]]:
     return module_exports
 
 
-def format_import(module_name: str, exported_names: list[str]) -> list[str]:
-    """Render a stub import statement for one module."""
-    names = sorted(exported_names)
-    single_line = f"from .{module_name} import {', '.join(names)}"
-    if len(single_line) <= 88:
-        return [single_line]
+# Names whose canonical package-level re-export is deferred through a PEP 562
+# module ``__getattr__`` (import-cycle safety).  Stub resolution cannot see
+# through ``__getattr__``, so these names are imported from the deeper,
+# cycle-free defining module instead.  Keyed by (owning package, name) because
+# a name can be legitimately re-exported by several packages.
+STUB_SOURCE_REDIRECTS: dict[tuple[str, str], str] = {
+    ("presets", "apply_preset_fitness_patch"): "frontend.presets._fitness",
+}
 
-    lines = [f"from .{module_name} import ("]
-    for name in names:
-        lines.append(f"    {name},")
-    lines.append(")")
-    return lines
+
+def format_import(module_name: str, exported_names: list[str]) -> list[str]:
+    """Render a stub import statement for one module.
+
+    ``STUB_SOURCE_REDIRECTS`` moves individual names to a deeper, cycle-free
+    module when the canonical package re-export is deferred via a module-level
+    ``__getattr__`` (PEP 562), which stub resolution cannot see through.
+    """
+    names = sorted(exported_names)
+    redirected = {
+        name: target for (pkg, name), target in STUB_SOURCE_REDIRECTS.items()
+        if pkg == module_name and name in names
+    }
+    names = [n for n in names if n not in redirected]
+    rendered: list[str] = []
+    if names:
+        single_line = f"from .{module_name} import {', '.join(names)}"
+        if len(single_line) <= 88:
+            rendered.append(single_line)
+        else:
+            rendered.append(f"from .{module_name} import (")
+            rendered.extend(f"    {name}," for name in names)
+            rendered.append(")")
+    for name, target in sorted(redirected.items()):
+        rendered.append(f"from .{target} import {name}")
+    return rendered
 
 
 def render_stub(module_exports: list[tuple[str, list[str]]]) -> str:

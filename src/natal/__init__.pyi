@@ -228,10 +228,10 @@ from .presets import (
     ZygoteGenotypeConversionRule,
     ZygoteGlabRedirectRule,
     ZygoteZtypeConversionRule,
-    apply_preset_fitness_patch,
     apply_preset_to_population,
     count_allele_copies,
 )
+from .frontend.presets._fitness import apply_preset_fitness_patch
 from .registry import IndexRegistry
 from .spatial import (
     BatchSetting,

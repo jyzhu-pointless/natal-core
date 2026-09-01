@@ -1,32 +1,34 @@
-"""Fitness system — fitness patch construction, application, and DSL writing.
+"""Forwarding shim: the ``fitness`` package now lives at
+``natal.frontend.fitness``.
 
-This subpackage hosts fitness logic extracted from presets and
-configurator modules:
-
-- ``fitness/_patch.py``: core fitness patch application (allele scaling, slab
-  scaling, selector-based writes).  Uses ``FitnessPopulationView`` protocol.
-- ``fitness/_writer.py``: Configurator DSL writer — resolves genotype-pattern
-  selectors to ztype indices and writes to config arrays.
+This module preserves the legacy import path during the Phase-0
+directory reorganisation; it will be removed once the migration
+completes.
 """
+import sys as _sys
 
-from typing import TYPE_CHECKING
+# Alias imports for submodule forwarding (registered below).
+import natal.frontend.fitness._patch as _m0
+import natal.frontend.fitness._types as _m1
+import natal.frontend.fitness._writer as _m2
+from natal.frontend.fitness import (
+    apply_preset_fitness_patch,
+    write_fitness_field,
+)
+
+# Register legacy submodule paths -> relocated modules.
+_sys.modules["natal.fitness._patch"] = _m0
+_sys.modules["natal.fitness._types"] = _m1
+_sys.modules["natal.fitness._writer"] = _m2
+
+# Legacy parity: real packages expose imported children as attributes; the
+# sys.modules aliases above do not.  Re-bind every aliased submodule onto its
+# (aliased) parent so ``package.submodule`` attribute access keeps working.
+for _alias in [a for a in _sys.modules if a.startswith(__name__ + ".")]:
+    _parent, _, _leaf = _alias.rpartition(".")
+    setattr(_sys.modules[_parent], _leaf, _sys.modules[_alias])
 
 __all__ = [
     "apply_preset_fitness_patch",
     "write_fitness_field",
 ]
-
-if TYPE_CHECKING:
-    from natal.fitness._patch import apply_preset_fitness_patch  # noqa: F401
-    from natal.fitness._writer import write_fitness_field  # noqa: F401
-
-
-def __getattr__(name: str) -> object:
-    """Lazy-load public symbols to avoid circular imports at package-init time."""
-    if name == "apply_preset_fitness_patch":
-        from natal.fitness._patch import apply_preset_fitness_patch as _fn
-        return _fn
-    if name == "write_fitness_field":
-        from natal.fitness._writer import write_fitness_field as _fn
-        return _fn
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

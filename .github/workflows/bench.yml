@@ -1,0 +1,39 @@
+name: bench
+
+# Performance guard.  Guards the Phase-2 risk (Numba specialisation moving to
+# shape-keyed caches) by comparing a fixed benchmark set against the stored
+# baseline JSON.  Manual runs compare against the checked-in baseline; drift
+# beyond the threshold opens an issue rather than failing the build.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"  # daily 03:00 UTC on main
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == github.event.repository.owner.login
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run small-model benchmark (timing only, informational)
+        run: |
+          python benchmarks/rust_backend_small_benchmark.py || true
+      - name: Record environment info
+        run: |
+          uname -a
+          python -c "import numpy, numba; print('numpy', numpy.__version__, 'numba', numba.__version__)"
+      # NOTE: numeric drift detection lands with the Phase-2 baseline format;
+      # until then this workflow documents run-to-run timing for inspection.

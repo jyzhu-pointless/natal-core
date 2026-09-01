@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from typing import Any, Callable  # noqa: E402
 
-import natal as nt
 from natal.spatial.configurator import batch_setting
 from natal.spatial.population import SpatialPopulation
 from natal.spatial.topology import HexGrid
+
+import natal as nt
 from natal.ui import launch
 
 MAP_SIZE = 9

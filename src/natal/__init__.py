@@ -93,10 +93,7 @@ for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lam
         continue
 
     if is_package:
-        if module_name not in {"configurator", "data", "genetics", "hooks", "modifiers", "numba", "output", "patterns", "population", "presets", "registry", "spatial", "ui", "utils"}:
-            continue
         module_file = package_dir / module_name / "__init__.py"
-        _lazy_packages.add(module_name)
     else:
         module_file = package_dir / f"{module_name}.py"
 
@@ -106,10 +103,22 @@ for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lam
     # If multiple modules export the same name, keep the first mapping instead of
     # silently letting a later one overwrite it. Sorting by module name makes the
     # result stable and predictable.
-    for name in _extract_module_exports(module_file):
+    exports = _extract_module_exports(module_file)
+
+    # Rule-based participation instead of a hand-maintained allowlist: a
+    # first-level subpackage joins the public lazy-export index when its
+    # ``__init__.py`` declares a non-empty literal ``__all__``; an empty (or
+    # missing) ``__all__`` marks the package as private/structural (e.g.
+    # ``contracts``, ``frontend``, ``backends``, the ``engine`` shim).  This
+    # keeps the runtime index in lock-step with the stub generator, which
+    # already scans every first-level package.
+    if is_package and exports:
+        _lazy_packages.add(module_name)
+
+    for name in exports:
         _lazy_map.setdefault(name, module_name)
 
-    if is_package:
+    if is_package and exports:
         _lazy_map.setdefault(module_name, module_name)
 
 # Public export list.

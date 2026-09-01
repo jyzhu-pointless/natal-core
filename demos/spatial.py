@@ -9,15 +9,15 @@ from __future__ import annotations
 from typing import cast
 
 import numpy as np
-from numpy.typing import NDArray
-
-import natal as nt
 from natal.spatial.configurator import batch_setting
 from natal.spatial.population import SpatialPopulation
 from natal.spatial.topology import (
     SquareGrid,
     build_adjacency_matrix,
 )
+from numpy.typing import NDArray
+
+import natal as nt
 
 
 def _make_initial_count(wt: float, dr: float) -> dict[str, dict[str, list[float]]]:

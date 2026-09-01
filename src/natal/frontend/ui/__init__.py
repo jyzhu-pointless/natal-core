@@ -1,0 +1,28 @@
+"""
+NATAL UI Module
+===============
+
+Provides user interface components for visualizing and controlling simulations.
+Requires `nicegui` to be installed (`pip install nicegui`).
+"""
+
+from .dashboard import (
+    Dashboard,
+    PopulationDashboard,
+    SpatialDashboard,
+    launch,
+    launch_population,
+    launch_spatial,
+)
+from .visualization import get_allele_color, render_cell_svg
+
+__all__ = [
+    "Dashboard",
+    "PopulationDashboard",
+    "SpatialDashboard",
+    "get_allele_color",
+    "launch",
+    "launch_population",
+    "launch_spatial",
+    "render_cell_svg",
+]

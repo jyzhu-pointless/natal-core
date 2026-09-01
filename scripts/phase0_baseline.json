@@ -1,0 +1,32 @@
+{
+  "age_bh": {
+    "final_15": "df1b060db1d218d7868fac6cddd7a54e",
+    "mid_5": "b85a6b0f6265b61b0679ee081be8ef7c",
+    "tick": 15
+  },
+  "age_fixed": {
+    "final_15": "fcb2f693ddbaebaa1cfbb240c3ab6bee",
+    "mid_5": "68ddb11671613fe03acd499a0e5c25c8",
+    "tick": 15
+  },
+  "age_logistic_hook": {
+    "final_15": "019559d3d282241dd1175a01f7aba3ba",
+    "mid_5": "c177d3e037aaa569cf75a7de17a2938a",
+    "tick": 15
+  },
+  "discrete": {
+    "final_15": "ec57ae1b637133a76e9f1a621aea7f4f",
+    "mid_5": "10aecb0776e612748e1944e3c8e95d34",
+    "tick": 15
+  },
+  "discrete_wf": {
+    "final_15": "cb5ecd2712e9f260b2589a5271a2c4de",
+    "mid_5": "02a737591b6d5a9e52144e44533c8985",
+    "tick": 15
+  },
+  "spatial": {
+    "final_15": "a537b900c28b7821a5fefaefffbdd291",
+    "mid_5": "8c41961f8f44d75dbcab2871332c9724",
+    "tick": 15
+  }
+}

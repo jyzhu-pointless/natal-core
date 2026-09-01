@@ -10,10 +10,10 @@ from __future__ import annotations
 import time
 
 import numpy as np
-
-import natal as nt
 from natal.spatial.population import SpatialPopulation
 from natal.spatial.topology import HexGrid, build_gaussian_kernel
+
+import natal as nt
 
 MAP_SIZE: int = 501
 

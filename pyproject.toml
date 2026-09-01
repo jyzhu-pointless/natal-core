@@ -53,6 +53,13 @@ filterwarnings = [
 
 [project.optional-dependencies]
 test = ["pytest>=7.0.0", "pytest-cov>=6.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.6",
+    "pyright>=1.1.400",
+    "maturin>=1.7,<2.0",
+]
 
 [tool.ruff]
 target-version = "py39"
@@ -62,8 +69,7 @@ exclude = [
     "tests/**",
     "**/__pycache__",
     "**/*.pyc",
-    "src/natal/hooks/templates/unified_hook_csr_entry.tmpl.py",
-    "src/natal/hooks/templates/unified_hook_njit_entry.tmpl.py",
+    "src/natal/frontend/hooks/templates/*.tmpl.py",
     "visualization.py",
     "dashboard.py",
 ]
@@ -98,7 +104,7 @@ ignore = [
     "tests/**",
     "**/__pycache__",
     "**/*.pyc",
-    "src/natal/hooks/templates/*.tmpl.py",
+    "src/natal/frontend/hooks/templates/*.tmpl.py",
 ]
 
 typeCheckingMode = "strict"

@@ -1,31 +1,45 @@
-"""Configurator subpackage — chainable PopulationConfig builders.
+"""Forwarding shim: the ``configurator`` package now lives at
+``natal.frontend.configurator``.
 
-Provides the Configurator API for constructing and modifying
-``PopulationConfig`` / ``DiscretePopulationConfig``:
-
-- :class:`Configurator`, ``AgeStructuredConfigurator``,
-  ``DiscreteConfigurator`` — chainable domain methods
-  (``.competition()``, ``.reproduction()``) that mutate config arrays
-  in-place.  Created via ``Configurator.from_species()`` or bound to a
-  running simulation via ``for_population()`` for runtime changes.
-
-Utility symbols:
-  - ``set_param`` / ``hook_set_param`` — write a scalar parameter by
-    name, usable from pure Python or Numba hooks.
-  - ``merge_hooks`` — combine @hook-decorated items into a single map.
+This module preserves the legacy import path during the Phase-0
+directory reorganisation; it will be removed once the migration
+completes.
 """
+import sys as _sys
 
-from natal.configurator._base import (
+# Alias imports for submodule forwarding (registered below).
+import natal.frontend.configurator._base as _m0
+import natal.frontend.configurator._factory as _m1
+import natal.frontend.configurator._fitness as _m2
+import natal.frontend.configurator._params as _m3
+import natal.frontend.configurator._registry_builder as _m4
+import natal.frontend.configurator.age_structured as _m5
+import natal.frontend.configurator.discrete as _m6
+from natal.frontend.configurator import (
+    AgeStructuredConfigurator,
     Configurator,
+    DiscreteConfigurator,
+    PopulationConfigBuilder,
     hook_set_param,
     merge_hooks,
     set_param,
 )
-from natal.configurator._factory import (
-    PopulationConfigBuilder,
-)
-from natal.configurator.age_structured import AgeStructuredConfigurator
-from natal.configurator.discrete import DiscreteConfigurator
+
+# Register legacy submodule paths -> relocated modules.
+_sys.modules["natal.configurator._base"] = _m0
+_sys.modules["natal.configurator._factory"] = _m1
+_sys.modules["natal.configurator._fitness"] = _m2
+_sys.modules["natal.configurator._params"] = _m3
+_sys.modules["natal.configurator._registry_builder"] = _m4
+_sys.modules["natal.configurator.age_structured"] = _m5
+_sys.modules["natal.configurator.discrete"] = _m6
+
+# Legacy parity: real packages expose imported children as attributes; the
+# sys.modules aliases above do not.  Re-bind every aliased submodule onto its
+# (aliased) parent so ``package.submodule`` attribute access keeps working.
+for _alias in [a for a in _sys.modules if a.startswith(__name__ + ".")]:
+    _parent, _, _leaf = _alias.rpartition(".")
+    setattr(_sys.modules[_parent], _leaf, _sys.modules[_alias])
 
 __all__ = [
     "AgeStructuredConfigurator",

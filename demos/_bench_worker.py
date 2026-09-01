@@ -4,8 +4,9 @@ import time
 
 sys.path.insert(0, ".")
 
-from natal.genetics import Species
 from natal.population.age_structured import AgeStructuredPopulation
+
+from natal.genetics import Species
 
 warmup = int(sys.argv[1])
 bench = int(sys.argv[2])

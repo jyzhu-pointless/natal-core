@@ -1,80 +1,104 @@
-"""Population configuration and state data containers.
+"""Forwarding shim: the ``data`` package now lives at
+``natal.frontend.data``.
 
-This subpackage provides immutable configuration containers, growth-mode
-constants, factory/build functions, extraction helpers, and simulation state
-objects used throughout the NATAL Core framework.
+This module preserves the legacy import path during the Phase-0
+directory reorganisation; it will be removed once the migration
+completes.
 """
+import sys as _sys
 
-from ._builders import (
+# Alias imports for submodule forwarding (registered below).
+import natal.frontend.data._builders as _m0
+import natal.frontend.data._config as _m1
+import natal.frontend.data._engine as _m2
+import natal.frontend.data._extract as _m3
+import natal.frontend.data._plain as _m4
+import natal.frontend.data.config as _m5
+import natal.frontend.data.constants as _m6
+import natal.frontend.data.state as _m7
+from natal.frontend.data import (
+    BEVERTON_HOLT,
+    CONCAVE,
+    FIXED,
+    LINEAR,
+    LOGISTIC,
+    NO_COMPETITION,
+    DiscretePopulationConfig,
+    DiscretePopulationState,
+    PlainDiscretePopulationState,
+    PlainPopulationConfig,
+    PlainPopulationState,
+    PopulationConfig,
+    PopulationState,
     build_custom_array,
     build_discrete_engine_config,
     build_population_config,
     compress_config,
     compress_hl,
     decompress_hl,
-    from_plain_population_config,
-    initialize_gamete_map,
-    initialize_zygote_map,
-    to_plain_population_config,
-)
-from ._extract import (
     extract_gamete_frequencies,
     extract_gamete_frequencies_by_glab,
     extract_zygote_frequencies,
-)
-from .config import DiscretePopulationConfig, PlainPopulationConfig, PopulationConfig
-from .constants import BEVERTON_HOLT, CONCAVE, FIXED, LINEAR, LOGISTIC, NO_COMPETITION
-from .state import (
-    DiscretePopulationState,
-    PlainDiscretePopulationState,
-    PlainPopulationState,
-    PopulationState,
     from_plain_discrete_population_state,
+    from_plain_population_config,
     from_plain_population_state,
+    initialize_gamete_map,
+    initialize_zygote_map,
     parse_flattened_discrete_state,
     parse_flattened_state,
     to_plain_discrete_population_state,
+    to_plain_population_config,
     to_plain_population_state,
 )
 
+# Register legacy submodule paths -> relocated modules.
+_sys.modules["natal.data._builders"] = _m0
+_sys.modules["natal.data._config"] = _m1
+_sys.modules["natal.data._engine"] = _m2
+_sys.modules["natal.data._extract"] = _m3
+_sys.modules["natal.data._plain"] = _m4
+_sys.modules["natal.data.config"] = _m5
+_sys.modules["natal.data.constants"] = _m6
+_sys.modules["natal.data.state"] = _m7
+
+# Legacy parity: real packages expose imported children as attributes; the
+# sys.modules aliases above do not.  Re-bind every aliased submodule onto its
+# (aliased) parent so ``package.submodule`` attribute access keeps working.
+for _alias in [a for a in _sys.modules if a.startswith(__name__ + ".")]:
+    _parent, _, _leaf = _alias.rpartition(".")
+    setattr(_sys.modules[_parent], _leaf, _sys.modules[_alias])
+
 __all__ = [
-    # config.py
-    'DiscretePopulationConfig',
-    'PopulationConfig',
-    # constants.py
-    'NO_COMPETITION',
-    'FIXED',
-    'LOGISTIC',
-    'LINEAR',
-    'CONCAVE',
-    'BEVERTON_HOLT',
-    # state.py
-    'PopulationState',
-    'DiscretePopulationState',
-    # _extract.py
-    'extract_gamete_frequencies',
-    'extract_gamete_frequencies_by_glab',
-    'extract_zygote_frequencies',
-    # _builders.py — public builders and helpers
-    'build_population_config',
-    'build_discrete_engine_config',
-    'build_custom_array',
-    'initialize_zygote_map',
-    'initialize_gamete_map',
-    'compress_hl',
-    'decompress_hl',
-    'compress_config',
-    'to_plain_population_config',
-    'from_plain_population_config',
-    # state helpers
-    'to_plain_population_state',
-    'to_plain_discrete_population_state',
-    'from_plain_population_state',
-    'from_plain_discrete_population_state',
-    'parse_flattened_state',
-    'parse_flattened_discrete_state',
-    # backward-compat aliases
-    'PlainPopulationConfig',
-    'PlainPopulationState',
-    'PlainDiscretePopulationState',
+    "BEVERTON_HOLT",
+    "CONCAVE",
+    "DiscretePopulationConfig",
+    "DiscretePopulationState",
+    "FIXED",
+    "LINEAR",
+    "LOGISTIC",
+    "NO_COMPETITION",
+    "PlainDiscretePopulationState",
+    "PlainPopulationConfig",
+    "PlainPopulationState",
+    "PopulationConfig",
+    "PopulationState",
+    "build_custom_array",
+    "build_discrete_engine_config",
+    "build_population_config",
+    "compress_config",
+    "compress_hl",
+    "decompress_hl",
+    "extract_gamete_frequencies",
+    "extract_gamete_frequencies_by_glab",
+    "extract_zygote_frequencies",
+    "from_plain_discrete_population_state",
+    "from_plain_population_config",
+    "from_plain_population_state",
+    "initialize_gamete_map",
+    "initialize_zygote_map",
+    "parse_flattened_discrete_state",
+    "parse_flattened_state",
+    "to_plain_discrete_population_state",
+    "to_plain_population_config",
+    "to_plain_population_state",
 ]
