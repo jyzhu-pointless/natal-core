@@ -39,6 +39,7 @@ site/*
 .codex/*
 .reasonix/*
 .agents/*
+.zcode/*
 
 *beamer*
 
