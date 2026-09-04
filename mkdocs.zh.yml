@@ -111,11 +111,11 @@ nav:
   - 内部实现:
     - 4_index_registry.md
     - 4_simulation_engine.md
-    - 4_numba_optimization.md
+    - 4_backend_selection.md
     - 4_population_state_config.md
   - 附录:
     - 等位基因转换规则: allele_conversion_rules.md
-    - 缓存与代码生成: caching_and_codegen.md
+    - 执行后端: caching_and_codegen.md
     - 基因型筛选器: genotype_filter.md
     - 迁移: migration_builder_to_configurator.md
     - 迁移核实现: migration_kernel_impl.md
