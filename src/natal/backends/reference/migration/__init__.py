@@ -1,15 +1,15 @@
-"""Spatial migration backend modules."""
+"""Spatial migration backend modules (slice 5 CSR engine)."""
 
 from __future__ import annotations
 
-from natal.backends.reference.migration.adjacency import apply_spatial_adjacency_mode
-from natal.backends.reference.migration.kernel import (
-    apply_spatial_kernel_migration,
-    apply_spatial_kernel_migration_heterogeneous,
+from natal.backends.reference.migration.adjacency import (
+    apply_csr_migration,
+    migrate_scalar_bucket,
+    migrate_sperm_bucket,
 )
 
 __all__ = [
-    "apply_spatial_adjacency_mode",
-    "apply_spatial_kernel_migration",
-    "apply_spatial_kernel_migration_heterogeneous",
+    "apply_csr_migration",
+    "migrate_scalar_bucket",
+    "migrate_sperm_bucket",
 ]

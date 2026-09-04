@@ -1,4 +1,14 @@
-"""Adjacency-mode spatial migration engine."""
+"""CSR-mode spatial migration engine (slice 5).
+
+Runtime migration is a pure numeric loop: a per-deme/per-sex/per-age
+rate column multiplied by the frozen CSR routing table folded at build
+time (:mod:`natal.frontend.spatial.migration`).  There is no topology,
+kernel, or adjacency interpretation left at runtime — changing any of
+those rebuilds the model (Blueprint discipline).
+
+The bucket helpers keep the pre-slice-5 arithmetic order entry for
+entry, so deterministic trajectories are bit-identical.
+"""
 
 from __future__ import annotations
 
@@ -7,56 +17,53 @@ from typing import Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-try:
-    from numba import get_num_threads, prange  # pyright: ignore
-    from numba.np.ufunc.parallel import get_thread_id  # pyright: ignore
-    numba_max_threads = int(get_num_threads())
-except ImportError:
-    prange = range  # type: ignore[assignment]
+import natal.backends.reference.sampling as sampling
 
-    def get_thread_id() -> int:
-        """Return a dummy thread ID when Numba is not available."""
-        return 0
+prange = range
 
-    numba_max_threads = 1
 
-from natal.backends.numba import compat as nbc
-from natal.backends.numba.utils import njit_switch
+def get_thread_id() -> int:
+    """Return a dummy thread ID — the reference backend is single-threaded."""
+    return 0
+
+
+MAX_THREADS = 1
 
 __all__ = [
-    "apply_spatial_adjacency_mode",
+    "apply_csr_migration",
     "migrate_scalar_bucket",
     "migrate_sperm_bucket",
 ]
-
-
-@njit_switch(cache=True, parallel=True)
-def _apply_spatial_adjacency_migration_internal(
+def _apply_csr_migration_internal(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
-    row_dst_idx: NDArray[np.int64],
-    row_dst_prob: NDArray[np.float64],
-    row_nnz: NDArray[np.int64],
+    indptr: NDArray[np.int64],
+    dest_idx: NDArray[np.int64],
+    weights: NDArray[np.float64],
     rate: NDArray[np.float64],
     stochastic: bool,
     continuous_sampling: bool,
+    stay_after_send: bool,
     n_threads: int,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Internal implementation for spatial adjacency migration.
-
-    This function contains the shared logic for both deterministic and stochastic
-    migration modes using precomputed sparse adjacency rows.
+    """Shared CSR migration body for the deterministic and stochastic paths.
 
     Args:
         ind_count_all: Stacked individual-count tensor.
         sperm_store_all: Stacked sperm-storage tensor.
-        row_dst_idx: Sparse destination indices per source row.
-        row_dst_prob: Sparse destination probabilities per source row.
-        row_nnz: Number of valid destinations per source row.
-        rate: Migration probability.
-        stochastic: Whether to use stochastic migration sampling.
-        continuous_sampling: Whether to use continuous sampling.
-        n_threads: Number of thread lanes reserved for thread-local buffers.
+        indptr: CSR row pointer, length ``n_demes + 1``.
+        dest_idx: CSR destination index per entry.
+        weights: CSR outbound weight per entry (already normalized at
+            build time).
+        rate: ``(n_demes, n_sexes, n_ages)`` migration-rate column.
+        stochastic: Whether outbound mass is sampled.
+        continuous_sampling: Whether stochastic mode uses continuous
+            approximations.
+        stay_after_send: Deterministic bookkeeping order — ``False``
+            keeps the adjacency-mode "stay first" order, ``True`` the
+            kernel-mode "distribute first, residual last" order.
+        n_threads: Number of thread lanes reserved for thread-local
+            buffers.
 
     Returns:
         A tuple ``(ind_next, sperm_next)`` after one migration step.
@@ -66,17 +73,16 @@ def _apply_spatial_adjacency_migration_internal(
     n_sexes = ind_count_all.shape[1]
     n_ages = ind_count_all.shape[2]
     n_ztypes = ind_count_all.shape[3]
-    max_nnz = row_dst_idx.shape[1]
-
-    # Resolve rate array to age count: scalar broadcast to all ages.
-    rate_arr = rate
-    if rate_arr.shape[0] == 1 and n_ages > 1:
-        rate_arr = np.full(n_ages, rate_arr[0], dtype=np.float64)
+    max_row = 1
+    for src in range(n_demes):
+        row_len = int(indptr[src + 1] - indptr[src])
+        if row_len > max_row:
+            max_row = row_len
 
     # Thread-local accumulation avoids write conflicts across ``prange`` source lanes.
     out_ind_by_thread = np.zeros((n_threads,) + ind_count_all.shape, dtype=np.float64)
     out_sperm_by_thread = np.zeros((n_threads,) + sperm_store_all.shape, dtype=np.float64)
-    distributed_by_thread = np.zeros((n_threads, max_nnz), dtype=np.float64)
+    distributed_by_thread = np.zeros((n_threads, max_row), dtype=np.float64)
 
     # Parallelize by source deme so each lane processes one source row at a time.
     for src in prange(n_demes):
@@ -85,7 +91,11 @@ def _apply_spatial_adjacency_migration_internal(
         out_sperm = out_sperm_by_thread[thread_id]
         distributed = distributed_by_thread[thread_id]
 
-        src_nnz = int(row_nnz[src])
+        row_start = int(indptr[src])
+        row_end = int(indptr[src + 1])
+        src_nnz = row_end - row_start
+        row_dst_idx = dest_idx[row_start:row_end]
+        row_dst_prob = weights[row_start:row_end]
 
         # Handle female virgin + sperm-coupled buckets.
         for age in range(n_ages):
@@ -100,13 +110,14 @@ def _apply_spatial_adjacency_migration_internal(
                 if virgin_count < 0.0 and abs(virgin_count) < 1e-9:
                     virgin_count = 0.0
 
+                female_rate = rate[src, 0, age]
                 if stochastic:
                     _migrate_scalar_bucket(
                         value=virgin_count,
-                        row_dst_idx=row_dst_idx[src],
-                        row_dst_prob=row_dst_prob[src],
+                        row_dst_idx=row_dst_idx,
+                        row_dst_prob=row_dst_prob,
                         row_dst_count=src_nnz,
-                        rate=rate_arr[age],
+                        rate=female_rate,
                         stochastic=True,
                         continuous_sampling=continuous_sampling,
                         distributed=distributed,
@@ -119,26 +130,41 @@ def _apply_spatial_adjacency_migration_internal(
                 else:
                     # Deterministic calculation
                     if src_nnz > 0:
-                        outbound = virgin_count * rate_arr[age]
-                        stay = virgin_count - outbound
-                        out_ind[src, 0, age, female_ztype] += stay
-                        for nnz_idx in range(src_nnz):
-                            dst = int(row_dst_idx[src, nnz_idx])
-                            prob = row_dst_prob[src, nnz_idx]
-                            out_ind[dst, 0, age, female_ztype] += outbound * prob
+                        outbound = virgin_count * female_rate
+                        if stay_after_send:
+                            moved_total = 0.0
+                            for nnz_idx in range(src_nnz):
+                                dst = int(row_dst_idx[nnz_idx])
+                                moved = outbound * row_dst_prob[nnz_idx]
+                                out_ind[dst, 0, age, female_ztype] += moved
+                                moved_total += moved
+                            out_ind[src, 0, age, female_ztype] += (
+                                virgin_count - moved_total
+                            )
+                        else:
+                            stay = virgin_count - outbound
+                            out_ind[src, 0, age, female_ztype] += stay
+                            for nnz_idx in range(src_nnz):
+                                dst = int(row_dst_idx[nnz_idx])
+                                prob = row_dst_prob[nnz_idx]
+                                out_ind[dst, 0, age, female_ztype] += outbound * prob
                     else:
                         out_ind[src, 0, age, female_ztype] += virgin_count
 
+                # Stored sperm travels with its mated female: it must use
+                # the female rate, otherwise the virgin/stored bookkeeping
+                # (female_total >= stored_total) breaks after migration.
+                male_rate = female_rate
                 for male_ztype in range(n_ztypes):
                     sperm_value = sperm_store_all[src, age, female_ztype, male_ztype]
 
                     if stochastic:
                         _migrate_sperm_bucket(
                             value=sperm_value,
-                            row_dst_idx=row_dst_idx[src],
-                            row_dst_prob=row_dst_prob[src],
+                            row_dst_idx=row_dst_idx,
+                            row_dst_prob=row_dst_prob,
                             row_dst_count=src_nnz,
-                            rate=rate_arr[age],
+                            rate=male_rate,
                             stochastic=True,
                             continuous_sampling=continuous_sampling,
                             distributed=distributed,
@@ -152,16 +178,31 @@ def _apply_spatial_adjacency_migration_internal(
                     else:
                         # Deterministic calculation
                         if src_nnz > 0:
-                            outbound_sperm = sperm_value * rate_arr[age]
-                            stay_sperm = sperm_value - outbound_sperm
-                            out_sperm[src, age, female_ztype, male_ztype] += stay_sperm
-                            out_ind[src, 0, age, female_ztype] += stay_sperm
-                            for nnz_idx in range(src_nnz):
-                                dst = int(row_dst_idx[src, nnz_idx])
-                                prob = row_dst_prob[src, nnz_idx]
-                                moved_sperm = outbound_sperm * prob
-                                out_sperm[dst, age, female_ztype, male_ztype] += moved_sperm
-                                out_ind[dst, 0, age, female_ztype] += moved_sperm
+                            outbound_sperm = sperm_value * male_rate
+                            if stay_after_send:
+                                moved_total = 0.0
+                                for nnz_idx in range(src_nnz):
+                                    dst = int(row_dst_idx[nnz_idx])
+                                    moved_sperm = outbound_sperm * row_dst_prob[nnz_idx]
+                                    out_sperm[dst, age, female_ztype, male_ztype] += moved_sperm
+                                    out_ind[dst, 0, age, female_ztype] += moved_sperm
+                                    moved_total += moved_sperm
+                                out_sperm[src, age, female_ztype, male_ztype] += (
+                                    sperm_value - moved_total
+                                )
+                                out_ind[src, 0, age, female_ztype] += (
+                                    sperm_value - moved_total
+                                )
+                            else:
+                                stay_sperm = sperm_value - outbound_sperm
+                                out_sperm[src, age, female_ztype, male_ztype] += stay_sperm
+                                out_ind[src, 0, age, female_ztype] += stay_sperm
+                                for nnz_idx in range(src_nnz):
+                                    dst = int(row_dst_idx[nnz_idx])
+                                    prob = row_dst_prob[nnz_idx]
+                                    moved_sperm = outbound_sperm * prob
+                                    out_sperm[dst, age, female_ztype, male_ztype] += moved_sperm
+                                    out_ind[dst, 0, age, female_ztype] += moved_sperm
                         else:
                             out_sperm[src, age, female_ztype, male_ztype] += sperm_value
                             out_ind[src, 0, age, female_ztype] += sperm_value
@@ -171,14 +212,15 @@ def _apply_spatial_adjacency_migration_internal(
             for age in range(n_ages):
                 for ztype in range(n_ztypes):
                     value = ind_count_all[src, sex, age, ztype]
+                    bucket_rate = rate[src, sex, age]
 
                     if stochastic:
                         _migrate_scalar_bucket(
                             value=value,
-                            row_dst_idx=row_dst_idx[src],
-                            row_dst_prob=row_dst_prob[src],
+                            row_dst_idx=row_dst_idx,
+                            row_dst_prob=row_dst_prob,
                             row_dst_count=src_nnz,
-                            rate=rate_arr[age],
+                            rate=bucket_rate,
                             stochastic=True,
                             continuous_sampling=continuous_sampling,
                             distributed=distributed,
@@ -191,13 +233,22 @@ def _apply_spatial_adjacency_migration_internal(
                     else:
                         # Deterministic calculation
                         if src_nnz > 0:
-                            outbound = value * rate_arr[age]
-                            stay = value - outbound
-                            out_ind[src, sex, age, ztype] += stay
-                            for nnz_idx in range(src_nnz):
-                                dst = int(row_dst_idx[src, nnz_idx])
-                                prob = row_dst_prob[src, nnz_idx]
-                                out_ind[dst, sex, age, ztype] += outbound * prob
+                            outbound = value * bucket_rate
+                            if stay_after_send:
+                                moved_total = 0.0
+                                for nnz_idx in range(src_nnz):
+                                    dst = int(row_dst_idx[nnz_idx])
+                                    moved = outbound * row_dst_prob[nnz_idx]
+                                    out_ind[dst, sex, age, ztype] += moved
+                                    moved_total += moved
+                                out_ind[src, sex, age, ztype] += value - moved_total
+                            else:
+                                stay = value - outbound
+                                out_ind[src, sex, age, ztype] += stay
+                                for nnz_idx in range(src_nnz):
+                                    dst = int(row_dst_idx[nnz_idx])
+                                    prob = row_dst_prob[nnz_idx]
+                                    out_ind[dst, sex, age, ztype] += outbound * prob
                         else:
                             out_ind[src, sex, age, ztype] += value
 
@@ -209,293 +260,46 @@ def _apply_spatial_adjacency_migration_internal(
         out_sperm += out_sperm_by_thread[thread_id]
 
     return out_ind, out_sperm
-
-
-@njit_switch(cache=True)
-def _apply_spatial_adjacency_migration_deterministic_parallel(
+def apply_csr_migration(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
-    row_dst_idx: NDArray[np.int64],
-    row_dst_prob: NDArray[np.float64],
-    row_nnz: NDArray[np.int64],
-    row_total: NDArray[np.float64],
-    rate: NDArray[np.float64],
-    n_threads: int,
-) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Apply one deterministic migration step using sparse per-source rows."""
-    return _apply_spatial_adjacency_migration_internal(
-        ind_count_all=ind_count_all,
-        sperm_store_all=sperm_store_all,
-        row_dst_idx=row_dst_idx,
-        row_dst_prob=row_dst_prob,
-        row_nnz=row_nnz,
-        rate=rate,
-        stochastic=False,
-        continuous_sampling=False,
-        n_threads=n_threads,
-    )
-
-
-@njit_switch(cache=True)
-def _apply_spatial_adjacency_migration_stochastic_parallel(
-    ind_count_all: NDArray[np.float64],
-    sperm_store_all: NDArray[np.float64],
-    row_dst_idx: NDArray[np.int64],
-    row_dst_prob: NDArray[np.float64],
-    row_nnz: NDArray[np.int64],
-    rate: NDArray[np.float64],
-    continuous_sampling: bool,
-    n_threads: int,
-) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Apply one stochastic migration step using sparse routing rows."""
-    return _apply_spatial_adjacency_migration_internal(
-        ind_count_all=ind_count_all,
-        sperm_store_all=sperm_store_all,
-        row_dst_idx=row_dst_idx,
-        row_dst_prob=row_dst_prob,
-        row_nnz=row_nnz,
-        rate=rate,
-        stochastic=True,
-        continuous_sampling=continuous_sampling,
-        n_threads=n_threads,
-    )
-
-@njit_switch(cache=True)
-def apply_spatial_adjacency_mode(
-    ind_count_all: NDArray[np.float64],
-    sperm_store_all: NDArray[np.float64],
-    adjacency: NDArray[np.float64],
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
+    indptr: NDArray[np.int64],
+    dest_idx: NDArray[np.int64],
+    weights: NDArray[np.float64],
     rate: NDArray[np.float64],
     stochastic: bool,
     continuous_sampling: bool,
+    stay_after_send: bool = False,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Apply one synchronized migration step in adjacency backend mode."""
-    row_dst_idx, row_dst_prob, row_nnz, row_total = _build_sparse_migration_rows(
-        adjacency=adjacency,
-        migration_mode=migration_mode,
-        topology_rows=topology_rows,
-        topology_cols=topology_cols,
-        topology_wrap=topology_wrap,
-        migration_kernel=migration_kernel,
-        kernel_include_center=kernel_include_center,
-    )
-
-    if not stochastic:
-        return _apply_spatial_adjacency_migration_deterministic_parallel(
-            ind_count_all=ind_count_all,
-            sperm_store_all=sperm_store_all,
-            row_dst_idx=row_dst_idx,
-            row_dst_prob=row_dst_prob,
-            row_nnz=row_nnz,
-            row_total=row_total,
-            rate=rate,
-            n_threads=numba_max_threads,
-        )
-
-    return _apply_spatial_adjacency_migration_stochastic_parallel(
-        ind_count_all=ind_count_all,
-        sperm_store_all=sperm_store_all,
-        row_dst_idx=row_dst_idx,
-        row_dst_prob=row_dst_prob,
-        row_nnz=row_nnz,
-        rate=rate,
-        continuous_sampling=continuous_sampling,
-        n_threads=numba_max_threads,
-    )
-
-@njit_switch(cache=True)
-def _build_sparse_migration_rows(
-    adjacency: NDArray[np.float64],
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
-) -> Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.int64], NDArray[np.float64]]:
-    """Build sparse outbound rows for all source demes.
-
-    The output stores, for each source deme, the list of valid destination
-    indices and their normalized probabilities. Only non-zero destinations are
-    stored in the leading ``row_nnz[src]`` slots.
+    """Apply one synchronized migration step over the CSR routing table.
 
     Args:
-        adjacency: Dense adjacency matrix for adjacency mode.
-        migration_mode: Migration backend selector.
-        topology_rows: Topology row count for kernel mode.
-        topology_cols: Topology column count for kernel mode.
-        topology_wrap: Topology wrap flag for kernel mode.
-        migration_kernel: Migration kernel for kernel mode.
-        kernel_include_center: Whether the center kernel element is included.
+        ind_count_all: Stacked individual-count tensor.
+        sperm_store_all: Stacked sperm-storage tensor.
+        indptr: CSR row pointer, length ``n_demes + 1``.
+        dest_idx: CSR destination index per entry.
+        weights: CSR normalized outbound weight per entry.
+        rate: ``(n_demes, n_sexes, n_ages)`` migration-rate column.
+        stochastic: Whether to use stochastic migration sampling.
+        continuous_sampling: Whether to use continuous sampling.
 
     Returns:
-        A tuple ``(row_dst_idx, row_dst_prob, row_nnz, row_total)``.
+        A tuple ``(ind_next, sperm_next)`` after one migration step.
     """
-    # Number of source demes equals adjacency row count.
-    n_demes = adjacency.shape[0]
-    # Destination index table; unused slots are -1.
-    row_dst_idx = np.full((n_demes, n_demes), -1, dtype=np.int64)
-    # Destination probability table parallel to ``row_dst_idx``.
-    row_dst_prob = np.zeros((n_demes, n_demes), dtype=np.float64)
-    # Effective sparse row length per source.
-    row_nnz = np.zeros(n_demes, dtype=np.int64)
-    # Sum of positive weights in each source row.
-    row_total = np.zeros(n_demes, dtype=np.float64)
-
-    # ``row_probs`` is only needed when migration rows are synthesized from
-    # topology/kernel metadata. For dense adjacency mode we compact directly
-    # from ``adjacency[src, :]`` in a single pass.
-    row_probs = np.zeros(n_demes, dtype=np.float64)
-    for src in range(n_demes):
-        # Adjacency mode can be compacted in one pass: iterate dense row once
-        # and write non-zero destinations directly to sparse buffers.
-        if migration_mode == 0:
-            src_total = 0.0
-            src_nnz = 0
-            for dst in range(n_demes):
-                prob = adjacency[src, dst]
-                if prob <= 0.0:
-                    continue
-                row_dst_idx[src, src_nnz] = dst
-                row_dst_prob[src, src_nnz] = prob
-                src_nnz += 1
-                src_total += prob
-
-            row_nnz[src] = src_nnz
-            row_total[src] = src_total
-            continue
-
-        # Fill dense row for this source according to migration backend.
-        _populate_migration_row(
-            adjacency=adjacency,
-            migration_mode=migration_mode,
-            topology_rows=topology_rows,
-            topology_cols=topology_cols,
-            topology_wrap=topology_wrap,
-            migration_kernel=migration_kernel,
-            kernel_include_center=kernel_include_center,
-            source_idx=src,
-            row_probs=row_probs,
-        )
-
-        # Compact dense row into sparse (index, probability) pairs.
-        # Running sum of kept probabilities in this row.
-        src_total = 0.0
-        # Running sparse length for this source.
-        src_nnz = 0
-        for dst in range(n_demes):
-            # Candidate probability in dense scratch row.
-            prob = row_probs[dst]
-            if prob <= 0.0:
-                # Skip zero-weight destination.
-                continue
-            # Store destination index in compact row.
-            row_dst_idx[src, src_nnz] = dst
-            # Store probability in compact row.
-            row_dst_prob[src, src_nnz] = prob
-            # Advance sparse write cursor.
-            src_nnz += 1
-            # Accumulate row probability mass.
-            src_total += prob
-
-        # Persist sparse row length.
-        row_nnz[src] = src_nnz
-        # Persist row mass for fast no-edge checks.
-        row_total[src] = src_total
-
-    return row_dst_idx, row_dst_prob, row_nnz, row_total
-
-@njit_switch(cache=True)
-def _populate_migration_row(
-    adjacency: NDArray[np.float64],
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
-    source_idx: int,
-    row_probs: NDArray[np.float64],
-) -> None:
-    """Fill one normalized outbound migration row for a single source deme.
-
-    Args:
-        adjacency: Dense outbound migration matrix.
-        migration_mode: Backend selector. ``0`` reads directly from adjacency;
-            ``1`` computes one row from topology-aware kernel offsets.
-        topology_rows: Number of rows in the grid used by kernel migration.
-        topology_cols: Number of columns in the grid used by kernel migration.
-        topology_wrap: Whether out-of-bounds kernel offsets wrap around.
-        migration_kernel: Odd-sized migration kernel.
-        kernel_include_center: Whether the kernel center contributes to the
-            source deme itself.
-        source_idx: Flattened source-deme index.
-        row_probs: Preallocated output buffer that receives the normalized
-            outbound weights for ``source_idx``.
-    """
-    n_demes = row_probs.shape[0]
-    for idx in range(n_demes):
-        row_probs[idx] = 0.0
-
-    if migration_mode == 0:
-        # Dense adjacency mode already stores one outbound row per source
-        # deme, so this helper just copies the precomputed probabilities.
-        for dst_idx in range(n_demes):
-            row_probs[dst_idx] = adjacency[source_idx, dst_idx]
-        return
-
-    if topology_rows <= 0 or topology_cols <= 0:
-        return
-
-    src_row = source_idx // topology_cols
-    src_col = source_idx % topology_cols
-    kernel_rows = migration_kernel.shape[0]
-    kernel_cols = migration_kernel.shape[1]
-    center_row = kernel_rows // 2
-    center_col = kernel_cols // 2
-    total = 0.0
-
-    for kernel_row in range(kernel_rows):
-        for kernel_col in range(kernel_cols):
-            # The kernel is interpreted as source-relative offsets in the
-            # flattened topology grid rather than as a matrix that directly
-            # mixes neighboring rows of the state tensor.
-            if (not kernel_include_center) and kernel_row == center_row and kernel_col == center_col:
-                continue
-            weight = migration_kernel[kernel_row, kernel_col]
-            if weight <= 0.0:
-                continue
-
-            dst_row = src_row + kernel_row - center_row
-            dst_col = src_col + kernel_col - center_col
-
-            if topology_wrap:
-                # Periodic boundaries wrap offsets onto the opposite edge.
-                dst_row %= topology_rows
-                dst_col %= topology_cols
-            elif dst_row < 0 or dst_row >= topology_rows or dst_col < 0 or dst_col >= topology_cols:
-                # Non-wrapping topologies simply drop invalid offsets. The
-                # remaining valid weights are renormalized below.
-                continue
-
-            # Kernel routing is constructed from source-relative offsets in the
-            # topology index space, then normalized over valid destinations
-            # only. This preserves total migrating mass at borders.
-            dst_idx = dst_row * topology_cols + dst_col
-            row_probs[dst_idx] += weight
-            total += weight
-
-    if total > 0.0:
-        for dst_idx in range(n_demes):
-            row_probs[dst_idx] /= total
-
-@njit_switch(cache=True)
+    if np.all(rate <= 0.0):
+        return ind_count_all, sperm_store_all
+    return _apply_csr_migration_internal(
+        ind_count_all=ind_count_all,
+        sperm_store_all=sperm_store_all,
+        indptr=indptr,
+        dest_idx=dest_idx,
+        weights=weights,
+        rate=rate,
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling,
+        stay_after_send=stay_after_send,
+        n_threads=MAX_THREADS,
+    )
 def _sample_outbound_count(
     value: float,
     rate: float,
@@ -524,14 +328,10 @@ def _sample_outbound_count(
     if continuous_sampling:
         # Continuous mode keeps the state real-valued while still injecting
         # stochasticity into the outbound amount.
-        return float(nbc.continuous_binomial(float(value), float(rate)))
+        return float(sampling.continuous_binomial(float(value), float(rate)))
     # Discrete mode treats each scalar bucket as a Bernoulli family and keeps
     # the migrated amount integer-valued.
-    return float(nbc.binomial(int(round(float(value))), float(rate)))
-
-
-@njit_switch(cache=True)
-@njit_switch(cache=True)
+    return float(sampling.binomial(int(round(float(value))), float(rate)))
 def _distribute_outbound_count(
     outbound: float,
     row_dst_prob: NDArray[np.float64],
@@ -544,7 +344,7 @@ def _distribute_outbound_count(
 
     Args:
         outbound: Total mass already selected to leave the source bucket.
-        row_dst_prob: Destination probabilities for one source deme.
+        row_dst_prob: Destination weights for one source deme.
         row_dst_count: Number of valid destination entries in ``row_dst_prob``.
         stochastic: Whether to sample rather than use expectations.
         continuous_sampling: Whether stochastic mode should use the
@@ -591,18 +391,15 @@ def _distribute_outbound_count(
     if continuous_sampling:
         # Continuous multinomial keeps real-valued buckets while conserving
         # the sampled outbound total.
-        nbc.continuous_multinomial(float(outbound), probs, distributed)
+        sampling.continuous_multinomial(float(outbound), probs, distributed)
         return
 
     # Discrete multinomial allocates an integer outbound count to
     # destination demes while preserving the total exactly.
     # Discrete stochastic split preserving integer outbound total.
-    sampled = nbc.multinomial(int(round(float(outbound))), probs)
+    sampled = sampling.multinomial(int(round(float(outbound))), probs)
     for idx in range(row_dst_count):
         distributed[idx] = float(sampled[idx])
-
-
-@njit_switch(cache=True)
 def _migrate_scalar_bucket(
     value: float,
     row_dst_idx: NDArray[np.int64],
@@ -668,9 +465,6 @@ def _migrate_scalar_bucket(
     # bucket. This keeps the update synchronized and avoids in-place bias.
     # Keep any non-moved remainder at the source bucket.
     out_ind[source_idx, sex_idx, age_idx, genotype_idx] += value - moved_total
-
-
-@njit_switch(cache=True)
 def _migrate_sperm_bucket(
     value: float,
     row_dst_idx: NDArray[np.int64],

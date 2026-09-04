@@ -1,13 +1,11 @@
 """Spatial population models, topology, and configuration."""
 
 from .configurator import BatchSetting, SpatialConfigurator, batch_setting
+from .migration import MigrationCSR
 from .population import SpatialPopulation
 from .topology import (
     GridTopology,
-    HeterogeneousKernelParams,
     HexGrid,
-    MigrationParams,
-    SpatialTopology,
     SquareGrid,
     build_adjacency_matrix,
     build_gaussian_kernel,
@@ -16,12 +14,10 @@ from .topology import (
 __all__ = [
     "BatchSetting",
     "GridTopology",
-    "HeterogeneousKernelParams",
     "HexGrid",
-    "MigrationParams",
+    "MigrationCSR",
     "SpatialConfigurator",
     "SpatialPopulation",
-    "SpatialTopology",
     "SquareGrid",
     "batch_setting",
     "build_adjacency_matrix",

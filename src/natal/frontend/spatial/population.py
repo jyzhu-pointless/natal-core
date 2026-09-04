@@ -7,7 +7,6 @@ Each deme is represented by one concrete ``BasePopulation`` subclass instance.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from copy import copy, deepcopy
 from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
@@ -16,7 +15,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Protocol,
     Tuple,
     TypeAlias,
     cast,
@@ -25,19 +23,16 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.backends.numba.lifecycle as lifecycle_engine
-from natal.backends.numba.lifecycle_wrappers import (
-    LifecycleWrappers,
-    compile_lifecycle_wrappers,
-)
-from natal.backends.numba.utils import is_numba_enabled
+import natal.backends.reference.lifecycle as lifecycle_engine
 from natal.backends.reference.spatial_simulator import (
     run_spatial_migration,
 )
+from natal.contracts.blueprint import Blueprint
+from natal.contracts.materialize import SpatialMigration, materialize
+from natal.contracts.params import Params
 from natal.frontend.data import (
-    DiscretePopulationConfig,
     DiscretePopulationState,
-    PopulationConfig,
+    ModelDraft,
     PopulationState,
 )
 from natal.frontend.genetics import Species
@@ -45,22 +40,26 @@ from natal.frontend.hooks import (
     CompiledHookDescriptor,
     DemeSelector,
     HookProgram,
+    OpType,
 )
+from natal.frontend.hooks.compile.container import CompiledEventHooks
 from natal.frontend.population.base import BasePopulation
+from natal.frontend.spatial.migration import (
+    MigrationCSR,
+    RateDeclaration,
+    csr_dense_row,
+    fold_migration_csr,
+    normalize_migration_rate,
+    resolve_migration_mode,
+)
 from natal.frontend.spatial.topology import (
     GridTopology,
-    HeterogeneousKernelParams,
-    MigrationParams,
-    SpatialTopology,
     build_adjacency_matrix,
 )
 
 if TYPE_CHECKING:
-    from natal.frontend.configurator import Configurator
-    from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.output.history import History
     from natal.frontend.output.observation import Observation, ObservationResult
-    from natal.frontend.presets import GeneticPreset
     from natal.frontend.spatial.configurator import SpatialConfigurator
 
 __all__ = ["SpatialPopulation"]
@@ -69,11 +68,6 @@ ConfigObject: TypeAlias = object
 SpatialStateTuple: TypeAlias = tuple[NDArray[np.float64], NDArray[np.float64], int]
 DemePopulation: TypeAlias = BasePopulation[PopulationState] | BasePopulation[DiscretePopulationState]
 
-class _ConfigBankProtocol(Protocol):
-    """Minimal mutable config bank interface for heterogeneous dispatch."""
-
-    def append(self, value: ConfigObject) -> None:
-        """Append one config object."""
 
 def _coerce_adjacency_dense(
     adjacency: object,
@@ -171,433 +165,380 @@ def _coerce_adjacency_dense(
     return dense
 
 
-def _normalize_migration_rate(
-    rate: float | NDArray[np.float64] | Sequence[float],
-    n_ages: int,
-    adult_start_age: int,
-) -> NDArray[np.float64]:
-    """Normalize migration rate to an age-indexed array.
+class DemeSlice:
+    """Compatible view of one deme over the spatial SoA contract.
 
-    Scalar inputs: the rate applies only to adult ages (>= adult_start_age);
-    juvenile ages (< adult_start_age) default to 0.  In discrete populations
-    (n_ages == 1) the single age gets the full rate regardless of
-    adult_start_age.  Explicit arrays are used as-is.
-    """
-    arr = np.atleast_1d(np.asarray(rate, dtype=np.float64))
-    if arr.shape == (1,):
-        if n_ages > 1 and adult_start_age > 0:
-            result = np.full(n_ages, arr[0], dtype=np.float64)
-            result[:adult_start_age] = 0.0
-            return result
-        return np.full(n_ages, arr[0], dtype=np.float64)
-    if arr.shape == (n_ages,):
-        return arr
-    raise ValueError(
-        f"migration_rate shape {arr.shape} does not match n_ages={n_ages}"
-    )
+    Slice-5 stage 3: ``spatial.deme(i)`` returns this view instead of the
+    raw per-deme population.  Reads are fully compatible — every missing
+    attribute (``config``, ``state``, ``registry``, ``name``, …) is
+    delegated to the underlying deme object, so UI code and the ~15 test
+    files that consume the deep ``.config`` / ``.state`` interfaces keep
+    working unchanged.
 
+    Writes follow the stage-3 data plane:
 
-class _SpatialUpdate:
-    """Wrapper returned by :meth:`SpatialPopulation.update`.
+    - ``write_ecology`` writes the deme's ecology column entry AND the
+      deme's draft (per-field clone-on-write), so every execution path —
+      Python dispatch and the Rust session columns —
+      sees the same value.
+    - ``write_genetics`` forks the deme's genetics variant (Rust bank) and
+      clones the draft arrays, so divergence at one deme never leaks into
+      the demes that previously shared its tables.
 
-    Each chainable method accepts the same parameters as ``Configurator``,
-    plus ``BatchSetting`` values for per-deme parameter variation — same API
-    as ``SpatialConfigurator`` at build time.
+    Runtime config surgery through ``update()`` chains is gone on purpose:
+    the first-class runtime write path is the params surface (inside hooks
+    the ``TickContext`` lends the same writable surface).
     """
 
-    def __init__(
-        self, spatial_pop: SpatialPopulation, *, deme: int | None = None,
-    ) -> None:
-        """Initialize the per-deme or multi-deme updater.
+    def __init__(self, pop: SpatialPopulation, index: int) -> None:
+        """Bind the slice to one deme of a spatial population.
 
         Args:
-            spatial_pop: The spatial population whose demes will be
-                updated.
-            deme: When set, updates target only the given deme index;
-                when ``None``, updates target all demes.
+            pop: The owning spatial population.
+            index: Zero-based deme index.
         """
-        self._pop = spatial_pop
-        self._deme = deme
+        self._pop = pop
+        self._index = index
 
-    def competition(
-        self, **kwargs: object,  # object: Python **kwargs convention; values validated at call site
-    ) -> _SpatialUpdate:
-        self._apply_batch_or_scalar("competition", kwargs)
-        return self
+    @property
+    def index(self) -> int:
+        """int: Zero-based deme index of this slice."""
+        return self._index
 
-    def reproduction(
-        self, **kwargs: object,  # object: Python **kwargs convention; values validated at call site
-    ) -> _SpatialUpdate:
-        self._apply_batch_or_scalar("reproduction", kwargs)
-        return self
-
-    def survival(
-        self, **kwargs: object,  # object: Python **kwargs convention; values validated at call site
-    ) -> _SpatialUpdate:
-        self._apply_batch_or_scalar("survival", kwargs)
-        return self
-
-    def fitness(
-        self, **kwargs: object,  # object: Python **kwargs convention; values validated at call site
-    ) -> _SpatialUpdate:
-        self._dispatch_scalar("fitness", kwargs)
-        return self
-
-    def custom(
-        self, **kwargs: object,  # object: Python **kwargs convention; values validated at call site
-    ) -> _SpatialUpdate:
-        self._apply_batch_or_scalar("custom", kwargs)
-        return self
-
-    def setup(
-        self, **kwargs: object,  # object: Python **kwargs convention; values validated at call site
-    ) -> _SpatialUpdate:
-        self._apply_batch_or_scalar("setup", kwargs)
-        return self
-
-    def modifiers(
-        self,
-        gamete_modifiers: list[GameteModifier] | None = None,
-        zygote_modifiers: list[ZygoteModifier] | None = None,
-    ) -> _SpatialUpdate:
-        """Register gamete / zygote modifiers on target deme(s).
+    def __setattr__(self, name: str, value: object) -> None:
+        """Forward attribute writes to the underlying deme.
 
         Args:
-            gamete_modifiers: Sequence of ``GameteModifier`` instances
-                affecting meiosis (genotype → gamete mapping).
-            zygote_modifiers: Sequence of ``ZygoteModifier`` instances
-                affecting fertilization (gamete → zygote mapping).
+            name: Attribute name.
+            value: Attribute value.
+        """
+        if name in ("_pop", "_index"):
+            object.__setattr__(self, name, value)
+            return
+        deme = object.__getattribute__(self, "_pop")._demes[  # pyright: ignore[reportPrivateUsage]  # delegated write channel
+            object.__getattribute__(self, "_index")
+        ]
+        setattr(deme, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        """Forward attribute deletion to the underlying deme.
+
+        Args:
+            name: Attribute name.
+        """
+        if name in ("_pop", "_index"):
+            object.__delattr__(self, name)
+            return
+        deme = object.__getattribute__(self, "_pop")._demes[  # pyright: ignore[reportPrivateUsage]  # delegated write channel
+            object.__getattribute__(self, "_index")
+        ]
+        delattr(deme, name)
+
+    # -- delegated reads (full backward compatibility) ----------------------
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate unknown attributes to the underlying deme.
+
+        The return type is ``Any`` on purpose: the slice's attribute
+        surface is exactly the wrapped population's (config, state,
+        registry, hooks, ...), which is statically unknowable from the
+        view; consumers keep their existing concrete types through the
+        delegation.
+
+        Args:
+            name: Attribute name.
 
         Returns:
-            Self for chaining.
+            The deme attribute value.
         """
-        if self._deme is not None:
-            self._pop.update_deme(self._deme).modifiers(
-                gamete_modifiers=gamete_modifiers,
-                zygote_modifiers=zygote_modifiers,
-            )
-            return self
-
-        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
-        for d in self._pop.demes:
-            old_config = d.config
-            cid = id(old_config)
-
-            if gamete_modifiers:
-                for mod in gamete_modifiers:
-                    d.add_gamete_modifier(mod, refresh=False)
-            if zygote_modifiers:
-                for mod in zygote_modifiers:
-                    d.add_zygote_modifier(mod, refresh=False)
-
-            if cid in updated_configs:
-                d.set_config(updated_configs[cid])
-                continue
-            if gamete_modifiers or zygote_modifiers:
-                d.refresh_modifier_maps()
-            updated_configs[cid] = d.config
-        return self
-
-    def presets(self, *presets: GeneticPreset) -> _SpatialUpdate:
-        if self._deme is not None:
-            target = self._pop.deme(self._deme)
-            original_config = target.config
-            try:
-                self._pop.update_deme(self._deme).presets(*presets)
-            except Exception:
-                # update_deme() performs clone-on-write before Configurator's
-                # transaction starts, so restore the caller-visible shared
-                # config identity as well as Configurator's internal rollback.
-                target.set_config(original_config)
-                raise
-            return self
-
-        snapshots = [
-            (
-                d.config,
-                d.presets,
-                d.gamete_modifiers,
-                d.zygote_modifiers,
-            )
-            for d in self._pop.demes
+        # Only reached when normal lookup failed; _pop is set first in
+        # __init__, so this guard only fires for broken partial states.
+        deme = object.__getattribute__(self, "_pop")._demes[  # pyright: ignore[reportPrivateUsage]  # delegated read channel
+            object.__getattribute__(self, "_index")
         ]
-        preset_bindings: list[tuple[GeneticPreset, Species | None]] = [
-            (preset, preset._bound_species)  # pyright: ignore[reportPrivateUsage]  # rollback must preserve binding after a failed first registration.
-            for preset in presets
-        ]
-        modifier_groups: dict[
-            int,
-            tuple[
-                PopulationConfig | DiscretePopulationConfig,
-                list[tuple[int, str | None, GameteModifier]],
-                list[tuple[int, str | None, ZygoteModifier]],
-            ],
-        ] = {}
-        # Modifier callables built by the representative deme of each
-        # config-sharing group.  Followers share these by reference so
-        # that all demes in a group have identical _gamete_modifiers /
-        # _zygote_modifiers — otherwise preset.gamete_modifier(d) would
-        # create a fresh callable per deme, and semantically equivalent
-        # but numerically different closures produce diverging maps when
-        # any follower later calls refresh_modifiers() (F3×Refresh).
-        try:
-            for d in self._pop.demes:
-                old_config = d.config
-                cid = id(old_config)
+        return getattr(deme, name)
 
-                # add_preset has identity-based persistent dedup, so calling
-                # it with the same object twice (or across two presets()
-                # calls) is a no-op.  No per-call seen_presets needed.
-                for p in presets:
-                    d.add_preset(p)
+    @property
+    def config(self) -> ModelDraft:
+        """ModelDraft: The deme's live draft (read projection; see class notes)."""
+        return self._pop._demes[self._index].config  # pyright: ignore[reportPrivateUsage]  # delegated read channel
 
-                if cid in modifier_groups:
-                    shared_config, shared_gamete, shared_zygote = modifier_groups[cid]
-                    d._gamete_modifiers = list(shared_gamete)  # pyright: ignore[reportPrivateUsage]
-                    d._zygote_modifiers = list(shared_zygote)  # pyright: ignore[reportPrivateUsage]
-                    d.set_config(shared_config)
-                    continue
-                # Fitness patches mutate arrays in place.  Give each config
-                # group an isolated copy so every earlier group can be rolled
-                # back by identity if a later modifier build fails.
-                d.set_config(deepcopy(old_config))
-                d.refresh_modifiers()
-                d.reapply_preset_fitness()
-                modifier_groups[cid] = (
-                    d.config,
-                    list(d._gamete_modifiers),  # pyright: ignore[reportPrivateUsage]
-                    list(d._zygote_modifiers),  # pyright: ignore[reportPrivateUsage]
-                )
-        except Exception:
-            for d, snapshot in zip(self._pop.demes, snapshots):
-                old_config, old_presets, old_gamete, old_zygote = snapshot
-                d._presets = old_presets  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores registration metadata.
-                d._gamete_modifiers = old_gamete  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived metadata.
-                d._zygote_modifiers = old_zygote  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived metadata.
-                d.set_config(old_config)
-            for preset, bound_species in preset_bindings:
-                preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
-            raise
-        return self
+    @property
+    def state(self) -> PopulationState | DiscretePopulationState:
+        """The deme's live state NamedTuple (state arrays are writable)."""
+        return self._pop._demes[self._index].state  # pyright: ignore[reportPrivateUsage]  # delegated read channel
 
-    def reconfigure_preset(
-        self, preset: GeneticPreset, **changes: object,
-    ) -> _SpatialUpdate:
-        """Reconfigure a preset parameter on target deme(s).
+    # -- stage-3 write path --------------------------------------------------
 
-        Single-deme delegates to ``update_deme()`` → ``reconfigure_preset()``.
-        All-deme applies changes once, then rebuilds derived modifier lists
-        per deme and recomputes maps per shared config group.
+    def write_ecology(self, field: str, value: float | NDArray[np.float64]) -> None:
+        """Write one ecology value for this deme (column + draft + Rust).
 
-        Validation happens entirely before any mutation (validate-commit
-        two-phase): if any target deme lacks the preset registration or an
-        attribute name is invalid, the exception is raised and neither the
-        preset object nor any deme's config is changed.
+        Args:
+            field: Contract ecology field name (``carrying_capacity``,
+                ``eggs_per_female``, ``sex_ratio``, ``survival_rates``, …).
+            value: New scalar or array in the contract's logical shape.
 
-        A preset object registered on more than one deme cannot be
-        reconfigured on a single deme — the shared object would be mutated
-        for all demes while only the target deme's maps are rebuilt,
-        leaving the others in an inconsistent state.  Use all-deme
-        ``update().reconfigure_preset()`` instead, or register distinct
-        preset instances per deme.
+        Raises:
+            KeyError: If *field* is not an ecology field.
         """
+        self._pop._write_deme_ecology(self._index, field, value)  # pyright: ignore[reportPrivateUsage]  # single validated write channel
 
-        # ── Single-deme path ──
-        if self._deme is not None:
-            # Forbid reconfiguring a preset shared across multiple demes:
-            # setattr mutates the shared preset object in place, affecting
-            # all demes that hold a reference, but only the target deme's
-            # maps are rebuilt — the others would run with stale tensors
-            # while their preset metadata reflects the new parameter.
-            sharing_demes = [
-                i for i, d in enumerate(self._pop.demes)
-                if preset in d._presets  # pyright: ignore[reportPrivateUsage]
-            ]
-            if len(sharing_demes) > 1:
-                raise ValueError(
-                    f"Preset {preset.name!r} is registered on "
-                    f"{len(sharing_demes)} demes (indices {sharing_demes}). "
-                    f"Single-deme reconfigure_preset would mutate the shared "
-                    f"preset object but only rebuild deme {self._deme}'s "
-                    f"maps, leaving the others inconsistent. Use "
-                    f"update().reconfigure_preset() to reconfigure all "
-                    f"demes, or register distinct preset instances per deme."
-                )
-            self._pop.update_deme(self._deme).reconfigure_preset(preset, **changes)
-            return self
+    def write_genetics(self, field: str, values: NDArray[np.float64]) -> None:
+        """Write one genetics tensor for this deme, forking the variant.
 
-        # ── All-deme path: validate phase (zero side effects) ──
-        for d in self._pop.demes:
-            if preset not in d._presets:  # pyright: ignore[reportPrivateUsage]
-                raise ValueError(
-                    f"Preset {preset.name!r} is not registered on deme "
-                    f"{d._name!r}. Use presets() to register it first."  # pyright: ignore[reportPrivateUsage]
-                )
-        for attr in changes:
-            if not hasattr(preset, attr):
-                raise AttributeError(
-                    f"{type(preset).__name__} {preset.name!r} has no "
-                    f"attribute {attr!r}."
-                )
+        The deme's bank variant is cloned first (Rust side) and the draft
+        tables are detached, so demes that previously shared this genetics
+        keep their numerics bitwise unchanged.
 
-        # Validate a complete rebuild against every target registry before
-        # mutating the shared preset object.  Different demes may have distinct
-        # compressed axes, and a custom modifier may defer failure until its
-        # returned callable is invoked during map rebuilding.
-        candidate = copy(preset)
-        for attr, value in changes.items():
-            setattr(candidate, attr, value)
-        for d in self._pop.demes:
-            trial = d._clone(  # pyright: ignore[reportPrivateUsage]
-                f"{d.name}__preset_validation__",
-                config=deepcopy(d.config),
-            )
-            trial._presets = [  # pyright: ignore[reportPrivateUsage]
-                candidate if registered is preset else registered
-                for registered in trial._presets  # pyright: ignore[reportPrivateUsage]
-            ]
-            trial.refresh_modifiers()
-            trial.reapply_preset_fitness()
-
-        # ── Commit phase ──
-        for attr, value in changes.items():
-            setattr(preset, attr, value)
-
-        from natal.backends.reference.simulation.age_structured import (
-            sync_equilibrium_metrics,
-        )
-
-        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
-        for d in self._pop.demes:
-            old_config = d.config
-            cid = id(old_config)
-
-            d.refresh_modifiers(rebuild_maps=False)
-
-            if cid in updated_configs:
-                d.set_config(updated_configs[cid])
-                continue
-
-            d.refresh_modifier_maps()
-            d.reapply_preset_fitness()
-            sync_equilibrium_metrics(d.config)
-            updated_configs[cid] = d.config
-        return self
-
-    def _apply_batch_or_scalar(
-        self, method_name: str,         kwargs: dict[str, object],  # object: config field values (int, float, ndarray)
-    ) -> None:
-        """Dispatch kwargs: BatchSetting values → per-deme; scalars → all demes."""
-        from natal.frontend.spatial.configurator import BatchSetting
-
-        batch_keys = [k for k, v in kwargs.items() if isinstance(v, BatchSetting)]
-        if not batch_keys:
-            self._dispatch_scalar(method_name, kwargs)
-            return
-
-        n_demes = len(self._pop.demes)
-        # Expand all batch keys into per-deme value lists
-        expanded: dict[str, list[object]] = {}  # object: config field values per deme
-        for batch_key in batch_keys:
-            batch = cast(BatchSetting[Any], kwargs.pop(batch_key))  # Any: batch setting value type varies per config field
-            expanded[batch_key] = batch.expand(n_demes, self._pop.topology)
-
-        # Apply per-deme: each deme gets its slice of batch values + shared scalars.
-        # None values in batch lists mean "skip this deme for this parameter".
-        for i in range(n_demes):
-            per_deme_kwargs: dict[str, object] = dict(kwargs)  # object: config field values
-            all_none = True
-            for batch_key, vals in expanded.items():
-                val = vals[i]
-                if val is not None:
-                    per_deme_kwargs[batch_key] = val
-                    all_none = False
-            # Skip demes where every batch value is None (no modification needed)
-            if all_none and not kwargs:
-                continue
-            cfg = self._pop.update_deme(i)
-            getattr(cfg, method_name)(**per_deme_kwargs)
-
-    def _dispatch_scalar(
-        self, method_name: str,         kwargs: dict[str, object],  # object: config field values (int, float, ndarray)
-    ) -> None:
-        """Apply scalar kwargs to target deme(s) via the full Configurator method.
-
-        For ``fitness`` — the only method with non-idempotent in-place
-        writes (``mode='multiply'``) — deduplicates by the identity of the
-        4 fitness tensor arrays rather than by config shell identity.  This
-        prevents multiply from being applied multiple times to the same
-        shared array when heterogeneous config shells share fitness tensors
-        (e.g., ``_build_variant_config``'s shallow copy shares all
-        non-replaced arrays across variant groups).
-
-        For all other methods, in-place writes are idempotent (absolute
-        assignment via ``field[()] = value``), so shell-identity dedup is
-        safe: even if the same array is written twice, the result is the
-        same.  Shell-identity dedup also correctly broadcasts ``_replace``
-        changes (e.g., ``fixed_egg_count``) to all demes sharing a shell.
+        Args:
+            field: Contract genetics tensor name (one of the eight tables).
+            values: New contents in the table's logical shape.
         """
-        from natal.frontend.configurator import Configurator
+        self._pop._write_deme_genetics(self._index, field, values)  # pyright: ignore[reportPrivateUsage]  # single validated write channel
 
-        if self._deme is not None:
-            cfg = self._pop.update_deme(self._deme)
-            getattr(cfg, method_name)(**kwargs)
-            return
+    def __repr__(self) -> str:
+        """Return a debug representation pointing at the deme index."""
+        return f"DemeSlice(index={self._index}, pop={self._pop.name!r})"
 
-        # Fitness tensors are the write-set for the array-identity dedup.
-        # They are shared as a block across variant config shells (all 4
-        # come from the same build_config_maps call), so checking all 4
-        # identities correctly identifies the sharing group.
-        _FITNESS_FIELDS = (
-            "viability_fitness", "fecundity_fitness",
-            "sexual_selection_fitness", "zygote_viability_fitness",
-        )
-        use_array_dedup = method_name == "fitness"
+def _minimal_contract(
+    *,
+    n_demes: int,
+    n_sexes: int,
+    n_ages: int,
+    migration_csr: MigrationCSR,
+    rate3d: NDArray[np.float64],
+) -> tuple[Blueprint, Params]:
+    """Build a minimal spatial contract without a reference draft.
 
-        updated_configs: dict[int, PopulationConfig | DiscretePopulationConfig] = {}
-        written_arrays: set[int] = set()
+    Only used for lightweight deme doubles that predate the contract
+    era (test fixtures): dimensions come from the state shapes and the
+    genetics section stays empty.
 
-        for d in self._pop.demes:
-            old_config = d.config
-            cid = id(old_config)
+    Args:
+        n_demes: Number of demes.
+        n_sexes: Number of sexes.
+        n_ages: Number of age classes.
+        migration_csr: Folded migration CSR.
+        rate3d: ``(n_demes, n_sexes, n_ages)`` rate column.
 
-            if use_array_dedup:
-                # Skip if all fitness arrays have already been written
-                # in-place — the write has propagated through the shared
-                # arrays to this deme already.
-                array_ids = {
-                    id(getattr(old_config, f))
-                    for f in _FITNESS_FIELDS if hasattr(old_config, f)
-                }
-                if array_ids <= written_arrays:
-                    if cid in updated_configs:
-                        d.set_config(updated_configs[cid])
-                    continue
-                cfg = Configurator.for_population(d)
-                getattr(cfg, method_name)(**kwargs)
-                written_arrays.update(array_ids)
-                updated_configs[cid] = d.config
-            else:
-                if cid in updated_configs:
-                    d.set_config(updated_configs[cid])
-                    continue
-                cfg = Configurator.for_population(d)
-                getattr(cfg, method_name)(**kwargs)
-                updated_configs[cid] = d.config
+    Returns:
+        A ``(Blueprint, Params)`` pair with placeholder genetics.
+    """
+    blueprint = Blueprint(
+        n_sexes=n_sexes,
+        n_ages=n_ages,
+        n_ztypes=0,
+        n_gtypes=0,
+        n_glabs=0,
+        new_adult_age=0,
+        adult_ages=np.zeros(0, dtype=np.int64),
+        stochastic=False,
+        continuous_sampling=False,
+        fixed_egg_count=False,
+        has_sex_chromosomes=False,
+        extreme_speed_mode=0,
+        ztype_names=(),
+        gtype_names=(),
+        female_only_by_sex_chrom=np.zeros(0, dtype=np.bool_),
+        male_only_by_sex_chrom=np.zeros(0, dtype=np.bool_),
+        initial_individual_count=np.zeros((0,), dtype=np.float64),
+        initial_sperm_storage=np.zeros((0,), dtype=np.float64),
+        n_demes=n_demes,
+        migration_indptr=np.asarray(migration_csr.indptr, dtype=np.int64),
+        migration_dest_idx=np.asarray(migration_csr.dest_idx, dtype=np.int64),
+        migration_weights=np.asarray(migration_csr.weights, dtype=np.float64),
+    )
+    params = Params(
+        carrying_capacity=0.0,
+        eggs_per_female=0.0,
+        sex_ratio=0.5,
+        sperm_displacement_rate=0.0,
+        low_density_growth_rate=0.0,
+        growth_mode=0,
+        external_expected_eggs=-1.0,
+        survival_rates=np.zeros((n_sexes, n_ages), dtype=np.float64),
+        mating_rates=np.zeros((n_sexes, n_ages), dtype=np.float64),
+        reproduction_rates=np.zeros(n_ages, dtype=np.float64),
+        fertility=np.zeros(n_ages, dtype=np.float64),
+        competition_weights=np.zeros(n_ages, dtype=np.float64),
+        equilibrium_distribution=np.zeros((0, 0), dtype=np.float64),
+        viability_fitness=np.zeros((0,), dtype=np.float64),
+        fecundity_fitness=np.zeros((0,), dtype=np.float64),
+        sexual_selection_fitness=np.zeros((0,), dtype=np.float64),
+        zygote_viability_fitness=np.zeros((0,), dtype=np.float64),
+        offspring_tensor=np.zeros((0,), dtype=np.float64),
+        meiosis_map=np.zeros((0,), dtype=np.float64),
+        female_ztype_compatibility=np.zeros((0,), dtype=np.float64),
+        male_ztype_compatibility=np.zeros((0,), dtype=np.float64),
+        migration_rate=rate3d,
+    )
+    return blueprint, params
 
 
-_DETACH_FIELDS: tuple[str, ...] = (
+# Contract ecology field names carried as (n_demes, ...) columns.
+_ECOLOGY_COLUMN_FIELDS: frozenset[str] = frozenset({
     "carrying_capacity", "eggs_per_female", "sex_ratio",
-    "sperm_displacement_rate", "low_density_growth_rate",
-    "juvenile_growth_mode", "expected_competition_strength",
-    "expected_survival_rate", "generation_time",
-    "viability_fitness", "fecundity_fitness",
-    "sexual_selection_fitness", "zygote_viability_fitness",
-    "custom",
-    "age_based_survival_rates", "age_based_mating_rates",
-    "age_based_reproduction_rates", "female_age_based_fertility",
-    "age_based_relative_competition_strength",
-)
+    "sperm_displacement_rate", "low_density_growth_rate", "growth_mode",
+    "external_expected_eggs", "survival_rates", "mating_rates",
+    "reproduction_rates", "fertility", "competition_weights",
+    "equilibrium_distribution", "migration_rate",
+})
+
+# Contract ecology name -> draft field (scalar / vector columns).
+_ECOLOGY_DRAFT_FIELDS: dict[str, str] = {
+    "carrying_capacity": "carrying_capacity",
+    "eggs_per_female": "eggs_per_female",
+    "sex_ratio": "sex_ratio",
+    "sperm_displacement_rate": "sperm_displacement_rate",
+    "low_density_growth_rate": "low_density_growth_rate",
+    "growth_mode": "juvenile_growth_mode",
+    "external_expected_eggs": "external_expected_eggs",
+    "survival_rates": "age_based_survival_rates",
+    "mating_rates": "age_based_mating_rates",
+    "reproduction_rates": "age_based_reproduction_rates",
+    "fertility": "female_age_based_fertility",
+    "competition_weights": "age_based_relative_competition_strength",
+    "equilibrium_distribution": "equilibrium_individual_distribution",
+}
+
+# Contract genetics tensor name -> draft field (stage-3 fork write path).
+_GENETICS_DRAFT_FIELDS: dict[str, str] = {
+    "viability_fitness": "viability_fitness",
+    "fecundity_fitness": "fecundity_fitness",
+    "sexual_selection_fitness": "sexual_selection_fitness",
+    "zygote_viability_fitness": "zygote_viability_fitness",
+    "offspring_tensor": "offspring_tensor",
+    "meiosis_map": "zygotes_to_gametes_map",
+    "female_ztype_compatibility": "female_ztype_compatibility",
+    "male_ztype_compatibility": "male_ztype_compatibility",
+}
+
+
+class SpatialParamsView:
+    """Validated spatial runtime-parameter surface (stage-3 columns).
+
+    Reads return write-protected views of the live ``(n_demes, ...)``
+    ecology columns (engines see updates immediately).  Writes go through
+    :meth:`SpatialParamsView.tensor_write`, which validates the shape and
+    then routes the per-deme values through the deme write channel, so the
+    columns, the deme drafts, and the Rust session's ecology columns stay
+    in lockstep.
+    """
+
+    def __init__(self, pop: SpatialPopulation) -> None:
+        """Bind the view to its spatial population.
+
+        Args:
+            pop: The owning spatial population.
+        """
+        self._pop = pop
+
+    def __getattr__(self, name: str) -> NDArray[np.float64]:
+        """Read-protected view of one ecology column (or raise).
+
+        Args:
+            name: Contract ecology field name.
+
+        Returns:
+            A write-protected ``(n_demes, ...)`` column view.
+        """
+        columns = self._pop._ecology_columns  # pyright: ignore[reportPrivateUsage]  # column read channel
+        if name in columns:
+            arr = columns[name]
+            readonly = arr.view()
+            readonly.flags.writeable = False
+            return readonly
+        if name in _ECOLOGY_COLUMN_FIELDS:
+            raise KeyError(f"ecology column {name!r} is not materialized")
+        raise AttributeError(name)
+
+    @property
+    def migration_rate(self) -> NDArray[np.float64]:
+        """NDArray[np.float64]: Write-protected ``(n_demes, S, A)`` rate view."""
+        arr = self._pop._params.migration_rate  # pyright: ignore[reportPrivateUsage]  # view over the owned contract array
+        readonly = arr.view()
+        readonly.flags.writeable = False
+        return readonly
+
+    def tensor_write(self, field: str, values: RateDeclaration) -> None:
+        """Write one ecology column (validated, in place, per deme).
+
+        ``"migration_rate"`` keeps its build-time sugar: a scalar (adult
+        ages of all sexes, juveniles 0), a per-sex mapping, an
+        ``(n_ages,)`` vector, an ``(S, A)`` table, or the full
+        ``(n_demes, S, A)`` column.  Smaller shapes broadcast across demes.
+
+        Every other ecology field accepts the full ``(n_demes, ...)``
+        column or a per-deme shape broadcast across demes; the per-deme
+        values are routed through the shared write channel so the deme
+        drafts and the Rust session columns update with the column.
+
+        Args:
+            field: Contract ecology field name.
+            values: New column contents.
+
+        Raises:
+            ValueError: On an unknown field or a shape mismatch.
+        """
+        if field == "migration_rate":
+            params = self._pop._params  # pyright: ignore[reportPrivateUsage]  # single validated write channel
+            live = params.migration_rate
+            n_demes, n_sexes, n_ages = live.shape
+            if isinstance(values, dict):
+                bp = self._pop._blueprint  # pyright: ignore[reportPrivateUsage]  # frozen adult-age anchor
+                rate_2d = normalize_migration_rate(
+                    values, n_sexes, n_ages, int(bp.new_adult_age)
+                )
+                live[...] = np.tile(rate_2d, (n_demes, 1, 1))
+                return
+            arr = np.asarray(values, dtype=np.float64)
+            if arr.ndim == 3:
+                if arr.shape != live.shape:
+                    raise ValueError(
+                        f"migration_rate shape {arr.shape} does not match "
+                        f"{live.shape}"
+                    )
+                live[...] = arr
+                return
+            if arr.ndim == 2:
+                if arr.shape != (n_sexes, n_ages):
+                    raise ValueError(
+                        f"migration_rate shape {arr.shape} does not match "
+                        f"(n_sexes={n_sexes}, n_ages={n_ages})"
+                    )
+                live[...] = np.tile(arr, (n_demes, 1, 1))
+                return
+            bp = self._pop._blueprint  # pyright: ignore[reportPrivateUsage]  # frozen adult-age anchor
+            rate_2d = normalize_migration_rate(
+                values, n_sexes, n_ages, int(bp.new_adult_age)
+            )
+            live[...] = np.tile(rate_2d, (n_demes, 1, 1))
+            return
+
+        if field not in _ECOLOGY_COLUMN_FIELDS:
+            raise ValueError(f"unknown spatial params field {field!r}")
+        columns = self._pop._ecology_columns  # pyright: ignore[reportPrivateUsage]  # column write channel
+        column = columns.get(field)
+        if column is None:
+            raise ValueError(f"ecology column {field!r} is not materialized")
+        column_arr = np.asarray(column)
+        per_deme_shape = column_arr.shape[1:]
+        arr = np.asarray(values, dtype=np.float64)
+        if arr.shape == column_arr.shape:
+            per_deme_values: list[NDArray[np.float64] | float] = [
+                arr[i] for i in range(column_arr.shape[0])
+            ]
+        elif arr.ndim == 0:
+            per_deme_values = [float(arr) for _ in range(column_arr.shape[0])]
+        elif arr.shape == per_deme_shape:
+            per_deme_values = [arr for _ in range(column_arr.shape[0])]
+        else:
+            raise ValueError(
+                f"{field} shape {arr.shape} does not match the column "
+                f"{column_arr.shape} or the per-deme shape {per_deme_shape}"
+            )
+        for deme_index, per_deme_value in enumerate(per_deme_values):
+            self._pop._write_deme_ecology(deme_index, field, per_deme_value)  # pyright: ignore[reportPrivateUsage]  # single validated write channel
 
 
 class SpatialPopulation:
@@ -606,27 +547,25 @@ class SpatialPopulation:
     This class models spatial structure via composition: every deme is one
     already-initialized ``BasePopulation`` subclass instance.
 
+    Since slice 5 the spatial domain carries its own frozen contract pair:
+    ``blueprint`` holds the deme count and the folded migration CSR;
+    ``params`` holds the ``(n_demes, n_sexes, n_ages)`` migration-rate
+    column.  Runtime migration is ``rate column x fixed CSR`` — topology,
+    adjacency, kernel selection, and edge normalization exist only at
+    build time; changing any of them rebuilds the model.
+
     Attributes:
         name (str): Human-readable name for the spatial container.
         demes (Sequence[DemePopulation]): Immutable view of managed demes.
         n_demes (int): Number of demes in the spatial system.
         species (object): Shared species object used by all demes.
         topology (GridTopology | None): Spatial topology used by the landscape.
-        adjacency (NDArray[np.float64]): Outbound migration matrix between demes
-            when migration mode is ``"adjacency"``.
-        migration_strategy (Literal["auto", "adjacency", "kernel", "hybrid"]):
-            Strategy selector for migration backend. ``"hybrid"`` is reserved
-            for future mixed routing and currently follows ``"auto"`` runtime
-            behavior.
-        migration_mode (Literal["adjacency", "kernel"]): Active migration backend.
-        migration_kernel (NDArray[np.float64] | None): Migration kernel used when
-            ``migration_mode`` is ``"kernel"``.
-        kernel_bank (tuple[NDArray[np.float64], ...] | None): Optional bank of
-            per-pattern kernels reserved for future per-deme kernel routing.
-        deme_kernel_ids (NDArray[np.int64] | None): Optional per-deme kernel id
-            mapping into ``kernel_bank`` reserved for future mixed routing.
-        migration_rate (float): Fraction of each deme that participates in
-            migration on each tick.
+        blueprint (Blueprint): Frozen spatial contract (dimensions, flags,
+            migration CSR).
+        params (SpatialParamsView): Validated runtime-parameter surface;
+            the migration rate lives at ``params.migration_rate``.
+        migration_row (callable): Normalized outbound weight readout for
+            one source deme (derived from the CSR).
         tick (int): Current shared simulation tick across all demes.
     """
 
@@ -676,7 +615,7 @@ class SpatialPopulation:
         kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
-        migration_rate: float | NDArray[np.float64] | Sequence[float] = 0.0,
+        migration_rate: RateDeclaration = 0.0,
         adjust_migration_on_edge: bool = False,
         name: str = "SpatialPopulation",
     ) -> None:
@@ -705,7 +644,12 @@ class SpatialPopulation:
                 center as an outbound target for the source deme.
             migration_rate: Fraction of each deme that migrates each tick.
                 Scalar applies only to adult ages (>= new_adult_age from
-                config); juvenile ages default to 0.  Array indexed by age.
+                config); juvenile ages default to 0.  ``(n_ages,)`` arrays
+                are used as-is; a per-sex mapping such as
+                ``{"F": 0.2, "M": 0.05}`` applies the scalar/vector rules
+                per sex.  The normalized column lands on
+                ``pop.params.migration_rate`` with shape
+                ``(n_demes, n_sexes, n_ages)``.
             adjust_migration_on_edge: Whether to adjust migration rates on
                 boundaries. When False (default), boundary demes migrate less
                 due to fewer valid neighbors. When True, all demes have the
@@ -746,42 +690,21 @@ class SpatialPopulation:
                 "migration_strategy must be one of: auto, adjacency, kernel, hybrid"
             )
 
-        # Resolve strategy-level policy into one concrete backend mode.
-        if migration_strategy == "adjacency":
-            migration_mode: Literal["adjacency", "kernel"] = "adjacency"
-        elif migration_strategy == "kernel":
-            migration_mode = "kernel"
-        else:
-            # ``auto`` and ``hybrid`` currently share runtime behavior.
-            # TODO(spatial-migration/hybrid-dispatch): Implement true hybrid
-            # backend selection.
-            # Scope:
-            # - Add runtime branch policy for mixed routing (not alias to auto).
-            # - Allow per-run/per-tick decision between adjacency and kernel.
-            # Definition of done:
-            # - `migration_strategy="hybrid"` yields behavior distinguishable
-            #   from `auto` in at least one tested scenario.
-            migration_mode = "kernel" if migration_kernel is not None else "adjacency"
-
-        if migration_mode == "kernel":
-            if topology is None:
-                raise ValueError("topology is required when migration_kernel is provided")
-            has_heterogeneous_kernels = kernel_bank is not None and deme_kernel_ids is not None
-            if migration_kernel is None and not has_heterogeneous_kernels:
-                raise ValueError(
-                    "migration_kernel is required in kernel mode unless kernel_bank and "
-                    "deme_kernel_ids are both provided"
-                )
-            if migration_kernel is not None:
-                # Kernels are centered on one source cell; odd dimensions are
-                # required so a unique center index exists.
-                migration_kernel = np.asarray(migration_kernel, dtype=np.float64)
-                if (
-                    migration_kernel.ndim != 2
-                    or migration_kernel.shape[0] % 2 == 0
-                    or migration_kernel.shape[1] % 2 == 0
-                ):
-                    raise ValueError("migration_kernel must be a 2D array with odd dimensions")
+        # Resolve strategy-level policy into one concrete backend mode.  The
+        # strategy is a build-time materialization choice only — it is
+        # consumed here by the CSR fold and is not kept on the object.
+        # ``auto`` and ``hybrid`` share runtime behavior (see the historical
+        # hybrid-dispatch note in the migration module).
+        if migration_kernel is not None:
+            # Kernels are centered on one source cell; odd dimensions are
+            # required so a unique center index exists.
+            migration_kernel = np.asarray(migration_kernel, dtype=np.float64)
+            if (
+                migration_kernel.ndim != 2
+                or migration_kernel.shape[0] % 2 == 0
+                or migration_kernel.shape[1] % 2 == 0
+            ):
+                raise ValueError("migration_kernel must be a 2D array with odd dimensions")
 
         if adjacency is None:
             # Default adjacency:
@@ -835,43 +758,71 @@ class SpatialPopulation:
         # must always be rebuilt from all demes.
         self._hooks = self._compile_spatial_hooks_from_demes()
 
-        # Heterogeneous kernels use kernel mode directly (no dense pre-build).
-        # The kernel migration function selects per-deme kernels on-the-fly.
-        if migration_mode == "adjacency" and normalized_kernel_bank is not None and normalized_deme_kernel_ids is not None:
-            migration_mode = "kernel"
+        migration_mode = resolve_migration_mode(
+            strategy=migration_strategy,
+            migration_kernel=migration_kernel,
+            kernel_bank=normalized_kernel_bank,
+            deme_kernel_ids=normalized_deme_kernel_ids,
+        )
 
         self._name = name
         self._topology = topology
-        self._adjacency = adjacency_dense
-        self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = migration_strategy
-        self._migration_mode: Literal["adjacency", "kernel"] = migration_mode
-        self._migration_kernel = migration_kernel
-        self._kernel_bank = normalized_kernel_bank
-        self._deme_kernel_ids = normalized_deme_kernel_ids
-        self._kernel_include_center = bool(kernel_include_center)
-        self._migration_mode_code = 0 if migration_mode == "adjacency" else 1
-        ind = self._demes[0].state.individual_count
-        n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
-        adult_start_age = self._adult_start_age(n_ages)
-        self._migration_rate = _normalize_migration_rate(migration_rate, n_ages, adult_start_age)
-        self._adjust_migration_on_edge = bool(adjust_migration_on_edge)
+        # -- slice-5 contract fold ------------------------------------------
+        # Topology, adjacency, kernel selection, kernel-center handling, and
+        # edge normalization are resolved once here; runtime migration is the
+        # frozen CSR multiplied by the Params rate column.  Nothing spatial
+        # about migration survives on the object besides the CSR and the
+        # contract pair.
+        n_sexes, n_ages, adult_start_age = self._rate_axes(n_demes)
+        rate_2d = normalize_migration_rate(
+            migration_rate, n_sexes, n_ages, adult_start_age
+        )
+        migration_csr = fold_migration_csr(
+            n_demes=n_demes,
+            topology=topology,
+            adjacency_dense=adjacency_dense,
+            migration_kernel=migration_kernel,
+            kernel_bank=normalized_kernel_bank,
+            deme_kernel_ids=normalized_deme_kernel_ids,
+            kernel_include_center=bool(kernel_include_center),
+            adjust_on_edge=bool(adjust_migration_on_edge),
+            mode=migration_mode,
+        )
+        self._migration_csr = migration_csr
+        rate3d = np.tile(rate_2d, (n_demes, 1, 1))
+        try:
+            draft = self._export_reference_draft()
+        except TypeError:
+            # Lightweight test doubles may not implement ``export_config``;
+            # the contract pair degrades to the shape-level minimum while
+            # the CSR and rate column stay fully functional.
+            self._blueprint, self._params = _minimal_contract(
+                n_demes=n_demes,
+                n_sexes=rate_2d.shape[0],
+                n_ages=rate_2d.shape[1],
+                migration_csr=migration_csr,
+                rate3d=rate3d,
+            )
+        else:
+            self._blueprint, self._params = materialize(
+                draft,
+                SpatialMigration(
+                    indptr=migration_csr.indptr,
+                    dest_idx=migration_csr.dest_idx,
+                    weights=migration_csr.weights,
+                    rate=rate3d,
+                ),
+            )
         # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
 
-        # Pre-built parameter bundles for kernel dispatch.
-        self._spatial_topo = SpatialTopology(
-            rows=0 if topology is None else int(topology.rows),
-            cols=0 if topology is None else int(topology.cols),
-            wrap=False if topology is None else bool(topology.wrap),
-        )
-        self._migration_params = MigrationParams(
-            kernel=self._migration_kernel_array(),
-            include_center=bool(kernel_include_center),
-            rate=self._migration_rate,
-            adjust_on_edge=bool(adjust_migration_on_edge),
-            adjacency=adjacency_dense,
-            mode_code=0 if migration_mode == "adjacency" else 1,
-        )
+        # -- stage-3 ecology columns (contract name -> column array) --------
+        # Every ecology field lives as an (n_demes, ...) column on this
+        # container.  The migration-rate entry shares the live Params array
+        # (never a copy), so engines reading pop._params.migration_rate see
+        # column writes zero-copy.  Deme-slice ecology writes keep the
+        # columns and the deme drafts in lockstep.
+        self._ecology_columns = self._collect_ecology_columns()
 
         # Observation-based history recording.
         self._observation: Optional[Observation] = None
@@ -890,6 +841,73 @@ class SpatialPopulation:
                     f"deme[{idx}] tick ({deme.tick}) does not match deme[0] tick ({self._tick})"
                 )
         self._initialize_default_output_policy()
+
+    def _rate_axes(self, n_demes: int) -> tuple[int, int, int]:
+        """Resolve ``(n_sexes, n_ages, adult_start_age)`` for the rate column.
+
+        Prefers the reference deme's draft (authoritative build-time
+        axes); falls back to the state tensor shape for lightweight test
+        doubles without a draft.
+
+        Args:
+            n_demes: Number of demes (unused by the resolution itself;
+                accepted for call-site readability).
+
+        Returns:
+            The ``(n_sexes, n_ages, new_adult_age)`` triple.
+
+        Raises:
+            ValueError: If *n_demes* is not positive.
+        """
+        if n_demes < 1:
+            raise ValueError("n_demes must be >= 1")
+        export_fn = getattr(self._demes[0], "export_config", None)
+        if callable(export_fn):
+            draft = cast(ModelDraft, export_fn())
+            return int(draft.n_sexes), int(draft.n_ages), int(draft.new_adult_age)
+        ind = self._demes[0].state.individual_count
+        if ind.ndim == 3:
+            return int(ind.shape[0]), int(ind.shape[1]), (1 if ind.shape[1] > 1 else 0)
+        return 2, 1, 0
+
+    def _export_reference_draft(self) -> ModelDraft:
+        """Return deme 0's exported draft as the spatial contract reference.
+
+        The spatial Blueprint/Params pair materializes from the first
+        deme's draft (all demes share dimensions and execution flags);
+        per-deme ecology differences stay on the deme drafts until the
+        variant-bank slice.
+
+        Returns:
+            The reference ``ModelDraft``.
+
+        Raises:
+            TypeError: If deme 0 does not implement ``export_config``.
+        """
+        export_fn = getattr(self._demes[0], "export_config", None)
+        if not callable(export_fn):
+            raise TypeError("deme[0] does not implement export_config()")
+        return cast(ModelDraft, export_fn())
+
+    def _export_deme_drafts(self) -> list[ModelDraft]:
+        """Export every deme's draft, in deme order.
+
+        Used by the Rust backend wiring: the columnized ecology and the
+        genetics variant bank are gathered from the per-deme drafts.
+
+        Returns:
+            One ``ModelDraft`` per deme.
+
+        Raises:
+            TypeError: If any deme does not implement ``export_config``.
+        """
+        drafts: list[ModelDraft] = []
+        for idx, deme in enumerate(self._demes):
+            export_fn = getattr(deme, "export_config", None)
+            if not callable(export_fn):
+                raise TypeError(f"deme[{idx}] does not implement export_config()")
+            drafts.append(cast(ModelDraft, export_fn()))
+        return drafts
 
     def _initialize_default_output_policy(self) -> None:
         """Install identity Observation and raw History for direct construction.
@@ -966,9 +984,9 @@ class SpatialPopulation:
         return self._name
 
     @property
-    def demes(self) -> Sequence[DemePopulation]:
-        """Sequence[DemePopulation]: Immutable view of all managed demes."""
-        return tuple(self._demes)
+    def demes(self) -> Sequence[DemeSlice]:
+        """Sequence[DemeSlice]: Immutable view of all managed deme slices."""
+        return tuple(DemeSlice(self, i) for i in range(len(self._demes)))
 
     @property
     def n_demes(self) -> int:
@@ -981,143 +999,302 @@ class SpatialPopulation:
         return self._demes[0].species
 
     @property
-    def adjacency(self) -> NDArray[np.float64]:
-        """NDArray[np.float64]: Outbound migration matrix between demes."""
-        return self._adjacency
-
-    @property
     def topology(self) -> GridTopology | None:
-        """GridTopology | None: Landscape topology used by the spatial model."""
+        """GridTopology | None: Landscape topology used by the spatial model.
+
+        Read-only build-time metadata (deme coordinates, neighbor
+        queries); it no longer participates in runtime migration, which
+        consumes the frozen Blueprint CSR.
+        """
         return self._topology
 
     @property
-    def migration_mode(self) -> Literal["adjacency", "kernel"]:
-        """Literal["adjacency", "kernel"]: Active migration backend."""
-        return self._migration_mode
+    def blueprint(self) -> Blueprint:
+        """Blueprint: Frozen spatial contract (dimensions, flags, migration CSR)."""
+        return self._blueprint
 
     @property
-    def migration_strategy(self) -> Literal["auto", "adjacency", "kernel", "hybrid"]:
-        """Literal["auto", "adjacency", "kernel", "hybrid"]: Strategy policy."""
-        return self._migration_strategy
+    def params(self) -> SpatialParamsView:
+        """SpatialParamsView: Validated spatial runtime-parameter surface.
 
-    @property
-    def migration_kernel(self) -> NDArray[np.float64] | None:
-        """NDArray[np.float64] | None: Kernel used by topology-aware migration."""
-        return self._migration_kernel
-
-    @property
-    def kernel_bank(self) -> tuple[NDArray[np.float64], ...] | None:
-        """tuple[NDArray[np.float64], ...] | None: Reserved heterogeneous kernels."""
-        return self._kernel_bank
-
-    @property
-    def deme_kernel_ids(self) -> NDArray[np.int64] | None:
-        """NDArray[np.int64] | None: Reserved per-deme kernel ids."""
-        return self._deme_kernel_ids
-
-    def _adult_start_age(self, n_ages: int) -> int:
-        """Resolve adult start age from the first deme's config.
-
-        Falls back to 1 for age-structured populations when config is
-        unavailable (e.g. test fixtures).
+        The migration rate lives at ``params.migration_rate`` with shape
+        ``(n_demes, n_sexes, n_ages)``; writes go through
+        :meth:`SpatialParamsView.tensor_write`.
         """
-        try:
-            return int(self._demes[0].config.new_adult_age)
-        except AttributeError:
-            return 1 if n_ages > 1 else 0
+        return SpatialParamsView(self)
 
     @property
-    def migration_rate(self) -> NDArray[np.float64]:
-        """NDArray[np.float64]: Age-specific migration rate per tick."""
-        return self._migration_rate
+    def migration_csr(self) -> MigrationCSR:
+        """MigrationCSR: Frozen outbound migration routing table."""
+        return self._migration_csr
 
-    @migration_rate.setter
-    def migration_rate(self, value: float | NDArray[np.float64] | Sequence[float]) -> None:
-        ind = self._demes[0].state.individual_count
-        n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
-        adult_start_age = self._adult_start_age(n_ages)
-        self._migration_rate = _normalize_migration_rate(value, n_ages, adult_start_age)
-        # Rebuild MigrationParams so the updated rate reaches both
-        # the Python dispatch path and the codegen wrapper path.
-        self._migration_params = self._migration_params._replace(rate=self._migration_rate)
+    def deme(self, idx: int) -> DemeSlice:
+        """Return one deme slice by positional index.
 
-    @property
-    def adjust_migration_on_edge(self) -> bool:
-        """bool: Whether to adjust migration rates on boundaries."""
-        return self._adjust_migration_on_edge
-
-    def deme(self, idx: int) -> DemePopulation:
-        """Return one deme by positional index.
+        The slice delegates every read to the underlying deme population
+        (``config``, ``state``, ``registry``, …), so deep read interfaces
+        stay fully compatible.  Writes go through the stage-3 channels:
+        :meth:`DemeSlice.write_ecology` (column + draft + Rust session)
+        and :meth:`DemeSlice.write_genetics` (variant fork).
 
         Args:
             idx: Zero-based deme index.
 
         Returns:
-            The deme population at ``idx``.
+            The deme slice at ``idx``.
+        """
+        return DemeSlice(self, idx)
+
+    def _deme_object(self, idx: int) -> DemePopulation:
+        """Return the raw deme object (typed internal consumers only).
+
+        Public readers should use :meth:`deme`; this accessor exists for
+        the few internal consumers (output translation, recording-plan
+        compilation) whose signatures demand a ``BasePopulation``.
+
+        Args:
+            idx: Zero-based deme index.
+
+        Returns:
+            The underlying deme population.
         """
         return self._demes[idx]
 
-    def update(self, deme: int | None = None) -> _SpatialUpdate:
-        """Return an updater for modifying this population's config.
+    # -- stage-3 write channels (ecology columns + genetics fork) --------
 
-        Supports both scalar and ``batch_setting`` values in chain calls,
-        matching the ``SpatialConfigurator`` API::
+    def _sync_ecology_columns_from_rows(
+        self, rows: list[NDArray[np.float64]]
+    ) -> None:
+        """Commit per-deme tick-local ecology chains to columns and draft.
 
-            # Modify all demes simultaneously
-            pop.update().competition(carrying_capacity=5000)
+        Called after a python-dispatch tick whose program carried
+        ``Op.set_param``.  The container columns (the authoritative spatial
+        ecology store, mirroring the Rust columnized Params) take each
+        deme's final local value.  The shared draft is deliberately not
+        written here (a ``_replace`` would split the object shared across
+        demes); per-deme drafts already hold their own values via the
+        flush-time ``set_config`` propagation.
 
-            # Modify a specific deme (auto-detaches shared config)
-            pop.update(deme=3).competition(carrying_capacity=8000)
-
-            # Batch per-deme modification (same API as build time)
-            from natal.frontend.spatial.configurator import batch_setting
-            pop.update().competition(
-                carrying_capacity=batch_setting([100, 200, 300, 400])
-            )
+        Args:
+            rows: Per-deme final local rows (index-aligned with demes).
         """
-        return _SpatialUpdate(self, deme=deme)
+        from natal.frontend.hooks.types import ECO_PARAM_NAMES
 
-    def update_deme(self, demi: int) -> Configurator:
-        """Get a Configurator for a specific deme with clone-on-write.
-
-        Per-field detach: for each mutable config array in
-        ``_DETACH_FIELDS``, check whether any other deme shares the same
-        array object.  Only shared fields are copied into a private
-        config; unshared fields stay by reference.
-
-        This replaces the old ``carrying_capacity`` identity proxy, which
-        used a single field to infer the sharing state of the entire
-        config.  That inference breaks when different config shells share
-        some arrays but not others — for example, when a user calls
-        ``set_config(config._replace(carrying_capacity=new_K))`` on one
-        deme, producing a shell with a private K but shared fitness
-        arrays.  The K-proxy would see "K is unique → no sharing → no
-        detach", and a subsequent in-place fitness write would penetrate
-        to every deme sharing those arrays.
-        """
-        from natal.frontend.configurator import Configurator
-
-        target = self._demes[demi]
-        config = target.config
-
-        copied: dict[str, NDArray[np.generic]] = {}
-        for field in _DETACH_FIELDS:
-            if not hasattr(config, field):
+        for pid, name in enumerate(ECO_PARAM_NAMES):
+            column = self._ecology_columns.get(name)
+            if column is None:
                 continue
-            field_array = getattr(config, field)
-            # Detach if any other deme shares this exact array object.
-            if any(
-                getattr(d.config, field, None) is field_array
-                for j, d in enumerate(self._demes) if j != demi
-            ):
-                copied[field] = field_array.copy()
+            arr = np.asarray(column)
+            if arr.ndim == 1 and arr.size == len(rows):
+                for deme_index, row in enumerate(rows):
+                    arr[deme_index] = float(row[pid])
+        # Draft sync is deliberately skipped: the NamedTuple draft is
+        # immutable (_replace would split the shared object across demes)
+        # and the container columns are the authoritative spatial ecology
+        # store that pop.params and materialize both read.
 
-        if copied:
-            private = config._replace(**copied)
-            object.__setattr__(target, '_config', private)
-            config = private
+    def _collect_ecology_columns(self) -> dict[str, NDArray[np.float64]]:
+        """Gather the (n_demes, ...) ecology columns from the deme drafts.
 
-        return Configurator.for_population(target)
+        The migration-rate entry shares the live Params array (zero-copy),
+        and every other column is a fresh gather.  Lightweight deme
+        doubles without ``export_config`` degrade to the migration-rate
+        column only.
+
+        Returns:
+            The ecology column mapping keyed by contract field name.
+        """
+        n_demes = len(self._demes)
+        columns: dict[str, NDArray[np.float64]] = {}
+        try:
+            from natal.backends.rust.rust_backend import ecology_columns_from_drafts
+
+            columns.update(
+                {
+                    name: np.asarray(column_values, dtype=np.float64)
+                    for name, column_values in ecology_columns_from_drafts(
+                        self._export_deme_drafts()
+                    ).items()
+                }
+            )
+            # Reshape the session-boundary flat columns to their logical
+            # ``(n_demes, *per_deme)`` shapes so reads and writes see the
+            # contract's dimensionality.
+            for name, draft_field in _ECOLOGY_DRAFT_FIELDS.items():
+                column = columns.get(name)
+                if column is None or column.ndim != 1:
+                    continue
+                first = getattr(self._demes[0].config, draft_field, None)
+                if first is None or np.asarray(first).ndim == 0:
+                    continue
+                per_deme = np.asarray(first).shape
+                if column.size == n_demes * int(np.prod(per_deme)):
+                    columns[name] = column.reshape((n_demes,) + per_deme)
+        except TypeError:
+            # Lightweight test doubles: keep only the shared rate column.
+            pass
+        columns["migration_rate"] = np.asarray(
+            self._params.migration_rate, dtype=np.float64
+        )
+        return columns
+
+    def _rust_spatial_session(self) -> object | None:
+        """Return the enabled Rust spatial backend, or ``None``.
+
+        Returns:
+            The active ``RustHeterogeneousSpatialLifecycleBackend`` when
+            the Rust backend is enabled for age-structured demes.
+        """
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if isinstance(backend, object) and type(backend).__name__ == (
+            "RustHeterogeneousSpatialLifecycleBackend"
+        ):
+            return backend
+        return None
+
+    def _detach_deme_field(
+        self, deme_index: int, draft_field: str
+    ) -> tuple[ModelDraft, NDArray[np.generic] | float | int | bool | None]:
+        """Return the deme's draft with a private copy of one mutable field.
+
+        Clone-on-write per array field: when any other deme shares the array
+        object, the target deme gets a ``_replace`` shell with a copy so an
+        in-place write cannot penetrate to the sharing demes.  Plain Python
+        scalar fields are immutable NamedTuple slots — a write goes through
+        ``_replace`` and needs no detach.
+
+        Args:
+            deme_index: Zero-based deme index.
+            draft_field: ``ModelDraft`` field name to detach.
+
+        Returns:
+            The (possibly replaced) draft and its field value (array or
+            scalar).
+        """
+        target = self._demes[deme_index]
+        config = target.config
+        field_value: NDArray[np.generic] | float | int | bool | None = (
+            getattr(config, draft_field)
+        )
+        if isinstance(field_value, np.ndarray):
+            typed_value = field_value
+            shared = any(
+                getattr(other.config, draft_field, None) is typed_value
+                for j, other in enumerate(self._demes)
+                if j != deme_index
+            )
+            if shared:
+                config = config._replace(**{draft_field: typed_value.copy()})
+                target.set_config(config)
+                field_value: NDArray[np.generic] | float | int | bool | None = (
+                    getattr(config, draft_field)
+                )
+        return config, field_value
+
+    def _write_deme_ecology(
+        self, deme_index: int, field: str, value: float | NDArray[np.float64]
+    ) -> None:
+        """Write one ecology value for one deme (column + draft + Rust).
+
+        The write lands in three synchronized places: the deme's draft
+        (per-field clone-on-write, equilibrium metrics re-synced), the
+        container's ecology column, and — when the Rust backend is
+        enabled — the session's per-deme ecology column.
+
+        Args:
+            deme_index: Zero-based deme index.
+            field: Contract ecology field name.
+            value: New scalar or array in the contract's logical shape.
+
+        Raises:
+            KeyError: If *field* is not an ecology field.
+        """
+        if field not in _ECOLOGY_DRAFT_FIELDS:
+            raise KeyError(f"unknown ecology field {field!r}")
+        draft_field = _ECOLOGY_DRAFT_FIELDS[field]
+        config, field_value = self._detach_deme_field(deme_index, draft_field)
+        if isinstance(field_value, np.ndarray):
+            field_array: NDArray[np.float64] = cast("NDArray[np.float64]", field_value)
+            if field_array.ndim == 0:
+                field_array[()] = value
+            else:
+                field_array[...] = np.asarray(value, dtype=np.float64).reshape(
+                    field_array.shape
+                )
+        else:
+            # Scalar NamedTuple slot: rebuild the draft; the value is
+            # float or int according to the ecology field's declared type.
+            config = config._replace(**{draft_field: value})
+            self._demes[deme_index].set_config(config)
+
+        from natal.backends.reference.simulation.age_structured import (
+            sync_equilibrium_metrics,
+        )
+
+        # scalar metric slots are refreshed through _replace (immutable).
+        config = sync_equilibrium_metrics(config)
+        self._demes[deme_index].set_config(config)
+
+        column = self._ecology_columns.get(field)
+        if column is not None and field != "migration_rate":
+            column_arr = np.asarray(column)
+            if column_arr.ndim == 1 and column_arr.size == self.n_demes:
+                column_arr[deme_index] = value
+            else:
+                flat = column_arr.reshape(self.n_demes, -1)
+                flat[deme_index] = np.asarray(value, dtype=np.float64).ravel()
+
+        backend = self._rust_spatial_session()
+        if backend is not None and field != "migration_rate":
+            from natal.contracts.materialize import materialize
+
+            contracts = materialize(config)
+            refresh = getattr(backend, "refresh_deme_ecology", None)
+            if callable(refresh):
+                refresh(deme_index, [field], contracts.params)
+
+    def _write_deme_genetics(
+        self, deme_index: int, field: str, values: NDArray[np.float64]
+    ) -> None:
+        """Write one genetics tensor for one deme, forking the variant.
+
+        The Rust bank variant of the deme is cloned first (other demes
+        keep sharing the original tables) and the draft arrays are
+        detached the same way, so the fork is atomic across backends.
+
+        Args:
+            deme_index: Zero-based deme index.
+            field: Contract genetics tensor name (one of the eight tables).
+            values: New contents in the table's logical shape.
+
+        Raises:
+            KeyError: If *field* is not a genetics tensor.
+        """
+        if field not in _GENETICS_DRAFT_FIELDS:
+            raise KeyError(f"unknown genetics tensor {field!r}")
+        draft_field = _GENETICS_DRAFT_FIELDS[field]
+        config, field_value = self._detach_deme_field(deme_index, draft_field)
+        if not isinstance(field_value, np.ndarray):
+            raise TypeError(
+                f"{field!r} expects a tensor-backed draft field, got "
+                f"a scalar"
+            )
+        field_array: NDArray[np.float64] = cast("NDArray[np.float64]", field_value)
+        field_array[...] = np.asarray(values, dtype=np.float64).reshape(
+            field_array.shape
+        )
+
+        backend = self._rust_spatial_session()
+        if backend is not None:
+            fork = getattr(backend, "fork_variant", None)
+            refresh = getattr(backend, "refresh_variant_tensors", None)
+            if callable(fork) and callable(refresh):
+                variant_id = fork(deme_index)
+                from natal.contracts.materialize import materialize
+
+                contracts = materialize(config)
+                refresh(variant_id, [field], contracts.params)
+
 
     @property
     def tick(self) -> int:
@@ -1339,66 +1516,53 @@ class SpatialPopulation:
         history_obj.truncate(retain_until_tick=tick)
 
     @property
-    def hooks(self) -> LifecycleWrappers:
-        """LifecycleWrappers: Compiled hooks and lifecycle loop functions."""
+    def hooks(self) -> CompiledEventHooks:
+        """CompiledEventHooks: per-event hooks plus the CSR registry."""
         return self._hooks
 
-    def set_hook(
+    def register_hooks(
         self,
-        event_name: str,
-        func: Callable[..., None],
-        hook_id: Optional[int] = None,
-        hook_name: Optional[str] = None,
-        compile: bool = True,
-        deme_selector: Optional[DemeSelector] = None,
+        *items: object,
+        event: Optional[str] = None,
+        priority: int = 0,
+        deme: DemeSelector = "*",
+        name: Optional[str] = None,
     ) -> None:
-        """Register an event hook for selected demes.
+        """Register hooks on the demes selected by *deme* — the single entry.
 
-        If the function carries ``@hook(deme=...)`` metadata and no explicit
-        ``deme_selector`` is given, the metadata value is used automatically
-        — you don't need to repeat the selector.
+        Mirrors :meth:`natal.frontend.population.base.BasePopulation.
+        register_hooks` at the container level: the deme selector chooses
+        target demes, then registration is forwarded to each target with
+        panmictic selector semantics (the compiler-level selector fields
+        are transport-only metadata).
+
+        When multiple demes share the same hook storage (as happens with
+        homogeneous clones), the hook is registered **once** on a
+        representative and all other targeted owners see the change
+        through shared storage.  This avoids accidental duplicate
+        descriptors.
 
         Args:
-            event_name: Event name (must exist in ALLOWED_EVENTS).
-            func: Callback function.
-            hook_id: Numeric execution priority (optional, auto-assigned if omitted).
-            hook_name: Optional human-readable name for debugging.
-            compile: Whether to try compiling @hook-decorated functions.
-            deme_selector: Optional deme selector.  If omitted, reads from
-                ``@hook`` metadata automatically.
-
-        Note:
-            This API is a spatial convenience entrypoint. ``deme_selector`` is
-            interpreted here to choose target demes, then forwarded hooks are
-            registered on selected demes with panmictic selector semantics.
-            Compiler-level selector fields are transport-only metadata.
-
-            When multiple demes share the same hook storage (as happens with
-            homogeneous clones), the hook is registered **once** on a
-            representative and all other targeted owners see the change
-            through shared storage.  This avoids accidental duplicate
-            descriptors that would produce redundant static call sites.
+            *items: Hook registrations (``Op`` objects, ``@hook``-
+                decorated functions, single-parameter callables).
+            event: Default event for items that do not carry one.
+            priority: Execution priority — lower values run first.
+            deme: Deme selector (``"*"`` = all demes).
+            name: Optional name for grouped op registrations.
         """
-        # Auto-read deme from @hook metadata when no explicit selector given.
-        if deme_selector is None:
-            meta = getattr(func, 'meta', None)
-            if meta is not None:
-                demean_meta = meta.get('deme_selector')
-                if demean_meta is not None and demean_meta != "*":
-                    deme_selector = demean_meta
-
         # Determine which demes are targeted by the selector.
         target_ids = [
             i for i in range(self.n_demes)
-            if deme_selector is None or self._selector_matches_deme(deme_selector, i)
+            if self._selector_matches_deme(deme, i)
         ]
 
         if not target_ids:
             return
 
         # Group targeted demes by the identity of their hook storage.
-        # Demes that share the same ``compiled_hook_descriptors`` list (via clone
-        # sharing) should only have the hook compiled and appended once.
+        # Demes that share the same ``compiled_hook_descriptors`` list (via
+        # clone sharing) should only have the hook compiled and appended
+        # once.
         storage_groups = self._group_demes_by_hook_storage(target_ids)
 
         for storage_key, group_ids in storage_groups.items():
@@ -1406,33 +1570,35 @@ class SpatialPopulation:
             all_owners = self._demes_sharing_storage(storage_key)
 
             if set(all_owners).issubset(set(target_ids)):
-                # All owners are targeted — register once on a representative;
-                # other owners see the change through the shared list.
-                self._demes[group_ids[0]].set_hook(
-                    event_name, func, hook_id, hook_name, compile, None,
+                # All owners are targeted — register once on a
+                # representative; other owners see the change through the
+                # shared list.
+                self._demes[group_ids[0]].register_hooks(
+                    *items, event=event, priority=priority, deme="*", name=name
                 )
             else:
-                # Only a subset of owners are targeted — copy-on-write so the
-                # non-targeted owners keep their existing hook storage intact.
+                # Only a subset of owners are targeted — copy-on-write so
+                # the non-targeted owners keep their existing hook storage
+                # intact.
                 self._copy_hook_storage_for_demes(group_ids)
-                self._demes[group_ids[0]].set_hook(
-                    event_name, func, hook_id, hook_name, compile, None,
+                self._demes[group_ids[0]].register_hooks(
+                    *items, event=event, priority=priority, deme="*", name=name
                 )
 
-        # Invalidate the hook executor on all targeted demes so they pick up
-        # the recompiled aggregate hooks.
+        # Invalidate the hook executor on all targeted demes so they pick
+        # up the recompiled aggregate hooks.
         for deme_id in target_ids:
-            self._demes[deme_id].hook_executor = None
+            self._demes[deme_id].invalidate_hook_dispatch()
 
         # Rebuild aggregate hooks once after all per-deme mutations.
-        self._hooks = self._compile_spatial_hooks_from_demes()
+        self._refresh_spatial_hooks()
 
     def _group_demes_by_hook_storage(
         self, deme_ids: list[int],
-    ) -> dict[tuple[int, int], list[int]]:
+    ) -> dict[int, list[int]]:
         """Group deme indices by the identity of their hook storage.
 
-        Demes that share the same ``compiled_hook_descriptors`` and ``hook_entries`` objects
+        Demes that share the same ``compiled_hook_descriptors`` list object
         (typically clones sharing template storage) are placed in the same
         group.
 
@@ -1440,23 +1606,24 @@ class SpatialPopulation:
             deme_ids: Indices of demes to group.
 
         Returns:
-            A dict mapping ``(id(compiled_hook_descriptors), id(hook_entries))`` to the list
-            of deme indices sharing that storage.
+            A dict mapping ``id(compiled_hook_descriptors)`` to the list of
+            deme indices sharing that storage.
         """
-        groups: dict[tuple[int, int], list[int]] = {}
+        groups: dict[int, list[int]] = {}
         for deme_id in deme_ids:
             deme = self._demes[deme_id]
-            key = (id(deme.compiled_hook_descriptors), id(deme.hook_entries))
+            key = id(deme.compiled_hook_descriptors)
             groups.setdefault(key, []).append(deme_id)
         return groups
 
     def _demes_sharing_storage(
-        self, storage_key: tuple[int, int],
+        self, storage_key: int,
     ) -> list[int]:
         """Return all deme indices that share the given hook storage identity.
 
         Args:
-            storage_key: A ``(id(compiled_hook_descriptors), id(hook_entries))`` pair.
+            storage_key: The ``id(compiled_hook_descriptors)`` of a shared
+                descriptor list.
 
         Returns:
             List of deme indices across the entire population whose storage
@@ -1465,7 +1632,7 @@ class SpatialPopulation:
         owners: list[int] = []
         for deme_id in range(self.n_demes):
             deme = self._demes[deme_id]
-            if (id(deme.compiled_hook_descriptors), id(deme.hook_entries)) == storage_key:
+            if id(deme.compiled_hook_descriptors) == storage_key:
                 owners.append(deme_id)
         return owners
 
@@ -1474,10 +1641,10 @@ class SpatialPopulation:
     ) -> None:
         """Copy-on-write hook storage for a subset of demes.
 
-        Creates copies of ``compiled_hook_descriptors`` and ``hook_entries`` from the first
-        deme in *deme_ids* so they no longer share storage with non-targeted
-        peers.  Each event list inside ``hook_entries`` is also copied so that
-        future mutations on targeted demes do not leak to untargeted owners.
+        Creates a copy of ``compiled_hook_descriptors`` from the first deme
+        in *deme_ids* so they no longer share storage with non-targeted
+        peers; future mutations on targeted demes do not leak to
+        untargeted owners.
 
         Args:
             deme_ids: Indices of demes to receive the new private storage.
@@ -1486,39 +1653,10 @@ class SpatialPopulation:
         ref = self._demes[deme_ids[0]]
 
         compiled_copy = list(ref.compiled_hook_descriptors)
-        hooks_copy = {
-            event_name: list(entries)
-            for event_name, entries in ref.hook_entries.items()
-        }
 
         for deme_id in deme_ids:
             deme = self._demes[deme_id]
             object.__setattr__(deme, 'compiled_hook_descriptors', compiled_copy)
-            object.__setattr__(deme, 'hook_entries', hooks_copy)
-
-    def remove_hook(self, event_name: str, hook_id: int) -> bool:
-        """Remove a specific hook from all demes.
-
-        Args:
-            event_name: Event name.
-            hook_id: Hook ID.
-
-        Returns:
-            True if removed successfully from all demes, otherwise False.
-
-        Note:
-            Hook removal follows the same consistency rule as registration:
-            mutate each deme first, then rebuild the aggregate compiled hooks.
-        """
-        success = True
-        for deme in self._demes:
-            if not deme.remove_hook(event_name, hook_id):
-                success = False
-
-        # Keep aggregate compiled hooks synchronized with deme-local state.
-        self._hooks = self._compile_spatial_hooks_from_demes()
-
-        return success
 
     @staticmethod
     def _selector_matches_deme(selector: DemeSelector, deme_id: int) -> bool:
@@ -1704,6 +1842,18 @@ class SpatialPopulation:
         all_cond_offsets: list[int] = [0]
         all_cond_types: list[int] = []
         all_cond_params: list[int] = []
+        # OP_SET_PARAM / OP_CONVERT flattened data area (rebasing per
+        # plan so offsets stay global).
+        all_sp_param_ids: list[int] = []
+        all_sp_every: list[int] = []
+        all_sp_start: list[int] = []
+        all_rpn_offsets: list[int] = [0]
+        all_rpn_kinds: list[int] = []
+        all_rpn_payload: list[int] = []
+        all_sp_literals: list[float] = []
+        all_convert_source_z: list[int] = []
+        all_convert_target_z: list[int] = []
+        has_set_param = False
         all_deme_sel_types: list[int] = []
         all_deme_sel_offsets: list[int] = [0]
         all_deme_sel_data: list[int] = []
@@ -1722,6 +1872,9 @@ class SpatialPopulation:
 
                 n_ops_list.append(plan.n_ops)
                 all_op_types.extend(plan.op_types.tolist())
+                has_set_param = has_set_param or bool(
+                    (plan.op_types == int(OpType.SET_PARAM)).any()
+                )
 
                 # Offsets are rebased to flattened buffers as each hook's plan
                 # payload is appended.
@@ -1745,6 +1898,22 @@ class SpatialPopulation:
                     )
                 all_cond_types.extend(plan.condition_types.tolist())
                 all_cond_params.extend(plan.condition_params.tolist())
+
+                # set_param / convert payload columns and rebased RPN
+                # token stream (mirrors the panmictic builder).
+                all_sp_param_ids.extend(plan.sp_param_ids.tolist())
+                all_sp_every.extend(plan.sp_every.tolist())
+                all_sp_start.extend(plan.sp_start.tolist())
+                rpn_offset_base = len(all_rpn_kinds)
+                for i in range(plan.n_ops):
+                    all_rpn_offsets.append(
+                        rpn_offset_base + plan.rpn_offsets[i + 1] - plan.rpn_offsets[0]
+                    )
+                all_rpn_kinds.extend(plan.rpn_kinds.tolist())
+                all_rpn_payload.extend(plan.rpn_payload.tolist())
+                all_sp_literals.extend(plan.sp_literals.tolist())
+                all_convert_source_z.extend(plan.convert_source_z.tolist())
+                all_convert_target_z.extend(plan.convert_target_z.tolist())
                 op_offsets.append(len(all_op_types))
 
                 # Persist compiled selector in compact integer encoding expected
@@ -1780,37 +1949,47 @@ class SpatialPopulation:
             condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
             condition_types_data=np.array(all_cond_types, dtype=np.int32),
             condition_params_data=np.array(all_cond_params, dtype=np.int32),
+            sp_param_ids=np.array(all_sp_param_ids, dtype=np.int32),
+            sp_every=np.array(all_sp_every, dtype=np.int32),
+            sp_start=np.array(all_sp_start, dtype=np.int32),
+            rpn_offsets=np.array(all_rpn_offsets, dtype=np.int32),
+            rpn_kinds=np.array(all_rpn_kinds, dtype=np.int32),
+            rpn_payload=np.array(all_rpn_payload, dtype=np.int32),
+            sp_literals=np.array(all_sp_literals, dtype=np.float64),
+            convert_source_z=np.array(all_convert_source_z, dtype=np.int32),
+            convert_target_z=np.array(all_convert_target_z, dtype=np.int32),
+            has_set_param=has_set_param,
             deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
             deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
             deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
         )
 
-    def _compile_spatial_hooks_from_demes(self) -> LifecycleWrappers:
+    def _compile_spatial_hooks_from_demes(self) -> CompiledEventHooks:
         """Compile one aggregate hook bundle from current per-deme hooks.
 
         Uses the **compact** execution plan so that demes sharing identical
         hook sequences produce a single wildcard descriptor instead of one
-        per-deme descriptor.  This keeps the generated lifecycle wrapper
-        call graph minimal and avoids redundant static call sites that can
-        trigger native instability under prange.
+        per-deme descriptor.  The aggregate bundle carries the CSR registry
+        consumed by the Python dispatch path.
 
         Returns:
-            LifecycleWrappers: Event call chains plus CSR registry and
-            pre-compiled lifecycle loop functions.  Used by both generated
-            wrappers and Python dispatch fallback.
+            CompiledEventHooks: per-event hook callables plus the CSR
+            registry used by ``_run_python_dispatch_tick``.
 
         Implementation detail:
             This function is the single rebuild entrypoint used by
-            initialization, ``set_hook(...)``, and ``remove_hook(...)`` so all
-            hook mutation paths stay behaviorally consistent.
+            initialization and ``register_hooks(...)`` so all hook mutation
+            paths stay behaviorally consistent.
         """
         compiled_hooks = self._collect_compact_spatial_hooks()
         registry = self._build_hook_program(compiled_hooks)
-        return compile_lifecycle_wrappers(
-            compiled_hooks,
-            registry=registry,
-            include_spatial_wrappers=True,
-        )
+        hooks = CompiledEventHooks()
+        hooks.registry = registry
+        return hooks
+
+    def _refresh_spatial_hooks(self) -> None:
+        """Rebuild the aggregate compiled hooks (single rebuild entrypoint)."""
+        self._hooks = self._compile_spatial_hooks_from_demes()
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """Trigger an event and execute all registered hooks for a specific deme.
@@ -1905,6 +2084,10 @@ class SpatialPopulation:
     def migration_row(self, source_idx: int) -> NDArray[np.float64]:
         """Return normalized outbound migration weights for one source deme.
 
+        The weights are scattered from the frozen Blueprint CSR and
+        renormalized to sum to one (border demes included), matching the
+        historical readout semantics.
+
         Args:
             source_idx: Source deme index.
 
@@ -1912,42 +2095,7 @@ class SpatialPopulation:
             A dense float64 vector of length ``n_demes`` with outbound weights
             from ``source_idx``.
         """
-        if self._migration_mode == "adjacency":
-            weights = self._adjacency[source_idx].astype(np.float64, copy=True)
-            total = float(weights.sum())
-            if total > 0.0:
-                weights /= total
-            return weights
-
-        assert self._topology is not None, "topology is required for kernel migration"
-
-        # Select kernel (single or from bank).
-        if self._deme_kernel_ids is not None and self._kernel_bank is not None:
-            kernel = self._kernel_bank[int(self._deme_kernel_ids[source_idx])]
-        else:
-            assert self._migration_kernel is not None, "migration_kernel required"
-            kernel = self._migration_kernel
-
-        weights = np.zeros(self.n_demes, dtype=np.float64)
-        src_coord = self._topology.from_index(source_idx)
-        kr = kernel.shape[0] // 2
-        kc = kernel.shape[1] // 2
-
-        for row in range(kernel.shape[0]):
-            for col in range(kernel.shape[1]):
-                if not self._kernel_include_center and row == kr and col == kc:
-                    continue
-                weight = float(kernel[row, col])
-                if weight <= 0.0:
-                    continue
-                mapped = self._topology.normalize_coord(
-                    src_coord[0] + row - kr,
-                    src_coord[1] + col - kc,
-                )
-                if mapped is None:
-                    continue
-                weights[self._topology.to_index(mapped)] += weight
-
+        weights = csr_dense_row(self._migration_csr, source_idx, self.n_demes)
         total = float(weights.sum())
         if total > 0.0:
             weights /= total
@@ -2040,49 +2188,6 @@ class SpatialPopulation:
                 )
         return cfg
 
-    def _migration_config(self) -> ConfigObject:
-        """Return one config object that carries migration runtime flags.
-
-        Migration kernels only use ``stochastic`` and
-        ``continuous_sampling``. Heterogeneous deme configs are supported
-        as long as these migration-relevant flags are consistent when
-        migration is enabled.
-
-        Returns:
-            One exported config object to feed migration kernels.
-
-        Raises:
-            TypeError: If a deme does not implement ``export_config``.
-            ValueError: If migration is enabled and migration flags differ
-                across demes.
-        """
-        export_fn = getattr(self._demes[0], "export_config", None)
-        if not callable(export_fn):
-            raise TypeError("deme[0] does not implement export_config()")
-        cfg = export_fn()
-
-        if np.all(self._migration_rate <= 0.0):
-            return cfg
-
-        cfg_is_stochastic = bool(getattr(cfg, "stochastic", False))
-        cfg_continuous_sampling = bool(getattr(cfg, "continuous_sampling", False))
-
-        for idx, deme in enumerate(self._demes[1:], start=1):
-            deme_export = getattr(deme, "export_config", None)
-            if not callable(deme_export):
-                raise TypeError(f"deme[{idx}] does not implement export_config()")
-            other_cfg = deme_export()
-            if bool(getattr(other_cfg, "stochastic", False)) != cfg_is_stochastic:
-                raise ValueError(
-                    f"deme[{idx}] has different stochastic; migration requires consistent stochastic mode across demes"
-                )
-            if bool(getattr(other_cfg, "continuous_sampling", False)) != cfg_continuous_sampling:
-                raise ValueError(
-                    f"deme[{idx}] has different continuous_sampling; migration requires consistent sampling mode "
-                    "across demes"
-                )
-        return cfg
-
     def _has_heterogeneous_configs(self) -> bool:
         """Return whether demes export non-equivalent config values."""
         export_fn = getattr(self._demes[0], "export_config", None)
@@ -2144,60 +2249,6 @@ class SpatialPopulation:
         except Exception:
             return False
 
-    def _migration_kernel_array(self) -> NDArray[np.float64]:
-        """Return the migration kernel array expected by compiled kernels."""
-        if self._migration_kernel is not None:
-            return self._migration_kernel
-        # Adjacency mode ignores this argument, but wrapper signatures require
-        # one ndarray for all call sites.
-        return np.zeros((1, 1), dtype=np.float64)
-
-    def _build_heterogeneous_kernel_arrays(self) -> Optional[HeterogeneousKernelParams]:
-        """Build per-kernel offset tables for heterogeneous kernel routing.
-
-        Returns:
-            ``HeterogeneousKernelParams`` when ``kernel_bank`` and
-            ``deme_kernel_ids`` are both set; ``None`` otherwise.
-        """
-        from natal.backends.reference.migration.kernel import (
-            build_kernel_offset_table,
-        )
-
-        if self._kernel_bank is None or self._deme_kernel_ids is None:
-            return None
-
-        n_kernels = len(self._kernel_bank)
-        max_kernel_size = max(k.shape[0] * k.shape[1] for k in self._kernel_bank)
-
-        kernel_d_row = np.zeros((n_kernels, max_kernel_size), dtype=np.int64)
-        kernel_d_col = np.zeros((n_kernels, max_kernel_size), dtype=np.int64)
-        kernel_weights = np.zeros((n_kernels, max_kernel_size), dtype=np.float64)
-        kernel_nnzs = np.zeros(n_kernels, dtype=np.int64)
-        kernel_total_sums = np.zeros(n_kernels, dtype=np.float64)
-        max_nnz = 0
-        for k in range(n_kernels):
-            d_r, d_c, w, nnz, total_sum = build_kernel_offset_table(
-                migration_kernel=self._kernel_bank[k],
-                kernel_include_center=bool(self._kernel_include_center),
-            )
-            kernel_d_row[k, :nnz] = d_r[:nnz]
-            kernel_d_col[k, :nnz] = d_c[:nnz]
-            kernel_weights[k, :nnz] = w[:nnz]
-            kernel_nnzs[k] = nnz
-            kernel_total_sums[k] = total_sum
-            if nnz > max_nnz:
-                max_nnz = nnz
-
-        return HeterogeneousKernelParams(
-            deme_kernel_ids=self._deme_kernel_ids,
-            d_row=kernel_d_row,
-            d_col=kernel_d_col,
-            weights=kernel_weights,
-            nnzs=kernel_nnzs,
-            total_sums=kernel_total_sums,
-            max_nnz=max_nnz,
-        )
-
     def _is_discrete_demes(self) -> bool:
         """Return whether all demes are discrete-generation (no sperm storage).
 
@@ -2212,19 +2263,10 @@ class SpatialPopulation:
         """Return whether any managed deme currently owns Python-layer hooks.
 
         Returns:
-            ``True`` if at least one deme has hooks registered through the
-            legacy Python callback map; otherwise ``False``.
+            ``True`` if at least one deme has a Python-callback hook
+            registered; otherwise ``False``.
         """
-        return any(deme.has_python_hooks() for deme in self._demes)
-
-    def _has_mixed_hook_types(self) -> bool:
-        """Return whether any managed deme mixes hook types in one event.
-
-        Returns:
-            ``True`` if any deme has an event containing multiple hook payload
-            categories (declarative/njit/python); otherwise ``False``.
-        """
-        return any(deme.has_mixed_hook_types() for deme in self._demes)
+        return any(deme.has_python_callbacks() for deme in self._demes)
 
     def get_compiled_hooks(
         self,
@@ -2263,21 +2305,11 @@ class SpatialPopulation:
         """Return whether spatial runtime must use Python event dispatch.
 
         Returns:
-            ``True`` if local hook execution is required for this spatial run.
-            ``False`` when the simulation can use the compiled njit fast
-            path end-to-end (including hooks and heterogeneous configs).
-
-        Note:
-            The spatial lifecycle wrapper now supports per-deme hook execution
-            (CSR registry) and heterogeneous configs (config bank) inside njit
-            with ``prange``. Python dispatch is only needed when Numba is
-            disabled or when legacy Python hook callbacks are present.
+            Always ``True``: with the compiled lifecycle wrappers retired,
+            every non-Rust spatial run uses the per-deme Python dispatch
+            path.  The Rust backend is the only other execution vehicle.
         """
-        if not is_numba_enabled():
-            return True
-        if self._has_python_hooks():
-            return True
-        return False
+        return True
 
     def _config_equivalence_groups(self) -> list[tuple[ConfigObject, list[int]]]:
         """Group deme indices by value-equivalent exported configs.
@@ -2309,39 +2341,64 @@ class SpatialPopulation:
 
         return groups
 
-    def _heterogeneous_config_bank_and_ids(self) -> tuple[object, NDArray[np.int64]]:
-        """Build a Numba-typed config bank and per-deme config ids.
+    def _heterogeneous_config_bank_and_ids(self) -> tuple[list[object], NDArray[np.int64]]:
+        """Build a config bank and per-deme config ids.
 
         Returns:
-            A tuple ``(config_bank, deme_config_ids)`` where ``config_bank`` is
-            a numba.typed.List of unique configs and ``deme_config_ids`` maps
-            each deme to one config index.
-
-        TODO(spatial-config/flattened-config-bank): Consider replacing the
-            typed-list config bank with flattened config matrices plus index
-            vectors to stabilize kernel signatures and simplify heterogeneous
-            dispatch ABI.
+            A tuple ``(config_bank, deme_config_ids)`` where ``config_bank``
+            is a list of unique configs and ``deme_config_ids`` maps each
+            deme to one config index.
         """
-        import importlib
-
         groups = self._config_equivalence_groups()
         deme_config_ids = np.empty(self.n_demes, dtype=np.int64)
-
-        numba_typed = importlib.import_module("numba.typed")
-        config_bank_factory = cast(Callable[[], _ConfigBankProtocol], numba_typed.List)
-        config_bank = config_bank_factory()
+        config_bank: list[object] = []
         for group_id, (group_cfg, group_deme_indices) in enumerate(groups):
             config_bank.append(group_cfg)
             for deme_idx in group_deme_indices:
                 deme_config_ids[deme_idx] = np.int64(group_id)
-
-        return cast(object, config_bank), deme_config_ids
+        return config_bank, deme_config_ids
 
     def _ensure_demes_runnable(self, *, context: str) -> None:
         """Raise if any deme is already finished before execution."""
         for idx, deme in enumerate(self._demes):
             if getattr(deme, "_finished", False):
                 raise RuntimeError(f"deme[{idx}] has finished; cannot {context}")
+
+    def _assert_consistent_migration_flags(self) -> None:
+        """Raise when demes disagree on migration-relevant sampling flags.
+
+        Migration kernels only consume ``stochastic`` and
+        ``continuous_sampling``; a mixed set of flags would migrate under
+        the first deme's mode while the demes' lifecycles ran under their
+        own modes.
+
+        Raises:
+            ValueError: When a non-leading deme exports different
+                ``stochastic`` or ``continuous_sampling`` values.
+        """
+        export_fn = getattr(self._demes[0], "export_config", None)
+        if not callable(export_fn):
+            return
+        cfg = export_fn()
+        stochastic = bool(getattr(cfg, "stochastic", False))
+        continuous = bool(getattr(cfg, "continuous_sampling", False))
+        for idx, deme in enumerate(self._demes[1:], start=1):
+            deme_export = getattr(deme, "export_config", None)
+            if not callable(deme_export):
+                continue
+            other = deme_export()
+            if bool(getattr(other, "stochastic", False)) != stochastic:
+                raise ValueError(
+                    f"deme[{idx}] has different stochastic; migration requires "
+                    "consistent stochastic mode across demes"
+                )
+            if (
+                bool(getattr(other, "continuous_sampling", False)) != continuous
+            ):
+                raise ValueError(
+                    f"deme[{idx}] has different continuous_sampling; migration "
+                    "requires consistent sampling mode across demes"
+                )
 
     def _mark_all_demes_stopped(self) -> None:
         """Mark all demes finished and emit the finish event."""
@@ -2355,11 +2412,61 @@ class SpatialPopulation:
         Spatial History belongs to this container, so the delegated deme
         lifecycle must not record a second, pre-migration snapshot.
 
+        For programs carrying ``Op.set_param``, each deme runs against its
+        own tick-local ecology chain (a mutable row shared with the
+        executor): expressions read and write the deme's OWN chain, so
+        events compound within the tick (matching the Rust local EcoCtx)
+        while homogeneous demes sharing one draft object cannot contaminate
+        each other.  After the tick the container columns take each deme's
+        final local value and the shared draft takes deme 0's.
+
         Returns:
             ``True`` when a deme stops the simulation during its lifecycle;
             otherwise ``False`` after migration is applied.
         """
+        from natal.frontend.hooks.types import ECO_PARAM_NAMES
+
+        registry = self._hooks.registry
+        has_set_param = registry is not None and bool(registry.has_set_param)
+        local_rows: list[NDArray[np.float64]] = []
+        if has_set_param:
+            for deme_index, deme in enumerate(self._demes):
+                row = np.zeros(len(ECO_PARAM_NAMES), dtype=np.float64)
+                for pid, name in enumerate(ECO_PARAM_NAMES):
+                    column = self._ecology_columns.get(name)
+                    if column is not None and np.asarray(column).ndim == 1:
+                        row[pid] = float(np.asarray(column)[deme_index])
+                    else:
+                        row[pid] = float(getattr(deme.config, name))
+                deme.set_eco_value_override(row)
+                local_rows.append(row)
+        try:
+            return self._python_dispatch_tick_inner()
+        finally:
+            if has_set_param:
+                for deme in self._demes:
+                    deme.set_eco_value_override(None)
+                self._sync_ecology_columns_from_rows(local_rows)
+
+    def _python_dispatch_tick_inner(self) -> bool:
+        """The original per-deme loop (see _run_python_dispatch_tick)."""
+        from natal.frontend.hooks.types import ECO_PARAM_NAMES
+
         for deme in self._demes:
+            chain = getattr(deme, "_eco_value_override", None)
+            if chain is not None:
+                # Reset the shared draft to THIS deme's chain value so the
+                # lifecycle kernels (which read the draft) start each deme
+                # from its own column value; event-level writes by an
+                # earlier deme cannot feed this deme's operands.
+                deme.set_config(
+                    deme.config._replace(
+                        **{
+                            name: float(chain[pid])
+                            for pid, name in enumerate(ECO_PARAM_NAMES)
+                        }
+                    )
+                )
             run_lifecycle = getattr(deme, "_run_python_lifecycle", None)
             if run_lifecycle is not None:
                 if hasattr(deme.state, "sperm_storage"):
@@ -2382,95 +2489,22 @@ class SpatialPopulation:
 
         self._tick = int(self._demes[0].tick)
 
-        config = self._migration_config()
         ind_all, sperm_all = self._stack_deme_state_arrays()
 
-        # Build heterogeneous kernel arrays if needed, else pass None values.
-        het = self._build_heterogeneous_kernel_arrays()
-
+        # Runtime migration = rate column x frozen CSR (slice-5 data plane).
         ind_all, sperm_all = run_spatial_migration(
             ind_count_all=ind_all,
             sperm_store_all=sperm_all,
-            adjacency=self._migration_params.adjacency,
-            migration_mode=self._migration_params.mode_code,
-            topology_rows=self._spatial_topo.rows,
-            topology_cols=self._spatial_topo.cols,
-            topology_wrap=self._spatial_topo.wrap,
-            migration_kernel=self._migration_params.kernel,
-            kernel_include_center=self._migration_params.include_center,
-            config=cast(PopulationConfig, config),
-            migration_rate=self._migration_params.rate,
-            adjust_migration_on_edge=self._migration_params.adjust_on_edge,
-            deme_kernel_ids=het.deme_kernel_ids if het is not None else None,
-            kernel_d_row=het.d_row if het is not None else None,
-            kernel_d_col=het.d_col if het is not None else None,
-            kernel_weights=het.weights if het is not None else None,
-            kernel_nnzs=het.nnzs if het is not None else None,
-            kernel_total_sums=het.total_sums if het is not None else None,
-            max_nnz=het.max_nnz if het is not None else 0,
+            indptr=self._migration_csr.indptr,
+            dest_idx=self._migration_csr.dest_idx,
+            weights=self._migration_csr.weights,
+            migration_rate=self._params.migration_rate,
+            stochastic=bool(self._blueprint.stochastic),
+            continuous_sampling=bool(self._blueprint.continuous_sampling),
+            stay_after_send=self._migration_csr.stay_after_send,
         )
         self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
         return False
-
-    def _run_codegen_wrapper_tick(self) -> bool:
-        """Run one tick through the njit spatial lifecycle wrapper.
-
-        Uses the pre-compiled spatial lifecycle wrapper from
-        ``CompiledEventHooks``, which handles per-deme hook execution inside
-        ``prange`` followed by migration — all in compiled Numba code.
-        """
-        ind_all, sperm_all = self._stack_deme_state_arrays()
-        config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
-
-        if self._is_discrete_demes():
-            tick_fn = self._hooks.spatial_discrete_tick_fn
-        else:
-            tick_fn = self._hooks.spatial_tick_fn
-        assert tick_fn is not None, "spatial lifecycle wrapper not compiled (Numba disabled?)"
-        assert self._hooks.hooks.registry is not None, "spatial hooks must have a compiled registry"  # type: ignore[unreachable-code]
-
-        het = self._build_heterogeneous_kernel_arrays()
-        ind, sperm, tick, was_stopped = tick_fn(
-            ind_all, sperm_all,
-            config_bank, deme_config_ids,
-            self._hooks.hooks.registry, int(self._tick),
-            self._spatial_topo,
-            self._migration_params,
-            het,
-        )
-        self._apply_stacked_state(ind, sperm, int(tick))
-        return bool(was_stopped)
-
-    def _run_codegen_wrapper_steps(self, n_steps: int, *, record_every: int, clear_history_on_start: bool = True) -> bool:
-        """Run multiple ticks through the njit spatial lifecycle wrapper.
-
-        Uses the pre-compiled spatial lifecycle ``run`` function, which handles
-        per-deme hook execution, migration, and optional history recording
-        entirely in compiled Numba code.
-        """
-        ind_all, sperm_all = self._stack_deme_state_arrays()
-        config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
-
-        if self._is_discrete_demes():
-            run_fn = self._hooks.spatial_discrete_run_fn
-        else:
-            run_fn = self._hooks.spatial_run_fn
-        assert run_fn is not None, "spatial lifecycle run wrapper not compiled (Numba disabled?)"
-        assert self._hooks.hooks.registry is not None, "spatial hooks must have a compiled registry"  # pyright: ignore[reportUnreachable]
-
-        het = self._build_heterogeneous_kernel_arrays()
-        final_state_tuple, history_new, was_stopped = run_fn(
-            ind_all, sperm_all,
-            config_bank, deme_config_ids,
-            self._hooks.hooks.registry, int(self._tick), int(n_steps),
-            self._spatial_topo,
-            self._migration_params,
-            het,
-            record_interval=int(record_every),
-        )
-        self._apply_stacked_state(final_state_tuple[0], final_state_tuple[1], int(final_state_tuple[2]))
-        self._process_kernel_history(history_new, clear_history_on_start)
-        return bool(was_stopped)
 
     def enable_rust_backend(self, seed: int = 0) -> SpatialPopulation:
         """Enable the Rust spatial backend for subsequent runs.
@@ -2481,7 +2515,7 @@ class SpatialPopulation:
         the Rust migration kernels.
 
         Args:
-            seed: Base seed; deme *d* uses ``seed + d``.
+            seed: Base seed; deme *d* uses ``seed ^ d`` for its RNG.
 
         Returns:
             Self for chaining.
@@ -2493,6 +2527,8 @@ class SpatialPopulation:
         """
         from natal.backends.rust.rust_backend import (
             RustHeterogeneousSpatialLifecycleBackend,
+            ecology_columns_from_drafts,
+            genetics_variant_bank,
             rust_backend_available,
         )
 
@@ -2501,17 +2537,17 @@ class SpatialPopulation:
                 "natal._engine_rs is not available; build it with `maturin develop` "
                 "before enabling the Rust backend."
             )
-        if getattr(self._demes[0], "_has_non_csr_hooks", lambda: False)():
+        if getattr(self._demes[0], "has_python_callbacks", lambda: False)():
             raise RuntimeError(
-                "Rust spatial backend only supports CSR declarative hooks. "
-                "Keep the Numba backend for custom hook callables."
+                "The Rust spatial backend does not bridge Python callbacks "
+                "yet. Keep the reference backend for callback hooks."
             )
 
-        config_bank, deme_config_ids = self._heterogeneous_config_bank_and_ids()
         if self._is_discrete_demes():
             from natal.backends.rust.rust_backend import RustDiscreteLifecycleBackend
 
-            config_bank_list = cast(list[DiscretePopulationConfig], config_bank)
+            config_bank, _deme_config_ids = self._heterogeneous_config_bank_and_ids()
+            config_bank_list = cast(list[ModelDraft], config_bank)
             self._rust_discrete_spatial_backends = [
                 RustDiscreteLifecycleBackend(cfg, None, seed=seed + idx)
                 for idx, cfg in enumerate(config_bank_list)
@@ -2520,12 +2556,23 @@ class SpatialPopulation:
             self._rust_spatial_seed = seed
             return self
 
-        config_bank_list = cast(list[PopulationConfig], config_bank)
+        # Stage-2 variant bank: per-deme ecology columns plus a genetics
+        # bank deduplicated by tensor content.  Bank size follows genetics
+        # diversity only — ecological batch differences never clone
+        # variants, and identical genetics never clone ecology.
+        deme_drafts = self._export_deme_drafts()
+        columns = ecology_columns_from_drafts(deme_drafts)
+        columns["migration_rate"] = np.asarray(
+            self._params.migration_rate, dtype=np.float64
+        ).ravel()
+        tensor_bank, deme_variant_ids = genetics_variant_bank(deme_drafts)
         compiled_hooks = self._collect_compact_spatial_hooks()
         hook_program = self._build_hook_program(compiled_hooks)
         self._rust_spatial_backend = RustHeterogeneousSpatialLifecycleBackend(
-            config_bank_list,
-            deme_config_ids,
+            self._blueprint,
+            columns,
+            tensor_bank,
+            deme_variant_ids,
             hook_program=hook_program,
             seed=seed,
         )
@@ -2548,23 +2595,50 @@ class SpatialPopulation:
         """Return whether the Rust spatial backend is enabled.
 
         Returns:
-            True when enabled and no unsupported custom hooks are present.
+            True when enabled and no Python-callback hooks are present.
         """
         return (
             (
                 getattr(self, "_rust_spatial_backend", None) is not None
                 or getattr(self, "_rust_discrete_spatial_backends", None) is not None
             )
-            and not getattr(self._demes[0], "_has_non_csr_hooks", lambda: False)()
+            and not getattr(self._demes[0], "has_python_callbacks", lambda: False)()
         )
+
+    def _absorb_rust_spatial_journal(self, backend: object) -> None:
+        """Split a drained spatial journal into per-deme plain-name rows.
+
+        The heterogeneous backend drains rows as
+        ``(tick, "deme{i}:{name}", old, new)`` (a params_log row has no
+        deme dimension).  Every deme population then absorbs its own
+        plain-name rows — the same ``params_log`` content and draft
+        visibility the Python per-deme dispatch path produces.
+        """
+        drain = getattr(backend, "drain_eco_journal", None)
+        if drain is None:
+            return
+        per_deme: dict[int, list[tuple[int, str, float, float]]] = {}
+        for tick, route, old, new in drain():
+            deme_part, _, name = route.partition(":")
+            deme = int(deme_part[len("deme"):])
+            per_deme.setdefault(deme, []).append((tick, name, old, new))
+            # Mirror the write into the authoritative container columns so
+            # the python-dispatch surface (pop.params) stays identical.
+            column = self._ecology_columns.get(name)
+            if column is not None:
+                arr = np.asarray(column)
+                if arr.ndim == 1 and arr.size > deme:
+                    arr[deme] = float(new)
+        for deme, rows in per_deme.items():
+            absorb = getattr(self._demes[deme], "_absorb_rust_eco_journal", None)
+            if absorb is not None:
+                absorb(rows)
 
     def _run_rust_spatial_tick(self) -> bool:
         """Run one spatial tick through the Rust lifecycle and migration."""
         from natal.backends.rust.rust_backend import (
-            rust_migrate_adjacency_deterministic,
-            rust_migrate_adjacency_stochastic,
-            rust_migrate_kernel_deterministic,
-            rust_migrate_kernel_stochastic,
+            rust_migrate_csr_deterministic,
+            rust_migrate_csr_stochastic,
         )
 
         ind_all, sperm_all = self._stack_deme_state_arrays()
@@ -2581,6 +2655,11 @@ class SpatialPopulation:
                     individual_count=deme.state.individual_count,
                 )
                 next_state, _ = backend.run_tick(state)
+                # Per-deme sessions journal plain rows; merge them into the
+                # deme's own params_log and draft.
+                absorb = getattr(deme, "_absorb_rust_eco_journal", None)
+                if absorb is not None:
+                    absorb(backend.drain_eco_journal())
                 new_ind[deme_id] = next_state.individual_count
             ind_all = new_ind
             next_tick = self._tick + 1
@@ -2588,38 +2667,42 @@ class SpatialPopulation:
             backend = getattr(self, "_rust_spatial_backend", None)
             if backend is None:
                 raise RuntimeError("Rust spatial backend is not enabled.")
-            ind_all, sperm_all, next_tick = backend.run(ind_all, sperm_all, self._tick)
-        config = cast(PopulationConfig, self._migration_config())
-        stochastic = bool(config.stochastic)
-        continuous = bool(config.continuous_sampling)
-        rate = self._migration_params.rate
-        params = self._migration_params
+            rust_run = cast(
+                "Callable[[NDArray[np.float64], NDArray[np.float64], int], tuple[NDArray[np.float64], NDArray[np.float64], int]]",
+                backend.run,
+            )
+            ind_all, sperm_all, next_tick = rust_run(ind_all, sperm_all, self._tick)
+            # Merge the session's per-deme set_param writes (prefixed rows
+            # split back into each deme's plain-name log rows and draft).
+            self._absorb_rust_spatial_journal(backend)
+        # Runtime migration = rate column x frozen CSR, same data plane as
+        # the reference and Python-dispatch paths (slice 5).
+        csr = self._migration_csr
+        stochastic = bool(self._blueprint.stochastic)
+        continuous = bool(self._blueprint.continuous_sampling)
+        rate = self._params.migration_rate
 
-        if params.mode_code == 0:
-            if stochastic:
-                ind_all, sperm_all = rust_migrate_adjacency_stochastic(
-                    ind_all, sperm_all, params.adjacency, rate,
-                    int(self._rust_spatial_seed or 0), continuous,
-                )
-            else:
-                ind_all, sperm_all = rust_migrate_adjacency_deterministic(
-                    ind_all, sperm_all, params.adjacency, rate,
-                )
-        elif params.mode_code == 1:
-            if stochastic:
-                ind_all, sperm_all = rust_migrate_kernel_stochastic(
-                    ind_all, sperm_all, params.kernel,
-                    bool(self._spatial_topo.wrap), bool(params.include_center),
-                    rate, int(self._rust_spatial_seed or 0), continuous,
-                )
-            else:
-                ind_all, sperm_all = rust_migrate_kernel_deterministic(
-                    ind_all, sperm_all, params.kernel,
-                    bool(self._spatial_topo.wrap), bool(params.include_center),
-                    rate,
-                )
+        # Zero-rate fast path: the Python migration kernel returns the
+        # arrays untouched when every rate is <= 0 (np.all identity).  The
+        # Rust path must mirror that contract — running the CSR kernel
+        # would rebuild female counts from (virgins + sperm-bucket sums)
+        # and pick up last-ulp residues, breaking bitwise parity.
+        if bool(np.all(np.asarray(rate) <= 0.0)):
+            self._apply_stacked_state(ind_all, sperm_all, int(next_tick))
+            return False
+
+        if stochastic:
+            ind_all, sperm_all = rust_migrate_csr_stochastic(
+                ind_all, sperm_all,
+                csr.indptr, csr.dest_idx, csr.weights, rate,
+                int(self._rust_spatial_seed or 0), continuous,
+            )
         else:
-            raise RuntimeError(f"Unsupported migration mode {params.mode_code}")
+            ind_all, sperm_all = rust_migrate_csr_deterministic(
+                ind_all, sperm_all,
+                csr.indptr, csr.dest_idx, csr.weights, rate,
+                bool(csr.stay_after_send),
+            )
 
         self._apply_stacked_state(ind_all, sperm_all, int(next_tick))
         return False
@@ -2654,15 +2737,14 @@ class SpatialPopulation:
             RuntimeError: If any deme has already finished.
         """
         self._ensure_demes_runnable(context="run spatial tick")
+        self._assert_consistent_migration_flags()
 
         if self.using_rust_backend:
             was_stopped = self._run_rust_spatial_tick()
-        elif self._should_use_python_dispatch():
-            # Hook-aware fallback: preserve per-deme local hook semantics.
-            was_stopped = self._run_python_dispatch_tick()
         else:
-            # Global Numba path: run spatial kernel for one full spatial tick.
-            was_stopped = self._run_codegen_wrapper_tick()
+            # Non-Rust path: per-deme Python dispatch keeps local hook
+            # semantics and the shared migration stage.
+            was_stopped = self._run_python_dispatch_tick()
         if was_stopped:
             self._mark_all_demes_stopped()
         return self
@@ -2696,6 +2778,7 @@ class SpatialPopulation:
             raise ValueError("n_steps must be >= 0")
 
         self._ensure_demes_runnable(context="run spatial simulation")
+        self._assert_consistent_migration_flags()
 
         self._running = True
         try:
@@ -2708,8 +2791,9 @@ class SpatialPopulation:
                     record_every=record_every,
                     clear_history_on_start=False,
                 )
-            elif self._should_use_python_dispatch():
-                # Hook-aware fallback: keep local hook timeline semantics.
+            else:
+                # Non-Rust path: per-deme Python dispatch keeps local hook
+                # timeline semantics.
                 was_stopped = False
                 if record_every > 0 and (self._tick % record_every == 0):
                     self._record_snapshot(allow_existing=True)
@@ -2719,13 +2803,6 @@ class SpatialPopulation:
                         break
                     if record_every > 0 and (self._tick % record_every == 0):
                         self._record_snapshot(allow_existing=True)
-            else:
-                # Global Numba path: run batched spatial kernel.
-                was_stopped = self._run_codegen_wrapper_steps(
-                    n_steps,
-                    record_every=int(record_every),
-                    clear_history_on_start=clear_history_on_start,
-                )
             if bool(was_stopped):
                 self._mark_all_demes_stopped()
             elif finish:

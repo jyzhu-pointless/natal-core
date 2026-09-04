@@ -1,6 +1,6 @@
 """Spatial simulation engine.
 
-Core multi-deme lifecycle engine live under ``natal.engine``.
+Core multi-deme lifecycle engine live under ``natal.backends.reference``.
 Migration engine were split into ``natal.backends.reference.spatial_migrator``.
 """
 
@@ -11,29 +11,21 @@ from typing import Any, Optional, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-try:
-    from numba import prange  # pyright: ignore
-except ImportError:
-    prange = range  # type: ignore[assignment]
-
-from natal.backends.numba.utils import njit_switch
 from natal.backends.reference.age_structured_simulator import (
     run_aging,
     run_reproduction,
     run_survival,
 )
 from natal.backends.reference.spatial_migrator import run_spatial_migration
-from natal.frontend.data import PopulationConfig, PopulationState
+from natal.frontend.data import ModelDraft, PopulationState
 
 __all__ = [
     # No user-facing API for now
 ]
-
-@njit_switch(cache=True)
 def run_spatial_tick(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
-    config: PopulationConfig,
+    config: ModelDraft,
     tick: int,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64], int]:
     """Run one spatial tick without hook dispatch.
@@ -51,13 +43,13 @@ def run_spatial_tick(
         A tuple ``(ind_next, sperm_next, tick_next)``.
 
     This kernel executes one full lifecycle per deme inside a single
-    ``prange`` region. Compared with stage-by-stage spatial passes, it
+    ``range`` region. Compared with stage-by-stage spatial passes, it
     reduces synchronization points between parallel sections while
     preserving per-deme lifecycle ordering.
     """
     # Spatial ticks intentionally reuse the single-deme lifecycle ordering.
     # Offspring tensor is precomputed and shared across all demes.
-    for deme_id in prange(ind_count_all.shape[0]):
+    for deme_id in range(ind_count_all.shape[0]):
         # Work on one deme-local pair of arrays; there are no cross-deme reads
         # until the migration stage, so this section is parallel-safe.
         deme_state = PopulationState(
@@ -73,9 +65,6 @@ def run_spatial_tick(
         sperm_store_all[deme_id] = deme_state.sperm_storage
 
     return ind_count_all, sperm_store_all, int(tick) + 1
-
-
-@njit_switch(cache=True, parallel=True)
 def run_spatial_tick_heterogeneous(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
@@ -88,7 +77,7 @@ def run_spatial_tick_heterogeneous(
     Args:
         ind_count_all: Stacked individual counts for all demes.
         sperm_store_all: Stacked sperm-storage arrays for all demes.
-        config_bank: Numba-typed list of unique configs.
+        config_bank: List of unique configs.
         deme_config_ids: Per-deme config id into ``config_bank``.
         tick: Current simulation tick.
 
@@ -96,10 +85,10 @@ def run_spatial_tick_heterogeneous(
         A tuple ``(ind_next, sperm_next, tick_next)``.
 
     Note:
-        This kernel keeps deme-level ``prange`` parallelism while allowing
+        This kernel keeps deme-level ``range`` parallelism while allowing
         each deme to use a different configuration object.
     """
-    for deme_id in prange(ind_count_all.shape[0]):
+    for deme_id in range(ind_count_all.shape[0]):
         cfg = config_bank[int(deme_config_ids[deme_id])]
 
         deme_state = PopulationState(
@@ -115,22 +104,17 @@ def run_spatial_tick_heterogeneous(
         sperm_store_all[deme_id] = deme_state.sperm_storage
 
     return ind_count_all, sperm_store_all, int(tick) + 1
-
-
-@njit_switch(cache=True)
 def run_spatial_tick_with_migration(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
-    config: PopulationConfig,
+    config: ModelDraft,
     tick: int,
-    adjacency: NDArray[np.float64],
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
+    indptr: NDArray[np.int64],
+    dest_idx: NDArray[np.int64],
+    weights: NDArray[np.float64],
     migration_rate: NDArray[np.float64],
+    stochastic: bool,
+    continuous_sampling: bool,
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64], int]:
     """Run one spatial tick with migration applied after aging.
 
@@ -139,17 +123,13 @@ def run_spatial_tick_with_migration(
         sperm_store_all: Stacked sperm storage arrays.
         config: Shared population configuration.
         tick: Current simulation tick.
-        adjacency: Dense outbound adjacency matrix.
-        migration_mode: Backend selector. ``0`` for adjacency, ``1`` for
-            topology/kernel routing.
-        topology_rows: Number of topology rows for kernel routing.
-        topology_cols: Number of topology columns for kernel routing.
-        topology_wrap: Whether kernel routing wraps around the topology border.
-        migration_kernel: Kernel used when ``migration_mode == 1``.
-        kernel_include_center: Whether the kernel center contributes outbound
-            mass to the source deme.
-        migration_rate: Probability that each scalar bucket attempts to
-            migrate.
+        indptr: CSR migration row pointer, length ``n_demes + 1``.
+        dest_idx: CSR destination index per entry.
+        weights: CSR normalized outbound weight per entry.
+        migration_rate: ``(n_demes, n_sexes, n_ages)`` rate column.
+        stochastic: Whether outbound mass is sampled.
+        continuous_sampling: Whether stochastic mode uses continuous
+            approximations.
 
     Returns:
         A tuple ``(ind_next, sperm_next, tick_next)``.
@@ -170,71 +150,29 @@ def run_spatial_tick_with_migration(
     ind, sperm = run_spatial_migration(
         ind_count_all=ind,
         sperm_store_all=sperm,
-        adjacency=adjacency,
-        migration_mode=migration_mode,
-        topology_rows=topology_rows,
-        topology_cols=topology_cols,
-        topology_wrap=topology_wrap,
-        migration_kernel=migration_kernel,
-        kernel_include_center=kernel_include_center,
-        config=config,
+        indptr=indptr,
+        dest_idx=dest_idx,
+        weights=weights,
         migration_rate=migration_rate,
+        stochastic=stochastic,
+        continuous_sampling=continuous_sampling,
     )
     return ind, sperm, tick_next
-
-
-@njit_switch(cache=True)
-def run_spatial_tick_with_adjacency_migration(
-    ind_count_all: NDArray[np.float64],
-    sperm_store_all: NDArray[np.float64],
-    config: PopulationConfig,
-    tick: int,
-    adjacency: NDArray[np.float64],
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
-    migration_rate: NDArray[np.float64],
-) -> Tuple[NDArray[np.float64], NDArray[np.float64], int]:
-    """Backward-compatible alias for migration-enabled spatial tick."""
-    return run_spatial_tick_with_migration(
-        ind_count_all=ind_count_all,
-        sperm_store_all=sperm_store_all,
-        config=config,
-        tick=tick,
-        adjacency=adjacency,
-        migration_mode=migration_mode,
-        topology_rows=topology_rows,
-        topology_cols=topology_cols,
-        topology_wrap=topology_wrap,
-        migration_kernel=migration_kernel,
-        kernel_include_center=kernel_include_center,
-        migration_rate=migration_rate,
-    )
-
-
-@njit_switch(cache=True)
 def run_spatial_steps_with_migration(
     ind_count_all: NDArray[np.float64],
     sperm_store_all: NDArray[np.float64],
-    config: PopulationConfig,
+    config: ModelDraft,
     tick: int,
     n_steps: int,
-    adjacency: NDArray[np.float64],
-    migration_mode: int,
-    topology_rows: int,
-    topology_cols: int,
-    topology_wrap: bool,
-    migration_kernel: NDArray[np.float64],
-    kernel_include_center: bool,
+    indptr: NDArray[np.int64],
+    dest_idx: NDArray[np.int64],
+    weights: NDArray[np.float64],
     migration_rate: NDArray[np.float64],
+    stochastic: bool,
+    continuous_sampling: bool,
     record_interval: int = 0,
 ) -> Tuple[Tuple[NDArray[np.float64], NDArray[np.float64], int], Optional[NDArray[np.float64]], bool]:
     """Execute multiple spatial ticks with migration and optional history recording.
-
-    Replaces the generated ``__RUN_SPATIAL_NAME__`` codegen wrapper.
 
     Args:
         ind_count_all: Stacked individual counts.
@@ -242,14 +180,13 @@ def run_spatial_steps_with_migration(
         config: Shared population configuration.
         tick: Starting simulation tick.
         n_steps: Number of ticks to execute.
-        adjacency: Dense outbound migration matrix.
-        migration_mode: Backend selector (0=adjacency, 1=kernel).
-        topology_rows: Topology rows for kernel routing.
-        topology_cols: Topology columns for kernel routing.
-        topology_wrap: Whether kernel routing wraps topology borders.
-        migration_kernel: Kernel when migration_mode == 1.
-        kernel_include_center: Whether kernel center is an outbound target.
-        migration_rate: Fraction of each deme that migrates each tick.
+        indptr: CSR migration row pointer, length ``n_demes + 1``.
+        dest_idx: CSR destination index per entry.
+        weights: CSR normalized outbound weight per entry.
+        migration_rate: ``(n_demes, n_sexes, n_ages)`` rate column.
+        stochastic: Whether outbound mass is sampled.
+        continuous_sampling: Whether stochastic mode uses continuous
+            approximations.
         record_interval: History recording interval (0 = no recording).
     Returns:
         A tuple ``(state_tuple, history, was_stopped)``.
@@ -282,14 +219,12 @@ def run_spatial_steps_with_migration(
             sperm_store_all=sperm,
             config=config,
             tick=int(tick_cur),
-            adjacency=adjacency,
-            migration_mode=migration_mode,
-            topology_rows=topology_rows,
-            topology_cols=topology_cols,
-            topology_wrap=topology_wrap,
-            migration_kernel=migration_kernel,
-            kernel_include_center=kernel_include_center,
+            indptr=indptr,
+            dest_idx=dest_idx,
+            weights=weights,
             migration_rate=migration_rate,
+            stochastic=stochastic,
+            continuous_sampling=continuous_sampling,
         )
 
         if record_interval > 0 and (tick_cur % record_interval == 0):

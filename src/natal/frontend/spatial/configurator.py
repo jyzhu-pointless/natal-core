@@ -40,23 +40,20 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.configurator import (
-    AgeStructuredConfigurator,
-    Configurator,
-    DiscreteConfigurator,
-)
+from natal.frontend.configurator import Configurator
 from natal.frontend.configurator._base import normalize_observation_groups
 from natal.frontend.configurator._factory import (
     InitialIndividualCountInput,
     InitialSpermStorageInput,
 )
-from natal.frontend.data import DiscretePopulationConfig, PopulationConfig
+from natal.frontend.data import ModelDraft
 from natal.frontend.genetics import Species
 from natal.frontend.genetics.structures._helpers import build_compression_mask
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
 from natal.frontend.registry.index import IndexRegistry
+from natal.frontend.spatial.migration import RateDeclaration
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import GridTopology
 
@@ -288,9 +285,9 @@ def batch_setting(
 def _make_hashable(value: Any) -> Any:  # Any param+return: accepts arbitrary types for dict-key conversion
     """Recursively convert *value* into a hashable form for deduplication.
 
-    Used by ``_build_heterogeneous()`` to detect which demes have identical
-    batch-parameter values and can share a compiled config.  Without this,
-    two numpy arrays with identical contents would be seen as different
+    Used by the heterogeneous build to detect which demes have identical
+    genetics values and can share a compiled config.  Without this, two
+    numpy arrays with identical contents would be seen as different
     dict keys (ndarray is not hashable).
 
     Conversion rules:
@@ -321,6 +318,50 @@ def _make_hashable(value: Any) -> Any:  # Any param+return: accepts arbitrary ty
     return value
 
 
+# Builder kwargs that alter the genetics section beyond the route table:
+# positional batch presets and custom modifiers rewrite the meiosis /
+# offspring maps just like genetics-section fitness rows do.
+_PRESET_KWARG_PREFIX = "_preset_"
+_MODIFIER_KWARGS = frozenset({"gamete_modifiers", "zygote_modifiers"})
+
+
+def _genetics_route_names() -> frozenset[str]:
+    """Genetics-section user-facing names from the route table."""
+    from natal.frontend.configurator._routes import ROUTES_BY_METHOD
+
+    names: set[str] = set()
+    for entries in ROUTES_BY_METHOD.values():
+        for entry in entries:
+            if entry.section == "genetics":
+                names.add(entry.name)
+                names.update(entry.aliases)
+    return frozenset(names)
+
+
+def _genetics_batch_names(batch_param_names: List[str]) -> List[str]:
+    """Return the batch parameter names that alter the genetics section.
+
+    Slice-5 stage-2 grouping rule: only genetics content decides whether
+    demes need distinct compiled configs (variant bank entries).  Ecology
+    batch values (carrying capacity, survival, initial state, …) are
+    filled per deme into the ecology columns instead of splitting groups.
+
+    Args:
+        batch_param_names: All accumulated batch kwarg names.
+
+    Returns:
+        The subset of names whose per-deme differences are genetic.
+    """
+    route_names = _genetics_route_names()
+    return [
+        name
+        for name in batch_param_names
+        if name in route_names
+        or name in _MODIFIER_KWARGS
+        or name.startswith(_PRESET_KWARG_PREFIX)
+    ]
+
+
 def _float_value(value: object, *, name: str) -> float:  # object: accepts any scalar from configurator replay log (int, float, np.generic)
     """Narrow a replay-log scalar before converting it to float.
 
@@ -349,7 +390,7 @@ def _float_value(value: object, *, name: str) -> float:  # object: accepts any s
 
 def _clone_deme(
     template: PopulationInstance,
-    config: PopulationConfig | DiscretePopulationConfig,
+    config: ModelDraft,
     name: str,
 ) -> PopulationInstance:
     """Create a lightweight functional copy of a template deme.
@@ -357,9 +398,9 @@ def _clone_deme(
     Delegates to the population instance's ``_clone`` method.  The clone
     **shares** the following with the template (same object reference):
 
-    - ``_config`` — PopulationConfig (and all ndarrays within it)
+    - ``_config`` — ModelDraft (and all ndarrays within it)
     - ``_species``, ``_index_registry``, ``_registry``
-    - ``hook_entries``, ``compiled_hook_descriptors``, ``hook_executor``
+    - ``compiled_hook_descriptors``, ``hook_executor``
     - ``_gamete_modifiers``, ``_zygote_modifiers``
 
     Only these are **independent copies**:
@@ -374,7 +415,7 @@ def _clone_deme(
     Args:
         template: A fully-built population instance (``AgeStructuredPopulation``
             or ``DiscreteGenerationPopulation``).
-        config: The ``PopulationConfig`` for the clone (shared by reference).
+        config: The ``ModelDraft`` for the clone (shared by reference).
         name: Unique name for the clone.
 
     Returns:
@@ -387,7 +428,7 @@ def _clone_deme(
 # _replace optimization: builder-kwarg → config-field mappings
 # ---------------------------------------------------------------------------
 #
-# ``_build_heterogeneous`` uses ``PopulationConfig._replace`` to share heavy
+# ``_build_heterogeneous`` uses ``ModelDraft._replace`` to share heavy
 # arrays across groups.  Most builder kwargs map directly to a same-named
 # config field; only the exceptions below need explicit mappings.
 #
@@ -419,16 +460,28 @@ _KWARG_RENAMES: dict[str, str] = {
     "eggs_per_female": "eggs_per_female",
 }
 
-# Builder kwargs that affect equilibrium metrics.
-# When any of these change, expected_competition_strength and
-# expected_survival_rate are recomputed after _replace.
-_EQUILIBRIUM_SENSITIVE_KWARGS: frozenset[str] = frozenset({
-    "carrying_capacity", "age_1_carrying_capacity", "old_juvenile_carrying_capacity",
-    "eggs_per_female", "sex_ratio",
-})
+# Discrete-generation builder kwargs → (unified vector field, cell index).
+# The draft schema has no per-scalar discrete fields; each kwarg writes one
+# cell of a **copied** (2, n_ages) vector so variants never alias the base.
+_DISCRETE_VECTOR_CELLS: dict[str, tuple[str, tuple[int, ...]]] = {
+    "female_age0_survival": ("age_based_survival_rates", (0, 0)),
+    "male_age0_survival": ("age_based_survival_rates", (1, 0)),
+    "female_adult_mating_rate": ("age_based_mating_rates", (0, 1)),
+    "male_adult_mating_rate": ("age_based_mating_rates", (1, 1)),
+}
+
+def _route_sensitive(kwarg: str) -> bool:
+    """Return whether a builder kwarg affects the equilibrium metrics.
+
+    Driven by the jsonc ``sensitive`` column via the route table — the
+    historical hand-maintained sensitive-kwarg frozenset is gone.
+    """
+    from natal.frontend.configurator._routes import is_sensitive
+
+    return is_sensitive(kwarg)
 
 
-def _is_0d_field(config: PopulationConfig | DiscretePopulationConfig, name: str) -> bool:
+def _is_0d_field(config: ModelDraft, name: str) -> bool:
     """Return True if the config field *name* is a 0-d ndarray."""
     val = getattr(config, name, None)
     return isinstance(val, np.ndarray) and val.ndim == 0
@@ -511,13 +564,15 @@ class SpatialConfigurator:
         # Runtime population reference (None at build time; set by for_population).
         self._pop_ref: Optional[Any] = None  # Any: stores a Population reference; concrete type varies
 
-        # Create the template configurator (new path).
+        # Create the template configurator (new path).  The unified
+        # Configurator serves both granularities — the flag only picks the
+        # normalized draft shape.
         if pop_type == "age_structured":
-            self._template: DiscreteConfigurator | AgeStructuredConfigurator = \
-                Configurator.for_age_structured(species)
+            self._template: Configurator = Configurator.from_species(species)
         else:
-            self._template: DiscreteConfigurator | AgeStructuredConfigurator = \
-                Configurator.for_discrete(species)
+            self._template: Configurator = Configurator.from_species(
+                species, discrete=True
+            )
 
         # Accumulated batch settings: param_name -> BatchSetting.
         self._batch_settings: Dict[str, BatchSetting[Any]] = {}  # Any: BatchSetting value type varies per config field
@@ -528,7 +583,7 @@ class SpatialConfigurator:
         # Spatial migration parameters.
         self._migration_kernel: Optional[NDArray[np.float64]] = None
         self._migration_kernel_batch: Optional[BatchSetting[Any]] = None
-        self._migration_rate: float = 0.0
+        self._migration_rate: RateDeclaration = 0.0
         self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto"
         self._migration_adjacency: Optional[object] = None
         self._kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None
@@ -627,7 +682,7 @@ class SpatialConfigurator:
                 hook_items = kwargs.get("hook_items", ())
                 if hook_items:
                     hook_strs.update(
-                        collect_hook_genotype_refs(list(hook_items))
+                        collect_hook_genotype_refs([(tuple(hook_items), {})])
                     )
         resolved = self._resolve_declared_to_ints(
             hook_strs, full_registry, full_config.n_slabs,
@@ -693,7 +748,7 @@ class SpatialConfigurator:
     def _build_combined_modifier_maps(
         self,
         expanded: Dict[str, List[Any]],
-        full_config: PopulationConfig | DiscretePopulationConfig,
+        full_config: ModelDraft,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Sum modifier-applied gamete/zygote maps across all config groups.
 
@@ -1421,7 +1476,9 @@ class SpatialConfigurator:
             self._migration_kernel_batch = kernel
         elif kernel is not None:
             self._migration_kernel = np.asarray(kernel, dtype=np.float64)
-        self._migration_rate = float(migration_rate)
+        # Keep the raw declaration: scalar / vector / per-sex mapping are
+        # normalized once by the SpatialPopulation constructor (slice 5).
+        self._migration_rate = migration_rate
         self._migration_strategy = strategy
         if adjacency is not None:
             self._migration_adjacency = adjacency
@@ -1431,7 +1488,10 @@ class SpatialConfigurator:
             self._deme_kernel_ids = np.asarray(deme_kernel_ids, dtype=np.int64)
         self._kernel_include_center = bool(kernel_include_center)
         self._adjust_migration_on_edge = bool(adjust_migration_on_edge)
-        self._param_values["migration.migration_rate"] = float(migration_rate)
+        # Keep the raw declaration in the parameter registry: the scalar /
+        # dict / vector sugar is normalized once by the SpatialPopulation
+        # constructor (slice 5), not here.
+        self._param_values["migration.migration_rate"] = migration_rate
         return self
 
     # ------------------------------------------------------------------
@@ -1443,12 +1503,12 @@ class SpatialConfigurator:
 
         Merges spatial-specific params with values read from the template config.
         """
-        from natal.utils.parameters import ALL_PARAMETERS
+        from natal.frontend.utils.parameters import ALL_PARAMETERS
 
         params = dict(self._param_values)
         # Read scalar config values through ParamDescriptor registry
         for key, desc in ALL_PARAMETERS.items():
-            if desc.config_field is None or desc.is_tensor:
+            if desc.config_field is None or desc.kind == "geno_tensor":
                 continue
             field: object = getattr(self._template.config, desc.config_field, None)  # object: config fields have heterogeneous types
             if field is None:
@@ -1503,39 +1563,28 @@ class SpatialConfigurator:
     def build(self) -> SpatialPopulation:
         """Build and return the configured ``SpatialPopulation``.
 
-        Two paths, chosen automatically based on whether any ``batch_setting()``
-        values were used during the chain:
+        Single entry point (slice-5 stage 2): one build path handles both
+        the homogeneous and the heterogeneous case.
 
-        - **Homogeneous** (no ``batch_setting``): build ONE template deme,
-          clone N-1 times via ``_clone_deme()``.  All demes share the same
-          config object — maximum memory efficiency, zero redundant work.
+        - **No ``batch_setting``**: build ONE template deme, clone N-1
+          times.  All demes share the same config object — maximum memory
+          efficiency, zero redundant work.
 
-        - **Heterogeneous** (any ``batch_setting``): expand batch values,
-          group demes by parameter signature, build one template per group.
-          Within a group, demes share a config.  Across groups, heavy
-          ndarrays (genotype maps, fitness tensors) are shared via
-          ``_replace()`` when possible.
+        - **Any ``batch_setting``**: group demes by *genetics* content
+          signature, build one template per group, then fill per-deme
+          ecology through cheap ``_replace`` config shells.  Deme count
+          and ecology diversity therefore never inflate the number of
+          full builds; the runtime variant bank (see
+          ``natal.backends.rust.rust_backend``) deduplicates along the
+          same genetics-only rule.
 
         Returns:
             A ``SpatialPopulation`` with all demes initialized.
         """
         if not self._batch_settings:
-            return self._build_homogeneous()
-        return self._build_heterogeneous()
-
-    def _build_homogeneous(self) -> SpatialPopulation:
-        """Phase 1a: Build one template deme, clone N-1 times."""
-        template = self._template.build(name=self._spatial_name)
-        tpl_config = template.export_config()
-
-        demes: List[PopulationInstance] = [template]
-        for i in range(1, self._n_demes):
-            clone = _clone_deme(
-                template,
-                config=tpl_config,
-                name=f"{self._spatial_name}_deme_{i}",
-            )
-            demes.append(clone)
+            demes = self._build_homogeneous_demes()
+        else:
+            demes = self._build_heterogeneous_demes()
 
         kernel_bank, deme_kernel_ids = self._resolve_migration_kernels()
 
@@ -1555,35 +1604,40 @@ class SpatialConfigurator:
         self._compile_recording_plan(spatial)
         return spatial
 
-    def _build_heterogeneous(self) -> SpatialPopulation:
-        """Phase 1b: Group demes by config equivalence, build one template
-        per group, then clone within each group.
+    def _build_homogeneous_demes(self) -> List[PopulationInstance]:
+        """Build one template deme and clone it N-1 times."""
+        template = self._template.build(name=self._spatial_name)
+        tpl_config = template.export_config()
+
+        demes: List[PopulationInstance] = [template]
+        for i in range(1, self._n_demes):
+            clone = _clone_deme(
+                template,
+                config=tpl_config,
+                name=f"{self._spatial_name}_deme_{i}",
+            )
+            demes.append(clone)
+        return demes
+
+    def _build_heterogeneous_demes(self) -> List[PopulationInstance]:
+        """Group demes by *genetics* signature, build one template per
+        group, then derive per-deme ecology via ``_replace`` shells.
 
         **Grouping algorithm**::
 
             1. Expand every ``BatchSetting`` → per-deme value list.
-            2. For each deme, build a hashable signature from its batch-param values.
-            3. Demes with identical signatures share a config → same group.
-            4. For each group:
-               a. Build ONE template (full replay or ``_replace``).
-               b. Clone the template for remaining demes in the group.
+            2. For each deme, build a hashable signature from its
+               *genetics-section* batch values (fitness rows, presets,
+               modifiers — see ``_genetics_batch_names``).
+            3. Demes with identical genetics signatures share one group
+               template.  Ecology batch values are excluded from the
+               signature: a K gradient across 2601 demes produces ONE
+               group, not 2601.
 
-        **Example** — 2601 demes, K = [10000, ..., 5000, ..., 10000]::
-
-            Signatures: 10000 × 2600, 5000 × 1  →  2 groups  →  2 builds, not 2601.
-
-        **Config sharing across groups**::
-
-            The first group is built via full builder replay. Subsequent
-            groups use ``PopulationConfig._replace`` when only scalar /
-            known-array fields differ — this is a NamedTuple shallow copy:
-            unchanged fields (genotype maps, fitness arrays, survival rates,
-            etc.) point to the **same ndarray objects** as the first group's
-            config.  Only the fields that actually differ are new values.
-
-            When a group has non-scalar differences that ``_can_use_replace``
-            cannot handle (e.g. fitness dicts), a full builder replay is used
-            as fallback — all arrays are rebuilt from scratch for that group.
+            4. Within a group, non-first demes receive their own ecology
+               through ``_build_variant_config`` (``_replace`` shallow
+               copies sharing all heavy arrays) or a full builder replay
+               when a value cannot be applied by ``_replace``.
         """
         # 1. Expand every BatchSetting → concrete per-deme list.
         #    e.g. K=batch_setting([10000,5000,5000,8000]) → [10000, 5000, 5000, 8000]
@@ -1596,36 +1650,43 @@ class SpatialConfigurator:
         if self._compress:
             union_declared = self._compress_once(expanded)
 
-        # 2. Hash each deme's batch-param values into a signature.
-        #    ndarray values → bytes; dict values → sorted kv tuples.
-        #    Two demes with identical signatures share a config.
-        batch_param_names = sorted(expanded.keys())
-        signatures: List[tuple[tuple[str, Any], ...]] = []
+        # 2. Hash each deme's values into two signatures: a *genetics*
+        #    signature deciding group membership (ndarray values → bytes;
+        #    dict values → sorted kv tuples) and the full-value signature
+        #    deciding whether a member can plain-clone its group template.
+        all_param_names = sorted(expanded.keys())
+        genetics_param_names = _genetics_batch_names(all_param_names)
+        genetics_signatures: List[tuple[tuple[str, Any], ...]] = []
+        full_signatures: List[tuple[tuple[str, Any], ...]] = []
         for i in range(self._n_demes):
-            sig: tuple[tuple[str, Any], ...] = tuple(
+            genetics_signatures.append(tuple(
                 (name, _make_hashable(expanded[name][i]))
-                for name in batch_param_names
-            )
-            signatures.append(sig)
+                for name in genetics_param_names
+            ))
+            full_signatures.append(tuple(
+                (name, _make_hashable(expanded[name][i]))
+                for name in all_param_names
+            ))
 
-        # 3. Group deme indices by signature.
+        # 3. Group deme indices by genetics signature.
         #    [1,1,1,...,2,...,1] → 2 groups, not n_demes groups.
         groups: defaultdict[tuple[tuple[str, Any], ...], List[int]] = defaultdict(list)
-        for idx, sig in enumerate(signatures):
+        for idx, sig in enumerate(genetics_signatures):
             groups[sig].append(idx)
 
-        # 4. Build one template per group.  The first group always runs the
-        #    full builder pipeline.  Subsequent groups try ``_replace`` first
-        #    (shares heavy ndarrays), falling back to full replay.
+        # 4. Build one template per genetics group.  The first group always
+        #    runs the full builder pipeline.  Every deme whose full value
+        #    map differs derives its ecology through a ``_replace`` shell
+        #    (heavy ndarrays stay shared) or a full replay fallback.
         demes: List[PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]  # None placeholder; each slot filled before return
-        base_config: PopulationConfig | DiscretePopulationConfig | None = None
+        base_config: ModelDraft | None = None
         base_template: Optional[PopulationInstance] = None   # template deme from first group — cloned via _clone_deme
 
         for _sig, indices in groups.items():
             first_idx = indices[0]
             sig_map: Dict[str, Any] = {
                 name: expanded[name][first_idx]
-                for name in batch_param_names
+                for name in all_param_names
             }
 
             if base_config is None:
@@ -1635,36 +1696,12 @@ class SpatialConfigurator:
                 base_config = group_template.export_config()
                 base_template = group_template
             elif self._can_use_replace(sig_map, base_config):
-                # Fast path: only scalar / known-array fields differ.
-                # _replace creates a shallow copy — unchanged ndarrays
-                # (genotype maps, fitness, survival) are shared with base_config.
+                # Fast path: only scalar / known-array fields differ from
+                # the first group's template.
                 assert base_template is not None  # set in first-group branch above
-                variant_config = self._build_variant_config(
-                    sig_map, base_config,
-                    species=self._species,
-                    pop_type=self._pop_type,
+                group_template = self._deme_from_replace(
+                    sig_map, base_config, base_template, first_idx,
                 )
-                group_template = _clone_deme(
-                    base_template,
-                    config=variant_config,
-                    name=f"{self._spatial_name}_deme_{first_idx}",
-                )
-                # _clone_deme copies state arrays from base_template;
-                # overwrite them with the variant group's own values.
-                state = group_template.state
-                if "individual_count" in sig_map:
-                    state.individual_count[:] = variant_config.initial_individual_count
-                if "sperm_storage" in sig_map:
-                    ss = getattr(state, 'sperm_storage', None)
-                    if ss is not None:
-                        ss[:] = variant_config.initial_sperm_storage
-                # Update snapshot so reset() restores per-group initial state.
-                ss_snap = getattr(state, 'sperm_storage', None)
-                object.__setattr__(group_template, '_initial_population_snapshot', (
-                    state.individual_count.copy(),
-                    ss_snap.copy() if ss_snap is not None else None,
-                    None,
-                ))
             else:
                 # Fallback: parameter not recognized by _can_use_replace
                 # (e.g. fitness dict, custom modifier). Full builder replay —
@@ -1675,37 +1712,93 @@ class SpatialConfigurator:
 
             demes[first_idx] = group_template
 
-            # Clone the group template for remaining demes in this group.
-            # Clones share the group's config by reference (including all
-            # ndarrays); only state arrays are independent copies.
-            tpl_config = group_template.export_config()
+            # Remaining demes of this genetics group share its genetics;
+            # each derives its own ecology (K gradients, initial states, …)
+            # without inflating the number of full template builds.
+            # base_config was assigned in the first-group branch above, so
+            # every member of a later group can derive from it.
+            group_config = group_template.export_config()
             for idx in indices[1:]:
-                demes[idx] = _clone_deme(
-                    group_template,
-                    config=tpl_config,
-                    name=f"{self._spatial_name}_deme_{idx}",
-                )
+                if full_signatures[idx] == full_signatures[first_idx]:
+                    # Identical values: plain clone sharing the group's
+                    # config by reference (only state arrays are copies).
+                    demes[idx] = _clone_deme(
+                        group_template,
+                        config=group_config,
+                        name=f"{self._spatial_name}_deme_{idx}",
+                    )
+                elif self._can_use_replace(
+                    {name: expanded[name][idx] for name in all_param_names},
+                    base_config,
+                ):
+                    demes[idx] = self._deme_from_replace(
+                        {name: expanded[name][idx] for name in all_param_names},
+                        base_config,
+                        cast(PopulationInstance, base_template),
+                        idx,
+                    )
+                else:
+                    demes[idx] = self._build_template_for_group(
+                        {name: expanded[name][idx] for name in all_param_names},
+                        extra_declared=union_declared,
+                    )
 
-        kernel_bank, deme_kernel_ids = self._resolve_migration_kernels()
+        return demes
 
-        spatial = SpatialPopulation(
-            demes=demes,
-            topology=self._topology,
-            adjacency=self._migration_adjacency,
-            migration_kernel=self._migration_kernel,
-            migration_strategy=self._migration_strategy,
-            kernel_bank=kernel_bank,
-            deme_kernel_ids=deme_kernel_ids,
-            kernel_include_center=self._kernel_include_center,
-            migration_rate=self._migration_rate,
-            adjust_migration_on_edge=self._adjust_migration_on_edge,
-            name=self._spatial_name,
+    def _deme_from_replace(
+        self,
+        value_map: Dict[str, Any],
+        base_config: ModelDraft,
+        base_template: PopulationInstance,
+        deme_idx: int,
+    ) -> PopulationInstance:
+        """Derive one deme from the base template via a ``_replace`` shell.
+
+        The shell shares every unmodified ndarray with *base_config*;
+        only the deme-specific values (initial state, ecology scalars)
+        are new.  State arrays and the reset snapshot carry the deme's
+        own initial values.
+
+        Args:
+            value_map: The deme's concrete batch values.
+            base_config: The first group's template config.
+            base_template: The first group's template deme.
+            deme_idx: Deme index used for the deme name.
+
+        Returns:
+            A new deme population instance.
+        """
+        variant_config = self._build_variant_config(
+            value_map,
+            base_config,
+            species=self._species,
+            pop_type=self._pop_type,
         )
-        self._compile_recording_plan(spatial)
-        return spatial
+        deme = _clone_deme(
+            base_template,
+            config=variant_config,
+            name=f"{self._spatial_name}_deme_{deme_idx}",
+        )
+        # _clone_deme copies state arrays from base_template; overwrite
+        # them with the deme's own initial values.
+        state = deme.state
+        if "individual_count" in value_map:
+            state.individual_count[:] = variant_config.initial_individual_count
+        if "sperm_storage" in value_map:
+            ss = getattr(state, 'sperm_storage', None)
+            if ss is not None:
+                ss[:] = variant_config.initial_sperm_storage
+        # Update snapshot so reset() restores this deme's initial state.
+        ss_snap = getattr(state, 'sperm_storage', None)
+        object.__setattr__(deme, '_initial_population_snapshot', (
+            state.individual_count.copy(),
+            ss_snap.copy() if ss_snap is not None else None,
+            None,
+        ))
+        return deme
 
     @staticmethod
-    def _can_use_replace(sig_map: Dict[str, object], base_config: PopulationConfig | DiscretePopulationConfig) -> bool:
+    def _can_use_replace(sig_map: Dict[str, object], base_config: ModelDraft) -> bool:
         """Return True if every kwarg in *sig_map* can be applied via ``_replace``.
 
         ``_replace`` is a NamedTuple shallow copy — it creates a new config
@@ -1717,7 +1810,7 @@ class SpatialConfigurator:
         or must fall back to a full builder replay.  A kwarg qualifies if it
         appears in ``_ARRAY_KWARGS``, ``_KWARG_MULTI_FIELD``,
         ``_KWARG_RENAMES``, or exists as a direct field name on
-        ``PopulationConfig``.
+        ``ModelDraft``.
         """
         for name in sig_map:
             if name in _ARRAY_KWARGS:
@@ -1733,14 +1826,14 @@ class SpatialConfigurator:
     @staticmethod
     def _build_variant_config(
         sig_map: Dict[str, object],
-        base_config: PopulationConfig | DiscretePopulationConfig,
+        base_config: ModelDraft,
         *,
         species: Species,
         pop_type: str = "age_structured",
-    ) -> PopulationConfig | DiscretePopulationConfig:
+    ) -> ModelDraft:
         """Create a variant config via ``_replace``, sharing all heavy arrays.
 
-        ``PopulationConfig`` is a NamedTuple.  ``_replace(**kwargs)`` creates
+        ``ModelDraft`` is a NamedTuple.  ``_replace(**kwargs)`` creates
         a **shallow copy**: fields named in *kwargs* get new values; every
         other field keeps its original reference.  This means genotype maps,
         fitness tensors, survival vectors, and all other unchanging ndarrays
@@ -1764,12 +1857,12 @@ class SpatialConfigurator:
 
         Args:
             sig_map: Mapping from batch kwarg name to group's concrete value.
-            base_config: The base ``PopulationConfig`` to derive from.
+            base_config: The base ``ModelDraft`` to derive from.
             species: ``Species`` instance, needed for genotype resolution.
             pop_type: ``"age_structured"`` or ``"discrete_generation"``.
 
         Returns:
-            A new ``PopulationConfig`` sharing all unchanged array references
+            A new ``ModelDraft`` sharing all unchanged array references
             with *base_config*.
         """
         from natal.backends.reference.simulation.age_structured import (
@@ -1815,6 +1908,17 @@ class SpatialConfigurator:
                     replace_kwargs["initial_sperm_storage"] = array
                 continue
 
+            # --- 1b. discrete scalars: one cell of a copied unified vector ---
+            if kwarg in _DISCRETE_VECTOR_CELLS:
+                field_name, cell = _DISCRETE_VECTOR_CELLS[kwarg]
+                arr = np.array(
+                    getattr(base_config, field_name), dtype=np.float64
+                )
+                # sig_map values are pre-validated scalars (see _can_use_replace).
+                arr[cell] = float(val)  # type: ignore[reportArgumentType]  # BatchSetting already expanded upstream
+                replace_kwargs[field_name] = arr
+                continue
+
             # --- 2. rename ---
             config_field = _KWARG_RENAMES.get(kwarg, kwarg)
             # Wrap scalar values for 0-d ndarray config fields.
@@ -1825,44 +1929,23 @@ class SpatialConfigurator:
             else:
                 replace_kwargs[config_field] = val
 
-            if kwarg in _EQUILIBRIUM_SENSITIVE_KWARGS:
+            if _route_sensitive(kwarg):
                 needs_equilibrium = True
 
         variant = base_config._replace(**replace_kwargs)
 
         if needs_equilibrium:
-            # DiscretePopulationConfig stores only 0-d scalars — rebuild temp (2,2)
-            # arrays for compute_equilibrium_metrics which expects per-age arrays.
-            from natal.frontend.data import DiscretePopulationConfig as DPC
-
-            if isinstance(variant, DPC):
-                surv = np.zeros((2, 2), dtype=np.float64)
-                surv[0, 0] = variant.female_age0_survival
-                surv[1, 0] = variant.male_age0_survival
-                mating = np.zeros((2, 2), dtype=np.float64)
-                mating[0, 1] = variant.female_adult_mating_rate
-                mating[1, 1] = variant.male_adult_mating_rate
-                reprod = np.zeros(2, dtype=np.float64)
-                reprod[1] = variant.reproduction_rate
-                as_surv = surv
-                as_mating = mating
-                as_reprod = reprod
-            else:
-                as_surv = variant.age_based_survival_rates
-                as_mating = variant.age_based_mating_rates
-                as_reprod = variant.age_based_reproduction_rates
-
             new_comp, new_surv = compute_equilibrium_metrics(
-                carrying_capacity=variant.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
-                eggs_per_female=variant.eggs_per_female[()],  # pyright: ignore[reportArgumentType]
-                age_based_survival_rates=as_surv,
-                age_based_mating_rates=as_mating,
+                carrying_capacity=variant.carrying_capacity,  # pyright: ignore[reportArgumentType]
+                eggs_per_female=variant.eggs_per_female,  # pyright: ignore[reportArgumentType]
+                age_based_survival_rates=variant.age_based_survival_rates,
+                age_based_mating_rates=variant.age_based_mating_rates,
                 female_age_based_fertility=variant.female_age_based_fertility,
                 relative_competition_strength=variant.age_based_relative_competition_strength,
-                sex_ratio=variant.sex_ratio[()],  # pyright: ignore[reportArgumentType]
+                sex_ratio=variant.sex_ratio,  # pyright: ignore[reportArgumentType]
                 new_adult_age=int(variant.new_adult_age),
                 n_ages=int(variant.n_ages),
-                age_based_reproduction_rates=as_reprod,
+                age_based_reproduction_rates=variant.age_based_reproduction_rates,
             )
             variant = variant._replace(
                 expected_competition_strength=np.array(float(new_comp)),
@@ -1954,7 +2037,6 @@ class SpatialConfigurator:
 
     def _compile_recording_plan(self, spatial: SpatialPopulation) -> None:
         """Compile and freeze the :class:`RecordingPlan` on the spatial population."""
-        from natal.frontend.data import DiscretePopulationConfig
         from natal.frontend.output._recording import compile_recording_plan
         from natal.frontend.output.history import History
         from natal.frontend.output.observation import (
@@ -1962,9 +2044,9 @@ class SpatialConfigurator:
             build_identity_observation,
         )
 
-        ref_deme = spatial.deme(0)
+        ref_deme = spatial._deme_object(0)  # pyright: ignore[reportPrivateUsage]  # typed internal consumer
         config = ref_deme.config
-        if isinstance(config, DiscretePopulationConfig):
+        if config.discrete_generation:
             kind = "spatial_discrete_generation"
             has_sperm = False
         else:
