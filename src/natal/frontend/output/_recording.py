@@ -51,7 +51,7 @@ class RecordingPlan:
     """Immutable plan that describes how each tick is recorded.
 
     Created once at build time and never modified.  Engine wrappers
-    extract Numba-compatible scalars and arrays from this plan.
+    extract reference-compatible scalars and arrays from this plan.
 
     Attributes:
         schema: The :class:`HistorySchema` describing all recorded rows.

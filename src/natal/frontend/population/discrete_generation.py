@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     Dict,
     List,
@@ -21,85 +20,87 @@ from typing import (
     Sequence,
     Tuple,
     Union,
-    cast,
 )
 
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.backends.numba.lifecycle as lifecycle_engine
-import natal.backends.numba.utils as _numba_utils
+import natal.backends.reference.lifecycle as lifecycle_engine
 from natal.frontend.data import (
-    DiscretePopulationConfig,
     DiscretePopulationState,
+    ModelDraft,
     parse_flattened_discrete_state,
 )
 from natal.frontend.genetics import Genotype, Species
-from natal.frontend.hooks.types import CompiledHookDescriptor
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.registry.index import IndexRegistry
-from natal.utils.types import Sex
+from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustDiscreteLifecycleBackend
-    from natal.frontend.configurator import (
-        DiscreteConfigurator,
-    )
+    from natal.contracts.params import Params
+    from natal.frontend.configurator import Configurator
 
 __all__ = ["DiscreteGenerationPopulation"]
 
 
-def _require_discrete_config(config: object) -> DiscretePopulationConfig:
-    """Validate that *config* is a well-formed ``DiscretePopulationConfig``.
+def _require_discrete_config(config: object) -> ModelDraft:
+    """Validate that *config* satisfies the discrete-generation invariants.
 
-    The two config models (``PopulationConfig`` for age-structured,
-    ``DiscretePopulationConfig`` for discrete-generation) are independent
-    NamedTuples with no cross-model conversion.  This helper enforces the
-    type boundary at every entry point that stores a config on a
+    Since the draft merge there is a single ``ModelDraft`` schema for
+    both granularities; what distinguishes a discrete-generation draft
+    is its normalized shape, not its type.  This helper enforces that
+    shape at every entry point that stores a draft on a
     ``DiscreteGenerationPopulation`` (``__init__``, ``import_config``):
-    it rejects any other type — including ``PopulationConfig`` and dict —
-    with ``TypeError``, and rejects a ``DiscretePopulationConfig`` whose
-    discrete-generation invariants are violated with ``ValueError``.
+    non-``ModelDraft`` objects are rejected with ``TypeError``, and
+    drafts violating the discrete-generation invariants with
+    ``ValueError``.
 
     The discrete-generation engine hardcodes a 2-age lifecycle
     (age 0 = offspring, age 1 = reproducing adult; adults are replaced
-    every tick).  A config with ``n_ages != 2``, ``new_adult_age != 1``,
-    or ``adult_ages != [1]`` would run but produce silently wrong dynamics,
-    so it is rejected up front rather than silently normalized.
+    every tick).  A draft with ``n_ages != 2``, ``new_adult_age != 1``,
+    or ``adult_ages != [1]`` would run but produce silently wrong
+    dynamics, so it is rejected up front rather than silently
+    normalized.
 
     Args:
-        config: The candidate config object.
+        config: The candidate draft object.
 
     Returns:
-        *config* itself, narrowed to ``DiscretePopulationConfig``.
+        *config* itself, narrowed to ``ModelDraft``.
 
     Raises:
-        TypeError: If *config* is not a ``DiscretePopulationConfig``.
-        ValueError: If *config* is a ``DiscretePopulationConfig`` but
-            ``n_ages != 2``, ``new_adult_age != 1``, or
-            ``adult_ages != [1]``.
+        TypeError: If *config* is not a ``ModelDraft``.
+        ValueError: If *config* is a ``ModelDraft`` but ``n_ages != 2``,
+            ``new_adult_age != 1``, or ``adult_ages != [1]``.
     """
-    if not isinstance(config, DiscretePopulationConfig):
+    if not isinstance(config, ModelDraft):
         raise TypeError(
-            f"DiscreteGenerationPopulation requires a "
-            f"DiscretePopulationConfig, got {type(config).__name__}. "
-            f"PopulationConfig and other types are not accepted — the two "
-            f"config models are independent; build a "
-            f"DiscretePopulationConfig via Configurator.for_discrete() "
-            f"or build_discrete_engine_config()."
+            f"DiscreteGenerationPopulation requires a discrete-generation "
+            f"ModelDraft, got {type(config).__name__}. Build one via "
+            f"Configurator.for_discrete() or build_discrete_engine_config()."
         )
     if config.n_ages != 2 or config.new_adult_age != 1:
         raise ValueError(
-            f"DiscretePopulationConfig must satisfy the discrete-generation "
-            f"invariants: n_ages == 2 and new_adult_age == 1, got "
-            f"n_ages={config.n_ages}, new_adult_age={config.new_adult_age}. "
+            f"The discrete-generation draft must satisfy the "
+            f"discrete-generation invariants: n_ages == 2 and "
+            f"new_adult_age == 1, got n_ages={config.n_ages}, "
+            f"new_adult_age={config.new_adult_age}. "
             f"The discrete engine hardcodes a 2-age lifecycle."
         )
     expected_adult_ages = np.array([1], dtype=np.int64)
     if not np.array_equal(config.adult_ages, expected_adult_ages):
         raise ValueError(
-            f"DiscretePopulationConfig.adult_ages must be [1], got "
+            f"The discrete-generation draft adult_ages must be [1], got "
             f"{config.adult_ages!r}."
+        )
+    # Non-overlapping generations: adults never survive a tick.  This is
+    # the data marker distinguishing the discrete normalization from a
+    # 2-age overlapping (age-structured) draft.
+    if float(config.age_based_survival_rates[:, 1].sum()) != 0.0:
+        raise ValueError(
+            "The discrete-generation draft requires zero adult survival "
+            f"(non-overlapping generations), got {config.age_based_survival_rates.tolist()}."
         )
     return config
 
@@ -110,28 +111,28 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     def __init__(
         self,
         species: Species,
-        population_config: DiscretePopulationConfig,
+        population_config: ModelDraft,
         name: Optional[str] = None,
         index_registry: Optional[IndexRegistry] = None,
         initial_individual_count: Optional[
             Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]]
         ] = None,
-        hooks: Optional[Dict[str, List[Tuple[Any, Optional[str], Optional[int]]]]] = None,
+        hook_items: Optional[List[object]] = None,
     ):
         """Initialize a discrete-generation population.
 
         Constructs the population from a species definition and a
-        ``DiscretePopulationConfig``, sets up genotype registries and the
-        initial age-by-genotype distribution, and registers hooks for
-        event-driven intervention.
+        discrete-normalized ``ModelDraft``, sets up genotype registries
+        and the initial age-by-genotype distribution, and registers
+        hooks for event-driven intervention.
 
         Args:
             species: Genetic architecture describing loci, alleles and
                 chromosome structure.
             population_config: A fully initialized
-                ``DiscretePopulationConfig``.  A ``PopulationConfig`` or
-                other type is rejected with ``TypeError`` — the two config
-                models are independent; build a ``DiscretePopulationConfig``
+                ``ModelDraft`` in the discrete normalization.  A draft
+                violating the invariants is rejected with ``ValueError``;
+                build a discrete draft via ``Configurator.for_discrete()``
                 via ``Configurator.for_discrete()`` or
                 ``build_discrete_engine_config()``.
             name: Human-readable population name.  Defaults to
@@ -139,11 +140,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             index_registry: Optional shared registry for index compression.
             initial_individual_count: Optional per-sex, per-genotype
                 initial distribution that overrides the config default.
-            hooks: Event hook registrations to apply.
+            hook_items: Hook registrations (``Op`` objects, ``@hook``-
+                decorated functions, or single-parameter callables).
 
         Raises:
-            TypeError: If *population_config* is not a
-                ``DiscretePopulationConfig``.
+            TypeError: If *population_config* is not a ``ModelDraft``.
             ValueError: If *population_config* violates the discrete
                 generation invariants (``n_ages == 2``, ``new_adult_age
                 == 1``, ``adult_ages == [1]``).
@@ -151,7 +152,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if name is None:
             name = "DiscreteGenerationPop"
 
-        super().__init__(species, name, hooks=hooks or {})
+        super().__init__(species, name, hook_items=hook_items)
 
         if index_registry is not None:
             self._index_registry = index_registry
@@ -189,9 +190,15 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._distribute_initial_population(initial_individual_count)
 
         self._python_backend = False
+        # True while a Rust batch run executes; in-hook writes defer to the
+        # next run (session borrow held by the engine).
+        self._rust_run_active = False
         self._rust_lifecycle_backend: RustDiscreteLifecycleBackend | None = None
         self._rust_backend_seed: int | None = None
-        self._rust_backend_signature: str | None = None
+        # Contract params materialized from the draft at enable time and
+        # re-materialized on each dirty sync; the source object handed to
+        # the session's directed refresh_params pull.
+        self._contract_params: Params | None = None
 
         # Keep a pristine copy so reset() can restore the starting state.
         self._initial_population_snapshot = (
@@ -217,16 +224,17 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
-        backend: Literal["auto", "rust", "numba", "python"] = "numba",
+        backend: Literal["auto", "rust", "python"] = "auto",
         *,
         compress: bool = False,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
         declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
-    ) -> DiscreteConfigurator:
+    ) -> Configurator:
         """Fluent population construction entry point.
 
-        Returns a ``DiscreteConfigurator``.  Chain domain methods and end
-        with ``.build()`` to create a Population.
+        Returns the unified ``Configurator`` wrapping a
+        discrete-normalized draft.  Chain domain methods and end with
+        ``.build()`` to create a Population.
         """
         from natal.frontend.configurator import Configurator
 
@@ -237,7 +245,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                     "declared_genotypes (deprecated alias)."
                 )
             declared_zygote_types = declared_genotypes
-        return Configurator.for_discrete(species).setup(
+        return Configurator.from_species(species, discrete=True).setup(
             name=name,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
@@ -323,9 +331,19 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     def enable_rust_backend(self, seed: int = 0) -> DiscreteGenerationPopulation:
         """Enable the Rust backend for subsequent runs.
 
-        The Rust backend executes CSR declarative hooks only.  Call this
-        after all hook registration and config updates; runtime updates
-        after enabling require disabling and re-enabling the backend.
+        CSR declarative hooks travel to Rust inside the ``HookProgram``;
+        single-parameter Python callbacks are bridged through the
+        session's ``python_callbacks`` channel (fired at event boundaries
+        after the CSR hooks ran, state copies written back per call).
+        Call this after all hook registration and config updates.  The
+        current config is materialized into the contract pair once; the
+        session owns its copies.  Later value changes flow through the
+        dirty-set bridge: write paths mark contract fields and the next
+        ``run()`` pulls exactly those fields into the live session — no
+        rebuild, no RNG reset.  Structural changes (hooks, blueprint
+        flags) or direct out-of-band array edits still go through
+        :meth:`refresh_rust_backend`, the explicit full-refresh escape
+        hatch.
 
         Args:
             seed: Seed for the Rust RNG.
@@ -334,62 +352,58 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             Self for chaining.
 
         Raises:
-            RuntimeError: If the Rust extension is unavailable or custom hooks
-                are registered.
+            RuntimeError: If the Rust extension is unavailable.
         """
         from natal.backends.rust.rust_backend import (
             RustDiscreteLifecycleBackend,
             rust_backend_available,
-            rust_backend_signature,
         )
+        from natal.contracts.materialize import materialize
 
         if not rust_backend_available():
             raise RuntimeError(
                 "natal._engine_rs is not available; build it with `maturin develop` "
                 "before enabling the Rust backend."
             )
-        if self._has_non_csr_hooks():
-            raise RuntimeError(
-                "Rust backend only supports CSR declarative hooks. "
-                "Keep the Numba backend for custom hook callables."
-            )
         hook_program = self._build_hook_program()
-        self._rust_lifecycle_backend = RustDiscreteLifecycleBackend(
+        self._run_program = self._run_program._replace(hooks=hook_program)
+        backend = RustDiscreteLifecycleBackend(
             self.config,
             hook_program,
             seed=seed,
         )
+        self._register_rust_callbacks(backend)
+        self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
-        self._rust_backend_signature = rust_backend_signature(
-            self.config, hook_program
-        )
+        self._contract_params = materialize(self.config).params
+        self._rust_dirty.clear()
         return self
 
     def disable_rust_backend(self) -> DiscreteGenerationPopulation:
-        """Disable the Rust backend and return to the Numba/Python path.
+        """Disable the Rust backend and return to the reference path.
 
         Returns:
             Self for chaining.
         """
         self._rust_lifecycle_backend = None
         self._rust_backend_seed = None
-        self._rust_backend_signature = None
+        self._contract_params = None
+        self._rust_dirty.clear()
         return self
 
     def refresh_rust_backend(self) -> DiscreteGenerationPopulation:
         """Rebuild the Rust backend from the current config and hooks.
 
-        Call this after ``pop.update()`` when Rust was enabled before the
-        update.  Runtime config replacement is detected automatically, but
-        this method is the explicit synchronization point for in-place
-        scalar updates.
+        Explicit full-refresh escape hatch: rebuilds the session from a
+        fresh materialization (RNG resets to the original seed).  Value-only
+        changes do not need this — the dirty-set bridge syncs them before
+        the next run automatically.
 
         Returns:
             Self for chaining.
 
         Raises:
-            RuntimeError: If the backend was never enabled or custom hooks
-                are now registered.
+            RuntimeError: If the backend was never enabled.
         """
         if self._rust_backend_seed is None:
             raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
@@ -400,37 +414,38 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """Return whether the Rust backend is currently active.
 
         Returns:
-            True when enabled and no custom hooks are present.
+            True when ``enable_rust_backend()`` has been called.
         """
-        return (
-            getattr(self, "_rust_lifecycle_backend", None) is not None
-            and not self._has_non_csr_hooks()
-        )
-
-    def _has_non_csr_hooks(self) -> bool:
-        """Return whether any compiled hook needs a Python/Numba callable."""
-        descriptors = cast(
-            List[CompiledHookDescriptor],
-            getattr(self, "compiled_hook_descriptors", []),
-        )
-        return any(
-            desc.plan is None
-            and (desc.njit_fn is not None or desc.py_wrapper is not None)
-            for desc in descriptors
-        )
+        return getattr(self, "_rust_lifecycle_backend", None) is not None
 
     def _sync_rust_backend(self) -> None:
-        """Rebuild the Rust session when config or hook arrays changed."""
-        if self._rust_backend_seed is None:
-            return
-        from natal.backends.rust.rust_backend import rust_backend_signature
+        """Drain the dirty set into the live Rust session.
 
-        signature = rust_backend_signature(self.config, self._build_hook_program())
+        Dirty non-empty: re-materialize the contract params from the draft
+        and pull exactly the dirty fields into the session (directed
+        refresh — the session object and its RNG survive).  The
+        ``__hooks__``/``__blueprint__`` sentinels route to a full backend
+        rebuild because hooks and blueprint flags are session structure,
+        not values.
+        """
+        if self._rust_backend_seed is None or not self._rust_dirty:
+            return
         if (
-            getattr(self, "_rust_lifecycle_backend", None) is None
-            or signature != self._rust_backend_signature
+            self._rust_lifecycle_backend is None
+            or "__hooks__" in self._rust_dirty
+            or "__blueprint__" in self._rust_dirty
         ):
             self.refresh_rust_backend()
+            self._rust_dirty.clear()
+            return
+        from natal.contracts.materialize import materialize
+
+        self._contract_params = materialize(self.config).params
+        # backend is non-None here: the None case rebuilt above and returned.
+        self._rust_lifecycle_backend.refresh_params(
+            sorted(self._rust_dirty), self._contract_params
+        )
+        self._rust_dirty.clear()
 
     def _run_rust_lifecycle(
         self,
@@ -447,12 +462,22 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 "Rust backend is not enabled; call enable_rust_backend() first."
             )
 
-        final_state, history_new, was_stopped = backend.run(
-            self.state,
-            n_steps=n_steps,
-            record_every=record_every,
-            observation_mask=self._observation_mask,
-        )
+        # In-hook writes during the batch defer session pushes to the next run.
+        self._rust_run_active = True
+        try:
+            final_state, history_new, was_stopped = backend.run(
+                self.state,
+                n_steps=n_steps,
+                record_every=record_every,
+                observation_mask=self._observation_mask,
+            )
+        finally:
+            self._rust_run_active = False
+
+        # Merge the session's set_param writes (params_log rows under their
+        # own commit ticks + final draft values) so the Rust run path keeps
+        # the same audit trail and draft visibility as the Python channel.
+        self._absorb_rust_eco_journal(backend.drain_eco_journal())
 
         self._state = final_state
         self._tick = int(final_state.n_tick)
@@ -475,7 +500,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     ) -> DiscreteGenerationPopulation:
         """Run the population for *n_steps* ticks.
 
-        Uses the generated lifecycle wrapper when Numba is enabled and the
+        Uses the reference lifecycle orchestration and the
         pure-Python unified lifecycle loop otherwise.
 
         Args:
@@ -502,10 +527,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 record_every if record_every is not None else self.record_every
             )
 
-            if (
-                getattr(self, "_rust_lifecycle_backend", None) is not None
-                and not self._has_non_csr_hooks()
-            ):
+            if getattr(self, "_rust_lifecycle_backend", None) is not None:
                 return self._run_rust_lifecycle(
                     n_steps=n_steps,
                     record_every=record_every_resolved,
@@ -513,98 +535,28 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                     clear_history_on_start=clear_history_on_start,
                 )
 
-            # Wright-Fisher extreme-speed path: single multinomial draw per tick.
-            if getattr(self.config, "extreme_speed_mode", 0) > 0:
-                tick_fn = lifecycle_engine.run_wf_tick
-                wrappers = self.get_compiled_event_hooks()
-                if (
-                    _numba_utils.NUMBA_ENABLED
-                    and not getattr(self, "_python_backend", False)
-                    and wrappers.run_wf_fn is not None
-                ):
-                    assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
-                    obs_mask = self._observation_mask
-                    n_obs = len(self._observation.labels) if self._observation is not None else 0
-
-                    final_state_tuple, history_new, was_stopped = wrappers.run_wf_fn(
-                        state=self.state,
-                        config=self.config,
-                        registry=wrappers.hooks.registry,
-                        n_ticks=n_steps,
-                        record_interval=record_every_resolved,
-                        observation_mask=obs_mask,
-                        n_obs_groups=n_obs,
-                    )
-                    self._state = DiscretePopulationState(
-                        n_tick=int(final_state_tuple[1]),
-                        individual_count=final_state_tuple[0],
-                    )
-                    self._tick = int(final_state_tuple[1])
-                    self._process_kernel_history(history_new, clear_history_on_start)
-                else:
-                    return self._run_python_lifecycle(
-                        tick_fn=tick_fn,
-                        n_steps=n_steps,
-                        record_every=record_every_resolved,
-                        finish=finish,
-                        clear_history_on_start=clear_history_on_start,
-                    )
-
-                if was_stopped:
-                    self._finished = True
-                    self.trigger_event("finish")
-                elif finish:
-                    self.finish_simulation()
-                return self
-
-            tick_fn = lifecycle_engine.run_discrete_tick
-            wrappers = self.get_compiled_event_hooks()
-            if (
-                _numba_utils.NUMBA_ENABLED
-                and not getattr(self, "_python_backend", False)
-                and wrappers.run_discrete_fn is not None
-            ):
-                assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
-                obs_mask = self._observation_mask
-                n_obs = len(self._observation.labels) if self._observation is not None else 0
-
-                final_state_tuple, history_new, was_stopped = wrappers.run_discrete_fn(
-                    state=self.state,
-                    config=self.config,
-                    registry=wrappers.hooks.registry,
-                    n_ticks=n_steps,
-                    record_interval=record_every_resolved,
-                    observation_mask=obs_mask,
-                    n_obs_groups=n_obs,
-                )
-                self._state = DiscretePopulationState(
-                    n_tick=int(final_state_tuple[1]),
-                    individual_count=final_state_tuple[0],
-                )
-                self._tick = int(final_state_tuple[1])
-                self._process_kernel_history(history_new, clear_history_on_start)
-            else:
-                return self._run_python_lifecycle(
-                    tick_fn=tick_fn,
-                    n_steps=n_steps,
-                    record_every=record_every_resolved,
-                    finish=finish,
-                    clear_history_on_start=clear_history_on_start,
-                )
-
-            if was_stopped:
-                self._finished = True
-                self.trigger_event("finish")
-            elif finish:
-                self.finish_simulation()
-
-            return self
+            # Non-Rust path: the pure-Python reference lifecycle, where the
+            # CSR interpreter and the Python callbacks alternate per event.
+            # set_param ops also run here because their writes must reach the
+            # parameter write channel (route dispatch / audit log).
+            tick_fn = (
+                lifecycle_engine.run_wf_tick
+                if getattr(self.config, "extreme_speed_mode", 0) > 0
+                else lifecycle_engine.run_discrete_tick
+            )
+            return self._run_python_lifecycle(
+                tick_fn=tick_fn,
+                n_steps=n_steps,
+                record_every=record_every_resolved,
+                finish=finish,
+                clear_history_on_start=clear_history_on_start,
+            )
         finally:
             self._running = False
 
     def _run_python_lifecycle(
         self,
-        tick_fn: Callable[..., tuple[DiscretePopulationState, int]],
+        tick_fn: Callable[..., tuple[DiscretePopulationState, int, ModelDraft]],
         n_steps: int,
         record_every: int,
         finish: bool,
@@ -627,11 +579,17 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             This population after the run.
         """
         self.ensure_hook_executor()
-        registry = self._create_empty_hook_program()
+        from natal.frontend.hooks.types import empty_hook_program
+
+        registry = empty_hook_program()
+
+        def refresh_config(_config: ModelDraft) -> ModelDraft:
+            """Return the population's current config (write-channel rebind)."""
+            return self.config
 
         def first_hook(
             state: DiscretePopulationState,
-            config: DiscretePopulationConfig,
+            config: ModelDraft,
             deme_id: int,
         ) -> int:
             """Execute the ``first`` event against *state*."""
@@ -642,7 +600,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         def early_hook(
             state: DiscretePopulationState,
-            config: DiscretePopulationConfig,
+            config: ModelDraft,
             deme_id: int,
         ) -> int:
             """Execute the ``early`` event against *state*."""
@@ -653,7 +611,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         def late_hook(
             state: DiscretePopulationState,
-            config: DiscretePopulationConfig,
+            config: ModelDraft,
             deme_id: int,
         ) -> int:
             """Execute the ``late`` event against *state*."""
@@ -674,7 +632,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._tick = int(state.n_tick)
             self._record_current_snapshot(allow_existing=True)
 
-        final_state, was_stopped = lifecycle_engine.run(
+        input_config = self.config
+        final_state, was_stopped, config = lifecycle_engine.run(
             tick_fn=tick_fn,
             state=self.state,
             config=self.config,
@@ -686,9 +645,16 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             n_steps=n_steps,
             record_every=record_every,
             record_fn=record_fn,
+            config_refresh=refresh_config,
         )
         self._state = final_state
         self._tick = int(final_state.n_tick)
+        # The lifecycle rebuilds the config only when its in-kernel CSR
+        # flush fired; hook-executor writes already republished through
+        # set_config, so rebinding the stale lifecycle config here would
+        # clobber them.
+        if config is not input_config:
+            self.set_config(config)
 
         if was_stopped:
             self._finished = True
@@ -749,24 +715,24 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return self.state.flatten_all()
 
     @property
-    def config(self) -> DiscretePopulationConfig:
-        """DiscretePopulationConfig: The current configuration."""
-        return cast(DiscretePopulationConfig, super().config)
+    def config(self) -> ModelDraft:
+        """ModelDraft: The current configuration."""
+        return super().config
 
-    def export_config(self) -> DiscretePopulationConfig:
+    def export_config(self) -> ModelDraft:
         """Return a copy of the current configuration."""
         return self.config
 
-    def import_config(self, config: DiscretePopulationConfig) -> None:
+    def import_config(self, config: ModelDraft) -> None:
         """Replace the current configuration with *config*.
 
         Args:
-            config: A ``DiscretePopulationConfig`` to install on this
-                population.  A ``PopulationConfig`` or other type is
+            config: A discrete-normalized ``ModelDraft`` to install on this
+                population.  Other types are
                 rejected with ``TypeError``.
 
         Raises:
-            TypeError: If *config* is not a ``DiscretePopulationConfig``.
+            TypeError: If *config* is not a ``ModelDraft``.
             ValueError: If *config* violates the discrete-generation
                 invariants (``n_ages == 2``, ``new_adult_age == 1``,
                 ``adult_ages == [1]``).
@@ -828,9 +794,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             raise AttributeError("Population state has not been initialized.")
         return self._state
 
-    def update(self) -> DiscreteConfigurator:
-        """Return a ``DiscreteConfigurator`` for modifying this population's config."""
-        return cast('DiscreteConfigurator', self._create_configurator())
+    def update(self) -> Configurator:
+        """Return a ``Configurator`` for modifying this population's config."""
+        return self._create_configurator()
 
     def __repr__(self) -> str:
         """Return a string summary of the discrete-generation population."""

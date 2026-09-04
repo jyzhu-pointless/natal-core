@@ -90,7 +90,7 @@ class Gene(GeneticEntity['Locus']):
             setattr(self, key, value)
 
         # Validate name format
-        from natal.utils.helpers import validate_name
+        from natal.frontend.utils.helpers import validate_name
         if not validate_name(name):
             raise ValueError(f"Invalid gene name format: '{name}'. "
                              f"Gene names must contain only letters, numbers, and underscores.")

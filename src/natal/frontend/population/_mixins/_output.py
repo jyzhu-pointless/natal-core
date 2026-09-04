@@ -261,7 +261,7 @@ class OutputMixin(ModifierPresetMixin):
             ...     if pop.get_total_count() == 0:
             ...         print("Population extinct, finishing simulation.")
             ...         pop.finish_simulation()
-            >>> pop.set_hook('late', check_extinction)
+            >>> pop.update().hooks(check_extinction, event='late')
         """
         if self._finished:
             raise RuntimeError(

@@ -26,20 +26,17 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.backends.numba.lifecycle as lifecycle_engine
-import natal.backends.numba.utils as _numba_utils
-from natal.frontend.data import PopulationConfig, PopulationState
+import natal.backends.reference.lifecycle as lifecycle_engine
+from natal.frontend.data import ModelDraft, PopulationState
 from natal.frontend.genetics import Genotype, Species
-from natal.frontend.hooks.types import CompiledHookDescriptor
-from natal.frontend.population.base import BasePopulation, HookRegistrationMap
+from natal.frontend.population.base import BasePopulation
 from natal.frontend.registry.index import IndexRegistry
-from natal.utils.types import Sex
+from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustLifecycleBackend
-    from natal.frontend.configurator import (
-        AgeStructuredConfigurator,
-    )
+    from natal.contracts.params import Params
+    from natal.frontend.configurator import Configurator
 
 __all__ = ["AgeStructuredPopulation"]
 
@@ -64,26 +61,27 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     def __init__(
         self,
         species: Species,
-        population_config: PopulationConfig,
+        population_config: ModelDraft,
         name: Optional[str] = None,
         index_registry: Optional[IndexRegistry] = None,
         initial_individual_count: Optional[Mapping[str, Mapping[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
         initial_sperm_storage: Optional[Mapping[Union[Genotype, str], Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
-        hooks: Optional[HookRegistrationMap] = None,
+        hook_items: Optional[List[object]] = None,
     ):
-        """Initialize an age-structured population instance using a PopulationConfig.
+        """Initialize an age-structured population instance using a ModelDraft.
 
         Args:
             species: Species object describing genetic architecture.
-            population_config: Fully initialized PopulationConfig instance.
+            population_config: Fully initialized ModelDraft instance.
             name: Human-readable population name. If None, uses "AgeStructuredPop".
             initial_individual_count: Initial population distribution.
                 Format: {sex: {genotype: counts_by_age}}
             initial_sperm_storage: Initial sperm storage state (if supported).
-            hooks: Event hook registrations to apply.
+            hook_items: Hook registrations (``Op`` objects, ``@hook``-
+                decorated functions, or single-parameter callables).
 
         Examples:
-            >>> pop_config = PopulationConfigBuilder.build(species, ...)
+            >>> pop_config = build_population_config(species, ...)
             >>> pop = AgeStructuredPopulation(
             ...     species,
             ...     pop_config,
@@ -94,8 +92,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if name is None:
             name = "AgeStructuredPop"
 
-        hooks_map: HookRegistrationMap = hooks or {}
-        super().__init__(species, name, hooks=hooks_map)
+        super().__init__(species, name, hook_items=hook_items)
 
         if index_registry is not None:
             self._index_registry = index_registry
@@ -126,9 +123,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         self.snapshots = {}
         self._python_backend = False
+        # True while a Rust batch run executes; in-hook writes defer to the
+        # next run (session borrow held by the engine).
+        self._rust_run_active = False
         self._rust_lifecycle_backend: RustLifecycleBackend | None = None
         self._rust_backend_seed: int | None = None
-        self._rust_backend_signature: str | None = None
+        # Contract params materialized from the draft at enable time and
+        # re-materialized on each dirty sync; the source object handed to
+        # the session's directed refresh_params pull.
+        self._contract_params: Params | None = None
 
         if initial_individual_count is not None:
             self.state.individual_count.fill(0.0)
@@ -162,19 +165,19 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
-        backend: Literal["auto", "rust", "numba", "python"] = "numba",
+        backend: Literal["auto", "rust", "python"] = "auto",
         *,
         compress: bool = False,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
         declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
-    ) -> AgeStructuredConfigurator:
+    ) -> Configurator:
         """Start building an age-structured population with overlapping generations.
 
         This is the fluent entry point for constructing an
-        ``AgeStructuredPopulation``.  It returns an ``AgeStructuredConfigurator``
-        that you configure by chaining domain methods (``initial_state()``,
-        ``reproduction()``, ``competition()``, etc.) and finalize with
-        ``build()``.
+        ``AgeStructuredPopulation``.  It returns the unified
+        ``Configurator`` that you configure by chaining domain methods
+        (``initial_state()``, ``reproduction()``, ``competition()``, etc.)
+        and finalize with ``build()``.
 
         Args:
             species: Species object describing the population's genetic
@@ -189,10 +192,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts
                 so each female produces exactly the specified number of eggs.
                 Defaults to ``False``.
-            backend: Lifecycle backend selector.  ``"auto"`` chooses Rust when
-                the extension is available and only CSR hooks are registered;
-                ``"rust"`` forces Rust; ``"python"`` forces the pure-Python
-                fallback; ``"numba"`` (default) preserves the legacy JIT path.
+            backend: Lifecycle backend selector.  ``"auto"`` (default) chooses
+                Rust when the extension is available and falls back to the
+                pure-Python reference otherwise; ``"rust"`` forces Rust;
+                ``"python"`` forces the pure-Python reference.
             compress: If ``True``, enable full index compression at build
                 time, pruning unreachable GTypes and ZTypes to shrink
                 internal arrays. Defaults to ``False``.
@@ -205,7 +208,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 *declared_zygote_types*.
 
         Returns:
-            ``AgeStructuredConfigurator`` ready for domain-method chaining.
+            A ``Configurator`` ready for domain-method chaining.
             Call ``.build()`` to produce an ``AgeStructuredPopulation``.
 
         Raises:
@@ -222,7 +225,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     "declared_genotypes (deprecated alias)."
                 )
             declared_zygote_types = declared_genotypes
-        return Configurator.for_age_structured(species).setup(
+        return Configurator.from_species(species).setup(
             name=name,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
@@ -489,23 +492,23 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return int(total)
 
     @property
-    def config(self) -> PopulationConfig:
-        """PopulationConfig: The current configuration."""
-        return cast(PopulationConfig, super().config)
+    def config(self) -> ModelDraft:
+        """ModelDraft: The current configuration."""
+        return super().config
 
     # ========================================================================
     # State export/import (simulator interface)
     # ========================================================================
 
-    def export_config(self) -> PopulationConfig:
+    def export_config(self) -> ModelDraft:
         """Export population configuration to Config jitclass.
 
         Returns:
-            PopulationConfig: A copy of the current population configuration.
+            ModelDraft: A copy of the current population configuration.
         """
         return self.config
 
-    def import_config(self, config: PopulationConfig) -> None:
+    def import_config(self, config: ModelDraft) -> None:
         """Import configuration into the population.
 
         Args:
@@ -626,22 +629,25 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """Build configuration tuple for simulation engine.
 
         Returns:
-            tuple: A Numba-compatible configuration tuple.
+            tuple: An engine-compatible configuration tuple.
         """
         return self.export_config()
 
     def enable_rust_backend(self, seed: int = 0) -> AgeStructuredPopulation:
         """Enable the Rust lifecycle backend for subsequent runs.
 
-        The Rust backend executes CSR declarative hooks only.  If this
-        population contains custom hook callables, this method raises so the
-        caller can keep using the Numba path; ``run()`` also falls back to
-        Numba automatically when custom hooks are present.
+        CSR declarative hooks travel to Rust inside the ``HookProgram``;
+        single-parameter Python callbacks are bridged through the
+        session's ``python_callbacks`` channel (fired at event boundaries
+        after the CSR hooks ran, state copies written back per call).
 
-        The backend snapshots the current configuration and hook program.
-        Call this after all hook registration and config updates; runtime
-        ``pop.update()`` changes after enabling require disabling and
-        re-enabling the backend.
+        The current config is materialized into the contract pair once; the
+        session owns its copies.  Later value changes flow through the
+        dirty-set bridge: write paths mark contract fields and the next
+        ``run()`` pulls exactly those fields into the live session — no
+        rebuild, no RNG reset.  Structural changes (hooks, blueprint flags)
+        or direct out-of-band array edits still go through
+        :meth:`refresh_rust_backend`, the explicit full-refresh escape hatch.
 
         Args:
             seed: Seed for the Rust RNG used in stochastic simulations.
@@ -650,55 +656,52 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             Self for chaining.
 
         Raises:
-            RuntimeError: If the Rust extension is unavailable or custom hooks
-                are registered.
+            RuntimeError: If the Rust extension is unavailable.
         """
         from natal.backends.rust.rust_backend import (
             RustLifecycleBackend,
             rust_backend_available,
-            rust_backend_signature,
         )
+        from natal.contracts.materialize import materialize
 
         if not rust_backend_available():
             raise RuntimeError(
                 "natal._engine_rs is not available; build it with `maturin develop` "
                 "before enabling the Rust backend."
             )
-        if self._has_non_csr_hooks():
-            raise RuntimeError(
-                "Rust backend only supports CSR declarative hooks. "
-                "Keep the Numba backend for custom hook callables."
-            )
         hook_program = self._build_hook_program()
-        self._rust_lifecycle_backend = RustLifecycleBackend(
+        self._run_program = self._run_program._replace(hooks=hook_program)
+        backend = RustLifecycleBackend(
             self.config,
             hook_program,
             seed=seed,
         )
+        self._register_rust_callbacks(backend)
+        self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
-        self._rust_backend_signature = rust_backend_signature(
-            self.config, hook_program
-        )
+        self._contract_params = materialize(self.config).params
+        self._rust_dirty.clear()
         return self
 
     def disable_rust_backend(self) -> AgeStructuredPopulation:
-        """Disable the Rust backend and return to the Numba/Python path.
+        """Disable the Rust backend and return to the reference path.
 
         Returns:
             Self for chaining.
         """
         self._rust_lifecycle_backend = None
         self._rust_backend_seed = None
-        self._rust_backend_signature = None
+        self._contract_params = None
+        self._rust_dirty.clear()
         return self
 
     def refresh_rust_backend(self) -> AgeStructuredPopulation:
         """Rebuild the Rust backend from the current config and hooks.
 
-        Call this after ``pop.update()`` when Rust was enabled before the
-        update.  Runtime config replacement is detected automatically, but
-        this method is the explicit synchronization point for in-place
-        scalar updates.
+        Explicit full-refresh escape hatch: rebuilds the session from a
+        fresh materialization (RNG resets to the original seed).  Value-only
+        changes do not need this — the dirty-set bridge syncs them before
+        the next run automatically.
 
         Returns:
             Self for chaining.
@@ -716,35 +719,38 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """Return whether the Rust lifecycle backend is currently enabled.
 
         Returns:
-            True when ``enable_rust_backend()`` has been called and no custom
-            hooks were added afterwards.
+            True when ``enable_rust_backend()`` has been called.
         """
-        return self._rust_lifecycle_backend is not None and not self._has_non_csr_hooks()
-
-    def _has_non_csr_hooks(self) -> bool:
-        """Return whether any compiled hook needs a Python/Numba callable."""
-        descriptors = cast(
-            List[CompiledHookDescriptor],
-            getattr(self, "compiled_hook_descriptors", []),
-        )
-        return any(
-            desc.plan is None
-            and (desc.njit_fn is not None or desc.py_wrapper is not None)
-            for desc in descriptors
-        )
+        return self._rust_lifecycle_backend is not None
 
     def _sync_rust_backend(self) -> None:
-        """Rebuild the Rust session when config or hook arrays changed."""
-        if self._rust_backend_seed is None:
-            return
-        from natal.backends.rust.rust_backend import rust_backend_signature
+        """Drain the dirty set into the live Rust session.
 
-        signature = rust_backend_signature(self.config, self._build_hook_program())
+        Dirty non-empty: re-materialize the contract params from the draft
+        and pull exactly the dirty fields into the session (directed
+        refresh — the session object and its RNG survive).  The
+        ``__hooks__``/``__blueprint__`` sentinels route to a full backend
+        rebuild because hooks and blueprint flags are session structure,
+        not values.
+        """
+        if self._rust_backend_seed is None or not self._rust_dirty:
+            return
         if (
             self._rust_lifecycle_backend is None
-            or signature != self._rust_backend_signature
+            or "__hooks__" in self._rust_dirty
+            or "__blueprint__" in self._rust_dirty
         ):
             self.refresh_rust_backend()
+            self._rust_dirty.clear()
+            return
+        from natal.contracts.materialize import materialize
+
+        self._contract_params = materialize(self.config).params
+        # backend is non-None here: the None case rebuilt above and returned.
+        self._rust_lifecycle_backend.refresh_params(
+            sorted(self._rust_dirty), self._contract_params
+        )
+        self._rust_dirty.clear()
 
     def _run_rust_lifecycle(
         self,
@@ -760,12 +766,22 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
 
         observation_mask = self._observation_mask
-        final_state, history_new, was_stopped = backend.run(
-            self.state,
-            n_steps=n_steps,
-            record_every=record_every,
-            observation_mask=observation_mask,
-        )
+        # In-hook writes during the batch defer session pushes to the next run.
+        self._rust_run_active = True
+        try:
+            final_state, history_new, was_stopped = backend.run(
+                self.state,
+                n_steps=n_steps,
+                record_every=record_every,
+                observation_mask=observation_mask,
+            )
+        finally:
+            self._rust_run_active = False
+
+        # Merge the session's set_param writes (params_log rows under their
+        # own commit ticks + final draft values) so the Rust run path keeps
+        # the same audit trail and draft visibility as the Python channel.
+        self._absorb_rust_eco_journal(backend.drain_eco_journal())
 
         self._state = final_state
         self._tick = int(final_state.n_tick)
@@ -812,7 +828,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             if record_every is None:
                 record_every = self.record_every
 
-            if self._rust_lifecycle_backend is not None and not self._has_non_csr_hooks():
+            if self._rust_lifecycle_backend is not None:
                 return self._run_rust_lifecycle(
                     n_steps=n_steps,
                     record_every=record_every,
@@ -820,57 +836,24 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     clear_history_on_start=clear_history_on_start,
                 )
 
-            config = self.export_config()
-            wrappers = self.get_compiled_event_hooks()
-            assert wrappers.hooks.registry is not None, "hooks.registry should always be initialized"
-
-            if (
-                _numba_utils.NUMBA_ENABLED
-                and not getattr(self, "_python_backend", False)
-                and wrappers.run_fn is not None
-            ):
-                obs_mask = self._observation_mask
-                n_obs = len(self._observation.labels) if self._observation is not None else 0
-
-                final_state_tuple, history_new, was_stopped = wrappers.run_fn(
-                    state=self.state,
-                    config=config,
-                    registry=wrappers.hooks.registry,
-                    n_ticks=n_steps,
-                    record_interval=record_every,
-                    observation_mask=obs_mask,
-                    n_obs_groups=n_obs,
-                )
-
-                self._state = PopulationState(
-                    n_tick=int(final_state_tuple[2]),
-                    individual_count=final_state_tuple[0],
-                    sperm_storage=final_state_tuple[1],
-                )
-                self._tick = int(final_state_tuple[2])
-                self._process_kernel_history(history_new, clear_history_on_start)
-            else:
-                return self._run_python_lifecycle(
-                    tick_fn=lifecycle_engine.run_structured_tick,
-                    n_steps=n_steps,
-                    record_every=record_every,
-                    finish=finish,
-                    clear_history_on_start=clear_history_on_start,
-                )
-
-            if was_stopped:
-                self._finished = True
-                self.trigger_event("finish")
-            elif finish:
-                self.finish_simulation()
-
-            return self
+            # Non-Rust path: the pure-Python reference lifecycle, where the
+            # CSR interpreter and the Python callbacks alternate per event.
+            # set_param ops also force this path because their writes must
+            # reach the route table / dirty bridge / params snapshot log,
+            # which only the Python write channel has.
+            return self._run_python_lifecycle(
+                tick_fn=lifecycle_engine.run_structured_tick,
+                n_steps=n_steps,
+                record_every=record_every,
+                finish=finish,
+                clear_history_on_start=clear_history_on_start,
+            )
         finally:
             self._running = False
 
     def _run_python_lifecycle(
         self,
-        tick_fn: Callable[..., tuple[PopulationState, int]],
+        tick_fn: Callable[..., tuple[PopulationState, int, ModelDraft]],
         n_steps: int,
         record_every: int,
         finish: bool,
@@ -878,10 +861,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     ) -> AgeStructuredPopulation:
         """Run the pure-Python unified lifecycle loop.
 
-        Hook execution is delegated to ``trigger_event`` so CSR declarative
-        hooks, njit hooks, Python wrapper hooks, and legacy plain callbacks
-        keep their existing dispatch semantics.  The CSR registry passed to
-        the lifecycle loop is therefore the empty program.
+        Hook execution is delegated to ``trigger_event`` so the CSR
+        interpreter and single-parameter Python callbacks alternate per
+        event.  The CSR registry passed to the lifecycle loop is therefore
+        the empty program.
 
         Args:
             tick_fn: Unified single-tick function.
@@ -894,23 +877,29 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             This population after the run.
         """
         self.ensure_hook_executor()
-        registry = self._create_empty_hook_program()
+        from natal.frontend.hooks.types import empty_hook_program
 
-        def first_hook(state: PopulationState, config: PopulationConfig, deme_id: int) -> int:
+        registry = empty_hook_program()
+
+        def first_hook(state: PopulationState, config: ModelDraft, deme_id: int) -> int:
             """Execute the ``first`` event against *state*."""
             _ = config, deme_id
             self._state = state
             self._tick = int(state.n_tick)
             return self.trigger_event("first", deme_id=deme_id)
 
-        def early_hook(state: PopulationState, config: PopulationConfig, deme_id: int) -> int:
+        def refresh_config(_config: ModelDraft) -> ModelDraft:
+            """Return the population's current config (write-channel rebind)."""
+            return self.config
+
+        def early_hook(state: PopulationState, config: ModelDraft, deme_id: int) -> int:
             """Execute the ``early`` event against *state*."""
             _ = config, deme_id
             self._state = state
             self._tick = int(state.n_tick)
             return self.trigger_event("early", deme_id=deme_id)
 
-        def late_hook(state: PopulationState, config: PopulationConfig, deme_id: int) -> int:
+        def late_hook(state: PopulationState, config: ModelDraft, deme_id: int) -> int:
             """Execute the ``late`` event against *state*."""
             _ = config, deme_id
             self._state = state
@@ -929,7 +918,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self._tick = int(state.n_tick)
             self._record_current_snapshot(allow_existing=True)
 
-        final_state, was_stopped = lifecycle_engine.run(
+        input_config = self.config
+        final_state, was_stopped, config = lifecycle_engine.run(
             tick_fn=tick_fn,
             state=self.state,
             config=self.config,
@@ -941,9 +931,16 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             n_steps=n_steps,
             record_every=record_every,
             record_fn=record_fn,
+            config_refresh=refresh_config,
         )
         self._state = final_state
         self._tick = int(final_state.n_tick)
+        # The lifecycle rebuilds the config only when its in-kernel CSR
+        # flush fired; hook-executor writes already republished through
+        # set_config, so rebinding the stale lifecycle config here would
+        # clobber them.
+        if config is not input_config:
+            self.set_config(config)
 
         if was_stopped:
             self._finished = True
@@ -1024,9 +1021,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 present.add(genotype)
         return present
 
-    def update(self) -> AgeStructuredConfigurator:
-        """Return an ``AgeStructuredConfigurator`` for modifying this population's config."""
-        return cast('AgeStructuredConfigurator', self._create_configurator())
+    def update(self) -> Configurator:
+        """Return a ``Configurator`` for modifying this population's config."""
+        return self._create_configurator()
 
     def __repr__(self) -> str:
         """Return a compact string representation of the population."""

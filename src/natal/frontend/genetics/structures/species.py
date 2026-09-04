@@ -117,7 +117,7 @@ class Species(
                 self.add_chromosome(chrom)
 
         if gamete_labels is not None:
-            from natal.utils.helpers import validate_name
+            from natal.frontend.utils.helpers import validate_name
             for glab in gamete_labels:
                 if not validate_name(glab):
                     raise ValueError(
@@ -129,7 +129,7 @@ class Species(
             self._gamete_labels: List[str] = []
 
         if somatic_labels is not None:
-            from natal.utils.helpers import validate_name
+            from natal.frontend.utils.helpers import validate_name
             for slab in somatic_labels:
                 if not validate_name(slab):
                     raise ValueError(

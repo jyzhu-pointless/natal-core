@@ -19,8 +19,8 @@ from typing import (
 )
 
 from natal.frontend.genetics import Gene, Genotype
-from natal.utils.helpers import resolve_sex_label
-from natal.utils.types import Age, Sex
+from natal.frontend.utils.helpers import resolve_sex_label
+from natal.frontend.utils.types import Age, Sex
 
 # Temporary type alias
 _AlleleSpecifier = Union[Gene, str]
@@ -94,7 +94,7 @@ ZygoteViabilityScalingConfig = _ZygoteViabilityScalingConfig
 PresetFitnessPatch = Dict[str, Any]
 
 def _normalize_sex_key(sex_key: _SexSpecifier) -> int:
-    """Normalize sex key to integer index used by PopulationConfig.
+    """Normalize sex key to integer index used by ModelDraft.
 
     Accepted values:
     - Sex enum members (Sex.FEMALE, Sex.MALE)

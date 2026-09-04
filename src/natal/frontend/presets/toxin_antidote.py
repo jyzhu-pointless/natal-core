@@ -9,7 +9,7 @@ from natal.frontend.genetics import Gene, Genotype
 from natal.frontend.modifiers.gamete_conversion import GameteConversionRuleSet
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.modifiers.zygote_conversion import ZygoteConversionRuleSet
-from natal.utils.types import Sex
+from natal.frontend.utils.types import Sex
 
 from ._base import GeneticPreset
 from ._fitness import make_fitness_patch_given_allele_scaling

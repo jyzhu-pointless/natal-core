@@ -243,8 +243,9 @@ class Genotype:
         This method computes pure Mendelian segregation based on recombination rates.
         No gene drives or other modifiers are applied - this is the baseline calculation.
 
-        For gene drives, gamete selection, or other modifications, use Population-level
-        gamete modifiers via `Population.set_gamete_modifier()`.
+        For gene drives, gamete selection, or other modifications, register
+        Population-level gamete modifiers through the ``.modifiers()``
+        configurator method (they rewrite this map at build time).
 
         Recombination behavior is controlled by the Species's RecombinationMap:
         - If recombination rates are defined and non-zero, recombinant haplotypes
@@ -478,7 +479,7 @@ class Genotype:
         """
         Compute all recombinant haplotypes for a heterozygous chromosome.
 
-        Uses a high-level decorator to automatically select between Numba-accelerated
+        Uses a high-level decorator to define the platform-accelerated
         and pure Python implementations based on problem size.
 
         This method is only called when _should_use_recombination() returns True,
@@ -652,7 +653,7 @@ def compute_recombinant_haplotypes_with_alleles(
     if len(paternal_alleles) != n_loci:
         raise ValueError("maternal_alleles and paternal_alleles must have same length")
 
-    # Compute patterns (auto-selects Numba or Python)
+    # Compute patterns (auto-selects the backend)
     patterns, frequencies = compute_recombinant_haplotypes(
         n_loci, recombination_rates, start_maternal
     )

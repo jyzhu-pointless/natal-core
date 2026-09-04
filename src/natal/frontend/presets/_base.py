@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Self, Tuple
 
 from natal.frontend.genetics import Gene, Species
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
-from natal.utils.types import Sex
+from natal.frontend.utils.types import Sex
 
 from ._types import (
     PresetFitnessPatch,

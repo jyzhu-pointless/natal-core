@@ -33,8 +33,8 @@ from natal.frontend.modifiers.module import (
     GenotypeFilter,
     evaluate_genotype_filter,
 )
-from natal.utils.helpers import resolve_sex_label
-from natal.utils.types import Sex
+from natal.frontend.utils.helpers import resolve_sex_label
+from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.frontend.population.base import BasePopulation

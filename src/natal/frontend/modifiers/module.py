@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 import numpy as np
 
 from natal.frontend.genetics import Genotype, HaploidGenotype
-from natal.utils.helpers import resolve_sex_label
+from natal.frontend.utils.helpers import resolve_sex_label
 
 GenotypeFilter = Optional[Union[Callable[[Genotype], bool], str]]
 GlabSelector = Optional[Union[str, int]]

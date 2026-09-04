@@ -283,7 +283,7 @@ def sex(name: str) -> Condition:
     Returns:
         ``_Sex`` condition with the resolved sex index.
     """
-    from natal.utils.helpers import resolve_sex_label
+    from natal.frontend.utils.helpers import resolve_sex_label
 
     return _Sex(resolve_sex_label(name))
 

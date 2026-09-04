@@ -253,7 +253,7 @@ class LabPattern:
         Returns a wildcard (matches-everything) pattern for ``"*"``
         or the empty string.
         """
-        from natal.utils.helpers import validate_name
+        from natal.frontend.utils.helpers import validate_name
 
         s = lab_str.strip()
         if not s or s == "*":

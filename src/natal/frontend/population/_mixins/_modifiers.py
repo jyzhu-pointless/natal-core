@@ -127,7 +127,7 @@ class ModifierPresetMixin(HookManagerMixin):
         - ``gametes_to_zygotes_map``: mapping from paired haploid gametes back
           to diploid offspring genotype indices.
         - ``offspring_tensor``: precomputed 4-D tensor combining both maps
-          for efficient Numba-based reproduction.
+          for efficient native-accelerated reproduction.
 
         The maps are stored in ``_config`` via ``_replace``, which creates a
         shallow copy of the config with updated fields.
@@ -215,7 +215,7 @@ class ModifierPresetMixin(HookManagerMixin):
             zygotes_to_gametes_map = modifier(zygotes_to_gametes_map)
         for modifier in zygote_funcs:
             gametes_to_zygotes_map = modifier(gametes_to_zygotes_map)
-        # Configs from different demes share one Numba NamedTuple type.  Keep
+        # Configs from different demes share one unified NamedTuple type.  Keep
         # array layout stable as well as dtype/shape so a typed.List can hold
         # refreshed and untouched deme configs together.
         zygotes_to_gametes_map = np.ascontiguousarray(zygotes_to_gametes_map)
@@ -250,6 +250,9 @@ class ModifierPresetMixin(HookManagerMixin):
             n_gtypes=n_hg,
             n_glabs=n_glabs,
         )
+        # Modifier maps are session structure for the Rust bridge: the maps
+        # (and dimension counters) changed, so the session must be rebuilt.
+        self._rust_dirty.update({"meiosis_map", "offspring_tensor", "__hooks__"})
 
     def add_gamete_modifier(
         self,

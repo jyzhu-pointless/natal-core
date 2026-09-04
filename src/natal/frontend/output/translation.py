@@ -699,9 +699,9 @@ def spatial_population_to_readable_dict(
     )
 
     demes_payload: Dict[str, Any] = {}  # Any: JSON-serializable  # Any: JSON-serializable
-    for deme_idx, deme in enumerate(spatial_population.demes):
+    for deme_idx in range(spatial_population.n_demes):
         demes_payload[f"deme_{deme_idx}"] = population_to_readable_dict(
-            population=deme,
+            population=spatial_population._deme_object(deme_idx),  # pyright: ignore[reportPrivateUsage]  # typed internal consumer
             include_zero_counts=include_zero_counts,
         )
 
@@ -758,9 +758,9 @@ def spatial_population_to_observation_dict(
     from natal.frontend.output.observation import ObservationFilter
 
     per_deme_payload: Dict[str, Any] = {}  # Any: JSON-serializable  # Any: JSON-serializable
-    for deme_idx, deme in enumerate(spatial_population.demes):
+    for deme_idx in range(spatial_population.n_demes):
         per_deme_payload[f"deme_{deme_idx}"] = _get_population_observation_payload(
-            population=deme,
+            population=spatial_population._deme_object(deme_idx),  # pyright: ignore[reportPrivateUsage]  # typed internal consumer
             observation=None,
             groups=groups,
             collapse_age=collapse_age,

@@ -31,7 +31,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.frontend.registry.index import IndexRegistry
-from natal.utils.types import Sex
+from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.frontend.genetics import Species

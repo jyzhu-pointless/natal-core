@@ -1,4 +1,4 @@
-"""Numba-compatible observation row encoding for panmictic engines.
+"""Observation row encoding for panmictic engines.
 
 Spatial engines always transport a regular raw state batch. The spatial
 Population applies its canonical Observation after transport, so this module
@@ -10,12 +10,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.backends.numba.utils import njit_switch
-
 __all__: list[str] = []
-
-
-@njit_switch(cache=True)
 def build_observation_row_panmictic(
     individual_count: NDArray[np.float64],
     observation_mask: NDArray[np.float64],

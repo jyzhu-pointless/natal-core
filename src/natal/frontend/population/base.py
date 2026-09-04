@@ -6,17 +6,16 @@ common interfaces, evolution methods, history management, and helpers
 that are implemented by concrete population classes.
 
 This module provides a common abstraction layer for population models while
-keeping internal state representations compatible with NumPy/Numba engine.
+keeping internal state representations compatible with the NumPy-based engine.
 """
 
 from __future__ import annotations
 
 import hashlib
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import (
     TYPE_CHECKING,
-    Callable,
-    Dict,
     Generic,
     List,
     Optional,
@@ -28,14 +27,15 @@ from typing import (
 )
 
 import numpy as np
+from numpy.typing import NDArray
 
 from natal.frontend.data import (
-    DiscretePopulationConfig,
     DiscretePopulationState,
-    PopulationConfig,
+    ModelDraft,
     PopulationState,
 )
 from natal.frontend.genetics import Genotype, HaploidGenotype, Species
+from natal.frontend.hooks.types import RunProgram, empty_hook_program
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.population._mixins._observation import ObservationMixin
 from natal.frontend.population._mixins._output import OutputMixin
@@ -49,15 +49,15 @@ if TYPE_CHECKING:
         CompiledHookDescriptor,
         HookExecutor,
     )
+    from natal.frontend.hooks.tick_context import HookRunner
+    from natal.frontend.output._recording import RecordingPlan
     from natal.frontend.output.history import History
     from natal.frontend.output.observation import Observation, ObservationResult
+    from natal.frontend.population._params_view import ParamsView
     from natal.frontend.presets import GeneticPreset
 
-HookCallback = Callable[..., object]
-HookEntry = Tuple[int, Optional[str], HookCallback]
-HookRegistration = Tuple[HookCallback, Optional[str], Optional[int]]
-HookRegistrationMap = Dict[str, List[HookRegistration]]
-PendingHook = Tuple[str, HookCallback, Optional[str], Optional[int]]
+# A parameter snapshot row: (tick, parameter name, old value, new value).
+ParamChange = Tuple[int, str, float, float]
 
 class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     """Abstract base class for population models.
@@ -73,15 +73,12 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         name (str): Human-readable population name.
         tick (int): Current simulation tick.
         registry (IndexRegistry): Index registry for genotype/haplotype mappings.
-        config (PopulationConfig): Active static tensor/config container.
+        config (ModelDraft): Active static draft/config container.
         state (T_State): Active population state container.
         history (List[Tuple[int, np.ndarray]]): Recorded state snapshots by tick.
-        hook_entries (Dict[str, List[HookEntry]]): Mapping from event name to
-            the ordered list of hook entries ``(hook_id, hook_name, hook_func)``
-            registered for that event.  Each event list is sorted by hook_id.
         compiled_hook_descriptors (List[CompiledHookDescriptor]): Ordered list
-            of compiled hook descriptors (CSR plans, njit functions, and Python
-            wrappers) sorted by priority.  Homogeneous demes cloned from the
+            of compiled hook descriptors (CSR plans and Python callbacks)
+            sorted by priority.  Homogeneous demes cloned from the
             same template share this list object via identity.
         hook_executor (Optional[HookExecutor]): Python-side coordinator for
             all hook types.  Lazily built on first use and invalidated whenever
@@ -101,16 +98,18 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self,
         species: Species,
         name: str = "Population",
-        hooks: Optional[HookRegistrationMap] = None,
+        hook_items: Optional[List[object]] = None,
     ):
         """Initialize the base population.
 
         Args:
             species: Genetic architecture specifying chromosomes, loci, and alleles.
             name: Optional population name (default: "Population").
-            hooks: Optional mapping of event names to hook registrations. Each
-                entry should be a sequence of tuples in the form ``(func, hook_name, hook_id)``. Hooks
-                provided here will be registered during initialization.
+            hook_items: Optional hook registrations (``Op`` objects,
+                ``@hook``-decorated functions, or single-parameter
+                callables).  Registration is deferred to
+                :meth:`_finalize_hooks` so the IndexRegistry is ready
+                when declarative ops compile.
 
         Note:
             Registry and genotypes are initialized lazily via Template Method.
@@ -124,18 +123,17 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._index_registry: Optional[IndexRegistry] = None
         self._registry: Optional[IndexRegistry] = None
 
+        # Program-level plans (CSR hooks + frozen recording plan).
+        self._run_program: RunProgram = RunProgram(
+            hooks=empty_hook_program(), recording=None
+        )
+
         # Self-describing History data model (frozen at build time).
         self._history_obj: Optional[History] = None
-        self._recording_plan: Optional[object] = None
 
         # History config
         self.record_every: int = 1
         self.max_history: int = 5000  # Default rolling window size
-
-        # Hooks system: event_name -> [(hook_id, hook_name, hook_func), ...]
-        self.hook_entries: Dict[str, List[HookEntry]] = {
-            event: [] for event in self.ALLOWED_EVENTS
-        }
 
         # Presets with priority IDs.  Writes go to _presets; derived
         # modifier lists are rebuilt from _presets + _manual_* on demand.
@@ -149,14 +147,15 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self._zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
 
-        # Compiled hook descriptors (for Numba-accelerated execution).
+        # Compiled hook descriptors (CSR plans | Python callbacks).
         self.compiled_hook_descriptors: List[CompiledHookDescriptor] = []
 
-        # Hook executor (Python-side coordinator for all hook types).
+        # Dispatch pair (Python-side coordinator + callback runner).
         self.hook_executor: Optional[HookExecutor] = None
+        self._hook_runner: Optional[HookRunner] = None
 
         # Static data container.
-        self._config: Optional[PopulationConfig | DiscretePopulationConfig] = None
+        self._config: Optional[ModelDraft] = None
 
         # PopulationState container.
         self._state: Optional[T_State] = None
@@ -171,45 +170,65 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._observation: Optional[Observation] = None
         self._observation_mask: Optional[np.ndarray] = None
 
-        # Hooks queued for deferred compilation after subclass initialization.
-        # Format: [(event_name, func, hook_name, hook_id), ...]
-        self._pending_hooks: List[PendingHook] = []
+        # Parameter snapshot log (tick, name, old, new) appended by the
+        # runtime writers on every committed scalar change.
+        self._params_log: List[ParamChange] = []
+        # Frozen per-deme ecology snapshot for spatial python dispatch:
+        # homogeneous demes share one draft, so Op.set_param operands must
+        # read the deme's OWN pre-tick column value, not the shared draft
+        # another deme may already have written this tick.
+        self._eco_value_override: Optional[NDArray[np.float64]] = None
 
-        # Register hooks.
-        # If a hook carries @hook metadata, compilation may fail at this stage
-        # because IndexRegistry may not be fully initialized yet.
-        # Plain functions can be registered immediately; @hook functions are queued.
-        hooks_map: HookRegistrationMap = hooks or {}
-        if hooks_map:
-            for event_name, hooks_list in hooks_map.items():
-                for hook_info in hooks_list:
-                    func, hook_name, hook_id = hook_info
+        # Hooks queued for deferred registration after subclass
+        # initialization (declarative ops need the IndexRegistry).
+        self._pending_hook_items: List[object] = list(hook_items or [])
 
-                    # Check if function has @hook metadata
-                    hook_meta = getattr(func, 'meta', None)
-                    if hook_meta is not None:
-                        # Defer compilation until _finalize_hooks() is called
-                        self._pending_hooks.append((event_name, func, hook_name, hook_id))
-                    else:
-                        # Plain function, register immediately
-                        self.set_hook(event_name, func, hook_id=hook_id, hook_name=hook_name, compile=False)
+        # Rust dirty-set bridge: contract field names whose draft values
+        # changed after the Rust session was built.  The next run() pulls
+        # exactly these fields into the session (no rebuild, no RNG reset).
+        # The sentinel "__blueprint__" forces a full backend rebuild instead.
+        self._rust_dirty: set[str] = set()
+
+    def set_eco_value_override(self, values: Optional[NDArray[np.float64]]) -> None:
+        """Freeze or clear the Op.set_param operand snapshot.
+
+        The spatial python-dispatch tick sets each deme's snapshot to the
+        deme's own pre-tick ecology column so shared-draft writes by one
+        deme cannot feed another deme's same-tick expression.
+
+        Args:
+            values: Frozen row (length ``len(ECO_PARAM_NAMES)``) or
+                ``None`` to read live values again.
+        """
+        self._eco_value_override = values
 
     def _finalize_hooks(self) -> None:
-        """Compile pending hooks after subclass initialization is complete.
+        """Register deferred hook items after subclass initialization.
 
-        Called by subclasses after their __init__ completes. This allows hooks
-        with @hook metadata to be compiled with the now-initialized IndexRegistry.
+        Called by subclasses after their __init__ completes.  Declarative
+        ops need the IndexRegistry, which may only be ready once the
+        subclass has finished its own setup.
         """
-        # Compile any pending @hook-decorated functions
-        for event_name, func, hook_name, hook_id in self._pending_hooks:
-            self.set_hook(event_name, func, hook_id=hook_id, hook_name=hook_name, compile=True)
-        self._pending_hooks.clear()
-        self.hook_executor = None
+        pending = self._pending_hook_items
+        self._pending_hook_items = []
+        if pending:
+            self.register_hooks(*pending)
+
+    @property
+    def _recording_plan(self) -> Optional[RecordingPlan]:
+        """The frozen recording plan (lives inside the run program)."""
+        recording = cast("Optional[RecordingPlan]", self._run_program.recording)
+        return recording
+
+    @_recording_plan.setter
+    def _recording_plan(self, plan: Optional[RecordingPlan]) -> None:
+        """Install the frozen recording plan into the run program."""
+        self._run_program = self._run_program._replace(recording=plan)
 
     def _clone(
         self,
         name: str,
-        config: PopulationConfig | DiscretePopulationConfig | None = None,
+        config: ModelDraft | None = None,
     ) -> Self:
         """Create a lightweight functional copy sharing compiled state and config.
 
@@ -227,15 +246,20 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         Args:
             name: Unique name for the clone.
             config: Optional config to use (default: template's config).
-                Accepts either ``PopulationConfig`` or
-                ``DiscretePopulationConfig``; the two models are
-                independent and no cross-model conversion is performed.
+                Accepts a ``ModelDraft``; no conversion is performed.
 
         Returns:
             A new population instance of the same type with shared compiled state.
         """
         cls = type(self)
         clone = cls.__new__(cls)
+
+        # --- rust dirty bridge (independent per deme) ---
+        clone._rust_dirty = set()
+
+        # --- per-clone bookkeeping (deferred hooks already finalized) ---
+        clone._pending_hook_items = []
+        clone._params_log = []
 
         # --- shared identity ---
         clone._species = self._species
@@ -244,10 +268,15 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         clone._tick = int(self._tick)
 
         # --- shared hooks (compiled, read-only during simulation) ---
-        clone.hook_entries = self.hook_entries
-        clone._pending_hooks = []
         clone.compiled_hook_descriptors = self.compiled_hook_descriptors
         clone.hook_executor = self.hook_executor
+        clone._hook_runner = self._hook_runner
+        # Clones start from an empty CSR program; registration populates it
+        # lazily via _refresh_run_program (the shared descriptor list is
+        # re-read every time the program is rebuilt).
+        clone._run_program = RunProgram(
+            hooks=self._run_program.hooks, recording=self._run_program.recording
+        )
 
         # --- shared registry ---
         clone._index_registry = self._index_registry
@@ -457,13 +486,13 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         return self._index_registry
 
     @property
-    def config(self) -> PopulationConfig | DiscretePopulationConfig:
+    def config(self) -> ModelDraft:
         """Public accessor for compiled population configuration."""
         if self._config is None:
             raise AttributeError("Population config has not been initialized.")
         return self._config
 
-    def set_config(self, config: PopulationConfig | DiscretePopulationConfig) -> None:
+    def set_config(self, config: ModelDraft) -> None:
         """Replace this population's configuration."""
         self._config = config
 
@@ -476,6 +505,94 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         from natal.frontend.configurator import Configurator
 
         return Configurator.for_population(self)
+
+    @property
+    def params(self) -> ParamsView:
+        """Validated parameter surface (domain A).
+
+        Ecology attributes are writable with bounds checking
+        (``pop.params.carrying_capacity = 8000``); genetics tensors are
+        read-only copies with pattern-index reads
+        (``pop.params.viability_fitness[nt.Sex.MALE, 2, "A|a"]``) and an
+        explicit ``tensor_write`` channel.  Every write goes through the
+        same writer stack as ``pop.update()`` — draft, live Rust
+        session, and dirty bridge stay in sync.
+
+        Returns:
+            A :class:`~natal.frontend.population._params_view.ParamsView`
+            bound to this population.
+
+        .. versionadded:: NEXT
+        """
+        from natal.frontend.population._params_view import ParamsView
+
+        return ParamsView(self)
+
+    @property
+    def params_log(self) -> Tuple[ParamChange, ...]:
+        """Read-only parameter snapshot log.
+
+        Runtime writers append one ``(tick, name, old, new)`` row per
+        committed scalar change — no change, no row.  The log is the
+        hook-audit trail: writes made through ``pop.params`` /
+        ``pop.update()`` (including from inside hooks via the tick
+        context) all land here.
+
+        Returns:
+            A tuple snapshot of the logged rows.
+        """
+        return tuple(self._params_log)
+
+    def log_param_change(self, name: str, old: float, new: float) -> None:
+        """Append one parameter snapshot row at the current tick.
+
+        Called by the runtime writers at their commit point; rows are only
+        produced when the value actually changes.
+
+        Args:
+            name: Route (user-facing) parameter name.
+            old: Committed value before the write.
+            new: Committed value after the write.
+        """
+        if old != new:
+            self._params_log.append((int(self._tick), name, float(old), float(new)))
+
+    def _absorb_rust_eco_journal(
+        self, rows: Sequence[Tuple[int, str, float, float]]
+    ) -> None:
+        """Merge a drained Rust-session journal into the log and the draft.
+
+        On the Rust run path, ``Op.set_param`` writes evolve inside the
+        session-owned ecology columns; when ``run()`` returns, this merge
+        makes those writes visible on the population side.  Each row is
+        appended to ``params_log`` under its own commit tick (not the
+        current tick, so multi-tick batches keep their per-tick audit), and
+        each parameter's final value is written into the draft 0-d array.
+        No dirty-bridge marking happens: the session already holds the same
+        value and the values were bounds-validated on the Rust side, so
+        re-pushing them would be a redundant round trip.
+
+        Args:
+            rows: ``(tick, name, old, new)`` rows from a Rust backend's
+                ``drain_eco_journal`` (change-only, commit order).
+        """
+        if not rows:
+            return
+        final_values: dict[str, float] = {}
+        for tick, name, old, new in rows:
+            self._params_log.append((int(tick), name, float(old), float(new)))
+            final_values[name] = float(new)
+        draft = self.config
+        for name, value in final_values.items():
+            slot: object = getattr(draft, name)
+            # The journal only ever names the five runtime-mutable ecology
+            # scalars; they are immutable NamedTuple slots now, so the
+            # merge rebuilds the draft once.
+            if isinstance(slot, np.ndarray):
+                slot[()] = value
+            else:
+                draft = draft._replace(**{name: value})
+        self.set_config(draft)
 
     @property
     def presets(self) -> List[GeneticPreset]:

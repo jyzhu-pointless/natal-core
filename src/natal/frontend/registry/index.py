@@ -8,7 +8,7 @@ indexing, allowing independent pruning of individual (genotype, slab) and
 
 The registry is used throughout the simulation to translate domain objects
 (e.g., ``Genotype`` instances, strings) into compact integer indices that
-are suitable for NumPy arrays and Numba‑accelerated engine.
+are suitable for NumPy arrays and the native engine.
 """
 
 from __future__ import annotations
@@ -427,6 +427,6 @@ class IndexRegistry:
         self._gtype_to_index = {gt: i for i, gt in enumerate(new_index_to_gtype)}
 
 # compress_hg_glab / decompress_hg_glab have been moved to
-# natal.population_config as _compress_hl / _decompress_hl.
+# natal.frontend.population_config as _compress_hl / _decompress_hl.
 # They are only needed during species blueprint construction
 # (before IndexRegistry exists).  For runtime use gtype_index().
