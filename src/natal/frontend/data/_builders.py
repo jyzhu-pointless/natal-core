@@ -1,4 +1,4 @@
-"""Builder functions — split across _plain, _config, _engine modules."""
+"""Builder functions — split across _config and _engine modules."""
 from natal.frontend.data._config import build_population_config
 from natal.frontend.data._engine import (
     build_custom_array,
@@ -8,10 +8,6 @@ from natal.frontend.data._engine import (
     decompress_hl,
     initialize_gamete_map,
     initialize_zygote_map,
-)
-from natal.frontend.data._plain import (
-    from_plain_population_config,
-    to_plain_population_config,
 )
 
 __all__ = [
@@ -23,6 +19,4 @@ __all__ = [
     'compress_hl',
     'decompress_hl',
     'compress_config',
-    'to_plain_population_config',
-    'from_plain_population_config',
 ]

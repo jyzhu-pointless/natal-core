@@ -1,8 +1,9 @@
 """Population configuration and state data containers.
 
-This subpackage provides immutable configuration containers, growth-mode
-constants, factory/build functions, extraction helpers, and simulation state
-objects used throughout the NATAL Core framework.
+This subpackage provides the unified build-time draft container
+(``ModelDraft``), growth-mode constants, factory/build functions,
+extraction helpers, and simulation state objects used throughout the
+NATAL Core framework.
 """
 
 from ._builders import (
@@ -12,17 +13,15 @@ from ._builders import (
     compress_config,
     compress_hl,
     decompress_hl,
-    from_plain_population_config,
     initialize_gamete_map,
     initialize_zygote_map,
-    to_plain_population_config,
 )
 from ._extract import (
     extract_gamete_frequencies,
     extract_gamete_frequencies_by_glab,
     extract_zygote_frequencies,
 )
-from .config import DiscretePopulationConfig, PlainPopulationConfig, PopulationConfig
+from .config import ModelDraft
 from .constants import BEVERTON_HOLT, CONCAVE, FIXED, LINEAR, LOGISTIC, NO_COMPETITION
 from .state import (
     DiscretePopulationState,
@@ -39,8 +38,7 @@ from .state import (
 
 __all__ = [
     # config.py
-    'DiscretePopulationConfig',
-    'PopulationConfig',
+    'ModelDraft',
     # constants.py
     'NO_COMPETITION',
     'FIXED',
@@ -64,8 +62,6 @@ __all__ = [
     'compress_hl',
     'decompress_hl',
     'compress_config',
-    'to_plain_population_config',
-    'from_plain_population_config',
     # state helpers
     'to_plain_population_state',
     'to_plain_discrete_population_state',
@@ -74,7 +70,6 @@ __all__ = [
     'parse_flattened_state',
     'parse_flattened_discrete_state',
     # backward-compat aliases
-    'PlainPopulationConfig',
     'PlainPopulationState',
     'PlainDiscretePopulationState',
 ]

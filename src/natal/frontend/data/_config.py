@@ -1,4 +1,4 @@
-"""Config building logic — shared computation and PopulationConfig factory.
+"""Config building logic — shared computation and ModelDraft factory.
 
 This private module contains the intermediate ``_ComputedMaps`` NamedTuple,
 the shared computation engine ``build_config_maps``, and the public
@@ -12,7 +12,7 @@ from typing import Callable, NamedTuple, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import PopulationConfig
+from .config import ModelDraft
 from .constants import LOGISTIC
 
 
@@ -20,7 +20,7 @@ class _ComputedMaps(NamedTuple):
     """Intermediate result of shared config computation.
 
     Contains all arrays derived from raw inputs — before packaging into
-    either ``PopulationConfig`` or ``DiscretePopulationConfig``.  Not part
+    either granularity — both assemble into the unified ``ModelDraft``.  Not part
     of the public API.
     """
 
@@ -70,7 +70,7 @@ class _ComputedMaps(NamedTuple):
     initial_sperm_storage: NDArray[np.float64]
 
     # -- Equilibrium & competition --
-    carrying_capacity: NDArray[np.float64]          # 0-d
+    carrying_capacity: float
     expected_competition_strength: float
     expected_survival_rate: float
     eggs_per_female: float
@@ -169,16 +169,16 @@ def build_config_maps(
     else:
         resolved_age_1 = None
     if resolved_age_1 is not None:
-        carrying_capacity_f = np.array(float(resolved_age_1))
+        carrying_capacity_f = float(resolved_age_1)
     elif carrying_capacity is not None:
-        carrying_capacity_f = np.array(float(carrying_capacity))
+        carrying_capacity_f = float(carrying_capacity)
     elif infer_capacity_from_initial_state and initial_individual_count is not None:
         k_val = float(initial_individual_count[:, 1, :].sum())
         if k_val <= 0:
             k_val = 1000.0
-        carrying_capacity_f = np.array(k_val)
+        carrying_capacity_f = k_val
     else:
-        carrying_capacity_f = np.array(1000.0)
+        carrying_capacity_f = 1000.0
 
     def _validate_or_default_array(
         arr: Optional[NDArray[np.float64]],
@@ -376,8 +376,11 @@ def build_population_config(
     infer_capacity_from_initial_state: bool = True,
     equilibrium_individual_distribution: Optional[NDArray[np.float64]] = None,
     external_expected_eggs: Optional[float] = None,
-) -> PopulationConfig:
-    """Build an immutable PopulationConfig directly (legacy‑free path).
+    extreme_speed_mode: int = 0,
+    ztype_names: Optional[tuple[str, ...]] = None,
+    gtype_names: Optional[tuple[str, ...]] = None,
+) -> ModelDraft:
+    """Build a :class:`ModelDraft` directly (legacy‑free path).
 
     This function constructs a complete configuration, filling missing arrays
     with sensible defaults and computing derived values such as equilibrium
@@ -435,9 +438,15 @@ def build_population_config(
             survival rate calculation. When provided, the expected survival rate is
             computed as ``total_age_1 / (external_expected_eggs * s_0_avg)`` instead
             of using the distribution-computed egg count.
+        extreme_speed_mode: Wright-Fisher fused-tick selector (0 off).
+        ztype_names: Canonical name per ztype index; index-based names
+            are synthesized when omitted (callers holding a registry
+            pass the real directory).
+        gtype_names: Canonical name per gtype index; synthesized when
+            omitted.
 
     Returns:
-        A fully populated PopulationConfig instance.
+        A fully populated ModelDraft instance.
 
     Raises:
         AssertionError: If required dimensions are invalid or shape mismatches occur.
@@ -483,8 +492,19 @@ def build_population_config(
         pre_expanded=zygotes_to_gametes_map is not None and zygotes_to_gametes_map.shape[1] > n_genotypes,
     )
 
+    resolved_ztype_names = (
+        ztype_names
+        if ztype_names is not None
+        else tuple(f"ztype_{i}" for i in range(m.n_ztypes))
+    )
+    resolved_gtype_names = (
+        gtype_names
+        if gtype_names is not None
+        else tuple(f"gtype_{i}" for i in range(m.n_gtypes))
+    )
+
     if generation_time is None:
-        temp_cfg = PopulationConfig(
+        temp_cfg = ModelDraft(
             stochastic=bool(stochastic),
             continuous_sampling=bool(continuous_sampling),
             n_sexes=m.n_sexes,
@@ -493,46 +513,49 @@ def build_population_config(
             n_gtypes=m.n_gtypes,
             n_glabs=m.n_glabs,
             n_slabs=m.n_slabs,
+            new_adult_age=m.new_adult_age,
+            adult_ages=m.adult_ages,
+            extreme_speed_mode=int(extreme_speed_mode),
+            ztype_names=resolved_ztype_names,
+            gtype_names=resolved_gtype_names,
+            age_based_survival_rates=m.survival,
             age_based_mating_rates=m.mating,
             age_based_reproduction_rates=m.reproduction,
-            age_based_survival_rates=m.survival,
             female_age_based_fertility=m.female_fertility,
+            age_based_relative_competition_strength=m.competition,
+            carrying_capacity=m.carrying_capacity,
+            eggs_per_female=m.eggs_per_female,
+            sex_ratio=m.sex_ratio,
+            sperm_displacement_rate=m.sperm_displacement_rate,
+            low_density_growth_rate=m.low_density_growth_rate,
+            juvenile_growth_mode=int(m.juvenile_growth_mode),
+            expected_competition_strength=m.expected_competition_strength,
+            expected_survival_rate=m.expected_survival_rate,
+            generation_time=0.0,
             viability_fitness=m.viability,
             fecundity_fitness=m.fecundity,
             sexual_selection_fitness=m.sexual,
             zygote_viability_fitness=m.zygote,
-            age_based_relative_competition_strength=m.competition,
-            sperm_displacement_rate=np.array(m.sperm_displacement_rate),
-            eggs_per_female=np.array(m.eggs_per_female),
-            fixed_egg_count=m.fixed_egg_count,
-            carrying_capacity=m.carrying_capacity,
-            sex_ratio=np.array(m.sex_ratio),
-            low_density_growth_rate=np.array(m.low_density_growth_rate),
-            juvenile_growth_mode=np.array(m.juvenile_growth_mode, dtype=np.int64),
-            expected_competition_strength=np.array(m.expected_competition_strength),
-            expected_survival_rate=np.array(m.expected_survival_rate),
-            generation_time=np.array(0.0),
-            new_adult_age=m.new_adult_age,
-            hook_slot=int(hook_slot),
-            has_sex_chromosomes=m.has_sex_chromosomes,
+            zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
+            gametes_to_zygotes_map=m.zygote_map,
+            offspring_tensor=m.offspring_tensor,
             female_ztype_compatibility=m.female_ztype_compatibility,
             male_ztype_compatibility=m.male_ztype_compatibility,
             female_only_by_sex_chrom=m.female_only_by_sex_chrom,
             male_only_by_sex_chrom=m.male_only_by_sex_chrom,
-            adult_ages=m.adult_ages,
-            zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
-            gametes_to_zygotes_map=m.zygote_map,
-            offspring_tensor=m.offspring_tensor,
             initial_individual_count=m.initial_individual_count,
             initial_sperm_storage=m.initial_sperm_storage,
             equilibrium_individual_distribution=m.equilibrium_individual_distribution,
-            custom=np.zeros(0, dtype=np.float64),
+            hook_slot=int(hook_slot),
+            custom=np.zeros((), dtype=np.dtype([])),
+            fixed_egg_count=bool(fixed_egg_count),
+            has_sex_chromosomes=m.has_sex_chromosomes,
         )
-        generation_time_f = np.array(float(temp_cfg.compute_generation_time()))
+        generation_time_f = float(temp_cfg.compute_generation_time())
     else:
-        generation_time_f = np.array(float(generation_time))
+        generation_time_f = float(generation_time)
 
-    return PopulationConfig(
+    return ModelDraft(
         stochastic=bool(stochastic),
         continuous_sampling=bool(continuous_sampling),
         n_sexes=m.n_sexes,
@@ -541,38 +564,42 @@ def build_population_config(
         n_gtypes=m.n_gtypes,
         n_glabs=m.n_glabs,
         n_slabs=m.n_slabs,
+        new_adult_age=m.new_adult_age,
+        adult_ages=m.adult_ages,
+        extreme_speed_mode=int(extreme_speed_mode),
+        ztype_names=resolved_ztype_names,
+        gtype_names=resolved_gtype_names,
+        age_based_survival_rates=m.survival,
         age_based_mating_rates=m.mating,
         age_based_reproduction_rates=m.reproduction,
-        age_based_survival_rates=m.survival,
         female_age_based_fertility=m.female_fertility,
+        age_based_relative_competition_strength=m.competition,
+        carrying_capacity=m.carrying_capacity,
+        eggs_per_female=m.eggs_per_female,
+        sex_ratio=m.sex_ratio,
+        sperm_displacement_rate=m.sperm_displacement_rate,
+        low_density_growth_rate=m.low_density_growth_rate,
+        juvenile_growth_mode=int(m.juvenile_growth_mode),
+        expected_competition_strength=m.expected_competition_strength,
+        expected_survival_rate=m.expected_survival_rate,
+        generation_time=generation_time_f,
         viability_fitness=m.viability,
         fecundity_fitness=m.fecundity,
         sexual_selection_fitness=m.sexual,
         zygote_viability_fitness=m.zygote,
-        age_based_relative_competition_strength=m.competition,
-        sperm_displacement_rate=np.array(m.sperm_displacement_rate),
-        eggs_per_female=np.array(m.eggs_per_female),
-        fixed_egg_count=m.fixed_egg_count,
-        carrying_capacity=m.carrying_capacity,
-        sex_ratio=np.array(m.sex_ratio),
-        low_density_growth_rate=np.array(m.low_density_growth_rate),
-        juvenile_growth_mode=np.array(m.juvenile_growth_mode, dtype=np.int64),
-        expected_competition_strength=np.array(m.expected_competition_strength),
-        expected_survival_rate=np.array(m.expected_survival_rate),
-        generation_time=generation_time_f,
-        new_adult_age=m.new_adult_age,
-        hook_slot=int(hook_slot),
-        has_sex_chromosomes=m.has_sex_chromosomes,
+        zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
+        gametes_to_zygotes_map=m.zygote_map,
+        offspring_tensor=m.offspring_tensor,
         female_ztype_compatibility=m.female_ztype_compatibility,
         male_ztype_compatibility=m.male_ztype_compatibility,
         female_only_by_sex_chrom=m.female_only_by_sex_chrom,
         male_only_by_sex_chrom=m.male_only_by_sex_chrom,
-        adult_ages=m.adult_ages,
-        zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
-        gametes_to_zygotes_map=m.zygote_map,
-        offspring_tensor=m.offspring_tensor,
         initial_individual_count=m.initial_individual_count,
         initial_sperm_storage=m.initial_sperm_storage,
         equilibrium_individual_distribution=m.equilibrium_individual_distribution,
-        custom=np.zeros(0, dtype=np.float64),
+        hook_slot=int(hook_slot),
+        custom=np.zeros((), dtype=np.dtype([])),
+        fixed_egg_count=bool(fixed_egg_count),
+        has_sex_chromosomes=m.has_sex_chromosomes,
+        external_expected_eggs=external_expected_eggs,
     )
