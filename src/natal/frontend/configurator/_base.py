@@ -1,30 +1,33 @@
-"""Mutable wrapper for PopulationConfig, with a chainable API.
+"""Mutable wrapper for ModelDraft, with a chainable API.
 
-Provides read/write access to config fields through a chainable API,
+Provides read/write access to draft fields through a chainable API,
 registration of custom named parameters stored as structured numpy arrays,
-and freeze-back to an immutable NamedTuple via ``_replace`` (cheap — all
+and shallow-copy via ``_replace`` (cheap — all
 ndarray fields are shared by reference).  When wired to a live Population
 through ``for_population()``, config mutations propagate back to the
-Population automatically through ``set_config()``.
+Population automatically through ``set_config()`` and the live Rust
+session (when present) receives the same values immediately.
 
-``PopulationConfig`` and ``DiscretePopulationConfig`` are immutable
-NamedTuples whose fields cannot be modified once created.  During
+``ModelDraft`` is an immutable NamedTuple whose fields cannot be
+replaced once created.  During
 simulation setup and inside hooks at runtime, however, parameters need
 real-time adjustment.  The ``Configurator`` provides a mutable layer on
-top: all modifications write into the config arrays in-place, and the
-final immutable config is materialized via ``build()``.
+top: all modifications route through the declarative route table
+(:mod:`natal.frontend.configurator._routes`) via batch writers
+(:mod:`natal.frontend.configurator._writers`), and the
+final draft is materialized via ``build()``.
 
 The adapter class ``ConfigContext`` lets genetic presets and modifiers
-operate on config arrays without needing a live Population object.  The
-standalone :func:`set_param` function is also usable from within
-Numba-compiled hooks via ``objmode``.
+operate on config arrays without needing a live Population object.
 
-Key classes are ``Configurator`` (base with chainable domain methods),
-``DiscreteConfigurator`` (non-overlapping generations), and
-``AgeStructuredConfigurator`` (overlapping generations).
+Since slice 3 there is exactly one ``Configurator`` class: the former
+``AgeStructuredConfigurator`` / ``DiscreteConfigurator`` split was a
+code duplication of parameter shapes, now expressed as data in the
+route table.  Discrete-specific vocabulary (``female_age0_survival``,
+``female_adult_mating_rate``, ...) keeps working — those names route to
+single cells of the unified vectors.
 
-See also :func:`set_param` (low-level scalar writer) and
-:func:`hook_set_param` (Numba-safe wrapper for use in hooks).
+See also :func:`set_param` (low-level scalar writer).
 """
 
 from __future__ import annotations
@@ -43,32 +46,39 @@ from typing import (
 )
 
 import numpy as np
-from numba import (  # pyright: ignore[reportMissingTypeStubs]
-    objmode,  # pyright: ignore[reportAttributeAccessIssue, reportUnknownVariableType]
-)
 from numpy.typing import NDArray
 
-from natal.backends.numba.utils import njit_switch
+from natal.contracts.materialize import (
+    gtype_names_from_registry,
+    ztype_names_from_registry,
+)
 from natal.frontend.configurator._params import (
-    resolve_param,
+    compute_expected_eggs_from_females,
 )
 from natal.frontend.configurator._registry_builder import (
     ConfigContext,
     build_registry,
     rebuild_config_maps,
 )
-from natal.frontend.data import (
-    DiscretePopulationConfig,
-    PopulationConfig,
+from natal.frontend.configurator._routes import (
+    dispatch,
+    lookup_or_none,
+    sync_equilibrium_for_draft,
 )
-from natal.frontend.fitness._writer import write_fitness_field
+from natal.frontend.configurator._writers import (
+    ConfigWriter,
+    CoreConfigWriter,
+    DraftWriter,
+)
+from natal.frontend.data import (
+    ModelDraft,
+)
 from natal.frontend.genetics import Species
+from natal.frontend.hooks.types import DemeSelector
 from natal.frontend.presets import CytoplasmicPreset
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
-    from natal.frontend.configurator.age_structured import AgeStructuredConfigurator
-    from natal.frontend.configurator.discrete import DiscreteConfigurator
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.patterns import IndividualSelector
     from natal.frontend.population.age_structured import AgeStructuredPopulation
@@ -80,29 +90,30 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Configurator",
-    "hook_set_param",
     "set_param",
 ]
 
 # ── Type aliases for hook registrations ──────────────────────────────────────
 
-# A single hook registration: (func, name?, priority?)
-# ``Any`` return is required for compatibility with ``HookRegistration`` in
-# base_population.py (tuple invariance — ``Callable[..., int]`` would fail).
-_HookReg = tuple[Callable[..., Any], str | None, int | None]
-# Hook registration map keyed by event name.
-HookMap = dict[str, list[_HookReg]]
-# A hook item can be a raw dict or a callable with @hook metadata.
-_HookItem = Callable[..., Any] | HookMap
+# One stored .hooks() call: (items, kwargs) pairs, replayed onto the
+# population at build time or forwarded immediately at runtime.
+HookCall = tuple[tuple[object, ...], dict[str, object]]
+# A hook item: an Op, an op list, or a callable (decorated or a plain
+# single-parameter callback).
+_HookItem = object
 
 
-# These parameters affect the steady-state equilibrium.  When any of them
-# change, ``expected_competition_strength`` and ``expected_survival_rate``
-# must be recomputed via ``sync_equilibrium_metrics``.
-_EQUILIBRIUM_SENSITIVE_KEYS: frozenset[str] = frozenset({
-    "competition.carrying_capacity",
-    "reproduction.eggs_per_female",
-    "reproduction.sex_ratio",
+# Genetics tensors rebuilt wholesale by preset/modifier application.  The
+# Rust bridge refreshes these as whole tensors instead of tracking cells.
+_RUST_GENETICS_TENSORS: frozenset[str] = frozenset({
+    "viability_fitness",
+    "fecundity_fitness",
+    "sexual_selection_fitness",
+    "zygote_viability_fitness",
+    "offspring_tensor",
+    "meiosis_map",
+    "female_ztype_compatibility",
+    "male_ztype_compatibility",
 })
 
 
@@ -150,148 +161,78 @@ def normalize_observation_groups(groups: object) -> dict[str, IndividualSelector
 
 
 def set_param(
-    config: PopulationConfig | DiscretePopulationConfig,
+    config: ModelDraft,
     name: str,
     value: float | int | bool,
     *,
     _sync_equilibrium: bool = True,
-) -> None:
+    _dirty: set[str] | None = None,
+) -> ModelDraft:
     """Set a simulation parameter by its user-facing name.
 
-    Looks up *name* in ``ALL_PARAMETERS`` (the declarative registry in
-    :mod:`natal.parameters`) to find the correct config field + index path,
-    then writes *value* in-place into the 0-d ndarray at that position.
+    The write is routed through the declarative route table
+    (:mod:`natal.frontend.configurator._routes`): the name (full key,
+    short name, or alias) resolves to a route entry, the value is
+    parsed and validated according to the entry's ``kind``, and the
+    write is committed into the draft.  Entries flagged ``sensitive``
+    in ``parameters.jsonc`` (carrying capacity, eggs per female, sex
+    ratio, the Champer overrides) automatically refresh the equilibrium
+    metric caches unless ``_sync_equilibrium=False`` is passed.
 
-    The registry maps each parameter name to a :class:`~natal.parameters.
-    ParamDescriptor` with these fields used here:
+    Scalar NamedTuple slots (including the ecology scalars) are written
+    through ``_replace``, so the returned draft must be rebound to the
+    caller's variable::
 
-    - ``config_field`` — name of the attribute on the config object
-    - ``config_path`` — index tuple into the ndarray (empty for 0-d)
-    - ``is_tensor`` / ``is_array`` — guards to reject non-scalar writes
-    - ``domain`` — domain string grouping related parameters
-      (e.g. ``"competition"``, ``"reproduction"``)
+        config = set_param(config, "competition.carrying_capacity", 5000.0)
 
-    After writing, ``sync_equilibrium_metrics`` is called automatically
-    for equilibrium-sensitive keys (carrying capacity, eggs per female,
-    sex ratio) unless ``_sync_equilibrium=False`` is passed.
+    Array-backed fields (custom slots and vector/tensor contents) are
+    mutated in place and the same draft is returned.
 
-    Usable from pure Python, ``with objmode():`` inside njit hooks, and
-    Configurator chain methods.
+    Usable from pure Python and Configurator chain methods.
 
     If *name* matches a custom field on ``config.custom`` (registered via
-    :meth:`Configurator.custom`), it is written directly — no registry
-    lookup needed. This means ``hook_set_param`` inside Numba hooks can
-    also address custom fields.
+    :meth:`Configurator.custom`), it is written directly — no route
+    lookup needed.
 
     Args:
-        config: The PopulationConfig or DiscretePopulationConfig to modify.
+        config: The ModelDraft to modify.
         name: Parameter name — full key ``"competition.carrying_capacity"``,
               short name ``"carrying_capacity"``, or alias.
-        value: New value (scalar). For tensor parameters, use
-               direct array access instead.
+        value: New value (scalar). For tensor, vector, and row
+               parameters, use the Configurator methods or
+               ``pop.params.tensor_write`` instead.
+        _sync_equilibrium: Refresh equilibrium caches for sensitive keys
+               (internal; callers that sync explicitly pass ``False``).
+        _dirty: Optional sink set receiving the corresponding contract
+               (Params) field name after a successful write — the Rust
+               dirty bridge. ``None`` skips marking entirely.
+
+    Returns:
+        The (possibly replaced) draft carrying the committed write.
 
     Raises:
         KeyError: If *name* is not a registered parameter or custom field.
-        ValueError: If *name* refers to a tensor (non-scalar) parameter.
-
-    Examples::
-
-        set_param(config, "competition.carrying_capacity", 5000.0)
-        set_param(config, "carrying_capacity", 5000.0)        # short name
-        set_param(config, "reproduction.eggs_per_female", 100.0)
+        TypeError: If *name* refers to an immutable structural field.
+        ValueError: If *name* refers to a tensor/vector/row parameter,
+               or the value fails bounds validation.
     """
-    desc = resolve_param(name)  # noqa: F821
-    if desc is None:
-        # Fallback: check custom fields (not in the parameter registry).
+    entry = lookup_or_none(name)
+    if entry is None:
+        # Fallback: check custom fields (not in the route table).
         if hasattr(config, 'custom') and config.custom.dtype.names and name in config.custom.dtype.names:
             config.custom[name][()] = value
-            return
+            return config
         raise KeyError(f"Unknown parameter: {name!r}")
-    if desc.config_field is None:
-        raise ValueError(
-            f"{name!r} is a spatial-only parameter and cannot be set "
-            f"on a non-spatial config. Use pop.update(...) on a "
-            f"SpatialPopulation instead."
-        )
-    if desc.is_tensor or desc.is_array:
+    if entry.kind in ("geno_tensor", "age_vec", "sex_row"):
         raise ValueError(
             f"set_param does not support tensor or array parameters "
-            f"like {name!r}. Use direct array access instead."
+            f"like {name!r}. Use the corresponding Configurator method "
+            f"or pop.params.tensor_write instead."
         )
-
-    field = getattr(config, desc.config_field)
-
-    # Write through the index path:
-    #   ()      → 0-d ndarray → field[()] = value
-    #   (1,)    → 1-D index   → field[1] = value
-    #   (0, 0)  → 2-D index   → field[0, 0] = value
-    if desc.config_path:
-        field[desc.config_path] = value
-    elif isinstance(field, np.ndarray) and field.ndim == 0:
-        field[()] = value
-    elif isinstance(field, np.ndarray):
-        raise ValueError(
-            f"Cannot set {name!r} via set_param: field is a {field.ndim}d array "
-            f"but config_path is empty. Use the corresponding Configurator method "
-            f"or write to the array directly."
-        )
-    else:
-        raise TypeError(
-            f"Cannot set {name!r} via set_param: field is a Python "
-            f"{type(field).__name__} on an immutable config. "
-            f"Use the corresponding Configurator method instead."
-        )
-
-    # Auto-sync equilibrium when sensitive params change.
-    key = f"{desc.domain}.{desc.name}"
-    if _sync_equilibrium and key in _EQUILIBRIUM_SENSITIVE_KEYS:
-        from natal.backends.reference.simulation.age_structured import (
-            sync_equilibrium_metrics,
-        )
-
-        if not isinstance(config, DiscretePopulationConfig):
-            sync_equilibrium_metrics(config)
+    return dispatch(config, name, value, dirty_sink=_dirty, sync_sensitive=_sync_equilibrium)
 
 
-# ── Helpers: hook merging and fitness field writing ────────────────────────────
-
-
-def merge_hooks(hook_items: list[_HookItem]) -> HookMap:
-    """Merge @hook-decorated items into a hook registration map.
-
-    Each item can be a raw dict or a function with @hook metadata.
-    """
-    result: HookMap = {}
-    for item in hook_items:
-        if isinstance(item, dict):
-            hook_dict = cast(HookMap, item)
-            for event, registrations in hook_dict.items():
-                result.setdefault(event, []).extend(registrations)
-        elif callable(item):
-            # @hook-decorated functions store metadata in a .meta dict,
-            # but some older decorators set attributes directly.  Check
-            # both for backward compatibility.
-            meta = getattr(item, "meta", {})
-            event = meta.get("event") or getattr(item, "event", None)
-            priority = meta.get("priority", getattr(item, "priority", 0))
-            name = getattr(item, "__name__", None)
-            if event:
-                result.setdefault(event, []).append((item, name, priority))
-            else:
-                import warnings
-                warnings.warn(
-                    f"Hook {name or '<anonymous>'!r} has no event metadata. "
-                    f"Decorate it with @nt.hook(event='...') to register it.",
-                    UserWarning, stacklevel=2,
-                )
-        else:
-            import warnings
-            warnings.warn(
-                f"Ignoring unsupported hook item of type {type(item).__name__!r}. "
-                f"Expected a dict or a callable decorated with @nt.hook.",
-                UserWarning, stacklevel=2,
-            )
-    return result
+# ── Helpers: fitness field writing ─────────────────────────────────────────────
 
 
 def _collect_genotype_strings(genotype_ref: str | Sequence[str]) -> set[str]:
@@ -307,22 +248,29 @@ def _collect_genotype_strings(genotype_ref: str | Sequence[str]) -> set[str]:
     return result
 
 
-def collect_hook_genotype_refs(hook_items: list[_HookItem]) -> set[str]:
-    """Extract genotype string references from hook items for compression seeds.
+def collect_hook_genotype_refs(hook_calls: list[HookCall]) -> set[str]:
+    """Extract genotype string references from hook calls for compression seeds.
 
-    - Selector hooks: reads ``func.selectors`` metadata directly.
-    - Declarative hooks: calls function once, extracts ``op.genotypes``.
-    - Custom hooks: skipped.
+    Ensures genotypes introduced only via hooks survive BFS pruning:
+    declarative op lists contribute their ``op.genotypes`` strings, and
+    selector hooks contribute their resolved ``selectors`` specs.
     """
+    from natal.frontend.hooks.types import HookOp
+
     refs: set[str] = set()
-    for item in hook_items:
-        if isinstance(item, dict):
-            hook_dict: HookMap = cast(HookMap, item)
-            for registrations in hook_dict.values():
-                for hook_reg in registrations:
-                    refs.update(_extract_refs_from_callable(hook_reg[0]))
+
+    def _collect_item(item: object) -> None:
+        if isinstance(item, HookOp):
+            refs.update(_collect_genotype_strings(item.genotypes))
+        elif isinstance(item, (list, tuple)):
+            for inner in cast("Sequence[object]", item):
+                _collect_item(inner)
         elif callable(item):
             refs.update(_extract_refs_from_callable(item))
+
+    for items, _kwargs in hook_calls:
+        for item in items:
+            _collect_item(item)
     return refs
 
 
@@ -341,8 +289,7 @@ def _extract_refs_from_callable(func: Callable[..., Any]) -> set[str]:
         return result
 
     meta = getattr(func, "meta", None)
-    is_custom = getattr(func, "custom", False) or (meta and meta.get("custom"))
-    if not is_custom and meta:
+    if meta:
         try:
             ops = func()
             if isinstance(ops, list):
@@ -368,7 +315,7 @@ def _extract_refs_from_callable(func: Callable[..., Any]) -> set[str]:
 class Configurator:
     """Parameter configurator — unified API for build-time and runtime use.
 
-    Wraps a PopulationConfig and provides chainable domain methods
+    Wraps a ModelDraft and provides chainable domain methods
     (``.competition()``, ``.reproduction()``, etc.) that immediately write
     parameters via :func:`set_param`.  Presets, modifiers, and fitness
     are applied immediately — no deferred execution.
@@ -386,19 +333,19 @@ class Configurator:
 
     def __init__(
         self,
-        config: PopulationConfig | DiscretePopulationConfig,
+        config: ModelDraft,
         species: Species | None = None,
     ) -> None:
         """Wrap a config for chainable modification.
 
         Args:
-            config: An existing PopulationConfig or DiscretePopulationConfig.
+            An existing ModelDraft.
             species: Required for methods that need genotype resolution
                 (initial_state, presets, modifiers, fitness).  Can be
                 omitted when the Configurator is only used for scalar
                 parameter updates via set_param.
         """
-        self._config: PopulationConfig | DiscretePopulationConfig = config
+        self._config: ModelDraft = config
         self._species = species  # needed for initial_state / preset resolution
 
         # _registry is lazily built on first _make_ctx() call, avoiding the
@@ -422,11 +369,8 @@ class Configurator:
         self._pop_ref: BasePopulation[Any] | None = None
 
         # Discrete-specific scalar overrides (stored here so build() can
-        # extract them into DiscretePopulationConfig at the last moment).
-        self._female_adult_mating_rate: float | None = None
-        self._male_adult_mating_rate: float | None = None
-        self._female_age0_survival: float | None = None
-        self._male_age0_survival: float | None = None
+        # (discrete scalars now normalize into the unified draft vectors
+        # at write time — no end-of-build extraction exists anymore).
 
         # Index compression flag — enabled via setup(compress=True).
         # Applied during rebuild_config_maps (build-time) or
@@ -443,10 +387,31 @@ class Configurator:
         self._record_history_mode: Literal["raw", "observation"] = "raw"
         self._record_history_max_rows: int | None = None
 
+        # Stored .hooks() calls (build path); replayed onto the population
+        # after construction and before backend enable.
+        self._hook_calls: list[HookCall] = []
+
     @property
-    def config(self) -> PopulationConfig | DiscretePopulationConfig:
-        """The wrapped PopulationConfig (read-only accessor)."""
+    def config(self) -> ModelDraft:
+        """The wrapped ModelDraft (read-only accessor)."""
         return self._config
+
+    def _rust_dirty_sink(self) -> set[str] | None:
+        """Return the bound population's live rust-dirty set, if any.
+
+        Write paths add contract field names to this set; the population
+        drains it into the Rust session before the next run.  ``None``
+        means there is no live population (build path) and nothing needs
+        marking.
+
+        Returns:
+            The dirty set of ``_pop_ref`` when wired, else ``None``.
+        """
+        pop = self._pop_ref
+        if pop is None:
+            return None
+        # getattr guard: spatial _clone builds instances via __new__.
+        return getattr(pop, "_rust_dirty", None)
 
     # -- adapter factory ------------------------------------------------------
 
@@ -508,6 +473,11 @@ class Configurator:
         self.zygote_modifiers = ctx.zygote_modifiers
         if ctx.compression_applied:
             self._compression_applied = True
+        # rebuild_config_maps rewrote the inheritance maps; mark the whole
+        # genetics section so the Rust session refreshes every tensor.
+        sink = self._rust_dirty_sink()
+        if sink is not None:
+            sink.update(_RUST_GENETICS_TENSORS)
 
     # -- factory ---------------------------------------------------------------
 
@@ -517,26 +487,24 @@ class Configurator:
         species: Species,
         *,
         discrete: bool = False,
-    ) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
+    ) -> Configurator:
         """Create a Configurator from a Species with a minimal config.
 
         This is the primary factory.  Pass ``discrete=True`` for
         non-overlapping generations; otherwise an age-structured config
-        with overlapping generations is returned.
+        with overlapping generations is returned.  Since slice 3 both
+        granularities share this single Configurator class — the choice
+        only selects the normalized draft shape.
 
         Args:
             species: The genetic architecture for the population.
-            discrete: If ``True``, return a ``DiscreteConfigurator``
-                (Wright-Fisher, non-overlapping generations).  Default
-                ``False`` → ``AgeStructuredConfigurator``.
+            discrete: If ``True``, build the discrete-generation
+                (Wright-Fisher) normalized draft.  Default ``False`` →
+                age-structured draft.
 
         Returns:
-            A ``DiscreteConfigurator`` or ``AgeStructuredConfigurator``
-            ready for further chaining.
+            A ``Configurator`` ready for further chaining.
         """
-        from natal.frontend.configurator.age_structured import AgeStructuredConfigurator
-        from natal.frontend.configurator.discrete import DiscreteConfigurator
-
         bp = species.get_config_blueprint()
         n_g = bp["n_genotypes"]
         n_hg = bp["n_gtypes"]
@@ -557,7 +525,7 @@ class Configurator:
                 zygotes_to_gametes_map=z2g, gametes_to_zygotes_map=g2z,
                 has_sex_chromosomes=has_sc,
             )
-            result = DiscreteConfigurator(config, species=species)
+            result = Configurator(config, species=species)
             object.__setattr__(result, "_name", "DiscreteGenerationPop")
         else:
             from natal.frontend.data import build_population_config
@@ -571,59 +539,65 @@ class Configurator:
                 n_ages=2, new_adult_age=1, carrying_capacity=1000.0,
                 has_sex_chromosomes=has_sc,
             )
-            result = AgeStructuredConfigurator(config, species=species)
+            result = Configurator(config, species=species)
             object.__setattr__(result, "_name", "AgeStructuredPop")
         return result
 
     @classmethod
-    def for_discrete(cls, species: Species) -> DiscreteConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
-        """Shorthand for ``from_species(species, discrete=True)``."""
-        from natal.frontend.configurator.discrete import DiscreteConfigurator as _DC
-        return cast(_DC, cls.from_species(species, discrete=True))
+    def for_discrete(cls, species: Species) -> Configurator:
+        """Shorthand for ``from_species(species, discrete=True)``.
+
+        Args:
+            species: The genetic architecture for the population.
+
+        Returns:
+            A ``Configurator`` wrapping a discrete-normalized draft.
+        """
+        return cls.from_species(species, discrete=True)
 
     @classmethod
-    def for_age_structured(cls, species: Species) -> AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
-        """Shorthand for ``from_species(species)``."""
-        from natal.frontend.configurator.age_structured import (
-            AgeStructuredConfigurator as _ASC,
-        )
-        return cast(_ASC, cls.from_species(species))
+    def for_age_structured(cls, species: Species) -> Configurator:
+        """Shorthand for ``from_species(species)``.
+
+        Args:
+            species: The genetic architecture for the population.
+
+        Returns:
+            A ``Configurator`` wrapping an age-structured draft.
+        """
+        return cls.from_species(species)
 
     @staticmethod
     def for_config(
-        config: PopulationConfig | DiscretePopulationConfig,
-    ) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported subclass forward ref
-        """Return the right Configurator subclass for the given config type.
+        config: ModelDraft,
+    ) -> Configurator:
+        """Wrap *config* with the right granularity of the unified class.
+
+        The returned instance is identical either way — the draft's
+        ``discrete_generation`` flag carries the granularity as data —
+        but the constructor runs through the canonical entry point.
 
         Args:
-            config: The config to wrap.
+            config: The draft to wrap.
 
         Returns:
-            ``DiscreteConfigurator`` if *config* is a
-            ``DiscretePopulationConfig``, otherwise
-            ``AgeStructuredConfigurator``.
+            A ``Configurator`` around *config*.
         """
-        from natal.frontend.configurator.age_structured import AgeStructuredConfigurator
-        from natal.frontend.configurator.discrete import DiscreteConfigurator
-
-        if isinstance(config, DiscretePopulationConfig):
-            return DiscreteConfigurator(config)
-        return AgeStructuredConfigurator(config)
+        return Configurator(config)
 
     @staticmethod
-    def for_population(pop: BasePopulation[Any]) -> DiscreteConfigurator | AgeStructuredConfigurator:  # type: ignore[name-defined]  # noqa: F821  # lazy-imported forward ref; Any: Generic population reference, species type irrelevant
+    def for_population(pop: BasePopulation[Any]) -> Configurator:
         """Create a Configurator wired to *pop* for runtime updates.
 
-        Binds ``_pop_ref``, ``_species``, and ``_registry``
-        and ``_registry`` from the Population so that all chain methods work without
-        further setup. This is the single entry point for ``pop.update()`` paths.
+        Binds ``_pop_ref``, ``_species``, and ``_registry`` from the
+        Population so that all chain methods work without further
+        setup. This is the single entry point for ``pop.update()`` paths.
 
         Args:
             pop: The population to wire to.
 
         Returns:
-            A ``DiscreteConfigurator`` or ``AgeStructuredConfigurator``
-            ready for further chaining.
+            A ``Configurator`` ready for further chaining.
         """
         cfg = Configurator.for_config(pop.config)
 
@@ -637,6 +611,49 @@ class Configurator:
 
         return cfg
 
+    # -- batch writer ----------------------------------------------------------
+
+    def _make_writer(self) -> ConfigWriter:
+        """Create a batch writer bound to the current draft state.
+
+        Build path (no live population): a :class:`DraftWriter` writing
+        the draft through the route table.  Runtime path: a
+        :class:`CoreConfigWriter` which also pushes the committed
+        values straight into the live Rust session when one exists,
+        while still marking the dirty bridge exactly as before.
+
+        Returns:
+            A fresh :class:`ConfigWriter` bound to this instance.
+        """
+
+        def _publish(draft: ModelDraft) -> None:
+            # ``_replace`` writes swap the draft identity: keep the
+            # Configurator's view and the live Population in sync.
+            self._config = draft
+            if self._pop_ref is not None:
+                self._pop_ref.set_config(draft)
+
+        sink = self._rust_dirty_sink()
+        if self._pop_ref is not None:
+            # getattr guard: the backend only exists on Rust-enabled
+            # populations; reference-path populations pass None.  During an
+            # active Rust run the session cannot be written (PyO3 borrow);
+            # writes defer to the next run through the dirty bridge.
+            backend: object = None
+            if not getattr(self._pop_ref, "_rust_run_active", False):
+                backend = getattr(self._pop_ref, "_rust_lifecycle_backend", None)
+            return CoreConfigWriter(
+                self._config, sink, backend,
+                on_replace=_publish,
+                species=self._species, registry=self._registry,
+                param_log=self._pop_ref.log_param_change,
+            )
+        return DraftWriter(
+            self._config, sink,
+            on_replace=_publish,
+            species=self._species, registry=self._registry,
+        )
+
     # -- setup flags -----------------------------------------------------------
 
     def setup(
@@ -647,7 +664,7 @@ class Configurator:
         continuous_sampling: bool | None = None,
         fixed_egg_count: bool | None = None,
         compress: bool = False,
-        backend: Literal["auto", "rust", "numba", "python"] | None = None,
+        backend: Literal["auto", "rust", "python"] | None = None,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
         declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
     ) -> Self:
@@ -678,10 +695,10 @@ class Configurator:
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
             compress: If ``True``, enable full index compression at build time.
             backend: Lifecycle backend selector used by ``build()``.
-                ``None`` preserves any earlier setting; ``"numba"`` preserves
-                the legacy JIT path; ``"python"`` forces the pure-Python
-                fallback; ``"auto"`` selects Rust when available and CSR-only;
-                ``"rust"`` forces the Rust backend.
+                ``None`` preserves any earlier setting; ``"python"`` forces
+                the pure-Python reference; ``"auto"`` (the default) selects
+                Rust when the extension is available and falls back to the
+                reference otherwise; ``"rust"`` forces the Rust backend.
             declared_zygote_types: Optional sequence of genotype selectors to protect
                 from compression pruning.
 
@@ -693,7 +710,7 @@ class Configurator:
         if compress:
             self._compress = True
         if backend is not None:
-            self._backend: Literal["auto", "rust", "numba", "python"] = backend
+            self._backend: Literal["auto", "rust", "python"] = backend
         if declared_genotypes is not None:
             import warnings
             warnings.warn(
@@ -719,9 +736,330 @@ class Configurator:
             self._config = self._config._replace(**overrides)
             if self._pop_ref is not None:
                 self._pop_ref.set_config(self._config)
+                # Execution flags live on the frozen Blueprint contract, so
+                # a live session must be rebuilt, not value-refreshed.
+                sink = self._rust_dirty_sink()
+                if sink is not None:
+                    sink.add("__blueprint__")
         return self
 
     # -- domain methods --------------------------------------------------------
+    #
+    # Every domain method is a thin shell: parse kwargs -> build a writes
+    # dict -> one ``writer.apply(writes)``.  All differences between
+    # parameters live in the route table (parameters.jsonc), not in the
+    # method bodies.
+
+
+    def age_structure(
+        self, n_ages: int, new_adult_age: int,
+        generation_time: float | None = None,
+    ) -> Self:
+        """Lock population dimensions.
+
+        Args:
+            n_ages: Total number of age classes.
+            new_adult_age: First adult age.
+            generation_time: Optional marker for model interpretation.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: When called on a discrete-generation draft
+                (fixed at 2 ages by normalization) or after domain
+                methods have already been called.
+            ValueError: When *n_ages*/*new_adult_age* are inconsistent.
+
+        Note:
+            Must be called before any domain method (competition,
+            reproduction, survival, etc.).  Calling it after domain
+            methods will raise ``RuntimeError``.
+        """
+        if self._config.discrete_generation:
+            raise RuntimeError(
+                "age_structure() is not applicable to discrete-generation "
+                "populations: their draft is normalized to 2 age classes."
+            )
+        if getattr(self, "_has_domain_params", False):
+            raise RuntimeError(
+                "age_structure() must be called before any domain method "
+                "(competition(), reproduction(), survival(), etc.). "
+                "Domain methods have already been called on this configurator."
+            )
+        if n_ages <= 1:
+            raise ValueError(f"n_ages must be at least 2, got {n_ages}")
+        if new_adult_age < 0 or new_adult_age >= n_ages:
+            raise ValueError(
+                f"new_adult_age must be in [0, {n_ages}), got {new_adult_age}"
+            )
+        from natal.frontend.data import build_population_config
+
+        old = self._config
+        # Use species blueprint maps (unexpanded) so that
+        # build_population_config applies slab expansion exactly once.
+        if self._species is not None:
+            bp = self._species.get_config_blueprint()
+            n_g_orig = bp["n_genotypes"]
+            n_hg_orig = bp["n_gtypes"]
+            z2g_bp = bp["zygotes_to_gametes_map"]
+            g2z_bp = bp["gametes_to_zygotes_map"]
+        else:
+            n_g_orig = old.n_ztypes
+            n_hg_orig = old.n_gtypes
+            z2g_bp = old.zygotes_to_gametes_map
+            g2z_bp = old.gametes_to_zygotes_map
+
+        self._config = build_population_config(
+            n_genotypes=n_g_orig,
+            n_gtypes=n_hg_orig,
+            n_ages=n_ages,
+            n_glabs=old.n_glabs,
+            n_slabs=old.n_slabs,
+            gamete_labels=self._species.gamete_labels if self._species else None,
+            somatic_labels=self._species.somatic_labels if self._species else None,
+            zygotes_to_gametes_map=z2g_bp,
+            gametes_to_zygotes_map=g2z_bp,
+            new_adult_age=new_adult_age,
+            generation_time=generation_time,
+            stochastic=bool(old.stochastic),
+            continuous_sampling=bool(old.continuous_sampling),
+            fixed_egg_count=bool(old.fixed_egg_count),
+            has_sex_chromosomes=old.has_sex_chromosomes,
+        )
+        # Rebuild registry for the new n_ages (affects genotype lookup dims).
+        if self._species is not None:
+            from natal.frontend.configurator._base import build_registry
+            self._registry = build_registry(self._species)
+        return self
+
+    def competition(
+        self,
+        *,
+        carrying_capacity: float | None = None,
+        low_density_growth_rate: float | None = None,
+        juvenile_growth_mode: int | str | None = None,
+        growth_mode: int | str | None = None,
+        competition_strength: float | None = None,
+        expected_num_new_adult_females: float | None = None,
+        equilibrium_distribution: NDArray[np.float64] | None = None,
+        age_1_carrying_capacity: float | None = None,
+        old_juvenile_carrying_capacity: float | None = None,
+    ) -> Self:
+        """Configure density-dependent competition.
+
+        Args:
+            carrying_capacity: Equilibrium population at age 1 (K).
+            low_density_growth_rate: Per-capita growth at low density (r).
+            juvenile_growth_mode: Regulation function (string or int) —
+                historical spelling of *growth_mode*.
+            growth_mode: Regulation function (string or int):
+                ``no_competition``/``fixed``/``linear`` (``logistic``
+                alias)/``beverton_holt``/``ricker`` or the integer.
+            competition_strength: Larval competition weight.
+            expected_num_new_adult_females: Target adult females
+                (Champer model); derived egg override is computed and
+                declared on the draft.
+            equilibrium_distribution: Custom (2, n_ages) array for the
+                Champer equilibrium computation.
+            age_1_carrying_capacity: Legacy alias for *carrying_capacity*.
+            old_juvenile_carrying_capacity: Legacy alias.
+
+        Returns:
+            Self for chaining.
+        """
+        self._has_domain_params = True
+        mode_value = (
+            juvenile_growth_mode if juvenile_growth_mode is not None else growth_mode
+        )
+        # ---- carrying capacity (K) fallback chain ----
+        k_value = carrying_capacity
+        if k_value is None and age_1_carrying_capacity is not None:
+            k_value = age_1_carrying_capacity
+        if k_value is None and old_juvenile_carrying_capacity is not None:
+            k_value = old_juvenile_carrying_capacity
+        # Only auto-detect K during initial build (no live Population).
+        if k_value is None and self._pop_ref is None:
+            init_ind = self._config.initial_individual_count
+            if init_ind.size > 0 and init_ind.ndim >= 2 and init_ind.shape[1] >= 2:
+                age_1_count = float(init_ind[:, 1, :].sum())
+                if age_1_count >= 0.5:
+                    k_value = age_1_count
+                else:
+                    total = float(init_ind.sum())
+                    if total >= 0.5:
+                        k_value = total
+        writes: dict[str, object] = {}
+        if k_value is not None:
+            writes["carrying_capacity"] = k_value
+        if low_density_growth_rate is not None:
+            writes["low_density_growth_rate"] = low_density_growth_rate
+        if mode_value is not None:
+            writes["growth_mode"] = mode_value
+        if competition_strength is not None:
+            writes["competition_strength"] = competition_strength
+        if equilibrium_distribution is not None:
+            writes["equilibrium_distribution"] = equilibrium_distribution
+        if writes:
+            writer = self._make_writer()
+            writer.apply(writes)
+            self._config = writer.draft
+        if expected_num_new_adult_females is not None:
+            self._declare_expected_females(float(expected_num_new_adult_females))
+        return self
+
+    def _declare_expected_females(self, target_females: float) -> None:
+        """Compute and declare the Champer egg override on the draft.
+
+        Args:
+            target_females: Target number of new adult females; the
+                equivalent total egg production is derived from the
+                current demographics and persisted via the
+                ``external_expected_eggs`` route (a sensitive write, so
+                the equilibrium caches refresh).
+        """
+        cfg = self._config
+        eggs = compute_expected_eggs_from_females(
+            expected_num_new_adult_females=target_females,
+            eggs_per_female=float(cfg.eggs_per_female),
+            age_based_survival_rates=cfg.age_based_survival_rates,
+            age_based_reproduction_rates=cfg.age_based_reproduction_rates,
+            female_age_based_fertility=cfg.female_age_based_fertility,
+            sex_ratio=float(cfg.sex_ratio),
+            new_adult_age=int(cfg.new_adult_age),
+            n_ages=int(cfg.n_ages),
+        )
+        writer = self._make_writer()
+        writer.apply({"external_expected_eggs": eggs})
+        self._config = writer.draft
+
+    def reproduction(
+        self,
+        *,
+        eggs_per_female: float | None = None,
+        sex_ratio: float | None = None,
+        sperm_displacement_rate: float | None = None,
+        female_age_based_mating_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        male_age_based_mating_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        age_based_reproduction_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_adult_mating_rate: float | None = None,
+        male_adult_mating_rate: float | None = None,
+        fixed_egg_count: bool | None = None,
+    ) -> Self:
+        """Configure reproduction.
+
+        Every keyword is a route-table name: scalars go through the
+        ``scalar`` parser, per-age vectors through the flexible
+        ``sex_row``/``age_vec`` resolution, discrete adult mating
+        probabilities through ``slot`` cells, and the egg-count flag
+        through the ``bool`` channel.
+
+        Args:
+            eggs_per_female: Base eggs per reproducing female.
+            sex_ratio: Female fraction of offspring (0–1).
+            sperm_displacement_rate: Fraction of stored sperm displaced.
+            female_age_based_mating_rate: Per-age female mating probability.
+            male_age_based_mating_rate: Per-age male mating probability.
+            age_based_reproduction_rate: Per-age reproduction participation.
+            female_age_based_fertility: Per-age fertility weight.
+            female_adult_mating_rate: Adult female mating probability
+                (discrete vocabulary; writes the adult cell).
+            male_adult_mating_rate: Adult male mating probability
+                (discrete vocabulary; writes the adult cell).
+            fixed_egg_count: Disable Poisson noise.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            TypeError: When a per-age parameter is passed on a
+                discrete-generation draft (use the discrete vocabulary
+                instead).
+        """
+        self._has_domain_params = True
+        # Discrete drafts are normalized to 2 ages where age-0 does not
+        # mate: per-age flexible specs are meaningless there and keep the
+        # historical rejection of the former DiscreteConfigurator.
+        if self._config.discrete_generation and (
+            female_age_based_mating_rate is not None
+            or male_age_based_mating_rate is not None
+            or age_based_reproduction_rate is not None
+            or female_age_based_fertility is not None
+        ):
+            raise TypeError(
+                "reproduction() rejects per-age parameters on "
+                "discrete-generation populations; use the discrete "
+                "vocabulary (eggs_per_female, sex_ratio, "
+                "female_adult_mating_rate, male_adult_mating_rate)"
+            )
+        writes: dict[str, object] = {}
+        if eggs_per_female is not None:
+            writes["eggs_per_female"] = eggs_per_female
+        if sex_ratio is not None:
+            writes["sex_ratio"] = sex_ratio
+        if sperm_displacement_rate is not None:
+            writes["sperm_displacement_rate"] = sperm_displacement_rate
+        if female_age_based_mating_rate is not None:
+            writes["female_age_based_mating_rate"] = female_age_based_mating_rate
+        if male_age_based_mating_rate is not None:
+            writes["male_age_based_mating_rate"] = male_age_based_mating_rate
+        if age_based_reproduction_rate is not None:
+            writes["age_based_reproduction_rate"] = age_based_reproduction_rate
+        if female_age_based_fertility is not None:
+            writes["female_age_based_fertility"] = female_age_based_fertility
+        if female_adult_mating_rate is not None:
+            writes["female_adult_mating_rate"] = female_adult_mating_rate
+        if male_adult_mating_rate is not None:
+            writes["male_adult_mating_rate"] = male_adult_mating_rate
+        if fixed_egg_count is not None:
+            writes["fixed_egg_count"] = fixed_egg_count
+        if writes:
+            writer = self._make_writer()
+            writer.apply(writes)
+            self._config = writer.draft
+        return self
+
+    def survival(
+        self,
+        *,
+        female_age_based_survival: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        male_age_based_survival: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age0_survival: float | None = None,
+        male_age0_survival: float | None = None,
+    ) -> Self:
+        """Configure survival rates.
+
+        Per-age params accept flexible forms (scalar, list, dict, or
+        callable).  The discrete ``female_age0_survival`` /
+        ``male_age0_survival`` names keep working on both
+        granularities — they route to single cells of the unified
+        ``(2, n_ages)`` survival vector.
+
+        Args:
+            female_age_based_survival: Female survival rates (flexible form).
+            male_age_based_survival: Male survival rates (same forms).
+            female_age0_survival: Female juvenile (age-0) survival.
+            male_age0_survival: Male juvenile (age-0) survival.
+
+        Returns:
+            Self for chaining.
+        """
+        self._has_domain_params = True
+        writes: dict[str, object] = {}
+        if female_age_based_survival is not None:
+            writes["female_age_based_survival"] = female_age_based_survival
+        if male_age_based_survival is not None:
+            writes["male_age_based_survival"] = male_age_based_survival
+        if female_age0_survival is not None:
+            writes["female_age0_survival"] = female_age0_survival
+        if male_age0_survival is not None:
+            writes["male_age0_survival"] = male_age0_survival
+        if writes:
+            writer = self._make_writer()
+            writer.apply(writes)
+            self._config = writer.draft
+        return self
 
     def initial_state(
         self,
@@ -733,6 +1071,11 @@ class Configurator:
         *individual_count* is a dict like
         ``{"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}}``.
         Genotype selectors accept both strings and ``Genotype`` objects.
+
+        The resolution granularity follows the draft's
+        ``discrete_generation`` flag: discrete drafts use the flat
+        discrete resolution and ignore sperm storage; age-structured
+        drafts resolve per-age distributions.
 
         The distribution is NOT written to config immediately.  Instead it is
         stored in a deferred buffer and applied during :meth:`build` — after
@@ -751,7 +1094,8 @@ class Configurator:
             individual_count: Per-sex, per-genotype initial counts.
                 Nested as ``{sex: {genotype_selector: count}}``.
             sperm_storage: Per-sex, per-genotype initial stored sperm,
-                same nesting structure as *individual_count*.
+                same nesting structure as *individual_count*.  Ignored
+                (with a warning) for discrete-generation models.
 
         Returns:
             Self for chaining.
@@ -763,6 +1107,21 @@ class Configurator:
             )
         from natal.frontend.configurator._factory import PopulationConfigBuilder
 
+        if self._config.discrete_generation:
+            array = PopulationConfigBuilder.resolve_discrete_initial_individual_count(
+                species=self._species,
+                distribution=individual_count,
+            )
+            overrides: dict[str, object] = {"initial_individual_count": array}
+            if sperm_storage is not None:
+                import warnings
+                warnings.warn(
+                    "sperm_storage is ignored for discrete-generation populations.",
+                    UserWarning, stacklevel=2,
+                )
+            self._config = self._config._replace(**overrides)
+            return self
+
         n_ages = self._config.n_ages
         new_adult_age = self._config.new_adult_age
         array = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
@@ -771,7 +1130,7 @@ class Configurator:
             n_ages=n_ages,
             new_adult_age=new_adult_age,
         )
-        overrides: dict[str, object] = {"initial_individual_count": array}
+        overrides = {"initial_individual_count": array}
         if sperm_storage is not None:
             overrides["initial_sperm_storage"] = \
                 PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
@@ -791,7 +1150,7 @@ class Configurator:
         Multiple calls accumulate — ``.custom(a=1).custom(b=2)`` stores both.
 
         Unlike most domain methods which modify 0-d ndarrays in-place
-        (sharing the same ``PopulationConfig`` reference with the Population),
+        (sharing the same ``ModelDraft`` reference with the Population),
         ``custom()`` must call ``_replace`` to create a new config object
         with a rebuilt ``custom`` structured array.  When called via
         ``pop.update().custom(...)``, the ``_pop_ref`` back-reference
@@ -822,6 +1181,9 @@ class Configurator:
             # no write-back is needed for existing fields.
             for key, value in kwargs.items():
                 self._config.custom[key][()] = value
+        sink = self._rust_dirty_sink()
+        if sink is not None:
+            sink.add("custom_slots")
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
@@ -901,12 +1263,7 @@ class Configurator:
         # Preset fitness and modifier rebuilding may mutate arrays in place.
         # Work against an isolated config and publish it only after every new
         # preset has completed successfully.
-        if isinstance(original_config, DiscretePopulationConfig):
-            isolated_config: PopulationConfig | DiscretePopulationConfig = deepcopy(
-                original_config
-            )
-        else:
-            isolated_config = deepcopy(original_config)
+        isolated_config: ModelDraft = deepcopy(original_config)
         self._config = isolated_config
         self._presets.extend(new_presets)
         try:
@@ -1023,8 +1380,7 @@ class Configurator:
         if self._registry is None:
             self._registry = build_registry(self._species)
 
-        registry = self._registry
-        all_genotypes = registry.index_to_genotype
+        writes: dict[str, object] = {}
         for patch_name, patch_dict in [
             ("viability", viability),
             ("fecundity", fecundity),
@@ -1032,11 +1388,14 @@ class Configurator:
             ("zygote_viability", zygote_viability),
         ]:
             if patch_dict is not None:
-                write_fitness_field(
-                    self._config, patch_name, patch_dict, mode,
-                    species=self._species, registry=registry,
-                    all_genotypes=all_genotypes,
-                )
+                writes[patch_name] = patch_dict
+        if writes:
+            # geno_tensor kind: pattern dicts delegate to
+            # write_fitness_field inside the writer; the writer also
+            # pushes the whole tensors to the live Rust session.
+            writer = self._make_writer()
+            writer.apply(writes, mode=mode)
+            self._config = writer.draft
         return self
 
     # -- deprecated compression methods (use setup(compress=True)) ----------------
@@ -1073,33 +1432,45 @@ class Configurator:
 
     # -- hooks ------------------------------------------------------------------
 
-    def hooks(self, *hook_items: _HookItem) -> Self:
-        """Register event hooks.
+    def hooks(
+        self,
+        *hook_items: _HookItem,
+        event: str | None = None,
+        priority: int = 0,
+        deme: DemeSelector = "*",
+        name: str | None = None,
+    ) -> Self:
+        """Register event hooks — the single entry, build and runtime.
 
-        Hooks are passed through to the Population constructor at
-        ``build()`` time — they are *not* config writes.
+        Accepted items: ``Op.*`` objects (or lists of them), functions
+        decorated with ``@hook(event='...')``, and plain single-parameter
+        callables (``def hook(pop) -> int``).
 
         Args:
-            *hook_items: Hook registrations. Each item can be a raw
-                ``{event: [(func, name, priority), ...]}`` dict or a
-                callable decorated with ``@hook(event='...')``.
+            *hook_items: Hook registrations.
+            event: Default event for items that do not carry one
+                (``"first"``, ``"early"``, ``"late"``, ``"finish"``).
+            priority: Execution priority — lower values run first.
+            deme: Deme selector for spatial populations.
+            name: Optional name for grouped op registrations.
 
         Returns:
             Self for chaining.
 
         Raises:
-            RuntimeError: When called on a runtime Configurator
-                (i.e. via ``pop.update().hooks()``).  Use
-                ``pop.set_hook()`` for runtime hook registration.
+            TypeError: If an item has an unsupported shape (including the
+                removed ``(state, config, deme_id)`` signature).
+            ValueError: If an event name is unknown or cannot be resolved.
         """
         if self._pop_ref is not None:
-            raise RuntimeError(
-                "hooks can only be registered at build time. "
-                "Use pop.set_hook() for runtime hook registration."
+            # Runtime: register immediately on the live population.
+            self._pop_ref.register_hooks(
+                *hook_items, event=event, priority=priority, deme=deme, name=name
             )
-        if not hasattr(self, "_hook_items"):
-            self._hook_items: list[_HookItem] = []
-        self._hook_items.extend(hook_items)
+            return self
+        self._hook_calls.append((hook_items, {
+            "event": event, "priority": priority, "deme": deme, "name": name,
+        }))
         return self
 
     # -- observations ------------------------------------------------------------
@@ -1259,10 +1630,7 @@ class Configurator:
         pop.reapply_preset_fitness()
         self._config = pop.config
 
-        from natal.backends.reference.simulation.age_structured import (
-            sync_equilibrium_metrics,
-        )
-        sync_equilibrium_metrics(self._config)
+        self._config = sync_equilibrium_for_draft(self._config)
         return self
 
     # -- apply / build ---------------------------------------------------------
@@ -1270,114 +1638,21 @@ class Configurator:
     def apply(self) -> Self:
         """Sync derived values (equilibrium metrics).
 
-        All parameters are now applied immediately, so this is only
-        needed when you modify config arrays directly (outside Configurator).
+        All routed writes already refresh the equilibrium caches on
+        their own (driven by the jsonc ``sensitive`` column), so this is
+        only needed when you modify config arrays directly (outside
+        Configurator) or want to force a re-derivation before build.
 
         Returns:
             Self for chaining.
         """
-        self._sync_equilibrium()
+        self._config = sync_equilibrium_for_draft(self._config)
         return self
-
-    def _sync_equilibrium(self) -> None:
-        """Recompute ``expected_competition_strength`` and ``expected_survival_rate``.
-
-        Called by :meth:`apply` and after equilibrium-sensitive parameter
-        changes (carrying capacity, eggs per female, sex ratio).  Results
-        are written directly into the config's 0-d ndarray fields.
-
-        If a custom ``equilibrium_distribution`` was stored (via
-        ``competition(equilibrium_distribution=...)``), it is used as the
-        target age structure for the Champer model.  If the user explicitly
-        set ``expected_num_new_adult_females``, external egg counts are computed
-        from that value instead of the distribution.
-
-        For ``DiscretePopulationConfig``, survival/mating/reproduction arrays
-        are constructed manually from scalar fields (age0_survival,
-        adult_mating_rate, etc.) before calling
-        ``compute_equilibrium_metrics``.
-        """
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
-        from natal.frontend.configurator._params import (
-            compute_expected_eggs_from_females,
-        )
-
-        eq_dist: NDArray[np.float64] | None = getattr(
-            self, "_equilibrium_distribution", None
-        )
-        # Reshape flat equilibrium_distribution to (n_sexes, n_ages) if needed.
-        config = self._config
-        if isinstance(eq_dist, np.ndarray) and eq_dist.ndim == 1:
-            n_ages = int(config.n_ages)
-            eq_dist = eq_dist.reshape(2, n_ages)
-
-        # Compute external_expected_eggs from expected_num_new_adult_females
-        # Only when the user explicitly set it (avoid default config value)
-        external_eggs: float | None = None
-        if getattr(self, "_has_user_expected_new_adult_females", False):
-            if isinstance(config, DiscretePopulationConfig):
-                ext_surv: NDArray[np.float64] = np.array([
-                    [config.female_age0_survival, 0.0],
-                    [config.male_age0_survival, 0.0],
-                ])
-                ext_repro: NDArray[np.float64] = np.array([
-                    0.0, config.reproduction_rate,
-                ])
-            else:
-                ext_surv = config.age_based_survival_rates
-                ext_repro = config.age_based_reproduction_rates
-
-            external_eggs = compute_expected_eggs_from_females(
-                expected_num_new_adult_females=getattr(self, "_user_expected_new_adult_females", 500.0),
-                eggs_per_female=float(config.eggs_per_female),
-                age_based_survival_rates=ext_surv,
-                age_based_reproduction_rates=ext_repro,
-                female_age_based_fertility=config.female_age_based_fertility,
-                sex_ratio=float(config.sex_ratio),
-                new_adult_age=int(config.new_adult_age),
-                n_ages=int(config.n_ages),
-            )
-
-        if isinstance(config, DiscretePopulationConfig):
-            surv: NDArray[np.float64] = np.array([
-                [config.female_age0_survival, 0.0],
-                [config.male_age0_survival, 0.0],
-            ])
-            mate: NDArray[np.float64] = np.array([
-                [0.0, config.female_adult_mating_rate],
-                [0.0, config.male_adult_mating_rate],
-            ])
-            repro: NDArray[np.float64] = np.array([
-                0.0, config.reproduction_rate,
-            ])
-        else:
-            surv = config.age_based_survival_rates
-            mate = config.age_based_mating_rates
-            repro = config.age_based_reproduction_rates
-
-        expected_comp, expected_surv = compute_equilibrium_metrics(
-            carrying_capacity=float(config.carrying_capacity),
-            eggs_per_female=float(config.eggs_per_female),
-            age_based_survival_rates=surv,
-            age_based_mating_rates=mate,
-            age_based_reproduction_rates=repro,
-            female_age_based_fertility=config.female_age_based_fertility,
-            relative_competition_strength=config.age_based_relative_competition_strength,
-            sex_ratio=float(config.sex_ratio),
-            new_adult_age=int(config.new_adult_age),
-            n_ages=int(config.n_ages),
-            equilibrium_individual_count=eq_dist,
-            external_expected_eggs=external_eggs,
-        )
-        config.expected_competition_strength[()] = expected_comp
-        config.expected_survival_rate[()] = expected_surv
 
     def build(
         self,
         name: str | None = None,
-        hooks: HookMap | None = None,
+        hook_items: Sequence[object] | None = None,
     ) -> DiscreteGenerationPopulation | AgeStructuredPopulation:
         """Finalize the config and create a Population.
 
@@ -1406,16 +1681,32 @@ class Configurator:
         Args:
             name: Population name (falls back to ``.setup(name=...)``
                 or ``"Population"``).
-            hooks: Additional hook registrations merged with any stored
+            hook_items: Additional hook registrations (same item shapes
+                as :meth:`hooks`), registered together with any stored
                 via :meth:`hooks`.
 
         Returns:
             ``AgeStructuredPopulation`` or ``DiscreteGenerationPopulation``,
-            depending on whether *self._config* is a ``PopulationConfig``
-            or ``DiscretePopulationConfig``.
+            depending on whether *self._config* carries the
+            discrete-generation flag.
         """
         # Sync equilibrium metrics and apply index compression (if enabled).
         self.apply()
+
+        # Inject the symbolic name directory from the registry (building the
+        # registry lazily when presets/fitness never forced it).  Happens
+        # before compression so compress_config subslices real names.
+        if self._species is None:
+            raise RuntimeError(
+                "Cannot build Population: no Species set. "
+                "Use Configurator.from_species() to create this instance."
+            )
+        if self._registry is None:
+            self._registry = build_registry(self._species)
+        self._config = self._config._replace(
+            ztype_names=ztype_names_from_registry(self._registry.index_to_ztype),
+            gtype_names=gtype_names_from_registry(self._registry.index_to_gtype),
+        )
 
         # Compression runs on a COPY — self._config stays in G_orig space.
         # Population receives the compressed config.  All user writes
@@ -1425,11 +1716,8 @@ class Configurator:
         if self._compress and not self._compression_applied:
             # Auto-collect genotype refs from hooks so genotypes introduced
             # only via hooks survive BFS pruning.
-            stored_hooks: list[_HookItem] | None = getattr(
-                self, "_hook_items", None
-            )
-            if stored_hooks:
-                hook_refs = collect_hook_genotype_refs(stored_hooks)
+            if self._hook_calls:
+                hook_refs = collect_hook_genotype_refs(self._hook_calls)
                 if hook_refs:
                     existing = self._declared_zygote_types
                     self._declared_zygote_types = cast(
@@ -1456,38 +1744,7 @@ class Configurator:
         if name is None:
             name = getattr(self, "_name", "Population")
 
-        # Merge stored hooks (from .hooks()) with passed hooks.
-        stored_hooks: list[_HookItem] | None = getattr(self, "_hook_items", None)
-        if stored_hooks:
-            hook_map = merge_hooks(stored_hooks)
-            if hooks:
-                # Merge external hooks into stored ones
-                for event, items in (hooks or {}).items():
-                    hook_map.setdefault(event, []).extend(items)
-            hooks = hook_map
-
-        # Determine population class from config type.
-        if self._species is None:
-            raise RuntimeError(
-                "Cannot build Population: no Species set. "
-                "Use Configurator.from_species() to create this instance."
-            )
-
-        if isinstance(final_config, DiscretePopulationConfig):
-            # Sync pre-extracted discrete fields from the latest source maps.
-            # These may be stale if gamete/fitness maps were rebuilt by presets
-            # or if equilibrium metrics were recomputed after construction.
-            replace_kwargs: dict[str, object] = {
-                "meiosis_f": final_config.zygotes_to_gametes_map[0],
-                "meiosis_m": final_config.zygotes_to_gametes_map[1],
-                "fecundity_f": final_config.fecundity_fitness[0],
-                "fecundity_m": final_config.fecundity_fitness[1],
-            }
-            # Viability source array is only present on full PopulationConfig.
-            if hasattr(final_config, "viability_fitness"):
-                replace_kwargs["viability_f"] = final_config.viability_fitness[0, 0, :]  # type: ignore[reportAttributeAccessIssue]
-                replace_kwargs["viability_m"] = final_config.viability_fitness[1, 0, :]  # type: ignore[reportAttributeAccessIssue]
-            final_config = final_config._replace(**replace_kwargs)
+        if final_config.discrete_generation:
             from natal.frontend.population.discrete_generation import (
                 DiscreteGenerationPopulation,
             )
@@ -1498,7 +1755,6 @@ class Configurator:
                     population_config=final_config,
                     index_registry=self._registry,
                     name=name,
-                    hooks=hooks,
                 )
         else:
             from natal.frontend.population.age_structured import (
@@ -1510,7 +1766,6 @@ class Configurator:
                 population_config=final_config,
                 index_registry=self._registry,
                 name=name,
-                hooks=hooks,
             )
 
         # Configurator applies modifiers before Population construction.  Carry
@@ -1521,10 +1776,27 @@ class Configurator:
         pop._gamete_modifiers = list(self.gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
         pop._zygote_modifiers = list(self.zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
 
-        # Apply the requested lifecycle backend.  ``auto`` silently falls
-        # back to Numba when the Rust extension is unavailable or custom
-        # hooks are present; ``rust`` propagates the failure.
-        backend = getattr(self, "_backend", "numba")
+        # Replay stored .hooks() calls (plus any passed inline) BEFORE the
+        # backend enable below: enable_rust_backend snapshots both the CSR
+        # program and the Python-callback bridges.
+        hook_calls: list[HookCall] = list(self._hook_calls)
+        if hook_items:
+            hook_calls.append((tuple(hook_items), {}))
+        for items, kwargs in hook_calls:
+            pop.register_hooks(  # pyright: ignore[reportPrivateUsage]
+                *items,
+                event=cast("str | None", kwargs["event"]),
+                priority=cast("int", kwargs["priority"]),
+                deme=cast("DemeSelector", kwargs["deme"]),
+                name=cast("str | None", kwargs["name"]),
+            )
+
+        # Apply the requested lifecycle backend.  ``auto`` (the default)
+        # selects Rust when the extension is importable and silently falls
+        # back to the pure-Python reference otherwise; ``rust`` propagates
+        # the failure.  The legacy compiled-backend selector was retired:
+        # request ``rust`` or ``python`` explicitly.
+        backend = getattr(self, "_backend", "auto")
         if backend == "python":
             pop._python_backend = True  # pyright: ignore[reportPrivateUsage]
         elif backend in ("auto", "rust"):
@@ -1536,6 +1808,11 @@ class Configurator:
                 except RuntimeError:
                     if backend == "rust":
                         raise
+        elif backend == "numba":
+            raise ValueError(
+                "backend='numba' was removed. Use backend='rust' (native "
+                "extension) or backend='python' (pure-Python reference)."
+            )
 
         # Compile and freeze the recording plan.
         self._compile_recording_plan(pop)
@@ -1548,13 +1825,12 @@ class Configurator:
         initial state have been applied.  The plan is immutable for the
         remainder of the population's lifetime.
         """
-        from natal.frontend.data import DiscretePopulationConfig
         from natal.frontend.output._recording import compile_recording_plan
         from natal.frontend.output.history import History
         from natal.frontend.output.observation import build_identity_observation
 
         config = pop.config
-        if isinstance(config, DiscretePopulationConfig):
+        if config.discrete_generation:
             kind = "discrete_generation"
             has_sperm = False
         else:
@@ -1606,27 +1882,3 @@ class Configurator:
         pop._recording_plan = plan  # type: ignore[reportPrivateUsage]  # configurator sets private attr on population
         pop._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]  # configurator sets private attr
 
-
-# ── Numba hook wrapper ─────────────────────────────────────────────────────────
-
-
-@njit_switch(cache=True)
-def hook_set_param(config: object, name: str, value: float) -> None:
-    """Set a simulation parameter from inside a Numba hook.
-
-    Wraps :func:`set_param` in an objmode context so the call is valid
-    from nopython-compiled hook functions.  Use when you need the
-    flexibility of string-name lookup at the cost of an objmode boundary
-    (~microseconds per call).
-
-    For the fastest path, write ``config.field[()] = v`` directly in
-    nopython — no objmode overhead.
-
-    Args:
-        config: The PopulationConfig or DiscretePopulationConfig.
-        name: Parameter name — ``"competition.carrying_capacity"``,
-              ``"carrying_capacity"``, or any registered alias.
-        value: New scalar value.
-    """
-    with objmode():
-        set_param(config, name, value)  # pyright: ignore[reportArgumentType] — objmode converts njit types to Python

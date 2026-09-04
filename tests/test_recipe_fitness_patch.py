@@ -5,8 +5,8 @@ import uuid
 
 import numpy as np
 
-from natal.presets import apply_preset_fitness_patch
-from natal.genetics import Species
+from natal.frontend.presets import apply_preset_fitness_patch
+from natal.frontend.genetics import Species
 
 
 class _FakeConfig:
@@ -251,8 +251,8 @@ class TestPresetFitnessPatch(unittest.TestCase):
 
 
     def test_import_from_canonical_path(self) -> None:
-        """apply_preset_fitness_patch is importable from natal.fitness._patch."""
-        from natal.fitness._patch import apply_preset_fitness_patch as _patch_fn
+        """apply_preset_fitness_patch is importable from natal.frontend.fitness._patch."""
+        from natal.frontend.fitness._patch import apply_preset_fitness_patch as _patch_fn
 
         patch = {
             "viability_per_allele": {
@@ -275,7 +275,7 @@ class TestPresetFitnessPatch(unittest.TestCase):
         The protocol requires only three attributes (config, species,
         index_registry) — no Population or ConfigContext needed.
         """
-        from natal.fitness._patch import apply_preset_fitness_patch as _patch_fn
+        from natal.frontend.fitness._patch import apply_preset_fitness_patch as _patch_fn
 
         class _MinimalView:
             __slots__ = ('config', 'species', 'index_registry')

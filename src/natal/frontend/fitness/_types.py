@@ -6,7 +6,7 @@ Private module — not part of the public API.
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from natal.frontend.data.config import DiscretePopulationConfig, PopulationConfig
+    from natal.frontend.data.config import ModelDraft
     from natal.frontend.genetics.structures.species import Species
     from natal.frontend.registry.index import IndexRegistry
 
@@ -19,7 +19,7 @@ class FitnessPopulationView(Protocol):
     """
 
     @property
-    def config(self) -> 'PopulationConfig | DiscretePopulationConfig': ...
+    def config(self) -> 'ModelDraft': ...
 
     @property
     def species(self) -> 'Species': ...

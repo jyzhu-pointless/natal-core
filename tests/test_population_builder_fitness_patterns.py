@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 import uuid
 
-from natal.configurator._params import iter_sexual_selection_entries
-from natal.genetics import Species
-from natal.utils.helpers import resolve_sex_label
+from natal.frontend.configurator._params import iter_sexual_selection_entries
+from natal.frontend.genetics import Species
+from natal.frontend.utils.helpers import resolve_sex_label
 
 
 def _make_simple_species() -> Species:

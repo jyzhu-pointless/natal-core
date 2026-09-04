@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Mapping
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.data import DiscretePopulationConfig, PopulationConfig
+from natal.frontend.data import ModelDraft
 from natal.frontend.genetics import Species
 from natal.frontend.registry.index import IndexRegistry
 
@@ -20,13 +20,13 @@ if TYPE_CHECKING:
 
 
 def _get_fitness_array(
-    config: PopulationConfig | DiscretePopulationConfig,
+    config: ModelDraft,
     field_name: str,
 ) -> NDArray[np.float64]:
     """Map a fitness field name to the corresponding config array.
 
     Args:
-        config: The PopulationConfig or DiscretePopulationConfig.
+        config: The ModelDraft.
         field_name: One of ``"viability"``, ``"fecundity"``,
             ``"sexual_selection"``, or ``"zygote_viability"``.
 
@@ -37,18 +37,27 @@ def _get_fitness_array(
         ValueError: If *field_name* is not recognized.
     """
     if field_name == "viability":
-        return config.viability_fitness  # type: ignore[return-value]  # union-narrowing false positive
+        return config.viability_fitness
     if field_name == "fecundity":
-        return config.fecundity_fitness  # type: ignore[return-value]  # union-narrowing false positive
+        return config.fecundity_fitness
     if field_name == "sexual_selection":
-        return config.sexual_selection_fitness  # type: ignore[return-value]  # union-narrowing false positive
+        return config.sexual_selection_fitness
     if field_name == "zygote_viability":
-        return config.zygote_viability_fitness  # type: ignore[return-value]  # union-narrowing false positive
+        return config.zygote_viability_fitness
     raise ValueError(f"Unknown fitness field: {field_name}")
 
 
+# Fitness patch name -> contract (Params) tensor name for the Rust bridge.
+_RUST_CONTRACT_TENSOR: dict[str, str] = {
+    "viability": "viability_fitness",
+    "fecundity": "fecundity_fitness",
+    "sexual_selection": "sexual_selection_fitness",
+    "zygote_viability": "zygote_viability_fitness",
+}
+
+
 def write_fitness_field(
-    config: PopulationConfig | DiscretePopulationConfig,
+    config: ModelDraft,
     field_name: str,
     patch: Mapping[str, float | Mapping[str, float]],
     mode: str,
@@ -56,6 +65,7 @@ def write_fitness_field(
     species: Species,
     registry: IndexRegistry,
     all_genotypes: list[Genotype],
+    _dirty: set[str] | None = None,
 ) -> None:
     """Resolve genotype-pattern strings and write into a fitness tensor.
 
@@ -66,6 +76,17 @@ def write_fitness_field(
 
     The function detects the format of *patch* and dispatches to one of
     four branches.  See inline comments for the detection rules.
+
+    Args:
+        config: The ModelDraft whose fitness tensor is written in place.
+        field_name: One of the four fitness patch names.
+        patch: Genotype-selector keyed values (formats below).
+        mode: ``"replace"`` or ``"multiply"``.
+        species: Genetic architecture for selector resolution.
+        registry: Index registry mapping genotypes to ztype indices.
+        all_genotypes: All genotypes in registry order.
+        _dirty: Optional sink set receiving the contract tensor name after
+            a successful write (Rust dirty bridge); ``None`` skips marking.
 
     Supported formats::
 
@@ -100,6 +121,8 @@ def write_fitness_field(
                 species=species, registry=registry,
                 all_genotypes=all_genotypes,
             )
+        if _dirty is not None:
+            _dirty.add(f"{field_name}_fitness")
         return
 
     # ══════════════════════════════════════════════════════════════════════
@@ -143,6 +166,8 @@ def write_fitness_field(
                                         arr[f_z, m_z] = val
                                     else:
                                         arr[f_z, m_z] *= val
+            if _dirty is not None:
+                _dirty.add("sexual_selection_fitness")
             return
 
         # ═══════════════════════════════════════════════════════════════
@@ -173,6 +198,8 @@ def write_fitness_field(
                         arr[:, m_z] = val        # broadcast: all females × this male
                     else:
                         arr[:, m_z] *= val
+        if _dirty is not None:
+            _dirty.add("sexual_selection_fitness")
         return
 
     # ══════════════════════════════════════════════════════════════════════
@@ -247,8 +274,15 @@ def write_fitness_field(
                 )
 
 
+    # Mark the Rust dirty bridge: the whole tensor contents changed.
+    if _dirty is not None:
+        contract_name = _RUST_CONTRACT_TENSOR.get(field_name)
+        if contract_name is not None:
+            _dirty.add(contract_name)
+
+
 def _write_fitness_field_flat(
-    config: PopulationConfig | DiscretePopulationConfig,
+    config: ModelDraft,
     field_name: str,
     patch: Mapping[str | tuple[Genotype | str, str], float],
     mode: str,
@@ -275,7 +309,7 @@ def _write_fitness_field_flat(
     *age_idx* is ignored for them.
 
     Args:
-        config: The PopulationConfig or DiscretePopulationConfig to modify.
+        config: The ModelDraft to modify.
         field_name: One of ``"viability"``, ``"fecundity"``,
             ``"sexual_selection"``, or ``"zygote_viability"``.
         patch: A flat ``{genotype_selector: value}`` mapping.
@@ -287,10 +321,9 @@ def _write_fitness_field_flat(
         age_idx: Age index for the write (defaults to ``new_adult_age - 1``).
     """
     # Default to last juvenile age: viability typically affects
-    # larvae/juveniles, not adults.  DiscretePopulationConfig has
-    # no ``new_adult_age`` field (always 2 ages, adult at age 1).
+    # larvae/juveniles, not adults.
     resolved_age: int = age_idx if age_idx is not None else (
-        getattr(config, "new_adult_age", 1) - 1
+        config.new_adult_age - 1
     )
 
     # Resolve valid slab labels for tuple selectors with @slab suffix.

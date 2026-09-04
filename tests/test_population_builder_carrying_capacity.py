@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 import pytest
 
 import natal as nt
-from natal.configurator import PopulationConfigBuilder
+from natal.frontend.configurator import PopulationConfigBuilder
 
 
 def _make_species(name: str = "TestSp") -> nt.Species:
@@ -216,8 +216,8 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.engine.simulation.age_structured import compute_equilibrium_metrics
-        from natal.data import build_population_config
+        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
+        from natal.frontend.data import build_population_config
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=K,
@@ -280,7 +280,7 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.engine.simulation.age_structured import compute_equilibrium_metrics
+        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
 
         comp, surv = compute_equilibrium_metrics(
             carrying_capacity=K,
@@ -616,7 +616,7 @@ class TestChamperModel:
 
     def test_competition_and_survival_consistency_explicit_dist(self) -> None:
         """End-to-end: compute_equilibrium_metrics with explicit distribution is self-consistent."""
-        from natal.engine.simulation.age_structured import compute_equilibrium_metrics
+        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([
@@ -650,7 +650,7 @@ class TestChamperModel:
 
     def test_competition_and_survival_external_eggs(self) -> None:
         """End-to-end: external_expected_eggs affects survival, not competition."""
-        from natal.engine.simulation.age_structured import compute_equilibrium_metrics
+        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([

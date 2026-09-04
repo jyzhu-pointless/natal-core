@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from natal.population.discrete_generation import DiscreteGenerationPopulation
-from natal.genetics import Species
-from natal.utils.types import Sex
+from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
+from natal.frontend.genetics import Species
+from natal.frontend.utils.types import Sex
 
 
 def _make_species() -> Species:

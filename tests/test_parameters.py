@@ -6,13 +6,13 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from natal.utils.parameters import (
+from natal.frontend.utils.parameters import (
     ALL_PARAMETERS,
     PARAM_IDS,
     PARAMETERS_BY_DOMAIN,
     ParamDescriptor,
 )
-from natal.data import PopulationConfig
+from natal.frontend.data import ModelDraft
 
 
 class TestParamDescriptor:
@@ -23,27 +23,33 @@ class TestParamDescriptor:
         desc = ParamDescriptor(
             domain="test",
             name="foo",
+            method="competition",
+            kind="scalar",
+            section="ecology",
             config_field="some_field",
             config_path=(),
             dtype=float,
             bounds=(0.0, 1.0),
+            sensitive=False,
         )
-        assert desc.is_tensor is False
-        assert desc.is_0d is False
-        assert desc.is_array is False
         assert desc.target == "config"
         assert desc.doc == ""
         assert desc.aliases == ()
+        assert desc.sensitive is False
 
     def test_frozen_prevents_mutation(self):
         """Assigning an attribute raises FrozenInstanceError."""
         desc = ParamDescriptor(
             domain="test",
             name="bar",
+            method="setup",
+            kind="bool",
+            section="ecology",
             config_field="x",
             config_path=(),
             dtype=int,
             bounds=(0, 100),
+            sensitive=False,
         )
         with pytest.raises(FrozenInstanceError):
             desc.domain = "other"  # type: ignore[misc]
@@ -86,17 +92,30 @@ class TestAllParameters:
 
 
 class TestParameterFieldMapping:
-    """Verifying config_field mapping between parameters and PopulationConfig."""
+    """Verifying config_field mapping between parameters and ModelDraft."""
 
     def test_config_field_exists_on_config(self):
-        """Every parameter with a config_field maps to an actual PopulationConfig field."""
+        """Every parameter with a config_field maps to an actual ModelDraft field."""
         for key, desc in ALL_PARAMETERS.items():
             if desc.config_field is None:
                 # Spatial-only parameters have no config_field (e.g. migration_rate)
                 continue
             assert hasattr(
-                PopulationConfig, desc.config_field
-            ), f"{key}: PopulationConfig has no field '{desc.config_field}'"
+                ModelDraft, desc.config_field
+            ), f"{key}: ModelDraft has no field '{desc.config_field}'"
+
+    def test_kinds_are_from_the_seven_shapes(self):
+        """Every parameter carries one of the seven route kinds."""
+        valid = {"scalar", "mode_enum", "age_vec", "sex_row", "slot", "bool", "geno_tensor"}
+        for key, desc in ALL_PARAMETERS.items():
+            assert desc.kind in valid, f"{key}: unknown kind {desc.kind!r}"
+
+    def test_sections_are_ecology_or_genetics(self):
+        """Ecology/genetics section tags partition the table."""
+        for key, desc in ALL_PARAMETERS.items():
+            assert desc.section in ("ecology", "genetics"), key
+            if desc.kind == "geno_tensor" and desc.domain == "fitness":
+                assert desc.section == "genetics", key
 
     def test_migration_rate_config_field_none(self):
         """migration.migration_rate has config_field=None (spatial only)."""
@@ -104,10 +123,12 @@ class TestParameterFieldMapping:
         assert desc.config_field is None
         assert desc.target == "spatial"
 
-    def test_carrying_capacity_is_0d(self):
-        """competition.carrying_capacity is a 0-d ndarray targeting 'config'."""
+    def test_carrying_capacity_is_scalar(self):
+        """competition.carrying_capacity is a bounded scalar targeting 'config'."""
         desc = ALL_PARAMETERS["competition.carrying_capacity"]
-        assert desc.is_0d is True
+        assert desc.kind == "scalar"
+        assert desc.section == "ecology"
+        assert desc.sensitive is True
         assert desc.target == "config"
 
     @pytest.mark.parametrize(
@@ -121,10 +142,11 @@ class TestParameterFieldMapping:
             "fitness.male_ztype_compatibility",
         ],
     )
-    def test_fitness_is_tensor(self, key: str):
-        """Fitness-related parameters have is_tensor=True."""
+    def test_fitness_is_geno_tensor(self, key: str):
+        """Fitness-related parameters use the geno_tensor shape."""
         desc = ALL_PARAMETERS[key]
-        assert desc.is_tensor is True, f"{key}.is_tensor should be True"
+        assert desc.kind == "geno_tensor", f"{key}.kind should be geno_tensor"
+        assert desc.section == "genetics"
 
     def test_aliases(self):
         """Known parameters carry their expected historical aliases."""
@@ -159,14 +181,18 @@ class TestParametersByDomain:
         assert set(PARAMETERS_BY_DOMAIN) == expected
 
     def test_competition_domain(self):
-        """Competition domain contains expected parameters."""
+        """Competition domain contains expected parameters (growth_mode
+        renamed from juvenile_growth_mode, which survives as an alias)."""
         comp = PARAMETERS_BY_DOMAIN["competition"]
         assert "carrying_capacity" in comp
         assert "low_density_growth_rate" in comp
-        assert "juvenile_growth_mode" in comp
+        assert "growth_mode" in comp
+        assert "juvenile_growth_mode" in comp["growth_mode"].aliases
         assert "competition_strength" in comp
         assert "expected_competition_strength" in comp
         assert "expected_survival_rate" in comp
+        assert "external_expected_eggs" in comp
+        assert "equilibrium_distribution" in comp
 
     def test_all_parameters_assigned_to_a_domain(self):
         """Every ALL_PARAMETERS entry appears in exactly one domain group."""

@@ -5,10 +5,10 @@ import uuid
 
 import numpy as np
 
-from natal.configurator import (
+from natal.frontend.configurator import (
     PopulationConfigBuilder,
 )
-from natal.genetics import Species
+from natal.frontend.genetics import Species
 
 
 def _make_species(prefix: str = "BuilderInjectionSpecies") -> Species:

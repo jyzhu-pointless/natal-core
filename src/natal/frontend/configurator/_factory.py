@@ -1,11 +1,11 @@
-"""``PopulationConfigBuilder`` utility for constructing ``PopulationConfig``.
+"""``PopulationConfigBuilder`` utility for constructing ``ModelDraft``.
 
 ``PopulationConfigBuilder`` is the internal engine that converts high-level
 builder parameters (survival arrays, mating rates, modifiers, etc.) into
-a fully-initialized ``PopulationConfig`` / ``DiscretePopulationConfig``.
+a fully-initialized ``ModelDraft``.
 
 Key functions:
-  - ``PopulationConfigBuilder.build()`` — construct a full config from
+  - ``PopulationConfigBuilder.build()`` — construct a full draft from
     resolved parameters.
   - ``resolve_age_structured_initial_individual_count()`` — parse
     JSON-style ``{sex: {genotype: count}}`` into a ``(2, n_ages, n_ztypes)``
@@ -36,14 +36,14 @@ from numpy.typing import NDArray
 
 import natal.frontend.data as _population_config
 from natal.frontend.data import (
-    PopulationConfig,
+    ModelDraft,
     build_custom_array,
     build_population_config,
 )
 from natal.frontend.genetics import Genotype, HaploidGenome, Species
 from natal.frontend.registry.index import IndexRegistry
-from natal.utils.helpers import resolve_sex_label
-from natal.utils.types import Sex
+from natal.frontend.utils.helpers import resolve_sex_label
+from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     pass
@@ -88,7 +88,7 @@ initialize_zygote_map = cast(InitializeMapFn, _population_config.initialize_zygo
 
 
 class PopulationConfigBuilder:
-    """Internal builder for constructing PopulationConfig.
+    """Internal builder for constructing ModelDraft.
 
     .. deprecated::
         Use ``Configurator`` instead.
@@ -142,8 +142,8 @@ class PopulationConfigBuilder:
         initial_sperm_storage: Optional[NDArray[np.float64]] = None,
         # Custom fields
         custom_specs: Optional[dict[str, float | int | bool | NDArray[np.float64]]] = None,
-    ) -> PopulationConfig:
-        """Construct a complete PopulationConfig from builder parameters.
+    ) -> ModelDraft:
+        """Construct a complete ModelDraft from builder parameters.
 
         Args:
             species (Species): Genetic architecture.
@@ -177,7 +177,7 @@ class PopulationConfigBuilder:
             initial_sperm_storage (Optional[NDArray[np.float64]]): Initial sperm storage array.
 
         Returns:
-            PopulationConfig: A fully initialized PopulationConfig instance.
+            ModelDraft: A fully initialized ModelDraft instance.
 
         Raises:
             ValueError: If n_ages, new_adult_age or other parameters are invalid.
@@ -327,7 +327,7 @@ class PopulationConfigBuilder:
         else:
             external_eggs = None
 
-        # ===== Create and return PopulationConfig =====
+        # ===== Create and return ModelDraft =====
         cfg = build_population_config(
             n_genotypes=n_genotypes,
             n_gtypes=n_haplogenotypes * n_glabs,

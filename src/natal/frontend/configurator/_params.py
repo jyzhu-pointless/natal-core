@@ -16,8 +16,6 @@ Function overview:
     survival rates to produce a (2, n_ages) equilibrium array.
   - ``compute_expected_eggs_from_females()`` — forward-propagate
     a target adult female count to compute total egg production.
-  - ``resolve_param()`` — parameter name lookup with three-tier
-    fallback (exact, short-name, alias).
 """
 
 from __future__ import annotations
@@ -36,7 +34,6 @@ from natal.frontend.data import (
     LOGISTIC,
     NO_COMPETITION,
 )
-from natal.utils.parameters import ALL_PARAMETERS, ParamDescriptor
 
 __all__: list[str] = []  # internal helpers, not re-exported
 
@@ -347,31 +344,9 @@ def compute_expected_eggs_from_females(
 # ─────────────────────────────────────────────────────────────────────────────
 # From _base.py: _resolve_param
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def resolve_param(name: str) -> ParamDescriptor | None:
-    """Look up a parameter name in ``ALL_PARAMETERS`` with three fallback tiers.
-
-    Tier 1: exact match — ``"competition.carrying_capacity"``.
-    Tier 2: short-name match — ``"carrying_capacity"`` matches via
-            ``key.endswith(".carrying_capacity")``.
-    Tier 3: alias match — user-friendly names defined in each
-            ``ParamDescriptor.aliases``.
-
-    Returns the ``ParamDescriptor`` or ``None``.
-    """
-    # Tier 1: O(1) exact key lookup.
-    if name in ALL_PARAMETERS:
-        return ALL_PARAMETERS[name]
-
-    # Tier 2-3: linear scan for short-name / alias match.
-    for key, desc in ALL_PARAMETERS.items():
-        if key.endswith(f".{name}"):
-            return desc
-        if name in desc.aliases:
-            return desc
-
-    return None
+# NOTE (slice 3): the former ``resolve_param()`` name lookup moved to
+# ``_routes.lookup()`` / ``_routes.lookup_or_none()`` — the route table
+# pre-indexes full keys, short names, and aliases at import time.
 
 
 def iter_sexual_selection_entries(

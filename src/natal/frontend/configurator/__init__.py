@@ -1,38 +1,51 @@
-"""Configurator subpackage — chainable PopulationConfig builders.
+"""Configurator subpackage — chainable ModelDraft builders.
 
-Provides the Configurator API for constructing and modifying
-``PopulationConfig`` / ``DiscretePopulationConfig``:
+Provides the unified Configurator API for constructing and modifying
+``ModelDraft`` (slice 3 collapsed the former age-structured/discrete
+subclass split into one class driven by the route table):
 
-- :class:`Configurator`, ``AgeStructuredConfigurator``,
-  ``DiscreteConfigurator`` — chainable domain methods
-  (``.competition()``, ``.reproduction()``) that mutate config arrays
-  in-place.  Created via ``Configurator.from_species()`` or bound to a
-  running simulation via ``for_population()`` for runtime changes.
+- :class:`Configurator` — chainable domain methods
+  (``.competition()``, ``.reproduction()``) that write through the
+  declarative route table.  Created via ``Configurator.from_species()``
+  or bound to a running simulation via ``for_population()`` for runtime
+  changes.  Batch writers live in :mod:`._writers`, routing logic in
+  :mod:`._routes`.
 
 Utility symbols:
-  - ``set_param`` / ``hook_set_param`` — write a scalar parameter by
-    name, usable from pure Python or Numba hooks.
-  - ``merge_hooks`` — combine @hook-decorated items into a single map.
+  - ``set_param`` — write a scalar parameter by name, usable from pure
+    Python or the route-table writers.
 """
 
 from natal.frontend.configurator._base import (
     Configurator,
-    hook_set_param,
-    merge_hooks,
     set_param,
 )
 from natal.frontend.configurator._factory import (
     PopulationConfigBuilder,
 )
-from natal.frontend.configurator.age_structured import AgeStructuredConfigurator
-from natal.frontend.configurator.discrete import DiscreteConfigurator
+from natal.frontend.configurator._routes import (
+    ROUTES,
+    ROUTES_BY_METHOD,
+    RouteEntry,
+    dispatch,
+)
+from natal.frontend.configurator._writers import (
+    ConfigWriter,
+    CoreConfigWriter,
+    DraftWriter,
+    HookConfigWriter,
+)
 
 __all__ = [
-    "AgeStructuredConfigurator",
     "Configurator",
-    "DiscreteConfigurator",
+    "CoreConfigWriter",
+    "ConfigWriter",
+    "DraftWriter",
+    "HookConfigWriter",
     "PopulationConfigBuilder",
-    "hook_set_param",
-    "merge_hooks",
+    "ROUTES",
+    "ROUTES_BY_METHOD",
+    "RouteEntry",
+    "dispatch",
     "set_param",
 ]

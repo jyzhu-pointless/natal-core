@@ -24,8 +24,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.frontend.data import (
-    DiscretePopulationConfig,
-    PopulationConfig,
+    ModelDraft,
     compress_config,
 )
 from natal.frontend.genetics import Species, build_compression_mask
@@ -99,7 +98,7 @@ class ConfigContext:
     def __init__(
         self,
         species: Species,
-        config: PopulationConfig | DiscretePopulationConfig,
+        config: ModelDraft,
         registry: IndexRegistry,
         compress: bool = False,
     ) -> None:
@@ -107,7 +106,7 @@ class ConfigContext:
 
         Args:
             species: The genetic architecture for the population.
-            config: The PopulationConfig or DiscretePopulationConfig to wrap.
+            config: The ModelDraft to wrap.
             registry: An IndexRegistry pre-populated with genotypes/haplotypes.
             compress: Enable both GType and ZType index compression at once.
         """
@@ -335,8 +334,8 @@ def rebuild_config_maps(
     n_hg_effective = int(ctx.config.n_gtypes) // n_glabs
     n_glabs_effective = n_glabs
     gtype_compressed = False
+    _hl_active = gtype_mask >= 0
     if gtype_mask.size > 0:
-        _hl_active = gtype_mask >= 0
         n_hl_compressed = int(_hl_active.sum())
         if n_hl_compressed < zygotes_to_gametes_map.shape[2]:
             zygotes_to_gametes_map = zygotes_to_gametes_map[:, :, _hl_active]
@@ -371,12 +370,12 @@ def rebuild_config_maps(
         "n_ztypes": n_g_compressed,
         "n_gtypes": n_hg_effective if gtype_compressed else n_hg_effective * n_glabs_effective,
     }
-    if isinstance(ctx.config, DiscretePopulationConfig):
-        # Keep the pre-extracted slices in sync with the source maps.
-        overrides["meiosis_f"] = zygotes_to_gametes_map[0]
-        overrides["meiosis_m"] = zygotes_to_gametes_map[1]
-        overrides["fecundity_f"] = ctx.config.fecundity_fitness[0]
-        overrides["fecundity_m"] = ctx.config.fecundity_fitness[1]
-        overrides["viability_f"] = ctx.config.viability_fitness[0, 0, :]
-        overrides["viability_m"] = ctx.config.viability_fitness[1, 0, :]
+    if gtype_compressed:
+        # The registry compressed gtypes with the same flat mask; slice the
+        # name directory with it so indices stay aligned.
+        overrides["gtype_names"] = tuple(
+            name
+            for name, m in zip(ctx.config.gtype_names, gtype_mask.tolist())
+            if m >= 0
+        )
     ctx.config = ctx.config._replace(**overrides)

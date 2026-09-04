@@ -88,17 +88,13 @@ class TestBuilderCustomFields:
         with pytest.raises(TypeError):
             _build({"label": "hot"})
 
-    def test_custom_accessible_in_numba(self):
-        """Custom fields can be read and mutated from @njit functions."""
-        from natal.numba.utils import njit_switch
-
+    def test_custom_accessible_from_reference(self):
+        """Custom fields are readable and writable from the reference runtime."""
         pop = _build({"temperature": 25.0, "threshold": 100.0})
 
-        @njit_switch(cache=True)
         def read_custom(config):
             return config.custom["temperature"][()] + config.custom["threshold"][()]
 
-        @njit_switch(cache=True)
         def write_custom(config):
             config.custom["temperature"][()] = 99.0
             return 0
