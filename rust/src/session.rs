@@ -1,15 +1,19 @@
-//! PyO3 session object owning configuration copies, RNG state, and the
-//! compiled CSR hook program.
+//! PyO3 session object owning the contract, RNG state, and the compiled CSR
+//! hook program.
 
-use numpy::{PyArray2, PyArrayMethods, PyReadonlyArray4, PyReadwriteArray3, PyUntypedArrayMethods};
+use numpy::{
+    PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray4, PyReadwriteArray3, PyUntypedArrayMethods,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use rand::rngs::SmallRng;
+use pyo3::types::PyDict;
+use std::collections::HashMap;
 
 use crate::config::SimConfig;
+use crate::contract::{session_get_tensor, session_tensor_write, Blueprint, Params, TensorSet};
 use crate::hooks::HookProgram;
 use crate::lifecycle;
-use crate::rng::new_rng;
+use crate::rng::{new_rng, SessionRng};
 
 /// Validate and return mutable slices for age-structured state arrays.
 ///
@@ -62,35 +66,198 @@ fn map_lifecycle_error(err: String) -> PyErr {
     PyRuntimeError::new_err(err)
 }
 
+/// Ecology scalar field names carried by a memory checkpoint.
+pub(crate) const ECOLOGY_SCALARS: [&str; 7] = [
+    "carrying_capacity",
+    "eggs_per_female",
+    "sex_ratio",
+    "sperm_displacement_rate",
+    "low_density_growth_rate",
+    "growth_mode",
+    "external_expected_eggs",
+];
+
+/// Ecology vector field names carried by a memory checkpoint.
+///
+/// ``migration_rate`` is the spatial rate column folded into the params
+/// contract (slice 5); restoring it keeps a checkpoint a complete save of
+/// the ecology section.
+pub(crate) const ECOLOGY_VECTORS: [&str; 7] = [
+    "survival_rates",
+    "mating_rates",
+    "reproduction_rates",
+    "fertility",
+    "competition_weights",
+    "equilibrium_distribution",
+    "migration_rate",
+];
+
+/// Copy the ecology section of *params* into a fresh Python dict.
+///
+/// The genetics section is deliberately excluded: a memory checkpoint is a
+/// save, not an uninstallation of genetic mods.
+pub(crate) fn ecology_snapshot<'py>(
+    py: Python<'py>,
+    params: &Params,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for name in ECOLOGY_SCALARS {
+        dict.set_item(name, params.get_scalar(name)?)?;
+    }
+    for name in ECOLOGY_VECTORS {
+        dict.set_item(name, params.get_tensor(py, name)?)?;
+    }
+    Ok(dict)
+}
+
+/// Write an ecology snapshot dict back into *params*.
+///
+/// ## Errors
+/// Returns ``PyValueError`` when a vector has the wrong size; each
+/// ``tensor_write`` validates before committing, so the previous contents
+/// are preserved for the failing field.
+pub(crate) fn restore_ecology(
+    params: &mut Params,
+    bp: &Blueprint,
+    ecology: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    for name in ECOLOGY_SCALARS {
+        let value: f64 = ecology.get_item(name)?.extract()?;
+        params.apply(HashMap::from([(name.to_string(), value)]))?;
+    }
+    for name in ECOLOGY_VECTORS {
+        let values: Vec<f64> = ecology
+            .get_item(name)?
+            .extract::<numpy::PyReadonlyArray1<'_, f64>>()?
+            .as_slice()?
+            .to_vec();
+        params.tensor_write(bp, name, values)?;
+    }
+    Ok(())
+}
+
+/// Snapshot tuple: ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.
+pub type AgeSnapshot<'py> = (
+    i64,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Vec<u64>,
+    Bound<'py, PyDict>,
+);
+
 /// PyO3-exported stateful session for the age-structured Rust backend.
 ///
-/// Owns a ``SimConfig`` snapshot, the Rust RNG, and a CSR hook program.
+/// Owns the frozen blueprint, the mutable params, the RNG, and a CSR hook
+/// program.  A flat [`SimConfig`] is assembled from the contracts at every
+/// tick-batch entry point, so [`Params`] writes take effect on the next
+/// batch without rebuilding the session (the RNG keeps streaming).
 #[pyclass(name = "EngineSession")]
 pub struct EngineSession {
-    cfg: SimConfig,
-    rng: SmallRng,
+    blueprint: Blueprint,
+    params: Params,
+    genetics: TensorSet,
+    rng: SessionRng,
     hooks: HookProgram,
+    /// Audited set_param transitions accumulated across tick/run calls;
+    /// drained by the Python adapter after each run so ``params_log`` and
+    /// the draft stay synchronized with the session-owned columns.
+    eco_journal: Vec<crate::hooks::EcoJournalRow>,
 }
 
 #[pymethods]
 impl EngineSession {
-    /// Create an age-structured session from a Python config and an optional seed.
+    /// Create an age-structured session from the Python contract objects.
     ///
     /// ## Parameters
-    /// - `config`: Python ``PopulationConfig``.
+    /// - `blueprint`: A ``natal.contracts.Blueprint`` NamedTuple.
+    /// - `params`: A ``natal.contracts.Params`` dataclass instance.
     /// - `seed`: RNG seed.
     ///
     /// ## Returns
-    /// A new ``EngineSession``.
+    /// A new ``EngineSession`` owning copies of both contracts.
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` when either contract is inconsistent.
     #[new]
-    #[pyo3(signature = (config, seed=0))]
-    fn new(config: &Bound<'_, PyAny>, seed: u64) -> PyResult<Self> {
-        let cfg = SimConfig::from_python(config)?;
+    #[pyo3(signature = (blueprint, params, seed=0))]
+    fn from_parts(
+        blueprint: &Bound<'_, PyAny>,
+        params: &Bound<'_, PyAny>,
+        seed: u64,
+    ) -> PyResult<Self> {
+        let bp = Blueprint::from_python(blueprint)?;
+        // Panmictic sessions carry one deme: length-1 ecology columns and
+        // the session-owned genetics tables split out of the contract.
+        let pr = Params::from_python(params, 1)?;
+        let genetics = TensorSet::from_python(params)?;
+        bp.validate()?;
+        pr.validate(&bp)?;
+        genetics.validate(&bp)?;
         Ok(Self {
-            cfg,
+            blueprint: bp,
+            params: pr,
+            genetics,
             rng: new_rng(seed),
             hooks: HookProgram::default(),
+            eco_journal: Vec::new(),
         })
+    }
+
+    /// Pull exactly the named contract fields from the Python params object.
+    ///
+    /// Directed refresh: the session is not rebuilt and the RNG keeps
+    /// streaming; only the listed scalars and tensors are overwritten.
+    ///
+    /// ## Parameters
+    /// - `fields`: Contract field names to pull.
+    /// - `source`: A ``natal.contracts.Params`` carrying current values.
+    ///
+    /// ## Errors
+    /// Returns ``PyKeyError``/``PyValueError`` on unknown names or size
+    /// mismatch; nothing is written when any field fails.
+    fn refresh_params(&mut self, fields: Vec<String>, source: &Bound<'_, PyAny>) -> PyResult<()> {
+        let genetics = &mut self.genetics;
+        self.params
+            .pull_fields(&self.blueprint, 0, &fields, source, Some(genetics))
+    }
+
+    /// Batch scalar write straight into the owned params (hook write path).
+    ///
+    /// ## Errors
+    /// Returns ``PyKeyError`` for unknown fields; atomic per call.
+    fn apply(&mut self, writes: HashMap<String, f64>) -> PyResult<()> {
+        self.params.apply(writes)
+    }
+
+    /// Read a scalar param value from the owned params.
+    ///
+    /// ## Errors
+    /// Returns ``PyKeyError`` for unknown or non-scalar fields.
+    fn get_scalar(&self, name: &str) -> PyResult<f64> {
+        self.params.get_scalar(name)
+    }
+
+    /// Read a copy of a tensor param from the owned params.
+    ///
+    /// ## Errors
+    /// Returns ``PyKeyError`` for unknown or non-tensor fields.
+    fn get_tensor<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        session_get_tensor(py, &self.params, &self.genetics, name)
+    }
+
+    /// Whole-tensor contents write straight into the owned params.
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` on size mismatch; previous contents are
+    /// preserved on failure.
+    fn tensor_write(&mut self, field: &str, values: Vec<f64>) -> PyResult<()> {
+        session_tensor_write(
+            &self.blueprint,
+            &mut self.params,
+            &mut self.genetics,
+            field,
+            values,
+        )
     }
 
     /// Replace the declarative CSR hook program used by ``tick``.
@@ -107,12 +274,51 @@ impl EngineSession {
         self.hooks = HookProgram::default();
     }
 
+    /// Register Python callbacks fired at the first/early/late event
+    /// boundaries after the CSR hooks ran.
+    ///
+    /// ## Parameters
+    /// - `first`: Callables invoked after the ``first`` CSR event.
+    /// - `early`: Callables invoked after the ``early`` CSR event.
+    /// - `late`: Callables invoked after the ``late`` CSR event.
+    ///
+    /// ## Notes
+    /// Each callable receives ``(ind, sperm, tick, deme_id)`` where the two
+    /// arrays are fresh copies of the current state; a nonzero return value
+    /// stops the run.
+    fn set_python_callbacks(
+        &mut self,
+        first: Vec<Py<PyAny>>,
+        early: Vec<Py<PyAny>>,
+        late: Vec<Py<PyAny>>,
+    ) {
+        self.hooks.python_callbacks = vec![first, early, late];
+    }
+
+    /// Clear all Python callbacks.
+    fn clear_python_callbacks(&mut self) {
+        self.hooks.python_callbacks = vec![Vec::new(), Vec::new(), Vec::new()];
+    }
+
     /// Reseed the Rust RNG used by stochastic sampling.
     ///
     /// ## Parameters
     /// - `seed`: New seed.
     fn reseed(&mut self, seed: u64) {
         self.rng = new_rng(seed);
+    }
+
+    /// Drain the accumulated set_param audit journal.
+    ///
+    /// Returns and clears every ``(tick, param_id, old, new)`` transition
+    /// committed by ``tick`` / ``run`` since the previous drain.  Rows are
+    /// change-only (same-value commits are not journaled) and ordered by
+    /// commit time.
+    ///
+    /// ## Returns
+    /// A list of ``(tick, param_id, old, new)`` tuples.
+    fn drain_eco_journal(&mut self) -> Vec<crate::hooks::EcoJournalRow> {
+        std::mem::take(&mut self.eco_journal)
     }
 
     /// Run the reproduction stage in place.
@@ -125,9 +331,10 @@ impl EngineSession {
         mut ind: PyReadwriteArray3<'_, f64>,
         mut sperm: PyReadwriteArray3<'_, f64>,
     ) -> PyResult<()> {
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let (ind_slice, sperm_slice) =
-            array_slices(&mut ind, &mut sperm, self.cfg.n_ages, self.cfg.n_ztypes)?;
-        lifecycle::reproduction(&mut self.rng, &self.cfg, ind_slice, sperm_slice)
+            array_slices(&mut ind, &mut sperm, cfg.n_ages, cfg.n_ztypes)?;
+        lifecycle::reproduction(&mut self.rng, &cfg, ind_slice, sperm_slice)
             .map_err(map_lifecycle_error)
     }
 
@@ -141,9 +348,10 @@ impl EngineSession {
         mut ind: PyReadwriteArray3<'_, f64>,
         mut sperm: PyReadwriteArray3<'_, f64>,
     ) -> PyResult<()> {
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let (ind_slice, sperm_slice) =
-            array_slices(&mut ind, &mut sperm, self.cfg.n_ages, self.cfg.n_ztypes)?;
-        lifecycle::survival(&mut self.rng, &self.cfg, ind_slice, sperm_slice)
+            array_slices(&mut ind, &mut sperm, cfg.n_ages, cfg.n_ztypes)?;
+        lifecycle::survival(&mut self.rng, &cfg, ind_slice, sperm_slice)
             .map_err(map_lifecycle_error)
     }
 
@@ -157,9 +365,10 @@ impl EngineSession {
         mut ind: PyReadwriteArray3<'_, f64>,
         mut sperm: PyReadwriteArray3<'_, f64>,
     ) -> PyResult<()> {
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let (ind_slice, sperm_slice) =
-            array_slices(&mut ind, &mut sperm, self.cfg.n_ages, self.cfg.n_ztypes)?;
-        lifecycle::aging(&self.cfg, ind_slice, sperm_slice);
+            array_slices(&mut ind, &mut sperm, cfg.n_ages, cfg.n_ztypes)?;
+        lifecycle::aging(&cfg, ind_slice, sperm_slice);
         Ok(())
     }
 
@@ -184,18 +393,11 @@ impl EngineSession {
         tick: i64,
         deme_id: i64,
     ) -> PyResult<i32> {
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let (ind_slice, sperm_slice) =
-            array_slices(&mut ind, &mut sperm, self.cfg.n_ages, self.cfg.n_ztypes)?;
-        lifecycle::run_tick(
-            &mut self.rng,
-            &self.cfg,
-            &self.hooks,
-            ind_slice,
-            sperm_slice,
-            tick,
-            deme_id,
-        )
-        .map_err(map_lifecycle_error)
+            array_slices(&mut ind, &mut sperm, cfg.n_ages, cfg.n_ztypes)?;
+        let result = self.run_with_eco(&cfg, ind_slice, sperm_slice, tick, deme_id);
+        result.map_err(map_lifecycle_error)
     }
 
     /// Run up to ``n_ticks`` complete ticks inside Rust.
@@ -219,13 +421,15 @@ impl EngineSession {
         record_interval: i64,
         observation_mask: Option<PyReadonlyArray4<'py, f64>>,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
-        // Copy the observation mask if present, run the Rust batch loop, and
-        // copy the flattened history into a NumPy 2-D array.
+        // Assemble the config from the owned contracts at the batch entry,
+        // copy the observation mask if present, run the Rust batch loop,
+        // and copy the flattened history into a NumPy 2-D array.
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let (ind_slice, sperm_slice) = array_slices(
             &mut individual_count,
             &mut sperm_storage,
-            self.cfg.n_ages,
-            self.cfg.n_ztypes,
+            cfg.n_ages,
+            cfg.n_ztypes,
         )?;
         let mask_vec = match observation_mask {
             Some(mask) => Some(
@@ -236,9 +440,23 @@ impl EngineSession {
             None => None,
         };
 
+        let mut eco_values = self.eco_values(0);
+
+        // Borrowed EcoCtx: run_batch commits set_param writes at every event
+        // boundary; after the batch the journal is drained into the
+        // session-owned audit trail for the Python adapter.
+        let mut eco_ctx = Some(lifecycle::EcoCtx {
+            bp: &self.blueprint,
+            params: &mut self.params,
+            genetics: &self.genetics,
+            deme: 0,
+            tick,
+            journal: Vec::new(),
+        });
+
         let (final_tick, flat_history, n_rows, was_stopped) = lifecycle::run_batch(
             &mut self.rng,
-            &self.cfg,
+            &cfg,
             &self.hooks,
             ind_slice,
             sperm_slice,
@@ -246,8 +464,14 @@ impl EngineSession {
             n_ticks,
             record_interval,
             mask_vec.as_deref(),
+            &mut eco_values,
+            &mut eco_ctx,
         )
         .map_err(map_lifecycle_error)?;
+
+        if let Some(ctx) = eco_ctx.as_mut() {
+            self.eco_journal.append(&mut ctx.journal);
+        }
 
         let n_cols = if n_rows == 0 {
             0
@@ -261,6 +485,182 @@ impl EngineSession {
             .map_err(|err| PyValueError::new_err(err.to_string()))?
             .copy_from_slice(&flat_history);
         Ok((final_tick, history, was_stopped))
+    }
+
+    /// Capture a memory checkpoint of everything the session owns.
+    ///
+    /// The state arrays are Python-owned, so they are passed in and returned
+    /// as flat copies; the RNG state is captured as four raw state words so
+    /// ``restore -> run`` *continues* the exact stream (continuation, not a
+    /// reseed).  The ecology section of the params is copied; the genetics
+    /// section is never rolled back (a checkpoint is a save, not an
+    /// uninstallation of genetic mods).
+    ///
+    /// ## Parameters
+    /// - `individual_count`: Current state array.
+    /// - `sperm_storage`: Current sperm array.
+    /// - `tick`: Current tick value.
+    ///
+    /// ## Returns
+    /// ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.
+    #[pyo3(signature = (individual_count, sperm_storage, tick))]
+    fn snapshot_state<'py>(
+        &self,
+        py: Python<'py>,
+        individual_count: numpy::PyReadonlyArray3<'py, f64>,
+        sperm_storage: numpy::PyReadonlyArray3<'py, f64>,
+        tick: i64,
+    ) -> PyResult<AgeSnapshot<'py>> {
+        let ind = individual_count
+            .as_slice()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let sperm = sperm_storage
+            .as_slice()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let ind_flat = PyArray1::from_slice(py, ind);
+        let sperm_flat = PyArray1::from_slice(py, sperm);
+        let rng_words = self.rng.state_words().to_vec();
+        let ecology = ecology_snapshot(py, &self.params)?;
+        Ok((tick, ind_flat, sperm_flat, rng_words, ecology))
+    }
+
+    /// Restore a memory checkpoint produced by [`EngineSession::snapshot_state`].    ///
+    /// Writes the state arrays back in place, rebuilds the RNG from the
+    /// captured state words (exact continuation), and restores the ecology
+    /// params section.  The genetics section is untouched.
+    ///
+    /// ## Parameters
+    /// - `individual_count`: Live state array, overwritten.
+    /// - `sperm_storage`: Live sperm array, overwritten.
+    /// - `tick`: Tick value carried by the checkpoint.
+    /// - `ind_flat`: Checkpoint individual counts.
+    /// - `sperm_flat`: Checkpoint sperm storage.
+    /// - `rng_words`: Four captured RNG state words.
+    /// - `ecology`: Checkpoint ecology dict.
+    ///
+    /// ## Returns
+    /// The restored tick value.
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` on array size, RNG word count, or ecology
+    /// field mismatch.
+    #[allow(clippy::too_many_arguments)] // Restores the full snapshot tuple in one call.
+    #[pyo3(signature = (individual_count, sperm_storage, tick, ind_flat, sperm_flat, rng_words, ecology))]
+    fn restore_state(
+        &mut self,
+        mut individual_count: PyReadwriteArray3<'_, f64>,
+        mut sperm_storage: PyReadwriteArray3<'_, f64>,
+        tick: i64,
+        ind_flat: numpy::PyReadonlyArray1<'_, f64>,
+        sperm_flat: numpy::PyReadonlyArray1<'_, f64>,
+        rng_words: Vec<u64>,
+        ecology: &Bound<'_, PyAny>,
+    ) -> PyResult<i64> {
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let ind_shape = individual_count.shape();
+        if ind_shape != [2, cfg.n_ages, cfg.n_ztypes] {
+            return Err(PyValueError::new_err(format!(
+                "individual_count shape must be [2, {}, {}], got {ind_shape:?}",
+                cfg.n_ages, cfg.n_ztypes
+            )));
+        }
+        let sperm_shape = sperm_storage.shape();
+        if sperm_shape != [cfg.n_ages, cfg.n_ztypes, cfg.n_ztypes] {
+            return Err(PyValueError::new_err(format!(
+                "sperm_storage shape must be [{}, {}, {}], got {sperm_shape:?}",
+                cfg.n_ages, cfg.n_ztypes, cfg.n_ztypes
+            )));
+        }
+        if rng_words.len() != 4 {
+            return Err(PyValueError::new_err(format!(
+                "rng_words must contain 4 state words, got {}",
+                rng_words.len()
+            )));
+        }
+        let ind_src = ind_flat
+            .as_slice()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let sperm_src = sperm_flat
+            .as_slice()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        if ind_src.len() != individual_count.len() || sperm_src.len() != sperm_storage.len() {
+            return Err(PyValueError::new_err(
+                "checkpoint arrays do not match the live state size",
+            ));
+        }
+        {
+            let ind = individual_count
+                .as_slice_mut()
+                .map_err(|err| PyValueError::new_err(err.to_string()))?;
+            ind.copy_from_slice(ind_src);
+            let sperm = sperm_storage
+                .as_slice_mut()
+                .map_err(|err| PyValueError::new_err(err.to_string()))?;
+            sperm.copy_from_slice(sperm_src);
+        }
+        let mut words = [0_u64; 4];
+        words.copy_from_slice(&rng_words);
+        self.rng = SessionRng::from_state_words(words);
+        restore_ecology(&mut self.params, &self.blueprint, ecology)?;
+        Ok(tick)
+    }
+}
+
+impl EngineSession {
+    /// Snapshot the canonical ECO param values for one deme column.
+    ///
+    /// ## Parameters
+    /// - `deme`: Deme column to read.
+    ///
+    /// ## Returns
+    /// A length-``N_ECO_PARAMS`` array in ``ECO_PARAM_COLUMNS`` order.
+    fn eco_values(&self, deme: usize) -> [f64; crate::hooks::N_ECO_PARAMS] {
+        let mut values = [0.0; crate::hooks::N_ECO_PARAMS];
+        for (id, slot) in values.iter_mut().enumerate() {
+            *slot = self.params.eco_value(id, deme);
+        }
+        values
+    }
+
+    /// Run one structured tick with a live ECO scratch and write-back.
+    ///
+    /// The EcoCtx commits set_param writes into the deme's ecology column
+    /// at every event boundary and re-assembles the config for the same
+    /// tick's later stages — the same granularity as the Python executor.
+    /// The tick's journal rows are drained into the session audit trail.
+    fn run_with_eco(
+        &mut self,
+        cfg: &SimConfig,
+        ind: &mut [f64],
+        sperm: &mut [f64],
+        tick: i64,
+        deme_id: i64,
+    ) -> Result<i32, String> {
+        let deme = deme_id.max(0) as usize;
+        let mut eco_values = self.eco_values(deme);
+        let mut ctx = Some(lifecycle::EcoCtx {
+            bp: &self.blueprint,
+            params: &mut self.params,
+            genetics: &self.genetics,
+            deme,
+            tick,
+            journal: Vec::new(),
+        });
+        let result = lifecycle::run_tick(
+            &mut self.rng,
+            cfg,
+            &self.hooks,
+            ind,
+            sperm,
+            tick,
+            deme_id,
+            &mut eco_values,
+            &mut ctx,
+        );
+        if let Some(ctx) = ctx.as_mut() {
+            self.eco_journal.append(&mut ctx.journal);
+        }
+        result
     }
 }
 
@@ -338,6 +738,18 @@ fn extract_i64_scalar(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
     value.call_method0("item")?.extract::<i64>()
 }
 
+/// Extract a Python bool attribute.
+///
+/// ## Parameters
+/// - `obj`: Python object.
+/// - `name`: Attribute name.
+///
+/// ## Returns
+/// The attribute as ``bool``.
+fn extract_bool_scalar(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<bool> {
+    obj.getattr(name)?.extract::<bool>()
+}
+
 impl HookProgram {
     /// Deserialize a Python CSR ``HookProgram`` into the Rust mirror.
     ///
@@ -348,12 +760,17 @@ impl HookProgram {
     /// A ``HookProgram`` with copied flat arrays.
     pub(crate) fn from_python(program: &Bound<'_, PyAny>) -> PyResult<Self> {
         let n_hooks = extract_i64_scalar(program, "n_hooks")?;
+        let op_types = extract_i64_array(program, "op_types_data")?;
+        let has_set_param = extract_bool_scalar(program, "has_set_param")?
+            || op_types
+                .iter()
+                .any(|&op| op == crate::hooks::OP_SET_PARAM_PUBLIC);
         Ok(Self {
             n_events: extract_i64_scalar(program, "n_events")?,
             n_hooks,
             hook_offsets: extract_i64_array(program, "hook_offsets")?,
             op_offsets: extract_i64_array(program, "op_offsets")?,
-            op_types: extract_i64_array(program, "op_types_data")?,
+            op_types,
             zidx_offsets: extract_i64_array(program, "zidx_offsets_data")?,
             zidx_data: extract_i64_array(program, "zidx_data")?,
             age_offsets: extract_i64_array(program, "age_offsets_data")?,
@@ -366,6 +783,17 @@ impl HookProgram {
             deme_selector_types: extract_i64_array(program, "deme_selector_types")?,
             deme_selector_offsets: extract_i64_array(program, "deme_selector_offsets")?,
             deme_selector_data: extract_i64_array(program, "deme_selector_data")?,
+            sp_param_ids: extract_i64_array(program, "sp_param_ids")?,
+            sp_every: extract_i64_array(program, "sp_every")?,
+            sp_start: extract_i64_array(program, "sp_start")?,
+            rpn_offsets: extract_i64_array(program, "rpn_offsets")?,
+            rpn_kinds: extract_i64_array(program, "rpn_kinds")?,
+            rpn_payload: extract_i64_array(program, "rpn_payload")?,
+            sp_literals: extract_f64_array(program, "sp_literals")?,
+            convert_source_z: extract_i64_array(program, "convert_source_z")?,
+            convert_target_z: extract_i64_array(program, "convert_target_z")?,
+            has_set_param,
+            ..Default::default()
         })
     }
 }

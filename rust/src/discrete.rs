@@ -3,25 +3,21 @@
 #![allow(clippy::needless_range_loop)] // Index loops mirror the Python reference for parity review.
 #![allow(clippy::too_many_arguments)] // Batch signature mirrors the Numba kernel tuple layout.
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use rand::rngs::SmallRng;
 
+use crate::contract::{Blueprint, Params, TensorSet};
+use crate::curves;
 use crate::hooks::HookProgram;
 use crate::rng::{
     binomial, clamp01, continuous_binomial, continuous_multinomial, continuous_poisson,
-    multinomial, poisson, EPS,
+    multinomial, poisson, SessionRng, EPS,
 };
 
 /// Juvenile growth mode: no density regulation.
 const NO_COMPETITION: i64 = 0;
 /// Juvenile growth mode: fixed carrying-capacity ceiling.
 const FIXED: i64 = 1;
-/// Juvenile growth mode: logistic density regulation.
-const LOGISTIC: i64 = 2;
-/// Juvenile growth mode: Beverton-Holt density regulation.
-const BEVERTON_HOLT: i64 = 3;
 /// Wright-Fisher mode: multinomial offspring sampling.
 const WF_MULTINOMIAL: i64 = 1;
 /// Wright-Fisher mode: Poisson offspring sampling.
@@ -29,7 +25,7 @@ const WF_POISSON: i64 = 2;
 /// Wright-Fisher mode: deterministic expected offspring counts.
 const WF_DETERMINISTIC: i64 = 3;
 
-/// Plain Rust snapshot of the discrete-generation ``DiscretePopulationConfig``.
+/// Plain Rust snapshot of the discrete-generation ``ModelDraft`` (discrete normalization).
 ///
 /// The Python config is copied once into plain Rust fields so discrete and
 /// Wright-Fisher kernels never touch Python objects.
@@ -77,198 +73,71 @@ pub struct DiscreteConfig {
     pub male_only_by_sex_chrom: Vec<bool>,
 }
 
-/// Build a ``PyValueError`` for an array shape mismatch.
-///
-/// ## Parameters
-/// - `name`: Attribute name.
-/// - `expected`: Expected shape description.
-/// - `got`: Actual shape.
-///
-/// ## Returns
-/// A ``PyValueError`` with a descriptive message.
-fn shape_error(name: &str, expected: &str, got: &[usize]) -> PyErr {
-    PyValueError::new_err(format!("{name} must have shape {expected}, got {got:?}"))
-}
-
-/// Extract a float64 config scalar, accepting 0-d NumPy arrays.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name.
-///
-/// ## Returns
-/// The scalar as ``f64``.
-fn extract_f64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<f64> {
-    let value = obj.getattr(name)?;
-    if let Ok(scalar) = value.extract::<f64>() {
-        return Ok(scalar);
-    }
-    value.call_method0("item")?.extract::<f64>()
-}
-
-/// Extract an int64 config scalar, accepting 0-d NumPy arrays.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name.
-///
-/// ## Returns
-/// The scalar as ``i64``.
-fn extract_i64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
-    let value = obj.getattr(name)?;
-    if let Ok(scalar) = value.extract::<i64>() {
-        return Ok(scalar);
-    }
-    value.call_method0("item")?.extract::<i64>()
-}
-
-/// Extract a 1-D float64 config array with an exact length check.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name.
-/// - `expected`: Required length.
-///
-/// ## Returns
-/// A ``Vec<f64>`` copy.
-fn extract_f64_1d(obj: &Bound<'_, PyAny>, name: &str, expected: usize) -> PyResult<Vec<f64>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray1<'_, f64>>()?;
-    if array.len() != expected {
-        return Err(shape_error(name, &format!("({expected},)"), array.shape()));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract a 2-D float64 config array with an exact shape check.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name.
-/// - `rows`: Required rows.
-/// - `cols`: Required columns.
-///
-/// ## Returns
-/// A ``Vec<f64>`` copy in row-major order.
-fn extract_f64_2d(
-    obj: &Bound<'_, PyAny>,
-    name: &str,
-    rows: usize,
-    cols: usize,
-) -> PyResult<Vec<f64>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray2<'_, f64>>()?;
-    let shape = array.shape();
-    if shape.len() != 2 || shape[0] != rows || shape[1] != cols {
-        return Err(shape_error(name, &format!("({rows}, {cols})"), shape));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract a 3-D float64 config array with an exact shape check.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name.
-/// - `d0`, `d1`, `d2`: Required dimensions.
-///
-/// ## Returns
-/// A ``Vec<f64>`` copy in row-major order.
-fn extract_f64_3d(
-    obj: &Bound<'_, PyAny>,
-    name: &str,
-    d0: usize,
-    d1: usize,
-    d2: usize,
-) -> PyResult<Vec<f64>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray3<'_, f64>>()?;
-    let shape = array.shape();
-    if shape.len() != 3 || shape[0] != d0 || shape[1] != d1 || shape[2] != d2 {
-        return Err(shape_error(name, &format!("({d0}, {d1}, {d2})"), shape));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract a 1-D boolean config array with an exact length check.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name.
-/// - `expected`: Required length.
-///
-/// ## Returns
-/// A ``Vec<bool>`` copy.
-fn extract_bool_1d(obj: &Bound<'_, PyAny>, name: &str, expected: usize) -> PyResult<Vec<bool>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray1<'_, bool>>()?;
-    if array.len() != expected {
-        return Err(shape_error(name, &format!("({expected},)"), array.shape()));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
 impl DiscreteConfig {
-    /// Build ``DiscreteConfig`` from a Python ``DiscretePopulationConfig`` object.
+    /// Assemble the discrete kernel config from the owned contracts.
+    ///
+    /// Mirrors the discrete normalization of the legacy ``from_python``:
+    /// per-generation scalars live in cells of the unified ``(2, n_ages)``
+    /// vectors (adult column 1, juvenile column 0).  The equilibrium
+    /// metrics are derived from the current params on every assembly.
     ///
     /// ## Parameters
-    /// - `config`: Python discrete config.
+    /// - `bp`: The frozen blueprint (discrete drafts normalize to
+    ///   ``n_ages == 2``).
+    /// - `params`: The current runtime parameters (columnized ecology).
+    /// - `genetics`: The shared genetics tables.
     ///
     /// ## Returns
-    /// A ``DiscreteConfig`` owning plain Rust copies.
+    /// A ``DiscreteConfig`` view consistent with the current contract values.
     ///
     /// ## Errors
-    /// Returns ``PyValueError`` if the config is not a valid discrete config.
-    pub fn from_python(config: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let n_ztypes = extract_i64(config, "n_ztypes")? as usize;
-        if config.getattr("n_ages")?.extract::<i64>()? != 2 {
-            return Err(PyValueError::new_err(
-                "discrete config must have n_ages == 2",
-            ));
+    /// Returns ``PyValueError`` when the blueprint is not discrete-shaped
+    /// or a params vector disagrees with the blueprint-declared size.
+    pub fn assemble(bp: &Blueprint, params: &Params, genetics: &TensorSet) -> PyResult<Self> {
+        if bp.n_ages != 2 {
+            return Err(PyValueError::new_err(format!(
+                "discrete blueprint must have n_ages == 2, got {}",
+                bp.n_ages
+            )));
         }
+        params.validate(bp)?;
+        genetics.validate(bp)?;
+        let (expected_competition_strength, expected_survival_rate) =
+            crate::equilibrate::equilibrium_metrics(bp, params, 0);
+        // Panmictic/discrete sessions carry length-1 columns; deme 0 is the
+        // only entry and its segment layout matches the pre-columnization
+        // flat vectors bit-for-bit (validate above guarantees the sizes).
+        let g = bp.n_ztypes;
+        let mating = &params.mating_rates[..4];
+        let survival = &params.survival_rates[..4];
         let cfg = Self {
-            n_ztypes,
-            stochastic: config.getattr("stochastic")?.extract::<bool>()?,
-            continuous_sampling: config.getattr("continuous_sampling")?.extract::<bool>()?,
-            female_adult_mating_rate: extract_f64(config, "female_adult_mating_rate")?,
-            male_adult_mating_rate: extract_f64(config, "male_adult_mating_rate")?,
-            reproduction_rate: extract_f64(config, "reproduction_rate")?,
-            eggs_per_female: extract_f64(config, "eggs_per_female")?,
-            sex_ratio: extract_f64(config, "sex_ratio")?,
-            female_age0_survival: extract_f64(config, "female_age0_survival")?,
-            male_age0_survival: extract_f64(config, "male_age0_survival")?,
-            has_sex_chromosomes: config.getattr("has_sex_chromosomes")?.extract::<bool>()?,
-            extreme_speed_mode: extract_i64(config, "extreme_speed_mode")?,
-            juvenile_growth_mode: extract_i64(config, "juvenile_growth_mode")?,
-            carrying_capacity: extract_f64(config, "carrying_capacity")?,
-            expected_competition_strength: extract_f64(config, "expected_competition_strength")?,
-            expected_survival_rate: extract_f64(config, "expected_survival_rate")?,
-            low_density_growth_rate: extract_f64(config, "low_density_growth_rate")?,
-            sexual_selection_fitness: extract_f64_2d(
-                config,
-                "sexual_selection_fitness",
-                n_ztypes,
-                n_ztypes,
-            )?,
-            offspring_tensor: extract_f64_3d(
-                config,
-                "offspring_tensor",
-                n_ztypes,
-                n_ztypes,
-                n_ztypes,
-            )?,
-            fecundity_f: extract_f64_1d(config, "fecundity_f", n_ztypes)?,
-            fecundity_m: extract_f64_1d(config, "fecundity_m", n_ztypes)?,
-            viability_f: extract_f64_1d(config, "viability_f", n_ztypes)?,
-            viability_m: extract_f64_1d(config, "viability_m", n_ztypes)?,
-            female_ztype_compatibility: extract_f64_1d(
-                config,
-                "female_ztype_compatibility",
-                n_ztypes,
-            )?,
-            male_ztype_compatibility: extract_f64_1d(config, "male_ztype_compatibility", n_ztypes)?,
-            female_only_by_sex_chrom: extract_bool_1d(
-                config,
-                "female_only_by_sex_chrom",
-                n_ztypes,
-            )?,
-            male_only_by_sex_chrom: extract_bool_1d(config, "male_only_by_sex_chrom", n_ztypes)?,
+            n_ztypes: g,
+            stochastic: bp.stochastic,
+            continuous_sampling: bp.continuous_sampling,
+            female_adult_mating_rate: mating[1],
+            male_adult_mating_rate: mating[2 + 1],
+            reproduction_rate: params.reproduction_rates[1],
+            eggs_per_female: params.eggs_per_female[0],
+            sex_ratio: params.sex_ratio[0],
+            female_age0_survival: survival[0],
+            male_age0_survival: survival[2],
+            has_sex_chromosomes: bp.has_sex_chromosomes,
+            extreme_speed_mode: bp.extreme_speed_mode,
+            juvenile_growth_mode: params.growth_mode[0],
+            carrying_capacity: params.carrying_capacity[0],
+            expected_competition_strength,
+            expected_survival_rate,
+            low_density_growth_rate: params.low_density_growth_rate[0],
+            sexual_selection_fitness: genetics.sexual_selection_fitness.clone(),
+            offspring_tensor: genetics.offspring_tensor.clone(),
+            fecundity_f: genetics.fecundity_fitness[..g].to_vec(),
+            fecundity_m: genetics.fecundity_fitness[g..(2 * g)].to_vec(),
+            viability_f: genetics.viability_fitness[..g].to_vec(),
+            viability_m: genetics.viability_fitness[(2 * g)..(3 * g)].to_vec(),
+            female_ztype_compatibility: genetics.female_ztype_compatibility.clone(),
+            male_ztype_compatibility: genetics.male_ztype_compatibility.clone(),
+            female_only_by_sex_chrom: bp.female_only_by_sex_chrom.clone(),
+            male_only_by_sex_chrom: bp.male_only_by_sex_chrom.clone(),
         };
         Ok(cfg)
     }
@@ -327,7 +196,7 @@ fn compute_mating_probability(cfg: &DiscreteConfig, male_counts: &[f64], out: &m
 /// - `mating_prob`: Precomputed mating probability matrix.
 /// - `pair_counts`: Output mated pair counts, accumulated in place.
 fn mate_discrete(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &DiscreteConfig,
     females: &[f64],
     mating_prob: &[f64],
@@ -393,7 +262,7 @@ fn mate_discrete(
 /// - `n_f`: Output female age-0 counts.
 /// - `n_m`: Output male age-0 counts.
 fn fertilize_discrete(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &DiscreteConfig,
     pair_counts: &[f64],
     n_f: &mut [f64],
@@ -539,7 +408,7 @@ fn fertilize_discrete(
 /// - `rng`: Random number generator.
 /// - `cfg`: Discrete config.
 /// - `ind`: Mutable discrete individual-count slice.
-pub fn reproduction(rng: &mut SmallRng, cfg: &DiscreteConfig, ind: &mut [f64]) {
+pub fn reproduction(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64]) {
     // Discrete reproduction pipeline:
     // 1. Build effective adult males.
     // 2. Build mating probabilities and sample pair counts.
@@ -585,35 +454,21 @@ fn scaling_factor(cfg: &DiscreteConfig, ind: &[f64]) -> f64 {
     let total_age_0: f64 = (0..g)
         .map(|z| ind[idx(0, 0, z, g)] + ind[idx(1, 0, z, g)])
         .sum();
-    match cfg.juvenile_growth_mode {
-        NO_COMPETITION => 1.0,
-        FIXED => {
-            if total_age_0 > 0.0 {
-                (cfg.carrying_capacity / total_age_0).min(1.0)
-            } else {
-                1.0
-            }
-        }
-        LOGISTIC => {
-            let ratio = if cfg.expected_competition_strength > 0.0 {
-                total_age_0 / cfg.expected_competition_strength
-            } else {
-                1.0
-            };
-            ((-ratio * (cfg.low_density_growth_rate - 1.0)) + cfg.low_density_growth_rate).max(0.0)
-                * cfg.expected_survival_rate
-        }
-        BEVERTON_HOLT => {
-            let ratio = if cfg.expected_competition_strength > 0.0 {
-                total_age_0 / cfg.expected_competition_strength
-            } else {
-                1.0
-            };
-            (cfg.low_density_growth_rate / (ratio * (cfg.low_density_growth_rate - 1.0) + 1.0))
-                * cfg.expected_survival_rate
-        }
-        _ => 1.0,
+    if cfg.juvenile_growth_mode == NO_COMPETITION {
+        return 1.0;
     }
+    curves::regulation_scaling(
+        cfg.juvenile_growth_mode,
+        total_age_0,
+        if cfg.juvenile_growth_mode == FIXED {
+            cfg.carrying_capacity
+        } else {
+            cfg.expected_competition_strength
+        },
+        cfg.low_density_growth_rate,
+        cfg.expected_survival_rate,
+    )
+    .unwrap_or(1.0)
 }
 
 /// Apply juvenile scaling by resampling age-0 counts.
@@ -623,7 +478,7 @@ fn scaling_factor(cfg: &DiscreteConfig, ind: &[f64]) -> f64 {
 /// - `cfg`: Discrete config.
 /// - `ind`: Mutable discrete individual-count slice.
 /// - `scaling`: Scaling factor.
-fn recruit_juveniles(rng: &mut SmallRng, cfg: &DiscreteConfig, ind: &mut [f64], scaling: f64) {
+fn recruit_juveniles(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64], scaling: f64) {
     // Resample age-0 counts to the scaled total;
     // stochastic uses multinomial, deterministic scales proportionally.
     let g = cfg.n_ztypes;
@@ -691,7 +546,7 @@ fn recruit_juveniles(rng: &mut SmallRng, cfg: &DiscreteConfig, ind: &mut [f64], 
 /// - `rng`: Random number generator.
 /// - `cfg`: Discrete config.
 /// - `ind`: Mutable discrete individual-count slice.
-pub fn survival(rng: &mut SmallRng, cfg: &DiscreteConfig, ind: &mut [f64]) {
+pub fn survival(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64]) {
     // Discrete survival applies density scaling first, then viability
     // survival separately for female and male age-0 individuals.
     let g = cfg.n_ztypes;
@@ -761,14 +616,27 @@ pub fn aging(_cfg: &DiscreteConfig, ind: &mut [f64]) {
 /// ## Returns
 /// ``Ok(0)`` for continue, ``Ok(1)`` if a hook requested stop, or an error string.
 pub fn run_tick(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &DiscreteConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
     tick: i64,
+    eco_values: &mut [f64],
+    eco_ctx: &mut Option<crate::lifecycle::EcoCtx<'_>>,
 ) -> Result<i32, String> {
     // One discrete tick follows: first hook -> reproduction -> early hook
     // -> survival -> late hook -> aging.
+    // Discrete tick order mirrors the age-structured engine; optional
+    // Python callbacks fire at each event boundary after the CSR hooks.
+    // With an EcoCtx, set_param writes are committed at each boundary and
+    // the config re-assembled so later stages of the same tick observe
+    // them (Python parity).  The ctx tick is re-stamped per tick so batch
+    // loops journal under the correct tick value.
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.tick = tick;
+    }
+    let mut rebuilt: Option<DiscreteConfig> = None;
+
     let mut result = hooks.execute_event(
         rng,
         0,
@@ -781,11 +649,22 @@ pub fn run_tick(
         cfg.stochastic,
         cfg.continuous_sampling,
         -1,
+        eco_values,
     );
+    if result == 0 {
+        result = hooks.fire_python_callbacks(0, ind, &mut [], tick, -1)?;
+    }
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.commit(eco_values)?;
+        if hooks.has_set_param {
+            rebuilt = Some(ctx.assemble_discrete()?);
+        }
+    }
     if result != 0 {
         return Ok(result);
     }
-    reproduction(rng, cfg, ind);
+    let cfg_after_first = rebuilt.as_ref().unwrap_or(cfg);
+    reproduction(rng, cfg_after_first, ind);
     result = hooks.execute_event(
         rng,
         1,
@@ -798,11 +677,22 @@ pub fn run_tick(
         cfg.stochastic,
         cfg.continuous_sampling,
         -1,
+        eco_values,
     );
+    if result == 0 {
+        result = hooks.fire_python_callbacks(1, ind, &mut [], tick, -1)?;
+    }
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.commit(eco_values)?;
+        if hooks.has_set_param {
+            rebuilt = Some(ctx.assemble_discrete()?);
+        }
+    }
     if result != 0 {
         return Ok(result);
     }
-    survival(rng, cfg, ind);
+    let cfg_after_early = rebuilt.as_ref().unwrap_or(cfg);
+    survival(rng, cfg_after_early, ind);
     result = hooks.execute_event(
         rng,
         2,
@@ -815,11 +705,22 @@ pub fn run_tick(
         cfg.stochastic,
         cfg.continuous_sampling,
         -1,
+        eco_values,
     );
+    if result == 0 {
+        result = hooks.fire_python_callbacks(2, ind, &mut [], tick, -1)?;
+    }
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.commit(eco_values)?;
+        if hooks.has_set_param {
+            rebuilt = Some(ctx.assemble_discrete()?);
+        }
+    }
     if result != 0 {
         return Ok(result);
     }
-    aging(cfg, ind);
+    let cfg_after_late = rebuilt.as_ref().unwrap_or(cfg);
+    aging(cfg_after_late, ind);
     Ok(0)
 }
 
@@ -836,7 +737,7 @@ pub fn run_tick(
 /// ## Returns
 /// ``Ok(())`` or an error string for an unknown WF mode.
 pub fn run_wf_tick(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &DiscreteConfig,
     ind: &mut [f64],
 ) -> Result<(), String> {
@@ -908,35 +809,20 @@ pub fn run_wf_tick(
     }
     if cfg.juvenile_growth_mode > 0 {
         let total: f64 = expected_f.iter().chain(expected_m.iter()).sum();
-        let sf = match cfg.juvenile_growth_mode {
-            FIXED => {
-                if total > 0.0 {
-                    (cfg.carrying_capacity / total).min(1.0)
-                } else {
-                    1.0
-                }
-            }
-            LOGISTIC => {
-                let ratio = if cfg.expected_competition_strength > 0.0 {
-                    total / cfg.expected_competition_strength
-                } else {
-                    1.0
-                };
-                ((-ratio * (cfg.low_density_growth_rate - 1.0)) + cfg.low_density_growth_rate)
-                    .max(0.0)
-                    * cfg.expected_survival_rate
-            }
-            BEVERTON_HOLT => {
-                let ratio = if cfg.expected_competition_strength > 0.0 {
-                    total / cfg.expected_competition_strength
-                } else {
-                    1.0
-                };
-                (cfg.low_density_growth_rate / (ratio * (cfg.low_density_growth_rate - 1.0) + 1.0))
-                    * cfg.expected_survival_rate
-            }
-            _ => 1.0,
-        };
+        // Same curve dispatch as the staged tick; for the fused Wright-Fisher
+        // update the "actual competition strength" is the full offspring total.
+        let sf = curves::regulation_scaling(
+            cfg.juvenile_growth_mode,
+            total,
+            if cfg.juvenile_growth_mode == FIXED {
+                cfg.carrying_capacity
+            } else {
+                cfg.expected_competition_strength
+            },
+            cfg.low_density_growth_rate,
+            cfg.expected_survival_rate,
+        )
+        .unwrap_or(1.0);
         for value in expected_f.iter_mut().chain(expected_m.iter_mut()) {
             *value *= sf;
         }
@@ -992,7 +878,7 @@ pub fn run_wf_tick(
 /// ## Returns
 /// ``(final_tick, flat_history, n_rows, was_stopped)``.
 pub fn run_batch(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &DiscreteConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
@@ -1001,6 +887,8 @@ pub fn run_batch(
     record_interval: i64,
     observation_mask: Option<&[f64]>,
     wf: bool,
+    eco_values: &mut [f64],
+    eco_ctx: &mut Option<crate::lifecycle::EcoCtx<'_>>,
 ) -> Result<(i64, Vec<f64>, usize, bool), String> {
     // Loop discrete or WF ticks in Rust with optional history recording.
     let g = cfg.n_ztypes;
@@ -1054,7 +942,7 @@ pub fn run_batch(
     }
     for _ in 0..n_ticks {
         let result = if wf {
-            let result = hooks.execute_event(
+            let mut result = hooks.execute_event(
                 rng,
                 0,
                 ind,
@@ -1066,14 +954,22 @@ pub fn run_batch(
                 cfg.stochastic,
                 cfg.continuous_sampling,
                 -1,
+                eco_values,
             );
+            if result == 0 {
+                result = hooks.fire_python_callbacks(0, ind, &mut [], current_tick, -1)?;
+            }
+            if let Some(ctx) = eco_ctx.as_mut() {
+                ctx.tick = current_tick;
+                ctx.commit(eco_values)?;
+            }
             if result != 0 {
                 return Ok((current_tick, history, n_rows, true));
             }
             run_wf_tick(rng, cfg, ind)?;
             0
         } else {
-            run_tick(rng, cfg, hooks, ind, current_tick)?
+            run_tick(rng, cfg, hooks, ind, current_tick, eco_values, eco_ctx)?
         };
         if result != 0 {
             return Ok((current_tick, history, n_rows, true));

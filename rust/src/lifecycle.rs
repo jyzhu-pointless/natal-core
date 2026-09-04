@@ -9,9 +9,11 @@
 //! The stage order mirrors ``natal.engine.lifecycle.run_structured_tick``:
 //! first hook → reproduction → early hook → survival → late hook → aging.
 
-use rand::rngs::SmallRng;
+use crate::rng::SessionRng;
 
 use crate::config::SimConfig;
+use crate::contract::{Blueprint, Params, TensorSet};
+use crate::curves;
 use crate::hooks::HookProgram;
 use crate::rng::{
     binomial, clamp01, continuous_binomial, continuous_multinomial, continuous_poisson,
@@ -22,10 +24,6 @@ use crate::rng::{
 const NO_COMPETITION: i64 = 0;
 /// Juvenile growth mode: fixed carrying-capacity ceiling.
 const FIXED: i64 = 1;
-/// Juvenile growth mode: logistic density regulation.
-const LOGISTIC: i64 = 2;
-/// Juvenile growth mode: Beverton-Holt density regulation.
-const BEVERTON_HOLT: i64 = 3;
 
 /// Row-major flat index for ``(sex, age, ztype)``.
 ///
@@ -103,7 +101,7 @@ fn compute_mating_probability_matrix(cfg: &SimConfig, male_counts: &[f64], out: 
 /// - `sperm`: Mutable sperm-storage slice.
 /// - `mating_prob`: Precomputed female x male mating probabilities.
 fn sample_mating(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &SimConfig,
     female_counts: &[f64],
     sperm: &mut [f64],
@@ -229,7 +227,13 @@ fn sample_mating(
 /// - `sperm`: Stored sperm slice.
 /// - `n_f`: Output female age-0 counts per zygote type.
 /// - `n_m`: Output male age-0 counts per zygote type.
-fn fertilize(rng: &mut SmallRng, cfg: &SimConfig, sperm: &[f64], n_f: &mut [f64], n_m: &mut [f64]) {
+fn fertilize(
+    rng: &mut SessionRng,
+    cfg: &SimConfig,
+    sperm: &[f64],
+    n_f: &mut [f64],
+    n_m: &mut [f64],
+) {
     // Convert stored sperm pairs into age-0 offspring:
     // - Egg count depends on female/male fecundity and female fertility.
     // - Stochastic reproduction uses binomial/poisson counts.
@@ -399,7 +403,7 @@ fn fertilize(rng: &mut SmallRng, cfg: &SimConfig, sperm: &[f64], n_f: &mut [f64]
 /// ## Returns
 /// ``Ok(())`` on success, or a descriptive error string for invalid states.
 pub fn reproduction(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &SimConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
@@ -491,55 +495,53 @@ pub fn reproduction(
 /// ## Returns
 /// A non-negative scaling factor.
 fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
-    // Juvenile density regulation by growth mode:
+    // Juvenile density regulation by growth mode, dispatched through the
+    // shared curve library with the Python reference operation order:
     // - NO_COMPETITION: 1.0 (no regulation).
     // - FIXED: cap total age-0 at carrying capacity.
-    // - LOGISTIC / BEVERTON_HOLT: use competition ratio and growth rate.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let mut total_age_0 = 0.0;
-    for ztype in 0..n_ztypes {
-        total_age_0 += ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)];
-        total_age_0 += ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)];
+    // - LINEAR / BEVERTON_HOLT / RICKER: curve at the competition ratio,
+    //   scaled by the equilibrium survival rate.
+    // Totals group by sex first (female row sum + male row sum), matching
+    // the Python reference's `f_row.sum() + m_row.sum()` — an interleaved
+    // accumulation rounds differently in the last ulp.
+    if cfg.juvenile_growth_mode == NO_COMPETITION {
+        return 1.0;
     }
-
-    match cfg.juvenile_growth_mode {
-        NO_COMPETITION => 1.0,
-        FIXED => {
-            if total_age_0 > 0.0 {
-                (cfg.carrying_capacity / total_age_0).min(1.0)
-            } else {
-                1.0
-            }
+    if cfg.juvenile_growth_mode == FIXED {
+        let mut female_sum = 0.0;
+        let mut male_sum = 0.0;
+        for ztype in 0..cfg.n_ztypes {
+            female_sum += ind[ind_idx(0, 0, ztype, cfg.n_ages, cfg.n_ztypes)];
+            male_sum += ind[ind_idx(1, 0, ztype, cfg.n_ages, cfg.n_ztypes)];
         }
-        LOGISTIC | BEVERTON_HOLT => {
-            let mut juvenile_counts = vec![0.0; cfg.new_adult_age];
-            for age in 0..cfg.new_adult_age {
-                for ztype in 0..n_ztypes {
-                    juvenile_counts[age] += ind[ind_idx(0, age, ztype, n_ages, n_ztypes)];
-                    juvenile_counts[age] += ind[ind_idx(1, age, ztype, n_ages, n_ztypes)];
-                }
-            }
-            let mut actual_comp = 0.0;
-            for age in 0..cfg.new_adult_age {
-                actual_comp +=
-                    juvenile_counts[age] * cfg.age_based_relative_competition_strength[age];
-            }
-            let competition_ratio = if cfg.expected_competition_strength > 0.0 {
-                actual_comp / cfg.expected_competition_strength
-            } else {
-                1.0
-            };
-            let r = cfg.low_density_growth_rate;
-            let actual_growth_rate = if cfg.juvenile_growth_mode == LOGISTIC {
-                (-competition_ratio * (r - 1.0) + r).max(0.0)
-            } else {
-                r / (competition_ratio * (r - 1.0) + 1.0)
-            };
-            actual_growth_rate * cfg.expected_survival_rate
-        }
-        _ => 1.0,
+        let total_age_0 = female_sum + male_sum;
+        return curves::regulation_scaling(FIXED, total_age_0, cfg.carrying_capacity, 0.0, 0.0)
+            .unwrap_or(1.0);
     }
+    // Compensatory family: blend juvenile counts below adulthood by the
+    // per-age competition weights, then evaluate the curve.
+    let mut juvenile_counts = vec![0.0; cfg.new_adult_age];
+    for age in 0..cfg.new_adult_age {
+        let mut female_sum = 0.0;
+        let mut male_sum = 0.0;
+        for ztype in 0..cfg.n_ztypes {
+            female_sum += ind[ind_idx(0, age, ztype, cfg.n_ages, cfg.n_ztypes)];
+            male_sum += ind[ind_idx(1, age, ztype, cfg.n_ages, cfg.n_ztypes)];
+        }
+        juvenile_counts[age] = female_sum + male_sum;
+    }
+    let mut actual_comp = 0.0;
+    for age in 0..cfg.new_adult_age {
+        actual_comp += juvenile_counts[age] * cfg.age_based_relative_competition_strength[age];
+    }
+    curves::regulation_scaling(
+        cfg.juvenile_growth_mode,
+        actual_comp,
+        cfg.expected_competition_strength,
+        cfg.low_density_growth_rate,
+        cfg.expected_survival_rate,
+    )
+    .unwrap_or(1.0)
 }
 
 /// Apply the juvenile scaling factor by resampling age-0 counts.
@@ -552,7 +554,7 @@ fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
 /// - `cfg`: Simulation config.
 /// - `ind`: Mutable individual-count flat slice.
 /// - `scaling`: Scaling factor from [`scaling_factor`].
-fn recruit_juveniles(rng: &mut SmallRng, cfg: &SimConfig, ind: &mut [f64], scaling: f64) {
+fn recruit_juveniles(rng: &mut SessionRng, cfg: &SimConfig, ind: &mut [f64], scaling: f64) {
     // Resample age-0 counts so the total equals total * scaling.
     // Stochastic mode uses multinomial/continuous multinomial;
     // deterministic mode scales each category proportionally.
@@ -562,7 +564,13 @@ fn recruit_juveniles(rng: &mut SmallRng, cfg: &SimConfig, ind: &mut [f64], scali
     let continuous = cfg.continuous_sampling;
 
     let mut combined = Vec::with_capacity(2 * n_ztypes);
-    let mut total = 0.0;
+    // Python parity: the reference computes `total` as the *grouped* sum
+    // `female_arr.sum() + male_arr.sum()` (used for `desired` and the
+    // deterministic scaling), while the stochastic probability normalizer
+    // divides by the sequential sum over the concatenation.  The two
+    // round differently in the last ulp, so both accumulations are kept.
+    let mut female_sum = 0.0;
+    let mut male_sum = 0.0;
     for sex in 0..2 {
         for ztype in 0..n_ztypes {
             let mut value = ind[ind_idx(sex, 0, ztype, n_ages, n_ztypes)];
@@ -570,9 +578,15 @@ fn recruit_juveniles(rng: &mut SmallRng, cfg: &SimConfig, ind: &mut [f64], scali
                 value = value.round();
             }
             combined.push(value);
-            total += value;
+            if sex == 0 {
+                female_sum += value;
+            } else {
+                male_sum += value;
+            }
         }
     }
+    let total = female_sum + male_sum;
+    let total_counts: f64 = combined.iter().sum();
     if total <= 0.0 {
         for sex in 0..2 {
             for ztype in 0..n_ztypes {
@@ -598,7 +612,7 @@ fn recruit_juveniles(rng: &mut SmallRng, cfg: &SimConfig, ind: &mut [f64], scali
 
     let mut probs = vec![0.0; combined.len()];
     for (prob, &count) in probs.iter_mut().zip(combined.iter()) {
-        *prob = count / total;
+        *prob = count / total_counts;
     }
     let mut draws = vec![0.0; combined.len()];
     if stochastic {
@@ -636,7 +650,7 @@ fn recruit_juveniles(rng: &mut SmallRng, cfg: &SimConfig, ind: &mut [f64], scali
 /// ## Returns
 /// ``Ok(())`` or an error if the state is inconsistent.
 fn sample_survival_with_sperm(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &SimConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
@@ -767,7 +781,7 @@ fn apply_survival_deterministic(
 /// ## Returns
 /// ``Ok(())`` on success, or an error string for invalid states.
 pub fn survival(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &SimConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
@@ -852,6 +866,91 @@ pub fn aging(cfg: &SimConfig, ind: &mut [f64], sperm: &mut [f64]) {
     }
 }
 
+/// Per-deme ``OP_SET_PARAM`` write-back context.
+///
+/// Owns a mutable borrow of the session's [`Params`] plus the immutable
+/// contract references needed to re-assemble a config.  After each event
+/// boundary the tick commits the ECO scratch into the deme's ecology
+/// column; when the hook program carries set_param ops, the tick also
+/// re-assembles its config so writes take effect on the **same tick's**
+/// later lifecycle stages — matching the Python executor, where the
+/// early-hook write is visible to survival within one tick.
+pub struct EcoCtx<'a> {
+    /// Blueprint providing dimensions for config assembly.
+    pub bp: &'a Blueprint,
+    /// Session-owned ecology columns (written via ``set_eco_value``); for
+    /// spatial ticks this is the deme's private single-deme local copy.
+    pub params: &'a mut Params,
+    /// Shared genetics tables for config assembly.
+    pub genetics: &'a TensorSet,
+    /// Deme column the writes target (0 for panmictic sessions and for
+    /// the per-deme local copies of spatial ticks).
+    pub deme: usize,
+    /// Current simulation tick, stamped onto journal rows.
+    pub tick: i64,
+    /// Audited committed transitions ``(tick, param_id, old, new)`` — one
+    /// row per event-boundary commit whose value actually changed.  The
+    /// owning session drains this at batch end and hands it to the Python
+    /// adapter so ``params_log`` stays complete on the Rust run path.
+    pub journal: Vec<crate::hooks::EcoJournalRow>,
+}
+
+impl EcoCtx<'_> {
+    /// Commit the ECO scratch into the deme's ecology column.
+    ///
+    /// Every value passes the wire bounds table first: a non-finite or
+    /// out-of-bounds RPN result (e.g. ``"K / 0"``) is rejected here with a
+    /// message naming the parameter, tick, and value instead of silently
+    /// entering the columns.  Actual value changes are journaled for the
+    /// session audit trail.
+    ///
+    /// ## Parameters
+    /// - `values`: Values written by the CSR interpreter.
+    ///
+    /// ## Returns
+    /// ``Ok(())``, or an error string for an invalid value.
+    pub fn commit(&mut self, values: &[f64]) -> Result<(), String> {
+        for (id, value) in values.iter().enumerate() {
+            if id >= crate::hooks::N_ECO_PARAMS {
+                break;
+            }
+            if let Err(reason) = crate::hooks::validate_eco_param(id, *value) {
+                return Err(format!(
+                    "set_param value out of bounds: {reason} (tick {})",
+                    self.tick
+                ));
+            }
+            let old = self.params.eco_value(id, self.deme);
+            if old != *value {
+                self.journal.push((self.tick, id, old, *value));
+            }
+            self.params.set_eco_value(id, self.deme, *value);
+        }
+        Ok(())
+    }
+
+    /// Re-assemble the age-structured config from current ecology.
+    ///
+    /// ## Returns
+    /// A fresh [`SimConfig`] reflecting committed set_param writes, or an
+    /// error string when assembly validation fails.
+    pub fn assemble(&self) -> Result<SimConfig, String> {
+        SimConfig::assemble_deme(self.bp, self.params, self.genetics, self.deme)
+            .map_err(|err| err.to_string())
+    }
+
+    /// Re-assemble the discrete-generation config from current ecology.
+    ///
+    /// ## Returns
+    /// A fresh [`DiscreteConfig`] reflecting committed set_param writes,
+    /// or an error string when assembly validation fails.
+    pub fn assemble_discrete(&self) -> Result<crate::discrete::DiscreteConfig, String> {
+        // DiscreteConfig reads the deme-0 column (panmictic sessions).
+        crate::discrete::DiscreteConfig::assemble(self.bp, self.params, self.genetics)
+            .map_err(|err| err.to_string())
+    }
+}
+
 /// Run one full age-structured tick with hooks in the reference stage order.
 ///
 /// Stage order: first hook -> reproduction -> early hook -> survival -> late
@@ -865,20 +964,37 @@ pub fn aging(cfg: &SimConfig, ind: &mut [f64], sperm: &mut [f64]) {
 /// - `sperm`: Mutable sperm-storage flat slice.
 /// - `tick`: Current tick.
 /// - `deme_id`: Current deme id.
+/// - `eco_values`: Live ECO scratch for ``OP_SET_PARAM``.
+/// - `eco_ctx`: Optional write-back context; when present, ECO writes are
+///   committed after each event boundary and the config is re-assembled
+///   for set_param programs (same-tick visibility, Python parity).
 ///
 /// ## Returns
 /// ``Ok(0)`` for continue, ``Ok(1)`` if a hook requested stop, or an error string.
 pub fn run_tick(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &SimConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
     sperm: &mut [f64],
     tick: i64,
     deme_id: i64,
+    eco_values: &mut [f64],
+    eco_ctx: &mut Option<EcoCtx<'_>>,
 ) -> Result<i32, String> {
     // One structured tick follows the Python reference order:
     // first hook -> reproduction -> early hook -> survival -> late hook -> aging.
+    // Optional Python callbacks fire at each event boundary after the CSR
+    // hooks; a nonzero callback result stops the run.  With an EcoCtx,
+    // set_param writes are committed at each boundary and the config is
+    // re-assembled so later stages of the same tick observe them.
+    // The ctx tick is re-stamped here so batch loops journal every tick
+    // under its own tick value (the ctx outlives one batch, not one tick).
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.tick = tick;
+    }
+    let mut rebuilt: Option<SimConfig> = None;
+
     let mut result = hooks.execute_event(
         rng,
         0,
@@ -891,12 +1007,23 @@ pub fn run_tick(
         cfg.stochastic,
         cfg.continuous_sampling,
         deme_id,
+        eco_values,
     );
+    if result == 0 {
+        result = hooks.fire_python_callbacks(0, ind, sperm, tick, deme_id)?;
+    }
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.commit(eco_values)?;
+        if hooks.has_set_param {
+            rebuilt = Some(ctx.assemble()?);
+        }
+    }
     if result != 0 {
         return Ok(result);
     }
 
-    reproduction(rng, cfg, ind, sperm)?;
+    let cfg_after_first: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    reproduction(rng, cfg_after_first, ind, sperm)?;
 
     result = hooks.execute_event(
         rng,
@@ -910,12 +1037,23 @@ pub fn run_tick(
         cfg.stochastic,
         cfg.continuous_sampling,
         deme_id,
+        eco_values,
     );
+    if result == 0 {
+        result = hooks.fire_python_callbacks(1, ind, sperm, tick, deme_id)?;
+    }
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.commit(eco_values)?;
+        if hooks.has_set_param {
+            rebuilt = Some(ctx.assemble()?);
+        }
+    }
     if result != 0 {
         return Ok(result);
     }
 
-    survival(rng, cfg, ind, sperm)?;
+    let cfg_after_early: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    survival(rng, cfg_after_early, ind, sperm)?;
 
     result = hooks.execute_event(
         rng,
@@ -929,12 +1067,23 @@ pub fn run_tick(
         cfg.stochastic,
         cfg.continuous_sampling,
         deme_id,
+        eco_values,
     );
+    if result == 0 {
+        result = hooks.fire_python_callbacks(2, ind, sperm, tick, deme_id)?;
+    }
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.commit(eco_values)?;
+        if hooks.has_set_param {
+            rebuilt = Some(ctx.assemble()?);
+        }
+    }
     if result != 0 {
         return Ok(result);
     }
 
-    aging(cfg, ind, sperm);
+    let cfg_after_late: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    aging(cfg_after_late, ind, sperm);
     Ok(0)
 }
 
@@ -955,11 +1104,17 @@ pub fn run_tick(
 /// - `n_ticks`: Number of ticks to run.
 /// - `record_interval`: Record every N ticks; 0 disables recording.
 /// - `observation_mask`: Optional observation mask.
+/// - `eco_values`: Live scratch slice for ``OP_SET_PARAM`` evaluation.
+/// - `eco_ctx`: Optional write-back context (borrowed, not consumed); when
+///   present, ECO writes are committed and the config re-assembled at every
+///   event boundary of every tick (matching the Python lifecycle
+///   granularity).  The caller keeps ownership so it can drain
+///   ``eco_ctx.journal`` into its session audit trail after the batch.
 ///
 /// ## Returns
 /// ``(final_tick, flat_history, n_rows, was_stopped)``.
 pub fn run_batch(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     cfg: &SimConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
@@ -968,6 +1123,8 @@ pub fn run_batch(
     n_ticks: i64,
     record_interval: i64,
     observation_mask: Option<&[f64]>,
+    eco_values: &mut [f64],
+    eco_ctx: &mut Option<EcoCtx<'_>>,
 ) -> Result<(i64, Vec<f64>, usize, bool), String> {
     // Loop n_ticks entirely in Rust.
     // When recording is enabled, append a history row at the requested interval.
@@ -1038,7 +1195,20 @@ pub fn run_batch(
     }
 
     for _ in 0..n_ticks {
-        let result = run_tick(rng, cfg, hooks, ind, sperm, current_tick, -1)?;
+        // With an EcoCtx, run_tick commits ECO writes and re-assembles the
+        // config at every event boundary (matching the Python lifecycle);
+        // without one the batch cfg stays frozen for the whole batch.
+        let result = run_tick(
+            rng,
+            cfg,
+            hooks,
+            ind,
+            sperm,
+            current_tick,
+            -1,
+            eco_values,
+            eco_ctx,
+        )?;
         if result != 0 {
             return Ok((current_tick, history, n_rows, true));
         }

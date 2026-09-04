@@ -11,10 +11,16 @@ crate-type = ["cdylib"]
 
 [dependencies]
 numpy = "0.23.0"
-pyo3 = { version = "0.23.5", features = ["extension-module"] }
+pyo3 = { version = "0.23.5", features = [] }
+
 rand = "0.10.2"
 rand_distr = "0.6.0"
 rayon = "1.10"
+
+[features]
+# The extension-module feature links against the Python interpreter, which
+# breaks plain `cargo test` linking; maturin builds enable it (pyproject).
+extension-module = ["pyo3/extension-module"]
 
 [profile.release]
 codegen-units = 1

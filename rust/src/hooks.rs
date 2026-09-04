@@ -7,7 +7,9 @@
 #![allow(clippy::needless_range_loop)] // Index loops mirror the CSR kernel for parity review.
 #![allow(clippy::too_many_arguments)] // execute_event mirrors the HookProgram flat-array signature.
 
-use rand::rngs::SmallRng;
+use crate::rng::SessionRng;
+use numpy::{PyArray1, PyArrayMethods};
+use pyo3::prelude::*;
 
 use crate::rng::{binomial, clamp01, continuous_binomial, EPS};
 
@@ -27,6 +29,72 @@ const OP_STOP_IF_ZERO: i64 = 6;
 const OP_STOP_IF_BELOW: i64 = 7;
 const OP_STOP_IF_ABOVE: i64 = 8;
 const OP_STOP_IF_EXTINCTION: i64 = 9;
+const OP_SET_PARAM: i64 = 10;
+const OP_CONVERT: i64 = 11;
+
+// RPN value-expression token kinds mirror ``natal.hooks.types`` (RPN_*).
+const RPN_LITERAL: i64 = 0;
+const RPN_PARAM: i64 = 1;
+const RPN_ADD: i64 = 2;
+const RPN_SUB: i64 = 3;
+const RPN_MUL: i64 = 4;
+const RPN_DIV: i64 = 5;
+
+/// Number of fixed ecology params addressable by ``OP_SET_PARAM``.
+/// Mirrors ``ECO_PARAM_NAMES`` in ``natal.hooks.types`` (order included).
+pub const N_ECO_PARAMS: usize = 5;
+
+/// Public alias of the ``OP_SET_PARAM`` opcode for cross-module checks
+/// (e.g. session deserialization flagging programs with param writes).
+pub const OP_SET_PARAM_PUBLIC: i64 = 10;
+
+/// One audited ``OP_SET_PARAM`` transition handed to the session:
+/// ``(tick, param_id, old, new)``, recorded only when the committed value
+/// actually changed.  Spatial sessions wrap rows with the deme id (see
+/// ``spatial::SpatialEcoJournalRow``).
+pub type EcoJournalRow = (i64, usize, f64, f64);
+
+/// Validity bounds per ECO param id — the wire mirror of the Python
+/// ``natal/parameters.jsonc`` scalar ``bounds`` for the five
+/// runtime-mutable ecology scalars, in ``ECO_PARAM_COLUMNS`` id order.
+///
+/// ``EcoCtx::commit`` rejects non-finite or out-of-bounds writes with this
+/// table, so an inf/nan RPN result can never silently enter the session
+/// columns (parity with the Python flush channel's bounds validation).
+/// **Sync discipline**: when a bound changes in ``parameters.jsonc``, this
+/// table and the locking unit test below must change in the same commit.
+pub const ECO_PARAM_BOUNDS: [(f64, f64); N_ECO_PARAMS] = [
+    (0.0, 1e12), // carrying_capacity
+    (0.0, 1e6),  // eggs_per_female
+    (0.0, 1.0),  // sex_ratio
+    (0.0, 1.0),  // sperm_displacement_rate
+    (0.0, 1e6),  // low_density_growth_rate
+];
+
+/// Validate one ECO param value against the wire bounds table.
+///
+/// ## Parameters
+/// - `id`: Index into ``ECO_PARAM_COLUMNS`` (clamped defensively).
+/// - `value`: Candidate committed value.
+///
+/// ## Returns
+/// ``Ok(())`` when finite and within bounds; otherwise an ``Err`` message
+/// naming the parameter and its allowed interval (mirrors the Python
+/// ``'<name>' requires a value in [lo, hi], got <v>`` wording).
+pub fn validate_eco_param(id: usize, value: f64) -> Result<(), String> {
+    let idx = id.min(N_ECO_PARAMS - 1);
+    let (lo, hi) = ECO_PARAM_BOUNDS[idx];
+    if value.is_finite() && lo <= value && value <= hi {
+        return Ok(());
+    }
+    Err(format!(
+        "'{}' requires a value in [{}, {}], got {}",
+        crate::contract::ECO_PARAM_COLUMNS[idx],
+        lo,
+        hi,
+        value
+    ))
+}
 
 // Condition opcodes mirror ``natal.hooks.types`` (atomic 0..6, RPN 100+).
 const COND_ALWAYS: i64 = 0;
@@ -77,6 +145,102 @@ pub struct HookProgram {
     pub deme_selector_types: Vec<i64>,
     pub deme_selector_offsets: Vec<i64>,
     pub deme_selector_data: Vec<i64>,
+    // OP_SET_PARAM data area (per-op columns; -1 = not a set_param op).
+    pub sp_param_ids: Vec<i64>,
+    pub sp_every: Vec<i64>,
+    pub sp_start: Vec<i64>,
+    // RPN token stream (CSR via rpn_offsets) + shared literal pool.
+    pub rpn_offsets: Vec<i64>,
+    pub rpn_kinds: Vec<i64>,
+    pub rpn_payload: Vec<i64>,
+    pub sp_literals: Vec<f64>,
+    // OP_CONVERT data area (single-ZType endpoints per op; -1 otherwise).
+    pub convert_source_z: Vec<i64>,
+    pub convert_target_z: Vec<i64>,
+    /// True when any op is ``OP_SET_PARAM``; lets sessions rebuild their
+    /// per-tick config so in-run parameter writes take effect on the next
+    /// tick (matching the Python lifecycle granularity).
+    pub has_set_param: bool,
+    /// Optional Python callables per in-tick event (first, early, late),
+    /// fired at the event boundary after the CSR hooks ran.  Empty lists
+    /// keep the kernels callback-free; each callable receives
+    /// ``(ind, sperm, tick, deme_id)`` and a nonzero return stops the run.
+    /// Each callback receives private copies of the arrays, and the copies
+    /// are written back after the call so hook state mutations take effect.
+    pub python_callbacks: Vec<Vec<Py<PyAny>>>,
+}
+
+impl HookProgram {
+    /// Fire the Python callbacks registered for one event boundary.
+    ///
+    /// ## Parameters
+    /// - `event`: Event index (0 first, 1 early, 2 late).
+    /// - `ind`: Current individual-count flat slice.  Each callback receives
+    ///   a private copy; mutations are written back into this slice after
+    ///   the call so later callbacks and lifecycle stages observe them.
+    /// - `sperm`: Current sperm-storage flat slice (same copy/write-back
+    ///   semantics as *ind*; often empty for discrete models).
+    /// - `tick`: Current tick.
+    /// - `deme_id`: Current deme id.
+    ///
+    /// ## Returns
+    /// ``Ok(0)`` to continue, ``Ok(nonzero)`` when a callback requested a
+    /// stop, or an error string when a callback raised.
+    ///
+    /// ## Notes
+    /// The GIL is already held inside every pymethod, so ``with_gil`` here
+    /// is a cheap re-entry, not a lock acquisition from a foreign thread.
+    /// The write-back keeps Python-callback semantics identical across the
+    /// Rust, Numba, and reference backends: a hook's state writes are
+    /// visible to subsequent hooks and lifecycle stages.
+    pub fn fire_python_callbacks(
+        &self,
+        event: usize,
+        ind: &mut [f64],
+        sperm: &mut [f64],
+        tick: i64,
+        deme_id: i64,
+    ) -> Result<i32, String> {
+        let Some(callbacks) = self.python_callbacks.get(event) else {
+            return Ok(0);
+        };
+        if callbacks.is_empty() {
+            return Ok(0);
+        }
+        Python::with_gil(|py| {
+            for callback in callbacks {
+                // Copies: PyArray1::from_slice allocates a fresh buffer, so
+                // the callback can never alias the live kernel memory.
+                let ind_arr = PyArray1::from_slice(py, ind);
+                let sperm_arr = PyArray1::from_slice(py, sperm);
+                let result: i32 = callback
+                    .bind(py)
+                    .call1((ind_arr.clone(), sperm_arr.clone(), tick, deme_id))
+                    .and_then(|value| value.extract())
+                    .map_err(|err| format!("python lifecycle callback failed: {err}"))?;
+                // Write back the (possibly mutated) copies so hook state
+                // writes take effect, matching the Python-backend semantics.
+                let ind_mutated: Vec<f64> = ind_arr
+                    .readonly()
+                    .as_slice()
+                    .map_err(|err| err.to_string())?
+                    .to_vec();
+                ind.copy_from_slice(&ind_mutated);
+                if !sperm.is_empty() {
+                    let sperm_mutated: Vec<f64> = sperm_arr
+                        .readonly()
+                        .as_slice()
+                        .map_err(|err| err.to_string())?
+                        .to_vec();
+                    sperm.copy_from_slice(&sperm_mutated);
+                }
+                if result != 0 {
+                    return Ok(result);
+                }
+            }
+            Ok(0)
+        })
+    }
 }
 
 /// Evaluate one atomic tick condition.
@@ -227,7 +391,7 @@ fn deme_matches(program: &HookProgram, hook_idx: usize, deme_id: i64) -> bool {
 /// ## Returns
 /// The number of survivors as ``f64``.
 fn sample_survivors(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     n_base: f64,
     survival_prob: f64,
     stochastic_flag: bool,
@@ -262,7 +426,7 @@ fn sample_survivors(
 /// ## Returns
 /// The new count for the slot.
 fn apply_target_without_sperm(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     current_count: f64,
     target_count: f64,
     stochastic_flag: bool,
@@ -311,7 +475,7 @@ fn apply_target_without_sperm(
 /// ## Panics
 /// Panics if the state is inconsistent (`n_virgins < 0`).
 fn apply_target_with_sperm(
-    rng: &mut SmallRng,
+    rng: &mut SessionRng,
     current_count: f64,
     target_count: f64,
     sperm_row: &mut [f64],
@@ -373,6 +537,98 @@ fn apply_target_with_sperm(
     new_sperm_sum + sample_survivors(rng, n_virgins, survival_prob, true, dirichlet_flag)
 }
 
+/// Evaluate one ``OP_SET_PARAM`` RPN value program with a stack machine.
+///
+/// Mirrors ``_eval_rpn_value`` in the Python CSR kernel bit-for-bit:
+/// operands push literals or the current ecology values; operators pop
+/// two and push the result.  Division by zero follows explicit IEEE-754
+/// semantics (``x/0`` = ±inf, ``0/0`` = nan) so the two interpreters and
+/// the Numba kernel never diverge through error handling.
+///
+/// ## Parameters
+/// - `program`: Hook program carrying the RPN token arrays.
+/// - `rpn_start`: First token index of this op's program.
+/// - `rpn_end`: One past the last token index.
+/// - `eco_values`: Current ecology values indexed by ECO param id.
+///
+/// ## Returns
+/// The evaluated expression value.
+fn eval_rpn_value(
+    program: &HookProgram,
+    rpn_start: usize,
+    rpn_end: usize,
+    eco_values: &[f64],
+) -> f64 {
+    let mut stack: Vec<f64> = Vec::with_capacity(rpn_end - rpn_start + 1);
+    for idx in rpn_start..rpn_end {
+        let kind = program.rpn_kinds[idx];
+        match kind {
+            RPN_LITERAL => stack.push(program.sp_literals[program.rpn_payload[idx] as usize]),
+            RPN_PARAM => stack.push(eco_values[program.rpn_payload[idx] as usize]),
+            _ => {
+                let rhs = stack.pop().unwrap_or(f64::NAN);
+                let lhs = stack.pop().unwrap_or(f64::NAN);
+                let value = match kind {
+                    RPN_ADD => lhs + rhs,
+                    RPN_SUB => lhs - rhs,
+                    RPN_MUL => lhs * rhs,
+                    RPN_DIV => {
+                        // Explicit IEEE semantics (see docstring).
+                        if rhs == 0.0 {
+                            if lhs > 0.0 {
+                                f64::INFINITY
+                            } else if lhs < 0.0 {
+                                f64::NEG_INFINITY
+                            } else {
+                                f64::NAN
+                            }
+                        } else {
+                            lhs / rhs
+                        }
+                    }
+                    _ => f64::NAN,
+                };
+                stack.push(value);
+            }
+        }
+    }
+    stack.first().copied().unwrap_or(f64::NAN)
+}
+
+/// Return how many of `n_base` individuals convert at `prob`.
+///
+/// Shares the sampling conventions of [`sample_survivors`] so
+/// ``OP_CONVERT`` draws come from the same CSR sampling channel as the
+/// Python kernel's ``_convert_count``.
+///
+/// ## Parameters
+/// - `rng`: Random number generator.
+/// - `n_base`: Count eligible for conversion.
+/// - `prob`: Per-individual conversion probability.
+/// - `stochastic_flag`: Whether to sample stochastically.
+/// - `dirichlet_flag`: Whether continuous sampling is enabled.
+///
+/// ## Returns
+/// The converted count (continuous in Dirichlet mode).
+fn convert_count(
+    rng: &mut SessionRng,
+    n_base: f64,
+    prob: f64,
+    stochastic_flag: bool,
+    dirichlet_flag: bool,
+) -> f64 {
+    if n_base <= 0.0 {
+        return 0.0;
+    }
+    if stochastic_flag {
+        if dirichlet_flag {
+            return continuous_binomial(rng, n_base, prob);
+        }
+        return binomial(rng, n_base.round() as i64, prob);
+    }
+    n_base * prob
+}
+
 impl HookProgram {
     /// Execute all CSR hooks for one lifecycle event in priority order.
     ///
@@ -392,12 +648,18 @@ impl HookProgram {
     /// - `stochastic`: Stochastic sampling flag.
     /// - `continuous_sampling`: Continuous sampling flag.
     /// - `deme_id`: Current deme id.
+    /// - `eco_values`: Live scratch slice indexed by ``ECO_PARAM_NAMES``
+    ///   position for ``OP_SET_PARAM``: the interpreter evaluates RPN
+    ///   expressions against the current values and writes new values
+    ///   back into this slice; the session owns the write-back into its
+    ///   ecology columns.
     ///
     /// ## Returns
     /// ``RESULT_CONTINUE`` (0) or ``RESULT_STOP`` (1) if a stop operation triggered.
+    #[allow(clippy::too_many_arguments)] // Mirrors the Python flat-array kernel signature.
     pub fn execute_event(
         &self,
-        rng: &mut SmallRng,
+        rng: &mut SessionRng,
         event_id: i64,
         individual_count: &mut [f64],
         sperm_storage: &mut [f64],
@@ -408,6 +670,7 @@ impl HookProgram {
         stochastic: bool,
         continuous_sampling: bool,
         deme_id: i64,
+        eco_values: &mut [f64],
     ) -> i32 {
         // Iterate hooks in serialized order, respecting deme selectors.
         // For each operation: evaluate condition, apply mutation or stop check.
@@ -481,7 +744,12 @@ impl HookProgram {
                                     _ => current,
                                 };
 
-                                individual_count[flat] = if sex_idx == 0 {
+                                individual_count[flat] = if sex_idx == 0
+                                    && !sperm_storage.is_empty()
+                                {
+                                    // Models without a sperm dimension (discrete
+                                    // generation) pass an empty slice; virgin
+                                    // females there have no storage to displace.
                                     let row = &mut sperm_storage[(age * n_ztypes + zidx) * n_ztypes
                                         ..(age * n_ztypes + zidx + 1) * n_ztypes];
                                     apply_target_with_sperm(
@@ -501,6 +769,98 @@ impl HookProgram {
                                         continuous_sampling,
                                     )
                                 };
+                            }
+                        }
+                    }
+                } else if op_type == OP_SET_PARAM {
+                    // Schedule check + RPN evaluation + eco write.  The
+                    // interpreter only computes; the session owns the
+                    // write-back into its ecology columns.
+                    let start_tick = self.sp_start[op_idx];
+                    let every_ticks = self.sp_every[op_idx];
+                    if tick >= start_tick && (tick - start_tick) % every_ticks == 0 {
+                        let rpn_start = self.rpn_offsets[op_idx] as usize;
+                        let rpn_end = self.rpn_offsets[op_idx + 1] as usize;
+                        let value = eval_rpn_value(self, rpn_start, rpn_end, eco_values);
+                        let param_id = self.sp_param_ids[op_idx];
+                        if param_id >= 0 && (param_id as usize) < eco_values.len() {
+                            eco_values[param_id as usize] = value;
+                        }
+                    }
+                } else if op_type == OP_CONVERT {
+                    // One-to-one probabilistic ZType migration: males move
+                    // plain counts; females move the virgin part and every
+                    // sperm bucket atomically (female label follows the
+                    // row, male axis untouched).  Every moved unit is
+                    // subtracted from the source and added to the target,
+                    // so totals are conserved by construction.
+                    let src_z = self.convert_source_z[op_idx] as usize;
+                    let dst_z = self.convert_target_z[op_idx] as usize;
+                    let prob = param;
+                    if src_z < n_ztypes && dst_z < n_ztypes {
+                        let has_sperm = !sperm_storage.is_empty();
+                        for age in 0..n_ages {
+                            let male_flat = (n_ages + age) * n_ztypes + src_z;
+                            let moved_male = convert_count(
+                                rng,
+                                individual_count[male_flat],
+                                prob,
+                                stochastic,
+                                continuous_sampling,
+                            );
+                            individual_count[male_flat] -= moved_male;
+                            individual_count[(n_ages + age) * n_ztypes + dst_z] += moved_male;
+
+                            if has_sperm {
+                                // Virgin count is fixed before the bucket
+                                // loop: the loop moves buckets out of the
+                                // source row, so the pre-loop row sum is
+                                // the mated total.
+                                let mut sperm_row_sum = 0.0;
+                                for mz in 0..n_ztypes {
+                                    sperm_row_sum +=
+                                        sperm_storage[(age * n_ztypes + src_z) * n_ztypes + mz];
+                                }
+                                let mut moved_mated = 0.0;
+                                for mz in 0..n_ztypes {
+                                    let bucket_flat = (age * n_ztypes + src_z) * n_ztypes + mz;
+                                    let moved_bucket = convert_count(
+                                        rng,
+                                        sperm_storage[bucket_flat],
+                                        prob,
+                                        stochastic,
+                                        continuous_sampling,
+                                    );
+                                    sperm_storage[bucket_flat] -= moved_bucket;
+                                    sperm_storage[(age * n_ztypes + dst_z) * n_ztypes + mz] +=
+                                        moved_bucket;
+                                    moved_mated += moved_bucket;
+                                }
+                                let virgins = (individual_count[age * n_ztypes + src_z]
+                                    - sperm_row_sum)
+                                    .max(0.0);
+                                let moved_virgin = convert_count(
+                                    rng,
+                                    virgins,
+                                    prob,
+                                    stochastic,
+                                    continuous_sampling,
+                                );
+                                individual_count[age * n_ztypes + src_z] -=
+                                    moved_mated + moved_virgin;
+                                individual_count[age * n_ztypes + dst_z] +=
+                                    moved_mated + moved_virgin;
+                            } else {
+                                let female_flat = age * n_ztypes + src_z;
+                                let moved_female = convert_count(
+                                    rng,
+                                    individual_count[female_flat],
+                                    prob,
+                                    stochastic,
+                                    continuous_sampling,
+                                );
+                                individual_count[female_flat] -= moved_female;
+                                individual_count[age * n_ztypes + dst_z] += moved_female;
                             }
                         }
                     }
@@ -551,5 +911,327 @@ impl HookProgram {
             }
         }
         RESULT_CONTINUE
+    }
+}
+
+#[cfg(test)]
+mod setparam_convert_tests {
+    //! Unit tests for the OP_SET_PARAM RPN interpreter and the
+    //! OP_CONVERT migration, mirroring the Python-side invariants.
+
+    use super::*;
+
+    /// Build a minimal one-hook program with the given op payload.
+    fn single_op_program(op_type: i64, param: f64) -> HookProgram {
+        // One hook on event 1, one op with all-deme selectors, a dummy
+        // ztype/age span, and an always-true condition.
+        HookProgram {
+            n_events: 4,
+            n_hooks: 1,
+            hook_offsets: vec![0, 0, 1, 1, 1],
+            op_offsets: vec![0, 1],
+            op_types: vec![op_type],
+            params: vec![param],
+            zidx_offsets: vec![0, 1],
+            zidx_data: vec![0],
+            age_offsets: vec![0, 1],
+            age_data: vec![0],
+            sex_masks: vec![false, false],
+            condition_offsets: vec![0, 1],
+            condition_types: vec![COND_ALWAYS],
+            condition_params: vec![0],
+            deme_selector_types: vec![0],
+            deme_selector_offsets: vec![0, 0],
+            ..HookProgram::default()
+        }
+    }
+
+    fn seeded() -> SessionRng {
+        crate::rng::new_rng(42)
+    }
+
+    /// The wire bounds table is locked against ``natal/parameters.jsonc``:
+    /// every row must match the jsonc scalar bounds for the corresponding
+    /// ``ECO_PARAM_COLUMNS`` entry, or the Rust commit gate would accept (or
+    /// reject) values the Python flush channel treats differently.
+    #[test]
+    fn eco_param_bounds_match_jsonc_wire_contract() {
+        assert_eq!(
+            crate::contract::ECO_PARAM_COLUMNS,
+            [
+                "carrying_capacity",
+                "eggs_per_female",
+                "sex_ratio",
+                "sperm_displacement_rate",
+                "low_density_growth_rate"
+            ],
+            "bounds rows are indexed by ECO_PARAM_COLUMNS order"
+        );
+        let expected = [
+            (0.0, 1e12), // carrying_capacity
+            (0.0, 1e6),  // eggs_per_female
+            (0.0, 1.0),  // sex_ratio
+            (0.0, 1.0),  // sperm_displacement_rate
+            (0.0, 1e6),  // low_density_growth_rate
+        ];
+        for (id, (got, want)) in ECO_PARAM_BOUNDS.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(got, want, "bounds row {id}");
+        }
+    }
+
+    /// Validation accepts boundary values and rejects non-finite /
+    /// out-of-bounds ones with a message naming the parameter.
+    #[test]
+    fn validate_eco_param_accepts_bounds_and_rejects_inf_nan() {
+        assert!(validate_eco_param(0, 0.0).is_ok());
+        assert!(validate_eco_param(0, 1e12).is_ok());
+        assert!(validate_eco_param(2, 1.0).is_ok());
+        let inf_err = validate_eco_param(0, f64::INFINITY).unwrap_err();
+        assert!(
+            inf_err.contains("carrying_capacity") && inf_err.contains("inf"),
+            "message names the parameter and the offending value: {inf_err}"
+        );
+        assert!(validate_eco_param(1, f64::NAN).is_err());
+        assert!(validate_eco_param(2, 1.5).is_err());
+        assert!(validate_eco_param(3, -0.1).is_err());
+        assert!(validate_eco_param(4, 2e6).is_err());
+    }
+
+    #[test]
+    fn rpn_evaluates_expressions_against_current_values() {
+        // "K * 0.95" with K = 200 -> 190.  Tokens: [param0, lit0, mul].
+        let mut program = single_op_program(OP_SET_PARAM, 0.0);
+        program.sp_param_ids = vec![0];
+        program.sp_every = vec![1];
+        program.sp_start = vec![0];
+        program.rpn_offsets = vec![0, 3];
+        program.rpn_kinds = vec![RPN_PARAM, RPN_LITERAL, RPN_MUL];
+        program.rpn_payload = vec![0, 0, 0];
+        program.sp_literals = vec![0.95];
+
+        let mut eco = [200.0, 0.0, 0.0, 0.0, 0.0];
+        let mut rng = seeded();
+        let mut ind = vec![0.0; 2];
+        let result = program.execute_event(
+            &mut rng,
+            1,
+            &mut ind,
+            &mut [],
+            2,
+            1,
+            1,
+            5,
+            false,
+            false,
+            0,
+            &mut eco,
+        );
+        assert_eq!(result, RESULT_CONTINUE);
+        assert!((eco[0] - 190.0).abs() < 1e-12, "K * 0.95 with K=200 -> 190");
+    }
+
+    #[test]
+    fn rpn_division_by_zero_follows_ieee_semantics() {
+        // "1 / (K - K)" with K = 50 -> 1 / 0 -> +inf.
+        let mut program = single_op_program(OP_SET_PARAM, 0.0);
+        program.sp_param_ids = vec![0];
+        program.sp_every = vec![1];
+        program.sp_start = vec![0];
+        program.rpn_offsets = vec![0, 5];
+        program.rpn_kinds = vec![RPN_LITERAL, RPN_PARAM, RPN_PARAM, RPN_SUB, RPN_DIV];
+        program.rpn_payload = vec![0, 0, 0, 0, 0];
+        program.sp_literals = vec![1.0];
+
+        let mut eco = [50.0, 0.0, 0.0, 0.0, 0.0];
+        let mut rng = seeded();
+        let mut ind = vec![0.0; 2];
+        program.execute_event(
+            &mut rng,
+            1,
+            &mut ind,
+            &mut [],
+            2,
+            1,
+            1,
+            0,
+            false,
+            false,
+            0,
+            &mut eco,
+        );
+        assert!(
+            eco[0].is_infinite() && eco[0] > 0.0,
+            "1/0 -> +inf, got {}",
+            eco[0]
+        );
+    }
+
+    #[test]
+    fn set_param_respects_every_and_start_schedule() {
+        // every=10, start=5: fires at ticks 5, 15, 25 — not 0..4 or 10.
+        let mut program = single_op_program(OP_SET_PARAM, 0.0);
+        program.sp_param_ids = vec![0];
+        program.sp_every = vec![10];
+        program.sp_start = vec![5];
+        program.rpn_offsets = vec![0, 1];
+        program.rpn_kinds = vec![RPN_LITERAL];
+        program.rpn_payload = vec![0];
+        program.sp_literals = vec![-1.0];
+
+        for tick in [0_i64, 4, 5, 10, 14, 15, 24, 25] {
+            let mut eco = [7.0, 0.0, 0.0, 0.0, 0.0];
+            let mut rng = seeded();
+            let mut ind = vec![0.0; 2];
+            program.execute_event(
+                &mut rng,
+                1,
+                &mut ind,
+                &mut [],
+                2,
+                1,
+                1,
+                tick,
+                false,
+                false,
+                0,
+                &mut eco,
+            );
+            let expected = if tick >= 5 && (tick - 5) % 10 == 0 {
+                -1.0
+            } else {
+                7.0
+            };
+            assert_eq!(eco[0], expected, "tick {tick}");
+        }
+    }
+
+    #[test]
+    fn deterministic_convert_conserves_totals_with_sperm() {
+        // 2 ages, 3 ztypes, sperm (age, female_z, male_z).
+        let mut program = single_op_program(OP_CONVERT, 0.25);
+        program.convert_source_z = vec![0];
+        program.convert_target_z = vec![1];
+
+        let n_ages = 2;
+        let n_ztypes = 3;
+        let mut ind = vec![0.0; 2 * n_ages * n_ztypes];
+        let mut sperm = vec![0.0; n_ages * n_ztypes * n_ztypes];
+        // Female A|A: 20 per age (6 mated via sperm buckets, 14 virgin).
+        // Male A|A: 15 per age.
+        for age in 0..n_ages {
+            ind[age * n_ztypes] = 20.0;
+            ind[(n_ages + age) * n_ztypes] = 15.0;
+            sperm[age * n_ztypes * n_ztypes + 1] = 3.0;
+            sperm[age * n_ztypes * n_ztypes + 2] = 3.0;
+        }
+        let ind_before = ind.clone();
+        let sperm_before = sperm.clone();
+        let total_before: f64 = ind.iter().sum::<f64>() + sperm.iter().sum::<f64>();
+
+        let mut rng = seeded();
+        let mut eco = [0.0; N_ECO_PARAMS];
+        let result = program.execute_event(
+            &mut rng, 1, &mut ind, &mut sperm, 2, n_ages, n_ztypes, 0, false, false, 0, &mut eco,
+        );
+        assert_eq!(result, RESULT_CONTINUE);
+
+        let total_after: f64 = ind.iter().sum::<f64>() + sperm.iter().sum::<f64>();
+        assert!(
+            (total_before - total_after).abs() < 1e-12,
+            "total conserved"
+        );
+
+        // Males: 15 -> 11.25 per age (25 % deterministic migration).
+        for age in 0..n_ages {
+            assert!(
+                (ind[(n_ages + age) * n_ztypes] - 11.25).abs() < 1e-12,
+                "male deterministic migration"
+            );
+            assert!(
+                (ind[(n_ages + age) * n_ztypes + 1] - 3.75).abs() < 1e-12,
+                "male target gains exactly the moved count"
+            );
+            // Females: virgins 14 and each 3-count sperm bucket migrate at
+            // 25 % -> 0.75 + 0.75 + 3.5 = 5.0 moved, 15.0 remain.
+            assert!(
+                (ind[age * n_ztypes] - 15.0).abs() < 1e-12,
+                "female source after migration"
+            );
+            assert!(
+                (ind[age * n_ztypes + 1] - 5.0).abs() < 1e-12,
+                "female target after migration"
+            );
+        }
+        // Per-bucket atomicity: source bucket + target bucket unchanged sum.
+        for age in 0..n_ages {
+            for mz in 0..n_ztypes {
+                let src = age * n_ztypes * n_ztypes + mz;
+                let dst = (age * n_ztypes + 1) * n_ztypes + mz;
+                assert!(
+                    (sperm[src] + sperm[dst] - (sperm_before[src] + sperm_before[dst])).abs()
+                        < 1e-12,
+                    "bucket ({age}, 0, {mz}) conserved"
+                );
+            }
+        }
+        // The male axis of every sperm row is untouched.
+        for mz in 0..n_ztypes {
+            let col_before: f64 = (0..n_ages)
+                .map(|age| sperm_before[age * n_ztypes * n_ztypes + mz])
+                .sum();
+            let col_after: f64 = (0..n_ages)
+                .map(|age| {
+                    sperm[age * n_ztypes * n_ztypes + mz]
+                        + sperm[(age * n_ztypes + 1) * n_ztypes + mz]
+                        + sperm[(age * n_ztypes + 2) * n_ztypes + mz]
+                })
+                .sum();
+            assert!(
+                (col_before - col_after).abs() < 1e-12,
+                "male sperm axis {mz} frozen"
+            );
+        }
+        let _ = ind_before;
+    }
+
+    #[test]
+    fn stochastic_convert_conservs_expectation() {
+        let mut program = single_op_program(OP_CONVERT, 0.5);
+        program.convert_source_z = vec![0];
+        program.convert_target_z = vec![2];
+
+        let n_ztypes = 3;
+        let trials = 400;
+        let mut moved_sum = 0.0;
+        // Distinct seed per trial: re-using one seed would repeat the
+        // same draw and make the mean a single sample.
+        for trial in 0..trials {
+            let mut ind = vec![0.0; 2 * n_ztypes];
+            ind[0] = 100.0; // female A|A, age 0, no sperm
+            let mut rng = crate::rng::new_rng(1_000 + trial as u64);
+            let mut eco = [0.0; N_ECO_PARAMS];
+            program.execute_event(
+                &mut rng,
+                1,
+                &mut ind,
+                &mut [],
+                2,
+                1,
+                n_ztypes,
+                0,
+                true,
+                false,
+                0,
+                &mut eco,
+            );
+            moved_sum += ind[2];
+        }
+        let mean = moved_sum / trials as f64;
+        // 100 females * 0.5 = 50 expected; 3-sigma of Binomial(100, .5)
+        // averaged over 400 trials is ~0.06 * 5 = loose bound 2.5.
+        assert!(
+            (mean - 50.0).abs() < 2.5,
+            "expected 50 moved on average, got {mean}"
+        );
     }
 }

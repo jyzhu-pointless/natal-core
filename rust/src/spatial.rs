@@ -3,22 +3,48 @@
 //! The module runs the per-deme age-structured lifecycle over a stacked state,
 //! supports heterogeneous config banks, and implements both adjacency-based
 //! and topology-kernel migration in deterministic and stochastic forms.
+//!
+//! Per-deme RNG streams derive from the base seed via ``seed ^ deme_id``
+//! (XOR keeps every base-seed bit present in each stream).
 
 #![allow(clippy::needless_range_loop)] // Index loops mirror the Python reference for parity review.
 #![allow(clippy::too_many_arguments)] // Migration helpers mirror the Numba kernel signatures.
 
-use rand::rngs::SmallRng;
 use rayon::prelude::*;
 
 use crate::config::SimConfig;
+use crate::contract::{Blueprint, Params, TensorSet};
 use crate::hooks::HookProgram;
 use crate::lifecycle;
-use crate::rng::new_rng;
+use crate::rng::{new_rng, SessionRng};
+
+/// One audited spatial set_param transition: ``(deme, tick, param_id, old,
+/// new)`` — the per-deme wrapper around
+/// [`crate::hooks::EcoJournalRow`], because spatial EcoCtx instances are
+/// per-deme locals whose journals must carry the owning deme id.
+pub type SpatialEcoJournalRow = (usize, i64, usize, f64, f64);
+
+/// Cut this deme's local ecology copy when the program writes params.
+///
+/// When the program carries set_param ops, every parallel deme ticks
+/// against a private single-deme copy of its ecology column (parallel
+/// demes cannot share ``&mut Params``).  ``commit`` journals and writes
+/// the local column, ``assemble`` re-reads it, so later stages of the
+/// **same tick** observe the write — the granularity the Python per-deme
+/// lifecycle has always had.  Programs without set_param get ``None``
+/// (zero overhead, identical numerics).
+fn local_params(hooks: &HookProgram, params: &Params, deme: usize) -> Option<Params> {
+    if hooks.has_set_param {
+        Some(params.single_deme(deme))
+    } else {
+        None
+    }
+}
 
 /// Run one age-structured tick for every deme in parallel (homogeneous config).
 ///
 /// The stacked state is split into per-deme chunks; each deme gets an
-/// independent RNG derived from ``seed + deme_id``.
+/// independent RNG derived from ``seed ^ deme_id``.
 ///
 /// ## Parameters
 /// - `cfg`: Shared simulation config.
@@ -28,9 +54,19 @@ use crate::rng::new_rng;
 /// - `sperm_all`: Stacked sperm-storage slice.
 /// - `n_demes`: Number of demes.
 /// - `tick`: Current tick.
+/// - `bp`: Blueprint backing config re-assembly (set_param programs).
+/// - `params`: Session ecology columns the local copies are cut from.
+/// - `genetics`: Shared genetics tables for config re-assembly.
+/// - `journal`: Session audit sink, extended with this tick's per-deme
+///   set_param transitions in deme order.
 ///
 /// ## Returns
 /// ``Ok(())`` or an error string if a deme hook stops or shapes mismatch.
+///
+/// ## Panics
+/// Panics (via slicing) if the ecology columns do not actually hold
+/// ``n_demes`` entries; sessions validate that at construction.
+#[allow(clippy::too_many_arguments)] // Session boundary mirror of the panmictic tick API.
 pub fn run_spatial_tick(
     cfg: &SimConfig,
     hooks: &HookProgram,
@@ -39,9 +75,14 @@ pub fn run_spatial_tick(
     sperm_all: &mut [f64],
     n_demes: usize,
     tick: i64,
+    eco_all: &mut [f64],
+    bp: &Blueprint,
+    params: &Params,
+    genetics: &TensorSet,
+    journal: &mut Vec<SpatialEcoJournalRow>,
 ) -> Result<(), String> {
     // Split stacked state into per-deme chunks and run each deme tick in
-    // parallel with an independent RNG derived from seed + deme id.
+    // parallel with an independent RNG derived from seed ^ deme id.
     let n_ages = cfg.n_ages;
     let n_ztypes = cfg.n_ztypes;
     let ind_stride = 2 * n_ages * n_ztypes;
@@ -56,18 +97,56 @@ pub fn run_spatial_tick(
             sperm_chunks.len()
         ));
     }
+    // Per-deme ECO scratch rows (N_ECO_PARAMS wide) for OP_SET_PARAM;
+    // chunk boundaries make the parallel deme writes disjoint.
+    let mut eco_chunks: Vec<&mut [f64]> = eco_all.chunks_mut(crate::hooks::N_ECO_PARAMS).collect();
 
-    let results: Vec<Result<i32, String>> = ind_chunks
+    let results: Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)> = ind_chunks
         .par_iter_mut()
         .zip(sperm_chunks.par_iter_mut())
+        .zip(eco_chunks.par_iter_mut())
         .enumerate()
-        .map(|(deme_id, (ind, sperm))| {
-            let mut rng: SmallRng = new_rng(seed.wrapping_add(deme_id as u64));
-            lifecycle::run_tick(&mut rng, cfg, hooks, ind, sperm, tick, deme_id as i64)
+        .map(|(deme_id, ((ind, sperm), eco))| {
+            let mut rng: SessionRng = new_rng(crate::rng::stream_seed(seed, deme_id as i64));
+            let mut local = local_params(hooks, params, deme_id);
+            let mut ctx = local.as_mut().map(|local_params| lifecycle::EcoCtx {
+                bp,
+                params: local_params,
+                genetics,
+                // The local copy has exactly one column: writes target index 0.
+                deme: 0,
+                tick,
+                journal: Vec::new(),
+            });
+            let result = lifecycle::run_tick(
+                &mut rng,
+                cfg,
+                hooks,
+                ind,
+                sperm,
+                tick,
+                deme_id as i64,
+                eco,
+                &mut ctx,
+            );
+            let rows = ctx.map(|ctx| {
+                // The local copy's final values are the deme's tick result:
+                // reflect them into the eco scratch row the session reads
+                // for its column write-back (multi-event writes included).
+                for id in 0..crate::hooks::N_ECO_PARAMS {
+                    eco[id] = ctx.params.eco_value(id, 0);
+                }
+                ctx.journal
+                    .into_iter()
+                    .map(|(t, id, old, new)| (deme_id, t, id, old, new))
+                    .collect::<Vec<SpatialEcoJournalRow>>()
+            });
+            (result, rows.unwrap_or_default())
         })
-        .collect::<Vec<Result<i32, String>>>();
+        .collect::<Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)>>();
 
-    for result in results {
+    for (result, rows) in results {
+        journal.extend(rows);
         let code = result?;
         if code != 0 {
             return Err(format!("deme hook requested stop with code {code}"));
@@ -76,36 +155,51 @@ pub fn run_spatial_tick(
     Ok(())
 }
 
-/// Run one tick for every deme with per-deme configs from a config bank.
+/// Run one tick for every deme with one flat config per deme.
+///
+/// The configs slice is index-aligned with the demes: deme *d* consumes
+/// ``configs[d]`` (its own ecology column entry plus its shared genetics
+/// variant, already assembled by the session).
 ///
 /// ## Parameters
-/// - `configs`: Config bank.
+/// - `configs`: Per-deme configs (length equals the deme count).
 /// - `hooks`: CSR hook program.
-/// - `deme_config_ids`: Per-deme config index.
 /// - `seed`: Base RNG seed.
 /// - `ind_all`: Stacked individual-count slice.
 /// - `sperm_all`: Stacked sperm-storage slice.
 /// - `tick`: Current tick.
+/// - `bp`: Blueprint backing config re-assembly (set_param programs).
+/// - `params`: Columnized session ecology the local copies are cut from.
+/// - `variants`: Genetics variant bank shared across demes.
+/// - `deme_variants`: Per-deme index into the variant bank.
+/// - `journal`: Session audit sink, extended with this tick's per-deme
+///   set_param transitions in deme order.
 ///
 /// ## Returns
 /// ``Ok(())`` or an error string.
+#[allow(clippy::too_many_arguments)] // Session boundary mirror of the panmictic tick API.
 pub fn run_spatial_tick_heterogeneous(
     configs: &[SimConfig],
     hooks: &HookProgram,
-    deme_config_ids: &[usize],
     seed: u64,
     ind_all: &mut [f64],
     sperm_all: &mut [f64],
     tick: i64,
+    eco_all: &mut [f64],
+    bp: &Blueprint,
+    params: &Params,
+    variants: &[TensorSet],
+    deme_variants: &[usize],
+    journal: &mut Vec<SpatialEcoJournalRow>,
 ) -> Result<(), String> {
-    // Like run_spatial_tick, but each deme looks up its own config from
-    // the config bank via deme_config_ids.
-    if configs.is_empty() || deme_config_ids.is_empty() {
+    // Like run_spatial_tick, but each deme consumes its own pre-assembled
+    // per-deme config.
+    if configs.is_empty() {
         return Err(
             "heterogeneous spatial run requires at least one config and one deme".to_string(),
         );
     }
-    let n_demes = deme_config_ids.len();
+    let n_demes = configs.len();
     let first = &configs[0];
     let n_ages = first.n_ages;
     let n_ztypes = first.n_ztypes;
@@ -121,25 +215,72 @@ pub fn run_spatial_tick_heterogeneous(
             sperm_chunks.len()
         ));
     }
+    if params.n_demes != n_demes || deme_variants.len() != n_demes {
+        return Err(format!(
+            "heterogeneous spatial run requires {n_demes} ecology columns and variant ids, got {} and {}",
+            params.n_demes,
+            deme_variants.len()
+        ));
+    }
 
-    let results: Vec<Result<i32, String>> = ind_chunks
+    // Per-deme ECO scratch rows (N_ECO_PARAMS wide) for OP_SET_PARAM.
+    let mut eco_chunks: Vec<&mut [f64]> = eco_all.chunks_mut(crate::hooks::N_ECO_PARAMS).collect();
+
+    let results: Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)> = ind_chunks
         .par_iter_mut()
         .zip(sperm_chunks.par_iter_mut())
+        .zip(eco_chunks.par_iter_mut())
+        .zip(configs.par_iter())
         .enumerate()
-        .map(|(deme_id, (ind, sperm))| {
-            let cfg_idx = *deme_config_ids.get(deme_id).ok_or("missing config id")?;
-            let cfg = configs.get(cfg_idx).ok_or("config id out of range")?;
+        .map(|(deme_id, (((ind, sperm), eco), cfg))| {
             if cfg.n_ages != n_ages || cfg.n_ztypes != n_ztypes {
-                return Err(format!(
-                    "config {cfg_idx} dimensions do not match the stacked state"
-                ));
+                return (
+                    Err(format!(
+                        "config for deme {deme_id} dimensions do not match the stacked state"
+                    )),
+                    Vec::new(),
+                );
             }
-            let mut rng: SmallRng = new_rng(seed.wrapping_add(deme_id as u64));
-            lifecycle::run_tick(&mut rng, cfg, hooks, ind, sperm, tick, deme_id as i64)
+            let genetics = &variants[deme_variants[deme_id]];
+            let mut rng: SessionRng = new_rng(crate::rng::stream_seed(seed, deme_id as i64));
+            let mut local = local_params(hooks, params, deme_id);
+            let mut ctx = local.as_mut().map(|local_params| lifecycle::EcoCtx {
+                bp,
+                params: local_params,
+                genetics,
+                // The local copy has exactly one column: writes target index 0.
+                deme: 0,
+                tick,
+                journal: Vec::new(),
+            });
+            let result = lifecycle::run_tick(
+                &mut rng,
+                cfg,
+                hooks,
+                ind,
+                sperm,
+                tick,
+                deme_id as i64,
+                eco,
+                &mut ctx,
+            );
+            let rows = ctx.map(|ctx| {
+                // Local final values back into the eco scratch row the
+                // session reads for its column write-back.
+                for id in 0..crate::hooks::N_ECO_PARAMS {
+                    eco[id] = ctx.params.eco_value(id, 0);
+                }
+                ctx.journal
+                    .into_iter()
+                    .map(|(t, id, old, new)| (deme_id, t, id, old, new))
+                    .collect::<Vec<SpatialEcoJournalRow>>()
+            });
+            (result, rows.unwrap_or_default())
         })
-        .collect::<Vec<Result<i32, String>>>();
+        .collect::<Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)>>();
 
-    for result in results {
+    for (result, rows) in results {
+        journal.extend(rows);
         let code = result?;
         if code != 0 {
             return Err(format!("deme hook requested stop with code {code}"));
@@ -148,35 +289,56 @@ pub fn run_spatial_tick_heterogeneous(
     Ok(())
 }
 
-/// Deterministically move individuals and stored sperm across an adjacency matrix.
+/// Deterministically move individuals and stored sperm along a CSR routing table.
 ///
-/// Outbound counts are ``value * rate`` and are distributed by adjacency
-/// weights.  Female virgins and stored sperm are migrated separately from males.
+/// Outbound counts are ``value * rate`` and are distributed by the frozen
+/// CSR weights folded onto the Blueprint at build time.  Female virgins and
+/// stored sperm are migrated separately from males.
 ///
 /// ## Returns
 /// ``(out_ind, out_sperm)`` new stacked arrays.
-pub fn migrate_adjacency_deterministic(
+pub fn migrate_csr_deterministic(
     ind_all: &[f64],
     sperm_all: &[f64],
-    adjacency: &[f64],
+    indptr: &[i64],
+    dest_idx: &[i64],
+    weights: &[f64],
     rate: &[f64],
+    stay_after: bool,
     n_demes: usize,
     n_ages: usize,
     n_ztypes: usize,
 ) -> Result<(Vec<f64>, Vec<f64>), String> {
     // For each source deme, compute outbound individuals/sperm using the
-    // per-age migration rate, then distribute them by adjacency weights.
-    // Males and stored sperm are handled separately from female virgins.
+    // per-deme/per-sex/per-age migration rate, then distribute them along
+    // the CSR entries in stored order.  Males and stored sperm are handled
+    // separately from female virgins.
     let ind_stride = 2 * n_ages * n_ztypes;
-    if adjacency.len() != n_demes * n_demes {
-        return Err("adjacency must be a dense (n_demes, n_demes) matrix".to_string());
+    if indptr.len() != n_demes + 1 {
+        return Err(format!(
+            "migration indptr length {} does not match n_demes + 1 ({})",
+            indptr.len(),
+            n_demes + 1
+        ));
+    }
+    if rate.len() != n_demes * 2 * n_ages {
+        return Err(format!(
+            "migration rate length {} does not match (n_demes, 2, n_ages) = {}",
+            rate.len(),
+            n_demes * 2 * n_ages
+        ));
     }
     let mut out_ind = vec![0.0; ind_all.len()];
     let mut out_sperm = vec![0.0; sperm_all.len()];
 
     for src in 0..n_demes {
+        let row_start = indptr[src] as usize;
+        let row_end = indptr[src + 1] as usize;
+
         for age in 0..n_ages {
-            let migration_rate = if rate.len() == 1 { rate[0] } else { rate[age] };
+            // Female virgins (sex 0) and their stored sperm move at the
+            // female rate so the virgin/stored bookkeeping stays consistent.
+            let female_rate = rate[src * 2 * n_ages + age];
             for female_ztype in 0..n_ztypes {
                 let mut stored_total = 0.0;
                 for male_ztype in 0..n_ztypes {
@@ -190,13 +352,27 @@ pub fn migrate_adjacency_deterministic(
                     virgin_count = 0.0;
                 }
 
-                let outbound = virgin_count * migration_rate;
-                let stay = virgin_count - outbound;
+                let outbound = virgin_count * female_rate;
                 let src_ind_idx = src * ind_stride + age * n_ztypes + female_ztype;
-                out_ind[src_ind_idx] += stay;
-                for dst in 0..n_demes {
-                    let prob = adjacency[src * n_demes + dst];
-                    if prob > 0.0 {
+                if stay_after {
+                    let mut moved_total = 0.0;
+                    for entry in row_start..row_end {
+                        let dst = dest_idx[entry] as usize;
+                        let moved = outbound * weights[entry];
+                        out_ind[dst * ind_stride + age * n_ztypes + female_ztype] += moved;
+                        moved_total += moved;
+                    }
+                    out_ind[src_ind_idx] += virgin_count - moved_total;
+                } else if row_start == row_end {
+                    // Empty CSR row (isolated deme): nothing leaves, matching
+                    // the Python reference's keep-all branch.
+                    out_ind[src_ind_idx] += virgin_count;
+                } else {
+                    let stay = virgin_count - outbound;
+                    out_ind[src_ind_idx] += stay;
+                    for entry in row_start..row_end {
+                        let dst = dest_idx[entry] as usize;
+                        let prob = weights[entry];
                         out_ind[dst * ind_stride + age * n_ztypes + female_ztype] +=
                             outbound * prob;
                     }
@@ -207,13 +383,32 @@ pub fn migrate_adjacency_deterministic(
                         + female_ztype * n_ztypes
                         + male_ztype;
                     let value = sperm_all[sperm_idx];
-                    let outbound_sperm = value * migration_rate;
-                    let stay_sperm = value - outbound_sperm;
-                    out_sperm[sperm_idx] += stay_sperm;
-                    out_ind[src_ind_idx] += stay_sperm;
-                    for dst in 0..n_demes {
-                        let prob = adjacency[src * n_demes + dst];
-                        if prob > 0.0 {
+                    let outbound_sperm = value * female_rate;
+                    if stay_after {
+                        let mut moved_total = 0.0;
+                        for entry in row_start..row_end {
+                            let dst = dest_idx[entry] as usize;
+                            let moved = outbound_sperm * weights[entry];
+                            let dst_sperm_idx = (dst * n_ages + age) * n_ztypes * n_ztypes
+                                + female_ztype * n_ztypes
+                                + male_ztype;
+                            out_sperm[dst_sperm_idx] += moved;
+                            out_ind[dst * ind_stride + age * n_ztypes + female_ztype] += moved;
+                            moved_total += moved;
+                        }
+                        out_sperm[sperm_idx] += value - moved_total;
+                        out_ind[src_ind_idx] += value - moved_total;
+                    } else if row_start == row_end {
+                        // Empty CSR row: keep everything at the source.
+                        out_sperm[sperm_idx] += value;
+                        out_ind[src_ind_idx] += value;
+                    } else {
+                        let stay_sperm = value - outbound_sperm;
+                        out_sperm[sperm_idx] += stay_sperm;
+                        out_ind[src_ind_idx] += stay_sperm;
+                        for entry in row_start..row_end {
+                            let dst = dest_idx[entry] as usize;
+                            let prob = weights[entry];
                             let moved = outbound_sperm * prob;
                             let dst_sperm_idx = (dst * n_ages + age) * n_ztypes * n_ztypes
                                 + female_ztype * n_ztypes
@@ -226,21 +421,33 @@ pub fn migrate_adjacency_deterministic(
             }
         }
 
-        for sex in 1..2 {
-            for age in 0..n_ages {
-                let migration_rate = if rate.len() == 1 { rate[0] } else { rate[age] };
-                for ztype in 0..n_ztypes {
-                    let src_idx = src * ind_stride + (sex * n_ages + age) * n_ztypes + ztype;
-                    let value = ind_all[src_idx];
-                    let outbound = value * migration_rate;
+        // Males (sex 1) migrate at their own rate column.
+        for age in 0..n_ages {
+            let male_rate = rate[src * 2 * n_ages + n_ages + age];
+            for ztype in 0..n_ztypes {
+                let src_idx = src * ind_stride + (n_ages + age) * n_ztypes + ztype;
+                let value = ind_all[src_idx];
+                let outbound = value * male_rate;
+                if stay_after {
+                    let mut moved_total = 0.0;
+                    for entry in row_start..row_end {
+                        let dst = dest_idx[entry] as usize;
+                        let moved = outbound * weights[entry];
+                        out_ind[dst * ind_stride + (n_ages + age) * n_ztypes + ztype] += moved;
+                        moved_total += moved;
+                    }
+                    out_ind[src_idx] += value - moved_total;
+                } else if row_start == row_end {
+                    // Empty CSR row: keep everything at the source.
+                    out_ind[src_idx] += value;
+                } else {
                     let stay = value - outbound;
                     out_ind[src_idx] += stay;
-                    for dst in 0..n_demes {
-                        let prob = adjacency[src * n_demes + dst];
-                        if prob > 0.0 {
-                            out_ind[dst * ind_stride + (sex * n_ages + age) * n_ztypes + ztype] +=
-                                outbound * prob;
-                        }
+                    for entry in row_start..row_end {
+                        let dst = dest_idx[entry] as usize;
+                        let prob = weights[entry];
+                        out_ind[dst * ind_stride + (n_ages + age) * n_ztypes + ztype] +=
+                            outbound * prob;
                     }
                 }
             }
@@ -249,19 +456,21 @@ pub fn migrate_adjacency_deterministic(
     Ok((out_ind, out_sperm))
 }
 
-/// Stochastically move individuals and stored sperm across an adjacency matrix.
+/// Stochastically move individuals and stored sperm along a CSR routing table.
 ///
 /// Outbound counts are sampled with binomial/continuous-binomial and then
-/// multinomially distributed among destinations.  Each source deme uses its own
-/// RNG stream derived from ``seed + deme_id``, matching the per-deme RNG policy
-/// used by spatial lifecycle ticks.
+/// multinomially distributed among the CSR destinations.  Each source deme
+/// uses its own RNG stream derived from ``seed ^ deme_id``, matching the
+/// per-deme RNG policy used by spatial lifecycle ticks.
 ///
 /// ## Returns
 /// ``(out_ind, out_sperm)`` new stacked arrays.
-pub fn migrate_adjacency_stochastic(
+pub fn migrate_csr_stochastic(
     ind_all: &[f64],
     sperm_all: &[f64],
-    adjacency: &[f64],
+    indptr: &[i64],
+    dest_idx: &[i64],
+    weights: &[f64],
     rate: &[f64],
     seed: u64,
     continuous_sampling: bool,
@@ -269,23 +478,46 @@ pub fn migrate_adjacency_stochastic(
     n_ages: usize,
     n_ztypes: usize,
 ) -> Result<(Vec<f64>, Vec<f64>), String> {
-    // Stochastic variant of adjacency migration: sample outbound counts
-    // and multinomially distribute them among destinations.
+    // Stochastic variant of CSR migration: sample outbound counts and
+    // multinomially distribute them among the destinations.
     let ind_stride = 2 * n_ages * n_ztypes;
-    if adjacency.len() != n_demes * n_demes {
-        return Err("adjacency must be a dense (n_demes, n_demes) matrix".to_string());
+    if indptr.len() != n_demes + 1 {
+        return Err(format!(
+            "migration indptr length {} does not match n_demes + 1 ({})",
+            indptr.len(),
+            n_demes + 1
+        ));
+    }
+    if rate.len() != n_demes * 2 * n_ages {
+        return Err(format!(
+            "migration rate length {} does not match (n_demes, 2, n_ages) = {}",
+            rate.len(),
+            n_demes * 2 * n_ages
+        ));
+    }
+    let mut max_row = 1usize;
+    for pair in indptr.windows(2) {
+        let len = (pair[1] - pair[0]).max(0) as usize;
+        if len > max_row {
+            max_row = len;
+        }
     }
     let mut out_ind = vec![0.0; ind_all.len()];
     let mut out_sperm = vec![0.0; sperm_all.len()];
-    let mut distributed = vec![0.0; n_demes];
-    let mut probs = vec![0.0; n_demes];
+    let mut distributed = vec![0.0; max_row];
+    let mut probs = vec![0.0; max_row];
 
     // Each source deme gets its own RNG stream derived from the base seed.
     // This keeps per-deme stochastic migration reproducible and independent.
     for src in 0..n_demes {
-        let mut rng = new_rng(seed.wrapping_add(src as u64));
+        let mut rng = new_rng(crate::rng::stream_seed(seed, src as i64));
+        let row_start = indptr[src] as usize;
+        let row_end = indptr[src + 1] as usize;
+        let row_len = row_end - row_start;
         for age in 0..n_ages {
-            let migration_rate = if rate.len() == 1 { rate[0] } else { rate[age] };
+            // Female virgins (sex 0) and their stored sperm move at the
+            // female rate so the virgin/stored bookkeeping stays consistent.
+            let female_rate = rate[src * 2 * n_ages + age];
             for female_ztype in 0..n_ztypes {
                 let mut stored_total = 0.0;
                 for male_ztype in 0..n_ztypes {
@@ -300,26 +532,20 @@ pub fn migrate_adjacency_stochastic(
                 }
 
                 let outbound =
-                    sample_outbound(&mut rng, virgin_count, migration_rate, continuous_sampling);
-                distribute_outbound(
+                    sample_outbound(&mut rng, virgin_count, female_rate, continuous_sampling);
+                let moved_total = distribute_csr_outbound(
                     &mut rng,
                     outbound,
-                    adjacency,
-                    src,
-                    n_demes,
+                    weights,
+                    row_start,
+                    row_len,
                     continuous_sampling,
                     &mut distributed,
                     &mut probs,
                 );
-                let mut moved_total = 0.0;
-                for dst_pos in 0..n_demes {
-                    let prob = adjacency[src * n_demes + dst_pos];
-                    if prob <= 0.0 {
-                        continue;
-                    }
-                    let moved = distributed[dst_pos];
-                    moved_total += moved;
-                    out_ind[dst_pos * ind_stride + age * n_ztypes + female_ztype] += moved;
+                for pos in 0..row_len {
+                    let dst = dest_idx[row_start + pos] as usize;
+                    out_ind[dst * ind_stride + age * n_ztypes + female_ztype] += distributed[pos];
                 }
                 out_ind[src * ind_stride + age * n_ztypes + female_ztype] +=
                     virgin_count - moved_total;
@@ -330,69 +556,56 @@ pub fn migrate_adjacency_stochastic(
                         + male_ztype;
                     let value = sperm_all[sperm_idx];
                     let outbound_sperm =
-                        sample_outbound(&mut rng, value, migration_rate, continuous_sampling);
-                    distribute_outbound(
+                        sample_outbound(&mut rng, value, female_rate, continuous_sampling);
+                    let moved_sperm_total = distribute_csr_outbound(
                         &mut rng,
                         outbound_sperm,
-                        adjacency,
-                        src,
-                        n_demes,
+                        weights,
+                        row_start,
+                        row_len,
                         continuous_sampling,
                         &mut distributed,
                         &mut probs,
                     );
-                    let mut moved_total = 0.0;
-                    for dst in 0..n_demes {
-                        let prob = adjacency[src * n_demes + dst];
-                        if prob <= 0.0 {
-                            continue;
-                        }
-                        let moved = distributed[dst];
-                        moved_total += moved;
+                    for pos in 0..row_len {
+                        let dst = dest_idx[row_start + pos] as usize;
+                        let moved = distributed[pos];
                         let dst_sperm_idx = (dst * n_ages + age) * n_ztypes * n_ztypes
                             + female_ztype * n_ztypes
                             + male_ztype;
                         out_sperm[dst_sperm_idx] += moved;
                         out_ind[dst * ind_stride + age * n_ztypes + female_ztype] += moved;
                     }
-                    out_sperm[sperm_idx] += value - moved_total;
+                    out_sperm[sperm_idx] += value - moved_sperm_total;
                     out_ind[src * ind_stride + age * n_ztypes + female_ztype] +=
-                        value - moved_total;
+                        value - moved_sperm_total;
                 }
             }
         }
 
-        for sex in 1..2 {
-            for age in 0..n_ages {
-                let migration_rate = if rate.len() == 1 { rate[0] } else { rate[age] };
-                for ztype in 0..n_ztypes {
-                    let src_idx = src * ind_stride + (sex * n_ages + age) * n_ztypes + ztype;
-                    let value = ind_all[src_idx];
-                    let outbound =
-                        sample_outbound(&mut rng, value, migration_rate, continuous_sampling);
-                    distribute_outbound(
-                        &mut rng,
-                        outbound,
-                        adjacency,
-                        src,
-                        n_demes,
-                        continuous_sampling,
-                        &mut distributed,
-                        &mut probs,
-                    );
-                    let mut moved_total = 0.0;
-                    for dst in 0..n_demes {
-                        let prob = adjacency[src * n_demes + dst];
-                        if prob <= 0.0 {
-                            continue;
-                        }
-                        let moved = distributed[dst];
-                        moved_total += moved;
-                        out_ind[dst * ind_stride + (sex * n_ages + age) * n_ztypes + ztype] +=
-                            moved;
-                    }
-                    out_ind[src_idx] += value - moved_total;
+        // Males (sex 1) migrate at their own rate column.
+        for age in 0..n_ages {
+            let male_rate = rate[src * 2 * n_ages + n_ages + age];
+            for ztype in 0..n_ztypes {
+                let src_idx = src * ind_stride + (n_ages + age) * n_ztypes + ztype;
+                let value = ind_all[src_idx];
+                let outbound = sample_outbound(&mut rng, value, male_rate, continuous_sampling);
+                let moved_total = distribute_csr_outbound(
+                    &mut rng,
+                    outbound,
+                    weights,
+                    row_start,
+                    row_len,
+                    continuous_sampling,
+                    &mut distributed,
+                    &mut probs,
+                );
+                for pos in 0..row_len {
+                    let dst = dest_idx[row_start + pos] as usize;
+                    out_ind[dst * ind_stride + (n_ages + age) * n_ztypes + ztype] +=
+                        distributed[pos];
                 }
+                out_ind[src_idx] += value - moved_total;
             }
         }
     }
@@ -409,7 +622,7 @@ pub fn migrate_adjacency_stochastic(
 ///
 /// ## Returns
 /// The outbound count.
-fn sample_outbound(rng: &mut SmallRng, value: f64, rate: f64, continuous_sampling: bool) -> f64 {
+fn sample_outbound(rng: &mut SessionRng, value: f64, rate: f64, continuous_sampling: bool) -> f64 {
     // Sample how many individuals leave: deterministic rate, continuous
     // binomial, or discrete binomial.
     if value <= 0.0 || rate <= 0.0 {
@@ -424,209 +637,49 @@ fn sample_outbound(rng: &mut SmallRng, value: f64, rate: f64, continuous_samplin
     crate::rng::binomial(rng, value.round() as i64, rate)
 }
 
-/// Distribute outbound migrants among destination demes according to adjacency.
+/// Distribute outbound migrants among the CSR destinations of one source row.
 ///
-/// ## Parameters
-/// - `rng`: Random number generator.
-/// - `outbound`: Total migrants leaving.
-/// - `adjacency`: Dense adjacency matrix.
-/// - `src`: Source deme index.
-/// - `n_demes`: Number of demes.
-/// - `continuous_sampling`: Use continuous sampling.
-/// - `distributed`: Output per-destination counts.
-/// - `probs`: Scratch probability buffer.
-fn distribute_outbound(
-    rng: &mut SmallRng,
+/// The row weights are normalized before the multinomial samplers see them:
+/// kernel-mode CSR rows may intentionally sum to less than one (boundary
+/// demes keep mass at the source), and the discrete multinomial sampler
+/// assumes a probability vector.
+///
+/// ## Returns
+/// The total mass assigned to destinations.
+fn distribute_csr_outbound(
+    rng: &mut SessionRng,
     outbound: f64,
-    adjacency: &[f64],
-    src: usize,
-    n_demes: usize,
+    weights: &[f64],
+    row_start: usize,
+    row_len: usize,
     continuous_sampling: bool,
     distributed: &mut [f64],
     probs: &mut [f64],
-) {
-    // Collect positive adjacency probabilities and multinomially distribute
-    // the outbound count among them.
+) -> f64 {
+    // Clear scratch buffers, collect the row weights, normalize, sample.
     for slot in distributed.iter_mut() {
         *slot = 0.0;
     }
-    if outbound <= 0.0 {
-        return;
+    if outbound <= 0.0 || row_len == 0 {
+        return 0.0;
     }
     let mut total = 0.0;
-    let mut count = 0;
-    for dst in 0..n_demes {
-        let prob = adjacency[src * n_demes + dst];
-        if prob > 0.0 {
-            probs[count] = prob;
-            count += 1;
-            total += prob;
-        }
+    for pos in 0..row_len {
+        let weight = weights[row_start + pos];
+        probs[pos] = weight;
+        total += weight;
     }
     if total <= 0.0 {
-        return;
+        return 0.0;
+    }
+    let inv_total = 1.0 / total;
+    for pos in 0..row_len {
+        probs[pos] *= inv_total;
     }
     if continuous_sampling {
-        crate::rng::continuous_multinomial(rng, outbound, &probs[..count], distributed);
+        crate::rng::continuous_multinomial(rng, outbound, &probs[..row_len], distributed);
     } else {
-        crate::rng::multinomial(rng, outbound.round() as i64, &probs[..count], distributed);
+        crate::rng::multinomial(rng, outbound.round() as i64, &probs[..row_len], distributed);
     }
-}
-
-/// Build a dense adjacency matrix from a migration kernel and topology.
-///
-/// Kernel offsets are applied to each source cell with optional wrapping;
-/// each source row is normalized to sum to one.
-///
-/// ## Returns
-/// A dense ``n_demes x n_demes`` adjacency matrix.
-fn build_kernel_adjacency(
-    migration_kernel: &[f64],
-    topology_rows: usize,
-    topology_cols: usize,
-    topology_wrap: bool,
-    kernel_include_center: bool,
-) -> Result<Vec<f64>, String> {
-    // Convert a topology migration kernel into a dense adjacency matrix by
-    // wrapping or clipping kernel offsets and normalizing each source row.
-    let n_demes = topology_rows * topology_cols;
-    if n_demes == 0 {
-        return Err("topology must have at least one deme".to_string());
-    }
-    let kernel_rows = topology_rows.max(1);
-    let kernel_cols = topology_cols.max(1);
-    if migration_kernel.len() != kernel_rows * kernel_cols {
-        return Err(format!(
-            "migration_kernel length {} does not match topology shape {}x{}",
-            migration_kernel.len(),
-            topology_rows,
-            topology_cols
-        ));
-    }
-
-    let mut adjacency = vec![0.0; n_demes * n_demes];
-    let rows_i = topology_rows as isize;
-    let cols_i = topology_cols as isize;
-    let center_row = topology_rows / 2;
-    let center_col = topology_cols / 2;
-    for src_row in 0..topology_rows {
-        for src_col in 0..topology_cols {
-            let src = src_row * topology_cols + src_col;
-            let mut total = 0.0;
-            for kernel_row in 0..topology_rows {
-                for kernel_col in 0..topology_cols {
-                    if !kernel_include_center
-                        && kernel_row == center_row
-                        && kernel_col == center_col
-                    {
-                        continue;
-                    }
-                    let weight = migration_kernel[kernel_row * topology_cols + kernel_col];
-                    if weight <= 0.0 {
-                        continue;
-                    }
-                    let dst_row = src_row as isize + kernel_row as isize - center_row as isize;
-                    let dst_col = src_col as isize + kernel_col as isize - center_col as isize;
-                    let (dst_row, dst_col) = if topology_wrap {
-                        (dst_row.rem_euclid(rows_i), dst_col.rem_euclid(cols_i))
-                    } else if dst_row < 0 || dst_row >= rows_i || dst_col < 0 || dst_col >= cols_i {
-                        continue;
-                    } else {
-                        (dst_row, dst_col)
-                    };
-                    let dst = dst_row as usize * topology_cols + dst_col as usize;
-                    adjacency[src * n_demes + dst] += weight;
-                    total += weight;
-                }
-            }
-            if total > 0.0 {
-                for dst in 0..n_demes {
-                    adjacency[src * n_demes + dst] /= total;
-                }
-            }
-        }
-    }
-    Ok(adjacency)
-}
-
-/// Deterministically migrate using a topology migration kernel.
-///
-/// Builds the kernel adjacency matrix and delegates to deterministic
-/// adjacency migration.
-///
-/// ## Returns
-/// ``(out_ind, out_sperm)``.
-pub fn migrate_kernel_deterministic(
-    ind_all: &[f64],
-    sperm_all: &[f64],
-    migration_kernel: &[f64],
-    topology_rows: usize,
-    topology_cols: usize,
-    topology_wrap: bool,
-    kernel_include_center: bool,
-    rate: &[f64],
-    n_ages: usize,
-    n_ztypes: usize,
-) -> Result<(Vec<f64>, Vec<f64>), String> {
-    // Build the kernel adjacency once, then reuse deterministic adjacency
-    // migration with the generated matrix.
-    let adjacency = build_kernel_adjacency(
-        migration_kernel,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        kernel_include_center,
-    )?;
-    migrate_adjacency_deterministic(
-        ind_all,
-        sperm_all,
-        &adjacency,
-        rate,
-        topology_rows * topology_cols,
-        n_ages,
-        n_ztypes,
-    )
-}
-
-/// Stochastically migrate using a topology migration kernel.
-///
-/// Builds the kernel adjacency matrix and delegates to stochastic
-/// adjacency migration, which uses a per-source-deme RNG stream.
-///
-/// ## Returns
-/// ``(out_ind, out_sperm)``.
-pub fn migrate_kernel_stochastic(
-    ind_all: &[f64],
-    sperm_all: &[f64],
-    migration_kernel: &[f64],
-    topology_rows: usize,
-    topology_cols: usize,
-    topology_wrap: bool,
-    kernel_include_center: bool,
-    rate: &[f64],
-    seed: u64,
-    continuous_sampling: bool,
-    n_ages: usize,
-    n_ztypes: usize,
-) -> Result<(Vec<f64>, Vec<f64>), String> {
-    // Build the kernel adjacency once, then reuse stochastic adjacency
-    // migration with the generated matrix.
-    let adjacency = build_kernel_adjacency(
-        migration_kernel,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        kernel_include_center,
-    )?;
-    migrate_adjacency_stochastic(
-        ind_all,
-        sperm_all,
-        &adjacency,
-        rate,
-        seed,
-        continuous_sampling,
-        topology_rows * topology_cols,
-        n_ages,
-        n_ztypes,
-    )
+    distributed[..row_len].iter().sum()
 }

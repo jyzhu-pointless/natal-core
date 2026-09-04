@@ -1,21 +1,32 @@
-//! Python-side simulation configuration copied into a plain Rust struct.
+//! The flat per-tick kernel configuration, assembled from owned contracts.
 //!
-//! ``EngineSession::new`` reads the ``PopulationConfig`` attributes once and
-//! owns plain ``Vec`` copies.  The per-tick kernels never touch Python objects.
+//! Kernels consume [`SimConfig`] and never see Python objects.  Sessions no
+//! longer snapshot a Python config: they own a
+//! [`contract::Blueprint`](crate::contract::Blueprint) plus
+//! [`contract::Params`](crate::contract::Params) (columnized ecology) and a
+//! [`contract::TensorSet`](crate::contract::TensorSet) (genetics), and
+//! assemble a fresh ``SimConfig`` view at every tick-batch entry point, so
+//! parameter writes take effect on the next batch without any session
+//! rebuild.  Spatial sessions assemble one view *per deme* from the deme's
+//! ecology column entry and its shared genetics variant.
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
+use crate::contract::{Blueprint, Params, TensorSet};
+use crate::equilibrate::equilibrium_metrics;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-/// Plain Rust snapshot of the age-structured ``PopulationConfig``.
+/// Flat kernel view assembled from the owned contracts.
 ///
-/// The Python ``PopulationConfig`` is read once at session creation and copied
-/// into plain Rust arrays and scalars so the hot per-tick kernels never touch
-/// Python objects.  Field names and array shapes mirror the Python config.
+/// This is a pure-copy structure (tens of KB): every field either mirrors a
+/// contract value or is derived on demand from it.  The derived equilibrium
+/// metrics ``expected_competition_strength`` / ``expected_survival_rate``
+/// are recomputed from the current params at every [`SimConfig::assemble`]
+/// call, replacing the stored draft fields of the legacy ``from_python``
+/// path.
 ///
 /// ## Notes
 /// - All array fields are stored in row-major flat ``Vec`` layout.
-/// - Scalar fields are normalized by [`SimConfig::validate`] before first use.
+/// - Scalar fields are normalized by [`SimConfig::assemble`] before first use.
 #[derive(Clone)]
 pub struct SimConfig {
     // --- Dimensions ---
@@ -62,278 +73,116 @@ pub struct SimConfig {
     pub male_only_by_sex_chrom: Vec<bool>,
 }
 
-/// Build a ``PyValueError`` for an array shape mismatch.
-///
-/// ## Parameters
-/// - `name`: Python attribute name that failed validation.
-/// - `expected`: Human-readable expected shape.
-/// - `got`: Actual shape returned by NumPy.
-///
-/// ## Returns
-/// A ``PyValueError`` with a descriptive message.
-fn shape_error(name: &str, expected: &str, got: &[usize]) -> PyErr {
-    PyValueError::new_err(format!("{name} must have shape {expected}, got {got:?}"))
-}
-
-/// Extract a float64 config scalar, accepting 0-d NumPy arrays.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name to read.
-///
-/// ## Returns
-/// The scalar value as ``f64``.
-///
-/// ## Errors
-/// Returns ``PyValueError`` if the value cannot be converted to float64.
-fn extract_f64_1d(obj: &Bound<'_, PyAny>, name: &str, expected: usize) -> PyResult<Vec<f64>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray1<'_, f64>>()?;
-    if array.len() != expected {
-        return Err(shape_error(name, &format!("({expected},)"), array.shape()));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract a 2-D float64 config array with an exact shape check.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name to read.
-/// - `rows`: Required first dimension.
-/// - `cols`: Required second dimension.
-///
-/// ## Returns
-/// A ``Vec<f64>`` copy of the array in row-major order.
-///
-/// ## Errors
-/// Returns ``PyValueError`` if the shape does not match ``(rows, cols)``.
-fn extract_f64_2d(
-    obj: &Bound<'_, PyAny>,
-    name: &str,
-    rows: usize,
-    cols: usize,
-) -> PyResult<Vec<f64>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray2<'_, f64>>()?;
-    let shape = array.shape();
-    if shape.len() != 2 || shape[0] != rows || shape[1] != cols {
-        return Err(shape_error(name, &format!("({rows}, {cols})"), shape));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract a 3-D float64 config array with an exact shape check.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name to read.
-/// - `d0`, `d1`, `d2`: Required dimensions.
-///
-/// ## Returns
-/// A ``Vec<f64>`` copy of the array in row-major order.
-///
-/// ## Errors
-/// Returns ``PyValueError`` if the shape does not match.
-fn extract_f64_3d(
-    obj: &Bound<'_, PyAny>,
-    name: &str,
-    d0: usize,
-    d1: usize,
-    d2: usize,
-) -> PyResult<Vec<f64>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray3<'_, f64>>()?;
-    let shape = array.shape();
-    if shape.len() != 3 || shape[0] != d0 || shape[1] != d1 || shape[2] != d2 {
-        return Err(shape_error(name, &format!("({d0}, {d1}, {d2})"), shape));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract a boolean config scalar.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name to read.
-///
-/// ## Returns
-/// The boolean value.
-///
-/// ## Errors
-/// Returns ``PyValueError`` if the attribute is not boolean.
-fn extract_bool_1d(obj: &Bound<'_, PyAny>, name: &str, expected: usize) -> PyResult<Vec<bool>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray1<'_, bool>>()?;
-    if array.len() != expected {
-        return Err(shape_error(name, &format!("({expected},)"), array.shape()));
-    }
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract an int64 config scalar, accepting 0-d NumPy arrays.
-///
-/// ## Parameters
-/// - `obj`: Python config object.
-/// - `name`: Attribute name to read.
-///
-/// ## Returns
-/// The scalar value as ``i64``.
-///
-/// ## Errors
-/// Returns ``PyValueError`` if the value cannot be converted to int64.
-fn extract_i64_1d(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<i64>> {
-    let array = obj.getattr(name)?.extract::<PyReadonlyArray1<'_, i64>>()?;
-    Ok(array.as_slice()?.to_vec())
-}
-
-/// Extract a float64 config scalar, accepting 0-d NumPy arrays.
-fn extract_f64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<f64> {
-    let value = obj.getattr(name)?;
-    if let Ok(scalar) = value.extract::<f64>() {
-        return Ok(scalar);
-    }
-    let scalar = value.call_method0("item")?;
-    scalar.extract::<f64>()
-}
-
-/// Extract a boolean config scalar.
-fn extract_bool(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<bool> {
-    obj.getattr(name)?.extract::<bool>()
-}
-
-/// Extract an int64 config scalar, accepting 0-d NumPy arrays.
-fn extract_i64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
-    let value = obj.getattr(name)?;
-    if let Ok(scalar) = value.extract::<i64>() {
-        return Ok(scalar);
-    }
-    let scalar = value.call_method0("item")?;
-    scalar.extract::<i64>()
+/// Copy one deme's segment of a columnized vector into a flat kernel array.
+fn deme_segment(column: &[f64], deme: usize, per_deme: usize) -> Vec<f64> {
+    let start = deme * per_deme;
+    column[start..start + per_deme].to_vec()
 }
 
 impl SimConfig {
-    /// Build ``SimConfig`` from a Python ``PopulationConfig`` object.
+    /// Assemble a kernel config from the owned contracts at deme 0.
     ///
-    /// This is the single entry point used by ``EngineSession`` and the spatial
-    /// sessions.  It validates dimensions, copies all numeric arrays, and normalizes
-    /// mutable scalar fields.
-    ///
-    /// ## Parameters
-    /// - `config`: A fully built Python ``PopulationConfig``.
-    ///
-    /// ## Returns
-    /// A ``SimConfig`` owning plain Rust copies of every field needed by kernels.
+    /// Panmictic and homogeneous callers own length-1 (or tiled) columns,
+    /// so deme 0 carries the values every deme consumes.
     ///
     /// ## Errors
-    /// Returns ``PyValueError`` when dimensions are invalid, required arrays are
-    /// missing/mis-shaped, or scalar fields cannot be extracted.
-    pub fn from_python(config: &Bound<'_, PyAny>) -> PyResult<Self> {
-        // Read every scalar and array field from the Python config.
-        // Dimensions are validated first so later indexing is safe.
-        // Scalar probabilities are normalized by validate() before use.
-        let n_ages = extract_i64(config, "n_ages")? as usize;
-        let n_ztypes = extract_i64(config, "n_ztypes")? as usize;
-        let new_adult_age = extract_i64(config, "new_adult_age")? as usize;
+    /// Same as [`SimConfig::assemble_deme`].
+    pub fn assemble(bp: &Blueprint, params: &Params, genetics: &TensorSet) -> PyResult<Self> {
+        Self::assemble_deme(bp, params, genetics, 0)
+    }
+
+    /// Assemble a kernel config from the owned contracts for one deme.
+    ///
+    /// Validates the blueprint dimensions, derives the equilibrium metrics
+    /// from the *current* params (bit-for-bit port of the Python
+    /// ``compute_equilibrium_metrics``), and copies the deme's ecology
+    /// column segment plus the shared genetics tables.
+    ///
+    /// ## Parameters
+    /// - `bp`: The frozen blueprint.
+    /// - `params`: The current runtime parameters (columnized ecology).
+    /// - `genetics`: The genetics tables (variant shared across demes).
+    /// - `deme`: Deme whose ecology column feeds the view.
+    ///
+    /// ## Returns
+    /// A ``SimConfig`` view consistent with the current contract values.
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` when dimensions are invalid, the deme index
+    /// is out of range, or a params vector disagrees with the
+    /// blueprint-declared size.
+    pub fn assemble_deme(
+        bp: &Blueprint,
+        params: &Params,
+        genetics: &TensorSet,
+        deme: usize,
+    ) -> PyResult<Self> {
+        let n_ages = bp.n_ages;
+        let n_ztypes = bp.n_ztypes;
         if n_ages == 0 || n_ztypes == 0 {
             return Err(PyValueError::new_err(
                 "n_ages and n_ztypes must be positive",
             ));
         }
-        if new_adult_age == 0 || new_adult_age > n_ages {
+        if bp.new_adult_age == 0 || bp.new_adult_age > n_ages {
             return Err(PyValueError::new_err(format!(
-                "new_adult_age must be in [1, {n_ages}], got {new_adult_age}"
+                "new_adult_age must be in [1, {n_ages}], got {}",
+                bp.new_adult_age
             )));
         }
+        if deme >= params.n_demes {
+            return Err(PyValueError::new_err(format!(
+                "deme {deme} out of range for {} ecology columns",
+                params.n_demes
+            )));
+        }
+        params.validate(bp)?;
+        genetics.validate(bp)?;
+        let a = n_ages;
 
-        let adult_ages_raw = extract_i64_1d(config, "adult_ages")?;
-        let adult_ages: Vec<usize> = adult_ages_raw.iter().map(|&v| v as usize).collect();
-        let adult_start_age = *adult_ages.first().unwrap_or(&0);
+        // Derive the equilibrium metrics from current params so parameter
+        // changes take effect without any stored, stale copy.
+        let (expected_competition_strength, expected_survival_rate) =
+            equilibrium_metrics(bp, params, deme);
 
-        let mut cfg = Self {
+        let deme0 = |column: &Vec<f64>| -> f64 { column[deme] };
+        let cfg = Self {
             n_ages,
             n_ztypes,
-            adult_start_age,
-            new_adult_age,
-            stochastic: extract_bool(config, "stochastic")?,
-            continuous_sampling: extract_bool(config, "continuous_sampling")?,
-            fixed_egg_count: extract_bool(config, "fixed_egg_count")?,
-            has_sex_chromosomes: extract_bool(config, "has_sex_chromosomes")?,
-            eggs_per_female: extract_f64(config, "eggs_per_female")?,
-            sperm_displacement_rate: extract_f64(config, "sperm_displacement_rate")?,
-            sex_ratio: extract_f64(config, "sex_ratio")?,
-            carrying_capacity: extract_f64(config, "carrying_capacity")?,
-            expected_competition_strength: extract_f64(config, "expected_competition_strength")?,
-            expected_survival_rate: extract_f64(config, "expected_survival_rate")?,
-            low_density_growth_rate: extract_f64(config, "low_density_growth_rate")?,
-            juvenile_growth_mode: extract_i64(config, "juvenile_growth_mode")?,
-            age_based_mating_rates: extract_f64_2d(config, "age_based_mating_rates", 2, n_ages)?,
-            age_based_reproduction_rates: extract_f64_1d(
-                config,
-                "age_based_reproduction_rates",
-                n_ages,
-            )?,
-            female_age_based_fertility: extract_f64_1d(
-                config,
-                "female_age_based_fertility",
-                n_ages,
-            )?,
-            age_based_survival_rates: extract_f64_2d(
-                config,
-                "age_based_survival_rates",
-                2,
-                n_ages,
-            )?,
-            viability_fitness: extract_f64_3d(config, "viability_fitness", 2, n_ages, n_ztypes)?,
-            fecundity_fitness: extract_f64_2d(config, "fecundity_fitness", 2, n_ztypes)?,
-            sexual_selection_fitness: extract_f64_2d(
-                config,
-                "sexual_selection_fitness",
-                n_ztypes,
-                n_ztypes,
-            )?,
-            zygote_viability_fitness: extract_f64_2d(
-                config,
-                "zygote_viability_fitness",
-                2,
-                n_ztypes,
-            )?,
-            age_based_relative_competition_strength: extract_f64_1d(
-                config,
-                "age_based_relative_competition_strength",
-                n_ages,
-            )?,
-            adult_ages,
-            offspring_tensor: extract_f64_3d(
-                config,
-                "offspring_tensor",
-                n_ztypes,
-                n_ztypes,
-                n_ztypes,
-            )?,
-            female_ztype_compatibility: extract_f64_1d(
-                config,
-                "female_ztype_compatibility",
-                n_ztypes,
-            )?,
-            male_ztype_compatibility: extract_f64_1d(config, "male_ztype_compatibility", n_ztypes)?,
-            female_only_by_sex_chrom: extract_bool_1d(
-                config,
-                "female_only_by_sex_chrom",
-                n_ztypes,
-            )?,
-            male_only_by_sex_chrom: extract_bool_1d(config, "male_only_by_sex_chrom", n_ztypes)?,
+            adult_start_age: *bp.adult_ages.first().unwrap_or(&0) as usize,
+            new_adult_age: bp.new_adult_age,
+            stochastic: bp.stochastic,
+            continuous_sampling: bp.continuous_sampling,
+            fixed_egg_count: bp.fixed_egg_count,
+            has_sex_chromosomes: bp.has_sex_chromosomes,
+            eggs_per_female: deme0(&params.eggs_per_female).max(0.0),
+            sperm_displacement_rate: crate::rng::clamp01(deme0(&params.sperm_displacement_rate)),
+            sex_ratio: crate::rng::clamp01(deme0(&params.sex_ratio)),
+            carrying_capacity: deme0(&params.carrying_capacity),
+            expected_competition_strength,
+            expected_survival_rate,
+            low_density_growth_rate: deme0(&params.low_density_growth_rate),
+            juvenile_growth_mode: params.growth_mode[deme],
+            age_based_mating_rates: deme_segment(&params.mating_rates, deme, 2 * a),
+            age_based_reproduction_rates: deme_segment(&params.reproduction_rates, deme, a),
+            female_age_based_fertility: deme_segment(&params.fertility, deme, a),
+            age_based_survival_rates: deme_segment(&params.survival_rates, deme, 2 * a),
+            viability_fitness: genetics.viability_fitness.clone(),
+            fecundity_fitness: genetics.fecundity_fitness.clone(),
+            sexual_selection_fitness: genetics.sexual_selection_fitness.clone(),
+            zygote_viability_fitness: genetics.zygote_viability_fitness.clone(),
+            age_based_relative_competition_strength: deme_segment(
+                &params.competition_weights,
+                deme,
+                a,
+            ),
+            adult_ages: bp.adult_ages.iter().map(|&v| v as usize).collect(),
+            offspring_tensor: genetics.offspring_tensor.clone(),
+            female_ztype_compatibility: genetics.female_ztype_compatibility.clone(),
+            male_ztype_compatibility: genetics.male_ztype_compatibility.clone(),
+            female_only_by_sex_chrom: bp.female_only_by_sex_chrom.clone(),
+            male_only_by_sex_chrom: bp.male_only_by_sex_chrom.clone(),
         };
-        cfg.validate();
         Ok(cfg)
-    }
-
-    /// Normalize mutable scalar fields into the ranges expected by kernels.
-    ///
-    /// The Python config permits some values to be negative or slightly outside
-    /// ``[0, 1]``.  This method clamps those values so downstream kernels can
-    /// assume valid probabilities and non-negative rates.
-    fn validate(&mut self) {
-        // Clamp probability-like scalars into [0, 1] and non-negative rates.
-        // This keeps kernel assumptions simple and mirrors Python-side guards.
-        self.eggs_per_female = self.eggs_per_female.max(0.0);
-        self.sperm_displacement_rate = crate::rng::clamp01(self.sperm_displacement_rate);
-        self.sex_ratio = crate::rng::clamp01(self.sex_ratio);
     }
 }

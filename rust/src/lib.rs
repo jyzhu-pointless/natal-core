@@ -7,8 +7,11 @@
 //! interpreted directly in the kernels.
 
 mod config;
+mod contract;
+pub mod curves;
 mod discrete;
 mod discrete_session;
+mod equilibrate;
 mod hooks;
 mod lifecycle;
 mod rng;
@@ -17,12 +20,13 @@ mod spatial;
 mod spatial_session;
 
 use numpy::{
-    PyArray4, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray4,
-    PyReadwriteArray3, PyUntypedArrayMethods,
+    PyArray4, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray4, PyReadwriteArray3,
+    PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
+use crate::contract::{Blueprint, Params};
 use crate::discrete_session::DiscreteEngineSession;
 use crate::session::EngineSession;
 use crate::spatial_session::{HeterogeneousSpatialEngineSession, SpatialEngineSession};
@@ -145,24 +149,30 @@ fn discrete_aging(mut individual_count: PyReadwriteArray3<'_, f64>) -> PyResult<
     Ok(())
 }
 
-/// Deterministic adjacency migration exposed to Python.
+/// Deterministic CSR migration exposed to Python.
 ///
 /// ## Parameters
 /// - `individual_count_all`: Stacked state array.
 /// - `sperm_storage_all`: Stacked sperm array.
-/// - `adjacency`: Dense adjacency matrix.
-/// - `rate`: Per-age or global migration rate.
+/// - `indptr`: CSR migration row pointer (``n_demes + 1``).
+/// - `dest_idx`: CSR destination index per entry.
+/// - `weights`: CSR normalized outbound weight per entry.
+/// - `rate`: ``(n_demes, 2, n_ages)`` migration-rate column (flat).
 ///
 /// ## Returns
 /// New stacked ``(individual_count, sperm_storage)`` arrays.
 #[allow(clippy::type_complexity)] // PyO3 boundary returns two 4-D NumPy arrays.
+#[allow(clippy::too_many_arguments)] // Signature mirrors the Python migration API.
 #[pyfunction]
-fn migrate_adjacency_deterministic<'py>(
+fn migrate_csr_deterministic<'py>(
     py: Python<'py>,
     individual_count_all: PyReadonlyArray4<'py, f64>,
     sperm_storage_all: PyReadonlyArray4<'py, f64>,
-    adjacency: PyReadonlyArray2<'py, f64>,
+    indptr: PyReadonlyArray1<'py, i64>,
+    dest_idx: PyReadonlyArray1<'py, i64>,
+    weights: PyReadonlyArray1<'py, f64>,
     rate: PyReadonlyArray1<'py, f64>,
+    stay_after: bool,
 ) -> PyResult<(Bound<'py, PyArray4<f64>>, Bound<'py, PyArray4<f64>>)> {
     let ind_shape = individual_count_all.shape();
     if ind_shape.len() != 4 || ind_shape[1] != 2 {
@@ -179,32 +189,27 @@ fn migrate_adjacency_deterministic<'py>(
             "sperm_storage_all must have shape ({n_demes}, {n_ages}, {n_ztypes}, {n_ztypes}), got {sperm_shape:?}"
         )));
     }
-    let adj_shape = adjacency.shape();
-    if adj_shape != [n_demes, n_demes] {
-        return Err(PyValueError::new_err(format!(
-            "adjacency must have shape ({n_demes}, {n_demes}), got {adj_shape:?}"
-        )));
-    }
     let ind_in = individual_count_all
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     let sperm_in = sperm_storage_all
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let adjacency_in = adjacency
+    let indptr_in = indptr
+        .as_slice()
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let dest_in = dest_idx
+        .as_slice()
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let weights_in = weights
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     let rate_in = rate
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
-    let (out_ind, out_sperm) = crate::spatial::migrate_adjacency_deterministic(
-        ind_in,
-        sperm_in,
-        adjacency_in,
-        rate_in,
-        n_demes,
-        n_ages,
+    let (out_ind, out_sperm) = crate::spatial::migrate_csr_deterministic(
+        ind_in, sperm_in, indptr_in, dest_in, weights_in, rate_in, stay_after, n_demes, n_ages,
         n_ztypes,
     )
     .map_err(PyRuntimeError::new_err)?;
@@ -224,13 +229,15 @@ fn migrate_adjacency_deterministic<'py>(
     Ok((ind_out, sperm_out))
 }
 
-/// Stochastic adjacency migration exposed to Python.
+/// Stochastic CSR migration exposed to Python.
 ///
 /// ## Parameters
 /// - `individual_count_all`: Stacked state array.
 /// - `sperm_storage_all`: Stacked sperm array.
-/// - `adjacency`: Dense adjacency matrix.
-/// - `rate`: Per-age or global migration rate.
+/// - `indptr`: CSR migration row pointer (``n_demes + 1``).
+/// - `dest_idx`: CSR destination index per entry.
+/// - `weights`: CSR normalized outbound weight per entry.
+/// - `rate`: ``(n_demes, 2, n_ages)`` migration-rate column (flat).
 /// - `seed`: RNG seed.
 /// - `continuous_sampling`: Use continuous sampling.
 ///
@@ -239,11 +246,13 @@ fn migrate_adjacency_deterministic<'py>(
 #[allow(clippy::type_complexity)] // PyO3 boundary returns two 4-D NumPy arrays.
 #[allow(clippy::too_many_arguments)] // Signature mirrors the Python migration API.
 #[pyfunction]
-fn migrate_adjacency_stochastic<'py>(
+fn migrate_csr_stochastic<'py>(
     py: Python<'py>,
     individual_count_all: PyReadonlyArray4<'py, f64>,
     sperm_storage_all: PyReadonlyArray4<'py, f64>,
-    adjacency: PyReadonlyArray2<'py, f64>,
+    indptr: PyReadonlyArray1<'py, i64>,
+    dest_idx: PyReadonlyArray1<'py, i64>,
+    weights: PyReadonlyArray1<'py, f64>,
     rate: PyReadonlyArray1<'py, f64>,
     seed: u64,
     continuous_sampling: bool,
@@ -263,29 +272,31 @@ fn migrate_adjacency_stochastic<'py>(
             "sperm_storage_all must have shape ({n_demes}, {n_ages}, {n_ztypes}, {n_ztypes}), got {sperm_shape:?}"
         )));
     }
-    let adj_shape = adjacency.shape();
-    if adj_shape != [n_demes, n_demes] {
-        return Err(PyValueError::new_err(format!(
-            "adjacency must have shape ({n_demes}, {n_demes}), got {adj_shape:?}"
-        )));
-    }
     let ind_in = individual_count_all
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     let sperm_in = sperm_storage_all
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let adjacency_in = adjacency
+    let indptr_in = indptr
+        .as_slice()
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let dest_in = dest_idx
+        .as_slice()
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let weights_in = weights
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     let rate_in = rate
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
-    let (out_ind, out_sperm) = crate::spatial::migrate_adjacency_stochastic(
+    let (out_ind, out_sperm) = crate::spatial::migrate_csr_stochastic(
         ind_in,
         sperm_in,
-        adjacency_in,
+        indptr_in,
+        dest_in,
+        weights_in,
         rate_in,
         seed,
         continuous_sampling,
@@ -310,193 +321,27 @@ fn migrate_adjacency_stochastic<'py>(
     Ok((ind_out, sperm_out))
 }
 
-/// Deterministic kernel migration exposed to Python.
+/// Python-exposed equilibrium-metric calibration (parity with the
+/// Python reference ``compute_equilibrium_metrics``).
 ///
 /// ## Parameters
-/// - `individual_count_all`: Stacked state array.
-/// - `sperm_storage_all`: Stacked sperm array.
-/// - `migration_kernel`: Topology migration kernel.
-/// - `topology_wrap`: Whether topology wraps.
-/// - `kernel_include_center`: Whether the center cell is included.
-/// - `rate`: Per-age or global migration rate.
+/// - `blueprint`: The frozen blueprint (dimensions).
+/// - `params`: Current runtime parameters.
 ///
 /// ## Returns
-/// New stacked arrays.
-#[allow(clippy::type_complexity)] // PyO3 boundary returns two 4-D NumPy arrays.
-#[allow(clippy::too_many_arguments)] // Signature mirrors the Python kernel migration API.
+/// ``(expected_competition_strength, expected_survival_rate)``.
 #[pyfunction]
-fn migrate_kernel_deterministic<'py>(
-    py: Python<'py>,
-    individual_count_all: PyReadonlyArray4<'py, f64>,
-    sperm_storage_all: PyReadonlyArray4<'py, f64>,
-    migration_kernel: PyReadonlyArray2<'py, f64>,
-    topology_wrap: bool,
-    kernel_include_center: bool,
-    rate: PyReadonlyArray1<'py, f64>,
-) -> PyResult<(Bound<'py, PyArray4<f64>>, Bound<'py, PyArray4<f64>>)> {
-    let ind_shape = individual_count_all.shape();
-    if ind_shape.len() != 4 || ind_shape[1] != 2 {
-        return Err(PyValueError::new_err(format!(
-            "individual_count_all must have shape (n_demes, 2, n_ages, n_ztypes), got {ind_shape:?}"
-        )));
-    }
-    let n_demes = ind_shape[0];
-    let n_ages = ind_shape[2];
-    let n_ztypes = ind_shape[3];
-    let kernel_shape = migration_kernel.shape();
-    let topology_rows = kernel_shape[0];
-    let topology_cols = kernel_shape[1];
-    if topology_rows * topology_cols != n_demes {
-        return Err(PyValueError::new_err(format!(
-            "migration_kernel topology {topology_rows}x{topology_cols} does not match {n_demes} demes"
-        )));
-    }
-    let sperm_shape = sperm_storage_all.shape();
-    if sperm_shape != [n_demes, n_ages, n_ztypes, n_ztypes] {
-        return Err(PyValueError::new_err(format!(
-            "sperm_storage_all must have shape ({n_demes}, {n_ages}, {n_ztypes}, {n_ztypes}), got {sperm_shape:?}"
-        )));
-    }
-    let ind_in = individual_count_all
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let sperm_in = sperm_storage_all
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let kernel_in = migration_kernel
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let rate_in = rate
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let (out_ind, out_sperm) = crate::spatial::migrate_kernel_deterministic(
-        ind_in,
-        sperm_in,
-        kernel_in,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        kernel_include_center,
-        rate_in,
-        n_ages,
-        n_ztypes,
-    )
-    .map_err(PyRuntimeError::new_err)?;
-    let ind_out = PyArray4::<f64>::zeros(py, [n_demes, 2, n_ages, n_ztypes], false);
-    ind_out
-        .readwrite()
-        .as_slice_mut()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?
-        .copy_from_slice(&out_ind);
-    let sperm_out = PyArray4::<f64>::zeros(py, [n_demes, n_ages, n_ztypes, n_ztypes], false);
-    sperm_out
-        .readwrite()
-        .as_slice_mut()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?
-        .copy_from_slice(&out_sperm);
-    Ok((ind_out, sperm_out))
+fn equilibrium_metrics(
+    blueprint: &Bound<'_, PyAny>,
+    params: &Bound<'_, PyAny>,
+) -> PyResult<(f64, f64)> {
+    let bp = Blueprint::from_python(blueprint)?;
+    // The Python parity helper evaluates the panmictic (single-column)
+    // contract; length-1 columns reproduce the pre-columnization scalars.
+    let pr = Params::from_python(params, 1)?;
+    Ok(crate::equilibrate::equilibrium_metrics(&bp, &pr, 0))
 }
 
-/// Stochastic kernel migration exposed to Python.
-///
-/// ## Parameters
-/// - `individual_count_all`: Stacked state array.
-/// - `sperm_storage_all`: Stacked sperm array.
-/// - `migration_kernel`: Topology migration kernel.
-/// - `topology_wrap`: Whether topology wraps.
-/// - `kernel_include_center`: Whether the center cell is included.
-/// - `rate`: Per-age or global migration rate.
-/// - `seed`: RNG seed.
-/// - `continuous_sampling`: Use continuous sampling.
-///
-/// ## Returns
-/// New stacked arrays.
-#[allow(clippy::type_complexity)] // PyO3 boundary returns two 4-D NumPy arrays.
-#[allow(clippy::too_many_arguments)] // Signature mirrors the Python kernel migration API.
-#[pyfunction]
-fn migrate_kernel_stochastic<'py>(
-    py: Python<'py>,
-    individual_count_all: PyReadonlyArray4<'py, f64>,
-    sperm_storage_all: PyReadonlyArray4<'py, f64>,
-    migration_kernel: PyReadonlyArray2<'py, f64>,
-    topology_wrap: bool,
-    kernel_include_center: bool,
-    rate: PyReadonlyArray1<'py, f64>,
-    seed: u64,
-    continuous_sampling: bool,
-) -> PyResult<(Bound<'py, PyArray4<f64>>, Bound<'py, PyArray4<f64>>)> {
-    let ind_shape = individual_count_all.shape();
-    if ind_shape.len() != 4 || ind_shape[1] != 2 {
-        return Err(PyValueError::new_err(format!(
-            "individual_count_all must have shape (n_demes, 2, n_ages, n_ztypes), got {ind_shape:?}"
-        )));
-    }
-    let n_demes = ind_shape[0];
-    let n_ages = ind_shape[2];
-    let n_ztypes = ind_shape[3];
-    let kernel_shape = migration_kernel.shape();
-    let topology_rows = kernel_shape[0];
-    let topology_cols = kernel_shape[1];
-    if topology_rows * topology_cols != n_demes {
-        return Err(PyValueError::new_err(format!(
-            "migration_kernel topology {topology_rows}x{topology_cols} does not match {n_demes} demes"
-        )));
-    }
-    let sperm_shape = sperm_storage_all.shape();
-    if sperm_shape != [n_demes, n_ages, n_ztypes, n_ztypes] {
-        return Err(PyValueError::new_err(format!(
-            "sperm_storage_all must have shape ({n_demes}, {n_ages}, {n_ztypes}, {n_ztypes}), got {sperm_shape:?}"
-        )));
-    }
-    let ind_in = individual_count_all
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let sperm_in = sperm_storage_all
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let kernel_in = migration_kernel
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let rate_in = rate
-        .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let (out_ind, out_sperm) = crate::spatial::migrate_kernel_stochastic(
-        ind_in,
-        sperm_in,
-        kernel_in,
-        topology_rows,
-        topology_cols,
-        topology_wrap,
-        kernel_include_center,
-        rate_in,
-        seed,
-        continuous_sampling,
-        n_ages,
-        n_ztypes,
-    )
-    .map_err(PyRuntimeError::new_err)?;
-    let ind_out = PyArray4::<f64>::zeros(py, [n_demes, 2, n_ages, n_ztypes], false);
-    ind_out
-        .readwrite()
-        .as_slice_mut()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?
-        .copy_from_slice(&out_ind);
-    let sperm_out = PyArray4::<f64>::zeros(py, [n_demes, n_ages, n_ztypes, n_ztypes], false);
-    sperm_out
-        .readwrite()
-        .as_slice_mut()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?
-        .copy_from_slice(&out_sperm);
-    Ok((ind_out, sperm_out))
-}
-
-/// PyO3 module entry point registering all Rust backend classes and functions.
-///
-/// ## Parameters
-/// - `module`: PyO3 module being initialized.
-///
-/// ## Returns
-/// ``Ok(())`` after registering all classes and functions.
 #[pymodule]
 fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(age_structured_aging, module)?)?;
@@ -505,9 +350,8 @@ fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<DiscreteEngineSession>()?;
     module.add_class::<SpatialEngineSession>()?;
     module.add_class::<HeterogeneousSpatialEngineSession>()?;
-    module.add_function(wrap_pyfunction!(migrate_adjacency_deterministic, module)?)?;
-    module.add_function(wrap_pyfunction!(migrate_adjacency_stochastic, module)?)?;
-    module.add_function(wrap_pyfunction!(migrate_kernel_deterministic, module)?)?;
-    module.add_function(wrap_pyfunction!(migrate_kernel_stochastic, module)?)?;
+    module.add_function(wrap_pyfunction!(equilibrium_metrics, module)?)?;
+    module.add_function(wrap_pyfunction!(migrate_csr_deterministic, module)?)?;
+    module.add_function(wrap_pyfunction!(migrate_csr_stochastic, module)?)?;
     Ok(())
 }
