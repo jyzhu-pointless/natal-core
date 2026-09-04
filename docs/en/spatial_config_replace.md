@@ -2,19 +2,19 @@
 
 ## Problem
 
-`SpatialConfigurator._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `PopulationConfig`.
+`SpatialConfigurator._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `ModelDraft`.
 
 If only a few parameters differ between groups, all large arrays (`zygotes_to_gametes_map`, `gametes_to_zygotes_map`, `viability_fitness`, `fecundity_fitness`, etc.) are still duplicated, causing memory waste.
 
 ```
 2601 demes, each with a unique carrying_capacity
-→ 2601 full PopulationConfig instances
+→ 2601 full ModelDraft instances
 → Large arrays copied 2601 times
 ```
 
 ## Solution: `_replace` Fast Path
 
-`PopulationConfig` is a `NamedTuple`, and its `_replace()` method creates a new instance while **sharing references to all fields that are not replaced**. Leveraging this property, the first group is built in full, and subsequent groups only replace the differing fields:
+`ModelDraft` is a `NamedTuple`, and its `_replace()` method creates a new instance while **sharing references to all fields that are not replaced**. Leveraging this property, the first group is built in full, and subsequent groups only replace the differing fields:
 
 ```
 Group 0: Full builder pipeline → base_config (all arrays)

@@ -125,7 +125,7 @@ registry.register_gamete_label("cas9_deposited")           # 返回 glab 索引
 "Drive|WT"          → Genotype("Drive|WT") 无 slab 约束（见下文）
 ```
 
-`@slab` 后缀由 `ZygoteTypePattern`（定义在 `natal.patterns.elements.diploid` 中）解析。基础基因型模式是最后一个 `@` 之前的所有内容。
+`@slab` 后缀由 `ZygoteTypePattern`（定义在 `natal.frontend.patterns.elements.diploid` 中）解析。基础基因型模式是最后一个 `@` 之前的所有内容。
 
 ### 命名约定：`genotypes` 接受 ZType 字符串
 
@@ -177,7 +177,7 @@ Op.add(genotypes="Drive|WT@infected", delta=500)
 
 ### BFS 算法
 
-压缩使用不动点 BFS（在 `natal.genetics.structures._helpers` 的 `build_compression_mask` 中实现）。该算法对 GType 和 ZType 层次是对称的：
+压缩使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）。该算法对 GType 和 ZType 层次是对称的：
 
 ```
 1. 种子：收集可达基因型
@@ -253,12 +253,12 @@ pop.state.individual_count[0, 3, idx]
 
 ```python
 # 使用 GenotypeSelector 进行模式匹配操作
-from natal.patterns import GenotypeSelector
+from natal.frontend.patterns import GenotypeSelector
 selector = GenotypeSelector("A1|*", pop.index_registry)
 indices = selector.select()  # 返回匹配的整数索引数组
 ```
 
-**注意**：旧的导入路径 `from natal.genetic_patterns import GenotypeSelector` 已更新为 `from natal.patterns import GenotypeSelector`。
+**注意**：旧的导入路径 `from natal.genetic_patterns import GenotypeSelector` 已更新为 `from natal.frontend.patterns import GenotypeSelector`。
 
 ## 框架内部使用
 
@@ -279,13 +279,13 @@ indices = selector.select()  # 返回匹配的整数索引数组
 
 ### 3. Hook 系统
 
-- Numba Hook 使用预计算的索引进行高效操作。
+- Hook 使用预计算的索引（选择器在注册时解析）在两个后端上高效操作。
 - 避免在编译时访问动态注册表。
 - 通过选择器模式避免硬编码索引。
 
 ### 4. 索引压缩
 
-- `rebuild_config_maps()`（在 `natal.configurator._registry_builder` 中）运行 BFS。
+- `rebuild_config_maps()`（在 `natal.frontend.configurator._registry_builder` 中）运行 BFS。
 - 生成的掩码通过 `registry.compress(ztype_mask, gtype_mask)` 应用。
 - 压缩后，所有注册表属性只反映幸存的条目。
 
@@ -320,10 +320,10 @@ ZType 条目（每个 slab 一个）
 ## 相关章节
 
 - [遗传结构与实体](2_genetics.md) — Genotype 和 HaploidGenotype 的创建
-- [PopulationState & PopulationConfig](4_population_state_config.md) — 配置中的索引应用
+- [PopulationState & ModelDraft](4_population_state_config.md) — 配置中的索引应用
 - [Modifier 机制](3_modifiers.md) — Modifier 中的 IndexRegistry 使用
 - [Hook 系统](2_hooks.md) — 高级 Hook 选择器模式
 
 ---
 
-**准备进入配置编译细节了吗？** [前往下一章：PopulationState & PopulationConfig →](4_population_state_config.md)
+**准备进入配置编译细节了吗？** [前往下一章：PopulationState & ModelDraft →](4_population_state_config.md)

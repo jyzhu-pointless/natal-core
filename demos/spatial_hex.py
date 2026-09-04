@@ -9,10 +9,10 @@ from __future__ import annotations
 import time
 
 import numpy as np
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import HexGrid
 
 import natal as nt
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import HexGrid
 
 
 def build_hex_spatial_population() -> SpatialPopulation:

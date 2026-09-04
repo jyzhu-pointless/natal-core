@@ -187,6 +187,31 @@ pop.import_state(state_flat)
 2. 从同一快照派生多个参数分支。
 3. 比较不同策略下的轨迹差异。
 
+### 7.1 随机流（RNG）与 bit-reproducible 承诺范围
+
+- 每个种群的随机流由 `setup(stochastic=True, seed=...)` 派生；Rust 会话内
+  使用 `SessionRng`（`enable_rust_backend(seed=...)`、`reseed(seed)` 重置）。
+- 空间模型中 deme `d` 使用 `seed ^ d`（Rust 端）派生独立流，因此同一基种子下
+  各 deme 互不影响、确定性一致。
+- Hook 内的随机流 `pop.rng` 由 `槽位 ^ (tick*1_000_003) ^ ((deme_id+7)*6_559) ^
+  ((hook_index+1)*31)` 派生，每次调用独立。
+- **承诺范围**：同一输入（构建参数 + seed + hook 组合）下，确定性
+  （`stochastic=False`）轨迹在参考与 Rust 后端之间逐位一致；随机轨迹在固定
+  seed 下跨后端、跨进程可复现。不承诺跨版本位级稳定（未来算法修复可能改变
+  数值）。
+
+### 7.2 检查点（checkpoint）
+
+`snapshot_checkpoint()`（后端会话层）捕获**内存检查点**，内容为
+`(tick, 状态数组, RNG words, 生态列)`——即 state + 随机状态 + 生态参数，
+**遗传节（genetics tables）不参与回滚**。`restore_checkpoint(tick)`（种群层）
+从原始历史恢复：
+
+- 恢复后 tick 与状态一致（`state.n_tick` 同步），历史清空；
+- Rust 会话通过 `restore_checkpoint(state, snapshot)` 恢复会话并返回新 state；
+- 参数快照 `params_log` 是 hook 内参数修改的审计轨迹，与检查点独立
+  （检查点不包含 params_log；如需审计历史请另行保存）。
+
 ## 8. Hook 如何嵌入执行链路
 
 用户定义的 Hook（如 `first`/`early`/`late`）会被编译并合并到执行流程中，然后由 runner 在对应阶段触发。
@@ -238,7 +263,7 @@ pop.import_state(state_flat)
 
 ## 相关章节
 
-- [PopulationState 与 PopulationConfig](4_population_state_config.md)
-- [Numba 优化指南](4_numba_optimization.md)
+- [PopulationState 与 ModelDraft](4_population_state_config.md)
+- [后端选择与性能](4_backend_selection.md)
 - [Modifier 机制](3_modifiers.md)
 - [Hook 系统](2_hooks.md)

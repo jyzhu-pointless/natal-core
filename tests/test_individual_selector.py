@@ -1,4 +1,4 @@
-"""Tests for natal.patterns.individual_selector.IndividualSelector.
+"""Tests for natal.frontend.patterns.individual_selector.IndividualSelector.
 
 Every assertion proves a mathematical invariant — exact mask comparisons,
 coordinate-set cardinalities, or algebraic laws (commutativity, associativity,
@@ -11,9 +11,9 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.patterns import IndividualSelector
-from natal.registry.index import IndexRegistry
-from natal.utils.types import Sex
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.registry.index import IndexRegistry
+from natal.frontend.utils.types import Sex
 
 # ── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ class TestConstructionZtype:
         """ztype=ZygoteTypePattern → normalized via str() (produces repr).
         The repr of a ZygoteTypePattern is not a valid pattern syntax,
         so _resolve_ztype will raise PatternParseError at compile time."""
-        from natal.patterns import PatternParseError, ZygoteTypePattern
+        from natal.frontend.patterns import PatternParseError, ZygoteTypePattern
         pattern = ZygoteTypePattern.parse("*|Dr", simple_species)
         s = IndividualSelector(ztype=pattern)
         # _to_tuple_ztype calls str(value) which gives the repr string

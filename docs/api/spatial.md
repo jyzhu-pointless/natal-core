@@ -9,6 +9,6 @@ topology classes for multi-deme population simulations with migration.
 
 ## Complete Module Reference
 
-::: natal.spatial
+::: natal.frontend.spatial
     options:
       heading_level: 3

@@ -6,7 +6,7 @@ between the panmictic and spatial dashboards.
 """
 
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:
     from natal.frontend.genetics import Haplotype, Locus
@@ -206,16 +206,16 @@ def get_hooks_data(population: "BasePopulation[Any]") -> list[dict[str, Any]]:
             return float(ages)  # type: ignore[reportUnknownArgumentType]
         return str(ages)
 
-    hooks_data = []
+    hooks_data: List[Dict[str, object]] = []
     for desc in population.get_compiled_hooks():
-        hook_info = {
+        hook_info: Dict[str, object] = {
             "event": desc.event,
             "name": desc.name,
             "priority": desc.priority,
         }
         if hasattr(desc, "ops") and desc.ops:
             hook_info["type"] = "declarative"
-            op_list = []
+            op_list: List[Dict[str, object]] = []
             for op in desc.ops:
                 op_dict = {
                     "type": normalize_op_type(op.op_type),
@@ -227,15 +227,13 @@ def get_hooks_data(population: "BasePopulation[Any]") -> list[dict[str, Any]]:
                 }
                 op_list.append(op_dict)  # type: ignore[reportUnknownMemberType]
             hook_info["operations"] = op_list
-        else:
-            hook_info["type"] = "custom"
-            target_fn = desc.njit_fn or desc.py_wrapper
-            if target_fn:
-                try:
-                    sig = inspect.signature(target_fn)
-                    hook_info["signature"] = str(sig)
-                except (ValueError, TypeError):
-                    hook_info["signature"] = "N/A"
+        elif desc.callback is not None:
+            hook_info["type"] = "callback"
+            try:
+                sig = inspect.signature(desc.callback)
+                hook_info["signature"] = str(sig)
+            except (ValueError, TypeError):
+                hook_info["signature"] = "N/A"
         hooks_data.append(hook_info)  # type: ignore[reportUnknownMemberType]
     return hooks_data  # type: ignore[reportUnknownVariableType]
 
@@ -263,15 +261,12 @@ def render_single_hook(desc: "CompiledHookDescriptor", is_global: bool = False) 
                             ui.html(format_op(op)).classes("text-sm font-mono p-1 border-b bg-gray-50 rounded")
                 else:
                     ui.label("Compiled Plan (Low-level arrays)").classes("text-sm text-gray-400")
-            else:
-                if desc.py_wrapper:
-                    try:
-                        code = inspect.getsource(desc.py_wrapper)
-                        ui.code(code, language="python").classes("w-full text-sm")
-                    except OSError:
-                        ui.label("(Source code unavailable)").classes("italic")
-                elif desc.njit_fn:
-                    ui.label("Custom Numba Hook").classes("font-bold")
+            elif desc.callback is not None:
+                try:
+                    code = inspect.getsource(desc.callback)
+                    ui.code(code, language="python").classes("w-full text-sm")
+                except OSError:
+                    ui.label("(Source code unavailable)").classes("italic")
 
 
 def render_hooks_panel(population: "BasePopulation[Any]") -> None:

@@ -13,7 +13,7 @@ import time
 import numpy as np
 
 import natal as nt
-from natal.engine.backends.rust_backend import rust_backend_available
+from natal.backends.rust.rust_backend import rust_backend_available
 
 N_TICKS = 100
 REPEATS = 3
@@ -68,21 +68,21 @@ def measure_tick_loop(pop, n_steps: int) -> float:
 
 
 def benchmark(stochastic: bool) -> None:
-    reference = build(stochastic, "numba")
+    reference = build(stochastic, "python_reference")
     rust_pop = build(stochastic, "rust").enable_rust_backend(seed=1)
     measure_run(reference, 2)
     measure_run(rust_pop, 2)
 
     timings = {
-        "numba run(n)": [],
+        "python run(n)": [],
         "rust run(n)": [],
-        "numba run_tick loop": [],
+        "python run_tick loop": [],
         "rust run_tick loop": [],
     }
     for _ in range(REPEATS):
-        timings["numba run(n)"].append(measure_run(reference, N_TICKS))
+        timings["python run(n)"].append(measure_run(reference, N_TICKS))
         timings["rust run(n)"].append(measure_run(rust_pop, N_TICKS))
-        timings["numba run_tick loop"].append(measure_tick_loop(reference, N_TICKS))
+        timings["python run_tick loop"].append(measure_tick_loop(reference, N_TICKS))
         timings["rust run_tick loop"].append(measure_tick_loop(rust_pop, N_TICKS))
 
     print(f"\n=== stochastic={stochastic} (n_ztypes={reference.config.n_ztypes}) ===")

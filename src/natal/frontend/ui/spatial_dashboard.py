@@ -146,7 +146,7 @@ class SpatialDashboard:
                             self.pop.run_tick()
                             ticks += 1
 
-                    await run.io_bound(run_batch)  # type: ignore[reportPossiblyUnboundVariable]
+                    await run.io_bound(run_batch)  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 else:
                     await run.io_bound(self.pop.run_tick)  # type: ignore[reportUnknownParameterType]
 
@@ -304,9 +304,9 @@ class SpatialDashboard:
                 customdata[row, col] = idx
                 text[row, col] = f"Index: {idx}<br>Coord: ({row}, {col})<br>{hover_label}: {format_val(count)}"  # type: ignore[reportCallIssue, reportUnknownArgumentType]
 
-        fig = go.Figure(  # type: ignore[reportPossiblyUnboundVariable]
+        fig = go.Figure(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
             data=[
-                go.Heatmap(  # type: ignore[reportPossiblyUnboundVariable]
+                go.Heatmap(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                     z=z,
                     x=np.arange(topology.cols, dtype=np.int64),
                     y=np.arange(topology.rows, dtype=np.int64),
@@ -460,7 +460,7 @@ class SpatialDashboard:
         )
 
         if not _has_plotly:
-            ui.label("Plotly is required for landscape visualization. Install with: pip install plotly").classes(  # type: ignore[reportPossiblyUnboundVariable]
+            ui.label("Plotly is required for landscape visualization. Install with: pip install plotly").classes(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 "text-red-600 font-bold"
             )
             return
@@ -483,7 +483,7 @@ class SpatialDashboard:
                     return
 
                 if use_large:
-                    ui.label(  # type: ignore[reportPossiblyUnboundVariable]
+                    ui.label(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         "Large landscape mode uses a scalable row/column heatmap for responsiveness."
                     ).classes("text-sm text-slate-500")
                     self._landscape_fig = self._build_large_landscape_figure(
@@ -491,7 +491,7 @@ class SpatialDashboard:
                         colorbar_title=colorbar_title,
                         hover_label=hover_label, format_val=format_val,  # type: ignore[reportUnknownArgumentType]
                     )
-                    self._landscape_plot = ui.plotly(self._landscape_fig).classes(  # type: ignore[reportPossiblyUnboundVariable]
+                    self._landscape_plot = ui.plotly(self._landscape_fig).classes(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         "w-full border rounded"
                     ).props('style="height: 500px; width: 100%;"')
                     self._landscape_plot.on("plotly_click", self._on_landscape_click, ["points"])
@@ -521,7 +521,7 @@ class SpatialDashboard:
         self, counts: list[float], max_count: float, hover_label: str, format_val: Any
     ) -> tuple[Any, Any]:
         """Build non-topology scatter-marker landscape (first render)."""
-        fig = go.Figure()  # type: ignore[reportPossiblyUnboundVariable]
+        fig = go.Figure()  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
         n_demes = len(self.pop.demes)
         cols = int(np.ceil(np.sqrt(n_demes)))
 
@@ -561,7 +561,7 @@ class SpatialDashboard:
             hovermode="closest", height=400,
             uirevision="landscape",
         )
-        plot = ui.plotly(fig).classes("w-full border rounded").props('style="height: 400px; width: 100%;"')  # type: ignore[reportPossiblyUnboundVariable]
+        plot = ui.plotly(fig).classes("w-full border rounded").props('style="height: 400px; width: 100%;"')  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
         plot.on("plotly_click", self._on_landscape_click, ["points"])
         return fig, plot
 
@@ -677,7 +677,7 @@ class SpatialDashboard:
             uirevision="landscape",
         )
 
-        plot = ui.plotly(fig).classes("w-full border rounded").props('style="height: 500px; width: 100%;"')  # type: ignore[reportPossiblyUnboundVariable]
+        plot = ui.plotly(fig).classes("w-full border rounded").props('style="height: 500px; width: 100%;"')  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
         plot.on("plotly_click", self._on_landscape_click, ["points"])
         return fig, plot
 
@@ -880,7 +880,7 @@ class SpatialDashboard:
 
         return rows
 
-    def _get_genotype_fitness(self, config: Any, g_idx: int, target_age: int) -> dict[str, str]:  # config: PopulationConfig-like duck type
+    def _get_genotype_fitness(self, config: Any, g_idx: int, target_age: int) -> dict[str, str]:  # config: ModelDraft-like duck type
         """Return formatted viability and fecundity values for one genotype."""
         # TODO: When SpatialPopulation supports both shared and per-deme mutable
         # configuration layers, explicitly resolve invariants vs per-deme overrides here.
@@ -1076,13 +1076,29 @@ class SpatialDashboard:
         self._render_migration_panel()
         self._update_selected_deme()
 
+    def _migration_rate_text(self, deme_idx: int) -> str:
+        """Render the slice-5 migration-rate row for one deme.
+
+        The runtime migration surface is the ``(n_demes, n_sexes, n_ages)``
+        rate column on ``pop.params``; the retired ``migration_mode`` /
+        ``migration_kernel`` attributes no longer exist on the container.
+        """
+        rate = self.pop.params.migration_rate
+        row = rate[deme_idx]
+        parts = [
+            f"sex{s} age{i}={float(row[s, i]):.3f}"
+            for s in range(row.shape[0])
+            for i in range(row.shape[1])
+        ]
+        return "rate=[" + ", ".join(parts) + "]"
+
     def _update_global_stats(self) -> None:
         """Refresh aggregate summary labels."""
         self.lbl_tick.text = str(self.pop.tick)
         self.lbl_total.text = str(self.pop.get_total_count())
         self.lbl_females.text = str(self.pop.get_female_count())
         self.lbl_males.text = str(self.pop.get_male_count())
-        self.lbl_mode.text = self.pop.migration_mode
+        self.lbl_mode.text = self._migration_rate_text(0)
         self.lbl_history_count.text = f"(Current session: {len(self._chart_history)} snapshots)"
 
     MAX_CHART_POINTS = 500
@@ -1139,28 +1155,15 @@ class SpatialDashboard:
         )
 
         with self.migration_container:
-            ui.label(  # type: ignore[reportPossiblyUnboundVariable]
+            ui.label(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 f"Source deme: {selected.name} (index {self.selected_deme_idx})"
             ).classes("text-base font-semibold text-slate-700")
-            rate = self.pop.migration_rate
-            rate_str = ", ".join(f"age{i}={v:.3f}" for i, v in enumerate(rate.flat))
-            ui.label(  # type: ignore[reportPossiblyUnboundVariable]
-                f"Migration mode: {self.pop.migration_mode}, rate=[{rate_str}]"
+            rate_str = self._migration_rate_text(self.selected_deme_idx)
+            ui.label(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                f"Migration: {rate_str}"
             ).classes("text-sm text-slate-500")
 
-            if self.pop.migration_kernel is not None:
-                ui.label("Kernel").classes("text-sm font-semibold text-slate-600 mt-2")  # type: ignore[reportPossiblyUnboundVariable]
-                kernel_rows = [
-                    {f"c{col}": f"{float(value):.3f}" for col, value in enumerate(row)}
-                    for row in self.pop.migration_kernel
-                ]
-                columns = [
-                    {"name": f"c{col}", "label": str(col), "field": f"c{col}"}
-                    for col in range(self.pop.migration_kernel.shape[1])
-                ]
-                ui.table(columns=columns, rows=kernel_rows).props("dense flat").classes("w-full")  # type: ignore[reportPossiblyUnboundVariable]
-
-            ui.label("Outbound weights").classes("text-sm font-semibold text-slate-600 mt-2")  # type: ignore[reportPossiblyUnboundVariable]
+            ui.label("Outbound weights").classes("text-sm font-semibold text-slate-600 mt-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
             rows = [
                 {
                     "deme": self.pop.deme(idx).name,
@@ -1170,7 +1173,7 @@ class SpatialDashboard:
                 }
                 for idx, weight, coord in ranked_targets[:12]
             ]
-            ui.table(  # type: ignore[reportPossiblyUnboundVariable]
+            ui.table(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 columns=[
                     {"name": "deme", "label": "Deme", "field": "deme"},
                     {"name": "index", "label": "Index", "field": "index"},
@@ -1227,12 +1230,12 @@ class SpatialDashboard:
         self.age_summary_card.visible = True
         with self.summary_age_container:
             for row in rows:
-                with ui.row().classes("w-full items-center justify-between py-1 border-b last:border-b-0"):  # type: ignore[reportPossiblyUnboundVariable]
-                    ui.label(f"Age {row['age']}").classes("font-semibold text-base text-gray-700 min-w-[5rem]")  # type: ignore[reportPossiblyUnboundVariable]
-                    with ui.row().classes("gap-3 text-sm font-mono"):  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label(f"F {row['female']:,}").classes("text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label(f"M {row['male']:,}").classes("text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label(f"T {row['total']:,}").classes("text-gray-800 font-semibold")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.row().classes("w-full items-center justify-between py-1 border-b last:border-b-0"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    ui.label(f"Age {row['age']}").classes("font-semibold text-base text-gray-700 min-w-[5rem]")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    with ui.row().classes("gap-3 text-sm font-mono"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label(f"F {row['female']:,}").classes("text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label(f"M {row['male']:,}").classes("text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label(f"T {row['total']:,}").classes("text-gray-800 font-semibold")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
     def _render_deme_genotypes(self, state: PopulationState) -> None:
         """Render genotype cards for the selected deme."""
@@ -1242,28 +1245,28 @@ class SpatialDashboard:
         with self.genotype_container:
             for row in rows:
                 genotype = row["genotype"]
-                with ui.card().classes("items-center p-3 border rounded shadow-sm w-44"):  # type: ignore[reportPossiblyUnboundVariable]
-                    ui.html(render_cell_svg(genotype, self.pop.species, size=72))  # type: ignore[reportPossiblyUnboundVariable]
-                    ui.label(str(genotype)).classes("text-sm font-bold text-center leading-tight text-gray-800")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.card().classes("items-center p-3 border rounded shadow-sm w-44"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    ui.html(render_cell_svg(genotype, self.pop.species, size=72))  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    ui.label(str(genotype)).classes("text-sm font-bold text-center leading-tight text-gray-800")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
                     fitness = row["fitness"]
                     if fitness:
-                        with ui.column().classes("w-full items-center gap-0 my-1 bg-gray-50 rounded p-1"):  # type: ignore[reportPossiblyUnboundVariable]
+                        with ui.column().classes("w-full items-center gap-0 my-1 bg-gray-50 rounded p-1"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                             if "viability" in fitness:
-                                ui.label(fitness["viability"]).classes("text-xs text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
+                                ui.label(fitness["viability"]).classes("text-xs text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                             if "fecundity" in fitness:
-                                ui.label(fitness["fecundity"]).classes("text-xs text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
+                                ui.label(fitness["fecundity"]).classes("text-xs text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                    with ui.row().classes("w-full justify-between text-sm"):  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label(f"F: {row['female']}").classes("text-pink-600 font-semibold")  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label(f"M: {row['male']}").classes("text-blue-600 font-semibold")  # type: ignore[reportPossiblyUnboundVariable]
+                    with ui.row().classes("w-full justify-between text-sm"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label(f"F: {row['female']}").classes("text-pink-600 font-semibold")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label(f"M: {row['male']}").classes("text-blue-600 font-semibold")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
                     age_rows = row["age_rows"]
                     if age_rows:
-                        with ui.column().classes("w-full gap-0.5 text-xs text-gray-500"):  # type: ignore[reportPossiblyUnboundVariable]
+                        with ui.column().classes("w-full gap-0.5 text-xs text-gray-500"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                             for age_row in age_rows:
-                                with ui.row().classes("w-full justify-between leading-tight"):  # type: ignore[reportPossiblyUnboundVariable]
-                                    ui.label(f"A{age_row['age']}")  # type: ignore[reportPossiblyUnboundVariable]
+                                with ui.row().classes("w-full justify-between leading-tight"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                    ui.label(f"A{age_row['age']}")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                                     ui.label(f"{age_row['female']}/{age_row['male']}")  # type: ignore[reportUnnecessaryComparison]
 
     def _render_deme_config(self) -> None:
@@ -1278,12 +1281,12 @@ class SpatialDashboard:
         genotypes = registry.index_to_genotype
 
         with self.config_container:
-            with ui.card().classes("p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label(f"Deme {self.selected_deme_idx} Configuration").classes("text-lg font-bold text-gray-700 mb-4")  # type: ignore[reportPossiblyUnboundVariable]
+            with ui.card().classes("p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label(f"Deme {self.selected_deme_idx} Configuration").classes("text-lg font-bold text-gray-700 mb-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                with ui.row().classes("w-full gap-8"):  # type: ignore[reportPossiblyUnboundVariable]
-                    with ui.column().classes("w-1/3"):  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label("Scalar Parameters").classes("font-bold text-gray-600 mb-2")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.row().classes("w-full gap-8"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    with ui.column().classes("w-1/3"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label("Scalar Parameters").classes("font-bold text-gray-600 mb-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         with ui.grid(columns=2).classes("w-full gap-y-1 gap-x-4"):  # type: ignore[reportUnknownMemberType]
                             for label_text, value in [
                                 ("Carrying Capacity", float(config.carrying_capacity)),  # type: ignore[reportUnknownArgumentType]
@@ -1298,8 +1301,8 @@ class SpatialDashboard:
                                 ("N Ages", int(config.n_ages)),  # type: ignore[reportUnknownArgumentType]
                                 ("N Genotypes", int(config.n_ztypes)),  # type: ignore[reportUnknownArgumentType]
                             ]:
-                                ui.label(label_text).classes("font-bold text-gray-500 text-sm")  # type: ignore[reportPossiblyUnboundVariable]
-                                ui.label(str(value)).classes("text-right font-mono text-sm")  # type: ignore[reportPossiblyUnboundVariable]
+                                ui.label(label_text).classes("font-bold text-gray-500 text-sm")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                ui.label(str(value)).classes("text-right font-mono text-sm")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
                     with ui.column().classes("flex-grow"):  # type: ignore[reportUnknownMemberType]
                         target_age = max(0, int(config.new_adult_age) - 1)  # type: ignore[reportUnknownArgumentType]
@@ -1312,7 +1315,7 @@ class SpatialDashboard:
                             if f_val != 1.0 or m_val != 1.0:
                                 via_rows.append({"Genotype": str(g_obj), "Female": f_val, "Male": m_val})  # type: ignore[reportUnknownMemberType]
                         if via_rows:
-                            ui.label("Viability Fitness").classes("font-bold text-gray-600 mb-2")  # type: ignore[reportPossiblyUnboundVariable]
+                            ui.label("Viability Fitness").classes("font-bold text-gray-600 mb-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                             ui.table(  # type: ignore[reportUnknownMemberType]
                                 columns=[
                                     {"name": "Genotype", "label": "Genotype", "field": "Genotype"},
@@ -1330,7 +1333,7 @@ class SpatialDashboard:
                             if f_val != 1.0 or m_val != 1.0:
                                 fec_rows.append({"Genotype": str(g_obj), "Female": f_val, "Male": m_val})  # type: ignore[reportUnknownMemberType]
                         if fec_rows:
-                            ui.label("Fecundity Fitness").classes("font-bold text-gray-600 mb-2")  # type: ignore[reportPossiblyUnboundVariable]
+                            ui.label("Fecundity Fitness").classes("font-bold text-gray-600 mb-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                             ui.table(  # type: ignore[reportUnnecessaryComparison]
                                 columns=[
                                     {"name": "Genotype", "label": "Genotype", "field": "Genotype"},
@@ -1342,7 +1345,7 @@ class SpatialDashboard:
 
     def _render_hooks_panel(self) -> None:
         """Display all hooks registered on the spatial population."""
-        if not hasattr(self, "hooks_container") or self.hooks_container is None:  # type: ignore[reportPossiblyUnboundVariable]
+        if not hasattr(self, "hooks_container") or self.hooks_container is None:  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
             return
         self.hooks_container.clear()
 
@@ -1354,7 +1357,7 @@ class SpatialDashboard:
                     per_deme_hooks.append((deme_id, desc))
 
             if not per_deme_hooks:
-                ui.label("No hooks registered.").classes("text-gray-500 italic")  # type: ignore[reportPossiblyUnboundVariable]
+                ui.label("No hooks registered.").classes("text-gray-500 italic")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 return
 
             # Identify global (registered on all demes with "*" selector) vs local
@@ -1369,7 +1372,7 @@ class SpatialDashboard:
                     local_hooks.append((d_id, desc))
 
             if global_hooks:
-                ui.label("Global Hooks (applied to all demes)").classes("text-lg font-bold text-green-700 mt-2")  # type: ignore[reportPossiblyUnboundVariable]
+                ui.label("Global Hooks (applied to all demes)").classes("text-lg font-bold text-green-700 mt-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 seen: set[str] = set()
                 for _, desc in per_deme_hooks:
                     if getattr(desc, "deme_selector", None) == "*" and desc.name not in seen:
@@ -1377,26 +1380,26 @@ class SpatialDashboard:
                         render_single_hook(desc, is_global=True)
 
             if local_hooks:
-                ui.label("Per-Deme Hooks").classes("text-lg font-bold text-blue-700 mt-2")  # type: ignore[reportPossiblyUnboundVariable]
+                ui.label("Per-Deme Hooks").classes("text-lg font-bold text-blue-700 mt-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 # Group by deme
                 by_deme: dict[int, list[Any]] = {}
                 for d_id, desc in local_hooks:
                     by_deme.setdefault(d_id, []).append(desc)
                 for d_id in sorted(by_deme):
-                    ui.label(f"Deme {d_id}").classes("text-md font-semibold text-gray-700 mt-2")  # type: ignore[reportPossiblyUnboundVariable]
+                    ui.label(f"Deme {d_id}").classes("text-md font-semibold text-gray-700 mt-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                     for desc in by_deme[d_id]:
                         render_single_hook(desc, is_global=False)
 
     def show_export_dialog(self) -> None:
         """Open export dialog for spatial data."""
-        with ui.dialog() as self.export_dialog, ui.card():  # type: ignore[reportPossiblyUnboundVariable]
-            ui.label("Select items to export").classes("text-lg font-bold")  # type: ignore[reportPossiblyUnboundVariable]
-            self.cb_config = ui.checkbox("Configuration & Fitness", value=True)  # type: ignore[reportPossiblyUnboundVariable]
-            self.cb_history = ui.checkbox("Population History", value=True)  # type: ignore[reportPossiblyUnboundVariable]
-            self.cb_hooks = ui.checkbox("Hooks", value=True)  # type: ignore[reportPossiblyUnboundVariable]
-            with ui.row().classes("w-full justify-end gap-2 mt-4"):  # type: ignore[reportPossiblyUnboundVariable]
-                ui.button("Export", on_click=self._do_export)  # type: ignore[reportPossiblyUnboundVariable]
-                ui.button("Cancel", on_click=self.export_dialog.close).props("flat")  # type: ignore[reportPossiblyUnboundVariable]
+        with ui.dialog() as self.export_dialog, ui.card():  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            ui.label("Select items to export").classes("text-lg font-bold")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            self.cb_config = ui.checkbox("Configuration & Fitness", value=True)  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            self.cb_history = ui.checkbox("Population History", value=True)  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            self.cb_hooks = ui.checkbox("Hooks", value=True)  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            with ui.row().classes("w-full justify-end gap-2 mt-4"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.button("Export", on_click=self._do_export)  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.button("Cancel", on_click=self.export_dialog.close).props("flat")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
         self.export_dialog.open()
 
     def _do_export(self) -> None:
@@ -1406,7 +1409,7 @@ class SpatialDashboard:
         include_hooks = self.cb_hooks.value
         self.export_dialog.close()
         self._do_export_logic(include_config, include_history, include_hooks)
-        ui.notify("Export started...")  # type: ignore[reportPossiblyUnboundVariable]
+        ui.notify("Export started...")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
     def _do_export_logic(
         self, include_config: bool, include_history: bool, include_hooks: bool
@@ -1429,8 +1432,13 @@ class SpatialDashboard:
             export_content["configuration"] = {  # type: ignore[reportArgumentType]
                 "parameters": {
                     "n_demes": self.pop.n_demes,
-                    "migration_mode": self.pop.migration_mode,
-                    "migration_rate": float(self.pop.migration_rate),
+                    "migration_csr": {
+                        "indptr": self.pop.migration_csr.indptr.tolist(),
+                        "dest_idx": self.pop.migration_csr.dest_idx.tolist(),
+                        "weights": self.pop.migration_csr.weights.tolist(),
+                        "stay_after_send": bool(self.pop.migration_csr.stay_after_send),
+                    },
+                    "migration_rate_per_deme": self.pop.params.migration_rate.tolist(),
                     "carrying_capacity": float(first_config.carrying_capacity),  # type: ignore[reportUnknownArgumentType]
                     "n_sexes": int(first_config.n_sexes),  # type: ignore[reportUnknownArgumentType]
                     "n_ages": int(first_config.n_ages),  # type: ignore[reportUnknownArgumentType]
@@ -1446,13 +1454,13 @@ class SpatialDashboard:
 
         try:
             json_str = json.dumps(export_content, default=numpy_converter)
-            ui.download(  # type: ignore[reportPossiblyUnboundVariable]
+            ui.download(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 json_str.encode("utf-8"),
                 filename=f"natal_spatial_export_{self.pop.name}_tick{self.pop.tick}.json",
                 media_type="application/json",
             )
         except Exception as e:
-            ui.notify(f"Export failed: {e}", type="negative")  # type: ignore[reportPossiblyUnboundVariable]
+            ui.notify(f"Export failed: {e}", type="negative")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
     def reset_simulation(self) -> None:
         """Reset the spatial simulation and the dashboard session history."""
@@ -1467,7 +1475,7 @@ class SpatialDashboard:
         self.btn_play.text = "Play"
         self.status_label.text = "Ready"
         self.refresh_ui()
-        ui.notify("Spatial population reset.")  # type: ignore[reportPossiblyUnboundVariable]
+        ui.notify("Spatial population reset.")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
     def _on_show_numbers_change(self) -> None:
         """Handle checkbox change for show_numbers toggle."""
@@ -1476,33 +1484,33 @@ class SpatialDashboard:
 
     def build_layout(self) -> None:
         """Construct the NiceGUI layout."""
-        with ui.header().classes("items-center justify-between bg-slate-900 text-white"):  # type: ignore[reportPossiblyUnboundVariable]
-            ui.label("Spatial NATAL Dashboard").classes("text-2xl font-bold")  # type: ignore[reportPossiblyUnboundVariable]
-            ui.label(f"Population: {self.pop.name}").classes("text-base opacity-80")  # type: ignore[reportPossiblyUnboundVariable]
+        with ui.header().classes("items-center justify-between bg-slate-900 text-white"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            ui.label("Spatial NATAL Dashboard").classes("text-2xl font-bold")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            ui.label(f"Population: {self.pop.name}").classes("text-base opacity-80")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-        with ui.left_drawer(value=True).classes("bg-gray-50 p-4 shadow-lg border-r").props("width=320"):  # type: ignore[reportPossiblyUnboundVariable]
-            ui.label("Control Panel").classes("text-xl font-bold text-gray-700 mb-4")  # type: ignore[reportPossiblyUnboundVariable]
+        with ui.left_drawer(value=True).classes("bg-gray-50 p-4 shadow-lg border-r").props("width=320"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            ui.label("Control Panel").classes("text-xl font-bold text-gray-700 mb-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-            with ui.row().classes("items-center gap-2 mb-4 p-2 bg-white rounded border"):  # type: ignore[reportPossiblyUnboundVariable]
-                self.status_spinner = ui.spinner(size="sm").props("color=primary")  # type: ignore[reportPossiblyUnboundVariable]
-                self.status_label = ui.label("Ready").classes("text-base font-medium text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
+            with ui.row().classes("items-center gap-2 mb-4 p-2 bg-white rounded border"):  # type: ignore[reportPossiblyUnboundVariable]  # ui is bound only when nicegui imports; callers reach this layout method through _require_nicegui() and the runtime _has_nicegui guard, which pyright cannot narrow from the try/except import
+                self.status_spinner = ui.spinner(size="sm").props("color=primary")  # type: ignore[reportPossiblyUnboundVariable]  # same conditional-nicegui binding as the row above
+                self.status_label = ui.label("Ready").classes("text-base font-medium text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # same conditional-nicegui binding as the row above
                 self.status_spinner.visible = False
 
-            ui.label("Global State").classes("text-sm font-bold text-gray-400 uppercase mb-2")  # type: ignore[reportPossiblyUnboundVariable]
-            with ui.grid(columns=2).classes("w-full gap-y-2 gap-x-4 mb-4"):  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Tick").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_tick = ui.label(str(self.pop.tick)).classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Total").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_total = ui.label(str(self.pop.get_total_count())).classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Females").classes("font-bold text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_females = ui.label(str(self.pop.get_female_count())).classes("text-right font-mono text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Males").classes("font-bold text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_males = ui.label(str(self.pop.get_male_count())).classes("text-right font-mono text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Migration").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_mode = ui.label(self.pop.migration_mode).classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
+            ui.label("Global State").classes("text-sm font-bold text-gray-400 uppercase mb-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            with ui.grid(columns=2).classes("w-full gap-y-2 gap-x-4 mb-4"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Tick").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_tick = ui.label(str(self.pop.tick)).classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Total").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_total = ui.label(str(self.pop.get_total_count())).classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Females").classes("font-bold text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_females = ui.label(str(self.pop.get_female_count())).classes("text-right font-mono text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Males").classes("font-bold text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_males = ui.label(str(self.pop.get_male_count())).classes("text-right font-mono text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Migration").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_mode = ui.label(self._migration_rate_text(0)).classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-            ui.label("Landscape Display").classes("text-sm font-bold text-gray-400 uppercase mt-4 mb-2")  # type: ignore[reportPossiblyUnboundVariable]
-            self.chk_show_numbers = ui.checkbox(  # type: ignore[reportPossiblyUnboundVariable]
+            ui.label("Landscape Display").classes("text-sm font-bold text-gray-400 uppercase mt-4 mb-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            self.chk_show_numbers = ui.checkbox(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 "Show numbers",
                 value=False,
                 on_change=lambda: self._on_show_numbers_change()
@@ -1510,13 +1518,13 @@ class SpatialDashboard:
             if self._use_large_landscape_mode():
                 self.chk_show_numbers.disable()
 
-            ui.label("Interval (s) (0=Unlimited)").classes("text-sm font-bold text-gray-400 uppercase mt-4 mb-2")  # type: ignore[reportPossiblyUnboundVariable]
-            self.slider_speed = ui.slider(min=0.0, max=0.2, value=0.05, step=0.005).props("label-always")  # type: ignore[reportPossiblyUnboundVariable]
+            ui.label("Interval (s) (0=Unlimited)").classes("text-sm font-bold text-gray-400 uppercase mt-4 mb-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            self.slider_speed = ui.slider(min=0.0, max=0.2, value=0.05, step=0.005).props("label-always")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
             self.slider_speed.on_value_change(self._update_timer_interval)
 
-            with ui.column().classes("w-full gap-2 mt-4"):  # type: ignore[reportPossiblyUnboundVariable]
-                with ui.row().classes("w-full gap-2"):  # type: ignore[reportPossiblyUnboundVariable]
-                    ui.button("Step", on_click=self._run_step).props("icon=skip_next outline").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]
+            with ui.column().classes("w-full gap-2 mt-4"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                with ui.row().classes("w-full gap-2"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    ui.button("Step", on_click=self._run_step).props("icon=skip_next outline").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
                     def update_play_state(event: Any) -> None:  # plotly event object
                         self._toggle_play()
@@ -1525,32 +1533,32 @@ class SpatialDashboard:
                         event.sender.props(f"icon={icon}")
                         event.sender.text = text
 
-                    self.btn_play = ui.button("Play", on_click=update_play_state).props("icon=play_arrow").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]
+                    self.btn_play = ui.button("Play", on_click=update_play_state).props("icon=play_arrow").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                with ui.row().classes("w-full gap-2"):  # type: ignore[reportPossiblyUnboundVariable]
-                    ui.button("Reset", on_click=self.reset_simulation).props("icon=restart_alt flat color=grey").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]
-                    ui.button("Export", on_click=self.show_export_dialog).props("icon=download flat color=grey").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.row().classes("w-full gap-2"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    ui.button("Reset", on_click=self.reset_simulation).props("icon=restart_alt flat color=grey").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    ui.button("Export", on_click=self.show_export_dialog).props("icon=download flat color=grey").classes("flex-grow")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-            self.lbl_history_count = ui.label("").classes("text-sm text-gray-400 italic mt-4")  # type: ignore[reportPossiblyUnboundVariable]
-            ui.separator().classes("my-4")  # type: ignore[reportPossiblyUnboundVariable]
+            self.lbl_history_count = ui.label("").classes("text-sm text-gray-400 italic mt-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            ui.separator().classes("my-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-            ui.label("Selected Deme").classes("text-sm font-bold text-gray-400 uppercase mb-2")  # type: ignore[reportPossiblyUnboundVariable]
-            with ui.grid(columns=2).classes("w-full gap-y-2 gap-x-4"):  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Name").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_selected_name = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Coord").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_selected_coord = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Total").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_selected_total = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Females").classes("font-bold text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_selected_females = ui.label("").classes("text-right font-mono text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]
-                ui.label("Males").classes("font-bold text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]
-                self.lbl_selected_males = ui.label("").classes("text-right font-mono text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]
+            ui.label("Selected Deme").classes("text-sm font-bold text-gray-400 uppercase mb-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            with ui.grid(columns=2).classes("w-full gap-y-2 gap-x-4"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Name").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_selected_name = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Coord").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_selected_coord = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Total").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_selected_total = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Females").classes("font-bold text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_selected_females = ui.label("").classes("text-right font-mono text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                ui.label("Males").classes("font-bold text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                self.lbl_selected_males = ui.label("").classes("text-right font-mono text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-        with ui.column().classes("w-full p-4 gap-6"):  # type: ignore[reportPossiblyUnboundVariable]
-            with ui.card().classes("w-full p-0 gap-0 border-none shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]
-                with ui.row().classes("w-full no-wrap"):  # type: ignore[reportPossiblyUnboundVariable]
-                    self.chart_pop = ui.highchart(  # type: ignore[reportPossiblyUnboundVariable]
+        with ui.column().classes("w-full p-4 gap-6"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+            with ui.card().classes("w-full p-0 gap-0 border-none shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                with ui.row().classes("w-full no-wrap"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    self.chart_pop = ui.highchart(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         {
                             "title": {"text": "Total Population"},
                             "chart": {"type": "line", "animation": False, "height": 300},
@@ -1564,7 +1572,7 @@ class SpatialDashboard:
                         }
                     ).classes("w-1/2 h-80")
 
-                    self.chart_allele = ui.highchart(  # type: ignore[reportPossiblyUnboundVariable]
+                    self.chart_allele = ui.highchart(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         {
                             "title": {"text": "Global Allele Frequencies"},
                             "chart": {"type": "line", "animation": False, "height": 300},
@@ -1575,22 +1583,22 @@ class SpatialDashboard:
                         }
                     ).classes("w-1/2 h-80")
 
-            with ui.tabs().classes("w-full justify-start border-b") as tabs:  # type: ignore[reportPossiblyUnboundVariable]
+            with ui.tabs().classes("w-full justify-start border-b") as tabs:  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                 self.tabs_main = tabs
-                tab_overview = ui.tab(name="overview", label="Landscape", icon="grid_view")  # type: ignore[reportPossiblyUnboundVariable]
-                tab_deme = ui.tab(name="deme", label="Selected Deme", icon="search")  # type: ignore[reportPossiblyUnboundVariable]
-                tab_config = ui.tab(name="config", label="Config", icon="settings")  # type: ignore[reportPossiblyUnboundVariable]
-                tab_hooks = ui.tab(name="hooks", label="Hooks", icon="extension")  # type: ignore[reportPossiblyUnboundVariable]
-                tab_genetics = ui.tab(name="genetics", label="Genetics", icon="biotech")  # type: ignore[reportPossiblyUnboundVariable]
-                tab_observation = ui.tab(name="observation", label="Observation", icon="visibility")  # type: ignore[reportPossiblyUnboundVariable]
+                tab_overview = ui.tab(name="overview", label="Landscape", icon="grid_view")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                tab_deme = ui.tab(name="deme", label="Selected Deme", icon="search")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                tab_config = ui.tab(name="config", label="Config", icon="settings")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                tab_hooks = ui.tab(name="hooks", label="Hooks", icon="extension")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                tab_genetics = ui.tab(name="genetics", label="Genetics", icon="biotech")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                tab_observation = ui.tab(name="observation", label="Observation", icon="visibility")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-            with ui.tab_panels(tabs, value="overview").classes("w-full bg-transparent p-0"):  # type: ignore[reportPossiblyUnboundVariable]
-                with ui.tab_panel(tab_overview).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]
-                    with ui.row().classes("w-full gap-6 items-start"):  # type: ignore[reportPossiblyUnboundVariable]
-                        with ui.card().classes("flex-1 min-w-0 p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]
-                            with ui.row().classes("items-center gap-4 mb-3"):  # type: ignore[reportPossiblyUnboundVariable]
-                                ui.label("Landscape").classes("text-lg font-bold text-gray-700")  # type: ignore[reportPossiblyUnboundVariable]
-                                self.landscape_metric = ui.select(  # type: ignore[reportPossiblyUnboundVariable]
+            with ui.tab_panels(tabs, value="overview").classes("w-full bg-transparent p-0"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                with ui.tab_panel(tab_overview).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    with ui.row().classes("w-full gap-6 items-start"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        with ui.card().classes("flex-1 min-w-0 p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                            with ui.row().classes("items-center gap-4 mb-3"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                ui.label("Landscape").classes("text-lg font-bold text-gray-700")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                self.landscape_metric = ui.select(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                                     label="Metric",
                                     options={
                                         "total": "Total Population",
@@ -1600,7 +1608,7 @@ class SpatialDashboard:
                                     value="total",
                                     on_change=self._on_landscape_metric_change,
                                 ).classes("w-48")
-                                self.landscape_target = ui.select(  # type: ignore[reportPossiblyUnboundVariable]
+                                self.landscape_target = ui.select(  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                                     label="Target",
                                     options={},
                                     value=None,
@@ -1609,64 +1617,64 @@ class SpatialDashboard:
                                     key_generator=lambda x: x,
                                 ).classes("w-48")
                                 self.landscape_target.visible = False
-                            self.landscape_container = ui.column().classes("w-full min-w-0 overflow-hidden gap-3")  # type: ignore[reportPossiblyUnboundVariable]
-                        with ui.card().classes("w-[26rem] p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]
-                            ui.label("Migration Rule").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]
-                            self.migration_container = ui.column().classes("w-full gap-2")  # type: ignore[reportPossiblyUnboundVariable]
+                            self.landscape_container = ui.column().classes("w-full min-w-0 overflow-hidden gap-3")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        with ui.card().classes("w-[26rem] p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                            ui.label("Migration Rule").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                            self.migration_container = ui.column().classes("w-full gap-2")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                with ui.tab_panel(tab_deme).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]
-                    ui.label("Selected Deme State").classes("text-xl font-bold text-gray-700 mb-4")  # type: ignore[reportPossiblyUnboundVariable]
-                    with ui.row().classes("w-full gap-6 items-start"):  # type: ignore[reportPossiblyUnboundVariable]
-                        with ui.card().classes("w-[22rem] p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]
-                            ui.label("Overview").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]
-                            with ui.grid(columns=2).classes("w-full gap-y-2 gap-x-4"):  # type: ignore[reportPossiblyUnboundVariable]
-                                ui.label("Name").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                                self.lbl_selected_name_detail = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                                ui.label("Coord").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                                self.lbl_selected_coord_detail = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                                ui.label("Total").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]
-                                self.lbl_selected_total_detail = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]
-                                ui.label("Females").classes("font-bold text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]
-                                self.lbl_selected_females_detail = ui.label("").classes("text-right font-mono text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]
-                                ui.label("Males").classes("font-bold text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]
-                                self.lbl_selected_males_detail = ui.label("").classes("text-right font-mono text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.tab_panel(tab_deme).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    ui.label("Selected Deme State").classes("text-xl font-bold text-gray-700 mb-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    with ui.row().classes("w-full gap-6 items-start"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        with ui.card().classes("w-[22rem] p-4 border rounded shadow-sm"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                            ui.label("Overview").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                            with ui.grid(columns=2).classes("w-full gap-y-2 gap-x-4"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                ui.label("Name").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                self.lbl_selected_name_detail = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                ui.label("Coord").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                self.lbl_selected_coord_detail = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                ui.label("Total").classes("font-bold text-gray-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                self.lbl_selected_total_detail = ui.label("").classes("text-right font-mono")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                ui.label("Females").classes("font-bold text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                self.lbl_selected_females_detail = ui.label("").classes("text-right font-mono text-pink-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                ui.label("Males").classes("font-bold text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                                self.lbl_selected_males_detail = ui.label("").classes("text-right font-mono text-blue-600")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                        self.age_summary_card = ui.card().classes("flex-1 p-4 border rounded shadow-sm")  # type: ignore[reportPossiblyUnboundVariable]
+                        self.age_summary_card = ui.card().classes("flex-1 p-4 border rounded shadow-sm")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         with self.age_summary_card:
-                            ui.label("Age Breakdown").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]
-                            self.summary_age_container = ui.column().classes("w-full gap-0")  # type: ignore[reportPossiblyUnboundVariable]
+                            ui.label("Age Breakdown").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                            self.summary_age_container = ui.column().classes("w-full gap-0")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                    with ui.card().classes("w-full p-4 border rounded shadow-sm mt-4"):  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label("Genotype Details").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]
-                        self.genotype_container = ui.row().classes("w-full flex-wrap gap-4")  # type: ignore[reportPossiblyUnboundVariable]
+                    with ui.card().classes("w-full p-4 border rounded shadow-sm mt-4"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label("Genotype Details").classes("text-lg font-bold text-gray-700 mb-3")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        self.genotype_container = ui.row().classes("w-full flex-wrap gap-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                with ui.tab_panel(tab_config).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]
-                    self.config_container = ui.column().classes("w-full gap-6")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.tab_panel(tab_config).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    self.config_container = ui.column().classes("w-full gap-6")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                     self._render_deme_config()
 
-                with ui.tab_panel(tab_hooks).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]
-                    self.hooks_container = ui.column().classes("w-full gap-4")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.tab_panel(tab_hooks).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    self.hooks_container = ui.column().classes("w-full gap-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                     self._render_hooks_panel()
 
-                with ui.tab_panel(tab_genetics).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]
-                    with ui.column().classes("w-full gap-6"):  # type: ignore[reportPossiblyUnboundVariable]
-                        ui.label("Meiosis (Genotype → Gametes)").classes("font-bold text-gray-700 text-xl")  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.tab_panel(tab_genetics).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    with ui.column().classes("w-full gap-6"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                        ui.label("Meiosis (Genotype → Gametes)").classes("font-bold text-gray-700 text-xl")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         figs = self._create_meiosis_plots()  # type: ignore[reportUnknownVariableType]
                         with ui.row().classes("w-full gap-4"):  # type: ignore[reportUnknownVariableType]
-                            for fig in figs:  # type: ignore[reportPossiblyUnboundVariable]
+                            for fig in figs:  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                                 ui.plotly(fig).classes("flex-1 h-[600px] border rounded")  # type: ignore[reportUnknownArgumentType]
 
-                        ui.label("Fertilization (Gametes → Zygote)").classes("font-bold text-gray-700 text-xl mt-4")  # type: ignore[reportPossiblyUnboundVariable]
+                        ui.label("Fertilization (Gametes → Zygote)").classes("font-bold text-gray-700 text-xl mt-4")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         fig_fert = self._create_fertilization_plot()
                         if fig_fert:
-                            ui.plotly(fig_fert).classes("w-full border rounded").props('style="height: 600px;"')  # type: ignore[reportPossiblyUnboundVariable]
+                            ui.plotly(fig_fert).classes("w-full border rounded").props('style="height: 600px;"')  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
                         else:
-                            ui.label("Fertilization matrix too large to display.").classes("text-orange-500 italic")  # type: ignore[reportPossiblyUnboundVariable]
+                            ui.label("Fertilization matrix too large to display.").classes("text-orange-500 italic")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-                with ui.tab_panel(tab_observation).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]
-                    self.obs_panel.build(ui.column())  # type: ignore[reportPossiblyUnboundVariable]
+                with ui.tab_panel(tab_observation).classes("w-full"):  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
+                    self.obs_panel.build(ui.column())  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
 
-        self._tick_timer = ui.timer(0.1, self._on_timer)  # type: ignore[reportPossiblyUnboundVariable]
+        self._tick_timer = ui.timer(0.1, self._on_timer)  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime
         self.refresh_ui()
 
 

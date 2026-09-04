@@ -9,6 +9,6 @@ high-level genetic objects and low-level numerical arrays in the simulation engi
 
 ## Complete Module Reference
 
-::: natal.registry
+::: natal.frontend.registry
     options:
       heading_level: 3

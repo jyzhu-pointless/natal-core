@@ -160,10 +160,10 @@ Observation History 已经丢弃未记录的 ZType 与未选择的 deme 信息�
 
 ## 空间记录路径
 
-空间记录不在 Numba wrapper 内执行 Observation。wrapper 的职责是运行生命周期、迁移，并在稳定 tick 边界返回规则化 raw batch：
+空间记录不在执行内核内执行 Observation。内核的职责是运行生命周期、迁移，并在稳定 tick 边界返回规则化 raw batch：
 
 ```text
-Numba spatial wrapper
+Spatial execution kernel
   → [tick, all deme individual_count, all deme sperm_storage]
   → SpatialPopulation._process_kernel_history(...)
        ├─ raw History: 验证并提交完整 batch
@@ -199,7 +199,7 @@ Python fallback 在相同的稳定 tick 边界调用 `_record_snapshot()`。raw 
 4. `collapse_age=True` 与未折叠结果沿 age 轴求和逐元素相等。
 5. raw History 保留所有 deme、ZType 及适用的 sperm storage。
 6. raw History 的事后投影与同 tick 的 `Observation.apply()` 逐元素相等。
-7. Numba 路径与 Python fallback 在确定性模拟中产生相同 ticks 和相同 payload。
+7. 内核路径与 Python fallback 在确定性模拟中产生相同 ticks 和相同 payload。
 8. 未选择的 deme 不依赖 sentinel 表示，真实零计数不会与选择状态混淆。
 
 断言应比较明确的轴和逐坐标值；只比较总和或排序后的扁平数组无法发现轴交换和 deme 顺序错误。

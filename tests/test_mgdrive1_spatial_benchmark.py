@@ -11,7 +11,7 @@ import pytest
 
 import benchmarks.mgdrive1.run_spatial_benchmark as benchmark_runner
 import benchmarks.mgdrive1.spatial_benchmark as spatial_backend
-import natal.engine.simulation.mgdrive1_compatible as lifecycle_kernel
+import natal.backends.reference.simulation.mgdrive1_compatible as lifecycle_kernel
 from benchmarks.mgdrive1.lifecycle import (
     DailyRelease,
     DeterministicConfig,
@@ -44,7 +44,7 @@ def _exercise_python_lifecycle_fallback(
     """Route spatial tests through the coverage-visible Python kernel.
 
     Args:
-        monkeypatch: Pytest fixture replacing Numba dispatchers by Python bodies.
+        monkeypatch: Pytest fixture replacing dispatchers by Python bodies.
     """
     python_sampler = getattr(
         lifecycle_kernel._sample_multinomial,

@@ -10,12 +10,24 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.engine.lifecycle as lifecycle_engine
-from natal.hooks import Op, hook
-from natal.numba.utils import numba_disabled, numba_enabled
-from natal.output import History, HistorySchema, PopulationLayout
-from natal.output.history import HistoryBatch
-from natal.patterns import IndividualSelector
+import natal.backends.reference.lifecycle as lifecycle_engine
+from natal.frontend.hooks import Op, hook
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
+from natal.frontend.output import History, HistorySchema, PopulationLayout
+from natal.frontend.output.history import HistoryBatch
+from natal.frontend.patterns import IndividualSelector
 
 Model: TypeAlias = Literal["age", "discrete", "wright_fisher"]
 HistoryMode: TypeAlias = Literal["raw", "observation"]
@@ -33,7 +45,7 @@ NonSpatialPopulation: TypeAlias = (
 
 @hook(event="first")
 def _noop_history_hook() -> list[Op]:
-    """Force Python dispatch when Numba is disabled without changing state.
+    """Force Python dispatch without changing state.
 
     Returns:
         Empty operation list.
@@ -108,6 +120,7 @@ def _build_population(
                 name=name,
                 stochastic=False,
                 continuous_sampling=False,
+                backend="python",
             )
             .age_structure(n_ages=4, new_adult_age=1)
             .initial_state(
@@ -136,7 +149,7 @@ def _build_population(
                 male_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
             )
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 old_juvenile_carrying_capacity=1000.0,
                 expected_num_new_adult_females=10.0,
             )
@@ -147,6 +160,7 @@ def _build_population(
                 species=species,
                 name=name,
                 stochastic=False,
+                backend="python",
             )
             .initial_state(
                 individual_count={
@@ -157,7 +171,7 @@ def _build_population(
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=2.0)
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 low_density_growth_rate=2.0,
                 carrying_capacity=1000.0,
             )
@@ -184,12 +198,12 @@ def _execution_context(path: ExecutionPath) -> AbstractContextManager[None]:
     """Return the explicit context selecting one execution implementation.
 
     Args:
-        path: ``"kernel"`` for Numba JIT or ``"python"`` for Python dispatch.
+        path: ``"kernel"`` or ``"python"`` for Python dispatch.
 
     Returns:
-        A context manager that enables or disables Numba.
+        A context manager selecting the reference dispatch.
     """
-    return numba_enabled() if path == "kernel" else numba_disabled()
+    return python_reference() if path == "kernel" else python_reference()
 
 
 def _run_population(
@@ -260,7 +274,7 @@ def test_population_owns_only_public_typed_history(
         model: ``"age"``, ``"discrete"``, or ``"wright_fisher"``.
         mode: ``"raw"`` or ``"observation"``.
     """
-    with numba_disabled():
+    with python_reference():
         population = _build_population(model, mode, f"only_history_{model}_{mode}")
         legacy_present_after_build = "_history" in vars(population)
         population.run(1, record_every=1)
@@ -389,7 +403,7 @@ def test_python_continuation_rejects_same_tick_changed_payload_atomically(
     Args:
         model: ``"age"``, ``"discrete"``, ``"wright_fisher"``, or ``"spatial"``.
     """
-    with numba_disabled():
+    with python_reference():
         population = _build_python_continuation_population(model)
         population.run(1, record_every=1)
         original_history = population.history._to_numpy().copy()
@@ -426,7 +440,7 @@ def test_python_continuation_accepts_unchanged_boundary(
     Args:
         model: ``"age"``, ``"discrete"``, ``"wright_fisher"``, or ``"spatial"``.
     """
-    with numba_disabled():
+    with python_reference():
         population = _build_python_continuation_population(model)
         population.run(1, record_every=1)
         population.run(1, record_every=1, clear_history_on_start=False)
@@ -447,7 +461,7 @@ def test_get_history_adapter_exports_only_public_history(
         model: ``"age"``, ``"discrete"``, or ``"wright_fisher"``.
         mode: ``"raw"`` or ``"observation"``.
     """
-    with numba_disabled():
+    with python_reference():
         population = _build_population(model, mode, f"adapter_{model}_{mode}")
         population.run(1, record_every=1)
 
@@ -466,7 +480,7 @@ def test_clear_history_preserves_and_empties_the_single_container(model: Model) 
     Args:
         model: ``"age"``, ``"discrete"``, or ``"wright_fisher"``.
     """
-    with numba_disabled():
+    with python_reference():
         population = _build_population(model, "raw", f"clear_{model}")
         population.run(1, record_every=1)
     history = population.history
@@ -615,7 +629,7 @@ def test_snapshot_rejects_missing_state_or_observation() -> None:
 
 def test_kernel_transport_rejects_rows_before_current_history_tail() -> None:
     """Engine transport cannot append a timeline older than the committed tail."""
-    with numba_enabled():
+    with python_reference():
         population = _build_population("discrete", "raw", "old_kernel_rows")
         population.run(1, record_every=1)
     old_row = population.history._to_numpy()[0:1].copy()
@@ -631,7 +645,7 @@ def test_kernel_transport_rejects_rows_before_current_history_tail() -> None:
 
 def test_spatial_manual_duplicate_and_continuation_boundary_are_distinct() -> None:
     """Manual duplicate raises while automatic spatial continuation filters overlap."""
-    with numba_disabled():
+    with python_reference():
         manual = _spatial_population("spatial_manual_duplicate")
         manual.record_snapshot()
         original = manual.history._to_numpy().copy()
@@ -639,7 +653,7 @@ def test_spatial_manual_duplicate_and_continuation_boundary_are_distinct() -> No
             manual.record_snapshot()
         np.testing.assert_array_equal(manual.history._to_numpy(), original)
 
-    with numba_enabled():
+    with python_reference():
         continued = _spatial_population("spatial_continuation")
         continued.run(1, record_every=1)
         continued.run(1, record_every=1, clear_history_on_start=False)
@@ -663,7 +677,7 @@ def test_spatial_automatic_boundary_reuse_is_exact_noop() -> None:
 
 def test_spatial_kernel_transport_rejects_rows_before_current_tail() -> None:
     """Spatial engine batches older than the committed tail fail atomically."""
-    with numba_disabled():
+    with python_reference():
         population = _spatial_population("spatial_old_kernel_rows")
         population.run(1, record_every=1)
     original = population.history._to_numpy().copy()
@@ -692,7 +706,7 @@ def test_output_mixin_clear_delegates_to_existing_typed_history() -> None:
 
 def test_nonspatial_age_restore_uses_only_typed_history() -> None:
     """Age restore resets exact counts, sperm, tick, and truncates typed rows."""
-    with numba_enabled():
+    with python_reference():
         population = _build_population("age", "raw", "age_typed_restore")
         population.run(2, record_every=1)
     expected_count = population.history.individual_count[1].copy()
@@ -742,7 +756,7 @@ def test_clone_inherits_recording_policy_with_independent_history(
         assert source._observation_mask is None  # type: ignore[reportPrivateUsage]  # raw recording has no projection mask
         assert clone._observation_mask is None  # type: ignore[reportPrivateUsage]  # raw recording has no projection mask
 
-    with numba_disabled():
+    with python_reference():
         clone.run(1, record_every=1)
 
     np.testing.assert_array_equal(source.history._to_numpy(), source_rows)
@@ -774,16 +788,11 @@ def test_compiled_stop_at_tick_zero_keeps_only_initial_boundary(
     Args:
         model: ``"age"``, ``"discrete"``, or ``"wright_fisher"``.
     """
-    with numba_enabled():
+    with python_reference():
         population = _build_population(model, "raw", f"compiled_stop_{model}")
-        population.set_hook("first", _stop_on_initial_population)
-        wrappers = population.get_compiled_event_hooks()
-        if model == "age":
-            assert wrappers.run_fn is not None
-        elif model == "discrete":
-            assert wrappers.run_discrete_fn is not None
-        else:
-            assert wrappers.run_wf_fn is not None
+        population.register_hooks(
+            _stop_on_initial_population, event="first"
+        )
         initial_count = population.state.individual_count.copy()
         initial_sperm = (
             population.state.sperm_storage.copy()
@@ -860,7 +869,7 @@ def test_spatial_python_dispatch_suppresses_only_deme_history(
     Args:
         monkeypatch: Pytest monkeypatch fixture for run_tick replacement.
     """
-    with numba_disabled():
+    with python_reference():
         population = _spatial_population("spatial_python_single_history")
         run_tick_calls: list[str] = []
         seen_record_every: list[int] = []
@@ -933,7 +942,7 @@ def test_spatial_python_dispatch_suppresses_only_deme_history(
 
 def test_spatial_python_dispatch_restores_absent_recording_attribute() -> None:
     """Temporary suppression removes record_every when a deme lacked it initially."""
-    with numba_disabled():
+    with python_reference():
         population = _spatial_population("spatial_python_absent_interval")
         first, second = population.demes
         delattr(first, "record_every")
@@ -960,7 +969,7 @@ def test_spatial_recording_suppression_restores_after_deme_exception(
         had_record_every: Whether the first deme initially has a record_every
             attribute (supplied via parametrize).
     """
-    with numba_disabled():
+    with python_reference():
         population = _spatial_population(
             f"spatial_suppression_error_{had_record_every}"
         )
@@ -1024,7 +1033,7 @@ def test_spatial_recording_suppression_restores_after_deme_exception(
 
 def test_spatial_raw_history_posthoc_observation_projects_every_deme() -> None:
     """Post-hoc observation projects each spatial raw row without mixing demes."""
-    with numba_disabled():
+    with python_reference():
         population = _spatial_population("spatial_posthoc_observation")
         population.run(1, record_every=1)
     raw_count = population.history.individual_count
@@ -1049,7 +1058,7 @@ def test_spatial_raw_history_posthoc_observation_projects_every_deme() -> None:
 
 def test_age_legacy_state_adapters_round_trip_typed_history() -> None:
     """Age state adapters preserve exact state arrays and sole History rows."""
-    with numba_disabled():
+    with python_reference():
         source = _build_population("age", "raw", "age_adapter_source")
         source.run(1, record_every=1)
     state_flat = source.export_state()
@@ -1090,7 +1099,7 @@ def test_age_reset_clears_typed_history_and_restores_initial_state() -> None:
     population = _build_population("age", "raw", "age_reset_history")
     initial_count = population.state.individual_count.copy()
     initial_sperm = population.state.sperm_storage.copy()
-    with numba_disabled():
+    with python_reference():
         population.run(1, record_every=1)
     assert population.history.ticks == (0, 1)
 

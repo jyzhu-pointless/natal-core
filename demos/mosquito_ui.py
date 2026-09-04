@@ -99,7 +99,7 @@ pop = nt.AgeStructuredPopulation\
         male_age_based_survival=[1.0, 1.0, 2/3, 1/2],
     ) \
     .competition(
-        juvenile_growth_mode="concave",
+        juvenile_growth_mode="beverton_holt",
         old_juvenile_carrying_capacity=120,
         expected_num_new_adult_females=210,
     ) \

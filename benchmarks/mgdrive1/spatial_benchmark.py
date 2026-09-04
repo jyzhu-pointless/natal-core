@@ -8,11 +8,12 @@ from time import perf_counter
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.engine.simulation.mgdrive1_compatible import (
+from natal.backends.reference.simulation.mgdrive1_compatible import (
     advance_mgdrive1_lifecycle,
 )
-from natal.engine.spatial_migrator import apply_spatial_adjacency_migration
-from natal.spatial.topology import HexGrid, build_gaussian_kernel
+from natal.backends.reference.spatial_migrator import run_spatial_migration
+from natal.frontend.spatial.migration import fold_migration_csr, normalize_migration_rate
+from natal.frontend.spatial.topology import GridTopology, HexGrid, build_gaussian_kernel
 
 from .lifecycle import DailyRelease, DeterministicConfig, PatchState
 
@@ -302,25 +303,32 @@ def _migrate_adults(
     individuals[:, 0, 0] = state.adult_female.sum(axis=2)
     individuals[:, 1, 0] = state.adult_male
     sperm = state.adult_female[:, np.newaxis, :, :].copy()
-    migrated_individuals, migrated_sperm = (
-        apply_spatial_adjacency_migration(
-            ind_count_all=individuals,
-            sperm_store_all=sperm,
-            adjacency=np.zeros((1, 1), dtype=np.float64),
-            migration_mode=1,
-            topology_rows=rows,
-            topology_cols=cols,
-            topology_wrap=False,
-            migration_kernel=np.asarray(
-                migration_kernel,
-                dtype=np.float64,
-            ),
-            kernel_include_center=False,
-            rate=np.array([migration_rate], dtype=np.float64),
-            stochastic=stochastic,
-            continuous_sampling=False,
-            adjust_migration_on_edge=True,
-        )
+    # Slice 5: fold the kernel routing to CSR once, then run the pure
+    # numeric migration stage (rate column x fixed CSR).
+    csr = fold_migration_csr(
+        n_demes=n_demes,
+        topology=GridTopology(rows=rows, cols=cols, wrap=False),
+        adjacency_dense=np.zeros((n_demes, n_demes), dtype=np.float64),
+        migration_kernel=np.asarray(migration_kernel, dtype=np.float64),
+        kernel_bank=None,
+        deme_kernel_ids=None,
+        kernel_include_center=False,
+        adjust_on_edge=True,
+        mode="kernel",
+    )
+    rate = np.tile(
+        normalize_migration_rate(migration_rate, 2, 1, 0), (n_demes, 1, 1)
+    )
+    migrated_individuals, migrated_sperm = run_spatial_migration(
+        ind_count_all=individuals,
+        sperm_store_all=sperm,
+        indptr=csr.indptr,
+        dest_idx=csr.dest_idx,
+        weights=csr.weights,
+        migration_rate=rate,
+        stochastic=stochastic,
+        continuous_sampling=False,
+        stay_after_send=csr.stay_after_send,
     )
     adult_female = migrated_sperm[:, 0]
     return SpatialPatchState(

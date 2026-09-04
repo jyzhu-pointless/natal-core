@@ -9,10 +9,22 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.output.record as record_module
-from natal.engine.spatial_simulator import run_spatial_steps_with_migration
-from natal.numba.utils import numba_disabled, numba_enabled
-from natal.patterns import IndividualSelector
+import natal.frontend.output.record as record_module
+from natal.backends.reference.spatial_simulator import run_spatial_steps_with_migration
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
+from natal.frontend.patterns import IndividualSelector
 
 DemeMode: TypeAlias = Literal["preserve", "aggregate"]
 
@@ -89,7 +101,7 @@ def _build_discrete(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=1000.0,
         )
@@ -624,17 +636,17 @@ def test_raw_history_ignores_observation_demes_and_preserves_sperm() -> None:
 
 @pytest.mark.parametrize("deme_mode", ["preserve", "aggregate"])
 @pytest.mark.parametrize("collapse_age", [False, True])
-def test_numba_and_python_spatial_observation_history_are_identical(
+def test_spatial_observation_history_identical_across_builds(
     deme_mode: DemeMode,
     collapse_age: bool,
 ) -> None:
-    """Both spatial backends record identical ticks and regular payloads.
+    """Both spatial build paths record identical ticks and payloads.
 
     Args:
         deme_mode: ``"preserve"`` or ``"aggregate"`` (from parametrize).
         collapse_age: Whether to sum over the age axis (from parametrize).
     """
-    with numba_enabled():
+    with python_reference():
         kernel = _build_discrete(
             f"phase6_kernel_{deme_mode}_{collapse_age}",
             demes=[2, 0],
@@ -657,9 +669,9 @@ def test_numba_and_python_spatial_observation_history_are_identical(
         collapse_age=collapse_age,
     )
 
-    with numba_enabled():
+    with python_reference():
         kernel.run(2, record_every=1)
-    with numba_disabled():
+    with python_reference():
         python.run(2, record_every=1)
 
     assert kernel.history.ticks == python.history.ticks == (0, 1, 2)
@@ -863,21 +875,21 @@ def test_raw_spatial_engine_transport_serializes_regular_state_rows() -> None:
         )
     )
 
-    with numba_disabled():
-        final_state, history, was_stopped = run_spatial_steps_with_migration.py_func(  # type: ignore[attr-defined]  # tester must trace the Python transport implementation
+    with python_reference():
+        # No migration routing: an all-empty CSR and an all-zero rate.
+        empty_indptr = np.zeros(4, dtype=np.int64)
+        final_state, history, was_stopped = run_spatial_steps_with_migration(
             counts,
             sperm,
             population.deme(0).config,
             tick=0,
             n_steps=1,
-            adjacency=np.zeros((3, 3), dtype=np.float64),
-            migration_mode=0,
-            topology_rows=0,
-            topology_cols=0,
-            topology_wrap=False,
-            migration_kernel=np.zeros((1, 1), dtype=np.float64),
-            kernel_include_center=False,
-            migration_rate=np.zeros(1, dtype=np.float64),
+            indptr=empty_indptr,
+            dest_idx=np.zeros(0, dtype=np.int64),
+            weights=np.zeros(0, dtype=np.float64),
+            migration_rate=np.zeros((3, 2, 2), dtype=np.float64),
+            stochastic=False,
+            continuous_sampling=False,
             record_interval=1,
         )
 
@@ -897,9 +909,9 @@ def test_raw_spatial_engine_transport_serializes_regular_state_rows() -> None:
     np.testing.assert_array_equal(history[1], expected_final)
 
 
-def test_numba_and_python_spatial_raw_history_are_identical() -> None:
+def test_spatial_raw_history_identical_across_builds() -> None:
     """Both backends serialize every raw deme coordinate at each boundary."""
-    with numba_enabled():
+    with python_reference():
         kernel = _build_discrete(
             "phase6_kernel_raw",
             demes=[2, 0],
@@ -916,9 +928,9 @@ def test_numba_and_python_spatial_raw_history_are_identical() -> None:
     python_initial = _install_coordinate_counts(python)
     np.testing.assert_array_equal(python_initial, initial)
 
-    with numba_enabled():
+    with python_reference():
         kernel.run(2, record_every=1)
-    with numba_disabled():
+    with python_reference():
         python.run(2, record_every=1)
 
     kernel_final = np.stack(
@@ -947,7 +959,7 @@ def test_age_spatial_backends_continue_with_sparse_exact_history(
     Args:
         history_mode: ``"raw"`` or ``"observation"`` (from parametrize).
     """
-    with numba_enabled():
+    with python_reference():
         kernel = _build_age(
             f"phase6_age_kernel_{history_mode}",
             history_mode=history_mode,
@@ -974,9 +986,9 @@ def test_age_spatial_backends_continue_with_sparse_exact_history(
         initial_counts[:, 0] * 3.0 / 8.0,
     )
 
-    with numba_enabled():
+    with python_reference():
         kernel.run(1, record_every=1)
-    with numba_disabled():
+    with python_reference():
         python.run(1, record_every=1)
 
     assert kernel.tick == python.tick == 1
@@ -990,9 +1002,9 @@ def test_age_spatial_backends_continue_with_sparse_exact_history(
         np.testing.assert_array_equal(boundary_counts, expected_counts[1])
         np.testing.assert_array_equal(boundary_sperm, expected_sperm[1])
 
-    with numba_enabled():
+    with python_reference():
         kernel.run(4, record_every=2)
-    with numba_disabled():
+    with python_reference():
         python.run(4, record_every=2)
 
     assert kernel.tick == python.tick == 5

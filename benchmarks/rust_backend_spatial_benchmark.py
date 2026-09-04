@@ -17,9 +17,9 @@ import statistics
 import time
 
 import natal as nt
-from natal.engine.backends.rust_backend import rust_backend_available
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import SquareGrid, build_adjacency_matrix
+from natal.backends.rust.rust_backend import rust_backend_available
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import SquareGrid, build_adjacency_matrix
 
 N_DEMES = 16
 N_TICKS = 20
@@ -109,7 +109,7 @@ def measure_tick_loop(pop: SpatialPopulation, n_steps: int) -> float:
 def benchmark(stochastic: bool) -> None:
     """Warm up and compare Numba vs Rust spatial backends."""
     species = build_species(f"spatial_bench_{stochastic}")
-    reference = build_spatial(species, stochastic, "numba")
+    reference = build_spatial(species, stochastic, "python_reference")
     rust_pop = build_spatial(species, stochastic, "rust").enable_rust_backend(seed=1)
 
     # Warm up both code paths.
@@ -117,16 +117,16 @@ def benchmark(stochastic: bool) -> None:
     measure_run(rust_pop, 2)
 
     timings: dict[str, list[float]] = {
-        "numba run(n)": [],
+        "python run(n)": [],
         "rust run(n)": [],
-        "numba run_tick loop": [],
+        "python run_tick loop": [],
         "rust run_tick loop": [],
     }
 
     for _ in range(REPEATS):
-        timings["numba run(n)"].append(measure_run(reference, N_TICKS))
+        timings["python run(n)"].append(measure_run(reference, N_TICKS))
         timings["rust run(n)"].append(measure_run(rust_pop, N_TICKS))
-        timings["numba run_tick loop"].append(measure_tick_loop(reference, N_TICKS))
+        timings["python run_tick loop"].append(measure_tick_loop(reference, N_TICKS))
         timings["rust run_tick loop"].append(measure_tick_loop(rust_pop, N_TICKS))
 
     print(f"\n=== stochastic={stochastic} (n_demes={N_DEMES}, n_ticks={N_TICKS}) ===")
@@ -136,7 +136,7 @@ def benchmark(stochastic: bool) -> None:
         per_tick = total_ms / N_TICKS
         speedup = ""
         if label.startswith("rust"):
-            base_label = "numba" + label[len("rust"):]
+            base_label = "python" + label[len("rust"):]
             base_values = timings.get(base_label)
             if base_values:
                 base_ms = statistics.median(base_values) * 1000.0

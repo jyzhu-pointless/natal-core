@@ -1,9 +1,9 @@
 """Simplified weekly life-history model for laboratory Drosophila."""
 
 import natal as nt
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
-nt.disable_numba()
+# The pure-Python reference is the default execution vehicle.
 
 species = nt.Species.from_dict(
     name="Drosophila melanogaster",
@@ -43,6 +43,7 @@ def release_drive_males() -> list[nt.HookOp]:
 # Age 0 is produced during the current tick; age 1 combines larvae and pupae.
 population = (
     nt.AgeStructuredPopulation.setup(
+        backend="python",
         species=species,
         name="Weekly fruit fly",
         stochastic=True,

@@ -16,7 +16,12 @@ from time import perf_counter
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.numba.compat import set_numba_seed
+import numpy as np
+
+
+def seed_rng(seed: int) -> None:
+    """Seed the NumPy RNG that drives the reference trajectories."""
+    np.random.seed(seed)
 
 from .lifecycle import DailyRelease
 from .spatial_benchmark import (
@@ -402,7 +407,7 @@ def benchmark_natal_panmmictic(
     )
 
     # Exclude Numba compilation from timed replicates.
-    set_numba_seed(seed)
+    seed_rng(seed)
     step_spatial(
         scenario.state,
         scenario.config,
@@ -417,7 +422,7 @@ def benchmark_natal_panmmictic(
     for repeat_index in range(repeats):
         # A single deme has no parallel-deme RNG ambiguity, so the existing
         # panmictic benchmark can retain its reproducible seed contract.
-        set_numba_seed(seed + repeat_index)
+        seed_rng(seed + repeat_index)
         start = perf_counter()
         result = run_spatial(
             scenario.state,

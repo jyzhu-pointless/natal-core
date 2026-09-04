@@ -6,7 +6,7 @@
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -96,7 +96,7 @@ This unifies key names in `_replay_log`, ensuring parameter names are consistent
 ```
 _build_homogeneous():
     1. template = self._template.build()     # Full pipeline once
-    2. config = template.export_config()      # Export PopulationConfig
+    2. config = template.export_config()      # Export ModelDraft
     3. demes = [template]
     4. for i in 1..n_demes:
            demes.append(_clone_deme(template, config))
@@ -157,7 +157,7 @@ def _clone_deme(template, config, name):
     clone.hook_entries               = template.hook_entries          # Hook entry list per event
     clone.compiled_hook_descriptors = template.compiled_hook_descriptors  # Compiled hook descriptors
     clone.hook_executor            = template.hook_executor           # Hook execution engine
-    clone._config            = config                        # PopulationConfig (shared)
+    clone._config            = config                        # ModelDraft (shared)
     clone._index_registry    = template._index_registry      # Genotype lookup table
     clone._registry          = template._registry
     clone._gamete_modifiers  = template._gamete_modifiers    # Gamete modifiers
@@ -188,7 +188,7 @@ def _clone_deme(template, config, name):
 ## `BatchSetting`: Cross-Deme Varying Parameters
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 # List: index-to-index correspondence
 batch_setting([10000, 5000, 5000, 8000])        # kind="scalar"
@@ -210,12 +210,12 @@ Test conditions: 2 alleles (4 genotypes), 200 individuals per deme initially.
 
 | Scenario | Time | Notes |
 |----------|------|-------|
-| Homogeneous 100 demes | ~400ms | Includes first Numba compilation ~350ms |
+| Homogeneous 100 demes | ~400ms | Includes first template build and backend initialization |
 | Homogeneous 2601 demes | ~16ms | Clone phase only, excluding first template build |
 | 2-group heterogeneous 4 demes | ~6ms | One template per group + 1 clone each |
-| First template build | ~2-3ms | Numba compilation leverages file cache, faster after first hit |
+| First template build | ~2-3ms | Subsequent calls reuse the compiled CSR plan |
 
-First template build time depends on hook count and Numba cache status; subsequent calls are typically < 5ms.
+First template build time depends on the hook count; subsequent calls are typically < 5ms.
 
 ## Relationship with Existing API
 

@@ -11,7 +11,7 @@ demes = [build_deme(species, idx, ...) for idx in range(2601)]
 
 Each `build_deme` call goes through:
 - Species genotype resolution (index lookup)
-- Numba hook compilation (`_compile_hooks` → `CompiledEventHooks.from_compiled_hooks`)
+- Hook-plan compilation (`_compile_hooks` → `CompiledEventHooks.from_compiled_hooks`)
 - Config/fitness array allocation and population
 - `_finalize_hooks` triggering codegen
 
@@ -26,7 +26,7 @@ for deme in demes[1:]:
 ```
 
 - If forgotten, each deme holds an independent config, wasting memory
-- `import_config` can only share scalar fields; Numba compilation products remain independent
+- `import_config` can only share scalar fields; hook plans remain independent
 
 ### 3. No batch expression for heterogeneous configs
 
@@ -87,7 +87,7 @@ pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, col
     .reproduction(eggs_per_female=50) \
     .competition(
         carrying_capacity=batch_setting(spatial=lambda i, x, y: 10000 if x < N//2 else 5000),
-        juvenile_growth_mode="concave",
+        juvenile_growth_mode="beverton_holt",
         low_density_growth_rate=6.0,
     ) \
     .presets(drive) \
@@ -180,7 +180,7 @@ When performance requirements exceed the DSL convenience of the builder, provide
 DemeFactory.quick(
     species=species,
     individual_count=np.array(...),  # (n_sexes, n_ages, n_genotypes)
-    config=PopulationConfig(...),
+    config=ModelDraft(...),
     registry=shared_registry,
 )
 ```
@@ -275,7 +275,7 @@ for i in range(n_demes):
 |------|------------|
 | Config group key after batch expansion is unhashable (contains NumPy arrays) | Use `id(arr)` or serialized digest |
 | Sharing `compiled_hook_descriptors` / `hook_entries` reference when cloning demes leads to state leakage | Copy-on-write: duplicate on demand via subset `set_hook` |
-| Does `PopulationConfig` support `_replace`? | It is a NamedTuple, confirmed usable |
+| Does `ModelDraft` support `_replace`? | It is a NamedTuple, confirmed usable |
 | Relationship between SpatialConfigurator and existing `DiscreteGenerationPopulationBuilder` | SpatialConfigurator holds per-deme builders internally, reuses their validation logic |
 
 ---

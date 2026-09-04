@@ -842,15 +842,9 @@ def _assert_natal_day_zero() -> None:
             record.adult_female,
             np.diag([250.0, 0.0, 0.0]),
         )
-
-
-@pytest.mark.numba_on
 def test_natal_jit_day_zero_matches_explicit_population() -> None:
     """Exercise the JIT benchmark seam with exact initial counts."""
     _assert_natal_day_zero()
-
-
-@pytest.mark.numba_off
 def test_natal_fallback_day_zero_matches_explicit_population() -> None:
     """Exercise the Python fallback benchmark seam with exact initial counts."""
     _assert_natal_day_zero()

@@ -6,7 +6,7 @@
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -96,7 +96,7 @@ def _detect_and_delegate(self, method_name, kwargs):
 ```
 _build_homogeneous():
     1. template = self._template.build()     # 完整流程一次
-    2. config = template.export_config()      # 导出 PopulationConfig
+    2. config = template.export_config()      # 导出 ModelDraft
     3. demes = [template]
     4. for i in 1..n_demes:
            demes.append(_clone_deme(template, config))
@@ -157,7 +157,7 @@ def _clone_deme(template, config, name):
     clone.hook_entries               = template.hook_entries          # Hook entry list per event
     clone.compiled_hook_descriptors = template.compiled_hook_descriptors  # Compiled hook descriptors
     clone.hook_executor            = template.hook_executor           # Hook execution engine
-    clone._config            = config                        # PopulationConfig（共享）
+    clone._config            = config                        # ModelDraft（共享）
     clone._index_registry    = template._index_registry      # 基因型查找表
     clone._registry          = template._registry
     clone._gamete_modifiers  = template._gamete_modifiers    # 配子修饰器
@@ -188,7 +188,7 @@ def _clone_deme(template, config, name):
 ## `BatchSetting`：跨 deme 变化的参数
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 # 列表：按索引一一对应
 batch_setting([10000, 5000, 5000, 8000])        # kind="scalar"
@@ -210,12 +210,12 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 | 场景 | 耗时 | 说明 |
 |------|------|------|
-| 同构 100 demes | ~400ms | 含首次 Numba 编译 ~350ms |
+| 同构 100 demes | ~400ms | 含首次模板构建与后端初始化 |
 | 同构 2601 demes | ~16ms | 克隆阶段，不含首次 template 构建 |
 | 2 组异构 4 demes | ~6ms | 每组一个 template + 各克隆 1 次 |
-| 首次 template 构建 | ~2-3ms | Numba 编译有文件缓存，命中后更快 |
+| 首次 template 构建 | ~2-3ms | 后续调用复用已编译的 CSR 计划 |
 
-首次 template 构建的时间取决于 hook 数量和 Numba 缓存状态，后续调用通常 < 5ms。
+首次 template 构建的时间取决于 hook 数量，后续调用通常 < 5ms。
 
 ## 与现有 API 的关系
 

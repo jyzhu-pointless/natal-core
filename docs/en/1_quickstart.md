@@ -196,7 +196,7 @@ pop = (nt.DiscreteGenerationPopulation
 
 ### Using Other Presets
 
-The current preset system includes [HomingDrive](api/presets.md#natal.presets.HomingDrive) and [ToxinAntidoteDrive](api/presets.md#natal.presets.ToxinAntidoteDrive), with more preset types being continuously expanded in the future.
+The current preset system includes [HomingDrive](api/presets.md#natal.frontend.presets.HomingDrive) and [ToxinAntidoteDrive](api/presets.md#natal.frontend.presets.ToxinAntidoteDrive), with more preset types being continuously expanded in the future.
 
 You can also define custom presets; see [Design Your Own Presets](3_custom_presets.md) for details.
 
@@ -227,7 +227,7 @@ pop = (nt.AgeStructuredPopulation
 The **Hook system** allows you to inject custom intervention or monitoring logic at key points in the simulation loop (e.g., at the start of each step, after survival screening). Using the declarative `Op` syntax is the most efficient and intuitive approach:
 
 ```python
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 @hook(event='first')
 def release_drive_males():
@@ -254,7 +254,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **Tip**: For advanced users requiring high performance or complex logic, native Numba Hooks are available. See [Hook System](2_hooks.md) for details.
+> **Tip**: For advanced users requiring high performance or complex logic, single-parameter callback hooks or selector hooks are available; both backends execute the same event semantics. See [Hook System](2_hooks.md) for details.
 
 ---
 
@@ -318,7 +318,7 @@ NATAL provides a NiceGUI-based real-time visualization dashboard that allows you
 
 ```python
 import natal as nt
-from natal.ui import launch
+from natal.frontend.ui import launch
 
 # ... define genetic architecture, build population ...
 
@@ -338,16 +338,16 @@ Although the high-level code is intuitive and readable, a series of complex oper
 2. **Mapping Matrix Generation**: Based on genetic presets and the genetic mapping `modifiers`, two key matrices are generated:
    - `Genotype → Gamete`: Specifies which gametes each genotype produces
    - `Gamete → Zygote`: Specifies which genotypes gamete combinations produce
-3. **Configuration Compilation**: All parameters are compiled into a `PopulationConfig` NamedTuple, preparing for Numba JIT optimization
+3. **Configuration Compilation**: All parameters are compiled into a `ModelDraft` NamedTuple consumed by the selected backend (Rust native extension or pure-Python reference)
 4. **Hooks Compilation**: User-defined Hooks are compiled into execution plans, to be called at the appropriate times
 5. **State Initialization**: A `PopulationState` NamedTuple (containing numpy arrays) is created based on the initial distribution
 
 This process is transparent to the user, but understanding it is important. See:
 - [Index Registry](4_index_registry.md)
-- [PopulationState & PopulationConfig](4_population_state_config.md)
+- [PopulationState & ModelDraft](4_population_state_config.md)
 - [Modifiers System](3_modifiers.md) and [Genetic Presets System](2_genetic_presets.md)
 - [Hooks System](2_hooks.md)
-- [Numba Optimization Guide](4_numba_optimization.md)
+- [Backend Selection and Performance](4_backend_selection.md)
 
 ---
 
@@ -358,7 +358,7 @@ This process is transparent to the user, but understanding it is important. See:
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="FruitFly",
@@ -397,7 +397,7 @@ print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="AnophelesGambiae",
@@ -455,7 +455,7 @@ Now that you have mastered the basics! Next, you can:
 2. **Understand Genetic Architecture**: [Genetic Structures and Entities](2_genetics.md) - Gain in-depth knowledge of Species, Chromosome, and other concepts
 3. **Master Advanced Features**: [Hook System](2_hooks.md) - Learn how to inject custom simulation logic
 4. **Need Custom Genetic Rules**: [Modifier Mechanism](3_modifiers.md) - Write manual gamete/zygote modifiers
-5. **Performance Optimization**: [Numba Optimization Guide](4_numba_optimization.md) - Improve simulation performance
+5. **Performance Optimization**: [Backend Selection and Performance](4_backend_selection.md) - Improve simulation performance
 
 ---
 
@@ -465,7 +465,7 @@ Now that you have mastered the basics! Next, you can:
 **A**: Additional dimensions used to label gametes. For example, "default" and "Cas9_deposited" can distinguish between gametes with or without Cas9 protein deposition. When calculating zygotes, both the allele and the label of the gamete are considered.
 
 ### Q: Why is initialization slow?
-**A**: During initialization, two mapping matrices need to be generated, with complexity related to the 3rd-4th power of the number of genotypes. Depending on the Numba cache status, varying degrees of compilation may also be required. For relatively simple genetic setups (only a few dozen genotypes), this is expected to take from a few seconds to tens of seconds. This only happens once. Each subsequent tick is very fast.
+**A**: During initialization, two mapping matrices need to be generated, with complexity related to the 3rd-4th power of the number of genotypes; the first build takes from a few seconds to tens of seconds depending on the genotype count. This only happens once. Each subsequent tick is fast, with the Rust backend considerably faster.
 
 ### Q: When should I use a discrete-generation population?
 **A**: When your model does not require age structure, using `DiscreteGenerationPopulation` is simpler. It is suitable for:

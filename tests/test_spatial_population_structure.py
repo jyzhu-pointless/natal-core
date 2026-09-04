@@ -7,9 +7,9 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from natal.population.base import BasePopulation
-from natal.genetics import Species
-from natal.spatial.population import SpatialPopulation
+from natal.frontend.population.base import BasePopulation
+from natal.frontend.genetics import Species
+from natal.frontend.spatial.population import DemeSlice, SpatialPopulation
 
 
 class _DummyDemePopulation(BasePopulation):
@@ -43,7 +43,7 @@ class _DummyDemePopulation(BasePopulation):
     def reset(self) -> None:
         self._tick = 0
 
-    def update(self) -> Any:  # type: ignore[no-untyped-def]
+    def update(self) -> Any:  # type: ignore[no-untyped-def,any-return]  # duck-typed double: mirrors the untyped base-class hook; never called on this stub
         raise NotImplementedError
 
     @property
@@ -74,10 +74,16 @@ def test_spatial_population_demes_must_be_base_population_instances():
     sp = SpatialPopulation([deme0, deme1], migration_rate=0.25)
 
     assert sp.n_demes == 2
-    assert isinstance(sp.deme(0), BasePopulation)
-    assert isinstance(sp.deme(1), BasePopulation)
+    # Stage 3: deme() hands out compat slices delegating to the demes.
+    assert isinstance(sp.deme(0), DemeSlice)
+    assert isinstance(sp.deme(1), DemeSlice)
+    # Slices delegate reads to the wrapped demes.
+    assert sp.deme(0).name == deme0.name
+    assert sp.deme(1).name == deme1.name
     assert sp.species is species
-    assert sp.adjacency.shape == (2, 2)
+    # The default identity adjacency folds into a CSR row per deme.
+    assert sp.blueprint.n_demes == 2
+    assert sp.migration_csr.indptr.shape == (3,)
 
 
 def test_spatial_population_rejects_non_base_population_deme():
@@ -109,7 +115,10 @@ def test_spatial_population_accepts_csr_tuple_adjacency():
     )
 
     expected = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64)
-    assert np.allclose(sp.adjacency, expected)
+    # The CSR tuple folds into the migration CSR: row 0 -> deme 1, row 1 -> deme 0.
+    assert np.array_equal(sp.migration_csr.indptr, np.array([0, 1, 2]))
+    assert np.array_equal(sp.migration_csr.dest_idx, np.array([1, 0]))
+    assert np.allclose(sp.migration_csr.weights, [1.0, 1.0])
 
 
 def test_spatial_population_hybrid_strategy_interface_and_kernel_bank():
@@ -135,8 +144,11 @@ def test_spatial_population_hybrid_strategy_interface_and_kernel_bank():
         migration_rate=0.1,
     )
 
-    assert sp.migration_strategy == "hybrid"
-    assert sp.kernel_bank is not None
-    assert len(sp.kernel_bank) == 1
-    assert sp.deme_kernel_ids is not None
-    assert np.array_equal(sp.deme_kernel_ids, np.array([0, 0], dtype=np.int64))
+    # The hybrid strategy is a build-time materialization choice only: it
+    # resolves to kernel mode.  Without a topology the kernel-bank routing
+    # has no coordinate space, so the fold emits no outbound entries —
+    # the historical runtime behavior of bank routing with zero topology
+    # rows.
+    assert sp.blueprint.n_demes == 2
+    assert int(sp.migration_csr.indptr[-1]) == 0
+    assert sp.migration_csr.dest_idx.size == 0

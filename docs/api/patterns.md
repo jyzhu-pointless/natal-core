@@ -8,6 +8,6 @@ The `patterns` subpackage implements the syntax and logic for matching genotypes
 
 ## Complete Module Reference
 
-::: natal.patterns
+::: natal.frontend.patterns
     options:
       heading_level: 3

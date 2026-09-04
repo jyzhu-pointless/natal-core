@@ -24,7 +24,7 @@ spatial = (
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -56,8 +56,8 @@ pop_het = (
 If you already have an independently constructed list of demes, you can pass them directly to the `SpatialPopulation` constructor. All demes must share the same Species object:
 
 ```python
-from natal.spatial import SpatialPopulation
-from natal.spatial import SquareGrid
+from natal.frontend.spatial import SpatialPopulation
+from natal.frontend.spatial import SquareGrid
 
 shared_config = demes[0].export_config()
 for deme in demes[1:]:
@@ -173,7 +173,7 @@ The following parameters do **not** accept `batch_setting`:
 ### Four Input Forms
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 import numpy as np
 
 # 1. Scalar list (one-to-one correspondence with n_demes demes)
@@ -214,7 +214,7 @@ pop = (
 Specify different initial genotype distributions for each deme, commonly used in spatial drive release scenarios:
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 # Default: all demes have only WT
 n_demes = 100
@@ -233,7 +233,7 @@ pop = (
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6,
-                 juvenile_growth_mode="concave")
+                 juvenile_growth_mode="beverton_holt")
     .presets(HomingDrive(name="Drive", drive_allele="Dr", target_allele="WT",
                          resistance_allele="R2", functional_resistance_allele="R1",
                          drive_conversion_rate=0.95))
@@ -409,7 +409,7 @@ pop.run(100)
 pop.run(500, record_every=5)
 ```
 
-`SpatialPopulation.run()`'s `record_every` parameter controls the history sampling interval within the Numba-compiled kernel. Setting it to 0 disables history recording.
+`SpatialPopulation.run()`'s `record_every` parameter controls the history sampling interval within the execution kernel. Setting it to 0 disables history recording.
 
 ### Accessing Aggregate State
 
@@ -494,7 +494,7 @@ The internal execution order of each `run_tick()`:
 
 1. Check whether each deme has `is_finished`.
 2. Concatenate all demes' state into a unified array, build a config bank.
-3. Run the Numba-compiled spatial lifecycle wrapper: `prange` parallel execution of each deme's lifecycle -> unified migration.
+3. Run the spatial lifecycle: each deme's lifecycle executes in parallel at the deme granularity -> unified migration (within one Rust session or the Python reference path).
 4. Write the updated state back to each deme.
 
 If a deme triggers a termination condition first (e.g., population extinction), the entire `SpatialPopulation` stops advancing. For detailed execution flow, see [Spatial Lifecycle Wrapper](spatial_lifecycle_wrapper.md).
@@ -593,7 +593,7 @@ where $\sum_{i,j} K_{i,j}$ is the sum of all kernel weights (denoted `kernel_tot
 NATAL provides the `build_gaussian_kernel()` factory function, automatically using the correct distance metric based on topology type:
 
 ```python
-from natal.spatial import build_gaussian_kernel, HexGrid, SquareGrid
+from natal.frontend.spatial import build_gaussian_kernel, HexGrid, SquareGrid
 
 # Hexagonal grid Gaussian kernel -- automatically uses cosine law distance formula
 hex_kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
@@ -724,7 +724,7 @@ pop.run(10)
 
 ```python
 from natal import Species, SpatialPopulation, HexGrid
-from natal.spatial import build_gaussian_kernel
+from natal.frontend.spatial import build_gaussian_kernel
 
 species = Species.from_dict(name="hex", structure={"chr1": {"loc": ["WT", "Dr"]}})
 
@@ -736,7 +736,7 @@ pop = (
     .setup(name="hex_demo", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count={"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50)
-    .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="concave")
+    .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="beverton_holt")
     .migration(kernel=kernel, migration_rate=0.5)
     .build()
 )
@@ -746,10 +746,10 @@ pop.run(10)
 
 ## WebUI Debugging
 
-Spatial models can be directly connected to `natal.ui.launch(...)`.
+Spatial models can be directly connected to `natal.frontend.ui.launch(...)`.
 
 ```python
-from natal.ui import launch
+from natal.frontend.ui import launch
 
 launch(spatial, port=8080, title="Spatial Debug Dashboard")
 ```

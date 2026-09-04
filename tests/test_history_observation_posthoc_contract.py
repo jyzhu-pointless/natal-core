@@ -9,10 +9,22 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.numba.utils import numba_disabled
-from natal.output import History
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import batch_setting
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
+from natal.frontend.output import History
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.configurator import batch_setting
 
 
 def _species(name: str) -> nt.Species:
@@ -74,7 +86,7 @@ def _discrete_deme(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=1000.0,
         )
@@ -185,7 +197,7 @@ def _configured_spatial_discrete(name: str) -> nt.SpatialPopulation:
 
 def test_direct_spatial_constructor_installs_identity_observation_and_raw_history() -> None:
     """Direct construction records exact typed snapshots without a configurator."""
-    with numba_disabled():
+    with python_reference():
         population = _direct_spatial_discrete("direct_output_defaults")
         initial_counts = _stack_counts(population)
         initial_projection = population.observe()
@@ -217,7 +229,7 @@ def test_direct_spatial_constructor_installs_identity_observation_and_raw_histor
 def test_nonspatial_raw_history_posthoc_collapse_equals_each_projection() -> None:
     """Post-hoc collapse projects every raw record with the supplied rule."""
     species = _species("posthoc_nonspatial_species")
-    with numba_disabled():
+    with python_reference():
         population = _discrete_deme(
             species,
             "posthoc_nonspatial",
@@ -246,7 +258,7 @@ def test_nonspatial_raw_history_posthoc_collapse_equals_each_projection() -> Non
 
 def test_spatial_raw_history_posthoc_observation_preserves_every_deme() -> None:
     """Post-hoc spatial values are group-first and exact for every record/deme."""
-    with numba_disabled():
+    with python_reference():
         population = _configured_spatial_discrete("posthoc_spatial")
         population.run(1, record_every=1)
     observation = population.observation
@@ -300,7 +312,7 @@ def test_foreign_same_shape_observation_is_rejected_by_layout_fingerprint() -> N
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=1000.0,
         )
@@ -325,7 +337,7 @@ def test_foreign_same_shape_observation_is_rejected_by_layout_fingerprint() -> N
 
 def test_spatial_age_restore_checkpoint_restores_all_demes_and_truncates() -> None:
     """Checkpoint restore resets counts, sperm, all ticks, and future records."""
-    with numba_disabled():
+    with python_reference():
         population = (
             nt.SpatialPopulation.builder(
                 _species("restore_spatial_age_species"),

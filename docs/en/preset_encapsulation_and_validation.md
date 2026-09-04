@@ -29,8 +29,8 @@ A practical Preset should include:
 ## Example: Encapsulating a Minimal DrivePreset
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 class DrivePreset(GeneticPreset):
@@ -90,8 +90,8 @@ This significantly reduces the risk of "results cannot be reproduced."
 ## Complex Gene Drive Example
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
 
 class ComplexDrive(GeneticPreset):
     """Complex gene drive with multi-stage conversion"""

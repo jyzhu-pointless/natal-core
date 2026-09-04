@@ -21,9 +21,9 @@ from typing import Callable
 import numpy as np
 
 import natal as nt
-from natal.spatial.configurator import batch_setting
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import SquareGrid, build_adjacency_matrix
+from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import SquareGrid, build_adjacency_matrix
 
 BASELINE_PATH = Path(__file__).parent / "phase0_baseline.json"
 

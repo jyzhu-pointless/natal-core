@@ -8,6 +8,6 @@ The `modifiers` module defines how various genetic and external factors influenc
 
 ## Complete Module Reference
 
-::: natal.modifiers
+::: natal.frontend.modifiers
     options:
       heading_level: 3

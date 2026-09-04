@@ -9,6 +9,6 @@ for building and applying genotype-specific fitness modifiers.
 
 ## Complete Module Reference
 
-::: natal.fitness
+::: natal.frontend.fitness
     options:
       heading_level: 3

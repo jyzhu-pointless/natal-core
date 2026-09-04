@@ -29,7 +29,7 @@ NATAL 提供两层结构来组织转换规则：
 ## 最简可用示例
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 ruleset = GameteConversionRuleSet(name="homing_drive")
 ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
@@ -55,7 +55,7 @@ ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
 ### 使用 ZygoteConversionRuleSet
 
 ```python
-from natal.modifiers import ZygoteConversionRuleSet
+from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -107,8 +107,8 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 在开始设计复杂的转换规则之前，了解 `GeneticPreset` 的基础模板很重要：
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
 class MyCustomPreset(GeneticPreset):
@@ -147,8 +147,8 @@ class MyCustomPreset(GeneticPreset):
 ### 简单点突变
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
     """简单点突变：WT以一定频率突变为Mutant"""
@@ -180,7 +180,7 @@ class BidirectionalMutation(GeneticPreset):
         self.backward_rate = backward_rate
 
     def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 

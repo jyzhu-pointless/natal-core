@@ -24,7 +24,7 @@ spatial = (
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -56,8 +56,8 @@ pop_het = (
 如果已有独立构建好的 deme 列表，可以直接传给 `SpatialPopulation` 构造函数。所有 deme 必须共享同一个 Species 对象：
 
 ```python
-from natal.spatial import SpatialPopulation
-from natal.spatial import SquareGrid
+from natal.frontend.spatial import SpatialPopulation
+from natal.frontend.spatial import SquareGrid
 
 shared_config = demes[0].export_config()
 for deme in demes[1:]:
@@ -173,7 +173,7 @@ pop = (
 ### 四种输入形式
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 import numpy as np
 
 # 1. 标量列表（一一对应 n_demes 个 deme）
@@ -214,7 +214,7 @@ pop = (
 为每个 deme 指定不同的初始基因型分布，常用于空间驱动释放场景：
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 # 默认所有 deme 只有 WT
 n_demes = 100
@@ -233,7 +233,7 @@ pop = (
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6,
-                 juvenile_growth_mode="concave")
+                 juvenile_growth_mode="beverton_holt")
     .presets(HomingDrive(name="Drive", drive_allele="Dr", target_allele="WT",
                          resistance_allele="R2", functional_resistance_allele="R1",
                          drive_conversion_rate=0.95))
@@ -409,7 +409,7 @@ pop.run(100)
 pop.run(500, record_every=5)
 ```
 
-`SpatialPopulation.run()` 的 `record_every` 参数控制 Numba 编译内核中的历史采样间隔。设为 0 表示不记录历史。
+`SpatialPopulation.run()` 的 `record_every` 参数控制执行内核中的历史采样间隔。设为 0 表示不记录历史。
 
 ### 访问聚合状态
 
@@ -493,7 +493,7 @@ print(observed_history.values.shape)
 
 1. 检查每个 deme 是否已经 `is_finished`。
 2. 把所有 deme 的 state 拼成统一数组，构建 config bank。
-3. 运行 Numba 编译的空间生命周期包装器：`prange` 并行执行各 deme 生命周期 → 统一迁移。
+3. 运行空间生命周期：各 deme 生命周期按 deme 粒度并行执行 → 统一迁移（同一 Rust 会话或 Python 参考路径内）。
 4. 将更新后的 state 写回每个 deme。
 
 如果一个 deme 先触发终止条件（如种群灭绝），整个 `SpatialPopulation` 也会停止推进。详细执行流程见 [空间生命周期包装器](spatial_lifecycle_wrapper.md)。
@@ -592,7 +592,7 @@ $$p_n = \frac{w_n}{S_{\text{ref}}}, \quad S_{\text{ref}} = \begin{cases} \sum_{m
 NATAL 提供 `build_gaussian_kernel()` 工厂函数，自动根据拓扑类型使用正确的距离度量：
 
 ```python
-from natal.spatial import build_gaussian_kernel, HexGrid, SquareGrid
+from natal.frontend.spatial import build_gaussian_kernel, HexGrid, SquareGrid
 
 # 六边形网格高斯核 —— 自动使用余弦定理距离公式
 hex_kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
@@ -724,7 +724,7 @@ pop.run(10)
 
 ```python
 from natal import Species, SpatialPopulation, HexGrid
-from natal.spatial import build_gaussian_kernel
+from natal.frontend.spatial import build_gaussian_kernel
 
 species = Species.from_dict(name="hex", structure={"chr1": {"loc": ["WT", "Dr"]}})
 
@@ -736,7 +736,7 @@ pop = (
     .setup(name="hex_demo", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count={"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50)
-    .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="concave")
+    .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="beverton_holt")
     .migration(kernel=kernel, migration_rate=0.5)
     .build()
 )
@@ -746,10 +746,10 @@ pop.run(10)
 
 ## WebUI 调试
 
-Spatial 模型可以直接接到 `natal.ui.launch(...)`。
+Spatial 模型可以直接接到 `natal.frontend.ui.launch(...)`。
 
 ```python
-from natal.ui import launch
+from natal.frontend.ui import launch
 
 launch(spatial, port=8080, title="Spatial Debug Dashboard")
 ```

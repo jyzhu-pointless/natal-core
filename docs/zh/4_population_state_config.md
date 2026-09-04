@@ -1,9 +1,9 @@
-# `PopulationState` 与 `PopulationConfig`
+# `PopulationState` 与 `ModelDraft`
 
-`PopulationState` 和 `PopulationConfig` 是 NATAL 模拟框架中最关键的两个数据对象：
+`PopulationState` 和 `ModelDraft` 是 NATAL 模拟框架中最关键的两个数据对象：
 
 - `PopulationState`（以及离散世代对应的 `DiscretePopulationState`）负责保存模拟过程中的动态状态
-- `PopulationConfig` 负责保存模拟参数与遗传映射，是运行内核时读取的配置对象
+- `ModelDraft` 负责保存模拟参数与遗传映射，是运行内核时读取的配置对象
 
 理解这两个对象有助于更稳定地组织初始化、运行与结果解释过程。
 
@@ -13,14 +13,14 @@
 
 ```text
 用户输入参数
-  → PopulationConfig（静态配置）
+  → ModelDraft（静态配置）
   → PopulationState / DiscretePopulationState（动态状态）
   → run(...) / run_tick() 持续更新 state
 ```
 
 可以将其理解为：
 
-- `PopulationConfig` 回答"模型规则是什么"
+- `ModelDraft` 回答"模型规则是什么"
 - `PopulationState` 回答"当前系统处于什么状态"
 
 ## `PopulationState`：年龄结构模型的状态对象
@@ -60,9 +60,9 @@ class DiscretePopulationState(NamedTuple):
 - 状态更新由离散世代流程维护
 - 当前离散世代实现中，配置会规范为 `n_ages=2`、`new_adult_age=1`
 
-## `PopulationConfig`：模型规则与映射配置
+## `ModelDraft`：模型规则与映射配置
 
-`PopulationConfig` 定义在 `src/natal/population_config.py`，包含运行模型所需的固定参数与矩阵。
+`ModelDraft` 定义在 `src/natal/population_config.py`，包含运行模型所需的固定参数与矩阵。
 
 ### 配置内容分组
 
@@ -91,17 +91,17 @@ class DiscretePopulationState(NamedTuple):
 
 ### 使用时应关注什么
 
-`PopulationConfig` 是一个 `NamedTuple`，其拓扑结构（包含哪些字段、字段的 shape）在构建后**不可变**。但其中生态参数（如 `carrying_capacity`、`eggs_per_female` 等 9 个标量）以 0-d ndarray 形式存储，**可以在 Hook 中原地修改**：
+`ModelDraft` 是一个 `NamedTuple`，其拓扑结构（包含哪些字段、字段的 shape）在构建后**不可变**。但其中生态参数（如 `carrying_capacity`、`eggs_per_female` 等 9 个标量）以 0-d ndarray 形式存储，**可以在 Hook 中原地修改**：
 
 ```python
-@nt.hook(event="early", custom=True)
-def heatwave(state, config):
-    if state.n_tick == 10:
-        config.carrying_capacity[()] = 2000  # 原地修改，立即生效
+@nt.hook(event="early")
+def heatwave(pop: TickContext) -> int:
+    if pop.tick == 10:
+        pop.params.carrying_capacity = 2000.0  # bounds-validated runtime write, applies immediately
     return 0
 ```
 
-大数组字段（如 `viability_fitness`、`zygotes_to_gametes_map`）不建议在运行中修改，但技术上也可通过数组索引进行原地赋值。可以打印输出 `PopulationConfig` 的字段值，以确认模型参数是否符合预期：
+大数组字段（如 `viability_fitness`、`zygotes_to_gametes_map`）不建议在运行中修改，但技术上也可通过数组索引进行原地赋值。可以打印输出 `ModelDraft` 的字段值，以确认模型参数是否符合预期：
 
 ```python
 cfg = pop.config
@@ -112,9 +112,9 @@ print(cfg.viability_fitness.shape)
 ## 最简示例：查看 state 与 config
 
 ```python
-from natal.genetics import Species
-from natal.population import AgeStructuredPopulation
-from natal.population import DiscreteGenerationPopulation
+from natal.frontend.genetics import Species
+from natal.frontend.population import AgeStructuredPopulation
+from natal.frontend.population import DiscreteGenerationPopulation
 
 sp = Species.from_dict(name="Demo", structure={"chr1": {"A": ["A1", "A2"]}})
 
@@ -142,7 +142,7 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 
 为便于日志记录、前后端通信与调试，NATAL 提供了将状态对象翻译为人类可读结构的能力。
 
-相关 API 位于 `natal.output`：
+相关 API 位于 `natal.frontend.output`：
 
 - `population_state_to_dict` / `population_state_to_json`
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
@@ -183,7 +183,7 @@ print("观测值:", observed.values)
 如果直接操作 `PopulationState` / `DiscretePopulationState`，也可以调用对应的函数，并显式传入标签：
 
 ```python
-from natal.output import population_state_to_dict
+from natal.frontend.output import population_state_to_dict
 
 data = population_state_to_dict(
     state,

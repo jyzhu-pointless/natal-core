@@ -29,7 +29,7 @@ This can be understood as:
 ## Minimal Working Example
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 ruleset = GameteConversionRuleSet(name="homing_drive")
 ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
@@ -55,7 +55,7 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 ### Using ZygoteConversionRuleSet
 
 ```python
-from natal.modifiers import ZygoteConversionRuleSet
+from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -107,8 +107,8 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 Before designing complex conversion rules, it is important to understand the basic template of `GeneticPreset`:
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
 class MyCustomPreset(GeneticPreset):
@@ -147,8 +147,8 @@ Implementation highlights:
 ### Simple Point Mutation
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
     """Simple point mutation: WT mutates to Mutant at a certain frequency"""
@@ -180,7 +180,7 @@ class BidirectionalMutation(GeneticPreset):
         self.backward_rate = backward_rate
 
     def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 

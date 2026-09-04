@@ -26,15 +26,15 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.output.observation import (
+from natal.frontend.output.observation import (
     Observation,
     ObservationFilter,
     ObservationResult,
     apply_rule,
     build_identity_observation,
 )
-from natal.patterns import IndividualSelector
-from natal.registry.index import IndexRegistry
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.registry.index import IndexRegistry
 
 # ── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -1431,7 +1431,7 @@ def phase2_registry_multi_slab() -> IndexRegistry:
     """Registry with both 'default' and 'infected' slab labels."""
     reg = IndexRegistry()
     # Register with default slab
-    from natal.genetics import Species as _Species
+    from natal.frontend.genetics import Species as _Species
     sp = _Species.from_dict(
         name="MultiSlabSpecies",
         structure={"chr1": {"loc1": ["WT", "Dr"]}},

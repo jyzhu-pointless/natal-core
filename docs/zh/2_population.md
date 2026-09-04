@@ -76,7 +76,7 @@ pop.update().custom(temperature=35.0)
 ### 底层 set_param
 
 ```python
-from natal.configurator import set_param
+from natal.frontend.configurator import set_param
 
 # 支持全名、短名、别名
 set_param(config, "competition.carrying_capacity", 5000.0)
@@ -194,7 +194,7 @@ print("观测轴:", result.axes)
 print("观测值:", result.values)
 
 # 使用 IndividualSelector 在构建时定义自定义 observation
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
 pop = (
     nt.DiscreteGenerationPopulation.setup(sp)

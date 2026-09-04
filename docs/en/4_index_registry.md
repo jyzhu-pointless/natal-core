@@ -138,7 +138,7 @@ When a genotype string includes an `@slab` suffix, it specifies both the genotyp
 "Drive|WT"          → Genotype("Drive|WT") with no slab constraint (see below)
 ```
 
-The `@slab` suffix is parsed by `ZygoteTypePattern` (defined in `natal.patterns.elements.diploid`). The base genotype pattern is everything before the last `@`.
+The `@slab` suffix is parsed by `ZygoteTypePattern` (defined in `natal.frontend.patterns.elements.diploid`). The base genotype pattern is everything before the last `@`.
 
 ### Naming Convention: `genotypes` Accepts ZType Strings
 
@@ -190,7 +190,7 @@ The full combinatorial space `(Genotypes × slabs) × (Haplotypes × glabs)` can
 
 ### BFS Algorithm
 
-Compression uses a fixed-point BFS (implemented in `build_compression_mask` in `natal.genetics.structures._helpers`). The algorithm is symmetric for the GType and ZType layers:
+Compression uses a fixed-point BFS (implemented in `build_compression_mask` in `natal.frontend.genetics.structures._helpers`). The algorithm is symmetric for the GType and ZType layers:
 
 ```
 1. Seeds: collect reachable genotypes
@@ -265,12 +265,12 @@ pop.state.individual_count[0, 3, idx]
 
 ```python
 # Use GenotypeSelector for pattern-based operations
-from natal.patterns import GenotypeSelector
+from natal.frontend.patterns import GenotypeSelector
 selector = GenotypeSelector("A1|*", pop.index_registry)
 indices = selector.select()  # Returns matching integer index array
 ```
 
-**Note**: The old import path `from natal.genetic_patterns import GenotypeSelector` has been updated to `from natal.patterns import GenotypeSelector`.
+**Note**: The old import path `from natal.genetic_patterns import GenotypeSelector` has been updated to `from natal.frontend.patterns import GenotypeSelector`.
 
 ## Internal Framework Usage
 
@@ -291,13 +291,13 @@ Within the NATAL framework, `IndexRegistry` is used for:
 
 ### 3. Hook System
 
-- Numba Hooks use precomputed indices for efficient operation.
+- Hooks use precomputed indices (selectors are resolved at registration) for efficient operation on both backends.
 - Avoids accessing dynamic registries at compile time.
 - Avoids hardcoded indices through the selector pattern.
 
 ### 4. Index Compression
 
-- `rebuild_config_maps()` (in `natal.configurator._registry_builder`) runs the BFS.
+- `rebuild_config_maps()` (in `natal.frontend.configurator._registry_builder`) runs the BFS.
 - The resulting masks are applied via `registry.compress(ztype_mask, gtype_mask)`.
 - After compression, all registry properties reflect only the surviving entries.
 
@@ -332,10 +332,10 @@ ZType entries (one per slab)
 ## Related Sections
 
 - [Genetic Structures and Entities](2_genetics.md) — Genotype and HaploidGenotype creation
-- [PopulationState & PopulationConfig](4_population_state_config.md) — Index application in configuration
+- [PopulationState & ModelDraft](4_population_state_config.md) — Index application in configuration
 - [Modifier Mechanism](3_modifiers.md) — IndexRegistry usage in Modifiers
 - [Hook System](2_hooks.md) — Advanced Hook selector patterns
 
 ---
 
-**Ready to dive into configuration compilation details?** [Continue to next chapter: PopulationState & PopulationConfig →](4_population_state_config.md)
+**Ready to dive into configuration compilation details?** [Continue to next chapter: PopulationState & ModelDraft →](4_population_state_config.md)

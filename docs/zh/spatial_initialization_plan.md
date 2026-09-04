@@ -11,7 +11,7 @@ demes = [build_deme(species, idx, ...) for idx in range(2601)]
 
 每个 `build_deme` 调用经过：
 - Species genotype 解析（索引查找）
-- Numba hook 编译（`_compile_hooks` → `CompiledEventHooks.from_compiled_hooks`）
+- Hook 计划编译（`_compile_hooks` → `CompiledEventHooks.from_compiled_hooks`）
 - config/fitness 数组分配与填充
 - `_finalize_hooks` 触发 codegen
 
@@ -26,7 +26,7 @@ for deme in demes[1:]:
 ```
 
 - 忘记调用时每个 deme 持有独立 config，浪费内存
-- `import_config` 只能共享 scalar 字段，Numba 编译产物各自独立
+- `import_config` 只能共享 scalar 字段，Hook 计划各自独立
 
 ### 3. 异构配置缺乏批量表达
 
@@ -87,7 +87,7 @@ pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, col
     .reproduction(eggs_per_female=50) \
     .competition(
         carrying_capacity=batch_setting(spatial=lambda i, x, y: 10000 if x < N//2 else 5000),
-        juvenile_growth_mode="concave",
+        juvenile_growth_mode="beverton_holt",
         low_density_growth_rate=6.0,
     ) \
     .presets(drive) \
@@ -180,7 +180,7 @@ Deme 选择器自动展开为每个目标 deme 的 `set_hook` 调用。
 DemeFactory.quick(
     species=species,
     individual_count=np.array(...),  # (n_sexes, n_ages, n_genotypes)
-    config=PopulationConfig(...),
+    config=ModelDraft(...),
     registry=shared_registry,
 )
 ```
@@ -275,7 +275,7 @@ for i in range(n_demes):
 |------|------|
 | batch 展开后 config 分组 key 不可哈希（含 NumPy 数组）| 用 `id(arr)` 或序列化摘要 |
 | 克隆 demes 时 `compiled_hook_descriptors` / `hook_entries` 共享引用导致状态泄漏 | Copy-on-write：`set_hook` 子集注册时按需复制 |
-| `PopulationConfig` 是否支持 `_replace`？ | 目测是 NamedTuple，确认后可用 |
+| `ModelDraft` 是否支持 `_replace`？ | 目测是 NamedTuple，确认后可用 |
 | SpatialConfigurator 与现有 `Configurator` 的关系 | SpatialConfigurator 内部持有 per-deme builder，复用其校验逻辑 |
 
 ---

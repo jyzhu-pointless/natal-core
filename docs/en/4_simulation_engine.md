@@ -185,6 +185,39 @@ Typical scenarios:
 2. Fork multiple parameter branches from the same snapshot.
 3. Compare trajectory differences under different strategies.
 
+### 7.1 Random Streams (RNG) and the Bit-Reproducible Promise
+
+- Each population's random stream derives from `setup(stochastic=True, seed=...)`;
+  Rust sessions use a `SessionRng` (`enable_rust_backend(seed=...)`,
+  `reseed(seed)` resets it).
+- In spatial models deme `d` derives its stream from `seed ^ d` (Rust side), so
+  demes do not interfere with each other under the same base seed.
+- Inside hooks `pop.rng` derives from
+  `slot ^ (tick*1_000_003) ^ ((deme_id+7)*6_559) ^ ((hook_index+1)*31)`,
+  independent per invocation.
+- **Promise scope**: with identical inputs (build parameters + seed + hook
+  combination), deterministic (`stochastic=False`) trajectories are bitwise
+  identical between the reference and Rust backends; stochastic trajectories
+  reproduce across backends and processes under a fixed seed. Version-to-version
+  bit-level stability is *not* promised (future algorithm fixes may change
+  numerics).
+
+### 7.2 Checkpoints
+
+`snapshot_checkpoint()` (backend session layer) captures an **in-memory
+checkpoint** of `(tick, state arrays, RNG words, ecology columns)` -- that is,
+state + random state + ecology parameters; the **genetics tables are not part
+of the rollback**. `restore_checkpoint(tick)` (population layer) restores from
+raw history:
+
+- After restoration the tick and state are consistent (`state.n_tick` synced)
+  and the history is cleared;
+- Rust sessions restore via `restore_checkpoint(state, snapshot)` and return
+  the new state;
+- The `params_log` parameter snapshot is the audit trail of hook-side parameter
+  writes and is independent of checkpoints (checkpoints do not carry
+  `params_log`; save it separately if you need the audit).
+
 ## 8. How Hooks Integrate into the Execution Pipeline
 
 User-defined Hooks (e.g., `first`/`early`/`late`) are compiled and merged into the execution flow, then triggered by the runner at the corresponding stage.
@@ -236,7 +269,7 @@ In practical modeling, you typically only need to use the population API consist
 
 ## Related Sections
 
-- [PopulationState and PopulationConfig](4_population_state_config.md)
-- [Numba Optimization Guide](4_numba_optimization.md)
+- [PopulationState and ModelDraft](4_population_state_config.md)
+- [Backend Selection and Performance](4_backend_selection.md)
 - [Modifier Mechanism](3_modifiers.md)
 - [Hook System](2_hooks.md)

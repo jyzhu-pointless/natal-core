@@ -3,7 +3,7 @@
 import numpy as np
 
 import natal as nt
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -499,7 +499,7 @@ class TestModifierRegression:
             .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
             .build()
         )
-        from natal.engine.simulation.age_structured import (
+        from natal.backends.reference.simulation.age_structured import (
             compute_offspring_probability_tensor,
         )
 

@@ -239,7 +239,7 @@ for k in range(n_kernels):
 
 These pre-built arrays are passed into `apply_spatial_kernel_migration` during migration.
 
-### 5.3 Migration Phase (Inside Numba prange)
+### 5.3 Migration Phase (Inside the Parallel Kernel)
 
 ```python
 for src in prange(n_demes):

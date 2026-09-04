@@ -7,12 +7,12 @@ spatial builder with batch_setting.
 from __future__ import annotations
 
 import numpy as np
-from natal.spatial.configurator import batch_setting
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import SquareGrid
 
 import natal as nt
-from natal.ui import launch
+from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import SquareGrid
+from natal.frontend.ui import launch
 
 
 def _make_initial_count(wt: float, dr: float) -> dict[str, dict[str, list[float]]]:
@@ -92,7 +92,7 @@ def build_spatial_population() -> SpatialPopulation:
 
 def main() -> None:
     """Launch the spatial UI demo."""
-    nt.disable_numba()
+    # Spatial demos run the pure-Python per-deme dispatch.
     spatial = build_spatial_population()
     launch(spatial, port=8080, title="Spatial UI Demo")
 

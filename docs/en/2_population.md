@@ -73,7 +73,7 @@ Changes are written in-place via `set_param(config, name, value)` to 0-d ndarray
 #### Low-Level set_param
 
 ```python
-from natal.configurator import set_param
+from natal.frontend.configurator import set_param
 
 # Full name, short name, or alias all work
 set_param(config, "competition.carrying_capacity", 5000.0)
@@ -194,7 +194,7 @@ print("Observation axes:", result.axes)
 print("Observation values:", result.values)
 
 # Define a custom observation at build time with IndividualSelector
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
 pop = (
     nt.DiscreteGenerationPopulation.setup(sp)

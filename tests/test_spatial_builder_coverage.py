@@ -1,4 +1,4 @@
-"""Comprehensive tests for ``natal.spatial.configurator``.
+"""Comprehensive tests for ``natal.frontend.spatial.configurator``.
 
 Covers:
 - Homogeneous builds (discrete_generation and age_structured pop_types)
@@ -17,10 +17,22 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.numba.utils import numba_disabled
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import BatchSetting, SpatialConfigurator, batch_setting
-from natal.spatial.topology import HexGrid, SquareGrid
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.configurator import BatchSetting, SpatialConfigurator, batch_setting
+from natal.frontend.spatial.topology import HexGrid, SquareGrid
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -200,7 +212,7 @@ class TestBatchSetting:
             return float(x * 3)
         # Setting __signature__ to a non-Signature causes inspect.signature to
         # raise ValueError, which triggers the fallback to _fn_param_count = 1.
-        _no_sig_fn.__signature__ = "not-a-signature"  # type: ignore[assignment]
+        _no_sig_fn.__signature__ = "not-a-signature"  # type: ignore[assignment]  # deliberately malformed to trigger the fallback branch under test
         bs = batch_setting(_no_sig_fn)
         result = bs.expand(4, SquareGrid(1, 4))
         assert result == [0.0, 3.0, 6.0, 9.0]
@@ -216,7 +228,7 @@ class TestHomogeneousBuildDiscrete:
     def test_build_and_run_minimal(self) -> None:
         species = _simple_species("HomoDiscreteMin")
         topo = SquareGrid(2, 2)
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
                                              pop_type="discrete_generation")
@@ -245,7 +257,7 @@ class TestHomogeneousBuildDiscrete:
 
     def test_build_homogeneous_no_topology(self) -> None:
         species = _simple_species("HomoDiscreteNoTopo")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
                                              pop_type="discrete_generation")
@@ -269,7 +281,7 @@ class TestHomogeneousBuildDiscrete:
     def test_all_deme_indices_present(self) -> None:
         species = _simple_species("HomoDiscreteIdx")
         topo = SquareGrid(2, 2)
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
                                              pop_type="discrete_generation")
@@ -304,7 +316,7 @@ class TestHomogeneousBuildAgeStructured:
     def test_build_and_run(self) -> None:
         species = _simple_species("HomoAgeStruct")
         topo = SquareGrid(2, 2)
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
                                              pop_type="age_structured")
@@ -340,7 +352,7 @@ class TestHeterogeneousBuild:
 
     def test_batch_carrying_capacity_discrete(self) -> None:
         species = _simple_species("HetCCDisc")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -364,7 +376,7 @@ class TestHeterogeneousBuild:
 
     def test_batch_eggs_per_female(self) -> None:
         species = _simple_species("HetEggs")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
                                              pop_type="discrete_generation")
@@ -387,7 +399,7 @@ class TestHeterogeneousBuild:
 
     def test_batch_low_density_growth_rate(self) -> None:
         species = _simple_species("HetGrowth")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
                                              pop_type="discrete_generation")
@@ -413,7 +425,7 @@ class TestHeterogeneousBuild:
 
     def test_batch_juvenile_growth_mode(self) -> None:
         species = _simple_species("HetMode")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
                                              pop_type="discrete_generation")
@@ -447,7 +459,7 @@ class TestObservation:
 
     def test_with_observation_dict(self) -> None:
         species = _simple_species("ObsDict")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -474,7 +486,7 @@ class TestObservation:
     def test_with_observation_selector(self) -> None:
         """Build and run a spatial Observation from an IndividualSelector."""
         species = _simple_species("ObsList")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -512,7 +524,7 @@ class TestHexGridTopology:
     def test_hexgrid_build_and_run(self) -> None:
         species = _simple_species("HexGridSpec")
         topo = HexGrid(rows=3, cols=4)
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=12, topology=topo,
                                              pop_type="discrete_generation")
@@ -540,7 +552,7 @@ class TestHexGridTopology:
     def test_hexgrid_wrapping(self) -> None:
         species = _simple_species("HexWrapSpec")
         topo = HexGrid(rows=2, cols=2, wrap=True)
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
                                              pop_type="discrete_generation")
@@ -582,7 +594,7 @@ class TestErrorPaths:
     def test_adjacency_mode_requires_kernel_raises(self) -> None:
         """Kernel mode with no kernel and no kernel_bank raises."""
         species = _simple_species("KernelModeNoKernel")
-        with numba_disabled():
+        with python_reference():
             builder = (
                 nt.SpatialPopulation.builder(species, n_demes=1, topology=SquareGrid(1, 1),
                                              pop_type="discrete_generation")
@@ -601,7 +613,7 @@ class TestErrorPaths:
 
     def test_migration_kernel_even_dimension_raises(self) -> None:
         species = _simple_species("EvenKernel")
-        with numba_disabled():
+        with python_reference():
             builder = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -646,7 +658,7 @@ class TestErrorPaths:
 
     def test_wrong_invalid_migration_strategy_raises(self) -> None:
         species = _simple_species("InvalidStrategy")
-        with numba_disabled():
+        with python_reference():
             builder = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -680,7 +692,7 @@ class TestMigrationKernelBank:
         kernel_b = np.ones((3, 3), dtype=np.float64)
         kernel_b[1, 1] = 0.0
 
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -706,9 +718,12 @@ class TestMigrationKernelBank:
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.kernel_bank is not None
-        assert spatial.deme_kernel_ids is not None
-        assert spatial.migration_mode == "kernel"
+        # The bank+ids resolve at build time into per-deme CSR rows: all 4
+        # demes emit the 8-entry kernel ring (row-normalized).
+        assert spatial.blueprint.n_demes == 4
+        assert spatial.migration_csr.stay_after_send is True
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.isclose(spatial.migration_csr.weights.sum(), 4.0)
 
 
 # ===========================================================================
@@ -723,7 +738,7 @@ class TestMigrationBatchKernel:
         kernel = np.ones((3, 3), dtype=np.float64)
         kernel[1, 1] = 0.0
 
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -751,7 +766,7 @@ class TestMigrationBatchKernel:
     def test_adjacency_migration_with_rate_zero(self) -> None:
         """Migration with rate=0 should not affect population."""
         species = _simple_species("AdjZeroRate")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -772,7 +787,12 @@ class TestMigrationBatchKernel:
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.migration_mode == "adjacency"
+        # strategy="adjacency" resolves to adjacency-mode CSR: rows keep
+        # the raw topology adjacency weights (moore grid corner: weight
+        # 1.0 per neighbor, three neighbors per deme).
+        assert spatial.migration_csr.stay_after_send is False
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.allclose(spatial.migration_csr.weights, 1.0)
 
     def test_kernel_strategy_migration(self) -> None:
         """Explicit kernel migration strategy."""
@@ -780,7 +800,7 @@ class TestMigrationBatchKernel:
         kernel = np.ones((3, 3), dtype=np.float64)
         kernel[1, 1] = 0.0
 
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -802,7 +822,11 @@ class TestMigrationBatchKernel:
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.migration_mode == "kernel"
+        # strategy="kernel" resolves to kernel-mode CSR: the 3x3 kernel
+        # minus its center leaves 8 entries per deme, row-normalized.
+        assert spatial.migration_csr.stay_after_send is True
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.isclose(spatial.migration_csr.weights.sum(), 4.0)
 
     def test_adjust_migration_on_edge(self) -> None:
         """adjust_migration_on_edge=True with kernel migration."""
@@ -811,7 +835,7 @@ class TestMigrationBatchKernel:
                            [0.1, 0.0, 0.1],
                            [0.0, 0.1, 0.0]], dtype=np.float64)
 
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -833,12 +857,18 @@ class TestMigrationBatchKernel:
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.adjust_migration_on_edge is True
+        # With adjust_migration_on_edge every row (even the corner demes
+        # with two valid neighbors) normalizes to a total weight of 1.
+        rows = spatial.migration_csr.indptr
+        assert all(
+            np.isclose(spatial.migration_csr.weights[rows[d]:rows[d + 1]].sum(), 1.0)
+            for d in range(4)
+        )
 
     def test_hybrid_strategy(self) -> None:
         """Hybrid migration strategy (falls back to auto)."""
         species = _simple_species("HybridStrat")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -870,7 +900,7 @@ class TestBuilderMethodChaining:
 
     def test_survival_discrete_with_three_params(self) -> None:
         species = _simple_species("SurvDisc")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -897,7 +927,7 @@ class TestBuilderMethodChaining:
 
     def test_fitness_method(self) -> None:
         species = _simple_species("FitSpec")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -921,7 +951,7 @@ class TestBuilderMethodChaining:
 
     def test_modifiers_method(self) -> None:
         species = _simple_species("ModSpec")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -945,7 +975,7 @@ class TestBuilderMethodChaining:
 
     def test_survival_age_structured(self) -> None:
         species = _simple_species("SurvAgeSpec")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="age_structured")
@@ -973,7 +1003,7 @@ class TestBuilderMethodChaining:
 
     def test_old_juvenile_carrying_capacity_alias(self) -> None:
         species = _simple_species("OldJuvCC")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="age_structured")
@@ -1001,7 +1031,7 @@ class TestBuilderMethodChaining:
 
     def test_hooks_method(self) -> None:
         species = _simple_species("HookSpec")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1025,7 +1055,7 @@ class TestBuilderMethodChaining:
 
     def test_presets_method(self) -> None:
         species = _simple_species("PresetSpec")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1050,7 +1080,7 @@ class TestBuilderMethodChaining:
     def test_presets_with_batch_setting(self) -> None:
         """Cover presets with BatchSetting positional arg (lines 797-803)."""
         species = _simple_species("PresetBatch")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1081,7 +1111,7 @@ class TestBuilderMethodChaining:
             target_allele="WT",
             species=species,
         )
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1112,7 +1142,7 @@ class TestBuilderMethodChaining:
             target_allele="WT",
             species=species,
         )
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1141,7 +1171,7 @@ class TestBuilderMethodChaining:
         (Lines 1147, 1209, 1402-1404)
         """
         species = _simple_species("FitnessFallback")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1182,7 +1212,7 @@ class TestMakeHashable:
         kernel_b[1, 1] = 0.0
         # kernel_a and kernel_b are equal -> they should be deduplicated
 
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
                                              pop_type="discrete_generation")
@@ -1204,8 +1234,14 @@ class TestMakeHashable:
             spatial.run(2)
 
         assert spatial.tick == 2
-        assert spatial.kernel_bank is not None
-        assert len(spatial.kernel_bank) == 1
+        # kernel_a and kernel_b are content-equal: the batch kernel
+        # deduplicates to a single bank entry, visible as one CSR weight
+        # value per row position (all demes share the same routing).
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.allclose(
+            spatial.migration_csr.weights,
+            spatial.migration_csr.weights[:3].tolist() * 4,
+        )
 
 
 # ===========================================================================
@@ -1216,7 +1252,7 @@ class TestMakeHashableBranches:
     """Direct tests for _make_hashable covering dict/tuple/list branches."""
 
     def test_make_hashable_dict(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.configurator import _make_hashable
         d = {"b": 2, "a": 1}
         h = _make_hashable(d)
         assert isinstance(h, tuple)
@@ -1224,28 +1260,28 @@ class TestMakeHashableBranches:
         assert len(h[1]) == 2
 
     def test_make_hashable_list(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.configurator import _make_hashable
         lst = [3, 1, 2]
         h = _make_hashable(lst)
         assert isinstance(h, tuple)
         assert h == (3, 1, 2)
 
     def test_make_hashable_tuple(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.configurator import _make_hashable
         tup = (10, 20)
         h = _make_hashable(tup)
         assert isinstance(h, tuple)
         assert h == (10, 20)
 
     def test_make_hashable_ndarray(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.configurator import _make_hashable
         arr = np.array([[1.0, 2.0], [3.0, 4.0]])
         h = _make_hashable(arr)
         assert isinstance(h, tuple)
         assert h[0] == "__ndarray__"
 
     def test_make_hashable_scalar(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.configurator import _make_hashable
         assert _make_hashable(42) == 42
         assert _make_hashable("hello") == "hello"
 
@@ -1259,7 +1295,7 @@ class TestDetectAndDelegateWithArgs:
 
     def test_presets_with_positional_args(self) -> None:
         species = _simple_species("PosPresetOk")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=1,
                                              pop_type="discrete_generation")
@@ -1291,7 +1327,7 @@ class TestInitialStateWithSpermStorage:
     def test_initial_state_with_sperm_storage(self) -> None:
         species = _simple_species("InitSpermStore")
         topo = SquareGrid(1, 2)
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=topo,
                                              pop_type="age_structured")
@@ -1346,11 +1382,11 @@ class TestMigrationAdjacency:
     """Tests for migration with explicit adjacency (line 951)."""
 
     def test_migration_with_adjacency(self) -> None:
-        from natal.spatial.topology import build_adjacency_matrix
+        from natal.frontend.spatial.topology import build_adjacency_matrix
         species = _simple_species("MigAdj")
         topo = SquareGrid(2, 2)
         adj = build_adjacency_matrix(topo)
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
                                              pop_type="discrete_generation")
@@ -1379,7 +1415,7 @@ class TestHeterogeneousIndividualCount:
 
     def test_batch_individual_count(self) -> None:
         species = _simple_species("HetIndiv")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1409,7 +1445,7 @@ class TestObservationOnHeterogeneous:
 
     def test_observation_on_hetero(self) -> None:
         species = _simple_species("HetObs")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
                                              pop_type="discrete_generation")
@@ -1442,7 +1478,7 @@ class TestHeterogeneousAgeStructuredState:
 
     def test_batch_age_structured_state(self) -> None:
         species = _simple_species("HetAgeState")
-        with numba_disabled():
+        with python_reference():
             spatial = (
                 nt.SpatialPopulation.builder(species, n_demes=2, topology=SquareGrid(1, 2),
                                              pop_type="age_structured")

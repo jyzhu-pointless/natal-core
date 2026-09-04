@@ -29,8 +29,8 @@ Preset 的价值就是把这些内容收敛成一个稳定配置单元。
 ## 示例：封装一个最小 DrivePreset
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 class DrivePreset(GeneticPreset):
@@ -94,8 +94,8 @@ pop = (
 ## 复杂基因驱动示例
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
 
 class ComplexDrive(GeneticPreset):
     """复杂基因驱动，包含多个阶段的转换"""

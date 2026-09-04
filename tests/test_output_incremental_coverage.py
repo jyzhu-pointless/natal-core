@@ -10,16 +10,16 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.ui.spatial_dashboard as spatial_dashboard_module
-from natal.output import (
+import natal.frontend.ui.spatial_dashboard as spatial_dashboard_module
+from natal.frontend.output import (
     population_observation_history_to_readable_dict,
     spatial_population_history_to_readable_dict,
     spatial_population_observation_history_to_readable_dict,
 )
-from natal.output.observation import ObservationFilter
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import batch_setting
-from natal.ui.spatial_dashboard import SpatialDashboard
+from natal.frontend.output.observation import ObservationFilter
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
 def _species(name: str) -> nt.Species:
@@ -78,7 +78,7 @@ def _build_discrete(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=1000.0,
         )
@@ -190,7 +190,7 @@ def _build_spatial(
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=2.0)
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 low_density_growth_rate=2.0,
                 carrying_capacity=1000.0,
             )
@@ -547,16 +547,17 @@ def test_spatial_lifecycle_errors_clear_reset_and_finish_are_exact() -> None:
 
 
 def test_spatial_runtime_batch_updates_assign_exact_per_deme_values() -> None:
-    """The public spatial updater expands batch values by deme."""
+    """The public write channel assigns exact per-deme ecology values."""
     population = _build_spatial("spatial_batch_update", history_mode="raw")
 
-    population.update().competition(
-        carrying_capacity=batch_setting([111.0, 222.0])
-    )
+    for deme_index, k_value in enumerate((111.0, 222.0)):
+        population.deme(deme_index).write_ecology("carrying_capacity", k_value)
     assert [float(deme.config.carrying_capacity) for deme in population.demes] == [
         111.0,
         222.0,
     ]
+    # The ecology column mirrors the per-deme values.
+    assert population.params.carrying_capacity.tolist() == [111.0, 222.0]
 
 class _FakeUI:
     """Capture spatial dashboard downloads without starting NiceGUI."""

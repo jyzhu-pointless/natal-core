@@ -46,26 +46,33 @@ def extract_module_exports(module_file: Path) -> list[str]:
 
 
 def iter_public_modules(package_dir: Path) -> list[tuple[str, list[str]]]:
-    """Collect public exports for each top-level module and subpackage."""
+    """Collect public exports for each real first-level package.
+
+    The legacy top-level forwarding shims were removed when the Phase-0
+    reorganization completed; the public tree now consists of the
+    ``frontend.*`` and ``backends.*`` subpackages plus ``contracts``
+    itself.  Dotted owner names (e.g. ``frontend.hooks``) map to the
+    real package paths so the generated stub imports resolve.
+    """
     module_exports: list[tuple[str, list[str]]] = []
 
-    for module_file in sorted(package_dir.glob("*.py")):
-        if module_file.name.startswith("_") or module_file.name == "__init__.py":
-            continue
-        exports = extract_module_exports(module_file)
-        if exports:
-            module_exports.append((module_file.stem, exports))
-
-    # Scan subpackages: read their __init__.py __all__
-    for init_file in sorted(package_dir.glob("*/__init__.py")):
-        subpkg = init_file.parent.name
-        if subpkg.startswith("_"):
-            continue
+    def collect(init_file: Path, dotted: str) -> None:
         exports = extract_module_exports(init_file)
         if exports:
-            module_exports.append((subpkg, exports))
+            module_exports.append((dotted, exports))
 
-    return module_exports
+    collect(package_dir / "contracts" / "__init__.py", "contracts")
+
+    for root in ("frontend", "backends"):
+        root_init = package_dir / root / "__init__.py"
+        if not root_init.is_file():
+            continue
+        for init_file in sorted((package_dir / root).glob("*/__init__.py")):
+            if init_file.parent.name.startswith("_"):
+                continue
+            collect(init_file, f"{root}.{init_file.parent.name}")
+
+    return sorted(module_exports, key=lambda pair: pair[0])
 
 
 # Names whose canonical package-level re-export is deferred through a PEP 562
@@ -74,7 +81,7 @@ def iter_public_modules(package_dir: Path) -> list[tuple[str, list[str]]]:
 # cycle-free defining module instead.  Keyed by (owning package, name) because
 # a name can be legitimately re-exported by several packages.
 STUB_SOURCE_REDIRECTS: dict[tuple[str, str], str] = {
-    ("presets", "apply_preset_fitness_patch"): "frontend.presets._fitness",
+    ("frontend.presets", "apply_preset_fitness_patch"): "frontend.presets._fitness",
 }
 
 

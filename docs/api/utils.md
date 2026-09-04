@@ -9,6 +9,6 @@ The `utils` subpackage provides `Sex`, `Age`, `GameteLabel` type aliases,
 
 ## Complete Module Reference
 
-::: natal.utils
+::: natal.frontend.utils
     options:
       heading_level: 3

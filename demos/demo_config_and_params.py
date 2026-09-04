@@ -9,15 +9,16 @@
   1. 构建时 — Configurator 链式 API → build()
   2. 运行时 — pop.update().method(...)
   3. Python 侧 — set_param(config, "name", v)
-  4. Hook 内直接写 — config.field[()] = v  （nopython，最快）
-  5. Hook 内 hook_set_param — hook_set_param(config, "name", v)  （objmode 封装）
+  4. Hook 内写参数 — pop.params.xxx = v（单参数 hook 的一等写法，
+     写入即生效并记录到 pop.params_log 参数快照）
 """
 
 from __future__ import annotations
 
 import natal as nt
-from natal.configurator import hook_set_param, set_param
-from natal.data import CONCAVE, DiscretePopulationConfig, DiscretePopulationState
+from natal.frontend.configurator import set_param
+from natal.frontend.data import CONCAVE
+from natal.frontend.hooks.tick_context import TickContext
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 0. 准备 Species
@@ -34,7 +35,7 @@ sp = nt.Species.from_dict(
 # 新路径：Configurator.from_species() → 链式方法 → build()
 # 每个链式方法内部调用 set_param() 立即写入 config，不需 freeze/build。
 #
-# Configurator 包装了一个 PopulationConfig，提供以下领域方法：
+# Configurator 包装了一个 ModelDraft（统一构建草稿），提供以下领域方法：
 #   .setup(...)             — 模拟标志（stochastic、continuous_sampling 等）
 #   .age_structure(...)     — 年龄维度（仅 AgeStructuredConfigurator）
 #   .initial_state(...)     — 初始种群分布（字典 → 3-D 数组）
@@ -57,13 +58,13 @@ pop = (
         "male":   {"WT|WT": 5000, "WT|Var": 1000},
     })
     .reproduction(                                     # ④ 繁殖参数
-        eggs_per_female=50,   # → config.eggs_per_female[()]
-        sex_ratio=0.5,        # → config.sex_ratio[()]
+        eggs_per_female=50,   # → config.eggs_per_female
+        sex_ratio=0.5,        # → config.sex_ratio
     )
     .competition(                                     # ⑤ 竞争参数
-        carrying_capacity=10000,          # → config.carrying_capacity[()]
-        low_density_growth_rate=6.0,      # → config.low_density_growth_rate[()]
-        juvenile_growth_mode=CONCAVE,   # → config.juvenile_growth_mode[()]
+        carrying_capacity=10000,          # → config.carrying_capacity
+        low_density_growth_rate=6.0,      # → config.low_density_growth_rate
+        juvenile_growth_mode=CONCAVE,   # → config.juvenile_growth_mode
     )
     .custom(temperature=25.0, debug=False)             # ⑥ 自定义字段
     .build(name="demo_params")                         # ⑦ 终端：apply() + 创建 Population
@@ -72,10 +73,10 @@ pop = (
 print("=" * 60)
 print("初始配置")
 print("=" * 60)
-print(f"  K          = {pop.config.carrying_capacity[()]}")
-print(f"  eggs       = {pop.config.eggs_per_female[()]}")
-print(f"  sex_ratio  = {pop.config.sex_ratio[()]}")
-print(f"  growth_r   = {pop.config.low_density_growth_rate[()]}")
+print(f"  K          = {pop.config.carrying_capacity}")
+print(f"  eggs       = {pop.config.eggs_per_female}")
+print(f"  sex_ratio  = {pop.config.sex_ratio}")
+print(f"  growth_r   = {pop.config.low_density_growth_rate}")
 print(f"  temperature = {pop.config.custom['temperature'][()]}")
 print(f"  debug      = {bool(pop.config.custom['debug'][()])}")
 print(f"  population = {pop.state.individual_count.sum():.0f} individuals")
@@ -91,15 +92,15 @@ print(f"  population = {pop.state.individual_count.sum():.0f} individuals")
 # ── 2a. 单个参数修改 ──
 pop.update().competition(carrying_capacity=5000)
 print("\npop.update().competition(K=5000)")
-print(f"  K = {pop.config.carrying_capacity[()]}  ← 立即生效")
+print(f"  K = {pop.config.carrying_capacity}  ← 立即生效")
 
 # ── 2b. 链式多参数修改 ──
 pop.update().reproduction(eggs_per_female=30, sex_ratio=0.4).competition(
     low_density_growth_rate=3.0
 )
-print(f"  eggs = {pop.config.eggs_per_female[()]}")
-print(f"  sr   = {pop.config.sex_ratio[()]}")
-print(f"  r    = {pop.config.low_density_growth_rate[()]}")
+print(f"  eggs = {pop.config.eggs_per_female}")
+print(f"  sr   = {pop.config.sex_ratio}")
+print(f"  r    = {pop.config.low_density_growth_rate}")
 
 # ── 2c. custom 字段通过 pop.update().custom() 重设整个 custom ──
 pop.update().custom(temperature=35.0, debug=True)
@@ -120,48 +121,33 @@ print(f"  debug       = {bool(pop.config.custom['debug'][()])}")
 
 set_param(pop.config, "carrying_capacity", 8000)
 set_param(pop.config, "low_density_growth_rate", 4.0)
-print(f"\nset_param() 修改后: K={pop.config.carrying_capacity[()]}, r={pop.config.low_density_growth_rate[()]}")
+print(f"\nset_param() 修改后: K={pop.config.carrying_capacity}, r={pop.config.low_density_growth_rate}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. Hook 内修改 — 三种写法
+# 4. Hook 内修改 — 单参数 hook（切片④定案形态）
 # ═══════════════════════════════════════════════════════════════════════════════
-# Hook 签名：(state, config, deme_id) → int
-# config 作为参数直接传入，可以原地修改。
-# 修改在 hook return 后立即对后续 hook 和当前 tick 的剩余流程可见。
-
-# ── 写法 A：直接改 config 字段（推荐，nopython 最快）──
-# 适用：你知道字段名，且参数是 0-d ndarray。
+# 自定义 hook 的唯一签名：def hook(pop) -> int
+# pop 是引擎借给你的活种群（TickContext）：params 可写、state 可写、
+# metrics 按需现算、stop() 终止、rng 为本 deme 流。
+# hook 内写参数是一等做法：写入立即生效，并记录到 pop.params_log。
 
 
-@nt.hook(event="early", custom=True)
-def hook_direct(
-    state: DiscretePopulationState,
-    config: DiscretePopulationConfig,
-    _deme_id: int,
-) -> int:
+@nt.hook(event="early")
+def hook_degrade(pop: TickContext) -> int:
     # 只在 tick=5 触发一次：高温导致环境退化
-    if state.n_tick == 5:
-        config.carrying_capacity[()] *= 0.5       # K 减半
-        config.eggs_per_female[()] *= 0.7 # 繁殖率降至 70%
+    if pop.tick == 5:
+        pop.params.carrying_capacity = float(pop.params.carrying_capacity) * 0.5  # type: ignore[arg-type]  # ParamsView read is statically object; the route resolves a float scalar   # K 减半
+        pop.update().reproduction(eggs_per_female=35.0)                     # 繁殖率降至 70%
     return 0
 
 
-# ── 写法 B：hook_set_param（字符串参数名，objmode 封装在内部）──
-# 适用：需要字符串名路由，或 hook 内需要混合 Python 逻辑。
-# 代价：每次调用有 objmode 边界开销（~微秒级）。
-
-
-@nt.hook(event="early", custom=True)
-def hook_objmode(
-    state: DiscretePopulationState,
-    config: DiscretePopulationConfig,
-    _deme_id: int,
-) -> int:
-    if state.n_tick == 8:
-        hook_set_param(config, "carrying_capacity", 10000.0)
-        hook_set_param(config, "reproduction.eggs_per_female", 50.0)
-        hook_set_param(config, "reproduction.sex_ratio", 0.5)
+@nt.hook(event="early")
+def hook_recover(pop: TickContext) -> int:
+    # tick=8 触发：环境恢复（字符串名路由的写法走 pop.update()）
+    if pop.tick == 8:
+        pop.update().competition(carrying_capacity=10000.0)
+        pop.update().reproduction(eggs_per_female=50.0, sex_ratio=0.5)
     return 0
 
 
@@ -185,21 +171,21 @@ pop2 = (
         low_density_growth_rate=6.0,
         juvenile_growth_mode=CONCAVE,
     )
-    .hooks(hook_direct, hook_objmode)
+    .hooks(hook_degrade, hook_recover)
     .build()
 )
 
 print(f"\n{'=' * 60}")
 print("带 Hook 的完整运行")
 print("=" * 60)
-print(f"初始: total={pop2.state.individual_count.sum():.0f}, K={pop2.config.carrying_capacity[()]}")
+print(f"初始: total={pop2.state.individual_count.sum():.0f}, K={pop2.config.carrying_capacity}")
 
 # 运行 5 ticks → hook 触发条件满足 → K/eggs 被修改
 for t in range(1, 11):
     pop2.run(1)
     total = pop2.state.individual_count.sum()
-    k = pop2.config.carrying_capacity[()]
-    eggs = pop2.config.eggs_per_female[()]
+    k = pop2.config.carrying_capacity
+    eggs = pop2.config.eggs_per_female
     marker = " <-- hook 触发!" if t in (5, 8) else ""
     print(f"  tick={t:>2}  total={total:>6.0f}  K={k:>6.0f}  eggs={eggs:>5.0f}{marker}")
 
@@ -211,13 +197,14 @@ for t in range(1, 11):
 print(f"\n{'=' * 60}")
 print("参数修改方式速查")
 print("=" * 60)
+print(f"  参数快照 log 行数: {len(pop2.params_log)}")
 print("""
-  方式                    | 位置         | 性能   | 说明
-  ────────────────────────┼──────────────┼────────┼──────────────────────────
-  pop.update().method(...) | between-tick | Python | 运行时链式修改，最易用
-  set_param(config,n,v)   | between-tick | Python | 底层接口，字符串名路由
-  config.field[()] = v    | hook nopython| 最快   | 直接写 0-d ndarray
-  hook_set_param(c,n,v)   | hook 内      | 同 objmode | objmode 封装，单次调用便捷"
+  方式                      | 位置         | 说明
+  ──────────────────────────┼──────────────┼────────────────────────────
+  pop.update().method(...)  | 运行时       | 链式修改，最易用
+  pop.params.xxx = v        | hook 内/运行时 | 一等写法，记入 params_log
+  set_param(config,n,v)     | Python 侧    | 底层接口，字符串名路由
+  ctx.update().method(...)  | hook 内      | 与构建链同语法
 """)
 
 print("演示完成 ✅")

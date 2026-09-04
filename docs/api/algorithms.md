@@ -1,13 +1,13 @@
 # algorithms Module
 
-Numba-accelerated simulation algorithms and helper functions.
+Simulation algorithms and helper functions (backend-neutral).
 
 ## Overview
 
-The `algorithms` module provides Numba-accelerated helper functions for computing mating/sperm matrices, updating sperm storage, generating offspring distributions, and other population genetics operations.
+The `algorithms` module provides helper functions for computing mating/sperm matrices, updating sperm storage, generating offspring distributions, and other population genetics operations, executed identically on both backends.
 
 ## Complete Module Reference
 
-::: natal.engine.simulation.age_structured
+::: natal.backends.reference.simulation.age_structured
     options:
       heading_level: 3

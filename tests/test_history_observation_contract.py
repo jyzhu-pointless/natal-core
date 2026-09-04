@@ -10,9 +10,9 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.output import History
-from natal.patterns import IndividualSelector
-from natal.ui.dashboard_population import Dashboard
+from natal.frontend.output import History
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.ui.dashboard_population import Dashboard
 
 InvalidGroups: TypeAlias = (
     None
@@ -24,7 +24,7 @@ InvalidGroups: TypeAlias = (
 )
 
 
-def _configurator(name: str) -> nt.AgeStructuredConfigurator:
+def _configurator(name: str) -> nt.Configurator:
     """Create a deterministic four-age configurator for contract tests.
 
     Args:
@@ -61,7 +61,7 @@ def _configurator(name: str) -> nt.AgeStructuredConfigurator:
             male_age_based_survival=[1.0, 0.9, 0.8],
         )
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             old_juvenile_carrying_capacity=500,
             expected_num_new_adult_females=10,
         )
@@ -359,21 +359,21 @@ def test_deleted_get_history_not_accessible() -> None:
 
 
 def test_deleted_output_current_state_not_importable() -> None:
-    """output_current_state must not be importable from natal.output.translation."""
+    """output_current_state must not be importable from natal.frontend.output.translation."""
     with pytest.raises(ImportError):
-        from natal.output.translation import output_current_state  # noqa: F401
+        from natal.frontend.output.translation import output_current_state  # noqa: F401
 
 
 def test_deleted_output_history_not_importable() -> None:
-    """output_history must not be importable from natal.output.translation."""
+    """output_history must not be importable from natal.frontend.output.translation."""
     with pytest.raises(ImportError):
-        from natal.output.translation import output_history  # noqa: F401
+        from natal.frontend.output.translation import output_history  # noqa: F401
 
 
 def test_deleted_spatial_population_output_history_not_importable() -> None:
     """spatial_population_output_history must not be importable."""
     with pytest.raises(ImportError):
-        from natal.output.translation import spatial_population_output_history  # noqa: F401
+        from natal.frontend.output.translation import spatial_population_output_history  # noqa: F401
 
 
 def test_history_has_no_public_append() -> None:
@@ -393,15 +393,15 @@ def test_history_has_no_public_to_numpy() -> None:
 
 
 def test_observationfilter_not_publicly_exported() -> None:
-    """ObservationFilter must not be importable from natal.output."""
+    """ObservationFilter must not be importable from natal.frontend.output."""
     with pytest.raises(ImportError):
-        from natal.output import ObservationFilter  # noqa: F401
+        from natal.frontend.output import ObservationFilter  # noqa: F401
 
 
 def test_historybatch_not_publicly_exported() -> None:
-    """HistoryBatch must not be importable from natal.output."""
+    """HistoryBatch must not be importable from natal.frontend.output."""
     with pytest.raises(ImportError):
-        from natal.output import HistoryBatch  # noqa: F401
+        from natal.frontend.output import HistoryBatch  # noqa: F401
 
 
 def test_history_observe_rejects_legacy_mask() -> None:
@@ -415,6 +415,6 @@ def test_history_observe_rejects_legacy_mask() -> None:
 
 def test_observationfilter_create_observation_deleted() -> None:
     """ObservationFilter.create_observation must not be callable."""
-    from natal.output.observation import ObservationFilter
+    from natal.frontend.output.observation import ObservationFilter
     assert not hasattr(ObservationFilter, "create_observation")
     assert "create_observation" not in dir(ObservationFilter)

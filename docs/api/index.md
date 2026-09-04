@@ -27,7 +27,7 @@ This section provides module-level API references, organized by the package's 17
 
 ## Data
 
-- [PopulationConfig](population_config.md)
+- [ModelDraft](population_config.md)
 - [PopulationState](population_state.md)
 
 ## Engine
@@ -54,10 +54,6 @@ This section provides module-level API references, organized by the package's 17
 ## Fitness
 
 - [Fitness System](fitness.md)
-
-## Numba
-
-- [Numba Utilities](numba.md)
 
 ## Registry
 

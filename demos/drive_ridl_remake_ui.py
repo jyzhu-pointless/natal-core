@@ -11,7 +11,7 @@ Here we will remake the model using NATAL, and compare the results with the orig
 """
 
 import natal as nt
-from natal.ui import launch
+from natal.frontend.ui import launch
 
 # 1. Define the mosquito species
 sp_complete_drive = nt.Species.from_dict(

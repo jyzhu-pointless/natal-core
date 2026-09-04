@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
-from natal.engine.backends.rust_backend import rust_backend_available
+from natal.backends.rust.rust_backend import rust_backend_available
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 0. 检查原生扩展
@@ -75,7 +75,7 @@ control_ops = [
 ]
 
 for pop in (reference, rust_pop):
-    pop.register_declarative_hook("early", control_ops, name="demo_control")
+    pop.register_hooks(control_ops, event="early", name="demo_control")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. 启用 Rust 后端并运行
@@ -96,9 +96,14 @@ ind_equal = np.array_equal(
     rust_pop.state.individual_count,
     reference.state.individual_count,
 )
-sperm_equal = np.array_equal(
-    rust_pop.state.sperm_storage,
-    reference.state.sperm_storage,
+rust_sperm = getattr(rust_pop.state, "sperm_storage", None)
+ref_sperm = getattr(reference.state, "sperm_storage", None)
+sperm_equal = (
+    isinstance(rust_sperm, np.ndarray) and isinstance(ref_sperm, np.ndarray)
+    and np.array_equal(
+        np.asarray(rust_sperm, dtype=np.float64),
+        np.asarray(ref_sperm, dtype=np.float64),
+    )
 )
 history_equal = np.array_equal(
     rust_pop.history.individual_count,
@@ -106,7 +111,7 @@ history_equal = np.array_equal(
 )
 
 print("=" * 64)
-print("Rust backend vs Numba reference (deterministic, 10 ticks)")
+print("Rust backend vs Python reference (deterministic, 10 ticks)")
 print("=" * 64)
 print(f"  final tick                     : {rust_pop.tick}")
 print(f"  total population               : {rust_pop.get_total_count():.1f}")
@@ -115,6 +120,6 @@ print(f"  sperm_storage identical        : {sperm_equal}")
 print(f"  recorded history identical     : {history_equal}")
 
 if not (ind_equal and sperm_equal and history_equal):
-    raise RuntimeError("Rust backend diverged from the Numba reference.")
+    raise RuntimeError("Rust backend diverged from the Python reference.")
 
 print("\nDemo finished successfully.")

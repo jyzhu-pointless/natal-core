@@ -239,7 +239,7 @@ for k in range(n_kernels):
 
 这些预构建的数组在迁移时传入 `apply_spatial_kernel_migration`。
 
-### 5.3 迁移阶段（Numba prange 内）
+### 5.3 迁移阶段（并行内核内）
 
 ```python
 for src in prange(n_demes):

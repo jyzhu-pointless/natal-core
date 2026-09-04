@@ -264,7 +264,7 @@ pop.update().competition(carrying_capacity=5000)
 pop.update(deme=3).competition(carrying_capacity=8000)
 
 # Batch per-deme
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 pop.update().competition(
     carrying_capacity=batch_setting([100, 200, 300, 400])
 )
@@ -274,7 +274,7 @@ pop.update().competition(
 
 ### `set_param(config, name, value)`
 ```python
-from natal.configurator import set_param
+from natal.frontend.configurator import set_param
 set_param(config, "competition.carrying_capacity", 5000.0)
 set_param(config, "carrying_capacity", 5000.0)  # short name also works
 ```
@@ -284,7 +284,7 @@ Equilibrium-sensitive parameters (K / eggs / sex_ratio) auto-trigger sync.
 
 ### `hook_set_param(config, name, value)`
 ```python
-from natal.configurator import hook_set_param
+from natal.frontend.configurator import hook_set_param
 
 @nt.hook(event="early", custom=True)
 def my_hook(state, config, deme_id):

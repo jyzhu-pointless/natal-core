@@ -8,7 +8,7 @@ observation on a mosquito-like life cycle.
 from collections.abc import Mapping, Sequence
 
 import natal as nt
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
 # for type annotations only
 IndividualDistribution = Mapping[
@@ -88,7 +88,7 @@ pop = (nt.AgeStructuredPopulation
         male_age_based_survival=[1.0, 1.0, 2/3, 1/2],
     )
     .competition(
-        juvenile_growth_mode="concave",
+        juvenile_growth_mode="beverton_holt",
         old_juvenile_carrying_capacity=1200,
         expected_num_new_adult_females=2100,
     )

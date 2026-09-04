@@ -19,7 +19,7 @@ def my_filter(genotype):
 ## Core Example: W->D Only in W::D Heterozygotes
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 def is_wd_heterozygote(genotype) -> bool:
@@ -94,7 +94,7 @@ class PatternBasedPreset(GeneticPreset):
         self.conversion_rate = conversion_rate
 
     def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
         pattern_filter = population.species.parse_genotype_pattern(self.pattern)
@@ -126,7 +126,7 @@ class ConditionalMutation(GeneticPreset):
         self.required_background = required_background
 
     def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
 

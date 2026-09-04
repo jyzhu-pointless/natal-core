@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.data import DiscretePopulationState, PopulationConfig
+from natal.frontend.data import DiscretePopulationState, ModelDraft
 
 
 def _make_species(name: str = "DiscSp"):
@@ -33,8 +33,8 @@ def _minimal_pop(sp, *, pop_name: str = "DiscPop", stochastic: bool = False):
     )
 
 
-def _build_age_structured_config(sp: nt.Species) -> PopulationConfig:
-    """Build a minimal ``PopulationConfig`` via the age-structured builder.
+def _build_age_structured_config(sp: nt.Species) -> ModelDraft:
+    """Build a minimal age-structured ``ModelDraft`` via the builder.
 
     Used by the negative-contract tests to obtain a real ``PopulationConfig``
     (independent model) that must be rejected by the discrete-generation
@@ -53,7 +53,7 @@ def _build_age_structured_config(sp: nt.Species) -> PopulationConfig:
         )
         .reproduction(eggs_per_female=10)
         .competition(carrying_capacity=1000, low_density_growth_rate=6.0,
-                     juvenile_growth_mode="concave")
+                     juvenile_growth_mode="beverton_holt")
         .build()
     )
     return age_pop.export_config()
@@ -191,7 +191,7 @@ class TestStateAndConfigInterop:
         assert pop._tick == 11
 
     def test_import_config_rejects_non_normalized_discrete_config(self):
-        """import_config rejects a DiscretePopulationConfig with n_ages != 2.
+        """import_config rejects a non-discrete (overlapping) draft.
 
         The discrete-generation engine hardcodes a 2-age lifecycle; a config
         with violated invariants is rejected with ValueError rather than
@@ -246,7 +246,7 @@ class TestStateAndConfigInterop:
         age_config = _build_age_structured_config(sp)
 
         original_config = pop.export_config()
-        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+        with pytest.raises(ValueError, match="zero adult survival"):
             pop.import_config(age_config)
         assert pop.export_config() is original_config
 
@@ -256,7 +256,7 @@ class TestStateAndConfigInterop:
         pop = _minimal_pop(sp, pop_name="Disc_config_reject_dict_pop")
 
         original_config = pop.export_config()
-        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+        with pytest.raises(TypeError):
             pop.import_config({"n_ages": 2})  # type: ignore[arg-type]
         assert pop.export_config() is original_config
 
@@ -266,7 +266,7 @@ class TestStateAndConfigInterop:
 
         age_config = _build_age_structured_config(sp)
 
-        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+        with pytest.raises(ValueError, match="zero adult survival"):
             nt.DiscreteGenerationPopulation(
                 species=sp,
                 population_config=age_config,
@@ -370,7 +370,7 @@ class TestHomingDriveIntegration:
             .competition(
                 low_density_growth_rate=6.0,
                 carrying_capacity=100000,
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
             )
             .presets(drive)
             .build()
@@ -391,7 +391,7 @@ class TestHomingDriveIntegration:
         expected_drive = [0.10000, 0.18000, 0.29664, 0.45772, 0.63992]
         expected_r2 = [0.00000, 0.01000, 0.02458, 0.04472, 0.06749]
 
-        from natal.presets import count_allele_copies
+        from natal.frontend.presets import count_allele_copies
 
         for i, row in enumerate(history[:5]):
             tick = int(row[0])

@@ -48,24 +48,23 @@ def _build_pop(
 class TestFinalizeHooks:
     """Tests for ``_finalize_hooks()`` — deferred compilation of @hook functions.
 
-    The ``@hook`` decorator attaches metadata (``func.meta``) that
-    ``BasePopulation.__init__`` detects.  Hooks with metadata are queued in
-    ``_pending_hooks`` and compiled later by ``_finalize_hooks()``.
+    Hook items passed at build time are queued in ``_pending_hook_items``
+    and registered later by ``_finalize_hooks()``.
 
     ``DiscreteGenerationPopulation.__init__`` calls ``_finalize_hooks()``
     automatically, so these tests verify the post-finalization state.
     """
 
     def test_pending_hooks_compiled(self, simple_species: nt.Species) -> None:
-        """@hook functions queued in ``_pending_hooks`` are compiled after finalize."""
-        @nt.hook(event="early", custom=True)
-        def my_hook(state, config, deme_id):
+        """Hook items queued at build time are registered after finalize."""
+        @nt.hook(event="early")
+        def my_hook(pop):
             return 0
 
         pop = _build_pop(simple_species, "test_pending", hooks=[my_hook])
 
-        # _pending_hooks must be cleared after _finalize_hooks()
-        assert len(pop._pending_hooks) == 0
+        # The deferred item list must be drained after _finalize_hooks()
+        assert len(pop._pending_hook_items) == 0
 
         # The hook should be in compiled hooks
         compiled = pop.get_compiled_hooks()
@@ -73,17 +72,12 @@ class TestFinalizeHooks:
         hook_names = [h.name for h in compiled if hasattr(h, "name")]
         assert "my_hook" in hook_names
 
-    @pytest.mark.numba_off
     def test_plain_function_registered(self, simple_species: nt.Species) -> None:
-        """Plain 3-param callable (no @hook decorator) registers in _hooks.
-
-        Requires Numba disabled because ``set_hook()`` rejects plain Python
-        callables when Numba is on.
-        """
+        """Plain single-parameter callables register as Python callbacks."""
         calls: list[int] = []
 
-        def plain_hook(state, config, deme_id):
-            _ = config, deme_id
+        def plain_hook(pop):
+            _ = pop
             calls.append(1)
             return 0
 
@@ -91,19 +85,18 @@ class TestFinalizeHooks:
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="test_plain", stochastic=False,
             )
-            .hooks({"early": [(plain_hook, "plain_hook", 0)]})
+            .hooks(plain_hook, event="early")
             .reproduction(eggs_per_female=50, sex_ratio=0.5)
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .competition(carrying_capacity=10000, low_density_growth_rate=5.0)
             .build()
         )
 
-        # Plain hooks are registered in _hooks (traditional dict)
-        hooks = pop.get_hooks("early")
-        hook_names = [name for _, name, _ in hooks]
-        assert "plain_hook" in hook_names
+        compiled = pop.get_compiled_hooks("early")
+        assert [h.name for h in compiled] == ["plain_hook"]
+        assert pop.has_python_callbacks()
 
-        # The hook should also be executable via trigger_event
+        # The hook should be executable via trigger_event
         pop.trigger_event("early")
         assert len(calls) == 1
 

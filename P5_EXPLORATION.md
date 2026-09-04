@@ -1,3 +1,8 @@
+> [!NOTE] 历史记录
+> 本文记录 P5 的 Numba `@cfunc` 桥接探索。该探索已被 ⑥（numba 全拆、
+> `research/p5_cfunc_bridge/` 删除、Rust 回调改为 `TickContext` 跨桥）取代，
+> 文中的 API 与结论均已过时，仅作为历史保留——不要再按本文实现任何代码。
+
 # P5 初步探索：Numba `@cfunc` 机器码桥接
 
 > 状态：初步探索完成，已验证端到端可行性。

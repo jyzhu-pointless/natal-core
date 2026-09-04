@@ -9,15 +9,15 @@ from __future__ import annotations
 from typing import cast
 
 import numpy as np
-from natal.spatial.configurator import batch_setting
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import (
-    SquareGrid,
-    build_adjacency_matrix,
-)
 from numpy.typing import NDArray
 
 import natal as nt
+from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import (
+    SquareGrid,
+    build_adjacency_matrix,
+)
 
 
 def _make_initial_count(wt: float, dr: float) -> dict[str, dict[str, list[float]]]:
@@ -70,7 +70,7 @@ def summarize_readable(spatial: SpatialPopulation) -> None:
 
 
 def main() -> None:
-    nt.disable_numba()
+    # Spatial demos run the pure-Python per-deme dispatch.
 
     species = nt.Species.from_dict(
         name="SpatialDemoSpecies",

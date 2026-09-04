@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.ui.dashboard_population as dashboard_module
-from natal.data import DiscretePopulationState
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import SpatialConfigurator
-from natal.ui.dashboard_population import Dashboard
+import natal.frontend.ui.dashboard_population as dashboard_module
+from natal.frontend.data import DiscretePopulationState
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.configurator import SpatialConfigurator
+from natal.frontend.ui.dashboard_population import Dashboard
 
 
 class _FakeChart:
@@ -131,7 +131,7 @@ def _discrete_population(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=10.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=100,
         )

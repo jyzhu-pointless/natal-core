@@ -1,11 +1,11 @@
-"""Unit tests for natal.patterns.GenotypePatternParser."""
+"""Unit tests for natal.frontend.patterns.GenotypePatternParser."""
 
 from typing import Iterable, List
 
 import pytest
 import natal as nt
-from natal.genetics import Gene, Genotype, HaploidGenotype, Haplotype
-from natal.patterns import LabPattern, PatternParseError
+from natal.frontend.genetics import Gene, Genotype, HaploidGenotype, Haplotype
+from natal.frontend.patterns import LabPattern, PatternParseError
 
 
 def _build_genotype(sp, mat_allele: str, pat_allele: str) -> Genotype:

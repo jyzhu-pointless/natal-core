@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 
 import natal as nt
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
-nt.disable_numba()
+# The pure-Python reference is the default execution vehicle.
 
 species = nt.Species.from_dict(
     name="ObservationHistoryDemoSpecies",
@@ -19,7 +19,7 @@ species = nt.Species.from_dict(
 
 population = (
     nt.DiscreteGenerationPopulation
-    .setup(species=species, name="ObservationHistoryDemo", stochastic=False)
+    .setup(species=species, name="ObservationHistoryDemo", stochastic=False, backend="python")
     .initial_state(
         individual_count={
             "female": {
@@ -40,7 +40,7 @@ population = (
         eggs_per_female=50.0,
     )
     .competition(
-        juvenile_growth_mode="concave",
+        juvenile_growth_mode="beverton_holt",
         low_density_growth_rate=6.0,
         carrying_capacity=400,
     )
@@ -70,7 +70,7 @@ obs_hist = population.history.observe(population.observation)
 history_report = {
     "ticks": list(obs_hist.ticks),
     "axes": list(obs_hist.axes),
-    "labels": {"group": list(obs_hist.schema.observation.labels)},
+    "labels": {"group": list(obs_hist.schema.observation.labels) if obs_hist.schema.observation is not None else []},
     "values": obs_hist.values.tolist(),
 }
 

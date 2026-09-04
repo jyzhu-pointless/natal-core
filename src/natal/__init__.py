@@ -17,8 +17,15 @@ __version__ = "0.2.0b"
 #
 # The package intentionally does not import any child modules during initialization.
 # It only builds a name index up front, for Examples:
-# {"Sex": "type_def", "AgeStructuredPopulation": "age_structured_population"}
+# {"Sex": "frontend.utils", "AgeStructuredPopulation": "frontend.population"}
 # When code first accesses natal.Sex, the matching module is imported on demand.
+#
+# This index is built from the real (non-shim) package tree only:
+# ``frontend.*`` subpackages, ``contracts``, and ``backends.*``.  The legacy
+# top-level forwarding shims (``natal.frontend.data``, ``natal.frontend.hooks`` ...) were removed
+# when the Phase-0 reorganization completed; each legacy package name below
+# still resolves to its relocated module so ``natal.frontend.hooks``-style access keeps
+# working, but the physical packages no longer exist.
 _lazy_map: Dict[str, str] = {}
 _lazy_packages: set[str] = set()
 
@@ -80,46 +87,72 @@ def _extract_module_exports(module_file: Path) -> list[str]:
 
     return []
 
-# Scan the package directory and build the export-name -> module-name index.
-#
-# This only scans and parses files. It does not import modules, so importing natal
-# remains lightweight.
-package_dir = Path(__file__).resolve().parent
-for _, module_name, is_package in sorted(pkgutil.iter_modules(__path__), key=lambda item: item[1]):
 
-    # Skip private modules. Most subpackages are ignored, except known lazy-export
-    # providers such as `hooks`.
-    if module_name.startswith("_"):
-        continue
+def _scan_unit(module_name: str, allow_legacy_key: bool) -> list[str]:
+    """Extract the literal ``__all__`` of one unit and register its exports.
 
-    if is_package:
-        module_file = package_dir / module_name / "__init__.py"
-    else:
-        module_file = package_dir / f"{module_name}.py"
+    Args:
+        module_name: Dotted module name of the unit (e.g. ``frontend.hooks``).
+        allow_legacy_key: Whether the legacy short package key (e.g. ``hooks``)
+            is registered alongside the exported names.  ``contracts`` keeps its
+            own key because the package path did not change; ``frontend`` and
+            ``backends`` subpackages keep their pre-Phase-0 keys so that
+            ``natal.<legacy-key>`` attribute access keeps resolving.
 
+    Returns:
+        The unit's own exported names (may be empty).
+    """
+    module_file = package_dir.joinpath(*module_name.split("."), "__init__.py")
     if not module_file.is_file():
-        continue
-
-    # If multiple modules export the same name, keep the first mapping instead of
-    # silently letting a later one overwrite it. Sorting by module name makes the
-    # result stable and predictable.
+        return []
     exports = _extract_module_exports(module_file)
-
-    # Rule-based participation instead of a hand-maintained allowlist: a
-    # first-level subpackage joins the public lazy-export index when its
-    # ``__init__.py`` declares a non-empty literal ``__all__``; an empty (or
-    # missing) ``__all__`` marks the package as private/structural (e.g.
-    # ``contracts``, ``frontend``, ``backends``, the ``engine`` shim).  This
-    # keeps the runtime index in lock-step with the stub generator, which
-    # already scans every first-level package.
-    if is_package and exports:
-        _lazy_packages.add(module_name)
-
+    if allow_legacy_key:
+        short = module_name.rsplit(".", 1)[-1]
+        _lazy_map.setdefault(short, module_name)
+        if exports:
+            _lazy_packages.add(short)
     for name in exports:
         _lazy_map.setdefault(name, module_name)
+    return exports
 
-    if is_package and exports:
-        _lazy_map.setdefault(module_name, module_name)
+
+# Scan the package tree and build the export-name -> module-name index.
+#
+# This only scans and parses files. It does not import modules, so importing natal
+# remains lightweight.  Only real entity packages participate: the direct
+# children of ``frontend``, the direct children of ``backends``, and
+# ``contracts`` itself.  A unit joins the public lazy-export index when its
+# ``__init__.py`` declares a non-empty literal ``__all__``; an empty (or
+# missing) ``__all__`` marks the package as private/structural (e.g.
+# ``frontend`` itself, ``backends``, ``backends.reference``).
+package_dir = Path(__file__).resolve().parent
+
+# Every first-level package of the real tree, sorted for deterministic
+# first-wins semantics on repeated names (keeps e.g. ``apply_preset_fitness_patch``
+# owned by ``frontend.fitness``, alphabetically before ``frontend.presets``).
+scan_units: list[str] = []
+for root in ("contracts", "frontend", "backends"):
+    root_init = package_dir / root / "__init__.py"
+    if not root_init.is_file():
+        continue
+    if root == "contracts" or not _extract_module_exports(root_init):
+        # ``contracts`` is itself an export owner; ``frontend``/``backends`` are
+        # structural, so their only role is hosting the subpackages below.
+        scan_units.append(root)
+    for _, submodule_name, is_package in sorted(
+        pkgutil.iter_modules([str(package_dir / root)]),
+        key=lambda item: item[1],
+    ):
+        if is_package:
+            scan_units.append(f"{root}.{submodule_name}")
+
+for unit in sorted(set(scan_units)):
+    # Skip empty-``__all__`` units: their submodule aliases would be registered
+    # anyway for package-key access, but exporting nothing keeps their names out
+    # of the attribute namespace.
+    if unit != "contracts" and not _extract_module_exports(package_dir.joinpath(*unit.split("."), "__init__.py")):
+        continue
+    _scan_unit(unit, allow_legacy_key=True)
 
 # Public export list.
 #

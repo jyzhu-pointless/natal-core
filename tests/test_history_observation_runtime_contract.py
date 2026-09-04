@@ -9,15 +9,27 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.numba.utils import numba_disabled
-from natal.output import History
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import (
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
+from natal.frontend.output import History
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.configurator import (
     _float_value,  # type: ignore[reportPrivateUsage]  # directly verify replay-log type boundary
     _object_sequence,  # type: ignore[reportPrivateUsage]  # directly verify positional replay boundary
     batch_setting,
 )
-from natal.ui.spatial_dashboard import SpatialDashboard
+from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
 def _species(name: str) -> nt.Species:
@@ -66,7 +78,7 @@ def _discrete_population(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=10.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=100,
         )
@@ -178,7 +190,7 @@ def _stack_sperm_storage(population: nt.SpatialPopulation) -> NDArray[np.float64
 
 def test_nonspatial_observation_history_equals_direct_projection_each_tick() -> None:
     """Recorded collapsed values equal the canonical projection at every tick."""
-    with numba_disabled():
+    with python_reference():
         population = _discrete_population(
             "nonspatial_observation_history",
             observation_history=True,
@@ -199,7 +211,7 @@ def test_nonspatial_observation_history_equals_direct_projection_each_tick() -> 
 
 def test_spatial_raw_history_preserves_exact_discrete_deme_snapshots() -> None:
     """Public spatial raw History retains every deme coordinate at each tick."""
-    with numba_disabled():
+    with python_reference():
         population = _spatial_discrete(
             "spatial_raw_history",
             observation_history=False,
@@ -217,7 +229,7 @@ def test_spatial_raw_history_preserves_exact_discrete_deme_snapshots() -> None:
 
 def test_spatial_observe_is_group_first_and_preserves_deme_coordinates() -> None:
     """Spatial projection maps known ZTypes to group,deme,sex,age exactly."""
-    with numba_disabled():
+    with python_reference():
         population = _spatial_discrete(
             "spatial_observe_axes",
             observation_history=False,
@@ -238,7 +250,7 @@ def test_spatial_observe_is_group_first_and_preserves_deme_coordinates() -> None
 
 def test_spatial_collapsed_observation_history_equals_each_stable_projection() -> None:
     """Spatial observation History stores group,deme,sex without losing a deme."""
-    with numba_disabled():
+    with python_reference():
         population = _spatial_discrete(
             "spatial_observation_history",
             observation_history=True,
@@ -255,7 +267,7 @@ def test_spatial_collapsed_observation_history_equals_each_stable_projection() -
 
 def test_spatial_age_raw_history_preserves_exact_sperm_and_count_snapshots() -> None:
     """Age-structured raw History retains the full per-deme sperm tensor."""
-    with numba_disabled():
+    with python_reference():
         population = (
             nt.SpatialPopulation.builder(
                 _species("spatial_age_raw_species"),
@@ -323,7 +335,7 @@ def test_spatial_age_raw_history_preserves_exact_sperm_and_count_snapshots() -> 
 
 def test_nonspatial_kernel_rows_collapse_age_before_history_commit() -> None:
     """Kernel observation rows are reduced to the frozen collapsed schema."""
-    with numba_disabled():
+    with python_reference():
         population = _discrete_population(
             "nonspatial_kernel_collapse",
             observation_history=True,
@@ -346,7 +358,7 @@ def test_nonspatial_kernel_rows_collapse_age_before_history_commit() -> None:
 
 def test_spatial_kernel_rows_project_observation_and_trim_raw_transport() -> None:
     """Spatial engine transport commits only the values declared by each schema."""
-    with numba_disabled():
+    with python_reference():
         observed_population = _spatial_discrete(
             "spatial_kernel_observation",
             observation_history=True,
@@ -408,7 +420,7 @@ def test_spatial_output_accessors_reject_unbuilt_state_and_shape_empty_history()
     with pytest.raises(RuntimeError, match="History is not initialized"):
         _ = unbuilt.history
 
-    with numba_disabled():
+    with python_reference():
         built = _spatial_discrete(
             "spatial_empty_history",
             observation_history=False,
@@ -418,7 +430,7 @@ def test_spatial_output_accessors_reject_unbuilt_state_and_shape_empty_history()
 
 def test_spatial_dashboard_rebuilds_exact_totals_from_typed_raw_history() -> None:
     """Spatial charts consume History tensors without legacy flat-row parsing."""
-    with numba_disabled():
+    with python_reference():
         population = _spatial_discrete(
             "spatial_dashboard_history",
             observation_history=False,
@@ -446,7 +458,7 @@ def test_spatial_dashboard_rebuilds_exact_totals_from_typed_raw_history() -> Non
 
 def test_age_structured_snapshot_collapses_canonical_observation_exactly() -> None:
     """Age snapshot recording removes only age and preserves group and sex."""
-    with numba_disabled():
+    with python_reference():
         population = (
             nt.AgeStructuredPopulation.setup(
                 species=_species("age_snapshot_species"),
@@ -471,7 +483,7 @@ def test_age_structured_snapshot_collapses_canonical_observation_exactly() -> No
                 male_age_based_survival=[1.0, 0.9, 0.8],
             )
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 old_juvenile_carrying_capacity=500.0,
                 expected_num_new_adult_females=10.0,
             )
@@ -537,7 +549,7 @@ def test_restore_then_run_continues_from_target_tick() -> None:
             male_age_based_survival=[1.0, 0.9],
         )
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             old_juvenile_carrying_capacity=200,
             expected_num_new_adult_females=5,
         )
@@ -578,7 +590,7 @@ def test_finish_then_snapshot_records_current_tick() -> None:
             male_age_based_survival=[1.0, 0.9],
         )
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             old_juvenile_carrying_capacity=200,
             expected_num_new_adult_females=5,
         )
@@ -620,7 +632,7 @@ def test_import_then_run_starts_from_imported_tick() -> None:
             male_age_based_survival=[1.0, 0.9],
         )
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             old_juvenile_carrying_capacity=200,
             expected_num_new_adult_females=5,
         )
@@ -665,7 +677,7 @@ def test_clear_then_record_starts_fresh() -> None:
             male_age_based_survival=[1.0, 0.9],
         )
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             old_juvenile_carrying_capacity=200,
             expected_num_new_adult_females=5,
         )

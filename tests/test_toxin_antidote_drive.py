@@ -6,8 +6,8 @@ import uuid
 import numpy as np
 
 import natal as nt
-from natal.genetics import Species
-from natal.presets import ToxinAntidoteDrive
+from natal.frontend.genetics import Species
+from natal.frontend.presets import ToxinAntidoteDrive
 
 
 class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):

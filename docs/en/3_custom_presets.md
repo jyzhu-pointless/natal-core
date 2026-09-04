@@ -33,7 +33,7 @@ Think of it as:
 ### Minimal Working Example
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 ruleset = GameteConversionRuleSet(name="homing_drive")
 ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
@@ -59,7 +59,7 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 #### Using ZygoteConversionRuleSet
 
 ```python
-from natal.modifiers import ZygoteConversionRuleSet
+from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -88,15 +88,15 @@ Drive systems typically use both types of rules simultaneously:
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
 gamete_ruleset.add_allele_convert("W", "D", rate=0.99)
 
-# Zygote stage: copy conversion (ensure homozygosity)
+# Zygote stage: allele conversion (ensure homozygosity)
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
-zygote_ruleset.add_convert(
+zygote_ruleset.add_allele_convert(
     "W", "D",
     rate=0.95,
     genotype_filter=lambda g: "D" in str(g)
 )
 
-pop.set_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
+pop.add_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
 pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 ```
 
@@ -111,8 +111,8 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 Before designing complex conversion rules, it is important to understand the basic template of `GeneticPreset`:
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
 class MyCustomPreset(GeneticPreset):
@@ -151,8 +151,8 @@ Implementation notes:
 #### Simple Point Mutation
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
     """Simple point mutation: WT mutates to Mutant at a certain frequency"""
@@ -184,7 +184,7 @@ class BidirectionalMutation(GeneticPreset):
         self.backward_rate = backward_rate
 
     def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
@@ -217,7 +217,7 @@ def my_filter(genotype):
 ### Core Example: W->D Only in W::D Heterozygotes
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 def is_wd_heterozygote(genotype) -> bool:
@@ -287,7 +287,7 @@ class PatternBasedPreset(GeneticPreset):
         self.conversion_rate = conversion_rate
 
     def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
         pattern_filter = population.species.parse_genotype_pattern(self.pattern)
@@ -319,7 +319,7 @@ class ConditionalMutation(GeneticPreset):
         self.required_background = required_background
 
     def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
 
@@ -383,8 +383,8 @@ A practical Preset should include:
 ### Example: Encapsulating a Minimal DrivePreset
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 class DrivePreset(GeneticPreset):
@@ -448,8 +448,8 @@ This significantly reduces the risk of "results cannot be reproduced."
 ### Complex Gene Drive Example
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
 
 class ComplexDrive(GeneticPreset):
     """Complex gene drive with multi-stage conversion"""

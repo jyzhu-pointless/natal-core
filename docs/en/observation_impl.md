@@ -160,10 +160,10 @@ Observation History has discarded unrecorded ZTypes and unselected demes, so it 
 
 ## Spatial Recording Path
 
-Spatial recording does not execute the Observation inside the Numba wrapper. The wrapper runs lifecycle steps and migration, then returns a regular raw batch at stable tick boundaries:
+Spatial recording does not execute the Observation inside the execution kernel. The kernel runs lifecycle steps and migration, then returns a regular raw batch at stable tick boundaries:
 
 ```text
-Numba spatial wrapper
+Spatial execution kernel
   → [tick, all deme individual_count, all deme sperm_storage]
   → SpatialPopulation._process_kernel_history(...)
        ├─ raw History: validate and commit the complete batch
@@ -199,7 +199,7 @@ Changes to Observation or History recording should verify at least these numeric
 4. `collapse_age=True` is element-wise equal to the uncollapsed result summed along age.
 5. Raw History retains every deme, ZType, and applicable sperm-storage value.
 6. Post-hoc projection of raw History is element-wise equal to `Observation.apply()` at the same tick.
-7. The Numba path and Python fallback produce identical ticks and payloads in deterministic simulations.
+7. The kernel path and the Python fallback produce identical ticks and payloads in deterministic simulations.
 8. Unselected demes require no sentinel representation, and real zero counts are not confused with selection state.
 
 Assertions must compare explicit axes and coordinate values. Comparing only totals or sorted flattened arrays cannot detect axis swaps or incorrect deme ordering.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.output.record import build_observation_row_panmictic
+from natal.frontend.output.record import build_observation_row_panmictic
 
 # ===========================================================================
 # TestBuildObservationRowPanmictic

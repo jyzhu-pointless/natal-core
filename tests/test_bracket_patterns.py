@@ -3,8 +3,8 @@
 Uses a single global species to avoid caching issues.
 """
 
-from natal.patterns import GenotypePatternParser, PatternParseError
-from natal.genetics import Species
+from natal.frontend.patterns import GenotypePatternParser, PatternParseError
+from natal.frontend.genetics import Species
 
 TEST_SPECIES = Species.from_dict('test_bracket', {
     'chr1': {'A': ['A1', 'A2', 'A3'], 'B': ['B1', 'B2']},

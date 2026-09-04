@@ -136,7 +136,7 @@ def build_population(
     release_ratio: float,
     rng: np.random.Generator,
     drive_fitness: float = 1.0,
-) -> nt.AgeStructuredPopulation:
+) -> nt.AgeStructuredPopulation | nt.DiscreteGenerationPopulation:
     """Build one population instance for a single simulation replicate."""
     release_size = compute_release_size(release_ratio)
     release_hook = make_release_hook(release_size)

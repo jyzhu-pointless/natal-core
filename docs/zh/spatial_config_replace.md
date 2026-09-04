@@ -2,19 +2,19 @@
 
 ## 问题
 
-`SpatialConfigurator._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `PopulationConfig`。
+`SpatialConfigurator._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `ModelDraft`。
 
 如果只有少数参数在组间不同，所有大数组（`zygotes_to_gametes_map`、`gametes_to_zygotes_map`、`viability_fitness`、`fecundity_fitness` 等）仍会被重复创建，造成内存浪费。
 
 ```
 2601 个 deme，每个有唯一的 carrying_capacity
-→ 2601 个完整 PopulationConfig
+→ 2601 个完整 ModelDraft
 → 大数组被复制 2601 次
 ```
 
 ## 方案：`_replace` 快路径
 
-`PopulationConfig` 是 `NamedTuple`，其 `_replace()` 方法创建新实例时**共享所有未被替换字段的引用**。利用这一特性，第一个组完整构建，后续组仅替换差异字段：
+`ModelDraft` 是 `NamedTuple`，其 `_replace()` 方法创建新实例时**共享所有未被替换字段的引用**。利用这一特性，第一个组完整构建，后续组仅替换差异字段：
 
 ```
 组 0: 完整 builder 管线 → base_config（所有数组）

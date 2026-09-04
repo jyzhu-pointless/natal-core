@@ -6,8 +6,8 @@ Verifies:
 3. Pattern enumeration capabilities
 """
 
-from natal.patterns import GenotypePatternParser
-from natal.genetics import Species
+from natal.frontend.patterns import GenotypePatternParser
+from natal.frontend.genetics import Species
 
 
 def test_basic_haploid_genome_pattern():

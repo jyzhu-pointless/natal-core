@@ -8,13 +8,12 @@ Hook 用于在模拟流程的固定时间点插入用户逻辑。
 
 Hook 的作用时机包括：
 
-- `initialization`：模拟初始化完成后、进入首个 tick 之前。
 - `first`：每个 tick 的早期阶段。
 - `early`：繁殖步骤（`reproduction`）后、生存步骤（`survival`）前。
 - `late`：生存步骤（`survival`）后、衰老步骤（`aging`）前。
-- `finish`：模拟结束时。
+- `finish`：模拟结束时，不属于任何单个 tick。
 
-其中，`initialization` 和 `finish` 是一次性的事件，而 `first`、`early`、`late` 可以根据需要在多个 tick 中重复执行。
+其中 `finish` 是一次性的事件，而 `first`、`early`、`late` 可以根据需要在多个 tick 中重复执行。
 
 选择事件时，建议先明确干预发生在哪个具体的时机，这会显著影响结果解释。
 
@@ -30,7 +29,7 @@ sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
 @nt.hook(event="first", priority=10)
 def periodic_release():
     return [
-        nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
         nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
     ]
 
@@ -40,8 +39,8 @@ pop = (
     .setup(species=sp, name="MyPop", stochastic=True, continuous_sampling=False)
     .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
-        "female": {"WT|WT": 1000, "Drive|WT": 0},
-        "male": {"WT|WT": 1000, "Drive|WT": 0}
+        "female": {"WT|WT": 1000, "Var|WT": 0},
+        "male": {"WT|WT": 1000, "Var|WT": 0}
     })
     .survival(
         female_age_based_survival=0.85,
@@ -61,6 +60,20 @@ pop.run(n_steps=200, record_every=10)
 
 这种方式可读性高、维护成本低，也更便于团队复核模型规则。
 
+## 三种 Hook 编写形态
+
+`@nt.hook` 根据函数签名自动识别三种形态（在注册时判定）：
+
+| 形态 | 函数签名 | 说明 |
+|------|----------|------|
+| 声明式（Declarative） | 无参数，返回 `List[HookOp]` | 注册时调用一次，返回值编译为 CSR 计划 |
+| 回调（Callback） | 单参数 `def hook(pop: TickContext) -> int` | 每个 tick 调用一次，通过 `TickContext` 读写状态与参数 |
+| 选择器回调（Selector） | 单参数 + `selectors={...}` 关键字参数 | 选择器值在注册时解析、调用时注入 |
+
+旧的 `(state, config, deme_id)` 三参数签名已被显式拒绝（`TypeError` —— 该签名是 njit 时代的遗物，没有迁移通道）。回调 Hook 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟，非零值（或 `RESULT_STOP`）停止模拟。
+
+`.hooks()` 是注册 Hook 的唯一入口：构建链式 API 中可直接调用，构建完成后通过 `pop.update().hooks(...)` 注册。
+
 ## `Op` 操作
 
 常用操作包括：
@@ -76,8 +89,56 @@ pop.run(n_steps=200, record_every=10)
   - `Op.stop_if_above`：当指定基因型的个体数量高于阈值时停止运行。
   - `Op.stop_if_zero`：当指定基因型的个体数量为零时停止运行。
   - `Op.stop_if_extinction`：当种群个体数量为零时停止运行。
+- `Op.set_param`：按 tick 计划表调度一个生态参数（见下文）。
+- `Op.convert`：一对一概率性基因型转换（见下文）。
 
 把它们理解为"对状态张量进行声明式变换"。
+
+### `Op.set_param`：无代码参数调度
+
+`Op.set_param(param, value, every=1, start=0, when=None)` 按 tick 计划重写一个运行时可变生态标量：
+
+```python
+nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
+```
+
+- `value` 是**算术表达式**（RPN 编译）：操作数是 jsonc 参数名（`K` 是 `carrying_capacity` 的注册别名）或数字字面量，运算符是 `+ - * /`，支持括号。纯数字等价于常量表达式。表达式**每次触发时对当前值求值**，因此 `"K * 0.95"` 会复利递减。
+- `every` / `start` 控制触发计划：`tick >= start and (tick - start) % every == 0`；`when` 提供额外条件。
+- `event` 参数默认 `early`。
+- 目标是以下 **5 个生态参数**（必须同时是 标量参数（直接属性写）与 Rust 会话列）：
+
+| 参数名 | 说明 |
+|---|---|
+| `carrying_capacity` | K |
+| `eggs_per_female` | 雌性产卵数 |
+| `sex_ratio` | 性比 |
+| `sperm_displacement_rate` | 精子置换率 |
+| `low_density_growth_rate` | 低密度增长率 |
+
+向量/张量参数会抛 `ValueError` —— 请改用 `pop.update()` / `pop.params.tensor_write()`。
+
+**三后端语义**：
+
+- 参考（Python）路径与 Rust 路径都在**事件边界**按同一计划写入，通过 `pop.params.<name> = ...` 相同的通道（路由分派、Rust 脏桥、参数快照日志），同一个 tick 后续阶段立即可见。
+- Rust `run()` 路径中，写入在会话拥有的生态列内部演化（事件粒度相同、jsonc 边界校验相同；非有限值或越界值如 `"K / 0"` 会在运行中抛 `ValueError`）。`run()` 返回时，审计过的变化按各自提交 tick 追加到 `params_log`（HB-2 修复），最终值同步回 draft。
+
+### `Op.convert`：一对一概率转换
+
+`Op.convert(source, target, probability, when=None)` 把当前位于 `source` 基因型的个体以 `probability` **逐个体**转换到 `target`。两个 pattern 都必须**恰好匹配一个** ZType，否则编译期抛 `ValueError`。
+
+- **雄性**：只有 `individual_count` 行迁移（雄性不带精子标签）。
+- **雌性（年龄结构）**：virgin 部分与**每个精子桶** `(female_z, male_z)` 都独立二项抽样并原子迁移到 `(target_z, male_z)` —— 精子基因型标签跟随雌性行移动，雄性轴不动。确定性模式下总数精确守恒，随机模式下期望值守恒。
+- **离散代**：无精子存储，退化为普通逐个体二项迁移。
+
+常用惯用法：`probability=1.0` 的"分流兜底"步骤，把链式转换的剩余部分全部收编：
+
+```python
+# 30% 的 A|A 变成 A|a，其余变成 a|a
+nt.Op.convert("A|A", "A|a", probability=0.3),
+nt.Op.convert("A|A", "a|a", probability=1.0),
+```
+
+多个 `convert` 按 hook priority 顺序执行。
 
 ## 随机性处理
 
@@ -92,7 +153,7 @@ Declarative Hook 中的 `Op` 操作会根据种群创建（链式 API 中）时 
 
 当 `stochastic=True` 时，还可以通过 `continuous_sampling` 配置选择采样方式：
 
-- `continuous_sampling=True`：使用连续采样（使用矩匹配的 Beta/Gamma 分布替代二项/柏松分布）
+- `continuous_sampling=True`：使用连续采样（使用矩匹配的 Beta/Gamma 分布替代二项/泊松分布）
 - `continuous_sampling=False`：使用离散采样
 
 声明式 Hook 的优势在于：你只需要用同样的 Op 语法编写规则，系统会根据配置自动在确定性和随机性之间切换，无需修改 Hook 代码。
@@ -126,7 +187,7 @@ import natal as nt
 
 @nt.hook(event="first", priority=10)
 def release_hook():
-    return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
+    return [nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
 
 @nt.hook(event="late", priority=5)
 def culling_hook():
@@ -134,7 +195,7 @@ def culling_hook():
 
 @nt.hook(event="late", priority=0)
 def stop_hook():
-    return [nt.Op.stop_if_above(genotypes="Drive|WT", threshold=5000)]
+    return [nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000)]
 
 pop = (
     nt.AgeStructuredPopulation
@@ -153,22 +214,17 @@ pop.run(n_steps=100, record_every=10)
 
 如果存在多个 Hook，建议通过 `priority` 明确执行顺序，避免隐式顺序导致结果难以复现。
 
-## 执行模式
+## 执行路径
 
-NATAL Core 的 Hook 系统支持两种执行模式，受全局 `NUMBA_ENABLED` 开关控制：
+Hook 的物理执行路径由种群选择的后端决定：
 
-- **当 `NUMBA_ENABLED=True` 时（默认）**：
-  - 声明式 Hook 会被编译为纯数据结构（CSR 格式），在 Numba 编译的内核中高效执行
-  - 自定义 Hook 和 Selector-based Hook 需要遵循 Numba 语法
-  - Python 层 Hook 会在注册阶段被拒绝（`initialization` 和 `finish` 事件除外）
+- **参考（Python）后端**：声明式 Op 编译为连续数组 + 偏移表的 CSR 计划，由 Python 解释器逐事件执行；回调（`TickContext`）直接调用。
+- **Rust（原生扩展）后端**：CSR 计划与启动器在 Rust 会话内执行，单参数回调跨桥进入会话（每个调用获得一个独立的上下文封装）。
+- 两条路径执行相同的事件顺序、相同的确定性算术；`stochastic=False` 时轨迹逐位一致。
 
-- **当 `NUMBA_ENABLED=False` 时**：
-  - 任意已注册 Hook 类型（declarative CSR、njit、Python）都会在 `run(...)` / `run_tick()` 中走统一的 Python 事件调度路径
-  - 在该路径下，系统会根据 `priority` 按顺序执行所有 Hook，无需手动触发
+Hook 是"Op 即 hook"的声明式编译模型：`Op` 对象本身构成 hook 程序，`@hook` 声明式函数只是返回 Op 列表的编译器入口。`initialize` 事件不存在 —— 初始化阶段的逻辑请用 `first` 事件的首个 tick（`when="tick == 1"`）或 `finish` 事件表达。
 
-当全局 `NUMBA_ENABLED=True` 时，如果同一事件混用了 declarative CSR、njit、Python 三类 Hook，运行时会自动切到统一 Python 事件调度，确保跨类型按 `priority` 排序执行。
-
-在 `SpatialPopulation` 中，local Hook 的 `priority` 只在 deme 内部生效；不同 deme 之间不定义全局顺序。
+`SpatialPopulation` 中，local Hook 的 `priority` 只在 deme 内部生效；不同 deme 之间不定义全局顺序。空间模型见 [空间模拟](3_spatial_simulation.md)。
 
 ## 与 `run` / `run_tick` 的关系
 
@@ -189,7 +245,7 @@ sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
 
 @nt.hook(event="first", priority=0)
 def release():
-    return [nt.Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
+    return [nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
 
 @nt.hook(event="late", priority=5)
 def stop_if_no_female():
@@ -210,30 +266,44 @@ pop = (
 pop.run(n_steps=200, record_every=10)
 ```
 
-## 自定义 Hook（直接操作状态数组）
+## 单参数回调 Hook（TickContext）
 
-声明式 `Op.*` 操作不够灵活时，使用 `custom=True` 的自定义 Hook 直接操作 NumPy 数组：
+需要直接读写状态数组或运行时参数时，使用单参数回调形态。参数是一个 `TickContext`，公开成员如下：
+
+| 成员 | 类型 / 语义 |
+|---|---|
+| `pop.tick` | 当前模拟 tick（只读）。 |
+| `pop.deme_id` | 本次调用的 deme 索引（panmictic 为 `-1`，只读）。 |
+| `pop.state` | 可写状态视图（短期借用；写入立即生效）。 |
+| `pop.params` | 可写参数面（与 `pop.params` 相同的写入器栈；属性写入经边界校验，同时到达 draft、Rust 会话与参数快照日志）。 |
+| `pop.blueprint` | 只读维度、名称目录与引擎开关（`n_sexes`、`n_ages`、`n_ztypes`、`ztype_names` 等）。 |
+| `pop.metrics` | 按需计算的指标视图（每次访问重新计算）。 |
+| `pop.rng` | 确定性随机流（每调用独立；由种群槽位、tick、deme、hook 索引派生，从不触碰全局 `numpy.random`）。 |
+| `pop.update()` | 返回绑定到所属种群的运行时 `Configurator`（与构建链同语法）。 |
+| `pop.stop()` / `pop.stop_requested` | 在事件边界请求/查询终止当前 run。 |
 
 ```python
-from natal.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
-@hook(event="early", custom=True, priority=10)
-def my_hook(state, config, deme_id=-1):
-    # state.individual_count 的形状为 (性别, 年龄, 基因型)
-    if state.n_tick % 10 == 0:
-        state.individual_count[1, :, :] += 100  # 增加 100 只雄性
-    return 0  # RESULT_CONTINUE
+@nt.hook(event="early", priority=10)
+def my_hook(pop: TickContext) -> int:
+    pop.state.individual_count[1, :, :] += 100  # 增加 100 只雄性
+    pop.params.carrying_capacity = pop.params.carrying_capacity * 0.5
+    if pop.tick > 50:
+        pop.stop()
+    return 0
 ```
 
-自定义 Hook 使用签名 `(state, config, deme_id=-1)`。 该签名是唯一受支持的形式：旧的单参数（population）Hook 会被显式拒绝，而不会再被猜测执行。`deme_id` 在 panmictic 种群中默认为 `-1`。返回 `0` 继续模拟，返回 `RESULT_STOP` 结束模拟。关于基于选择器的 Hook、Numba 编译细节以及 Hook 内运行时参数修改，参见 [高级 Hook 教程](3_advanced_hooks.md)。
+关于基于选择器的 Hook 以及 Hook 内运行时参数修改的细节，参见 [高级 Hook 教程](3_advanced_hooks.md)。
 
 ## Hook 内修改参数
 
-参见 [高级 Hook 教程](3_advanced_hooks.md) 中的"运行时修改参数"一节。
+参见 [高级 Hook 教程](3_advanced_hooks.md)。
 
 ## 相关章节
 
 - [高级 Hook 教程](3_advanced_hooks.md)
+- [运行时参数修改](3_runtime_modification.md)
 - [种群初始化](2_population_initialization.md)
 - [Modifier 机制](3_modifiers.md)
 - [Configurator API 参考](api/configurator.md)

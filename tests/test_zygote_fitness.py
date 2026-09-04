@@ -8,8 +8,8 @@ import uuid
 import numpy as np
 
 import natal as nt
-from natal.data import build_population_config
-from natal.genetics import Species
+from natal.frontend.data import build_population_config
+from natal.frontend.genetics import Species
 
 
 def _make_simple_species() -> Species:

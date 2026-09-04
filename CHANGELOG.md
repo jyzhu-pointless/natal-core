@@ -4,11 +4,24 @@
 
 ### Breaking Changes
 
+- **Numba backend removed**: the `natal.numba` package, the `backend="numba"`
+  selector, `njit_switch`, `enable_numba/disable_numba`, the numba cache and
+  codegen pipeline are gone. The default backend `auto` now prefers the Rust
+  native extension and falls back to the pure-Python reference;
+  `backend="numba"` raises `ValueError` with a migration hint.
+- **Spatial `pop.update()` chain removed**: `SpatialPopulation.update()` and the
+  private `_SpatialUpdate` facade are gone; runtime spatial writes go through
+  `pop.params.tensor_write(...)` and `deme(i).write_ecology(...)` /
+  `write_genetics(...)`.
 - **History / Observation API**: replace mutable runtime observation creation
   and legacy output helpers with a canonical build-time `Observation`, a
   self-describing `History`, `pop.observe()`, `pop.record_snapshot()`, and raw
   checkpoint restoration. Deleted legacy interfaces are not retained as
   compatibility aliases.
+- **Forwarding shims removed**: the legacy top-level packages
+  (`natal.data`, `natal.hooks`, `natal.engine`, ...) are gone; import from
+  `natal.frontend.*`, `natal.backends.*`, `natal.contracts`, or the top-level
+  lazy API (`nt.Op`, `nt.Species`, ...).
 
 ### New Features
 
