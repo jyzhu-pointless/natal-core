@@ -9,7 +9,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from natal.hooks import (
+from natal.frontend.hooks import (
     COND_ALWAYS,
     RESULT_CONTINUE,
     RESULT_STOP,

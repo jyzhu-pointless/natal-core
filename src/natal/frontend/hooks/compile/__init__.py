@@ -1,1 +1,1 @@
-"""Hook compilation — container and codegen pipeline."""
+"""Hook compilation container (the njit codegen pipeline was removed)."""

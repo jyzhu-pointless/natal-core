@@ -1,22 +1,21 @@
-"""Tests for the HookExecutor class in its own module (hooks/hook_executor.py).
+"""Tests for the HookExecutor class in its own module (hooks/runtime/fallback.py).
 
-HookExecutor is the Python fallback hook dispatcher used only when Numba is
-disabled.  Tests here verify priority ordering, deme selector filtering,
-and proper dispatch of CSR / njit / py_wrapper descriptors.
+HookExecutor is the Python dispatch layer shared by the reference paths:
+it runs CSR declarative plans first, then Python callbacks, for one event.
+Tests here verify event grouping, priority ordering, deme selector
+filtering, RESULT_STOP propagation, and invalid event ids.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
-from natal.hooks import (
+import natal as nt
+from natal.frontend.hooks.entry.declarative import compile_declarative_hook
+from natal.frontend.hooks.runtime.fallback import HookExecutor
+from natal.frontend.hooks.tick_context import HookRunner
+from natal.frontend.hooks.types import (
     EVENT_EARLY,
     EVENT_FINISH,
     EVENT_FIRST,
@@ -24,13 +23,8 @@ from natal.hooks import (
     RESULT_CONTINUE,
     RESULT_STOP,
     CompiledHookDescriptor,
-    HookExecutor,
-    HookProgram,
-    Op,
+    empty_hook_program,
 )
-from natal.hooks.entry.declarative import compile_declarative_hook
-from natal.hooks.types import CompiledHookPlan
-from natal.numba.utils import numba_disabled
 
 
 # ---------------------------------------------------------------------------
@@ -38,85 +32,60 @@ from natal.numba.utils import numba_disabled
 # ---------------------------------------------------------------------------
 
 
-class _DummyState:
-    """Minimal state with individual_count and sperm_storage for HookExecutor."""
-
-    def __init__(self, n_genotypes: int = 2, n_ages: int = 2) -> None:
-        self.individual_count = np.zeros((2, n_ages, n_genotypes), dtype=np.float64)
-        self.sperm_storage = np.zeros((0, 0, 0), dtype=np.float64)
-
-
-class _DummyConfig:
-    """Minimal config exposing stochastic / continuous_sampling flags."""
-
-    def __init__(self, stochastic: bool = True) -> None:
-        self.stochastic = stochastic
-        self.continuous_sampling = False
-
-
-class _DummyPop:
-    """Minimal population exposing state and config for HookExecutor."""
-
-    def __init__(self, n_genotypes: int = 2, n_ages: int = 2) -> None:
-        self.state = _DummyState(n_genotypes, n_ages)
-        self._config = _DummyConfig()
-
-    @property
-    def config(self) -> _DummyConfig:  # type: ignore[override]
-        return self._config
-
-
-def _empty_program() -> HookProgram:
-    """Build a minimal empty HookProgram."""
-    return HookProgram(
-        n_events=np.int32(4),
-        n_hooks=np.int32(0),
-        hook_offsets=np.zeros(5, dtype=np.int32),
-        n_ops_list=np.zeros(0, dtype=np.int32),
-        op_offsets=np.zeros(1, dtype=np.int32),
-        op_types_data=np.zeros(0, dtype=np.int32),
-        zidx_offsets_data=np.zeros(0, dtype=np.int32),
-        zidx_data=np.zeros(0, dtype=np.int32),
-        age_offsets_data=np.zeros(0, dtype=np.int32),
-        age_data=np.zeros(0, dtype=np.int32),
-        sex_masks_data=np.zeros(0, dtype=np.bool_),
-        params_data=np.zeros(0, dtype=np.float64),
-        condition_offsets_data=np.zeros(0, dtype=np.int32),
-        condition_types_data=np.zeros(0, dtype=np.int32),
-        condition_params_data=np.zeros(0, dtype=np.int32),
-        deme_selector_types=np.zeros(0, dtype=np.int32),
-        deme_selector_offsets=np.zeros(0, dtype=np.int32),
-        deme_selector_data=np.zeros(0, dtype=np.int32),
+def _build_pop(name: str) -> nt.DiscreteGenerationPopulation:
+    """Build a quiescent discrete population (state changes only via hooks)."""
+    species = nt.Species.from_dict(
+        name=name, structure={"chr1": {"loc": ["WT", "Dr"]}}
+    )
+    return (
+        nt.DiscreteGenerationPopulation.setup(
+            species=species, name=name, stochastic=False
+        )
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [10.0, 0.0]},
+                "male": {"WT|WT": [10.0, 0.0]},
+            }
+        )
+        .reproduction(eggs_per_female=0.0)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .build()
     )
 
 
-def _dummy_index_registry(n_genotypes: int = 2):
-    """Create a minimal IndexRegistry for declarative hook compilation."""
-
-    class _DummyRegistry:
-        def num_genotypes(self) -> int:
-            return n_genotypes
-
-        def num_ages(self) -> int:
-            return 2
-
-        def get_zidx_range(self, selector: object) -> tuple[int, int]:
-            return (0, n_genotypes)
-
-        def get_age_range(self, selector: object) -> tuple[int, int]:
-            return (0, 2)
-
-    return _DummyRegistry()
+def _compiled(
+    ops: list[object],
+    pop: object,
+    event: str,
+    priority: int = 0,
+    deme_selector: object = "*",
+) -> CompiledHookDescriptor:
+    """Compile declarative ops into a descriptor against *pop*."""
+    return compile_declarative_hook(
+        ops, pop, event, priority=priority, deme_selector=deme_selector
+    )
 
 
-class _DummyPopForDeclarative(_DummyPop):
-    """Dummy population that supports declarative hook compilation."""
+def _executor(
+    descriptors: list[CompiledHookDescriptor],
+) -> HookExecutor:
+    """Build an executor bound to a fresh quiescent population."""
+    pop = _build_pop(f"executor_{len(descriptors)}_hook")
+    return HookExecutor.from_compiled_hooks(
+        empty_hook_program(), descriptors, HookRunner(pop)
+    )
 
-    def __init__(self, n_genotypes: int = 2, n_ages: int = 2) -> None:
-        super().__init__(n_genotypes, n_ages)
-        self.index_registry = _dummy_index_registry(n_genotypes)
-        self.config = _DummyConfig()  # Expose config directly for declarative compile
-        self._config = self.config
+
+def _executor_with_pop(
+    descriptors: list[CompiledHookDescriptor],
+) -> tuple[HookExecutor, nt.DiscreteGenerationPopulation]:
+    """Register *descriptors* on a population and build its dispatch pair."""
+    pop = _build_pop("executor_registered")
+    for desc in descriptors:
+        pop.register_compiled_hook(desc)
+    pop.ensure_hook_executor()
+    assert pop.hook_executor is not None
+    return pop.hook_executor, pop
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +95,7 @@ class _DummyPopForDeclarative(_DummyPop):
 
 def test_hook_executor_empty_construction() -> None:
     """HookExecutor constructed with empty lists yields no hooks per event."""
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [])
+    executor = _executor([])
     assert executor.get_hooks_for_event(0) == []
     assert executor.get_hooks_for_event(1) == []
     assert executor.get_hooks_for_event(2) == []
@@ -135,35 +104,23 @@ def test_hook_executor_empty_construction() -> None:
 
 def test_hook_executor_skips_null_descriptors() -> None:
     """Descriptors without any execution payload are silently skipped."""
-    desc = CompiledHookDescriptor(
-        name="empty", event="early", priority=0, njit_fn=None, py_wrapper=None, plan=None
-    )
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc])
+    desc = CompiledHookDescriptor(name="empty", event="early", priority=0)
+    executor = _executor([desc])
     assert executor.get_hooks_for_event(EVENT_EARLY) == []
 
 
 def test_hook_executor_groups_by_event() -> None:
     """Descriptors are grouped by event_id."""
-    calls: list[str] = []
+    pop = _build_pop("executor_grouping")
+    ops = [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)]
+    desc_first = _compiled(ops, pop, "first")
+    desc_early = _compiled(ops, pop, "early")
 
-    def make_njit(name: str) -> object:
-        def fn(state, config, deme_id=-1):
-            calls.append(name)
-            return RESULT_CONTINUE
-
-        return fn
-
-    desc_first = CompiledHookDescriptor(
-        name="first_hook", event="first", priority=0, njit_fn=make_njit("first")
-    )
-    desc_early = CompiledHookDescriptor(
-        name="early_hook", event="early", priority=0, njit_fn=make_njit("early")
-    )
-
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc_first, desc_early])
+    executor = _executor([desc_first, desc_early])
     assert len(executor.get_hooks_for_event(EVENT_FIRST)) == 1
     assert len(executor.get_hooks_for_event(EVENT_EARLY)) == 1
     assert len(executor.get_hooks_for_event(EVENT_LATE)) == 0
+    assert len(executor.get_hooks_for_event(EVENT_FINISH)) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -172,34 +129,23 @@ def test_hook_executor_groups_by_event() -> None:
 
 
 def test_hook_executor_priority_ordering() -> None:
-    """Hooks execute in priority order (lower values first)."""
-    calls: list[str] = []
+    """Hooks execute in priority order (lower values first).
 
-    def make_njit(name: str) -> object:
-        def fn(state, config, deme_id=-1):
-            calls.append(name)
-            return RESULT_CONTINUE
+    Scale and add are non-commutative on the same cell, so the exact
+    execution order is observable in the resulting count.
+    """
+    pop = _build_pop("executor_priority")
+    add_one = _compiled([nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)], pop, "early", priority=10)
+    scale_two = _compiled([nt.Op.scale(genotypes="WT|WT", ages=0, sex="female", factor=2.0)], pop, "early", priority=0)
+    add_two = _compiled([nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=2.0)], pop, "early", priority=5)
 
-        return fn
+    executor, pop = _executor_with_pop([scale_two, add_two, add_one])
 
-    desc_a = CompiledHookDescriptor(
-        name="a", event="early", priority=10, njit_fn=make_njit("a")
-    )
-    desc_b = CompiledHookDescriptor(
-        name="b", event="early", priority=0, njit_fn=make_njit("b")
-    )
-    desc_c = CompiledHookDescriptor(
-        name="c", event="early", priority=5, njit_fn=make_njit("c")
-    )
-
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc_a, desc_b, desc_c])
-    pop = _DummyPop()
-
-    with numba_disabled():
-        result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
+    result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
 
     assert result == RESULT_CONTINUE
-    assert calls == ["b", "c", "a"]
+    # order is scale(10→20), add2(→22), add1(→23); reversed order gives 32.
+    assert float(pop.state.individual_count[0, 0, 0]) == 23.0
 
 
 # ---------------------------------------------------------------------------
@@ -209,91 +155,76 @@ def test_hook_executor_priority_ordering() -> None:
 
 def test_hook_executor_deme_selector_wildcard() -> None:
     """Wildcard deme selector '*' matches any deme_id."""
-    calls: list[str] = []
-
-    def fn(state, config, deme_id=-1):
-        calls.append(f"run@{deme_id}")
-        return RESULT_CONTINUE
-
-    desc = CompiledHookDescriptor(
-        name="wild", event="early", priority=0, njit_fn=fn, deme_selector="*"
+    pop = _build_pop("executor_sel_wild")
+    desc = _compiled(
+        [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)],
+        pop,
+        "early",
     )
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc])
-    pop = _DummyPop()
+    executor, pop = _executor_with_pop([desc])
 
-    with numba_disabled():
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=5)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=99)
+    for deme_id in (0, 5, 99):
+        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=deme_id)
 
-    assert calls == ["run@0", "run@5", "run@99"]
+    assert float(pop.state.individual_count[0, 0, 0]) == 13.0
 
 
 def test_hook_executor_deme_selector_int() -> None:
     """Integer deme selector only matches that exact deme_id."""
-    calls: list[str] = []
-
-    def fn(state, config, deme_id=-1):
-        calls.append(f"run@{deme_id}")
-        return RESULT_CONTINUE
-
-    desc = CompiledHookDescriptor(
-        name="deme3", event="early", priority=0, njit_fn=fn, deme_selector=3
+    pop = _build_pop("executor_sel_int")
+    desc = _compiled(
+        [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)],
+        pop,
+        "early",
+        deme_selector=3,
     )
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc])
-    pop = _DummyPop()
+    executor, pop = _executor_with_pop([desc])
 
-    with numba_disabled():
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=3)
+    executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
+    assert float(pop.state.individual_count[0, 0, 0]) == 10.0
 
-    assert calls == ["run@3"]
+    executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=3)
+    assert float(pop.state.individual_count[0, 0, 0]) == 11.0
 
 
 def test_hook_executor_deme_selector_range() -> None:
     """Range deme selector matches deme_id in [start, stop)."""
-    calls: list[str] = []
-
-    def fn(state, config, deme_id=-1):
-        calls.append(f"run@{deme_id}")
-        return RESULT_CONTINUE
-
-    desc = CompiledHookDescriptor(
-        name="rng", event="early", priority=0, njit_fn=fn, deme_selector=range(2, 5)
+    pop = _build_pop("executor_sel_range")
+    desc = _compiled(
+        [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)],
+        pop,
+        "early",
+        deme_selector=range(2, 5),
     )
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc])
-    pop = _DummyPop()
+    executor, pop = _executor_with_pop([desc])
 
-    with numba_disabled():
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=1)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=4)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=5)
+    for deme_id in (1, 5):
+        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=deme_id)
+    assert float(pop.state.individual_count[0, 0, 0]) == 10.0
 
-    assert calls == ["run@2", "run@4"]
+    for deme_id in (2, 4):
+        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=deme_id)
+    assert float(pop.state.individual_count[0, 0, 0]) == 12.0
 
 
 def test_hook_executor_deme_selector_list() -> None:
     """List deme selector matches deme_id in the list."""
-    calls: list[str] = []
-
-    def fn(state, config, deme_id=-1):
-        calls.append(f"run@{deme_id}")
-        return RESULT_CONTINUE
-
-    desc = CompiledHookDescriptor(
-        name="lst", event="early", priority=0, njit_fn=fn, deme_selector=[1, 3, 7]
+    pop = _build_pop("executor_sel_list")
+    desc = _compiled(
+        [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)],
+        pop,
+        "early",
+        deme_selector=[1, 3, 7],
     )
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc])
-    pop = _DummyPop()
+    executor, pop = _executor_with_pop([desc])
 
-    with numba_disabled():
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=1)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=3)
-        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=8)
+    for deme_id in (0, 8):
+        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=deme_id)
+    assert float(pop.state.individual_count[0, 0, 0]) == 10.0
 
-    assert calls == ["run@1", "run@3"]
+    for deme_id in (1, 3, 7):
+        executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=deme_id)
+    assert float(pop.state.individual_count[0, 0, 0]) == 13.0
 
 
 # ---------------------------------------------------------------------------
@@ -302,36 +233,60 @@ def test_hook_executor_deme_selector_list() -> None:
 
 
 def test_hook_executor_stop_propagation() -> None:
-    """RESULT_STOP from any hook aborts the event immediately."""
-    calls: list[str] = []
-
-    def make_njit(name: str, result: int) -> object:
-        def fn(state, config, deme_id=-1):
-            calls.append(name)
-            return result
-
-        return fn
-
-    desc_a = CompiledHookDescriptor(
-        name="a", event="early", priority=0, njit_fn=make_njit("a", RESULT_CONTINUE)
+    """RESULT_STOP from a CSR plan aborts the event immediately."""
+    pop = _build_pop("executor_stop")
+    add_a = _compiled(
+        [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)],
+        pop,
+        "early",
+        priority=0,
     )
-    desc_b = CompiledHookDescriptor(
-        name="b", event="early", priority=1, njit_fn=make_njit("b", RESULT_STOP)
+    stop_b = _compiled(
+        [nt.Op.stop_if_above(genotypes="WT|WT", ages=0, sex="female", threshold=0.0, when="tick >= 0")],
+        pop,
+        "early",
+        priority=1,
     )
-    desc_c = CompiledHookDescriptor(
-        name="c", event="early", priority=2, njit_fn=make_njit("c", RESULT_CONTINUE)
+    add_c = _compiled(
+        [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=100.0)],
+        pop,
+        "early",
+        priority=2,
     )
 
-    executor = HookExecutor.from_compiled_hooks(
-        _empty_program(), [desc_a, desc_b, desc_c]
-    )
-    pop = _DummyPop()
+    executor, pop = _executor_with_pop([add_a, stop_b, add_c])
 
-    with numba_disabled():
-        result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
+    result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
 
     assert result == RESULT_STOP
-    assert calls == ["a", "b"]  # c never runs
+    # a runs (10+1); c never runs.
+    assert float(pop.state.individual_count[0, 0, 0]) == 11.0
+
+
+def test_hook_executor_callback_stop_propagation() -> None:
+    """A Python callback returning nonzero stops the event."""
+    calls: list[str] = []
+
+    def stopping_callback(pop: object) -> int:
+        """Request termination from inside an event."""
+        _ = pop
+        calls.append("stop")
+        return RESULT_STOP
+
+    pop = _build_pop("executor_callback_stop")
+    desc = CompiledHookDescriptor(
+        name="stopping_callback",
+        event="early",
+        priority=0,
+        callback=stopping_callback,
+        source=stopping_callback,
+    )
+    executor, pop = _executor_with_pop([desc])
+
+    result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
+
+    assert result == RESULT_STOP
+    assert calls == ["stop"]
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +296,8 @@ def test_hook_executor_stop_propagation() -> None:
 
 def test_hook_executor_invalid_event_id() -> None:
     """Out-of-range event_id returns RESULT_CONTINUE silently."""
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [])
-    pop = _DummyPop()
+    executor = _executor([])
+    pop = _build_pop("executor_invalid_event")
     result = executor.execute_event(999, pop, tick=0, deme_id=0)
     assert result == RESULT_CONTINUE
 
@@ -357,16 +312,11 @@ def test_hook_executor_invalid_event_id() -> None:
 
 def test_get_hooks_for_event_returns_sorted() -> None:
     """get_hooks_for_event returns descriptors sorted by priority."""
-    def _noop(state, config, deme_id=-1):
-        return 0
-
-    desc_a = CompiledHookDescriptor(
-        name="a", event="early", priority=5, njit_fn=_noop
-    )
-    desc_b = CompiledHookDescriptor(
-        name="b", event="early", priority=0, njit_fn=_noop
-    )
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc_a, desc_b])
+    pop = _build_pop("executor_sorted")
+    ops = [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)]
+    desc_a = _compiled(ops, pop, "early", priority=5)
+    desc_b = _compiled(ops, pop, "early", priority=0)
+    executor = _executor([desc_a, desc_b])
     hooks = executor.get_hooks_for_event(EVENT_EARLY)
     assert len(hooks) == 2
     assert hooks[0].priority <= hooks[1].priority

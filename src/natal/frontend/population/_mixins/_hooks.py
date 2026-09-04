@@ -1,430 +1,432 @@
 """Hook management mixin for BasePopulation.
 
-Extracted from :mod:`natal.frontend.population.base` to reduce the
-BasePopulation ABC to its core lifecycle contract.
+Slice-4 target state: one registration entry
+(:meth:`HookManagerMixin.register_hooks`, called by ``.hooks()`` on both
+the build-time and runtime Configurator), one descriptor payload pair
+(CSR plan | Python callback), and one Python dispatch path
+(:class:`~natal.frontend.hooks.runtime.fallback.HookExecutor`) that runs
+CSR plans and then single-parameter callbacks.
+
+The njit-era registration surface (``set_hook`` / ``get_hooks`` /
+``remove_hook``, the plain ``(state, config, deme_id)`` hook map, and the
+``hook_entries`` bookkeeping) was removed — the 26 decisions give njit
+hooks no migration channel.
 """
 
 from __future__ import annotations
 
 import inspect
-import warnings
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     List,
     Optional,
+    Sequence,
     Tuple,
     cast,
 )
 
-import numpy as np
-
-from natal.backends.numba.utils import is_numba_enabled
-from natal.frontend.data import (
-    DiscretePopulationConfig,
-    DiscretePopulationState,
-    PopulationConfig,
-    PopulationState,
+from natal.frontend.hooks.types import (
+    EVENT_ID_MAP,
+    RESULT_CONTINUE,
+    CompiledHookDescriptor,
+    DemeSelector,
+    HookOp,
+    OpType,
+    RunProgram,
 )
 
 if TYPE_CHECKING:
-    from natal.backends.numba.lifecycle_wrappers import LifecycleWrappers
-    from natal.frontend.hooks import HookExecutor
-    from natal.frontend.hooks.types import (
-        CompiledHookDescriptor,
-        DemeSelector,
-        HookProgram,
-    )
+    from typing import Any as _Any
+    from typing import Protocol as _Protocol
+
+    from natal.frontend.hooks.runtime.fallback import HookExecutor
+    from natal.frontend.hooks.tick_context import HookRunner
+    from natal.frontend.hooks.types import HookProgram
     from natal.frontend.population.base import BasePopulation
 
-HookCallback = Callable[..., object]
-HookEntry = Tuple[int, Optional[str], HookCallback]
+    # Host-contract alias: the mixin is only mixed into BasePopulation
+    # subclasses; the ``Any`` type argument stands for the host's
+    # ``T_State`` (a documented host-contract ``Any``).
+    _Population = BasePopulation[_Any]
+
+    class _CallbackBridge(_Protocol):
+        """Structural type of the Rust backend adapter's callback channel."""
+
+        def set_python_callbacks(
+            self,
+            first: List[Callable[..., int]],
+            early: List[Callable[..., int]],
+            late: List[Callable[..., int]],
+        ) -> None:
+            """Register per-event callback lists."""
+            ...
 
 
 class HookManagerMixin:
     """Mixin providing hook registration, compilation, and dispatch.
 
     Expects the host class (BasePopulation) to define these attributes:
-    ``hook_entries: Dict[str, List[HookEntry]]``,
-    ``_pending_hooks: List[PendingHook]``,
-    ``compiled_hook_descriptors: List[CompiledHookDescriptor]``,
-    ``hook_executor: Optional[HookExecutor]``.
+    ``ALLOWED_EVENTS``, ``tick``, ``state``, ``config``,
+    ``compiled_hook_descriptors``, ``hook_executor``, ``_hook_runner``,
+    ``_run_program``, and ``_rust_dirty``.
     """
 
     # Declared here so pyright knows these come from the host class.
     ALLOWED_EVENTS: list[str]  # type: ignore[assignment]
     tick: int  # type: ignore[assignment]
     # ``object`` is a host-contract declaration only: BasePopulation owns the
-    # typed ``state``/``config`` properties; this mixin just routes plain
-    # hooks and narrows through ``cast`` at the call site.
+    # typed ``state``/``config`` properties; this mixin just narrows through
+    # ``cast`` at the call site.
     state: object
     config: object
-    hook_entries: dict[str, list[HookEntry]]
     compiled_hook_descriptors: list[CompiledHookDescriptor]
     hook_executor: Optional[HookExecutor]
+    _hook_runner: Optional[HookRunner]
+    _run_program: RunProgram
+    # Rust dirty-set bridge owned by BasePopulation (contract field names).
+    _rust_dirty: set[str]
 
-    # ── Hook registration ────────────────────────────────────────────
+    # ── Hook registration (the single entry) ─────────────────────────
 
-    def set_hook(
+    def register_hooks(
         self,
-        event_name: str,
-        func: HookCallback,
-        hook_id: Optional[int] = None,
-        hook_name: Optional[str] = None,
-        compile: bool = True,
-        deme_selector: Optional[DemeSelector] = None,
+        *items: object,
+        event: Optional[str] = None,
+        priority: int = 0,
+        deme: DemeSelector = "*",
+        name: Optional[str] = None,
     ) -> None:
-        """
-        Register an event hook with optional automatic compilation.
+        """Register hooks — the single entry behind ``.hooks()``.
 
-        When ``compile=True`` and the function carries ``@hook`` metadata,
-        it enters the DSL compilation pipeline:
-        - declarative hook -> CSR plan in HookProgram (kernel executable)
-        - selector hook -> ``py_wrapper`` or ``njit_fn`` (mode dependent)
-        - numba hook -> ``njit_fn``
+        Accepted items:
 
-        Plain Python functions use the unified ``(state, config, deme_id)``
-        signature and are stored in the traditional ``_hooks`` map.
+        - a :class:`~natal.frontend.hooks.types.HookOp` (or a list of
+          them) → one declarative CSR descriptor; the event rides on the
+          op, the call, or the decorator default;
+        - a ``@hook``-decorated function → compiled according to its
+          shape (declarative / callback / selector callback);
+        - a plain single-parameter callable → a Python callback.
+
+        Registration is idempotent by object identity: registering the
+        same object (or the same op group) twice is a no-op.
 
         Args:
-            event_name: Event name (must exist in ``ALLOWED_EVENTS``).
-            func: Callback function, supported forms include:
-                  - plain function: ``func(state, config, deme_id)``
-                  - declarative ``@hook`` function: returns ``[Op.scale(...), ...]``
-                  - selector ``@hook(selectors={...})`` function
-            hook_id: Numeric execution priority (optional, auto-assigned if omitted).
-                     Lower IDs execute first.
-            hook_name: Optional human-readable name for debugging.
-            compile: Whether to try compiling ``@hook``-decorated functions (default ``True``).
-            deme_selector: Optional deme selector.
-                - ``None``: keep panmictic default behavior (no explicit selector override)
-                - non-``None``: passed into hook registration for spatial filtering
+            *items: Hook registrations (ops, op lists, decorated or plain
+                single-parameter callables).
+            event: Default event for items that do not carry one.
+            priority: Default priority for items that do not carry one.
+            deme: Default deme selector (``"*"`` = all demes).
+            name: Optional override name for grouped op registrations.
 
         Raises:
-            ValueError: If event does not exist or hook_id is already in use.
-
-        Examples:
-            >>> # Plain function (backward compatible)
-            >>> pop.set_hook('first', lambda state, config, deme_id: print(f'Step {state.n_tick}'))
-            >>>
-            >>> # Declarative @hook function (auto-compiled)
-            >>> @hook()
-            >>> def reduce_juveniles():
-            ...     return [Op.scale(genotypes='AA', ages=[0, 1], factor=0.9)]
-            >>> pop.set_hook('early', reduce_juveniles)
-            >>>
-            >>> # Selector @hook function (auto-compiled)
-            >>> @hook(selectors={'target': 'AA'})
-            >>> def release(pop, target):
-            ...     pop.state.individual_count[1, 2, target] += 100
-            >>> pop.set_hook('first', release)
+            ValueError: If an event name is unknown or no event can be
+                resolved for an item.
+            TypeError: If an item has an unsupported shape (including the
+                removed ``(state, config, deme_id)`` signature).
         """
-        if event_name not in self.ALLOWED_EVENTS:
-            raise ValueError(f"Event '{event_name}' not in {self.ALLOWED_EVENTS}")
+        if event is not None and event not in self.ALLOWED_EVENTS:
+            raise ValueError(f"Event '{event}' not in {self.ALLOWED_EVENTS}")
 
-        # BasePopulation itself is panmictic. Non-wildcard deme selectors are
-        # interpreted by SpatialPopulation orchestration and should not be
-        # consumed here.
-        if deme_selector is not None and deme_selector != "*":
+        # BasePopulation itself is panmictic.  Non-wildcard deme selectors
+        # are interpreted by SpatialPopulation orchestration and should not
+        # reach the per-deme descriptors.
+        if deme != "*":
+            import warnings
+
             warnings.warn(
-                "BasePopulation ignores non-'*' deme_selector. "
-                "Apply deme selection through SpatialPopulation-level logic instead.",
+                "BasePopulation ignores non-'*' deme selectors. "
+                "Apply deme selection through SpatialPopulation-level "
+                "logic instead.",
                 UserWarning,
                 stacklevel=2,
             )
-            deme_selector = None
+            deme = "*"
 
-        # Check if function has @hook metadata and should be compiled
-        hook_meta = getattr(func, 'meta', None)
-        if is_numba_enabled() and hook_meta is None:
-            raise TypeError(
-                "Python-layer hooks are not allowed when Numba is enabled. "
-                "Use @hook(...) with a compilable body or disable Numba."
-            )
-
-        if hook_meta is None:
-            # The unified hook signature is (state, config, deme_id).
-            # Reject the legacy single-parameter population hook instead of
-            # guessing which shape the user intended.
-            sig = inspect.signature(func)
-            required_params = [
-                param
-                for param in sig.parameters.values()
-                if param.default is inspect.Signature.empty
-                and param.kind
-                in (
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        for item in items:
+            if isinstance(item, HookOp):
+                self._register_op_group([item], event, item.priority, deme, name)
+            elif isinstance(item, (list, tuple)):
+                raw: List[object] = list(cast("Sequence[object]", item))
+                if not all(isinstance(op, HookOp) for op in raw):
+                    raise TypeError(
+                        "Op-list hook items must contain only HookOp "
+                        "objects (build them with Op.scale / Op.add / ...)."
+                    )
+                self._register_op_group(
+                    [op for op in raw if isinstance(op, HookOp)],
+                    event, priority, deme, name,
                 )
-            ]
-            if len(required_params) == 1:
+            elif callable(item):
+                self._register_callable_item(item, event, priority, deme)
+            else:
                 raise TypeError(
-                    "Hooks must accept (state, config, deme_id) -> int. "
-                    "Legacy 1-parameter population hooks are no longer "
-                    "supported; use @hook(...) or a 3-parameter plain hook."
+                    f"Unsupported hook item of type {type(item).__name__!r}. "
+                    "Use HookOp objects (Op.*), @hook-decorated functions, "
+                    "or single-parameter callables."
                 )
 
-        if compile and hook_meta is not None:
-            # Use the hook's register method with event override
-            register_fn = getattr(func, 'register', None)
-            if register_fn is not None:
-                # Panmictic path: do not force any selector override.
-                if deme_selector is None:
-                    register_fn(self, event_override=event_name)
-                else:
-                    register_fn(self, event_override=event_name, deme_selector_override=deme_selector)
-                # Compiled hooks are stored in compiled_hook_descriptors.
-                # Only selector-mode hooks with py_wrapper are mirrored to _hooks.
-                self.hook_executor = None
-                return
+    def _register_op_group(
+        self,
+        ops: List[HookOp],
+        event: Optional[str],
+        priority: int,
+        deme: DemeSelector,
+        name: Optional[str],
+    ) -> None:
+        """Register one declarative descriptor from a group of ops."""
+        from natal.frontend.hooks.entry.declarative import compile_declarative_hook
 
-        # Traditional registration (no compilation)
-        actual_name = hook_name or getattr(func, '__name__', None)
-
-        current_ids = [hid for hid, _, _ in self.hook_entries[event_name]]
-
-        if hook_id is None:
-            hook_id = (max(current_ids) + 1) if current_ids else 0
-
-        if hook_id in current_ids:
-            raise ValueError(f"hook_id {hook_id} already exists in event '{event_name}'")
-
-        self.hook_entries[event_name].append((hook_id, actual_name, func))
-        # Sort by hook ID to preserve execution order.
-        self.hook_entries[event_name].sort(key=lambda x: x[0])
-        self.hook_executor = None
-
-    def trigger_event(self, event_name: str, deme_id: int = -1) -> int:
-        """
-                Trigger an event and execute all registered hooks.
-
-                Execution order:
-                1. CSR operations (Numba fast path)
-                2. ``njit_fn`` hooks (user-defined Numba functions)
-                3. ``py_wrapper`` hooks (Python wrapper functions)
-
-        Args:
-                        event_name: Event name to trigger.
-                        deme_id: Deme index. Default -1 for non-spatial populations.
-
-        Returns:
-                        int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1) to stop.
-
-        Note:
-                        - Prefer HookExecutor (unified three-layer coordination).
-                        - If executor is not built, fall back to traditional ``_hooks``
-                            (Python callbacks only).
-                        - In accelerated ``run()``, core events are mostly executed by engine;
-                            ``trigger_event`` is used mainly for explicit events (for example ``finish``)
-                            and compatibility paths.
-
-        Examples:
-                        >>> result = pop.trigger_event('first')  # Executes all 'first' hooks
-            >>> if result == RESULT_STOP:
-            ...     print("Simulation stopped by hook")
-        """
-        from natal.frontend.hooks import RESULT_CONTINUE
-
-        # Prefer HookExecutor when available.
-        if self.hook_executor is not None:
-            from natal.frontend.hooks import EVENT_ID_MAP
-            event_id = EVENT_ID_MAP.get(event_name)
-            if event_id is not None:
-                result = self.hook_executor.execute_event(event_id, self, self.tick, deme_id=deme_id)  # type: ignore[arg-type]  # mixin, self is BasePopulation at runtime
-                return result
-
-        # Fallback to traditional plain hooks.  They use the unified
-        # (state, config, deme_id) signature and may return RESULT_STOP.
-        from natal.frontend.hooks import RESULT_STOP
-
-        state = cast(
-            PopulationState | DiscretePopulationState, self.state
+        resolved_event = next(
+            (op.event for op in ops if op.event is not None), event
         )
-        config = cast(
-            PopulationConfig | DiscretePopulationConfig, self.config
-        )
-        for _, _, hook in self.hook_entries.get(event_name, []):
-            result = hook(state, config, deme_id)
-            if result == RESULT_STOP:
-                return RESULT_STOP
-
-        return RESULT_CONTINUE
-
-    def get_hooks(self, event_name: str) -> List[HookEntry]:
-        """
-        Get all registered hooks for a specific event.
-
-        Args:
-            event_name: Event name.
-
-        Returns:
-            List of tuples ``[(hook_id, hook_name, hook_func), ...]``.
-        """
-        return list(self.hook_entries.get(event_name, []))
-
-    def remove_hook(self, event_name: str, hook_id: int) -> bool:
-        """
-        Remove a specific hook from an event.
-
-        Args:
-            event_name: Event name.
-            hook_id: Hook ID.
-
-        Returns:
-            True if removed successfully, otherwise False.
-        """
-        if event_name not in self.hook_entries:
-            return False
-
-        original_len = len(self.hook_entries[event_name])
-        self.hook_entries[event_name] = [(hid, name, func) for hid, name, func in self.hook_entries[event_name]
-                                    if hid != hook_id]
-        self.hook_executor = None
-        return len(self.hook_entries[event_name]) < original_len
-
-    # ── Compiled Hooks (DSL / Numba-friendly) ────────────────────────
-
-    def _register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:
-        """Register a compiled hook descriptor.
-
-        Args:
-            desc: CompiledHookDescriptor from hooks module.
-
-        Note:
-            To avoid maintaining two divergent hook sources, this method only
-            mirrors compiled hooks into traditional ``_hooks`` when a real
-            Python wrapper exists (selector-mode hooks). Pure declarative and
-            njit hooks stay in ``compiled_hook_descriptors`` and are executed by engine
-            (or by HookExecutor when trigger_event is used).
-        """
-        self.compiled_hook_descriptors.append(desc)
-        self.hook_executor = None
-
-        from natal.backends.numba.utils import NUMBA_ENABLED
-        if NUMBA_ENABLED and desc.py_wrapper is not None and desc.njit_fn is None:
-            raise TypeError(
-                f"Python py_wrapper hook '{desc.name}' is not allowed when Numba is enabled. "
-                "Please convert it to @njit or use declarative Op hooks."
+        if resolved_event is None:
+            raise ValueError(
+                "No event specified for declarative hook: pass "
+                ".hooks(..., event='early') or set event on the Op."
             )
-
-        # Mirror only real Python wrappers for trigger_event compatibility.
-        # Do not inject no-op placeholders for declarative/njit hooks.
-        if desc.py_wrapper is None:
-            return
-        hook_func = desc.py_wrapper
-
-        # Register with traditional system
-        event_name = desc.event
-        if event_name in self.hook_entries:
-            current_ids = [hid for hid, _, _ in self.hook_entries[event_name]]
-            hook_id = desc.priority
-            # Avoid duplicate IDs
-            while hook_id in current_ids:
-                hook_id += 1
-            self.hook_entries[event_name].append((hook_id, desc.name, hook_func))
-            self.hook_entries[event_name].sort(key=lambda x: x[0])
-
-    def has_python_hooks(self) -> bool:
-        """Return whether any Python-layer hooks are currently registered."""
-        hooks_map = self.hook_entries
-        return any(len(entries) > 0 for entries in hooks_map.values())
-
-    def has_mixed_hook_types(self) -> bool:
-        """Return whether any event mixes declarative/njit/python hook types."""
-        for event_name in self.ALLOWED_EVENTS:
-            kinds: set[str] = set()
-            for desc in self.get_compiled_hooks(event_name):
-                if getattr(desc, "plan", None) is not None:
-                    kinds.add("declarative")
-                if getattr(desc, "njit_fn", None) is not None:
-                    kinds.add("njit")
-                if getattr(desc, "py_wrapper", None) is not None and getattr(desc, "njit_fn", None) is None:
-                    kinds.add("python")
-            if len(kinds) > 1:
-                return True
-        return False
-
-    def ensure_hook_executor(self) -> None:
-        """Build HookExecutor lazily for Python event-dispatch paths."""
-        if self.hook_executor is None:
-            self.hook_executor = self._build_hook_executor()
-
-    def register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:
-        """Public wrapper for registering compiled hooks."""
+        descriptor_name = name or f"declarative_{resolved_event}_{len(ops)}op"
+        desc = compile_declarative_hook(
+            ops,
+            cast("_Population", self),
+            resolved_event,
+            priority,
+            deme_selector=deme,
+            name=descriptor_name,
+        )
+        # Identity: a single op maps to itself; a group to its op tuple.
+        desc.source = ops[0] if len(ops) == 1 else tuple(ops)
         self._register_compiled_hook(desc)
 
-    def get_compiled_hooks(self, event: Optional[str] = None) -> List[Any]:
+    def _register_callable_item(
+        self,
+        func: object,
+        event: Optional[str],
+        priority: int,
+        deme: DemeSelector,
+    ) -> None:
+        """Register one callable, honoring ``@hook`` metadata when present."""
+        meta = getattr(func, "meta", None)
+        if meta is not None:
+            register_fn = getattr(func, "register", None)
+            if register_fn is None:
+                raise TypeError(
+                    "Objects carrying hook meta must expose register(); "
+                    "decorate plain functions with @nt.hook."
+                )
+            register_fn(
+                cast("_Population", self),
+                event_override=event,
+                deme_selector_override=deme if deme != "*" else None,
+            )
+            return
+
+        # Plain callable: must be the single-parameter callback form.  The
+        # signature check happens here (not only in the decorator) so that
+        # bare functions get the same guidance as decorated ones.
+        callable_fn = cast("Callable[..., object]", func)
+        params = [
+            param
+            for param in inspect.signature(callable_fn).parameters.values()
+            if param.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and param.default is inspect.Signature.empty
+        ]
+        if len(params) != 1:
+            raise TypeError(
+                "Plain hook callables must take exactly one parameter: "
+                "def hook(pop) -> int (a TickContext; return 0 to "
+                "continue, nonzero to stop). Decorate declarative Op "
+                "hooks with @nt.hook(event='...')."
+            )
+        if event is None:
+            raise ValueError(
+                "No event specified for hook "
+                f"'{getattr(func, '__name__', '<anonymous>')}'. Pass "
+                ".hooks(..., event='early') or decorate with @nt.hook."
+            )
+        desc = CompiledHookDescriptor(
+            name=getattr(func, "__name__", "hook"),
+            event=event,
+            priority=priority,
+            deme_selector=deme,
+            callback=cast("CallbackOfPopulation", func),
+        )
+        desc.source = func
+        self._register_compiled_hook(desc)
+
+    def _register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:
+        """Register a compiled hook descriptor (identity-idempotent)."""
+        for existing in self.compiled_hook_descriptors:
+            if self._same_hook_identity(existing, desc):
+                return
+        self.compiled_hook_descriptors.append(desc)
+        self.hook_executor = None
+        self._hook_runner = None
+
+        # The Rust session snapshots the CSR hook program and callbacks at
+        # enable time; any post-enable registration must rebuild it before
+        # the next run.  The sentinel routes _sync_rust_backend to a full
+        # backend rebuild.
+        self._rust_dirty.add("__hooks__")
+        self._refresh_run_program()
+
+    @staticmethod
+    def _same_hook_identity(
+        left: CompiledHookDescriptor, right: CompiledHookDescriptor
+    ) -> bool:
+        """Return whether two descriptors are the same (source, event) hook.
+
+        The same object registered for a *different* event is a distinct
+        hook instance and registers again.
+        """
+        if left.event != right.event:
+            return False
+        left_source: object = left.source
+        right_source: object = right.source
+        if left_source is None or right_source is None:
+            return False
+        if isinstance(left_source, tuple) and isinstance(right_source, tuple):
+            lefts = cast("Tuple[object, ...]", left_source)
+            rights = cast("Tuple[object, ...]", right_source)
+            return len(lefts) == len(rights) and all(
+                a is b for a, b in zip(lefts, rights)
+            )
+        return left_source is right_source
+
+    # ── Dispatch ──────────────────────────────────────────────────────
+
+    def trigger_event(self, event_name: str, deme_id: int = -1) -> int:
+        """Trigger an event and execute all registered hooks for it.
+
+        Execution order per event: CSR declarative plans first, then
+        single-parameter Python callbacks (each receiving a fresh
+        :class:`~natal.frontend.hooks.tick_context.TickContext`).
+
+        Args:
+            event_name: Event name to trigger.
+            deme_id: Deme index. Default -1 for non-spatial populations.
+
+        Returns:
+            int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1)
+            to stop.
+        """
+        if self.hook_executor is None:
+            self.ensure_hook_executor()
+        executor = self.hook_executor
+        if executor is None:
+            return RESULT_CONTINUE
+        event_id = EVENT_ID_MAP.get(event_name)
+        if event_id is None:
+            return RESULT_CONTINUE
+        return executor.execute_event(
+            event_id,
+            cast("_Population", self),
+            self.tick,
+            deme_id=deme_id,
+        )
+
+    # ── Introspection ─────────────────────────────────────────────────
+
+    def get_compiled_hooks(self, event: Optional[str] = None) -> List[CompiledHookDescriptor]:
         """Get compiled hook descriptors, optionally filtered by event.
 
         Args:
             event: Optional event name to filter by.
 
         Returns:
-            List of CompiledHookDescriptor sorted by priority.
+            List of ``CompiledHookDescriptor`` sorted by priority.
         """
-        hooks = cast(List[Any], getattr(self, "compiled_hook_descriptors", []))
+        hooks = self.compiled_hook_descriptors
         if event is not None:
             hooks = [h for h in hooks if h.event == event]
         return sorted(hooks, key=lambda h: h.priority)
 
-    def register_declarative_hook(
-        self: BasePopulation[Any],  # type: ignore[reportGeneralTypeIssues, reportMissingTypeArgument]  # mixin, host is BasePopulation subclass
-        event: str,
-        ops: List[Any],
-        priority: int = 0,
-        name: str = "declarative_hook"
-    ) -> Any:
-        """Register a declarative hook from a list of operations.
+    def has_python_callbacks(self) -> bool:
+        """Return whether any registered hook is a Python callback."""
+        return any(desc.callback is not None for desc in self.compiled_hook_descriptors)
 
-        This is an alternative to using the @hook decorator.
+    def has_python_hooks(self) -> bool:
+        """Back-compatible alias for :meth:`has_python_callbacks`."""
+        return self.has_python_callbacks()
 
-        Args:
-            event: Event name ('first', 'early', 'late', 'finish')
-            ops: List of HookOp operations (from Op.scale, Op.add, etc.)
-            priority: Execution priority (lower = earlier)
-            name: Hook name for debugging
+    def invalidate_hook_dispatch(self) -> None:
+        """Drop the cached dispatch pair so the next event rebuilds it."""
+        self.hook_executor = None
+        self._hook_runner = None
 
-        Returns:
-            CompiledHookDescriptor: The compiled descriptor
+    def ensure_hook_executor(self) -> None:
+        """Build the dispatch pair (executor + runner) lazily."""
+        if self.hook_executor is None:
+            from natal.frontend.hooks.runtime.fallback import HookExecutor
+            from natal.frontend.hooks.tick_context import HookRunner
 
-        Examples:
-            >>> from natal.frontend.hooks import Op
-            >>> pop.register_declarative_hook(
-            ...     event='early',
-            ...     ops=[
-            ...         Op.scale(genotypes='AA', ages=[0, 1], factor=0.9),
-            ...         Op.add(genotypes='*', ages=0, delta=50, when='tick % 10 == 0'),
-            ...     ],
-            ...     name='juvenile_control'
-            ... )
+            runner = HookRunner(cast("_Population", self))
+            self._hook_runner = runner
+            self.hook_executor = HookExecutor.from_compiled_hooks(
+                self._run_program.hooks,
+                self.compiled_hook_descriptors,
+                runner,
+            )
+
+    def _ensure_hook_runner(self) -> HookRunner:
+        """Return the callback runner, building it on first use."""
+        if self._hook_runner is None:
+            from natal.frontend.hooks.tick_context import HookRunner
+
+            self._hook_runner = HookRunner(cast("_Population", self))
+        runner: HookRunner = self._hook_runner
+        return runner
+
+    def _register_rust_callbacks(self, backend: _CallbackBridge) -> None:
+        """Bridge Python callbacks into a Rust session.
+
+        One adapter per in-tick event (first/early/late); each adapter has
+        the Rust ``(ind, sperm, tick, deme_id) -> int`` signature and runs
+        every callback of its event in priority order.  Events without
+        callbacks register an empty list so Rust kernels skip the GIL
+        boundary entirely.
         """
-        from natal.frontend.hooks import compile_declarative_hook
-        desc = compile_declarative_hook(
-            ops,
-            self,
-            event,
-            priority=priority,
-            name=name,
+        from natal.frontend.hooks.types import EVENT_EARLY, EVENT_FIRST, EVENT_LATE
+
+        runner = self._ensure_hook_runner()
+        first_cb = runner.rust_callback(EVENT_FIRST)
+        early_cb = runner.rust_callback(EVENT_EARLY)
+        late_cb = runner.rust_callback(EVENT_LATE)
+        backend.set_python_callbacks(
+            [first_cb] if first_cb is not None else [],
+            [early_cb] if early_cb is not None else [],
+            [late_cb] if late_cb is not None else [],
         )
+
+    def register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:
+        """Public wrapper for registering compiled hooks."""
         self._register_compiled_hook(desc)
-        return desc
+
+    # ── Program assembly ──────────────────────────────────────────────
+
+    def _refresh_run_program(self) -> None:
+        """Rebuild the CSR hook plan inside the run program."""
+        self._run_program = self._run_program._replace(
+            hooks=self._build_hook_program()
+        )
 
     def _build_hook_program(self) -> HookProgram:
-        """Build HookProgram from compiled hooks.
+        """Pack all declarative descriptors into a CSR ``HookProgram``.
 
-        This packs all compiled hooks into a Numba-compatible jitclass
-        for efficient execution during simulation.
-
-        Returns:
-            HookProgram: Compiled hook program data
+        Callback-only descriptors contribute a (zero-op) hook slot so
+        deme-selector arrays stay aligned with ``n_hooks``.
         """
-        from natal.frontend.hooks import EVENT_NAMES, HookProgram
+        import numpy as np
+
+        from natal.frontend.hooks.types import EVENT_NAMES, HookProgram
 
         events = EVENT_NAMES
         n_events = len(events)
 
-        # 1. Collect all hooks per event
         hook_offsets: List[int] = [0]
         hook_list_by_event: List[List[CompiledHookDescriptor]] = []
 
@@ -435,7 +437,6 @@ class HookManagerMixin:
 
         n_hooks = hook_offsets[-1]
 
-        # 2. Pack all operation data
         all_op_types: List[int] = []
         all_zidx_offsets: List[int] = [0]
         all_zidx_data: List[int] = []
@@ -446,6 +447,19 @@ class HookManagerMixin:
         all_cond_offsets: List[int] = [0]
         all_cond_types: List[int] = []
         all_cond_params: List[int] = []
+
+        # OP_SET_PARAM / OP_CONVERT flattened data area (rebasing per
+        # plan so offsets stay global).
+        all_sp_param_ids: List[int] = []
+        all_sp_every: List[int] = []
+        all_sp_start: List[int] = []
+        all_rpn_offsets: List[int] = [0]
+        all_rpn_kinds: List[int] = []
+        all_rpn_payload: List[int] = []
+        all_sp_literals: List[float] = []
+        all_convert_source_z: List[int] = []
+        all_convert_target_z: List[int] = []
+        has_set_param = False
 
         all_deme_sel_types: List[int] = []
         all_deme_sel_offsets: List[int] = [0]
@@ -460,14 +474,21 @@ class HookManagerMixin:
                 if plan is None or plan.n_ops == 0:
                     n_ops_list.append(0)
                     op_offsets.append(op_offsets[-1])
+                    self._append_deme_selector(
+                        hook.deme_selector,
+                        all_deme_sel_types,
+                        all_deme_sel_offsets,
+                        all_deme_sel_data,
+                    )
                     continue
 
                 n_ops_list.append(plan.n_ops)
 
-                # Pack operation data
                 all_op_types.extend(plan.op_types.tolist())
+                has_set_param = has_set_param or bool(
+                    (plan.op_types == int(OpType.SET_PARAM)).any()
+                )
 
-                # Handle zidx (adjust offsets for concatenation)
                 zidx_offset_base = len(all_zidx_data)
                 for i in range(plan.n_ops):
                     all_zidx_offsets.append(
@@ -475,7 +496,6 @@ class HookManagerMixin:
                     )
                 all_zidx_data.extend(plan.zidx_data.tolist())
 
-                # Handle age
                 age_offset_base = len(all_age_data)
                 for i in range(plan.n_ops):
                     all_age_offsets.append(
@@ -483,10 +503,8 @@ class HookManagerMixin:
                     )
                 all_age_data.extend(plan.age_data.tolist())
 
-                # Handle sex masks (flatten 2D -> 1D)
                 all_sex_masks.extend(plan.sex_masks.flatten().tolist())
 
-                # Handle params, conditions
                 all_params.extend(plan.params.tolist())
                 cond_offset_base = len(all_cond_types)
                 for i in range(plan.n_ops):
@@ -496,25 +514,31 @@ class HookManagerMixin:
                 all_cond_types.extend(plan.condition_types.tolist())
                 all_cond_params.extend(plan.condition_params.tolist())
 
+                # set_param / convert payload columns are per-op lists of
+                # the same length; rpn token streams are rebased like the
+                # condition streams.
+                all_sp_param_ids.extend(plan.sp_param_ids.tolist())
+                all_sp_every.extend(plan.sp_every.tolist())
+                all_sp_start.extend(plan.sp_start.tolist())
+                rpn_offset_base = len(all_rpn_kinds)
+                for i in range(plan.n_ops):
+                    all_rpn_offsets.append(
+                        rpn_offset_base + plan.rpn_offsets[i + 1] - plan.rpn_offsets[0]
+                    )
+                all_rpn_kinds.extend(plan.rpn_kinds.tolist())
+                all_rpn_payload.extend(plan.rpn_payload.tolist())
+                all_sp_literals.extend(plan.sp_literals.tolist())
+                all_convert_source_z.extend(plan.convert_source_z.tolist())
+                all_convert_target_z.extend(plan.convert_target_z.tolist())
+
                 op_offsets.append(len(all_op_types))
+                self._append_deme_selector(
+                    hook.deme_selector,
+                    all_deme_sel_types,
+                    all_deme_sel_offsets,
+                    all_deme_sel_data,
+                )
 
-                # Pack deme selector from CompiledHookDescriptor
-                sel = hook.deme_selector
-                if sel == "*":
-                    all_deme_sel_types.append(0)
-                elif isinstance(sel, int):
-                    all_deme_sel_types.append(1)
-                    all_deme_sel_data.append(int(sel))
-                elif isinstance(sel, range):
-                    all_deme_sel_types.append(2)
-                    all_deme_sel_data.append(int(sel.start))
-                    all_deme_sel_data.append(int(sel.stop))
-                else:
-                    all_deme_sel_types.append(3)
-                    all_deme_sel_data.extend([int(x) for x in sel])
-                all_deme_sel_offsets.append(len(all_deme_sel_data))
-
-        # 3. Create HookProgram
         return HookProgram(
             n_events=np.int32(n_events),
             n_hooks=np.int32(n_hooks),
@@ -531,98 +555,46 @@ class HookManagerMixin:
             condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
             condition_types_data=np.array(all_cond_types, dtype=np.int32),
             condition_params_data=np.array(all_cond_params, dtype=np.int32),
+            sp_param_ids=np.array(all_sp_param_ids, dtype=np.int32),
+            sp_every=np.array(all_sp_every, dtype=np.int32),
+            sp_start=np.array(all_sp_start, dtype=np.int32),
+            rpn_offsets=np.array(all_rpn_offsets, dtype=np.int32),
+            rpn_kinds=np.array(all_rpn_kinds, dtype=np.int32),
+            rpn_payload=np.array(all_rpn_payload, dtype=np.int32),
+            sp_literals=np.array(all_sp_literals, dtype=np.float64),
+            convert_source_z=np.array(all_convert_source_z, dtype=np.int32),
+            convert_target_z=np.array(all_convert_target_z, dtype=np.int32),
+            has_set_param=has_set_param,
             deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
             deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
             deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
         )
 
-    def _build_hook_executor(self):
-        """Build HookExecutor from compiled hooks and HookProgram.
+    @staticmethod
+    def _append_deme_selector(
+        sel: DemeSelector,
+        types_out: List[int],
+        offsets_out: List[int],
+        data_out: List[int],
+    ) -> None:
+        """Append one serialized deme selector entry (keeps arrays aligned)."""
+        if sel == "*":
+            types_out.append(0)
+        elif isinstance(sel, int):
+            types_out.append(1)
+            data_out.append(int(sel))
+        elif isinstance(sel, range):
+            types_out.append(2)
+            data_out.append(int(sel.start))
+            data_out.append(int(sel.stop))
+        else:
+            types_out.append(3)
+            data_out.extend(int(x) for x in sel)
+        offsets_out.append(len(data_out))
 
-        HookExecutor is a Python-layer coordinator that manages:
-        1. CSR operations via execute_csr_event_program()
-        2. njit_fn hooks (user Numba functions)
-        3. py_wrapper hooks (Python wrappers for selector mode)
 
-        Returns:
-            HookExecutor: Executor instance, or None if no hooks compiled
-        """
-        from natal.frontend.hooks import HookExecutor
+# TYPE_CHECKING-only callback alias matching the descriptor payload type.
+if TYPE_CHECKING:
+    from typing import Callable as _Callable
 
-        # Get or build HookProgram for CSR operations
-        program = self._build_hook_program()
-        program_available = True
-
-        # Get all compiled hooks
-        compiled_hooks = self.compiled_hook_descriptors
-        if not compiled_hooks:
-            return None
-
-        # If no program (no CSR operations), create an empty one
-        # so HookExecutor can still manage njit_fn and py_wrapper hooks
-        if not program_available:
-            program = self._create_empty_hook_program()
-
-        # Create executor
-        executor = HookExecutor.from_compiled_hooks(program, compiled_hooks)
-        return executor
-
-    def _create_empty_hook_program(self):
-        """Create an empty HookProgram for non-CSR operations.
-
-        Used when there are no declarative Op.* operations,
-        but there are njit_fn or py_wrapper hooks.
-        """
-        from natal.frontend.hooks import NUM_EVENTS, HookProgram
-
-        n_events = NUM_EVENTS
-
-        # Create empty CSR arrays
-        hook_offsets = np.zeros(n_events + 1, dtype=np.int32)
-        op_offsets = np.array([0], dtype=np.int32)
-
-        return HookProgram(
-            n_events=np.int32(n_events),
-            n_hooks=np.int32(0),
-            hook_offsets=hook_offsets,
-            n_ops_list=np.array([], dtype=np.int32),
-            op_offsets=op_offsets,
-            op_types_data=np.array([], dtype=np.int32),
-            zidx_offsets_data=np.array([0], dtype=np.int32),
-            zidx_data=np.array([], dtype=np.int32),
-            age_offsets_data=np.array([0], dtype=np.int32),
-            age_data=np.array([], dtype=np.int32),
-            sex_masks_data=np.array([], dtype=np.bool_),
-            params_data=np.array([], dtype=np.float64),
-            condition_offsets_data=np.array([0], dtype=np.int32),
-            condition_types_data=np.array([], dtype=np.int32),
-            condition_params_data=np.array([], dtype=np.int32),
-            deme_selector_types=np.array([], dtype=np.int32),
-            deme_selector_offsets=np.array([0], dtype=np.int32),
-            deme_selector_data=np.array([], dtype=np.int32),
-        )
-
-    def get_compiled_event_hooks(self) -> LifecycleWrappers:
-        """Get compiled hooks and lifecycle wrappers for kernel-based simulation.
-
-        This method collects all registered hooks, compiles them into
-        Numba-friendly combined functions, and wraps them in pre-compiled
-        lifecycle loop functions (tick / run).
-
-        Returns:
-            LifecycleWrappers: Container with compiled event hooks
-                (``.hooks.first`` etc.) plus pre-compiled lifecycle loop
-                functions (``.run_fn``, ``.run_discrete_fn``, etc.).
-
-        Examples:
-            >>> wrappers = pop.get_compiled_event_hooks()
-            >>> wrappers.run_fn is not None
-            True
-        """
-        from natal.backends.numba.lifecycle_wrappers import compile_lifecycle_wrappers
-        registry = self._build_hook_program()
-        return compile_lifecycle_wrappers(
-            self.compiled_hook_descriptors,
-            registry=registry,
-            include_spatial_wrappers=False,
-        )
+    CallbackOfPopulation = _Callable[[object], Optional[int]]  # noqa: F401

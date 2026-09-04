@@ -1,112 +1,90 @@
 #!/usr/bin/env python3
 """Unit tests for deme selector support in hook descriptors and executor."""
 
-import sys
-from pathlib import Path
+from __future__ import annotations
 
-import numpy as np
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
-from natal.hooks import (  # noqa: E402
+import natal as nt
+from natal.frontend.hooks.entry.declarative import compile_declarative_hook
+from natal.frontend.hooks.types import (
     EVENT_EARLY,
     RESULT_CONTINUE,
     CompiledHookDescriptor,
-    HookExecutor,
-    HookProgram,
 )
-from natal.numba.utils import numba_disabled  # noqa: E402
 
 
-class _DummyState:
-    def __init__(self):
-        self.individual_count = np.zeros((2, 1, 1), dtype=np.float64)
-        self.sperm_storage = np.zeros((0, 0, 0), dtype=np.float64)
-
-
-class _DummyPop:
-    def __init__(self):
-        self.state = _DummyState()
-        self._config = type("Cfg", (), {"stochastic": False, "continuous_sampling": False})()
-
-    @property
-    def config(self):
-        return self._config
-
-
-def _empty_program() -> HookProgram:
-    return HookProgram(
-        n_events=np.int32(4),
-        n_hooks=np.int32(0),
-        hook_offsets=np.array([0, 0, 0, 0, 0], dtype=np.int32),
-        n_ops_list=np.array([], dtype=np.int32),
-        op_offsets=np.array([0], dtype=np.int32),
-        op_types_data=np.array([], dtype=np.int32),
-        zidx_offsets_data=np.array([0], dtype=np.int32),
-        zidx_data=np.array([], dtype=np.int32),
-        age_offsets_data=np.array([0], dtype=np.int32),
-        age_data=np.array([], dtype=np.int32),
-        sex_masks_data=np.array([], dtype=np.bool_),
-        params_data=np.array([], dtype=np.float64),
-        condition_offsets_data=np.array([0], dtype=np.int32),
-        condition_types_data=np.array([], dtype=np.int32),
-        condition_params_data=np.array([], dtype=np.int32),
-        deme_selector_types=np.array([], dtype=np.int32),
-        deme_selector_offsets=np.array([0], dtype=np.int32),
-        deme_selector_data=np.array([], dtype=np.int32),
+def _build_pop(name: str) -> nt.DiscreteGenerationPopulation:
+    """Build a quiescent discrete population (state changes only via hooks)."""
+    species = nt.Species.from_dict(
+        name=name, structure={"chr1": {"loc": ["WT", "Dr"]}}
+    )
+    return (
+        nt.DiscreteGenerationPopulation.setup(
+            species=species, name=name, stochastic=False
+        )
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [10.0, 0.0]},
+                "male": {"WT|WT": [10.0, 0.0]},
+            }
+        )
+        .reproduction(eggs_per_female=0.0)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .build()
     )
 
 
-def test_executor_filters_py_wrapper_by_deme_selector():
-    calls = []
+def _register(desc: CompiledHookDescriptor, pop: nt.DiscreteGenerationPopulation) -> None:
+    """Register one compiled descriptor on *pop* and build its dispatch pair."""
+    pop.register_compiled_hook(desc)
+    pop.ensure_hook_executor()
 
-    def only_deme_two(state, config, deme_id):
-        _ = state, config, deme_id
-        calls.append("d2")
 
+def test_executor_filters_callback_by_deme_selector() -> None:
+    """A single-parameter callback runs only when the deme selector matches."""
+    calls: list[int] = []
+
+    def only_deme_two(pop: object) -> int:
+        """Record the demes that reached this callback."""
+        _ = pop
+        calls.append(2)
+        return 0
+
+    pop = _build_pop("deme_selector_callback")
     desc = CompiledHookDescriptor(
         name="only_deme_two",
         event="early",
         priority=0,
         deme_selector=2,
-        py_wrapper=only_deme_two,
+        callback=only_deme_two,
+        source=only_deme_two,
     )
+    _register(desc, pop)
+    assert pop.hook_executor is not None
 
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc])
-    pop = _DummyPop()
-
-    with numba_disabled():
-        result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=1)
-        assert result == RESULT_CONTINUE
-        assert calls == []
-
-        result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
-        assert result == RESULT_CONTINUE
-        assert calls == ["d2"]
-
-
-def test_executor_filters_njit_like_hook_by_deme_selector():
-    calls = []
-
-    def fake_njit(ind_count, tick, deme_id):
-        _ = (ind_count, tick, deme_id)
-        calls.append("run")
-        return RESULT_CONTINUE
-
-    desc = CompiledHookDescriptor(
-        name="set_selector_list",
-        event="early",
-        priority=0,
-        deme_selector=[0, 3],
-        njit_fn=fake_njit,
-    )
-
-    executor = HookExecutor.from_compiled_hooks(_empty_program(), [desc])
-    pop = _DummyPop()
-
-    executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
+    result = pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=1)
+    assert result == RESULT_CONTINUE
     assert calls == []
 
-    executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=3)
-    assert calls == ["run"]
+    result = pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
+    assert result == RESULT_CONTINUE
+    assert calls == [2]
+
+
+def test_executor_filters_csr_plan_by_deme_selector() -> None:
+    """A CSR declarative plan runs only on demes inside the selector list."""
+    pop = _build_pop("deme_selector_csr")
+    desc = compile_declarative_hook(
+        [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)],
+        pop,
+        "early",
+        priority=0,
+        deme_selector=[0, 3],
+    )
+    _register(desc, pop)
+    assert pop.hook_executor is not None
+
+    pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
+    assert float(pop.state.individual_count[0, 0, 0]) == 10.0
+
+    pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=3)
+    assert float(pop.state.individual_count[0, 0, 0]) == 11.0

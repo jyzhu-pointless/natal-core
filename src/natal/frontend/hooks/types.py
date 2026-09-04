@@ -6,13 +6,8 @@ only defines shared primitives used by other hook modules.
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import sys
-import threading
 from dataclasses import dataclass, field
 from enum import IntEnum
-from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -27,8 +22,6 @@ from typing import (
 )
 
 import numpy as np
-
-from natal.backends.numba.utils import get_numba_cache_dir
 
 if TYPE_CHECKING:
     pass
@@ -55,6 +48,36 @@ class OpType(IntEnum):
     STOP_IF_BELOW = 7
     STOP_IF_ABOVE = 8
     STOP_IF_EXTINCTION = 9
+    SET_PARAM = 10
+    CONVERT = 11
+
+
+# Canonical id table for ``Op.set_param`` targets and RPN operands.  The
+# order is a cross-backend wire contract: the Python kernel, the
+# kernel, and the Rust interpreter all index their ecology-value array by
+# position in this tuple, so the order must never change once released.
+# Membership rule: jsonc ecology-section scalars that are runtime-mutable
+# 0-d draft arrays *and* Rust session f64 columns — dimensions (n_ages …),
+# mode enums (growth_mode), derived caches (generation_time …), vectors,
+# and genetics tensors are all excluded on purpose (they raise ValueError
+# at compile time).
+ECO_PARAM_NAMES: Tuple[str, ...] = (
+    "carrying_capacity",
+    "eggs_per_female",
+    "sex_ratio",
+    "sperm_displacement_rate",
+    "low_density_growth_rate",
+)
+
+# RPN value-expression token kinds (``Op.set_param`` value payloads).
+# 0/1 push one operand (literal pool index / ECO param id); 2..5 are the
+# binary arithmetic operators.  Mirrored in ``rust/src/hooks.rs``.
+RPN_LITERAL = 0
+RPN_PARAM = 1
+RPN_ADD = 2
+RPN_SUB = 3
+RPN_MUL = 4
+RPN_DIV = 5
 
 
 @dataclass
@@ -63,6 +86,10 @@ class HookOp:
 
     Fields in this class can still be symbolic (for example genotype labels).
     The compiler resolves all symbolic fields into concrete integer arrays.
+
+    An ``HookOp`` can be registered directly as a declarative hook via
+    ``.hooks(op, ...)``; *event* / *priority* may ride on the op itself or
+    be supplied by the registration call.
     """
 
     op_type: OpType
@@ -71,161 +98,21 @@ class HookOp:
     sex: Literal["female", "male", "both"] = "both"
     param: float = 1.0
     condition: Optional[str] = None
+    event: Optional[str] = None
+    priority: int = 0
+    # ``Op.set_param`` payload: route name of the target scalar, the raw
+    # value expression (RPN source or a plain number), and the firing
+    # schedule (``tick >= start and (tick - start) % every == 0``).
+    param_name: Optional[str] = None
+    value_expr: Optional[Union[str, float, int]] = None
+    every: int = 1
+    start: int = 0
+    # ``Op.convert`` payload: target zygote-type pattern (the source lives
+    # in ``genotypes``); ``param`` carries the conversion probability.
+    target_z: Optional[str] = None
 
 
 DemeSelector = Union[int, List[int], Tuple[int, ...], range, Literal["*"]]
-
-
-_HOOK_CODEGEN_DIR = Path(get_numba_cache_dir()) / "hook_codegen"
-_HOOK_CODEGEN_LOCK = threading.Lock()
-
-
-def _stable_callable_identity(fn: Callable[..., object]) -> str:
-    """Build a stable identity string for a callable across process runs."""
-    py_fn = getattr(fn, "py_func", fn)
-    module_name = getattr(py_fn, "__module__", "<unknown>")
-    qualname = getattr(py_fn, "__qualname__", getattr(py_fn, "__name__", "<unknown>"))
-    return f"{module_name}:{qualname}"
-
-
-def _hash_key(parts: List[str]) -> str:
-    """Compute a deterministic short hash key for generated wrapper identity."""
-    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-    return digest[:16]
-
-
-def _write_codegen_module(stem: str, source: str) -> Path:
-    """Write generated wrapper module to stable path if it doesn't exist."""
-    # Code generation can happen from multiple registration calls; lock to
-    # avoid race conditions when two threads try to create the same file.
-    with _HOOK_CODEGEN_LOCK:
-        _HOOK_CODEGEN_DIR.mkdir(parents=True, exist_ok=True)
-        module_path = _HOOK_CODEGEN_DIR / f"{stem}.py"
-        if not module_path.exists() or module_path.read_text(encoding="utf-8") != source:
-            module_path.write_text(source, encoding="utf-8")
-        return module_path
-
-
-def _load_codegen_module(stem: str, module_path: Path):
-    """Load a generated wrapper module from file, reusing sys.modules when possible."""
-    module_name = f"natal._hook_codegen_{stem}"
-    existing = sys.modules.get(module_name)
-    if existing is not None:
-        return existing
-
-    spec = importlib.util.spec_from_file_location(module_name, str(module_path))
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load generated hook module: {module_path}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _is_numba_dispatcher(fn: Callable[..., object]) -> bool:
-    """Return True when callable is a numba dispatcher (has ``py_func``)."""
-    return hasattr(fn, "py_func")
-
-
-def _validate_numba_hook_required(fn: Callable[..., object], hook_name: str, reason: str) -> None:
-    """Validate that *fn* is njit-compiled when Numba is enabled."""
-    from natal.backends.numba.utils import NUMBA_ENABLED
-
-    if NUMBA_ENABLED and not _is_numba_dispatcher(fn):
-        raise TypeError(
-            f"{hook_name} must be an @njit function when Numba is enabled due to {reason}. "
-            f"Got {type(fn).__name__}. "
-            "Either decorate with @njit or temporarily disable Numba using: "
-            "from natal.backends.numba.utils import numba_disabled; with numba_disabled(): ..."
-        )
-
-
-# Public wrappers for helpers that may be reused across modules.
-def stable_callable_identity(fn: Callable[..., object]) -> str:
-    """Build a stable identity string for a callable across process runs.
-
-    Args:
-        fn: The callable to identify.
-
-    Returns:
-        A string in the format ``module:qualname``.
-    """
-    return _stable_callable_identity(fn)
-
-
-def hash_key(parts: List[str]) -> str:
-    """Compute a deterministic short hash key for generated wrapper identity.
-
-    Args:
-        parts: String parts to hash.
-
-    Returns:
-        A 16-character hex digest.
-    """
-    return _hash_key(parts)
-
-
-def is_numba_dispatcher(fn: Callable[..., object]) -> bool:
-    """Return True when callable is a Numba dispatcher (has ``py_func``).
-
-    Args:
-        fn: The callable to check.
-
-    Returns:
-        True if the callable is Numba-compiled.
-    """
-    return _is_numba_dispatcher(fn)
-
-
-def write_codegen_module(stem: str, source: str) -> Path:
-    """Write generated wrapper module to stable path if it doesn't exist.
-
-    Args:
-        stem: Module stem name (no extension).
-        source: Python source code to write.
-
-    Returns:
-        Path to the written module file.
-    """
-    return _write_codegen_module(stem, source)
-
-
-def load_codegen_module(stem: str, module_path: Path):
-    """Load a generated wrapper module from file, reusing sys.modules when possible.
-
-    Args:
-        stem: Module stem name.
-        module_path: Path to the module file.
-
-    Returns:
-        The loaded module.
-    """
-    return _load_codegen_module(stem, module_path)
-
-
-def validate_numba_hook_required(fn: Callable[..., object], hook_name: str, reason: str) -> None:
-    """Validate that *fn* is njit-compiled when Numba is enabled.
-
-    Args:
-        fn: The callable to validate.
-        hook_name: Name of the hook for error message.
-        reason: Reason why Numba compilation is required.
-
-    Raises:
-        TypeError: If Numba is enabled but *fn* is not an ``@njit`` function.
-    """
-    _validate_numba_hook_required(fn, hook_name, reason)
-
-
-def is_njit_function(fn: Callable[..., object]) -> bool:
-    """Back-compatible alias for checking Numba dispatcher callables."""
-    return _is_numba_dispatcher(fn)
-
-
-def validate_hook_for_numba(hook: Callable[..., object], hook_name: str = "hook") -> None:
-    """Back-compatible hook validator for Numba-enabled mode."""
-    _validate_numba_hook_required(hook, hook_name, "hook registration")
 
 
 # Condition type constants
@@ -277,6 +164,24 @@ class CompiledHookPlan:
     condition_offsets: np.ndarray
     condition_types: np.ndarray
     condition_params: np.ndarray
+    # -- OP_SET_PARAM data area (per-op columns; -1 = not a set_param op) --
+    # sp_param_ids: index into the fixed ECO_PARAM_NAMES table.
+    # sp_every / sp_start: firing schedule (``tick >= start`` and
+    # ``(tick - start) % every == 0``).
+    sp_param_ids: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    sp_every: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    sp_start: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    # rpn_offsets: CSR prefix offsets into the flattened token arrays.
+    # rpn_kinds: RPN_LITERAL / RPN_PARAM / RPN_ADD..RPN_DIV per token.
+    # rpn_payload: literal-pool index or ECO param id per operand token.
+    # sp_literals: float64 literal pool shared by all ops of this plan.
+    rpn_offsets: np.ndarray = field(default_factory=lambda: np.array([0], dtype=np.int32))
+    rpn_kinds: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    rpn_payload: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    sp_literals: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
+    # -- OP_CONVERT data area (per-op ztype ids; -1 = not a convert op) --
+    convert_source_z: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    convert_target_z: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
 
     def to_tuple(self) -> Tuple[object, ...]:
         """Convert this plan to a flat tuple for HDF5 / array storage.
@@ -296,6 +201,15 @@ class CompiledHookPlan:
             self.condition_offsets,
             self.condition_types,
             self.condition_params,
+            self.sp_param_ids,
+            self.sp_every,
+            self.sp_start,
+            self.rpn_offsets,
+            self.rpn_kinds,
+            self.rpn_payload,
+            self.sp_literals,
+            self.convert_source_z,
+            self.convert_target_z,
         )
 
 
@@ -311,10 +225,12 @@ def _empty_meta_map() -> Dict[str, int]:
 
 @dataclass
 class CompiledHookDescriptor:
-    """Unified descriptor for all hook modes.
+    """Unified descriptor for all hook forms.
 
-    Exactly one of ``plan``, ``njit_fn``, or ``py_wrapper`` is typically used
-    as the primary execution payload for a descriptor.
+    The payload is binary (26-decision): exactly one of ``plan`` (CSR
+    declarative ops) or ``callback`` (single-parameter Python callable) is
+    used as the execution payload.  The legacy ``njit_fn`` / ``py_wrapper``
+    payloads were removed with the njit hook-wrapper mechanism.
     """
 
     name: str
@@ -322,12 +238,14 @@ class CompiledHookDescriptor:
     priority: int = 0
     deme_selector: DemeSelector = "*"
     plan: Optional[CompiledHookPlan] = None
+    callback: Optional[Callable[[object], Optional[int]]] = None
     selectors: Dict[str, np.ndarray] = field(default_factory=_empty_selector_map)
-    static_arrays: Tuple[np.ndarray, ...] = field(default_factory=tuple)
     meta: Dict[str, int] = field(default_factory=_empty_meta_map)
-    njit_fn: Optional[Callable[..., object]] = None
-    py_wrapper: Optional[Callable[..., object]] = None
     ops: Optional[List[HookOp]] = None
+    # Originating object (decorated/plain function or op group tuple) used
+    # for identity-based idempotent registration; ``None`` for descriptors
+    # built without one.
+    source: Optional[object] = None
 
 
 class HookProgram(NamedTuple):
@@ -351,3 +269,82 @@ class HookProgram(NamedTuple):
     deme_selector_types: np.ndarray
     deme_selector_offsets: np.ndarray
     deme_selector_data: np.ndarray
+    # OP_SET_PARAM / OP_CONVERT CSR data area (flattened across all hooks).
+    # Per-op columns use -1 for ops of other types; rpn_offsets is the
+    # shared prefix-sum over the flattened RPN token arrays.
+    sp_param_ids: np.ndarray = np.array([], dtype=np.int32)
+    sp_every: np.ndarray = np.array([], dtype=np.int32)
+    sp_start: np.ndarray = np.array([], dtype=np.int32)
+    rpn_offsets: np.ndarray = np.array([0], dtype=np.int32)
+    rpn_kinds: np.ndarray = np.array([], dtype=np.int32)
+    rpn_payload: np.ndarray = np.array([], dtype=np.int32)
+    sp_literals: np.ndarray = np.array([], dtype=np.float64)
+    convert_source_z: np.ndarray = np.array([], dtype=np.int32)
+    convert_target_z: np.ndarray = np.array([], dtype=np.int32)
+    # True when any op is OP_SET_PARAM: populations carrying such ops route
+    # to the Python lifecycle orchestration so writes reach the route
+    # table / dirty bridge / params snapshot log (single write channel).
+    has_set_param: bool = False
+
+
+def empty_hook_program(n_events: int = NUM_EVENTS) -> HookProgram:
+    """Build an all-empty CSR ``HookProgram``.
+
+    Used as the neutral element of the run program: populations without
+    declarative hooks still need a well-shaped program so kernels and the
+    Rust bridge can consume it without special cases.
+
+    Args:
+        n_events: Number of lifecycle events (default 4).
+
+    Returns:
+        An empty ``HookProgram`` with correct offsets.
+    """
+    return HookProgram(
+        n_events=np.int32(n_events),
+        n_hooks=np.int32(0),
+        hook_offsets=np.zeros(n_events + 1, dtype=np.int32),
+        n_ops_list=np.array([], dtype=np.int32),
+        op_offsets=np.array([0], dtype=np.int32),
+        op_types_data=np.array([], dtype=np.int32),
+        zidx_offsets_data=np.array([0], dtype=np.int32),
+        zidx_data=np.array([], dtype=np.int32),
+        age_offsets_data=np.array([0], dtype=np.int32),
+        age_data=np.array([], dtype=np.int32),
+        sex_masks_data=np.array([], dtype=np.bool_),
+        params_data=np.array([], dtype=np.float64),
+        condition_offsets_data=np.array([0], dtype=np.int32),
+        condition_types_data=np.array([], dtype=np.int32),
+        condition_params_data=np.array([], dtype=np.int32),
+        deme_selector_types=np.array([], dtype=np.int32),
+        deme_selector_offsets=np.array([0], dtype=np.int32),
+        deme_selector_data=np.array([], dtype=np.int32),
+        sp_param_ids=np.array([], dtype=np.int32),
+        sp_every=np.array([], dtype=np.int32),
+        sp_start=np.array([], dtype=np.int32),
+        rpn_offsets=np.array([0], dtype=np.int32),
+        rpn_kinds=np.array([], dtype=np.int32),
+        rpn_payload=np.array([], dtype=np.int32),
+        sp_literals=np.array([], dtype=np.float64),
+        convert_source_z=np.array([], dtype=np.int32),
+        convert_target_z=np.array([], dtype=np.int32),
+        has_set_param=False,
+    )
+
+
+class RunProgram(NamedTuple):
+    """Program-level plan bundle owned by a population.
+
+    Domain-B landing slot: the CSR hook program and the frozen recording
+    plan travel together as the population's *program*.  The density
+    program is still config-driven (no plan object exists yet), so it is
+    deliberately absent instead of being fabricated as a placeholder.
+
+    Attributes:
+        hooks: CSR declarative hook plan (empty when no Op hooks).
+        recording: The frozen :class:`RecordingPlan`, or ``None`` before
+            the Configurator installs it at the end of ``build()``.
+    """
+
+    hooks: HookProgram
+    recording: Optional[object] = None

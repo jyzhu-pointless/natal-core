@@ -1,14 +1,13 @@
-"""CSR execution engine — Numba-accelerated declarative hook kernels.
+"""CSR interpreter — reference-oracle declarative hook kernel.
 
-The hot loop operates on flattened ndarrays and avoids Python objects entirely.
-These functions are called from two contexts:
-
-* **Numba fast path** — lifecycle templates call ``execute_csr_event_arrays``
-  (batch) or unified functions from ``compile.codegen.compile_unified_event_hook``
-  (mixed CSR + njit interleaved by priority).
-* **Python fallback** — ``HookExecutor`` (in ``natal.frontend.hooks.runtime.fallback``)
-  calls ``execute_csr_event_arrays`` for individual descriptors when Numba
-  is disabled.
+Role since slice 4 (26 decisions): this module is the **reference oracle**
+for declarative CSR hooks.  The Rust ``hooks.rs`` interpreter is the
+primary executor for the Rust backend; this Python interpreter
+serves the reference backend (inside the lifecycle
+wrappers via ``execute_csr_event_program_with_state``, and from the
+Python orchestration layer via ``HookExecutor``) and provides the
+parity baseline the Rust executor is tested against.  Full retirement of
+the duplicate interpreter is deferred to slice 6.
 
 Return value protocol
 ---------------------
@@ -40,8 +39,7 @@ import numpy as np
 
 # prange removed — parallel=True on _execute_single_csr_hook was causing
 # OpenMP overhead (4-5x slowdown) for small genotype counts. See #perf.
-from natal.backends.numba import compat as nbc
-from natal.backends.numba.utils import njit_switch
+import natal.backends.reference.sampling as sampling
 from natal.frontend.hooks.types import (
     COND_OP_AND,
     COND_OP_NOT,
@@ -50,6 +48,12 @@ from natal.frontend.hooks.types import (
     RESULT_CONTINUE,
     RESULT_SKIP,
     RESULT_STOP,
+    RPN_ADD,
+    RPN_DIV,
+    RPN_LITERAL,
+    RPN_MUL,
+    RPN_PARAM,
+    RPN_SUB,
     DemeSelector,
     HookProgram,
 )
@@ -72,9 +76,6 @@ def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
     if isinstance(selector, range):
         return deme_id in selector
     return deme_id in selector
-
-
-@njit_switch(cache=True)
 def njit_deme_selector_matches(
     sel_type: int,
     start: int,
@@ -82,7 +83,7 @@ def njit_deme_selector_matches(
     data: np.ndarray,
     deme_id: int,
 ) -> bool:
-    """Numba-compatible deme selector check against serialized arrays.
+    """Deme selector check against serialized arrays.
 
     The selector is encoded in the HookProgram's ``deme_selector_*``
     arrays with these *sel_type* values:
@@ -125,9 +126,6 @@ _COND_TICK_GE = 3
 _COND_TICK_LT = 4
 _COND_TICK_LE = 5
 _COND_TICK_GT = 6
-
-
-@njit_switch(cache=True)
 def _check_csr_condition(cond_type: int, cond_param: int, tick: int) -> bool:
     """Evaluate a single atomic condition token against the current tick.
 
@@ -154,9 +152,6 @@ def _check_csr_condition(cond_type: int, cond_param: int, tick: int) -> bool:
     if cond_type >= COND_OP_AND:
         return False  # Logical operators should never reach the atomic evaluator.
     return True
-
-
-@njit_switch(cache=True)
 def _eval_csr_condition_program(
     cond_types: np.ndarray,
     cond_params: np.ndarray,
@@ -243,9 +238,6 @@ eval_csr_condition_program = _eval_csr_condition_program
 # survives with probability = target / current.  This keeps ``Op.scale(0.5)``
 # semantically identical to "50 % survival" and ensures sperm storage scaling
 # stays coherent.
-
-
-@njit_switch(cache=True)
 def _sample_survivors(
     n_base: float,
     survival_prob: float,
@@ -267,12 +259,9 @@ def _sample_survivors(
         return 0.0
     if stochastic_flag:
         if dirichlet_flag:
-            return nbc.continuous_binomial(n_base, survival_prob)
-        return float(nbc.binomial(int(round(n_base)), survival_prob))
+            return sampling.continuous_binomial(n_base, survival_prob)
+        return float(sampling.binomial(int(round(n_base)), survival_prob))
     return n_base * survival_prob
-
-
-@njit_switch(cache=True)
 def _apply_target_without_sperm(
     current_count: float,
     target_count: float,
@@ -296,9 +285,6 @@ def _apply_target_without_sperm(
 
     survival_prob = max(0.0, min(1.0, target_count / current_count))
     return _sample_survivors(current_count, survival_prob, stochastic_flag, dirichlet_flag)
-
-
-@njit_switch(cache=True)
 def _apply_target_with_sperm(
     current_count: float,
     target_count: float,
@@ -354,7 +340,7 @@ def _apply_target_with_sperm(
         total_sperm_count += float(sperm_row[gm_idx])
 
     n_virgins_raw = n_f_raw - total_sperm_count
-    if n_virgins_raw >= -nbc.EPS:
+    if n_virgins_raw >= -sampling.EPS:
         n_virgins_raw = max(0.0, n_virgins_raw)
     if n_virgins_raw < 0.0:
         print(
@@ -380,6 +366,102 @@ def _apply_target_with_sperm(
 
     survivors_virgins = _sample_survivors(n_virgins, survival_prob, True, dirichlet_flag)
     return new_sperm_sum + survivors_virgins
+def _eval_rpn_value(
+    rpn_kinds: np.ndarray,
+    rpn_payload: np.ndarray,
+    rpn_start: int,
+    rpn_end: int,
+    sp_literals: np.ndarray,
+    eco_values: np.ndarray,
+) -> float:
+    """Evaluate one ``Op.set_param`` RPN value program with a stack machine.
+
+    Operands push either a literal (pool-indexed) or the *current* value
+    of an ecology parameter (``ECO_PARAM_NAMES``-indexed slot of
+    *eco_values*); binary operators pop two and push the result.  The
+    token stream was depth-validated at compile time, so the machine can
+    trust its input.
+
+    Division by zero follows explicit IEEE-754 semantics (``x/0`` = ±inf,
+    ``0/0`` = nan) instead of raising: the identical branch runs in the
+    kernel and the Rust interpreter, and exceptions would diverge
+    across backends.
+
+    Args:
+        rpn_kinds: Flattened RPN token-kind array.
+        rpn_payload: Flattened per-token payload array.
+        rpn_start: First token index of this op's program.
+        rpn_end: One past the last token index.
+        sp_literals: Shared float64 literal pool.
+        eco_values: Current ecology values indexed by ECO param id.
+
+    Returns:
+        The evaluated expression value.
+    """
+    stack = np.zeros(rpn_end - rpn_start + 1, dtype=np.float64)
+    top = 0
+    for idx in range(rpn_start, rpn_end):
+        kind = rpn_kinds[idx]
+        if kind == RPN_LITERAL:
+            stack[top] = sp_literals[rpn_payload[idx]]
+            top += 1
+        elif kind == RPN_PARAM:
+            stack[top] = eco_values[rpn_payload[idx]]
+            top += 1
+        else:
+            rhs = stack[top - 1]
+            lhs = stack[top - 2]
+            top -= 1
+            if kind == RPN_ADD:
+                stack[top - 1] = lhs + rhs
+            elif kind == RPN_SUB:
+                stack[top - 1] = lhs - rhs
+            elif kind == RPN_MUL:
+                stack[top - 1] = lhs * rhs
+            elif kind == RPN_DIV:
+                # Explicit IEEE semantics (see docstring) keeps the
+                # Python and Rust interpreters bit-identical.
+                if rhs == 0.0:
+                    if lhs > 0.0:
+                        stack[top - 1] = np.inf
+                    elif lhs < 0.0:
+                        stack[top - 1] = -np.inf
+                    else:
+                        stack[top - 1] = np.nan
+                else:
+                    stack[top - 1] = lhs / rhs
+            # Unknown token kinds cannot occur: compile-time validation
+            # guarantees only RPN_* tokens enter the stream.
+    return stack[0]
+def _convert_count(
+    n_base: float,
+    prob: float,
+    stochastic_flag: bool,
+    dirichlet_flag: bool,
+) -> float:
+    """Return how many of *n_base* individuals convert at *prob*.
+
+    Shares the sampling conventions of ``_sample_survivors`` so
+    ``Op.convert`` draws come from the same CSR sampling channel:
+    deterministic mode moves ``n * prob`` exactly; stochastic mode uses
+    discrete or continuous binomial sampling.
+
+    Args:
+        n_base: Count eligible for conversion.
+        prob: Per-individual conversion probability.
+        stochastic_flag: Whether to sample stochastically.
+        dirichlet_flag: Whether continuous sampling is enabled.
+
+    Returns:
+        The converted count (continuous in Dirichlet mode).
+    """
+    if n_base <= 0.0:
+        return 0.0
+    if stochastic_flag:
+        if dirichlet_flag:
+            return sampling.continuous_binomial(n_base, prob)
+        return float(sampling.binomial(int(round(n_base)), prob))
+    return n_base * prob
 
 
 # ===================================================================
@@ -410,9 +492,8 @@ _OP_STOP_IF_ZERO = 6
 _OP_STOP_IF_BELOW = 7
 _OP_STOP_IF_ABOVE = 8
 _OP_STOP_IF_EXTINCTION = 9
-
-
-@njit_switch(cache=True)
+_OP_SET_PARAM = 10
+_OP_CONVERT = 11
 def _execute_single_csr_hook(
     hook_idx: int,
     n_hooks: int | np.integer[Any],
@@ -427,6 +508,15 @@ def _execute_single_csr_hook(
     condition_offsets_data: np.ndarray,
     condition_types_data: np.ndarray,
     condition_params_data: np.ndarray,
+    sp_param_ids_data: np.ndarray,
+    sp_every_data: np.ndarray,
+    sp_start_data: np.ndarray,
+    rpn_offsets_data: np.ndarray,
+    rpn_kinds_data: np.ndarray,
+    rpn_payload_data: np.ndarray,
+    sp_literals_data: np.ndarray,
+    convert_source_z_data: np.ndarray,
+    convert_target_z_data: np.ndarray,
     deme_selector_types: np.ndarray,
     deme_selector_offsets: np.ndarray,
     deme_selector_data: np.ndarray,
@@ -437,6 +527,7 @@ def _execute_single_csr_hook(
     stochastic: bool,
     continuous_sampling: bool,
     deme_id: int,
+    eco_values: Optional[np.ndarray] = None,
 ) -> int:
     """Execute a single CSR hook at global index *hook_idx*.
 
@@ -454,20 +545,33 @@ def _execute_single_csr_hook(
        c. For each selected (sex, age, genotype) cell, computes a target
           count from the operation type and applies it via
           ``_apply_target_with_sperm`` or ``_apply_target_without_sperm``.
-       d. For ``stop_if_*`` operations, aggregates the selected cells and
+       d. For ``OP_SET_PARAM``: checks the (start, every) schedule,
+          evaluates the RPN value program against the *current* ecology
+          values, and writes the result into *eco_values* (the caller
+          flushes it through the parameter write channel).
+       e. For ``OP_CONVERT``: binomially migrates individuals (and, for
+          females, every sperm bucket plus the virgin part) from the
+          source ZType to the target ZType, conserving totals.
+       f. For ``stop_if_*`` operations, aggregates the selected cells and
           returns ``RESULT_STOP`` if the threshold is met.
     5. Returns ``RESULT_CONTINUE`` if all operations completed normally.
 
-    This function was extracted from the inner loop of
-    ``execute_csr_event_arrays`` so that ``compile.codegen.compile_unified_event_hook``
-    can call individual CSR hooks at specific positions in a priority-ordered
-    schedule, interleaved with njit function calls.
+    Args:
+        eco_values: Live scratch array indexed by ``ECO_PARAM_NAMES``
+            position.  ``OP_SET_PARAM`` reads current values and writes
+            new values here; ``None`` allocates a local scratch (for
+            callers with no set_param ops).
 
     Returns:
         ``RESULT_CONTINUE`` (0) — all ops executed normally.
         ``RESULT_SKIP`` (0) — hook not applicable (wrong deme or OOB).
         ``RESULT_STOP`` (1) — a ``stop_if_*`` operation triggered.
     """
+    if eco_values is None:
+        eco_scratch = np.zeros(5, dtype=np.float64)
+    else:
+        eco_scratch = eco_values
+
     # Guard: bounds check.
     if hook_idx < 0 or hook_idx >= n_hooks:
         return RESULT_SKIP
@@ -568,6 +672,79 @@ def _execute_single_csr_hook(
                                 continuous_sampling,
                             )
 
+        # ---- OP_SET_PARAM: schedule check, RPN evaluation, eco write ----
+        # The kernel only computes; the caller owns the write-back channel
+        # (route dispatch / dirty bridge / params log on Python, session
+        # ecology columns on Rust).
+        elif op_type == _OP_SET_PARAM:
+            start_tick = sp_start_data[op_idx]
+            every_ticks = sp_every_data[op_idx]
+            if tick >= start_tick and (tick - start_tick) % every_ticks == 0:
+                rpn_start = rpn_offsets_data[op_idx]
+                rpn_end = rpn_offsets_data[op_idx + 1]
+                value = _eval_rpn_value(
+                    rpn_kinds_data,
+                    rpn_payload_data,
+                    rpn_start,
+                    rpn_end,
+                    sp_literals_data,
+                    eco_scratch,
+                )
+                eco_scratch[sp_param_ids_data[op_idx]] = value
+
+        # ---- OP_CONVERT: one-to-one probabilistic ZType migration ----
+        # Males migrate plain counts; females migrate the virgin part and
+        # every sperm bucket atomically (female label follows the row,
+        # male axis untouched).  Totals are conserved by construction:
+        # every moved unit is subtracted from source and added to target.
+        elif op_type == _OP_CONVERT:
+            src_z = convert_source_z_data[op_idx]
+            dst_z = convert_target_z_data[op_idx]
+            prob = param
+            n_ages_dim = individual_count.shape[1]
+            for age in range(n_ages_dim):
+                # Males carry no sperm label — plain count migration.
+                male_base = individual_count[1, age, src_z]
+                moved_male = _convert_count(
+                    male_base, prob, stochastic, continuous_sampling
+                )
+                individual_count[1, age, src_z] -= moved_male
+                individual_count[1, age, dst_z] += moved_male
+
+                if sperm_storage is not None and has_sperm_storage:
+                    n_male_z = sperm_storage.shape[2]
+                    # Virgin count is fixed before the bucket loop: the
+                    # loop moves buckets out of the source row, so the
+                    # pre-loop row sum is the mated total.
+                    sperm_row_sum = 0.0
+                    for mz in range(n_male_z):
+                        sperm_row_sum += sperm_storage[age, src_z, mz]
+                    moved_mated = 0.0
+                    for mz in range(n_male_z):
+                        bucket = sperm_storage[age, src_z, mz]
+                        moved_bucket = _convert_count(
+                            bucket, prob, stochastic, continuous_sampling
+                        )
+                        sperm_storage[age, src_z, mz] -= moved_bucket
+                        sperm_storage[age, dst_z, mz] += moved_bucket
+                        moved_mated += moved_bucket
+                    virgins = individual_count[0, age, src_z] - sperm_row_sum
+                    if virgins < 0.0:
+                        virgins = 0.0
+                    moved_virgin = _convert_count(
+                        virgins, prob, stochastic, continuous_sampling
+                    )
+                    individual_count[0, age, src_z] -= moved_mated + moved_virgin
+                    individual_count[0, age, dst_z] += moved_mated + moved_virgin
+                else:
+                    # Discrete models / no sperm storage: plain migration.
+                    female_base = individual_count[0, age, src_z]
+                    moved_female = _convert_count(
+                        female_base, prob, stochastic, continuous_sampling
+                    )
+                    individual_count[0, age, src_z] -= moved_female
+                    individual_count[0, age, dst_z] += moved_female
+
         # ---- STOP_IF: aggregate selected cells, check threshold ----
         if op_type in (_OP_STOP_IF_ZERO, _OP_STOP_IF_BELOW, _OP_STOP_IF_ABOVE):
             selected_total = 0.0
@@ -595,11 +772,8 @@ def _execute_single_csr_hook(
     return RESULT_CONTINUE
 
 
-# Public alias — imported by compile.codegen.compile_unified_event_hook and tests.
+# Public alias — used by tests and external parity checks.
 execute_single_csr_hook = _execute_single_csr_hook
-
-
-@njit_switch(cache=True)
 def execute_csr_event_arrays(
     n_events: int | np.integer[Any],
     n_hooks: int | np.integer[Any],
@@ -616,6 +790,15 @@ def execute_csr_event_arrays(
     condition_offsets_data: np.ndarray,
     condition_types_data: np.ndarray,
     condition_params_data: np.ndarray,
+    sp_param_ids_data: np.ndarray,
+    sp_every_data: np.ndarray,
+    sp_start_data: np.ndarray,
+    rpn_offsets_data: np.ndarray,
+    rpn_kinds_data: np.ndarray,
+    rpn_payload_data: np.ndarray,
+    sp_literals_data: np.ndarray,
+    convert_source_z_data: np.ndarray,
+    convert_target_z_data: np.ndarray,
     deme_selector_types: np.ndarray,
     deme_selector_offsets: np.ndarray,
     deme_selector_data: np.ndarray,
@@ -627,6 +810,7 @@ def execute_csr_event_arrays(
     stochastic: bool,
     continuous_sampling: bool,
     deme_id: int,
+    eco_values: Optional[np.ndarray] = None,
 ) -> int:
     """Execute all hooks for one event from flattened CSR arrays.
 
@@ -641,10 +825,20 @@ def execute_csr_event_arrays(
         hook_idx  →  op_offsets[hook_idx]    →  op range
         op_idx    →  zidx/age/cond offsets   →  cell range
 
+    Args:
+        eco_values: Live scratch array indexed by ``ECO_PARAM_NAMES``
+            position for ``OP_SET_PARAM`` evaluation; ``None`` allocates
+            a local scratch.
+
     Returns:
         ``RESULT_CONTINUE`` (0) — all hooks executed normally.
         ``RESULT_STOP`` (1) — a hook returned STOP.
     """
+    if eco_values is None:
+        eco_scratch = np.zeros(5, dtype=np.float64)
+    else:
+        eco_scratch = eco_values
+
     if event_id < 0 or event_id >= n_events:
         return 0
 
@@ -668,6 +862,15 @@ def execute_csr_event_arrays(
             condition_offsets_data=condition_offsets_data,
             condition_types_data=condition_types_data,
             condition_params_data=condition_params_data,
+            sp_param_ids_data=sp_param_ids_data,
+            sp_every_data=sp_every_data,
+            sp_start_data=sp_start_data,
+            rpn_offsets_data=rpn_offsets_data,
+            rpn_kinds_data=rpn_kinds_data,
+            rpn_payload_data=rpn_payload_data,
+            sp_literals_data=sp_literals_data,
+            convert_source_z_data=convert_source_z_data,
+            convert_target_z_data=convert_target_z_data,
             deme_selector_types=deme_selector_types,
             deme_selector_offsets=deme_selector_offsets,
             deme_selector_data=deme_selector_data,
@@ -678,6 +881,7 @@ def execute_csr_event_arrays(
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             deme_id=deme_id,
+            eco_values=eco_scratch,
         )
         if result != RESULT_CONTINUE:
             return result  # Propagate STOP immediately.
@@ -692,9 +896,6 @@ def build_hook_program(program: HookProgram) -> HookProgram:
     Currently a no-op.
     """
     return program
-
-
-@njit_switch(cache=True)
 def execute_csr_event_program_with_state(
     program: HookProgram,
     event_id: int,
@@ -705,6 +906,7 @@ def execute_csr_event_program_with_state(
     has_sperm_storage: bool,
     continuous_sampling: bool,
     deme_id: int = 0,
+    eco_values: Optional[np.ndarray] = None,
 ) -> int:
     """Execute one event from a ``HookProgram``, unpacking all fields.
 
@@ -723,6 +925,9 @@ def execute_csr_event_program_with_state(
         has_sperm_storage: Whether *sperm_storage* contains real data.
         continuous_sampling: Whether to use continuous-Dirichlet sampling.
         deme_id: Deme index for spatial models (0 for panmictic).
+        eco_values: Live scratch array indexed by ``ECO_PARAM_NAMES``
+            position; ``OP_SET_PARAM`` reads current values and writes
+            new values here.  ``None`` allocates a local scratch.
 
     Returns:
         ``RESULT_CONTINUE`` or ``RESULT_STOP``.
@@ -743,6 +948,15 @@ def execute_csr_event_program_with_state(
         condition_offsets_data=program.condition_offsets_data,
         condition_types_data=program.condition_types_data,
         condition_params_data=program.condition_params_data,
+        sp_param_ids_data=program.sp_param_ids,
+        sp_every_data=program.sp_every,
+        sp_start_data=program.sp_start,
+        rpn_offsets_data=program.rpn_offsets,
+        rpn_kinds_data=program.rpn_kinds,
+        rpn_payload_data=program.rpn_payload,
+        sp_literals_data=program.sp_literals,
+        convert_source_z_data=program.convert_source_z,
+        convert_target_z_data=program.convert_target_z,
         deme_selector_types=program.deme_selector_types,
         deme_selector_offsets=program.deme_selector_offsets,
         deme_selector_data=program.deme_selector_data,
@@ -754,10 +968,8 @@ def execute_csr_event_program_with_state(
         stochastic=stochastic,
         continuous_sampling=continuous_sampling,
         deme_id=deme_id,
+        eco_values=eco_values,
     )
-
-
-@njit_switch(cache=True)
 def execute_csr_event_program(
     program: HookProgram,
     event_id: int,

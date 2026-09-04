@@ -1,23 +1,23 @@
 import math
 
-import natal.hooks.runtime.csr_kernel as csr_kernel
+import natal.frontend.hooks.runtime.csr_kernel as csr_kernel
 
 
 def _call_python_impl(fn, *args):  # type: ignore[no-untyped-def]
-    """Call the pure-Python implementation of *fn*, bypassing any Numba wrapper.
+    """Call the pure-Python implementation of *fn*.
 
-    When Numba is enabled, ``@njit_switch`` returns a njit dispatcher whose
-    ``.py_func`` attribute holds the original Python function.  When Numba is
+    The kernel is a plain Python function; this helper keeps tests
+    transparent to wrapper-free callables.
     disabled the function is already plain Python.
 
-    This helper keeps tests agnostic to the current Numba state so they pass
+    
     in both modes.
     """
     return fn.py_func(*args) if hasattr(fn, "py_func") else fn(*args)
 
 
 def test_sample_survivors_uses_exported_binomial(monkeypatch) -> None:
-    """Discrete survivor sampling must route to nbc.binomial with correct args."""
+    """Discrete survivor sampling must route to sampling.binomial with correct args."""
     captured: dict[str, object] = {}
 
     def fake_binomial(n: int, p: float) -> int:
@@ -25,7 +25,7 @@ def test_sample_survivors_uses_exported_binomial(monkeypatch) -> None:
         captured["p"] = p
         return 777
 
-    monkeypatch.setattr(csr_kernel.nbc, "binomial", fake_binomial)
+    monkeypatch.setattr(csr_kernel.sampling, "binomial", fake_binomial)
 
     result = _call_python_impl(csr_kernel._sample_survivors, 1000.0, 0.5, True, False)
 

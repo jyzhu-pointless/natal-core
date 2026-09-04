@@ -10,14 +10,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.hooks import eval_csr_condition_program, parse_condition
-from natal.hooks.entry.declarative import (
+from natal.frontend.hooks import eval_csr_condition_program, parse_condition
+from natal.frontend.hooks.entry.declarative import (
     _parse_atomic_condition,
     _parse_condition,
     _to_rpn_condition,
     _tokenize_condition_expr,
 )
-from natal.hooks.types import (
+from natal.frontend.hooks.types import (
     COND_ALWAYS,
     COND_OP_AND,
     COND_OP_NOT,

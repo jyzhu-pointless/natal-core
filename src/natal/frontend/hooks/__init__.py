@@ -1,6 +1,5 @@
 """Hook subsystem public API."""
 
-from .compile.codegen import compile_combined_hook
 from .compile.container import CompiledEventHooks, noop_hook
 from .entry.declarative import (
     Op,
@@ -8,7 +7,7 @@ from .entry.declarative import (
     parse_condition,
 )
 from .entry.decorator import hook
-from .entry.selector import compile_selector_hook
+from .entry.selector import compile_selector_callback
 from .runtime.csr_kernel import (
     build_hook_program,
     deme_selector_matches,
@@ -19,6 +18,7 @@ from .runtime.csr_kernel import (
     execute_single_csr_hook,
 )
 from .runtime.fallback import HookExecutor
+from .tick_context import BlueprintView, HookRunner, TickContext, TickMetrics
 from .types import (
     COND_ALWAYS,
     COND_OP_AND,
@@ -30,6 +30,7 @@ from .types import (
     COND_TICK_LE,
     COND_TICK_LT,
     COND_TICK_MOD,
+    ECO_PARAM_NAMES,
     EVENT_EARLY,
     EVENT_FINISH,
     EVENT_FIRST,
@@ -46,6 +47,8 @@ from .types import (
     HookOp,
     HookProgram,
     OpType,
+    RunProgram,
+    empty_hook_program,
 )
 
 __all__ = [
@@ -57,6 +60,8 @@ __all__ = [
     "CompiledHookPlan",
     "CompiledHookDescriptor",
     "HookProgram",
+    "RunProgram",
+    "empty_hook_program",
     "HookExecutor",
     "execute_csr_event_arrays",
     "execute_csr_event_program_with_state",
@@ -64,14 +69,18 @@ __all__ = [
     "execute_single_csr_hook",
     "build_hook_program",
     "noop_hook",
-    "compile_combined_hook",
     "CompiledEventHooks",
     "hook",
     "compile_declarative_hook",
-    "compile_selector_hook",
+    "compile_selector_callback",
+    "TickContext",
+    "TickMetrics",
+    "BlueprintView",
+    "HookRunner",
     "COND_ALWAYS",
     "COND_TICK_EQ",
     "COND_TICK_MOD",
+    "ECO_PARAM_NAMES",
     "COND_TICK_GE",
     "COND_TICK_GT",
     "COND_TICK_LE",

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+"""Deme-selector policy: panmictic populations normalize, spatial forwards."""
 
 from __future__ import annotations
 
 import natal as nt
 import pytest
-from natal.hooks import Op, hook
-from natal.spatial.population import SpatialPopulation
+from natal.frontend.hooks import Op
+from natal.frontend.spatial.population import SpatialPopulation
 
 
 def _build_discrete_pop(species: nt.Species, name: str) -> nt.DiscreteGenerationPopulation:
@@ -30,12 +31,12 @@ def test_base_population_non_wildcard_deme_selector_warns_and_is_ignored() -> No
     )
     pop = _build_discrete_pop(species, "base_selector_policy")
 
-    @hook(event="first")
-    def first_add_one():
-        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=1.0)]
-
-    with pytest.warns(UserWarning, match="ignores non-'\\*' deme_selector"):
-        pop.set_hook("first", first_add_one, deme_selector=1)
+    with pytest.warns(UserWarning, match="ignores non-'\\*' deme selector"):
+        pop.register_hooks(
+            Op.add(genotypes="WT|WT", ages=1, sex="male", delta=1.0),
+            event="first",
+            deme=1,
+        )
 
     compiled = pop.get_compiled_hooks("first")
     assert len(compiled) == 1
@@ -53,11 +54,11 @@ def test_spatial_population_handles_deme_selector_locally() -> None:
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
 
-    @hook(event="first")
-    def first_add_one():
-        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=1.0)]
-
-    spatial.set_hook("first", first_add_one, deme_selector=0)
+    spatial.register_hooks(
+        Op.add(genotypes="WT|WT", ages=1, sex="male", delta=1.0),
+        event="first",
+        deme=0,
+    )
 
     d0_hooks = d0.get_compiled_hooks("first")
     d1_hooks = d1.get_compiled_hooks("first")

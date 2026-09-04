@@ -10,12 +10,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from natal.backends.numba.utils import njit_switch
 from natal.frontend.hooks.types import EVENT_NAMES, HookCallable
 
 
-@njit_switch(cache=True)
-def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:  # Numba-compatible hook signature; Any matches (state, config, deme_id) protocol
+def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:  # Host-contract signature; Any matches (state, config, deme_id) protocol
     """Default no-op hook: ``(state, config, deme_id) -> 0``.
 
     Used as the fallback when no hooks are registered for an event.
@@ -32,8 +30,8 @@ class CompiledEventHooks:
     Holds one combined callable per event (``first`` / ``early`` /
     ``late`` / ``finish``) plus a ``registry`` (``HookProgram``) for
     CSR dispatch.  This is a **pure container** — code generation and
-    lifecycle wrapper compilation live in
-    ``natal.backends.numba.lifecycle_wrappers``.
+    lifecycle wrapper compilation were retired with the reference-backend
+    freeze.
 
     Slots
     -----

@@ -13,13 +13,13 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
-from natal.hooks.entry.declarative import (
+from natal.frontend.hooks.entry.declarative import (
     Op,
     _resolve_genotypes,
     compile_declarative_hook,
 )
-from natal.hooks.entry.selector import _resolve_selector_to_array
-from natal.registry.index import IndexRegistry
+from natal.frontend.hooks.entry.selector import _resolve_selector_to_array
+from natal.frontend.registry.index import IndexRegistry
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 

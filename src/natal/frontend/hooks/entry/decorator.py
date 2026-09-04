@@ -1,15 +1,17 @@
 """``@hook()`` decorator — the front door of the hook system.
 
-Detects hook type from decorator metadata and function signature, routes
-to the appropriate compiler (declarative / selector / custom njit), and
-returns a ``DecoratedHookFn`` with a ``.register(pop)`` method.
+The 26-decision hook contract recognizes three authoring shapes:
 
-The decorator supports three authoring styles:
+1. **Declarative** — function takes no parameters and returns
+   ``List[HookOp]``; compiled to a CSR plan at registration.
+2. **Callback** — function takes exactly one parameter (the
+   :class:`~natal.frontend.hooks.tick_context.TickContext`); a Python
+   callable fired at event boundaries on every backend.
+3. **Selector callback** — ``selectors={}`` specified; resolved selector
+   values are injected as keyword arguments after the context.
 
-1. **Declarative** — function returns ``List[HookOp]``.
-2. **Selector** — ``selectors={}`` specified, compiled via ``compile_selector_hook``.
-3. **Custom njit / Python** — explicit ``custom=True`` or auto-detected via
-   required parameters (2+ positional args).
+The legacy njit-era ``(state, config, deme_id)`` signature is rejected
+with a :class:`TypeError` that guides authors to the new form.
 """
 
 from __future__ import annotations
@@ -17,20 +19,16 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol, cast
 
-from natal.backends.numba.utils import njit_switch
 from natal.frontend.hooks.entry.declarative import compile_declarative_hook
-from natal.frontend.hooks.entry.selector import compile_selector_hook
+from natal.frontend.hooks.entry.selector import compile_selector_callback
 from natal.frontend.hooks.types import (
     CompiledHookDescriptor,
     DemeSelector,
-    HookCallable,
-    is_njit_function,
 )
 
 from .declarative import HookOp
 
 if TYPE_CHECKING:
-    from natal.frontend.data import PopulationConfig, PopulationState
     from natal.frontend.population.base import BasePopulation
 
 
@@ -40,139 +38,45 @@ if TYPE_CHECKING:
 
 
 class DecoratedHookFn(Protocol):
-    """Protocol for functions that have been decorated with ``@hook()``.
-
-    Only the ``@hook()`` decorator produces objects satisfying this
-    protocol.  All other hook callables (noop, njit, combined, kernel
-    wrappers) are plain ``HookCallable``.
-    """
+    """Protocol for functions that have been decorated with ``@hook()``."""
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call the decorated hook function with arbitrary arguments."""
 
     __name__: str
     meta: Dict[str, Any]
-    compiled: Optional[Any]
     event: Any
     selectors: Dict[str, Any]
     priority: int
-    custom: bool
     deme_selector: Any
     register: Callable[..., Any]
 
 
 # ---------------------------------------------------------------------------
-# Signature normalization helpers
+# Signature inspection
 # ---------------------------------------------------------------------------
 
 
-def _normalize_njit_fn(fn: HookCallable) -> HookCallable:
-    """Ensure an njit hook callable accepts ``(state, config, deme_id)``.
-
-    The unified calling convention for all compiled hooks is
-    ``(state, config, deme_id=-1)``.  This adapter handles two cases:
-
-    * **3+ args** — assumed modern, passed through unchanged.
-    * **2 args** ``(state, config)`` — panmictic hook, thunk drops
-      ``deme_id``.
-
-    Returns:
-        A callable with signature ``(state, config, deme_id) -> int``.
-    """
-    py_fn = getattr(fn, "py_func", fn)
-    sig = inspect.signature(py_fn)
-    params = list(sig.parameters.values())
-
-    if len(params) >= 3:
-        return fn
-
-    # Wrap 2-arg (state, config) — omit deme_id for panmictic.
-    @njit_switch(cache=True)
-    def wrapped2(
-        state: PopulationState,
-        config: PopulationConfig | None = None,
-        _deme_id: int = -1,
-    ) -> object:
-        """Thunk adapting 2-arg fn to 3-arg ``(state, config, deme_id)``."""
-        return fn(state, config)
-
-    return wrapped2
-
-
-def _normalize_py_hook(fn: HookCallable) -> HookCallable:
-    """Ensure a Python hook callable accepts ``(state, config, deme_id)``.
-
-    Python equivalent of ``_normalize_njit_fn``.  Used only when Numba
-    is disabled.
-
-    Returns:
-        A callable with signature ``(state, config, deme_id) -> int``.
-    """
-    sig = inspect.signature(fn)
-    params = list(sig.parameters.values())
-
-    if len(params) >= 3:
-        return fn
-
-    def wrapped2(
-        state: PopulationState,
-        config: PopulationConfig | None = None,
-        _deme_id: int = -1,
-    ) -> object:
-        """Python thunk adapting 2-arg fn to 3-arg ``(state, config, deme_id)``."""
-        return fn(state, config)
-
-    return wrapped2
-
-
-# ---------------------------------------------------------------------------
-# Hook type auto-detection
-# ---------------------------------------------------------------------------
-
-
-def _has_required_parameters(func: HookCallable) -> bool:
-    """Return ``True`` if *func* requires positional or keyword arguments.
+def _count_required_parameters(func: Callable[..., Any]) -> int:
+    """Count required positional parameters of *func*.
 
     Args:
-        func: The function to inspect.
+        func: The callable to inspect.
 
     Returns:
-        True if any parameter has no default value.
+        The number of positional parameters without defaults.
     """
     sig = inspect.signature(func)
-    for param in sig.parameters.values():
-        if param.kind in (
+    return sum(
+        1
+        for param in sig.parameters.values()
+        if param.kind
+        in (
             inspect.Parameter.POSITIONAL_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        ):
-            if param.default is inspect.Signature.empty:
-                return True
-        elif param.kind is inspect.Parameter.KEYWORD_ONLY:
-            if param.default is inspect.Signature.empty:
-                return True
-    return False
-
-
-def _has_single_required_parameter(func: HookCallable) -> bool:
-    """Return ``True`` if *func* accepts exactly one required parameter.
-
-    Legacy single-parameter population hooks are no longer supported; the
-    unified hook signature is ``(state, config, deme_id) -> int``.
-    """
-    sig = inspect.signature(func)
-    params = list(sig.parameters.values())
-    if len(params) == 1:
-        param = params[0]
-        if (
-            param.kind
-            in (
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            )
-            and param.default is inspect.Signature.empty
-        ):
-            return True
-    return False
+        )
+        and param.default is inspect.Signature.empty
+    )
 
 
 # ===================================================================
@@ -184,54 +88,34 @@ def hook(
     event: Optional[str] = None,
     selectors: Optional[Dict[str, Any]] = None,
     priority: int = 0,
-    custom: bool = False,
     deme: DemeSelector = "*",
-    mode: str = "auto",
 ) -> Callable[[Callable[..., Any]], DecoratedHookFn]:
-    """Decorator for all supported hook authoring styles.
+    """Decorator for all supported hook authoring shapes.
 
-    The decorated function gains a ``.register(pop)`` method that
-    compiles and registers a ``CompiledHookDescriptor`` against a
-    population instance.
+    **Shape detection** (evaluated at ``.register()`` time):
 
-    **Hook type auto-detection** (evaluated at ``.register()`` time):
-
-    * ``selectors=`` is set → **Selector hook**
-      (``compile_selector_hook``)
-    * ``custom=True`` or function has required parameters →
-      **Custom hook** (njit or Python wrapper)
-    * Otherwise → **Declarative hook** (function returns
-      ``List[HookOp]``, compiled via ``compile_declarative_hook``)
-
-    For custom and selector hooks, Numba compilation is automatic — you
-    do **not** need to stack ``@njit``.  When Numba is enabled the
-    function is wrapped with ``njit_switch`` automatically; when Numba
-    is disabled a pure-Python wrapper is used.
-
-    In spatial simulations the ``deme_id`` parameter receives the current
-    deme index, enabling one hook function to serve all demes with
-    per-deme branching.
+    * ``selectors=`` is set → **Selector callback** (selector values
+      injected as keyword arguments after the context).
+    * function takes no required parameters → **Declarative hook**
+      (called once; must return ``List[HookOp]``).
+    * function takes exactly one required parameter → **Callback**
+      (``def hook(pop) -> int``; ``0``/``None`` continues, nonzero stops).
+    * anything else → :class:`TypeError` (the legacy
+      ``(state, config, deme_id)`` njit-era signature has no migration
+      channel; there are no existing users to support).
 
     Args:
         event: Hook event name (``"first"``, ``"early"``, ``"late"``,
-            ``"finish"``).
-        selectors: Symbolic selectors for selector-mode hooks.
+            ``"finish"``).  May also be supplied by the registration call.
+        selectors: Symbolic selectors resolved once at registration and
+            injected as keyword arguments.
         priority: Execution priority — lower values run first.
-        custom: If ``True``, treat as custom hook regardless of signature.
         deme: Target deme(s).  ``"*"`` (default) means all demes.
             Accepts ``int``, ``list``, ``tuple``, or ``range``.
-        mode: Selector passing style.  ``"auto"`` (default) auto-detects
-            from the function signature.  ``"expand"`` passes each
-            selector as a separate keyword argument.  ``"aggregate"``
-            packs all selectors into a single namedtuple argument.
 
     Returns:
         A decorator that transforms a function into a ``DecoratedHookFn``
         with ``.register(pop)`` capability.
-
-    Raises:
-        ValueError: If *mode* is not one of ``"auto"``, ``"expand"``,
-            ``"aggregate"``.
 
     Examples:
 
@@ -239,42 +123,33 @@ def hook(
 
             @hook(event="early", priority=0)
             def cull_juveniles():
-                return [Op.scale(ages=[0,1], factor=0.9)]
+                return [Op.scale(ages=[0, 1], factor=0.9)]
 
-        Custom njit hook:
+        Callback hook (single parameter):
 
             @hook(event="first", priority=1)
-            def release_males(state, config, deme_id=-1):
-                state.individual_count[1, 2, 0] += 100
+            def release_males(pop):
+                pop.state.individual_count[1, 0, 0] += 100
                 return 0
 
-        Selector hook:
+        Selector callback:
 
             @hook(event="late", selectors={"target": "AA"})
-            def count_homozygotes(state, config, target, deme_id=-1):
+            def count_homozygotes(pop, target):
                 ...
     """
-    if mode not in ("auto", "expand", "aggregate"):
-        raise ValueError(
-            f"mode must be 'auto', 'expand', or 'aggregate', got {mode!r}"
-        )
-
     def decorator(func: Callable[..., Any]) -> DecoratedHookFn:
         """Transform *func* into a ``DecoratedHookFn`` with ``.register(pop)``."""
         hook_func = cast(DecoratedHookFn, func)
         hook_func.meta = {
             "event": event,
-            "selectors": selectors or {},
+            "selectors": selectors,
             "priority": priority,
-            "custom": custom,
             "deme_selector": deme,
-            "mode": mode,
         }
-        hook_func.compiled = None
         hook_func.event = event
         hook_func.selectors = selectors or {}
         hook_func.priority = priority
-        hook_func.custom = custom
         hook_func.deme_selector = deme
 
         def register(
@@ -284,24 +159,17 @@ def hook(
         ) -> CompiledHookDescriptor:
             """Compile this hook against *pop* and return a descriptor.
 
-            Called by ``pop.set_hook()``.  Detects the hook type from
-            the decorator metadata and function signature, then routes
-            to the appropriate compiler.
-
             Args:
                 pop: The population to compile against.
-                event_override: Override the event name (used when
-                    ``set_hook(event_name, ...)`` is called with a
-                    different event than the decorator specifies).
-                deme_selector_override: Override the deme selector
-                    (used by SpatialPopulation to pin hooks to demes).
+                event_override: Override the event name (used when the
+                    registration call supplies a different event than the
+                    decorator).
+                deme_selector_override: Override the deme selector (used by
+                    spatial registration to pin hooks to demes).
 
             Returns:
                 A ``CompiledHookDescriptor`` registered on *pop*.
             """
-            from natal.backends.numba.utils import NUMBA_ENABLED
-            from natal.frontend.hooks.types import CompiledHookDescriptor
-
             actual_event = event_override or event
             actual_deme_selector: DemeSelector = (
                 deme if deme_selector_override is None else deme_selector_override
@@ -309,139 +177,62 @@ def hook(
             if actual_event is None:
                 raise ValueError(
                     f"Event not specified for hook '{func.__name__}'. "
-                    "Specify in decorator @hook(event='...') or call "
-                    "pop.set_hook('event', hook)"
+                    "Specify in decorator @hook(event='...') or in the "
+                    "registration call .hooks(..., event='...')."
                 )
 
-            # The unified hook signature is (state, config, deme_id).
-            # Legacy single-parameter population hooks are rejected rather
-            # than guessed so a typo cannot silently change hook semantics.
-            if selectors is None and _has_single_required_parameter(func):
-                raise TypeError(
-                    f"Hook '{func.__name__}' has 1 parameter; hooks must "
-                    "accept (state, config, deme_id) -> int, or use no "
-                    "parameters for the declarative Op-list style."
+            required = _count_required_parameters(func)
+            if selectors is not None:
+                desc = compile_selector_callback(
+                    func,
+                    pop,
+                    actual_event,
+                    selectors,
+                    priority,
+                    deme_selector=actual_deme_selector,
                 )
-
-            # Detect hook type from decorator metadata + function signature.
-            has_required_params = _has_required_parameters(func)
-            is_custom_or_selector = (
-                custom or selectors is not None or has_required_params
-            )
-
-            if is_custom_or_selector:
-                # ---- Selector mode ----
-                if selectors is not None:
-                    desc = compile_selector_hook(
-                        func,
-                        pop,
-                        actual_event,
-                        selectors,
-                        priority,
-                        deme_selector=actual_deme_selector,
-                        mode=mode,
-                    )
-                else:
-                    # ---- Custom hook (njit or Python fallback) ----
-                    if is_njit_function(func):
-                        # Already decorated with @njit — use directly.
-                        desc = CompiledHookDescriptor(
-                            name=func.__name__,
-                            event=actual_event,
-                            priority=priority,
-                            deme_selector=actual_deme_selector,
-                            njit_fn=func,
-                            meta={
-                                "n_ztypes": pop.index_registry.n_ztypes,
-                                "n_ages": pop.config.n_ages,
-                            },
-                        )
-                    else:
-                        # Not @njit-decorated yet.  Wrap with njit_switch so
-                        # the function can run in Numba's nopython mode.
-                        # If Numba is disabled, njit_switch returns a Python
-                        # callable — we detect this and use py_wrapper instead.
-                        try:
-                            decorated_func = njit_switch(cache=False)(func)
-                            if NUMBA_ENABLED and is_njit_function(decorated_func):
-                                norm_fn = _normalize_njit_fn(decorated_func)
-                                desc = CompiledHookDescriptor(
-                                    name=func.__name__,
-                                    event=actual_event,
-                                    priority=priority,
-                                    deme_selector=actual_deme_selector,
-                                    njit_fn=norm_fn,
-                                    meta={
-                                        "n_ztypes": pop.index_registry.n_ztypes,
-                                        "n_ages": pop.config.n_ages,
-                                    },
-                                )
-                            else:
-                                # Numba disabled — use Python wrapper.
-                                wrapped_func = _normalize_py_hook(func)
-                                desc = CompiledHookDescriptor(
-                                    name=func.__name__,
-                                    event=actual_event,
-                                    priority=priority,
-                                    deme_selector=actual_deme_selector,
-                                    njit_fn=None,
-                                    py_wrapper=wrapped_func,
-                                    meta={
-                                        "n_ztypes": pop.index_registry.n_ztypes,
-                                        "n_ages": pop.config.n_ages,
-                                    },
-                                )
-                        except Exception:
-                            # Fall back to Python wrapper.
-                            wrapped_func = _normalize_py_hook(func)
-                            desc = CompiledHookDescriptor(
-                                name=func.__name__,
-                                event=actual_event,
-                                priority=priority,
-                                deme_selector=actual_deme_selector,
-                                njit_fn=None,
-                                py_wrapper=wrapped_func,
-                                meta={
-                                    "n_ztypes": pop.index_registry.n_ztypes,
-                                    "n_ages": pop.config.n_ages,
-                                },
-                            )
-            else:
-                # ---- Declarative hook (returns List[HookOp]) ----
-                # The function is called ONCE at registration time.  Its
-                # return value (a list of HookOp objects) is compiled into
-                # a CSR plan.  The function itself is NOT stored or called
-                # at runtime — only the compiled plan is.
-                result = func()
-                if isinstance(result, list):
-                    result_ops = cast(List[object], result)
-                    if not all(isinstance(op, HookOp) for op in result_ops):
-                        raise TypeError(
-                            f"Declarative hook '{func.__name__}' must "
-                            "return List[HookOp], or use custom=True "
-                            "for custom mode."
-                        )
-                    ops = cast(List[HookOp], result_ops)
-                    desc = compile_declarative_hook(
-                        ops,
-                        pop,
-                        actual_event,
-                        priority,
-                        deme_selector=actual_deme_selector,
-                        name=func.__name__,
-                    )
-                else:
+            elif required == 0:
+                # Declarative: called ONCE at registration; its return value
+                # (list of HookOp) is compiled into a CSR plan.
+                result: object = func()
+                items = list(cast("List[object]", result)) if isinstance(result, list) else []
+                if not all(isinstance(op, HookOp) for op in items):
                     raise TypeError(
-                        f"Hook '{func.__name__}' must return List[HookOp] "
-                        "for declarative mode, or use custom=True for "
-                        "custom mode."
+                        f"Declarative hook '{func.__name__}' must return "
+                        "List[HookOp], or take one 'pop' parameter for the "
+                        "callback style."
                     )
+                ops = [op for op in items if isinstance(op, HookOp)]
+                desc = compile_declarative_hook(
+                    ops,
+                    pop,
+                    actual_event,
+                    priority,
+                    deme_selector=actual_deme_selector,
+                    name=func.__name__,
+                )
+            elif required == 1:
+                desc = CompiledHookDescriptor(
+                    name=func.__name__,
+                    event=actual_event,
+                    priority=priority,
+                    deme_selector=actual_deme_selector,
+                    callback=cast(Callable[[Any], int], func),
+                    source=func,
+                )
+            else:
+                raise TypeError(
+                    f"Hook '{func.__name__}' has {required} required "
+                    "parameters. The supported custom signature is "
+                    "def hook(pop) -> int (a TickContext; return 0 to "
+                    "continue, nonzero to stop). The legacy "
+                    "(state, config, deme_id) form is no longer supported."
+                )
 
-            hook_func.compiled = desc  # type: ignore  # set on DecoratedHookFn proxy
             pop.register_compiled_hook(desc)
             return desc
 
-        hook_func.register = register  # type: ignore  # set on DecoratedHookFn proxy
+        hook_func.register = register  # type: ignore[assignment]  # set on DecoratedHookFn proxy
         return hook_func
 
     return decorator
