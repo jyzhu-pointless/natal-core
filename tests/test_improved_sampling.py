@@ -2,7 +2,21 @@
 
 import numpy as np
 
-from natal.numba.compat import continuous_binomial
+
+from contextlib import contextmanager
+
+from natal.backends.reference.sampling import continuous_binomial
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
 
 
 def _continuous_binomial_min_concentration(n: float, p: float) -> float:

@@ -27,6 +27,7 @@ import re
 import select
 import shutil
 import subprocess
+import sysconfig
 import time
 from pathlib import Path
 from typing import Any
@@ -48,7 +49,7 @@ def _cargo_target_dir() -> Path:
     """Return an ignored target directory, keeping the repository tree clean."""
     if os.environ.get("CARGO_TARGET_DIR"):
         return Path(os.environ["CARGO_TARGET_DIR"])
-    target_dir = ROOT_DIR / ".numba_cache" / "rust-target"
+    target_dir = ROOT_DIR / "rust" / "target"
     target_dir.mkdir(parents=True, exist_ok=True)
     return target_dir
 
@@ -286,11 +287,21 @@ def main() -> int:
         return 1
 
     env = _cargo_env()
+    # Unit tests (curve-contract property tests etc.) build without the
+    # extension-module feature, so the test binary must locate libpython at
+    # runtime.  Fallback (not override) keeps system dylibs resolving first.
+    prefix = sysconfig.get_config_var("prefix")
+    if prefix:
+        fallback = env.get("DYLD_FALLBACK_LIBRARY_PATH", "")
+        env["DYLD_FALLBACK_LIBRARY_PATH"] = (
+            f"{Path(prefix) / 'lib'}{os.pathsep}{fallback}" if fallback else str(Path(prefix) / "lib")
+        )
     failures: list[str] = []
     for command in (
         ["cargo", "fmt", "--", "--check"],
         ["cargo", "clippy", "--", "-D", "warnings"],
         ["cargo", "check", "--all-targets"],
+        ["cargo", "test", "--lib"],
     ):
         if _run(command, cwd=RUST_DIR, env=env) != 0:
             failures.append(" ".join(command))

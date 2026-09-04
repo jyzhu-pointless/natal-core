@@ -1,19 +1,18 @@
-"""Pure-function simulation engine run outside Population with Numba support."""
+"""Pure-function simulation engine for the reference lifecycle."""
 
 from typing import Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 
+import natal.backends.reference.sampling as sampling
 import natal.backends.reference.simulation.age_structured as alg
-from natal.backends.numba import compat as nbc
-from natal.backends.numba.compat import binomial
-from natal.backends.numba.utils import njit_switch
+from natal.backends.reference.sampling import binomial
 from natal.frontend.data import (
     FIXED,
     LOGISTIC,
     NO_COMPETITION,
-    PopulationConfig,
+    ModelDraft,
     PopulationState,
 )
 
@@ -24,11 +23,10 @@ __all__ = [
 # ============================================================================
 # Core: separated stage functions (reproduction, survival, aging)
 # ============================================================================
-@njit_switch(cache=True)
 def run_reproduction_with_precomputed_offspring_probability(
     ind_count: NDArray[np.float64],
     sperm_store: NDArray[np.float64],
-    config: PopulationConfig,
+    config: ModelDraft,
     offspring_probability: NDArray[np.float64],
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Run reproduction stage: mating, sperm-store update, and offspring generation.
@@ -36,7 +34,7 @@ def run_reproduction_with_precomputed_offspring_probability(
     Args:
         ind_count: Individual-count array ``(n_sexes, n_ages, n_ztypes)``.
         sperm_store: Sperm-store array ``(n_ages, n_ztypes, n_ztypes)``.
-        config: PopulationConfig object.
+        config: Unified model draft object.
         offspring_probability: Precomputed offspring tensor
             ``P_offspring[gf, gm, g_off]`` reused across demes/ticks.
 
@@ -80,7 +78,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         sperm_store,
         mating_prob,
         config.age_based_mating_rates[0, :],  # female age-specific mating rates
-        config.sperm_displacement_rate[()],  # pyright: ignore[reportArgumentType]
+        config.sperm_displacement_rate,  # pyright: ignore[reportArgumentType]
         adult_start_age,
         n_ages,
         n_ztypes,
@@ -101,7 +99,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.fecundity_fitness[0], # sex=0 is FEMALE
         config.fecundity_fitness[1], # sex=1 is MALE
         offspring_probability,
-        config.eggs_per_female[()],  # pyright: ignore[reportArgumentType]
+        config.eggs_per_female,  # pyright: ignore[reportArgumentType]
         adult_start_age,
         n_ages,
         n_ztypes,
@@ -114,7 +112,7 @@ def run_reproduction_with_precomputed_offspring_probability(
         config.age_based_reproduction_rates,  # 直接传递年龄特定的繁殖率
         config.female_age_based_fertility,  # 传递年龄特定的相对生育率
         config.fixed_egg_count, # fixed_eggs
-        config.sex_ratio[()],  # pyright: ignore[reportArgumentType]
+        config.sex_ratio,  # pyright: ignore[reportArgumentType]
         has_sex_chromosomes=has_sex_chromosomes,
         stochastic=stochastic,
         continuous_sampling=continuous_sampling
@@ -137,11 +135,11 @@ def run_reproduction_with_precomputed_offspring_probability(
                 if continuous_sampling:
                     # Continuous sampling: use continuous_binomial function
                     if female_offspring[g] > 0:
-                        female_offspring[g] = nbc.continuous_binomial(
+                        female_offspring[g] = sampling.continuous_binomial(
                             female_offspring[g], config.zygote_viability_fitness[0, g]
                         )
                     if male_offspring[g] > 0:
-                        male_offspring[g] = nbc.continuous_binomial(
+                        male_offspring[g] = sampling.continuous_binomial(
                             male_offspring[g], config.zygote_viability_fitness[1, g]
                         )
                 else:
@@ -149,7 +147,7 @@ def run_reproduction_with_precomputed_offspring_probability(
                     if female_offspring[g] > 0:
                         n_female = int(round(female_offspring[g]))
                         if n_female > 0:
-                            female_offspring[g] = nbc.binomial(n_female, config.zygote_viability_fitness[0, g])
+                            female_offspring[g] = sampling.binomial(n_female, config.zygote_viability_fitness[0, g])
                     if male_offspring[g] > 0:
                         n_male = int(round(male_offspring[g]))
                         if n_male > 0:
@@ -163,18 +161,15 @@ def run_reproduction_with_precomputed_offspring_probability(
             ind_count[1, 0, :] *= config.zygote_viability_fitness[1, :]  # Male offspring
 
     return ind_count, sperm_store
-
-
-@njit_switch(cache=True)
 def run_reproduction(
     state: PopulationState,
-    config: PopulationConfig,
+    config: ModelDraft,
 ) -> PopulationState:
     """Run reproduction stage: mating, sperm-store update, and offspring generation.
 
     Args:
         state: Current population state.
-        config: PopulationConfig object.
+        config: Unified model draft object.
 
     Returns:
         New population state with updated individual counts and sperm store.
@@ -192,11 +187,9 @@ def run_reproduction(
         individual_count=ind_count,
         sperm_storage=sperm_store,
     )
-
-@njit_switch(cache=True)
 def run_survival(
     state: PopulationState,
-    config: PopulationConfig,
+    config: ModelDraft,
 ) -> PopulationState:
     """Run survival stage: apply survival/viability and juvenile recruitment.
 
@@ -207,7 +200,7 @@ def run_survival(
 
     Args:
         state: Current population state.
-        config: PopulationConfig instance.
+        config: Unified model draft instance.
 
     Returns:
         New population state with updated individual counts and sperm store.
@@ -223,8 +216,8 @@ def run_survival(
     # Firstly, apply density-dependent survival to age 0 individuals (juveniles) based on the configured growth mode.
     # =========================================================================
     # Use the unified recruit_juveniles_given_scaling_factor_sampling API.
-    # Mode constants: 0=NO_COMPETITION, 1=FIXED, 2=LOGISTIC/LINEAR, 3=BEVERTON_HOLT/CONCAVE
-    juvenile_growth_mode = config.juvenile_growth_mode[()]  # pyright: ignore[reportArgumentType]
+    # Mode constants: 0=NO_COMPETITION, 1=FIXED, 2=LOGISTIC/LINEAR, 3=BEVERTON_HOLT, 4=RICKER
+    juvenile_growth_mode = config.juvenile_growth_mode  # pyright: ignore[reportArgumentType]
     new_adult_age = config.new_adult_age
 
     # Compute scaling_factor.
@@ -238,10 +231,10 @@ def run_survival(
         # Mode 1: FIXED - scale down proportionally when above K.
         scaling_factor = alg.compute_scaling_factor_fixed(
             total_age_0=total_age_0,
-            carrying_capacity=config.carrying_capacity[()],  # pyright: ignore[reportArgumentType]
+            carrying_capacity=config.carrying_capacity,  # pyright: ignore[reportArgumentType]
         )
     else:
-        # Mode 2 (LOGISTIC/LINEAR) or Mode 3 (BEVERTON_HOLT/CONCAVE).
+        # Mode 2 (LOGISTIC/LINEAR), Mode 3 (BEVERTON_HOLT), or Mode 4 (RICKER).
         # Aggregate juvenile counts by age and compute actual competition strength.
         juvenile_counts = np.zeros(new_adult_age, dtype=np.float64)
         for age in range(new_adult_age):
@@ -256,16 +249,23 @@ def run_survival(
         if juvenile_growth_mode == LOGISTIC:
             scaling_factor = alg.compute_scaling_factor_logistic(
                 actual_competition_strength=actual_comp,
-                expected_competition_strength=config.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
-                expected_survival_rate=config.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
-                low_density_growth_rate=config.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
+                expected_competition_strength=config.expected_competition_strength,  # pyright: ignore[reportArgumentType]
+                expected_survival_rate=config.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                low_density_growth_rate=config.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
-        else: # Mode 3: BEVERTON_HOLT / CONCAVE
+        elif juvenile_growth_mode == 4:  # RICKER (exponential overcompensation)
+            scaling_factor = alg.compute_scaling_factor_ricker(
+                actual_competition_strength=actual_comp,
+                expected_competition_strength=config.expected_competition_strength,  # pyright: ignore[reportArgumentType]
+                expected_survival_rate=config.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                low_density_growth_rate=config.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
+            )
+        else:  # Mode 3: BEVERTON_HOLT
             scaling_factor = alg.compute_scaling_factor_beverton_holt(
                 actual_competition_strength=actual_comp,
-                expected_competition_strength=config.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
-                expected_survival_rate=config.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
-                low_density_growth_rate=config.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
+                expected_competition_strength=config.expected_competition_strength,  # pyright: ignore[reportArgumentType]
+                expected_survival_rate=config.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                low_density_growth_rate=config.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
 
     # Unified call to recruit_juveniles_given_scaling_factor_sampling.
@@ -336,17 +336,15 @@ def run_survival(
         individual_count=ind_count,
         sperm_storage=sperm_store,
     )
-
-@njit_switch(cache=True)
 def run_aging(
     state: PopulationState,
-    config: PopulationConfig,
+    config: ModelDraft,
 ) -> PopulationState:
     """Run aging stage: advance age classes.
 
     Args:
         state: Current population state.
-        config: PopulationConfig instance.
+        config: Unified model draft instance.
 
     Returns:
         New population state with advanced age classes.

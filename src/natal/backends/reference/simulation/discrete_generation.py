@@ -4,7 +4,7 @@ These are pure algorithm functions specific to the non-overlapping generation
 model — no sperm storage, no age iteration, no remating displacement.
 
 Each function is decorated with ``@njit_switch`` so it compiles to native code
-when Numba is available and falls back to pure Python otherwise.
+referenced by the reference lifecycle orchestration.
 """
 
 from typing import Annotated, Tuple
@@ -12,8 +12,7 @@ from typing import Annotated, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.backends.numba import compat as nbc
-from natal.backends.numba.utils import njit_switch
+import natal.backends.reference.sampling as sampling
 from natal.backends.reference.simulation.age_structured import (
     BEVERTON_HOLT,
     FIXED,
@@ -21,6 +20,7 @@ from natal.backends.reference.simulation.age_structured import (
     compute_scaling_factor_beverton_holt,
     compute_scaling_factor_fixed,
     compute_scaling_factor_logistic,
+    compute_scaling_factor_ricker,
 )
 
 __all__ = [
@@ -31,9 +31,6 @@ __all__ = [
 ]
 
 EPS = 1e-10
-
-
-@njit_switch(cache=True)
 def mate_discrete(
     females: Annotated[NDArray[np.float64], "shape=(g,)"],
     mating_prob: Annotated[NDArray[np.float64], "shape=(g,g)"],
@@ -66,7 +63,7 @@ def mate_discrete(
         genotype *gm*.
     """
     g = int(females.shape[0])
-    pm = nbc.clamp01(p_mating)
+    pm = sampling.clamp01(p_mating)
     pair_counts = np.zeros((g, g), dtype=np.float64)
 
     for gf in range(g):
@@ -76,10 +73,10 @@ def mate_discrete(
 
         if stochastic:
             if continuous:
-                n_mating = nbc.continuous_binomial(n_female, pm)
+                n_mating = sampling.continuous_binomial(n_female, pm)
             else:
                 n_int = max(0, int(round(n_female)))
-                n_mating = float(nbc.binomial(n_int, pm)) if n_int > 0 else 0.0
+                n_mating = float(sampling.binomial(n_int, pm)) if n_int > 0 else 0.0
         else:
             n_mating = n_female * pm
 
@@ -89,13 +86,13 @@ def mate_discrete(
         if stochastic:
             if continuous:
                 tmp = np.zeros(g, dtype=np.float64)
-                nbc.continuous_multinomial(n_mating, mating_prob[gf, :], tmp)
+                sampling.continuous_multinomial(n_mating, mating_prob[gf, :], tmp)
                 for gm in range(g):
                     pair_counts[gf, gm] += tmp[gm]
             else:
                 n_int = max(0, int(round(n_mating)))
                 if n_int > 0:
-                    draws = nbc.multinomial(n_int, mating_prob[gf, :])
+                    draws = sampling.multinomial(n_int, mating_prob[gf, :])
                     for gm in range(g):
                         pair_counts[gf, gm] += float(draws[gm])
         else:
@@ -103,9 +100,6 @@ def mate_discrete(
                 pair_counts[gf, gm] += n_mating * mating_prob[gf, gm]
 
     return pair_counts
-
-
-@njit_switch(cache=True)
 def fertilize_discrete(
     pair_counts: Annotated[NDArray[np.float64], "shape=(g,g)"],
     offspring_tensor: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
@@ -161,8 +155,8 @@ def fertilize_discrete(
         offspring counts per genotype.
     """
     g = int(fert_f.shape[0])
-    sex_ratio_c = nbc.clamp01(sex_ratio)
-    p_reproduce = nbc.clamp01(reproduction_rate)
+    sex_ratio_c = sampling.clamp01(sex_ratio)
+    p_reproduce = sampling.clamp01(reproduction_rate)
 
     n_offspring = np.zeros(g, dtype=np.float64)
     p_norm = np.zeros(g, dtype=np.float64)
@@ -189,14 +183,14 @@ def fertilize_discrete(
                 n_reproducing = float(n_pairs_eff)
                 if p_reproduce < 1.0 - EPS:
                     n_reproducing = (
-                        nbc.continuous_binomial(n_pairs_eff, p_reproduce)
+                        sampling.continuous_binomial(n_pairs_eff, p_reproduce)
                         if continuous
-                        else float(nbc.binomial(int(n_pairs_eff), p_reproduce))
+                        else float(sampling.binomial(int(n_pairs_eff), p_reproduce))
                     )
 
                 total_lambda = max(0.0, n_reproducing * eggs_per_pair)
                 if continuous:
-                    n_total = nbc.continuous_poisson(total_lambda)
+                    n_total = sampling.continuous_poisson(total_lambda)
                 else:
                     n_total = float(np.random.poisson(total_lambda))
             else:
@@ -218,9 +212,9 @@ def fertilize_discrete(
                     n_total
                     if p_surv >= 1.0 - EPS
                     else (
-                        nbc.continuous_binomial(n_total, p_surv)
+                        sampling.continuous_binomial(n_total, p_surv)
                         if continuous
-                        else float(nbc.binomial(int(round(n_total)), p_surv))
+                        else float(sampling.binomial(int(round(n_total)), p_surv))
                     )
                 )
                 if n_viable <= EPS:
@@ -231,11 +225,11 @@ def fertilize_discrete(
                     p_norm[go] = offspring_tensor[gf, gm, go] * inv
 
                 if continuous:
-                    nbc.continuous_multinomial(n_viable, p_norm, tmp)
+                    sampling.continuous_multinomial(n_viable, p_norm, tmp)
                     for go in range(g):
                         n_offspring[go] += tmp[go]
                 else:
-                    draws = nbc.multinomial(int(round(n_viable)), p_norm)
+                    draws = sampling.multinomial(int(round(n_viable)), p_norm)
                     for go in range(g):
                         n_offspring[go] += float(draws[go])
             else:
@@ -267,15 +261,15 @@ def fertilize_discrete(
             if has_sex_chromosomes:
                 denom = female_compat[go] + male_compat[go]
                 p_f = (
-                    nbc.clamp01(female_compat[go] / denom)
+                    sampling.clamp01(female_compat[go] / denom)
                     if denom > EPS
                     else 0.5
                 )
             if stochastic:
                 n_fem = (
-                    nbc.continuous_binomial(n_g, p_f)
+                    sampling.continuous_binomial(n_g, p_f)
                     if continuous
-                    else float(nbc.binomial(int(round(n_g)), p_f))
+                    else float(sampling.binomial(int(round(n_g)), p_f))
                 )
             else:
                 n_fem = n_g * p_f
@@ -292,7 +286,7 @@ def fertilize_discrete(
 # offspring computation followed by one multinomial draw per tick.  Models
 # effective population size dynamics rather than census dynamics.
 #
-# Mode constants (stored in DiscretePopulationConfig.extreme_speed_mode):
+# Mode constants (stored in ModelDraft.extreme_speed_mode):
 #   0 — off (standard sequential pipeline)
 #   1 — MULTINOMIAL  (classic Wright-Fisher single draw)
 #   2 — POISSON      (independent Poisson per genotype, large-N approx)
@@ -301,9 +295,6 @@ def fertilize_discrete(
 _WF_MULTINOMIAL = 1
 _WF_POISSON = 2
 _WF_DETERMINISTIC = 3
-
-
-@njit_switch(cache=True)
 def run_wf_tick(
     ind_count: Annotated[NDArray[np.float64], "shape=(2,2,g)"],
     offspring_tensor: Annotated[NDArray[np.float64], "shape=(g,g,g)"],
@@ -445,6 +436,11 @@ def run_wf_tick(
                 actual_competition, expected_competition_strength,
                 expected_survival_rate, low_density_growth_rate,
             )
+        elif juvenile_growth_mode == 4:  # RICKER
+            sf = compute_scaling_factor_ricker(
+                actual_competition, expected_competition_strength,
+                expected_survival_rate, low_density_growth_rate,
+            )
         else:
             sf = 1.0  # unknown mode — no scaling
 
@@ -468,7 +464,7 @@ def run_wf_tick(
             probs /= total_expected
             n_total = int(round(total_expected))
             if n_total > 0:
-                draws = nbc.multinomial(n_total, probs)
+                draws = sampling.multinomial(n_total, probs)
                 for go in range(g):
                     new_f[go] = float(draws[go])
                     new_m[go] = float(draws[g + go])
@@ -492,9 +488,6 @@ def run_wf_tick(
 # ---------------------------------------------------------------------------
 # Convenience: single-call WF loop (competition included here in engine)
 # ---------------------------------------------------------------------------
-
-
-@njit_switch(cache=True)
 def run_wf_loop(
     ind_count: Annotated[NDArray[np.float64], "shape=(2,2,g)"],
     n_ticks: int,

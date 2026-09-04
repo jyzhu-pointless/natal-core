@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-WHEEL_DIR = ROOT_DIR / ".numba_cache" / "rust-target" / "wheels"
+WHEEL_DIR = ROOT_DIR / "rust" / "target" / "wheels"
 MODULE_SUFFIX = "natal/_engine_rs"
 
 
@@ -43,7 +43,7 @@ def main() -> int:
 
     env = os.environ.copy()
     if not env.get("CARGO_TARGET_DIR"):
-        target = ROOT_DIR / ".numba_cache" / "rust-target"
+        target = ROOT_DIR / "rust" / "target"
         target.mkdir(parents=True, exist_ok=True)
         env["CARGO_TARGET_DIR"] = str(target)
     print(f"==> {' '.join(command)}")

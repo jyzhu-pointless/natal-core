@@ -4,27 +4,46 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from scipy import stats
-
-from natal.configurator import Configurator
-from natal.engine.backends.rust_backend import (
+from natal.backends.rust.rust_backend import (
     RustHeterogeneousSpatialLifecycleBackend,
     RustSpatialLifecycleBackend,
     rust_backend_available,
-    rust_migrate_adjacency_deterministic,
-    rust_migrate_adjacency_stochastic,
-    rust_migrate_kernel_deterministic,
-    rust_migrate_kernel_stochastic,
+    rust_migrate_csr_deterministic,
+    rust_migrate_csr_stochastic,
 )
-from natal.engine.migration.adjacency import apply_spatial_adjacency_mode
-from natal.engine.spatial_simulator import (
+from natal.backends.reference.migration.adjacency import apply_csr_migration
+from natal.backends.reference.spatial_simulator import (
     run_spatial_tick,
     run_spatial_tick_heterogeneous,
 )
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import SquareGrid, build_adjacency_matrix
-from natal.genetics import Species
-from natal.hooks.types import HookProgram
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import SquareGrid, build_adjacency_matrix
+from scipy import stats
+
+from natal.frontend.configurator import Configurator
+from natal.frontend.spatial.migration import fold_migration_csr
+
+
+def _fold_adjacency(adjacency):
+    """Fold a dense adjacency matrix into the slice-5 CSR triple."""
+    n = adjacency.shape[0]
+    csr = fold_migration_csr(
+        n_demes=n,
+        topology=None,
+        adjacency_dense=adjacency,
+        migration_kernel=None,
+        kernel_bank=None,
+        deme_kernel_ids=None,
+        kernel_include_center=False,
+        adjust_on_edge=False,
+        mode="adjacency",
+    )
+    return csr.indptr, csr.dest_idx, csr.weights, csr.stay_after_send
+
+
+from natal.frontend.hooks.types import HookProgram
+
+from natal.frontend.genetics import Species
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -81,7 +100,7 @@ def _stacked_state(config: object, n_demes: int, seed: int):
     return ind, sperm
 
 
-def test_homogeneous_spatial_tick_matches_numba(config: object) -> None:
+def test_homogeneous_spatial_tick_matches_reference(config: object) -> None:
     ind, sperm = _stacked_state(config, n_demes=5, seed=10)
     reference_ind = ind.copy()
     reference_sperm = sperm.copy()
@@ -97,24 +116,43 @@ def test_homogeneous_spatial_tick_matches_numba(config: object) -> None:
     assert np.array_equal(actual_sperm, expected_sperm)
 
 
-def test_heterogeneous_spatial_tick_matches_numba(config: object) -> None:
-    """Per-deme config-bank dispatch must match Numba's heterogeneous path."""
-    import numba.typed
-
+def test_heterogeneous_spatial_tick_matches_reference(config: object) -> None:
+    """Per-deme ecology columns + genetics variant bank must match reference."""
     config_high = config._replace(carrying_capacity=np.array(500.0))
     config_low = config._replace(carrying_capacity=np.array(50.0))
-    config_bank = numba.typed.List([config_high, config_low])
+    deme_drafts = [config_high, config_low, config_high, config_low]
     deme_config_ids = np.array([0, 1, 0, 1], dtype=np.int64)
+
+    from natal.backends.rust.rust_backend import (
+        ecology_columns_from_drafts,
+        genetics_variant_bank,
+    )
+    from natal.contracts.materialize import SpatialMigration, materialize
 
     ind, sperm = _stacked_state(config, n_demes=4, seed=20)
     reference_ind = ind.copy()
     reference_sperm = sperm.copy()
     expected_ind, expected_sperm, expected_tick = run_spatial_tick_heterogeneous(
-        reference_ind, reference_sperm, config_bank, deme_config_ids, tick=6
+        reference_ind, reference_sperm, [config_high, config_low], deme_config_ids, tick=6
     )
 
+    columns = ecology_columns_from_drafts(deme_drafts)
+    tensor_bank, variant_ids = genetics_variant_bank(deme_drafts)
+    # Ecology-only differences (K) never split genetics variants.
+    assert len(tensor_bank) == 1
+
+    # The spatial blueprint carries the real deme count (empty CSR rows are
+    # the no-routing sentinel for n_demes > 1).
+    n_ages = config.n_ages
+    migration = SpatialMigration(
+        indptr=np.zeros(5, dtype=np.int64),
+        dest_idx=np.zeros(0, dtype=np.int64),
+        weights=np.zeros(0, dtype=np.float64),
+        rate=np.zeros((4, 2, n_ages), dtype=np.float64),
+    )
+    blueprint = materialize(config_high, migration).blueprint
     backend = RustHeterogeneousSpatialLifecycleBackend(
-        [config_high, config_low], deme_config_ids, _empty_hook_program(), seed=0
+        blueprint, columns, tensor_bank, variant_ids, _empty_hook_program(), seed=0
     )
     actual_ind, actual_sperm, actual_tick = backend.run(ind, sperm, tick=6)
 
@@ -123,8 +161,8 @@ def test_heterogeneous_spatial_tick_matches_numba(config: object) -> None:
     assert np.array_equal(actual_sperm, expected_sperm)
 
 
-def test_deterministic_adjacency_migration_matches_numba(config: object) -> None:
-    """Rust dense-adjacency migration must match Numba's deterministic path."""
+def test_deterministic_adjacency_migration_matches_reference(config: object) -> None:
+    """Rust dense-adjacency migration must match the reference deterministic path."""
     n_demes = 4
     ind, sperm = _stacked_state(config, n_demes=n_demes, seed=30)
     rng = np.random.default_rng(31)
@@ -132,22 +170,21 @@ def test_deterministic_adjacency_migration_matches_numba(config: object) -> None
     adjacency /= adjacency.sum(axis=1, keepdims=True)
     rate = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float64)
 
-    expected_ind, expected_sperm = apply_spatial_adjacency_mode(
+    indptr, dest_idx, weights, stay_after = _fold_adjacency(adjacency)
+    rate3d = np.tile(rate, (n_demes, 2, 1))
+    expected_ind, expected_sperm = apply_csr_migration(
         ind.copy(),
         sperm.copy(),
-        adjacency,
-        migration_mode=0,
-        topology_rows=0,
-        topology_cols=0,
-        topology_wrap=False,
-        migration_kernel=np.zeros((1, 1)),
-        kernel_include_center=False,
-        rate=rate,
+        indptr,
+        dest_idx,
+        weights,
+        rate3d,
         stochastic=False,
         continuous_sampling=False,
+        stay_after_send=stay_after,
     )
-    actual_ind, actual_sperm = rust_migrate_adjacency_deterministic(
-        ind, sperm, adjacency, rate
+    actual_ind, actual_sperm = rust_migrate_csr_deterministic(
+        ind, sperm, indptr, dest_idx, weights, rate3d, stay_after
     )
 
     assert np.allclose(actual_ind, expected_ind, rtol=1e-12, atol=1e-12)
@@ -157,8 +194,7 @@ def test_deterministic_adjacency_migration_matches_numba(config: object) -> None
 def test_stochastic_adjacency_migration_is_distributionally_equivalent(
     config: object,
 ) -> None:
-    """Rust stochastic migration should match Numba aggregate moments."""
-    from natal.numba.compat import set_numba_seed
+    """Rust stochastic migration should match reference aggregate moments."""
 
     n_demes = 4
     ind, sperm = _stacked_state(config, n_demes=n_demes, seed=40)
@@ -168,39 +204,38 @@ def test_stochastic_adjacency_migration_is_distributionally_equivalent(
     rate = np.array([0.15, 0.2, 0.25, 0.3], dtype=np.float64)
 
     rust_totals = []
-    numba_totals = []
+    reference_totals = []
     for index in range(24):
-        rust_ind, rust_sperm = rust_migrate_adjacency_stochastic(
-            ind, sperm, adjacency, rate, seed=500 + index, continuous_sampling=False
+        indptr, dest_idx, weights, _ = _fold_adjacency(adjacency)
+        rate3d = np.tile(rate, (n_demes, 2, 1))
+        rust_ind, rust_sperm = rust_migrate_csr_stochastic(
+            ind, sperm, indptr, dest_idx, weights, rate3d,
+            seed=500 + index, continuous_sampling=False,
         )
         rust_totals.append(float(rust_ind[0].sum()))
 
-        set_numba_seed(500 + index)
-        expected_ind, expected_sperm = apply_spatial_adjacency_mode(
+        np.random.seed(500 + index)
+        expected_ind, expected_sperm = apply_csr_migration(
             ind.copy(),
             sperm.copy(),
-            adjacency,
-            migration_mode=0,
-            topology_rows=0,
-            topology_cols=0,
-            topology_wrap=False,
-            migration_kernel=np.zeros((1, 1)),
-            kernel_include_center=False,
-            rate=rate,
+            indptr,
+            dest_idx,
+            weights,
+            rate3d,
             stochastic=True,
             continuous_sampling=False,
         )
-        numba_totals.append(float(expected_ind[0].sum()))
+        reference_totals.append(float(expected_ind[0].sum()))
 
     rust_mean = float(np.mean(rust_totals))
-    numba_mean = float(np.mean(numba_totals))
-    t_test = stats.ttest_ind(rust_totals, numba_totals, equal_var=False)
+    reference_mean = float(np.mean(reference_totals))
+    t_test = stats.ttest_ind(rust_totals, reference_totals, equal_var=False)
     assert t_test.pvalue > 0.01
-    assert abs(rust_mean - numba_mean) < max(5.0, 0.15 * numba_mean)
+    assert abs(rust_mean - reference_mean) < max(5.0, 0.15 * reference_mean)
 
 
-def test_deterministic_kernel_migration_matches_numba(config: object) -> None:
-    """Rust topology-kernel migration must match Numba's deterministic path."""
+def test_deterministic_kernel_migration_matches_reference(config: object) -> None:
+    """Rust topology-kernel migration must match the reference deterministic path."""
     topology_rows = 3
     topology_cols = 3
     n_demes = topology_rows * topology_cols
@@ -209,30 +244,41 @@ def test_deterministic_kernel_migration_matches_numba(config: object) -> None:
     kernel = rng.random((topology_rows, topology_cols))
     rate = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float64)
 
-    expected_ind, expected_sperm = apply_spatial_adjacency_mode(
+    csr = fold_migration_csr(
+        n_demes=n_demes,
+        topology=SquareGrid(
+            rows=topology_rows, cols=topology_cols, neighborhood="von_neumann", wrap=True
+        ),
+        adjacency_dense=np.zeros((n_demes, n_demes)),
+        migration_kernel=kernel,
+        kernel_bank=None,
+        deme_kernel_ids=None,
+        kernel_include_center=False,
+        adjust_on_edge=False,
+        mode="kernel",
+    )
+    rate3d = np.tile(rate, (n_demes, 2, 1))
+    expected_ind, expected_sperm = apply_csr_migration(
         ind.copy(),
         sperm.copy(),
-        np.zeros((n_demes, n_demes)),
-        migration_mode=1,
-        topology_rows=topology_rows,
-        topology_cols=topology_cols,
-        topology_wrap=True,
-        migration_kernel=kernel,
-        kernel_include_center=False,
-        rate=rate,
+        csr.indptr,
+        csr.dest_idx,
+        csr.weights,
+        rate3d,
         stochastic=False,
         continuous_sampling=False,
+        stay_after_send=csr.stay_after_send,
     )
-    actual_ind, actual_sperm = rust_migrate_kernel_deterministic(
-        ind, sperm, kernel, topology_wrap=True, kernel_include_center=False, rate=rate
+    actual_ind, actual_sperm = rust_migrate_csr_deterministic(
+        ind, sperm, csr.indptr, csr.dest_idx, csr.weights, rate3d, csr.stay_after_send
     )
 
     assert np.allclose(actual_ind, expected_ind, rtol=1e-12, atol=1e-12)
     assert np.allclose(actual_sperm, expected_sperm, rtol=1e-12, atol=1e-12)
 
 
-def test_real_discrete_spatial_population_rust_matches_numba(config: object) -> None:
-    """A real discrete SpatialPopulation with Rust backend must match Numba."""
+def test_real_discrete_spatial_population_rust_matches_reference(config: object) -> None:
+    """A real discrete SpatialPopulation with Rust backend must match reference."""
     import natal as nt
 
     species = nt.Species.from_dict(
@@ -321,8 +367,7 @@ def test_real_discrete_spatial_wf_rust_runs(config: object) -> None:
 def test_stochastic_kernel_migration_is_distributionally_equivalent(
     config: object,
 ) -> None:
-    """Rust stochastic kernel migration should match Numba aggregate moments."""
-    from natal.numba.compat import set_numba_seed
+    """Rust stochastic kernel migration should match reference moments."""
 
     topology_rows = 3
     topology_cols = 3
@@ -333,47 +378,57 @@ def test_stochastic_kernel_migration_is_distributionally_equivalent(
     rate = np.array([0.15, 0.2, 0.25, 0.3], dtype=np.float64)
 
     rust_totals = []
-    numba_totals = []
+    reference_totals = []
     for index in range(24):
-        rust_ind, _ = rust_migrate_kernel_stochastic(
+        csr = fold_migration_csr(
+            n_demes=n_demes,
+            topology=SquareGrid(
+                rows=topology_rows, cols=topology_cols, neighborhood="von_neumann", wrap=True
+            ),
+            adjacency_dense=np.zeros((n_demes, n_demes)),
+            migration_kernel=kernel,
+            kernel_bank=None,
+            deme_kernel_ids=None,
+            kernel_include_center=False,
+            adjust_on_edge=False,
+            mode="kernel",
+        )
+        rate3d = np.tile(rate, (n_demes, 2, 1))
+        rust_ind, _ = rust_migrate_csr_stochastic(
             ind,
             sperm,
-            kernel,
-            topology_wrap=True,
-            kernel_include_center=False,
-            rate=rate,
+            csr.indptr,
+            csr.dest_idx,
+            csr.weights,
+            rate3d,
             seed=600 + index,
             continuous_sampling=False,
         )
         rust_totals.append(float(rust_ind[0].sum()))
 
-        set_numba_seed(600 + index)
-        expected_ind, _ = apply_spatial_adjacency_mode(
+        np.random.seed(600 + index)
+        expected_ind, _ = apply_csr_migration(
             ind.copy(),
             sperm.copy(),
-            np.zeros((n_demes, n_demes)),
-            migration_mode=1,
-            topology_rows=topology_rows,
-            topology_cols=topology_cols,
-            topology_wrap=True,
-            migration_kernel=kernel,
-            kernel_include_center=False,
-            rate=rate,
+            csr.indptr,
+            csr.dest_idx,
+            csr.weights,
+            rate3d,
             stochastic=True,
             continuous_sampling=False,
         )
-        numba_totals.append(float(expected_ind[0].sum()))
+        reference_totals.append(float(expected_ind[0].sum()))
 
     rust_mean = float(np.mean(rust_totals))
-    numba_mean = float(np.mean(numba_totals))
-    assert abs(rust_mean - numba_mean) < max(5.0, 0.15 * numba_mean)
-    assert abs(float(np.std(rust_totals)) - float(np.std(numba_totals))) < 0.5 * max(
-        1.0, float(np.std(numba_totals))
+    reference_mean = float(np.mean(reference_totals))
+    assert abs(rust_mean - reference_mean) < max(5.0, 0.15 * reference_mean)
+    assert abs(float(np.std(rust_totals)) - float(np.std(reference_totals))) < 0.5 * max(
+        1.0, float(np.std(reference_totals))
     )
 
 
-def test_real_spatial_population_rust_backend_matches_numba(config: object) -> None:
-    """A real SpatialPopulation with Rust backend must match Numba."""
+def test_real_spatial_population_rust_backend_matches_reference(config: object) -> None:
+    """A real SpatialPopulation with Rust backend must match reference."""
     import natal as nt
 
     species = nt.Species.from_dict(

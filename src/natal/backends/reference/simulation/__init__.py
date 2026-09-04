@@ -1,6 +1,6 @@
 """Simulation algorithm helpers for engine lifecycle stages.
 
-This package provides Numba-accelerated algorithm functions separated
+This package provides the algorithm functions separated
 by lifecycle model: age-structured (cohort-based) and discrete-generation.
 
 Modules:

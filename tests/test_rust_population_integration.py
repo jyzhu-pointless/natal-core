@@ -6,12 +6,12 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.configurator import Configurator
-from natal.engine.backends.rust_backend import rust_backend_available
-from natal.genetics import Species
-from natal.hooks.entry.declarative import Op
-from natal.patterns import IndividualSelector
-from natal.population.age_structured import AgeStructuredPopulation
+from natal.frontend.configurator import Configurator
+from natal.backends.rust.rust_backend import rust_backend_available
+from natal.frontend.genetics import Species
+from natal.frontend.hooks.entry.declarative import Op
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.population.age_structured import AgeStructuredPopulation
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -30,9 +30,9 @@ def species() -> Species:
 
 
 @nt.hook(event="first", priority=0)
-def _custom_noop_hook(state: object, config: object, deme_id: int) -> int:
-    """Module-level custom hook with a stable codegen identity."""
-    _ = state, config, deme_id
+def _custom_noop_hook(pop: object) -> int:
+    """Module-level custom hook (callback form)."""
+    _ = pop
     return 0
 
 
@@ -53,8 +53,8 @@ def _build_population(species: Species, name: str) -> AgeStructuredPopulation:
     )
 
 
-def test_real_population_matches_numba_backend(species: Species) -> None:
-    """A real population run through Rust must match the Numba path exactly."""
+def test_real_population_matches_reference_backend(species: Species) -> None:
+    """A real population run through Rust must match the reference exactly."""
     reference = _build_population(species, "reference")
     rust_pop = _build_population(species, "rust").enable_rust_backend(seed=123)
 
@@ -72,7 +72,7 @@ def test_real_population_matches_numba_backend(species: Species) -> None:
     )
 
 
-def test_population_with_declarative_hook_matches_numba(species: Species) -> None:
+def test_population_with_declarative_hook_matches_reference(species: Species) -> None:
     """CSR declarative hooks registered on a population run inside Rust."""
     reference = _build_population(species, "reference_hook")
     rust_pop = _build_population(species, "rust_hook")
@@ -81,7 +81,7 @@ def test_population_with_declarative_hook_matches_numba(species: Species) -> Non
         Op.add(genotypes="A|A", ages=1, sex="female", delta=3.0, when="tick >= 0"),
     ]
     for pop in (reference, rust_pop):
-        pop.register_declarative_hook("early", ops, name="early_control")
+        pop.register_hooks(ops, event="early", name="early_control")
 
     rust_pop.enable_rust_backend(seed=7)
     reference.run(4, record_every=1)
@@ -104,8 +104,8 @@ def test_run_tick_uses_rust_backend_when_enabled(species: Species) -> None:
     assert not np.array_equal(pop.state.individual_count, before)
 
 
-def test_observation_mode_history_matches_numba(species: Species) -> None:
-    """Kernel-side observation rows must match Numba's compressed history."""
+def test_observation_mode_history_matches_reference(species: Species) -> None:
+    """Kernel-side observation rows must match the reference history."""
     def build_observed(name: str):
         return (
             Configurator.from_species(species)
@@ -146,19 +146,30 @@ def test_setup_backend_auto_and_rust(species: Species) -> None:
         .setup(stochastic=False, name="rust_pop", backend="rust")
         .build()
     )
-    numba_pop = (
+    python_pop = (
         Configurator.from_species(species)
         .age_structure(4, 2)
-        .setup(stochastic=False, name="numba_pop", backend="numba")
+        .setup(stochastic=False, name="python_pop", backend="python")
         .build()
     )
     assert auto_pop.using_rust_backend is True
     assert rust_pop.using_rust_backend is True
-    assert numba_pop.using_rust_backend is False
+    assert python_pop.using_rust_backend is False
+
+
+def test_setup_backend_numba_is_rejected(species: Species) -> None:
+    """The retired compiled-backend selector raises with a migration hint."""
+    with pytest.raises(ValueError, match="backend='numba' was removed"):
+        (
+            Configurator.from_species(species)
+            .age_structure(4, 2)
+            .setup(stochastic=False, name="numba_pop", backend="numba")
+            .build()
+        )
 
 
 def test_auto_backend_falls_back_with_custom_hooks(species: Species) -> None:
-    """backend=auto must silently keep Numba for custom hooks."""
+    """backend=auto enables Rust; callbacks no longer force a fallback."""
     pop = (
         Configurator.from_species(species)
         .age_structure(4, 2)
@@ -167,13 +178,13 @@ def test_auto_backend_falls_back_with_custom_hooks(species: Species) -> None:
         .hooks(_custom_noop_hook)
         .build()
     )
-    assert pop.using_rust_backend is False
+    assert pop.using_rust_backend is True
     pop.run(2)
     assert pop.tick == 2
 
 
 def test_backend_python_forces_python_fallback(species: Species) -> None:
-    """backend=python must bypass Rust and Numba compiled paths."""
+    """backend=python must bypass the Rust path entirely."""
     pop = (
         Configurator.from_species(species)
         .age_structure(4, 2)
@@ -200,8 +211,8 @@ def test_runtime_config_update_rebuilds_rust_backend(species: Species) -> None:
     assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
 
 
-def test_custom_hooks_block_rust_enablement(species: Species) -> None:
-    """Custom callable hooks must force the population to stay on Numba."""
+def test_custom_hooks_work_with_rust_backend(species: Species) -> None:
+    """Python callbacks are bridged into the Rust engine, not rejected."""
     pop = (
         Configurator.from_species(species)
         .age_structure(4, 2)
@@ -216,9 +227,8 @@ def test_custom_hooks_block_rust_enablement(species: Species) -> None:
         .build()
     )
 
-    with pytest.raises(RuntimeError, match="CSR declarative hooks"):
-        pop.enable_rust_backend(seed=0)
+    pop.enable_rust_backend(seed=0)
 
-    assert pop.using_rust_backend is False
+    assert pop.using_rust_backend is True
     pop.run(2)
     assert pop.tick == 2

@@ -8,7 +8,7 @@ authors = [
 ]
 license = { text = "MIT" }
 requires-python = ">=3.9"
-keywords = ["population-genetics", "simulation", "numba", "bioinformatics", "evolutionary-biology"]
+keywords = ["population-genetics", "simulation", "bioinformatics", "evolutionary-biology"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -24,7 +24,6 @@ classifiers = [
 dependencies = [
     "matplotlib>=3.0.0",
     "nicegui[highcharts]>=3.0.0",
-    "numba>=0.60.0",
     "numpy>=2.0.0",
     "pandas>=2.1.0",
     "plotly>=6.0.0",
@@ -113,3 +112,4 @@ typeCheckingMode = "strict"
 manifest-path = "rust/Cargo.toml"
 module-name = "natal._engine_rs"
 python-source = "src"
+features = ["extension-module"]

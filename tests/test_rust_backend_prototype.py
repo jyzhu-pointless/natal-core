@@ -10,19 +10,18 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.configurator import Configurator
-from natal.data import (
-    DiscretePopulationConfig,
+from natal.frontend.configurator import Configurator
+from natal.frontend.data import (
     DiscretePopulationState,
-    PopulationConfig,
+    ModelDraft,
     PopulationState,
 )
-from natal.engine.backends.rust_backend import (
+from natal.backends.rust.rust_backend import (
     rust_backend_available,
     rust_run_age_structured_aging,
     rust_run_discrete_aging,
 )
-from natal.genetics import Species
+from natal.frontend.genetics import Species
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -31,7 +30,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def age_config() -> PopulationConfig:
+def age_config() -> ModelDraft:
     """Build a small age-structured config without touching the Rust backend."""
     species = Species.from_dict(
         name="RustPrototypeAgeSpecies",
@@ -42,7 +41,7 @@ def age_config() -> PopulationConfig:
 
 
 @pytest.fixture(scope="module")
-def discrete_config() -> DiscretePopulationConfig:
+def discrete_config() -> ModelDraft:
     """Build a minimal discrete-generation config without touching the Rust backend."""
     species = Species.from_dict(
         name="RustPrototypeDiscreteSpecies",
@@ -77,7 +76,7 @@ def _reference_discrete_aging(ind_count: np.ndarray) -> np.ndarray:
     return expected
 
 
-def test_age_structured_aging_matches_reference(age_config: PopulationConfig) -> None:
+def test_age_structured_aging_matches_reference(age_config: ModelDraft) -> None:
     """Rust aging must reproduce the age-shift semantics exactly."""
     rng = np.random.default_rng(2026_07_17)
     ind_count = rng.normal(size=(2, 5, 3))
@@ -99,7 +98,7 @@ def test_age_structured_aging_matches_reference(age_config: PopulationConfig) ->
 
 
 def test_discrete_aging_matches_reference(
-    discrete_config: DiscretePopulationConfig,
+    discrete_config: ModelDraft,
 ) -> None:
     """Rust discrete aging must reproduce the juvenile-to-adult shift exactly."""
     rng = np.random.default_rng(2026_07_18)
@@ -152,7 +151,7 @@ def test_age_structured_aging_rejects_bad_sperm_shape(
 
 
 def test_discrete_aging_rejects_too_few_ages(
-    discrete_config: DiscretePopulationConfig,
+    discrete_config: ModelDraft,
 ) -> None:
     """Rust must reject one-age discrete states instead of indexing out of bounds."""
     ind_count = np.ones((2, 1, 2), dtype=np.float64)

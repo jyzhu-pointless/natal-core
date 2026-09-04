@@ -10,26 +10,13 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-try:
-    # Numba does not publish complete type stubs for its public API.
-    from numba import (  # pyright: ignore[reportMissingTypeStubs] -- Numba has no complete type stubs.
-        prange,
-    )
-except ImportError:
-    # Python fallback preserves prange's integer-iterator contract.
-    prange = range  # type: ignore[assignment] -- range is the non-Numba prange fallback.
-
-from natal.backends.numba import compat as nbc
-from natal.backends.numba.utils import njit_switch
+import natal.backends.reference.sampling as sampling
 
 FloatArray = NDArray[np.float64]
 
 __all__ = [
     "advance_mgdrive1_lifecycle",
 ]
-
-
-@njit_switch(cache=True)
 def _sample_multinomial(
     n: int,
     probabilities: FloatArray,
@@ -55,15 +42,12 @@ def _sample_multinomial(
             else 0.0
         )
         conditional = min(1.0, max(0.0, conditional))
-        drawn = nbc.fast_binomial(remaining, conditional)
+        drawn = sampling.fast_binomial(remaining, conditional)
         result[category] = drawn
         remaining -= drawn
         probability_left -= probabilities[category]
     result[-1] = remaining
     return result
-
-
-@njit_switch(cache=True, parallel=True)
 def advance_mgdrive1_lifecycle(
     aquatic_input: FloatArray,
     adult_male_input: FloatArray,
@@ -143,11 +127,11 @@ def advance_mgdrive1_lifecycle(
     pupa_end = time_egg + time_larva + time_pupa
 
     # Each deme is independent until the caller runs migration. Keeping one
-    # complete daily lifecycle in each prange lane avoids shared scratch state.
-    for deme in prange(n_demes):
+    # complete daily lifecycle in each range lane avoids shared scratch state.
+    for deme in range(n_demes):
         for genotype in range(n_genotypes):
             if stochastic:
-                adult_male[deme, genotype] = nbc.fast_binomial(
+                adult_male[deme, genotype] = sampling.fast_binomial(
                     int(round(adult_male_input[deme, genotype])),
                     adult_survival[genotype],
                 )
@@ -156,7 +140,7 @@ def advance_mgdrive1_lifecycle(
             for mate_genotype in range(n_genotypes):
                 if stochastic:
                     adult_female[deme, genotype, mate_genotype] = (
-                        nbc.fast_binomial(
+                        sampling.fast_binomial(
                             int(
                                 round(
                                     adult_female_input[
@@ -178,7 +162,7 @@ def advance_mgdrive1_lifecycle(
         for genotype in range(n_genotypes):
             final_pupa = aquatic_input[deme, genotype, pupa_end - 1]
             if stochastic:
-                emerging[genotype] = nbc.fast_binomial(
+                emerging[genotype] = sampling.fast_binomial(
                     int(round(final_pupa)),
                     aquatic_survival,
                 )
@@ -188,7 +172,7 @@ def advance_mgdrive1_lifecycle(
             for genotype in range(n_genotypes):
                 count = aquatic_input[deme, genotype, age]
                 if stochastic:
-                    aquatic[deme, genotype, age + 1] = nbc.fast_binomial(
+                    aquatic[deme, genotype, age + 1] = sampling.fast_binomial(
                         int(round(count)),
                         aquatic_survival,
                     )
@@ -209,7 +193,7 @@ def advance_mgdrive1_lifecycle(
             for genotype in range(n_genotypes):
                 count = aquatic_input[deme, genotype, age]
                 if stochastic:
-                    aquatic[deme, genotype, age + 1] = nbc.fast_binomial(
+                    aquatic[deme, genotype, age + 1] = sampling.fast_binomial(
                         int(round(count)),
                         larval_survival,
                     )
@@ -222,7 +206,7 @@ def advance_mgdrive1_lifecycle(
             for genotype in range(n_genotypes):
                 count = aquatic_input[deme, genotype, age]
                 if stochastic:
-                    aquatic[deme, genotype, age + 1] = nbc.fast_binomial(
+                    aquatic[deme, genotype, age + 1] = sampling.fast_binomial(
                         int(round(count)),
                         aquatic_survival,
                     )
@@ -233,19 +217,19 @@ def advance_mgdrive1_lifecycle(
 
         for genotype in range(n_genotypes):
             if stochastic:
-                surviving = nbc.fast_binomial(
+                surviving = sampling.fast_binomial(
                     int(round(emerging[genotype])),
                     1.0 - adult_mortality,
                 )
-                female_pupae = nbc.fast_binomial(
+                female_pupae = sampling.fast_binomial(
                     surviving,
                     female_fraction[genotype],
                 )
-                adult_male[deme, genotype] += nbc.fast_binomial(
+                adult_male[deme, genotype] += sampling.fast_binomial(
                     surviving - female_pupae,
                     male_emergence[genotype],
                 )
-                unmated_female[deme, genotype] += nbc.fast_binomial(
+                unmated_female[deme, genotype] += sampling.fast_binomial(
                     female_pupae,
                     female_emergence[genotype],
                 )
@@ -316,7 +300,7 @@ def advance_mgdrive1_lifecycle(
                         )
                 unmated_female[deme, female_genotype] = 0.0
             elif stochastic:
-                unmated_female[deme, female_genotype] = nbc.fast_binomial(
+                unmated_female[deme, female_genotype] = sampling.fast_binomial(
                     int(round(unmated)),
                     adult_survival[female_genotype],
                 )

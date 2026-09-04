@@ -21,12 +21,11 @@ import numpy as np
 import pytest
 
 # All functions are imported directly so that njit_switch decorators are
-# evaluated with NUMBA_ENABLED = True (the default at import time).  The
-# conftest "disable_numba" autouse fixture sets NUMBA_ENABLED = False during
+# evaluated with the pure-Python reference path (the default backend).  The
 # test execution, but the decorators are already applied at import time.
-# For functions with pre-existing Numba type-unstable paths (e.g. 2D survival
-# rates), we test only the input types that Numba can compile.
-from natal.engine.simulation.age_structured import (
+# For functions with pre-existing type-unstable paths (e.g. 2D survival
+# rates), we test only the supported input types.
+from natal.backends.reference.simulation.age_structured import (
     _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction,
     apply_survival_rates_deterministic,
     apply_survival_rates_deterministic_with_sperm_storage,
@@ -44,7 +43,19 @@ from natal.engine.simulation.age_structured import (
     sample_mating,
     sample_survival_with_sperm_storage,
 )
-from natal.numba.utils import numba_disabled
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
 
 # ===========================================================================
 # compute_equilibrium_metrics
@@ -68,7 +79,7 @@ class TestComputeEquilibriumMetrics:
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
 
-        with numba_disabled():
+        with python_reference():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=1000.0,
                 eggs_per_female=eggs_per_female,
@@ -105,7 +116,7 @@ class TestComputeEquilibriumMetrics:
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
 
-        with numba_disabled():
+        with python_reference():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=800.0,
                 eggs_per_female=10.0,
@@ -142,7 +153,7 @@ class TestComputeEquilibriumMetrics:
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
 
-        with numba_disabled():
+        with python_reference():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=800.0,
                 eggs_per_female=10.0,
@@ -172,7 +183,7 @@ class TestComputeEquilibriumMetrics:
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5], dtype=np.float64)
 
-        with numba_disabled():
+        with python_reference():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=100.0,
                 eggs_per_female=0.0,
@@ -197,7 +208,7 @@ class TestComputeEquilibriumMetrics:
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
         repro_rates = np.array([0.0, 0.0, 0.1, 0.0], dtype=np.float64)
 
-        with numba_disabled():
+        with python_reference():
             comp, surv = compute_equilibrium_metrics(
                 carrying_capacity=100.0,
                 eggs_per_female=10.0,
@@ -364,7 +375,7 @@ class TestRecruitJuvenilesSampling:
     def test_deterministic_under_k_returns_exact(self) -> None:
         f = np.array([1.5, 2.5], dtype=np.float64)
         m = np.array([1.0, 1.0], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=100, n_ztypes=2,
                 stochastic=False,
@@ -375,7 +386,7 @@ class TestRecruitJuvenilesSampling:
     def test_deterministic_over_k_scales_down(self) -> None:
         f = np.array([10.0, 10.0], dtype=np.float64)
         m = np.array([10.0, 10.0], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=20, n_ztypes=2,
                 stochastic=False,
@@ -387,7 +398,7 @@ class TestRecruitJuvenilesSampling:
     def test_zero_total(self) -> None:
         f = np.zeros(2, dtype=np.float64)
         m = np.zeros(2, dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=100, n_ztypes=2,
                 stochastic=False,
@@ -398,7 +409,7 @@ class TestRecruitJuvenilesSampling:
     def test_deterministic_partial_scale(self) -> None:
         f = np.array([50.0, 0.0], dtype=np.float64)
         m = np.array([0.0, 50.0], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=50, n_ztypes=2,
                 stochastic=False,
@@ -410,7 +421,7 @@ class TestRecruitJuvenilesSampling:
         f = np.array([100.0, 50.0], dtype=np.float64)
         m = np.array([50.0, 100.0], dtype=np.float64)
         np.random.seed(42)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_sampling(
                 (f, m), carrying_capacity=100, n_ztypes=2,
                 stochastic=True,
@@ -429,7 +440,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
         f = np.array([10.0, 20.0], dtype=np.float64)
         m = np.array([30.0, 40.0], dtype=np.float64)
         factor = 0.5
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=factor, n_ztypes=2,
                 stochastic=False,
@@ -440,7 +451,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
     def test_zero_total(self) -> None:
         f = np.zeros(2, dtype=np.float64)
         m = np.zeros(2, dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=0.5, n_ztypes=2,
                 stochastic=False,
@@ -451,7 +462,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
     def test_zero_factor(self) -> None:
         f = np.array([10.0, 20.0], dtype=np.float64)
         m = np.array([30.0, 40.0], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=0.0, n_ztypes=2,
                 stochastic=False,
@@ -462,7 +473,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
     def test_full_preservation(self) -> None:
         f = np.array([10.0, 20.0], dtype=np.float64)
         m = np.array([30.0, 40.0], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=1.0, n_ztypes=2,
                 stochastic=False,
@@ -474,7 +485,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
         f = np.array([100.0, 50.0], dtype=np.float64)
         m = np.array([50.0, 100.0], dtype=np.float64)
         np.random.seed(42)
-        with numba_disabled():
+        with python_reference():
             f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
                 (f, m), scaling_factor=0.5, n_ztypes=2,
                 stochastic=True,
@@ -577,7 +588,7 @@ class TestSampleMating:
             [0.5, 0.5],
         ], dtype=np.float64)
         female_rates = np.array([0.0, 0.8, 0.8], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             S = sample_mating(
                 female_counts, sperm_store, mating_prob,
                 female_rates, sperm_displacement_rate=0.0,
@@ -610,7 +621,7 @@ class TestSampleMating:
             [0.5, 0.5],
         ], dtype=np.float64)
         female_rates = np.array([0.0, 0.8], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             S = sample_mating(
                 female_counts, sperm_store, mating_prob,
                 female_rates, sperm_displacement_rate=0.5,
@@ -679,7 +690,7 @@ class TestSampleMating:
         sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
         mating_prob = np.ones((2, 2), dtype=np.float64) * 0.5
         female_rates = np.array([0.0, 0.8], dtype=np.float64)
-        with numba_disabled():
+        with python_reference():
             S = sample_mating(
                 female_counts, sperm_store, mating_prob,
                 female_rates, sperm_displacement_rate=0.0,
@@ -722,7 +733,7 @@ class TestComputeOffspringProbabilityTensor:
 class TestApplySurvivalRatesDeterministic:
     """Tests for apply_survival_rates_deterministic with 1D survival rates.
 
-    Note: 2D survival rates trigger a pre-existing Numba type inference issue
+    Note: 2D survival rates trigger a pre-existing type inference issue
     in the current code. Only 1D rates are tested here.
     """
 
@@ -757,13 +768,13 @@ class TestApplySurvivalRatesDeterministic:
 class TestApplySurvivalRatesDeterministicWithSpermStorage:
     """Tests for apply_survival_rates_deterministic_with_sperm_storage.
 
-    Note: 2D survival rates trigger a pre-existing Numba type inference issue.
+    Note: 2D survival rates trigger a pre-existing type inference issue.
     Only 1D rates are tested here.
     """
 
     def test_1d_rates(self) -> None:
-        # The Numba-compiled version has a pre-existing type inference issue
-        # in its 1D/2D branch structure (reshape creates a shape that Numba
+        # The kernel has a pre-existing type inference issue
+        # in its 1D/2D branch structure (reshape creates a shape that the
         # cannot unify with the direct-assignment path).  Access the underlying
         # Python function to verify algorithm correctness.
         _surv_func = apply_survival_rates_deterministic_with_sperm_storage

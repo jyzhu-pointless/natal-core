@@ -1,13 +1,12 @@
 """Discrete-generation lifecycle engine.
 
 Orchestrate the three lifecycle stages using dedicated discrete algorithms.
-Each function takes ``DiscretePopulationConfig``.
+Each function takes the unified ``ModelDraft`` (discrete normalization).
 """
 
 
+import natal.backends.reference.sampling as sampling
 import natal.backends.reference.simulation.age_structured as alg
-from natal.backends.numba import compat as nbc
-from natal.backends.numba.utils import njit_switch
 from natal.backends.reference.simulation.discrete_generation import (
     fertilize_discrete,
     mate_discrete,
@@ -16,8 +15,8 @@ from natal.frontend.data import (
     FIXED,
     LOGISTIC,
     NO_COMPETITION,
-    DiscretePopulationConfig,
     DiscretePopulationState,
+    ModelDraft,
 )
 
 __all__ = [
@@ -27,12 +26,9 @@ __all__ = [
 ]
 
 # ── Stage A: reproduction ────────────────────────────────────────────────────
-
-
-@njit_switch(cache=True)
 def run_discrete_reproduction(
     state: DiscretePopulationState,
-    cfg: DiscretePopulationConfig,
+    cfg: ModelDraft,
 ) -> DiscretePopulationState:
     """Run one tick of discrete reproduction.
 
@@ -42,7 +38,7 @@ def run_discrete_reproduction(
 
     Args:
         state: Current discrete population state.
-        cfg: Discrete population configuration.
+        cfg: Unified model draft (discrete normalization).
 
     Returns:
         New discrete population state with age-0 offspring filled.
@@ -54,7 +50,7 @@ def run_discrete_reproduction(
 
     females = ind_count[0, 1, :]
     males = ind_count[1, 1, :]
-    effective_males = males * cfg.male_adult_mating_rate
+    effective_males = males * cfg.age_based_mating_rates[1, 1]
     if effective_males.sum() == 0.0 or females.sum() == 0.0:
         return DiscretePopulationState(
             n_tick=state.n_tick, individual_count=ind_count,
@@ -67,17 +63,17 @@ def run_discrete_reproduction(
     sperm = mate_discrete(
         females,
         mating_prob,
-        cfg.female_adult_mating_rate,
+        cfg.age_based_mating_rates[0, 1],
         stochastic,
         continuous
     )
 
     n_f, n_m = fertilize_discrete(
         sperm, cfg.offspring_tensor,
-        cfg.fecundity_f, cfg.fecundity_m,
-        cfg.eggs_per_female[()],  # pyright: ignore[reportArgumentType]
-        cfg.reproduction_rate,
-        cfg.sex_ratio[()],  # pyright: ignore[reportArgumentType]
+        cfg.fecundity_fitness[0], cfg.fecundity_fitness[1],
+        cfg.eggs_per_female,  # pyright: ignore[reportArgumentType]
+        cfg.age_based_reproduction_rates[1],
+        cfg.sex_ratio,  # pyright: ignore[reportArgumentType]
         cfg.has_sex_chromosomes,
         cfg.female_ztype_compatibility, cfg.male_ztype_compatibility,
         cfg.female_only_by_sex_chrom, cfg.male_only_by_sex_chrom,
@@ -92,18 +88,15 @@ def run_discrete_reproduction(
 
 
 # ── Stage B: survival ────────────────────────────────────────────────────────
-
-
-@njit_switch(cache=True)
 def run_discrete_survival(
     state: DiscretePopulationState,
-    cfg: DiscretePopulationConfig,
+    cfg: ModelDraft,
 ) -> DiscretePopulationState:
     """Run juvenile density regulation and genotype viability selection.
 
     Args:
         state: Current discrete population state.
-        cfg: Discrete population configuration.
+        cfg: Unified model draft (discrete normalization).
 
     Returns:
         New discrete population state after survival.
@@ -112,28 +105,35 @@ def run_discrete_survival(
     n_ztypes = cfg.n_ztypes
     stochastic = cfg.stochastic
     continuous = cfg.continuous_sampling
-    mode = cfg.juvenile_growth_mode[()]  # pyright: ignore[reportArgumentType]
+    mode = cfg.juvenile_growth_mode  # pyright: ignore[reportArgumentType]
 
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
 
     if mode == NO_COMPETITION:
         scaling = 1.0
     elif mode == FIXED:
-        scaling = alg.compute_scaling_factor_fixed(total_age_0, cfg.carrying_capacity[()])  # pyright: ignore[reportArgumentType]
+        scaling = alg.compute_scaling_factor_fixed(total_age_0, cfg.carrying_capacity)  # pyright: ignore[reportArgumentType]
     else:
         if mode == LOGISTIC:
             scaling = alg.compute_scaling_factor_logistic(
                 total_age_0,
-                cfg.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
-                cfg.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
-                cfg.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
+                cfg.expected_competition_strength,  # pyright: ignore[reportArgumentType]
+                cfg.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                cfg.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
+            )
+        elif mode == 4:  # RICKER (exponential overcompensation)
+            scaling = alg.compute_scaling_factor_ricker(
+                total_age_0,
+                cfg.expected_competition_strength,  # pyright: ignore[reportArgumentType]
+                cfg.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                cfg.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
         else:
             scaling = alg.compute_scaling_factor_beverton_holt(
                 total_age_0,
-                cfg.expected_competition_strength[()],  # pyright: ignore[reportArgumentType]
-                cfg.expected_survival_rate[()],  # pyright: ignore[reportArgumentType]
-                cfg.low_density_growth_rate[()],  # pyright: ignore[reportArgumentType]
+                cfg.expected_competition_strength,  # pyright: ignore[reportArgumentType]
+                cfg.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                cfg.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
 
     f_rec, m_rec = alg.recruit_juveniles_given_scaling_factor_sampling(
@@ -142,20 +142,20 @@ def run_discrete_survival(
         stochastic=stochastic, continuous_sampling=continuous,
     )
 
-    s_f = cfg.female_age0_survival * cfg.viability_f
-    s_m = cfg.male_age0_survival * cfg.viability_m
+    s_f = cfg.age_based_survival_rates[0, 0] * cfg.viability_fitness[0, 0, :]
+    s_m = cfg.age_based_survival_rates[1, 0] * cfg.viability_fitness[1, 0, :]
 
     if stochastic:
         if continuous:
             for k in range(n_ztypes):
-                ind_count[0, 0, k] = nbc.continuous_binomial(f_rec[k], s_f[k])
-                ind_count[1, 0, k] = nbc.continuous_binomial(m_rec[k], s_m[k])
+                ind_count[0, 0, k] = sampling.continuous_binomial(f_rec[k], s_f[k])
+                ind_count[1, 0, k] = sampling.continuous_binomial(m_rec[k], s_m[k])
         else:
             for k in range(n_ztypes):
                 nf = int(round(f_rec[k]))
                 nm = int(round(m_rec[k]))
-                ind_count[0, 0, k] = float(nbc.binomial(nf, s_f[k])) if nf > 0 else 0.0  # pyright: ignore[reportUnknownArgumentType]
-                ind_count[1, 0, k] = float(nbc.binomial(nm, s_m[k])) if nm > 0 else 0.0  # pyright: ignore[reportUnknownArgumentType]
+                ind_count[0, 0, k] = float(sampling.binomial(nf, s_f[k])) if nf > 0 else 0.0  # pyright: ignore[reportUnknownArgumentType]
+                ind_count[1, 0, k] = float(sampling.binomial(nm, s_m[k])) if nm > 0 else 0.0  # pyright: ignore[reportUnknownArgumentType]
     else:
         ind_count[0, 0, :] = f_rec * s_f
         ind_count[1, 0, :] = m_rec * s_m
@@ -166,12 +166,9 @@ def run_discrete_survival(
 
 
 # ── Stage C: aging ───────────────────────────────────────────────────────────
-
-
-@njit_switch(cache=True)
 def run_discrete_aging(
     state: DiscretePopulationState,
-    cfg: DiscretePopulationConfig,
+    cfg: ModelDraft,
 ) -> DiscretePopulationState:
     """Shift age-0 juveniles to age-1 adults.
 
@@ -180,7 +177,7 @@ def run_discrete_aging(
 
     Args:
         state: Current discrete population state.
-        cfg: Discrete population configuration (unused).
+        cfg: Unified model draft (unused).
 
     Returns:
         New discrete population state after aging.

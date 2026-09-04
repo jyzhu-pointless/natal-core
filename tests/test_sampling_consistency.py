@@ -6,8 +6,8 @@ import sys
 import numpy as np
 import pytest
 
-from natal.numba import compat as nbc
-from natal.numba.compat import continuous_binomial, continuous_multinomial
+import natal.backends.reference.sampling as nbc
+from natal.backends.reference.sampling import continuous_binomial, continuous_multinomial
 
 
 @pytest.mark.parametrize(
@@ -58,7 +58,7 @@ def test_continuous_samplers_reject_non_finite_inputs(
     """
     code = (
         "import numpy as np\n"
-        "from natal.numba import compat as nbc\n"
+        "import natal.backends.reference.sampling as nbc\n"
         "try:\n"
         f"    {expression}\n"
         "except ValueError:\n"
@@ -109,7 +109,7 @@ def test_continuous_samplers_finish_at_float64_resolution_limits() -> None:
     code = """
 import time
 import numpy as np
-from natal.numba import compat as nbc
+import natal.backends.reference.sampling as nbc
 
 probabilities = np.array([0.25, 0.75])
 scratch = np.empty(2)
@@ -158,7 +158,7 @@ def test_rare_categories_remain_stochastic_at_large_total_count() -> None:
     code = """
 import time
 import numpy as np
-from natal.numba import compat as nbc
+import natal.backends.reference.sampling as nbc
 
 total = float(2**104)
 rare_probability = np.nextafter(nbc.EPS, np.inf)
@@ -171,7 +171,7 @@ out_counts = np.empty(2)
 # Compile before timing so the deadline measures sampling rather than JIT work.
 nbc.continuous_binomial(10.0, 0.25)
 nbc.continuous_multinomial(10.0, common_probabilities, out_counts)
-nbc.set_numba_seed(194903)
+np.random.seed(194903)
 
 n_samples = 20_000
 binomial_samples = np.empty(n_samples)
@@ -231,7 +231,7 @@ def test_continuous_samplers_finish_around_stochastic_boundaries() -> None:
     code = """
 import time
 import numpy as np
-from natal.numba import compat as nbc
+import natal.backends.reference.sampling as nbc
 
 probabilities = np.array([0.25, 0.75])
 scratch = np.empty(2)
@@ -480,7 +480,7 @@ def test_bounded_gamma_large_shapes_match_target_moments(
         shape: Large Gamma shape in the normal-approximation interval.
         seed: Deterministic unit-test seed for the sampler.
     """
-    nbc.set_numba_seed(seed)
+    np.random.seed(seed)
     n_samples = 30_000
 
     samples = np.array(
@@ -507,7 +507,7 @@ def test_continuous_poisson_matches_target_moments(
         lam: Gamma shape and target Poisson mean/variance.
         seed: Deterministic unit-test seed for the sampler.
     """
-    nbc.set_numba_seed(seed)
+    np.random.seed(seed)
     n_samples = 30_000
 
     samples = np.array(
@@ -520,7 +520,7 @@ def test_continuous_poisson_matches_target_moments(
 
 def test_binomial_consistency() -> None:
     """Continuous binomial mean and variance match discrete binomial moments."""
-    nbc.set_numba_seed(42)
+    np.random.seed(42)
     n = 100
     p = 0.3
     n_samples = 10000
@@ -547,7 +547,7 @@ def test_binomial_consistency() -> None:
 
 def test_multinomial_consistency() -> None:
     """Continuous multinomial means match discrete multinomial and rows sum to n."""
-    nbc.set_numba_seed(42)
+    np.random.seed(42)
     n = 100
     p_array = np.array([0.2, 0.3, 0.5])
     n_samples = 10000
@@ -588,7 +588,7 @@ def test_multinomial_consistency() -> None:
 
 def test_small_n_cases() -> None:
     """Small-n continuous binomial moments match the defined surrogate."""
-    nbc.set_numba_seed(42)
+    np.random.seed(42)
     test_cases = [(10, 0.3), (5, 0.7), (2, 0.5), (1, 0.5)]
     n_samples = 5000
 

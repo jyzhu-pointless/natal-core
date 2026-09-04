@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.engine.simulation.discrete_generation import run_wf_tick
+from natal.backends.reference.simulation.discrete_generation import run_wf_tick
 
 
 def _make_neutral_config():
@@ -27,13 +27,13 @@ class TestWFTickUnit:
         result = run_wf_tick(
             ind_count=ind,
             offspring_tensor=cfg.offspring_tensor,
-            fecundity_f=cfg.fecundity_f,
-            fecundity_m=cfg.fecundity_m,
+            fecundity_f=cfg.fecundity_fitness[0],
+            fecundity_m=cfg.fecundity_fitness[1],
             sexual_selection=cfg.sexual_selection_fitness,
-            viability_f=cfg.viability_f,
-            viability_m=cfg.viability_m,
-            eggs_per_female=float(cfg.eggs_per_female[()]),
-            sex_ratio=float(cfg.sex_ratio[()]),
+            viability_f=cfg.viability_fitness[0, 0, :],
+            viability_m=cfg.viability_fitness[1, 0, :],
+            eggs_per_female=float(cfg.eggs_per_female),
+            sex_ratio=float(cfg.sex_ratio),
             female_compat=cfg.female_ztype_compatibility,
             male_compat=cfg.male_ztype_compatibility,
             female_only=cfg.female_only_by_sex_chrom,
@@ -60,13 +60,13 @@ class TestWFTickUnit:
             ind = run_wf_tick(
                 ind_count=ind,
                 offspring_tensor=cfg.offspring_tensor,
-                fecundity_f=cfg.fecundity_f,
-                fecundity_m=cfg.fecundity_m,
+                fecundity_f=cfg.fecundity_fitness[0],
+                fecundity_m=cfg.fecundity_fitness[1],
                 sexual_selection=cfg.sexual_selection_fitness,
-                viability_f=cfg.viability_f,
-                viability_m=cfg.viability_m,
-                eggs_per_female=float(cfg.eggs_per_female[()]),
-                sex_ratio=float(cfg.sex_ratio[()]),
+                viability_f=cfg.viability_fitness[0, 0, :],
+                viability_m=cfg.viability_fitness[1, 0, :],
+                eggs_per_female=float(cfg.eggs_per_female),
+                sex_ratio=float(cfg.sex_ratio),
                 female_compat=cfg.female_ztype_compatibility,
                 male_compat=cfg.male_ztype_compatibility,
                 female_only=cfg.female_only_by_sex_chrom,
@@ -86,13 +86,13 @@ class TestWFTickUnit:
         ref = run_wf_tick(
             ind_count=ind.copy(),
             offspring_tensor=cfg.offspring_tensor,
-            fecundity_f=cfg.fecundity_f,
-            fecundity_m=cfg.fecundity_m,
+            fecundity_f=cfg.fecundity_fitness[0],
+            fecundity_m=cfg.fecundity_fitness[1],
             sexual_selection=cfg.sexual_selection_fitness,
-            viability_f=cfg.viability_f,
-            viability_m=cfg.viability_m,
-            eggs_per_female=float(cfg.eggs_per_female[()]),
-            sex_ratio=float(cfg.sex_ratio[()]),
+            viability_f=cfg.viability_fitness[0, 0, :],
+            viability_m=cfg.viability_fitness[1, 0, :],
+            eggs_per_female=float(cfg.eggs_per_female),
+            sex_ratio=float(cfg.sex_ratio),
             female_compat=cfg.female_ztype_compatibility,
             male_compat=cfg.male_ztype_compatibility,
             female_only=cfg.female_only_by_sex_chrom,
@@ -109,13 +109,13 @@ class TestWFTickUnit:
             result = run_wf_tick(
                 ind_count=ind.copy(),
                 offspring_tensor=cfg.offspring_tensor,
-                fecundity_f=cfg.fecundity_f,
-                fecundity_m=cfg.fecundity_m,
+                fecundity_f=cfg.fecundity_fitness[0],
+                fecundity_m=cfg.fecundity_fitness[1],
                 sexual_selection=cfg.sexual_selection_fitness,
-                viability_f=cfg.viability_f,
-                viability_m=cfg.viability_m,
-                eggs_per_female=float(cfg.eggs_per_female[()]),
-                sex_ratio=float(cfg.sex_ratio[()]),
+                viability_f=cfg.viability_fitness[0, 0, :],
+                viability_m=cfg.viability_fitness[1, 0, :],
+                eggs_per_female=float(cfg.eggs_per_female),
+                sex_ratio=float(cfg.sex_ratio),
                 female_compat=cfg.female_ztype_compatibility,
                 male_compat=cfg.male_ztype_compatibility,
                 female_only=cfg.female_only_by_sex_chrom,
@@ -144,13 +144,13 @@ class TestWFTickUnit:
         ref = run_wf_tick(
             ind_count=ind.copy(),
             offspring_tensor=cfg.offspring_tensor,
-            fecundity_f=cfg.fecundity_f,
-            fecundity_m=cfg.fecundity_m,
+            fecundity_f=cfg.fecundity_fitness[0],
+            fecundity_m=cfg.fecundity_fitness[1],
             sexual_selection=cfg.sexual_selection_fitness,
-            viability_f=cfg.viability_f,
-            viability_m=cfg.viability_m,
-            eggs_per_female=float(cfg.eggs_per_female[()]),
-            sex_ratio=float(cfg.sex_ratio[()]),
+            viability_f=cfg.viability_fitness[0, 0, :],
+            viability_m=cfg.viability_fitness[1, 0, :],
+            eggs_per_female=float(cfg.eggs_per_female),
+            sex_ratio=float(cfg.sex_ratio),
             female_compat=cfg.female_ztype_compatibility,
             male_compat=cfg.male_ztype_compatibility,
             female_only=cfg.female_only_by_sex_chrom,
@@ -166,13 +166,13 @@ class TestWFTickUnit:
             result = run_wf_tick(
                 ind_count=ind.copy(),
                 offspring_tensor=cfg.offspring_tensor,
-                fecundity_f=cfg.fecundity_f,
-                fecundity_m=cfg.fecundity_m,
+                fecundity_f=cfg.fecundity_fitness[0],
+                fecundity_m=cfg.fecundity_fitness[1],
                 sexual_selection=cfg.sexual_selection_fitness,
-                viability_f=cfg.viability_f,
-                viability_m=cfg.viability_m,
-                eggs_per_female=float(cfg.eggs_per_female[()]),
-                sex_ratio=float(cfg.sex_ratio[()]),
+                viability_f=cfg.viability_fitness[0, 0, :],
+                viability_m=cfg.viability_fitness[1, 0, :],
+                eggs_per_female=float(cfg.eggs_per_female),
+                sex_ratio=float(cfg.sex_ratio),
                 female_compat=cfg.female_ztype_compatibility,
                 male_compat=cfg.male_ztype_compatibility,
                 female_only=cfg.female_only_by_sex_chrom,
@@ -210,22 +210,22 @@ class TestWFEndToEnd:
             ind = run_wf_tick(
                 ind_count=ind,
                 offspring_tensor=cfg.offspring_tensor,
-                fecundity_f=cfg.fecundity_f,
-                fecundity_m=cfg.fecundity_m,
+                fecundity_f=cfg.fecundity_fitness[0],
+                fecundity_m=cfg.fecundity_fitness[1],
                 sexual_selection=cfg.sexual_selection_fitness,
-                viability_f=cfg.viability_f,
-                viability_m=cfg.viability_m,
-                eggs_per_female=float(cfg.eggs_per_female[()]),
-                sex_ratio=float(cfg.sex_ratio[()]),
+                viability_f=cfg.viability_fitness[0, 0, :],
+                viability_m=cfg.viability_fitness[1, 0, :],
+                eggs_per_female=float(cfg.eggs_per_female),
+                sex_ratio=float(cfg.sex_ratio),
                 female_compat=cfg.female_ztype_compatibility,
                 male_compat=cfg.male_ztype_compatibility,
                 female_only=cfg.female_only_by_sex_chrom,
                 male_only=cfg.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
                 mode=3, stochastic=False,
-                mating_rate_f=cfg.female_adult_mating_rate,
-                mating_rate_m=cfg.male_adult_mating_rate,
-                reproduction_rate=cfg.reproduction_rate,
+                mating_rate_f=cfg.age_based_mating_rates[0, 1],
+                mating_rate_m=cfg.age_based_mating_rates[1, 1],
+                reproduction_rate=cfg.age_based_reproduction_rates[1],
             )
             history.append(ind.copy())
         return history
@@ -354,13 +354,13 @@ class TestWFEndToEnd:
             run_wf_tick(
                 ind_count=ind,
                 offspring_tensor=cfg.offspring_tensor,
-                fecundity_f=cfg.fecundity_f,
-                fecundity_m=cfg.fecundity_m,
+                fecundity_f=cfg.fecundity_fitness[0],
+                fecundity_m=cfg.fecundity_fitness[1],
                 sexual_selection=cfg.sexual_selection_fitness,
-                viability_f=cfg.viability_f,
-                viability_m=cfg.viability_m,
-                eggs_per_female=float(cfg.eggs_per_female[()]),
-                sex_ratio=float(cfg.sex_ratio[()]),
+                viability_f=cfg.viability_fitness[0, 0, :],
+                viability_m=cfg.viability_fitness[1, 0, :],
+                eggs_per_female=float(cfg.eggs_per_female),
+                sex_ratio=float(cfg.sex_ratio),
                 female_compat=cfg.female_ztype_compatibility,
                 male_compat=cfg.male_ztype_compatibility,
                 female_only=cfg.female_only_by_sex_chrom,
@@ -390,27 +390,27 @@ class TestRegressionFixes:
         result = run_wf_tick(
             ind_count=ind,
             offspring_tensor=cfg.offspring_tensor,
-            fecundity_f=cfg.fecundity_f,
-            fecundity_m=cfg.fecundity_m,
+            fecundity_f=cfg.fecundity_fitness[0],
+            fecundity_m=cfg.fecundity_fitness[1],
             sexual_selection=cfg.sexual_selection_fitness,
-            viability_f=cfg.viability_f,
-            viability_m=cfg.viability_m,
-            eggs_per_female=float(cfg.eggs_per_female[()]),
-            sex_ratio=float(cfg.sex_ratio[()]),
+            viability_f=cfg.viability_fitness[0, 0, :],
+            viability_m=cfg.viability_fitness[1, 0, :],
+            eggs_per_female=float(cfg.eggs_per_female),
+            sex_ratio=float(cfg.sex_ratio),
             female_compat=cfg.female_ztype_compatibility,
             male_compat=cfg.male_ztype_compatibility,
             female_only=cfg.female_only_by_sex_chrom,
             male_only=cfg.male_only_by_sex_chrom,
             has_sex_chromosomes=cfg.has_sex_chromosomes,
             mode=1, stochastic=False,
-            carrying_capacity=float(cfg.carrying_capacity[()]),
-            juvenile_growth_mode=int(cfg.juvenile_growth_mode[()]),
-            low_density_growth_rate=float(cfg.low_density_growth_rate[()]),
-            expected_competition_strength=float(cfg.expected_competition_strength[()]),
-            expected_survival_rate=float(cfg.expected_survival_rate[()]),
-            mating_rate_f=cfg.female_adult_mating_rate,
-            mating_rate_m=cfg.male_adult_mating_rate,
-            reproduction_rate=cfg.reproduction_rate,
+            carrying_capacity=float(cfg.carrying_capacity),
+            juvenile_growth_mode=int(cfg.juvenile_growth_mode),
+            low_density_growth_rate=float(cfg.low_density_growth_rate),
+            expected_competition_strength=float(cfg.expected_competition_strength),
+            expected_survival_rate=float(cfg.expected_survival_rate),
+            mating_rate_f=cfg.age_based_mating_rates[0, 1],
+            mating_rate_m=cfg.age_based_mating_rates[1, 1],
+            reproduction_rate=cfg.age_based_reproduction_rates[1],
         )
         total = result.sum()
         # With K=10 and expected offspring >> K, density regulation caps
@@ -462,13 +462,13 @@ class TestWFNonUniformSelection:
             ind_wf = run_wf_tick(
                 ind_count=ind_wf,
                 offspring_tensor=cfg_wf.offspring_tensor,
-                fecundity_f=cfg_wf.fecundity_f,
-                fecundity_m=cfg_wf.fecundity_m,
+                fecundity_f=cfg_wf.fecundity_fitness[0],
+                fecundity_m=cfg_wf.fecundity_fitness[1],
                 sexual_selection=cfg_wf.sexual_selection_fitness,
-                viability_f=cfg_wf.viability_f,
-                viability_m=cfg_wf.viability_m,
-                eggs_per_female=float(cfg_wf.eggs_per_female[()]),
-                sex_ratio=float(cfg_wf.sex_ratio[()]),
+                viability_f=cfg_wf.viability_fitness[0, 0, :],
+                viability_m=cfg_wf.viability_fitness[1, 0, :],
+                eggs_per_female=float(cfg_wf.eggs_per_female),
+                sex_ratio=float(cfg_wf.sex_ratio),
                 female_compat=cfg_wf.female_ztype_compatibility,
                 male_compat=cfg_wf.male_ztype_compatibility,
                 female_only=cfg_wf.female_only_by_sex_chrom,
@@ -478,7 +478,7 @@ class TestWFNonUniformSelection:
             )
 
         pop_std = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
+            species=sp, stochastic=False, backend="python",
         ).initial_state(
             individual_count={"female": {"A|A": 100, "A|a": 100},
                               "male":   {"A|A": 100, "a|a": 100}},
@@ -496,7 +496,7 @@ class TestCompressConfig:
 
     def test_compress_config_does_not_mutate_input(self):
         import natal as nt
-        from natal.data import compress_config
+        from natal.frontend.data import compress_config
 
         sp = nt.Species.from_dict("cc1", {"c1": {"l1": ["A", "a"]}})
         pop = nt.DiscreteGenerationPopulation.setup(
@@ -516,8 +516,8 @@ class TestCompressConfig:
 
     def test_compress_config_includes_initial_sperm_storage(self):
         import natal as nt
-        from natal.configurator import Configurator
-        from natal.data import compress_config
+        from natal.frontend.configurator import Configurator
+        from natal.frontend.data import compress_config
 
         sp = nt.Species.from_dict("cc2", {"c1": {"l1": ["A", "a"]}})
         pop = Configurator.for_age_structured(sp).setup(

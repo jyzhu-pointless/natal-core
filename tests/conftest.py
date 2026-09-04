@@ -1,73 +1,16 @@
 """Shared pytest fixtures and configuration for the natal-core test suite."""
 
-import os
-
 import pytest  # type: ignore
 
 import natal as nt
 
 
-# If Numba-compiled tests fail with "NRT_adapt_ndarray_to_python descr NULL",
-# the JIT cache is stale.  Clear it:
-#   rm -rf .numba_cache/hook_codegen
-#   rm -rf __pycache__
-# This can happen after structural changes to @njit_switch-decorated modules.
-
-def pytest_configure(config: pytest.Config) -> None:
-    """Register markers; conditionally disable Numba via env var.
-
-    Set ``NATAL_DISABLE_NUMBA=1`` to run ``@pytest.mark.numba_off`` tests
-    (those that use Python, non-njit hooks).
-    """
-    _numba_off_env = os.environ.get("NATAL_DISABLE_NUMBA") == "1"
-    if _numba_off_env:
-        nt.disable_numba()
-
-    config.addinivalue_line(
-        "markers",
-        "numba_off: test requires Numba disabled (uses Python hooks).  "
-        "Skipped by default.  Run with NATAL_DISABLE_NUMBA=1 to execute.",
-    )
-    config.addinivalue_line(
-        "markers",
-        "numba_on: test requires Numba enabled.  "
-        "Skipped when running with NATAL_DISABLE_NUMBA=1.",
-    )
-
-
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip tests whose Numba requirement doesn't match the current state.
-    
-    Also reorder spatial builder tests to run before discrete population tests,
-    avoiding a Numba JIT cache conflict (NRT_adapt_ndarray_to_python 'descr' is NULL).
-    """
-    # Move spatial builder coverage tests to the front to avoid Numba cache conflict
+    """Reorder spatial builder tests to run before discrete population tests."""
+    # Move spatial builder coverage tests to the front.
     spatial = [i for i in items if "test_spatial_builder_coverage" in i.nodeid]
     others = [i for i in items if "test_spatial_builder_coverage" not in i.nodeid]
     items[:] = spatial + others
-    
-    if nt.is_numba_enabled():
-        skip_numba_off = pytest.mark.skip(
-            reason="requires Numba disabled — run with NATAL_DISABLE_NUMBA=1"
-        )
-        for item in items:
-            if item.get_closest_marker("numba_off"):
-                item.add_marker(skip_numba_off)
-    else:
-        skip_numba_on = pytest.mark.skip(
-            reason="requires Numba enabled — run without NATAL_DISABLE_NUMBA"
-        )
-        for item in items:
-            if item.get_closest_marker("numba_on"):
-                item.add_marker(skip_numba_on)
-
-
-@pytest.fixture(autouse=True)
-def _numba_off_guard() -> None:
-    """Keep Numba disabled between tests when NATAL_DISABLE_NUMBA=1."""
-    if os.environ.get("NATAL_DISABLE_NUMBA") == "1":
-        nt.disable_numba()
-    yield
 
 
 @pytest.fixture

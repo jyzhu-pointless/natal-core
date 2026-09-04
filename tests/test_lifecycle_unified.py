@@ -1,12 +1,9 @@
-"""Tests for the unified lifecycle source functions and codegen assembler.
+"""Tests for the unified lifecycle source functions.
 
-These tests cover the single-source-of-truth lifecycle orchestration
-introduced by the lifecycle-tick-unification design:
+These tests cover the single-source-of-truth lifecycle orchestration:
 
 * direct Python execution of the three tick functions,
-* generated-module parity with the source functions,
-* removal of lifecycle template files,
-* rejection of legacy 1-parameter hook signatures.
+* removal of lifecycle template files.
 """
 
 from __future__ import annotations
@@ -17,10 +14,23 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.engine import lifecycle as lifecycle_engine
-from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
-from natal.hooks.types import EVENT_FIRST, RESULT_STOP
-from natal.numba.utils import numba_disabled
+from natal.frontend.hooks.types import empty_hook_program
+from natal.backends.reference import lifecycle as lifecycle_engine
+from natal.frontend.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
+from natal.frontend.hooks.types import EVENT_FIRST, RESULT_STOP
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def python_reference():
+    """Portable stand-in for the retired compiled-backend disable guard.
+
+    The only non-Rust execution vehicle is the pure-Python reference;
+    this context manager is a semantic no-op kept so test bodies that
+    previously forced the Python path stay readable.
+    """
+    yield
 
 
 def _species(name: str) -> nt.Species:
@@ -79,7 +89,7 @@ def _age_population(name: str) -> nt.AgeStructuredPopulation:
 
 def test_discrete_tick_stage_order_and_stop() -> None:
     """The unified discrete tick fires hooks in first/early/late order."""
-    with numba_disabled():
+    with python_reference():
         pop = _discrete_population("lifecycle_discrete_order")
         events: list[str] = []
 
@@ -98,10 +108,10 @@ def test_discrete_tick_stage_order_and_stop() -> None:
             events.append("late")
             return 0
 
-        state, result = lifecycle_engine.run_discrete_tick(
+        state, result, _config = lifecycle_engine.run_discrete_tick(
             pop.state,
             pop.config,
-            pop._create_empty_hook_program(),
+            empty_hook_program(),
             first_hook,
             early_hook,
             late_hook,
@@ -114,7 +124,7 @@ def test_discrete_tick_stage_order_and_stop() -> None:
 
 def test_age_structured_tick_full_order() -> None:
     """The unified age-structured tick advances only after all three events."""
-    with numba_disabled():
+    with python_reference():
         pop = _age_population("lifecycle_age_order")
         events: list[str] = []
 
@@ -126,10 +136,10 @@ def test_age_structured_tick_full_order() -> None:
 
             return hook_fn
 
-        state, result = lifecycle_engine.run_structured_tick(
+        state, result, _config = lifecycle_engine.run_structured_tick(
             pop.state,
             pop.config,
-            pop._create_empty_hook_program(),
+            empty_hook_program(),
             make_hook("first"),
             make_hook("early"),
             make_hook("late"),
@@ -142,7 +152,7 @@ def test_age_structured_tick_full_order() -> None:
 
 def test_wf_tick_only_runs_first_hook() -> None:
     """The fused Wright-Fisher tick ignores early and late hooks."""
-    with numba_disabled():
+    with python_reference():
         pop = _discrete_population("lifecycle_wf_order")
         config = pop.config._replace(extreme_speed_mode=3)
         events: list[str] = []
@@ -157,10 +167,10 @@ def test_wf_tick_only_runs_first_hook() -> None:
             events.append("never")
             return 0
 
-        state, result = lifecycle_engine.run_wf_tick(
+        state, result, _config = lifecycle_engine.run_wf_tick(
             pop.state,
             config,
-            pop._create_empty_hook_program(),
+            empty_hook_program(),
             first_hook,
             never_hook,
             never_hook,
@@ -173,7 +183,7 @@ def test_wf_tick_only_runs_first_hook() -> None:
 
 def test_structured_tick_stop_short_circuits() -> None:
     """An early STOP returns before survival, late hook, and aging."""
-    with numba_disabled():
+    with python_reference():
         pop = _age_population("lifecycle_age_stop")
         events: list[str] = []
 
@@ -192,10 +202,10 @@ def test_structured_tick_stop_short_circuits() -> None:
             events.append("late")
             return 0
 
-        state, result = lifecycle_engine.run_structured_tick(
+        state, result, _config = lifecycle_engine.run_structured_tick(
             pop.state,
             pop.config,
-            pop._create_empty_hook_program(),
+            empty_hook_program(),
             first_hook,
             early_hook,
             late_hook,
@@ -208,7 +218,7 @@ def test_structured_tick_stop_short_circuits() -> None:
 
 def test_wf_tick_stop_short_circuits() -> None:
     """A FIRST STOP returns before the fused Wright-Fisher transition."""
-    with numba_disabled():
+    with python_reference():
         pop = _discrete_population("lifecycle_wf_stop")
         config = pop.config._replace(extreme_speed_mode=3)
 
@@ -216,10 +226,10 @@ def test_wf_tick_stop_short_circuits() -> None:
             _ = state, config, deme_id
             return RESULT_STOP
 
-        state, result = lifecycle_engine.run_wf_tick(
+        state, result, _config = lifecycle_engine.run_wf_tick(
             pop.state,
             config,
-            pop._create_empty_hook_program(),
+            empty_hook_program(),
             stopping_hook,
             lambda state, config, deme_id: 0,
             lambda state, config, deme_id: 0,
@@ -227,64 +237,6 @@ def test_wf_tick_stop_short_circuits() -> None:
 
     assert result == RESULT_STOP
     assert state.n_tick == 0
-
-def test_assemble_module_matches_source_function() -> None:
-    """A generated discrete module behaves like the direct source function."""
-    with numba_disabled():
-        pop = _discrete_population("lifecycle_assembler_parity")
-        source = lifecycle_engine.assemble_lifecycle_module(
-            "discrete", "_tick_under_test", "_run_under_test"
-        )
-        namespace: dict[str, object] = {}
-        exec(compile(source, "<generated>", "exec"), namespace)
-        generated_tick = namespace["_tick_under_test"]
-
-        registry = pop._create_empty_hook_program()
-
-        def first_hook(state, config, deme_id):
-            _ = config, deme_id
-            state.individual_count[1, 1, 0] += 1.0
-            return 0
-
-        direct_state, direct_result = lifecycle_engine.run_discrete_tick(
-            pop.state, pop.config, registry, first_hook,
-            lambda state, config, deme_id: 0,
-            lambda state, config, deme_id: 0,
-        )
-        generated_state, generated_result = generated_tick(
-            pop.state, pop.config, registry, -1,
-        )
-
-    assert direct_result == generated_result == 0
-    np.testing.assert_allclose(
-        direct_state.individual_count, generated_state.individual_count,
-    )
-    assert direct_state.n_tick == generated_state.n_tick
-
-
-@pytest.mark.numba_on
-def test_generated_wrapper_matches_python_source_under_numba() -> None:
-    """Numba-generated and direct Python ticks produce identical states."""
-    pop = _discrete_population("lifecycle_numba_parity")
-    wrappers = pop.get_compiled_event_hooks()
-    registry = wrappers.hooks.registry
-    assert registry is not None
-    assert wrappers.run_discrete_tick_fn is not None
-
-    direct_state, direct_result = lifecycle_engine.run_discrete_tick(
-        pop.state, pop.config, registry,
-        wrappers.hooks.first, wrappers.hooks.early, wrappers.hooks.late,
-    )
-    generated_state, generated_result = wrappers.run_discrete_tick_fn(
-        pop.state, pop.config, registry, -1,
-    )
-
-    assert direct_result == generated_result == 0
-    np.testing.assert_allclose(
-        direct_state.individual_count, generated_state.individual_count,
-    )
-    assert direct_state.n_tick == generated_state.n_tick
-
 
 def test_lifecycle_template_files_are_removed() -> None:
     """The old lifecycle template files no longer exist."""
@@ -301,10 +253,10 @@ def test_lifecycle_template_files_are_removed() -> None:
 
 def test_csr_kernel_accepts_none_sperm_store() -> None:
     """``execute_csr_event_program_with_state`` accepts ``None`` sperm."""
-    with numba_disabled():
+    with python_reference():
         pop = _discrete_population("lifecycle_csr_none_sperm")
         result = execute_csr_event_program_with_state(
-            pop._create_empty_hook_program(),
+            empty_hook_program(),
             EVENT_FIRST,
             pop.state.individual_count,
             None,
