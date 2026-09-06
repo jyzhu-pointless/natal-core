@@ -40,7 +40,7 @@ except ImportError:
 
     ui = _DummyUI()  # type: ignore[assignment]
 
-from natal.frontend.data import CONCAVE, FIXED, LINEAR, NO_COMPETITION
+from natal.frontend.data import BEVERTON_HOLT, FIXED, LINEAR, NO_COMPETITION
 
 
 def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
@@ -121,7 +121,7 @@ def growth_mode_name(mode: int) -> str:
         NO_COMPETITION: "NO_COMPETITION",
         FIXED: "FIXED",
         LINEAR: "LINEAR",
-        CONCAVE: "CONCAVE",
+        BEVERTON_HOLT: "BEVERTON_HOLT",
     }
     return mapping.get(int(mode), f"UNKNOWN_{mode}")
 

@@ -1119,7 +1119,9 @@ def sync_equilibrium_metrics(config: "ModelDraft") -> "ModelDraft":
 NO_COMPETITION = 0
 FIXED = 1
 LOGISTIC = LINEAR = 2
-CONCAVE = BEVERTON_HOLT = 3
+BEVERTON_HOLT = 3
+
+
 def compute_scaling_factor_fixed(
     total_age_0: float,
     carrying_capacity: float,
@@ -1217,7 +1219,7 @@ def compute_scaling_factor_beverton_holt(
     expected_survival_rate: float,
     low_density_growth_rate: float,
 ) -> float:
-    """Compute BEVERTON_HOLT (CONCAVE) mode scaling factor.
+    """Compute BEVERTON_HOLT mode scaling factor.
 
     Args:
         actual_competition_strength: Current competition strength

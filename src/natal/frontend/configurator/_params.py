@@ -28,7 +28,6 @@ from numpy.typing import NDArray
 
 from natal.frontend.data import (
     BEVERTON_HOLT,
-    CONCAVE,
     FIXED,
     LINEAR,
     LOGISTIC,
@@ -178,7 +177,7 @@ def resolve_growth_mode(mode: Union[int, str]) -> int:
     """Normalize a juvenile growth mode specification to the internal integer constant.
 
     Accepts either the string name (case-insensitive: ``"logistic"``,
-    ``"concave"``, ``"beverton_holt"``, ``"fixed"``, ``"linear"``,
+    ``"beverton_holt"``, ``"fixed"``, ``"linear"``,
     ``"no_competition"``) or the corresponding integer constant from
     :mod:`natal.frontend.data`.  Strings are mapped via a lookup table; integers
     are validated against the set of known constants.
@@ -194,12 +193,12 @@ def resolve_growth_mode(mode: Union[int, str]) -> int:
             not a valid constant.
     """
     if isinstance(mode, int):
-        if mode not in [NO_COMPETITION, FIXED, LOGISTIC, CONCAVE, BEVERTON_HOLT, LINEAR]:
+        if mode not in [NO_COMPETITION, FIXED, LOGISTIC, BEVERTON_HOLT, LINEAR]:
             raise ValueError(f"Invalid growth mode constant: {mode}")
         return mode
     mode_map = {
         'NO_COMPETITION': NO_COMPETITION, 'FIXED': FIXED,
-        'LOGISTIC': LOGISTIC, 'CONCAVE': CONCAVE,
+        'LOGISTIC': LOGISTIC,
         'BEVERTON_HOLT': BEVERTON_HOLT, 'LINEAR': LINEAR,
     }
     upper_mode = mode.upper()

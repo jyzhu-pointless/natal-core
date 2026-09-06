@@ -142,6 +142,24 @@ class TestModeEnumShape:
         with pytest.raises(ValueError, match="Unknown growth mode"):
             dispatch(live, "juvenile_growth_mode", "sigma")
 
+    def test_concave_alias_fully_removed(self):
+        """Negative contract: no import path reaches the CONCAVE alias."""
+        import natal as nt
+        from natal.frontend.configurator._params import resolve_growth_mode
+
+        with pytest.raises(ImportError):
+            from natal.frontend.data import CONCAVE  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+        with pytest.raises(ImportError):
+            from natal.frontend.data.constants import CONCAVE  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+        assert not hasattr(nt, "CONCAVE")
+        # The legacy resolver rejects both spellings but keeps mode 3 valid.
+        with pytest.raises(ValueError, match="Unknown growth mode"):
+            resolve_growth_mode("concave")
+        with pytest.raises(ValueError, match="Unknown growth mode"):
+            resolve_growth_mode("CONCAVE")
+        assert resolve_growth_mode(3) == 3
+        assert resolve_growth_mode("beverton_holt") == 3
+
 
 class TestAgeVecShape:
     def test_list_and_scalar_broadcast(self):

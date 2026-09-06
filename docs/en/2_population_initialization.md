@@ -177,7 +177,7 @@ Competition parameters take effect during the survival phase of the population.
 | `no_competition` | 0 | 1.0 | no density regulation |
 | `fixed` | 1 | `min(1, K/N)` | fixed clamp on the total age-0 count |
 | `linear` (`"logistic"` is a historical alias) | 2 | `max(0, r - (r-1)·x) · s` | growth rate declines linearly with competition |
-| `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | hyperbolic (concave) curve; the `"concave"` string has been removed (using it raises a `ValueError` with a migration hint; the integer constant `CONCAVE` remains as a compatibility alias) |
+| `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | hyperbolic (concave) curve; the legacy aliases `"concave"` and the integer constant `CONCAVE` have both been removed (using them raises a `ValueError` / `AttributeError` with a migration hint) |
 | `ricker` | 4 | `r^(1-x) · s` | exponential overcompensation; oscillates for `r > e` |
 
 Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-identical curve scaling on both backends (rust / python).

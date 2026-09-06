@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import natal as nt
 from natal.frontend.configurator import set_param
-from natal.frontend.data import CONCAVE
+from natal.frontend.data import BEVERTON_HOLT
 from natal.frontend.hooks.tick_context import TickContext
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -64,7 +64,7 @@ pop = (
     .competition(                                     # ⑤ 竞争参数
         carrying_capacity=10000,          # → config.carrying_capacity
         low_density_growth_rate=6.0,      # → config.low_density_growth_rate
-        juvenile_growth_mode=CONCAVE,   # → config.juvenile_growth_mode
+        juvenile_growth_mode=BEVERTON_HOLT,   # → config.juvenile_growth_mode
     )
     .custom(temperature=25.0, debug=False)             # ⑥ 自定义字段
     .build(name="demo_params")                         # ⑦ 终端：apply() + 创建 Population
@@ -77,8 +77,8 @@ print(f"  K          = {pop.config.carrying_capacity}")
 print(f"  eggs       = {pop.config.eggs_per_female}")
 print(f"  sex_ratio  = {pop.config.sex_ratio}")
 print(f"  growth_r   = {pop.config.low_density_growth_rate}")
-print(f"  temperature = {pop.config.custom['temperature'][()]}")
-print(f"  debug      = {bool(pop.config.custom['debug'][()])}")
+print(f"  temperature = {pop.config.custom['temperature']}")
+print(f"  debug      = {bool(pop.config.custom['debug'])}")
 print(f"  population = {pop.state.individual_count.sum():.0f} individuals")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -104,8 +104,8 @@ print(f"  r    = {pop.config.low_density_growth_rate}")
 
 # ── 2c. custom 字段通过 pop.update().custom() 重设整个 custom ──
 pop.update().custom(temperature=35.0, debug=True)
-print(f"  temperature = {pop.config.custom['temperature'][()]}  (升高!)")
-print(f"  debug       = {bool(pop.config.custom['debug'][()])}")
+print(f"  temperature = {pop.config.custom['temperature']}  (升高!)")
+print(f"  debug       = {bool(pop.config.custom['debug'])}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -114,7 +114,7 @@ print(f"  debug       = {bool(pop.config.custom['debug'][()])}")
 # set_param(config, "name", v) 是所有高层 API 的底层实现：
 #   1. 在 parameters.py 注册表中查找参数名（支持全名、短名、别名）
 #   2. 定位到正确的 config 字段和数组索引
-#   3. 原地写入（0-d ndarray 用 field[()] = v，数组索引用 field[idx] = v）
+#   3. 原地写入（数组用 field[idx] = v，custom 槽位用 dict 写入）
 #   4. equilibrium-sensitive 参数（K/eggs/sr）自动调用 sync_equilibrium_metrics()
 #
 # 适用场景：Python 侧脚本、objmode hook 内、notebook 交互式分析
@@ -169,7 +169,7 @@ pop2 = (
     .competition(
         carrying_capacity=10000,
         low_density_growth_rate=6.0,
-        juvenile_growth_mode=CONCAVE,
+        juvenile_growth_mode=BEVERTON_HOLT,
     )
     .hooks(hook_degrade, hook_recover)
     .build()

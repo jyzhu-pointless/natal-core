@@ -186,7 +186,7 @@ NATAL Core 提供两种主要的种群类型：
 | `no_competition` | 0 | 1.0 | 无密度调节 |
 | `fixed` | 1 | `min(1, K/N)` | 按总 0 龄个体数固定截断 |
 | `linear`（`"logistic"` 为历史别名） | 2 | `max(0, r - (r-1)·x) · s` | 增长率随竞争线性下降 |
-| `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | 双曲（凹）曲线；`"concave"` 字符串已被移除（使用它会得到带迁移提示的 `ValueError`，整数常量 `CONCAVE` 仍保留为兼容别名） |
+| `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | 双曲（凹）曲线；旧别名 `"concave"` 与整数常量 `CONCAVE` 均已移除（使用它们会得到带迁移提示的 `ValueError` / `AttributeError`） |
 | `ricker` | 4 | `r^(1-x) · s` | 指数过度补偿；`r > e` 时出现振荡 |
 
 三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下两后端（rust / python）产生逐位一致的曲线缩放。

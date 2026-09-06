@@ -67,7 +67,7 @@ cfg.survival(
 cfg.competition(
     carrying_capacity=10000,          # equilibrium carrying capacity K
     low_density_growth_rate=6.0,      # low-density growth rate r
-    juvenile_growth_mode="concave",   # density-regulation function
+    juvenile_growth_mode="beverton_holt",   # density-regulation function
 )
 ```
 
