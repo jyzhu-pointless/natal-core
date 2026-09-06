@@ -27,7 +27,6 @@ Core modules and responsibilities:
 | `output/observation.py` | Defines `Observation`, `ObservationResult`, `ObservationFilter`, and identity observations |
 | `output/history.py` | Defines immutable schemas, typed array views, and post-hoc projection of raw History |
 | `output/_recording.py` | Compiles the `RecordingPlan`, row width, and spatial layout at build time |
-| `output/record.py` | Provides uniform observation-row encoding for non-spatial engines |
 | `engine/templates/spatial_lifecycle_*.tmpl.py` | Runs the spatial lifecycle and returns regular raw batches |
 | `spatial/population.py` | Applies the canonical Observation at the spatial container boundary, then commits History |
 

@@ -8,6 +8,7 @@ Covers:
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import natal as nt
@@ -186,16 +187,171 @@ class TestRefreshModifiers:
     """Tests for ``refresh_modifiers()`` — rebuild modifier lists and maps from sources.
 
     ``refresh_modifiers`` replaces the former ``rebuild_from_presets``.
-    These tests require full ``GeneticPreset`` infrastructure and are skipped.
+    With no presets registered the refresh must leave the modifier lists
+    empty and rebuild the pure Mendelian probability tables.
     """
 
-    @pytest.mark.skip(reason="Needs full GeneticPreset infrastructure")
     def test_no_presets_no_error(self, simple_species: nt.Species) -> None:
-        ...
+        """Refreshing with no presets keeps both modifier lists empty."""
+        pop = _build_pop(simple_species, "refresh_no_presets")
+        pop.refresh_modifiers()
+        assert pop._gamete_modifiers == []
+        assert pop._zygote_modifiers == []
 
-    @pytest.mark.skip(reason="Needs full GeneticPreset infrastructure")
     def test_config_maps_not_none(self, simple_species: nt.Species) -> None:
-        ...
+        """After refresh the three config maps exist with consistent shapes."""
+        pop = _build_pop(simple_species, "refresh_maps")
+        pop.refresh_modifiers()
+        cfg = pop.config
+        n_z = int(cfg.n_ztypes)
+        n_g = int(cfg.n_gtypes)
+        assert cfg.zygotes_to_gametes_map is not None
+        assert cfg.zygotes_to_gametes_map.shape == (2, n_z, n_g)
+        assert cfg.gametes_to_zygotes_map is not None
+        assert cfg.gametes_to_zygotes_map.shape == (n_g, n_g, n_z)
+        assert cfg.offspring_tensor is not None
+        # Single gamete label ("default"): the fusion collapses the label axis,
+        # leaving (maternal, paternal, offspring).
+        assert cfg.offspring_tensor.shape == (n_z, n_z, n_z)
+
+    def test_repeated_refresh_bitwise_idempotent(
+        self, simple_species: nt.Species
+    ) -> None:
+        """A second refresh rebuilds byte-identical maps.
+
+        Rebuilding from sources must not compound: the maps are derived
+        from the same preset/manual lists each time, so any drift would
+        mean state leaks between refreshes.
+        """
+        pop = _build_pop(simple_species, "refresh_twice")
+        pop.refresh_modifiers()
+        offspring_first = pop.config.offspring_tensor.copy()
+        z2g_first = pop.config.zygotes_to_gametes_map.copy()
+        g2z_first = pop.config.gametes_to_zygotes_map.copy()
+
+        pop.refresh_modifiers()
+
+        np.testing.assert_array_equal(pop.config.offspring_tensor, offspring_first)
+        np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, z2g_first)
+        np.testing.assert_array_equal(pop.config.gametes_to_zygotes_map, g2z_first)
+
+    def test_mendelian_offspring_tensor_values(
+        self, simple_species: nt.Species
+    ) -> None:
+        """No-preset refresh yields textbook Mendelian segregation.
+
+        Genotype order for this species is WT/WT, WT/Dr, WT/R2, Dr/Dr,
+        Dr/R2, R2/R2 (one locus, three alleles).
+        """
+        pop = _build_pop(simple_species, "refresh_mendelian")
+        pop.refresh_modifiers()
+        tensor = pop.config.offspring_tensor
+        names = [str(gt) for gt in pop._index_registry.index_to_genotype]
+        idx = {name: i for i, name in enumerate(names)}
+
+        # Heterozygote x same heterozygote: 1:2:1 segregation.
+        hd = idx["WT|Dr"]
+        np.testing.assert_allclose(
+            tensor[hd, hd, :], [0.25, 0.5, 0.0, 0.25, 0.0, 0.0]
+        )
+        # Homozygote x homozygote: all offspring are parental.
+        np.testing.assert_allclose(
+            tensor[idx["WT|WT"], idx["WT|WT"], :],
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        # Reciprocal crosses agree (autosome, no sex-linked transmission).
+        np.testing.assert_allclose(
+            tensor[hd, idx["WT|WT"], :], [0.5, 0.5, 0.0, 0.0, 0.0, 0.0]
+        )
+        np.testing.assert_allclose(
+            tensor[idx["WT|WT"], hd, :], [0.5, 0.5, 0.0, 0.0, 0.0, 0.0]
+        )
+        # Every parental pair produces a normalized distribution.
+        n = len(names)
+        np.testing.assert_allclose(tensor.sum(axis=-1), np.ones((n, n)))
+
+    def test_refresh_rebuilds_maps_from_source_not_stale_arrays(
+        self, simple_species: nt.Species
+    ) -> None:
+        """In-place corruption of the config maps is repaired by a refresh.
+
+        The refresh must derive all three probability tables from the
+        registry and the modifier source lists, never from the arrays
+        currently stored in ``config``.  Otherwise external in-place
+        mutation of the published (writeable) arrays would compound
+        into every later refresh.
+        """
+        pop = _build_pop(simple_species, "refresh_repair")
+        pop.refresh_modifiers()
+        expected_offspring = pop.config.offspring_tensor.copy()
+        expected_z2g = pop.config.zygotes_to_gametes_map.copy()
+        expected_g2z = pop.config.gametes_to_zygotes_map.copy()
+
+        # Corrupt the published arrays in place (they are writeable today).
+        pop.config.offspring_tensor.fill(0.125)
+        pop.config.zygotes_to_gametes_map.fill(0.5)
+        pop.config.gametes_to_zygotes_map.fill(0.75)
+
+        pop.refresh_modifiers()
+
+        np.testing.assert_array_equal(
+            pop.config.offspring_tensor, expected_offspring
+        )
+        np.testing.assert_array_equal(
+            pop.config.zygotes_to_gametes_map, expected_z2g
+        )
+        np.testing.assert_array_equal(
+            pop.config.gametes_to_zygotes_map, expected_g2z
+        )
+
+    def test_mendelian_meiosis_and_fusion_map_values(
+        self, simple_species: nt.Species
+    ) -> None:
+        """No-preset refresh yields exact meiosis and fusion maps.
+
+        The offspring tensor is a convolution of these two tables, so
+        their values are pinned separately: ``z2g[sex, genotype, gamete]``
+        is the segregation distribution of one parent, and
+        ``g2z[g1, g2, offspring]`` is one-hot on the unordered genotype
+        of the gamete pair.
+        """
+        pop = _build_pop(simple_species, "refresh_map_values")
+        pop.refresh_modifiers()
+        z2g = pop.config.zygotes_to_gametes_map
+        g2z = pop.config.gametes_to_zygotes_map
+        geno = {
+            str(gt): i for i, gt in enumerate(pop._index_registry.index_to_genotype)
+        }
+        haplo = {
+            str(h): i for i, h in enumerate(pop._index_registry.index_to_haplo)
+        }
+
+        # Heterozygote WT|Dr: Mendelian 1:1 segregation in both sexes.
+        np.testing.assert_allclose(z2g[0, geno["WT|Dr"], :], [0.5, 0.5, 0.0])
+        np.testing.assert_allclose(z2g[1, geno["WT|Dr"], :], [0.5, 0.5, 0.0])
+        # Homozygote WT|WT transmits only the WT gamete.
+        np.testing.assert_allclose(z2g[0, geno["WT|WT"], :], [1.0, 0.0, 0.0])
+        # Invariant: every genotype's gamete distribution is normalized
+        # in both sexes (modifier probability rows sum to 1).
+        np.testing.assert_allclose(z2g.sum(axis=-1), np.ones((2, len(geno))))
+
+        # Fusion is one-hot on the unordered genotype of the allele pair,
+        # independent of which parent contributed which allele.
+        one_hot = np.eye(len(geno))
+        for g1, g2, genotype in (
+            ("WT", "WT", "WT|WT"),
+            ("WT", "Dr", "WT|Dr"),
+            ("Dr", "WT", "WT|Dr"),
+            ("Dr", "Dr", "Dr|Dr"),
+            ("WT", "R2", "WT|R2"),
+        ):
+            np.testing.assert_array_equal(
+                g2z[haplo[g1], haplo[g2], :], one_hot[geno[genotype]]
+            )
+        # Invariant: fusing any gamete pair produces exactly one genotype.
+        np.testing.assert_allclose(
+            g2z.sum(axis=-1), np.ones((len(haplo), len(haplo)))
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

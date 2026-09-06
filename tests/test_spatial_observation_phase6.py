@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import replace
 from typing import Literal, TypeAlias
 
@@ -9,7 +10,6 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.frontend.output.record as record_module
 from natal.backends.reference.spatial_simulator import run_spatial_steps_with_migration
 
 from contextlib import contextmanager
@@ -1075,7 +1075,10 @@ def test_age_spatial_backends_continue_with_sparse_exact_history(
 
 def test_spatial_observation_has_no_compact_or_sentinel_representation() -> None:
     """Regular observation arrays replace CompactMeta and sentinel padding."""
-    assert hasattr(record_module, "CompactMeta") is False
+    # CompactMeta's last home was the deleted panmictic row-encoder module;
+    # the module itself must now be strictly unimportable.
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("natal.frontend.output.record")
     population = _build_discrete(
         "phase6_no_compact",
         demes=[2, 0],

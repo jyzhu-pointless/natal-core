@@ -27,7 +27,6 @@ Population state
 | `output/observation.py` | 定义 `Observation`、`ObservationResult`、`ObservationFilter` 与恒等观测 |
 | `output/history.py` | 定义不可变 schema、类型化数组视图、raw History 的事后投影 |
 | `output/_recording.py` | 在构建阶段编译 `RecordingPlan`、行宽与空间布局 |
-| `output/record.py` | 为非空间引擎提供统一的观测行编码 |
 | `engine/templates/spatial_lifecycle_*.tmpl.py` | 运行空间生命周期并传回规则化 raw batch |
 | `spatial/population.py` | 在空间容器边界应用 canonical Observation，再提交 History |
 
