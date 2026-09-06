@@ -7,7 +7,7 @@ NATAL Core framework.
 """
 
 from ._builders import (
-    build_custom_array,
+    build_custom_slots,
     build_discrete_engine_config,
     build_population_config,
     compress_config,
@@ -22,7 +22,7 @@ from ._extract import (
     extract_zygote_frequencies,
 )
 from .config import ModelDraft
-from .constants import BEVERTON_HOLT, CONCAVE, FIXED, LINEAR, LOGISTIC, NO_COMPETITION
+from .constants import BEVERTON_HOLT, FIXED, LINEAR, LOGISTIC, NO_COMPETITION
 from .state import (
     DiscretePopulationState,
     PlainDiscretePopulationState,
@@ -44,7 +44,6 @@ __all__ = [
     'FIXED',
     'LOGISTIC',
     'LINEAR',
-    'CONCAVE',
     'BEVERTON_HOLT',
     # state.py
     'PopulationState',
@@ -56,7 +55,7 @@ __all__ = [
     # _builders.py — public builders and helpers
     'build_population_config',
     'build_discrete_engine_config',
-    'build_custom_array',
+    'build_custom_slots',
     'initialize_zygote_map',
     'initialize_gamete_map',
     'compress_hl',

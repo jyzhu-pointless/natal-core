@@ -37,7 +37,7 @@ from numpy.typing import NDArray
 import natal.frontend.data as _population_config
 from natal.frontend.data import (
     ModelDraft,
-    build_custom_array,
+    build_custom_slots,
     build_population_config,
 )
 from natal.frontend.genetics import Genotype, HaploidGenome, Species
@@ -368,7 +368,7 @@ class PopulationConfigBuilder:
 
         # Build structured custom array from builder .custom() specs
         if custom_specs:
-            cfg = cfg._replace(custom=build_custom_array(custom_specs))
+            cfg = cfg._replace(custom=build_custom_slots(custom_specs))
 
         return cfg
 

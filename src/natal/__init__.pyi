@@ -30,7 +30,6 @@ from .frontend.configurator import (
 )
 from .frontend.data import (
     BEVERTON_HOLT,
-    CONCAVE,
     DiscretePopulationState,
     FIXED,
     LINEAR,
@@ -40,7 +39,7 @@ from .frontend.data import (
     PlainDiscretePopulationState,
     PlainPopulationState,
     PopulationState,
-    build_custom_array,
+    build_custom_slots,
     build_discrete_engine_config,
     build_population_config,
     compress_config,
@@ -265,7 +264,6 @@ __all__ = [
     "BatchSetting",
     "Blueprint",
     "BlueprintView",
-    "CONCAVE",
     "COND_ALWAYS",
     "COND_OP_AND",
     "COND_OP_NOT",
@@ -397,7 +395,7 @@ __all__ = [
     "batch_setting",
     "build_adjacency_matrix",
     "build_compression_mask",
-    "build_custom_array",
+    "build_custom_slots",
     "build_discrete_engine_config",
     "build_gaussian_kernel",
     "build_hook_program",

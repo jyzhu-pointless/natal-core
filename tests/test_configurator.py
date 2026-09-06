@@ -5,7 +5,7 @@ import pytest
 
 import natal as nt
 from natal.frontend.configurator import Configurator, set_param
-from natal.frontend.data import build_custom_array, build_population_config
+from natal.frontend.data import build_custom_slots, build_population_config
 from natal.frontend.patterns import IndividualSelector
 
 
@@ -39,7 +39,7 @@ def config_with_custom(species):
         zygotes_to_gametes_map=species.get_config_blueprint()["zygotes_to_gametes_map"],
         gametes_to_zygotes_map=species.get_config_blueprint()["gametes_to_zygotes_map"],
     )
-    return cfg._replace(custom=build_custom_array({"temperature": 25.0, "flag": True}))
+    return cfg._replace(custom=build_custom_slots({"temperature": 25.0, "flag": True}))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -77,12 +77,12 @@ class TestSetParam:
     def test_custom_field_write(self, config_with_custom):
         """set_param writes to a registered custom field."""
         config_with_custom = set_param(config_with_custom, "temperature", 30.0)
-        assert config_with_custom.custom["temperature"][()] == 30.0
+        assert config_with_custom.custom["temperature"] == 30.0
 
     def test_custom_field_bool(self, config_with_custom):
         """set_param writes bool values to registered custom fields."""
         config_with_custom = set_param(config_with_custom, "flag", False)
-        assert bool(config_with_custom.custom["flag"][()]) is False
+        assert config_with_custom.custom["flag"] is False
 
     def test_custom_field_no_config_custom_raises(self, minimal_config):
         """set_param raises KeyError when config has no custom fields."""
@@ -220,8 +220,8 @@ class TestConfiguratorBuild:
 
     def test_custom_fields_build(self, species):
         cfg = Configurator.from_species(species).custom(temperature=25.0, debug=True)
-        assert cfg._config.custom["temperature"][()] == 25.0
-        assert bool(cfg._config.custom["debug"][()]) is True
+        assert cfg._config.custom["temperature"] == 25.0
+        assert cfg._config.custom["debug"] is True
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -386,7 +386,7 @@ class TestCustomFields:
             .build()
         )
         pop.update().custom(temperature=25.0)
-        assert float(pop.config.custom["temperature"][()]) == 25.0
+        assert pop.config.custom["temperature"] == 25.0
 
         assert pop.tick == 0, "test_update_custom_scalar: initial tick should be 0"
         pop.run(1)
@@ -404,9 +404,9 @@ class TestCustomFields:
             .build()
         )
         pop.update().custom(temperature=35.0, season=1, debug=True)
-        assert float(pop.config.custom["temperature"][()]) == 35.0
-        assert int(pop.config.custom["season"][()]) == 1
-        assert bool(pop.config.custom["debug"][()]) is True
+        assert pop.config.custom["temperature"] == 35.0
+        assert pop.config.custom["season"] == 1
+        assert pop.config.custom["debug"] is True
 
         assert pop.tick == 0, "test_update_custom_multiple_fields: initial tick should be 0"
         pop.run(1)
@@ -426,7 +426,7 @@ class TestCustomFields:
         pop.update().custom(counter=0)
         pop.update().custom(counter=1)
         pop.update().custom(counter=2)
-        assert int(pop.config.custom["counter"][()]) == 2
+        assert pop.config.custom["counter"] == 2
 
         assert pop.tick == 0, "test_custom_mutable: initial tick should be 0"
         pop.run(1)
@@ -790,13 +790,13 @@ class TestCustomAccumulate:
     def test_custom_accumulates_fields(self, species):
         cfg = Configurator.from_species(species)
         cfg.custom(temperature=25.0).custom(humidity=0.6)
-        assert cfg._config.custom["temperature"][()] == 25.0
-        assert cfg._config.custom["humidity"][()] == 0.6
+        assert cfg._config.custom["temperature"] == 25.0
+        assert cfg._config.custom["humidity"] == 0.6
 
     def test_custom_overwrites_on_same_key(self, species):
         cfg = Configurator.from_species(species)
         cfg.custom(temperature=25.0).custom(temperature=30.0)
-        assert cfg._config.custom["temperature"][()] == 30.0
+        assert cfg._config.custom["temperature"] == 30.0
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -21,14 +21,19 @@ Discipline:
 
 from __future__ import annotations
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, TypeAlias
 
 import numpy as np
 from numpy.typing import NDArray
 
 from natal.frontend.utils.types import Sex
 
-__all__ = ["ModelDraft"]
+# Mirrors ``natal.contracts.params.CustomValue``.  Defined locally because
+# importing the contracts package here would cycle (contracts.materialize
+# imports this module to materialize ModelDraft).
+CustomValue: TypeAlias = bool | int | float | NDArray[np.float64]
+
+__all__ = ["CustomValue", "ModelDraft"]
 
 
 class ModelDraft(NamedTuple):
@@ -94,9 +99,10 @@ class ModelDraft(NamedTuple):
         equilibrium_individual_distribution: Optional (2, n_ages)
             declared equilibrium; None selects derivation mode.
         hook_slot: Reserved engine hook slot index.
-        custom: 0-d structured array of user custom fields (empty
-            structured array when none registered; replaced by the
-            Rust native slots in slice ③).
+        custom: User custom slots as a plain ``{name: value}`` dict
+            (empty when none registered).  Values are validated and
+            normalized by ``build_custom_slots``; scalars reach the Rust
+            session via ``Params.custom_slots``.
         fixed_egg_count: Deterministic expected egg count when True.
         has_sex_chromosomes: Sex-chromosome constraints active.
         external_expected_eggs: Optional Champer-model egg override;
@@ -160,7 +166,7 @@ class ModelDraft(NamedTuple):
     # -- declarations and plumbing --
     equilibrium_individual_distribution: Optional[NDArray[np.float64]]
     hook_slot: int
-    custom: NDArray[np.void]
+    custom: dict[str, CustomValue]
     fixed_egg_count: bool
     has_sex_chromosomes: bool
     external_expected_eggs: Optional[float] = None

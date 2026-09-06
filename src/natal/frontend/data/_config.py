@@ -547,7 +547,7 @@ def build_population_config(
             initial_sperm_storage=m.initial_sperm_storage,
             equilibrium_individual_distribution=m.equilibrium_individual_distribution,
             hook_slot=int(hook_slot),
-            custom=np.zeros((), dtype=np.dtype([])),
+            custom={},
             fixed_egg_count=bool(fixed_egg_count),
             has_sex_chromosomes=m.has_sex_chromosomes,
         )
@@ -598,7 +598,7 @@ def build_population_config(
         initial_sperm_storage=m.initial_sperm_storage,
         equilibrium_individual_distribution=m.equilibrium_individual_distribution,
         hook_slot=int(hook_slot),
-        custom=np.zeros((), dtype=np.dtype([])),
+        custom={},
         fixed_egg_count=bool(fixed_egg_count),
         has_sex_chromosomes=m.has_sex_chromosomes,
         external_expected_eggs=external_expected_eggs,

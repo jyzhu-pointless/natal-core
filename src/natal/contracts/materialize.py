@@ -63,29 +63,26 @@ class SpatialMigration(NamedTuple):
 
 
 def _custom_slots(draft: ModelDraft) -> dict[str, CustomValue]:
-    """Extract user custom fields from the draft's structured array.
+    """Copy user custom slots out of the draft's slot dict.
 
     Args:
         draft: The built draft whose ``custom`` field carries the
-            registered custom fields (empty structured array when none).
+            registered custom slots (empty dict when none).
 
     Returns:
-        A fresh ``{name: value}`` mapping; 3-D sub-array fields come
-        back as float64 copies.
+        A fresh ``{name: value}`` mapping owning its storage: scalars
+        are native Python values, arrays come back as float64 copies.
     """
     slots: dict[str, CustomValue] = {}
-    names = getattr(draft.custom.dtype, "names", None)
-    if not names:
-        return slots
-    for name in names:
-        raw = draft.custom[name]
-        if raw.ndim == 0:
-            # 0-d structured field access returns np.void; .item() yields
-            # the native scalar.
-            value: CustomValue = raw[()].item()  # type: ignore[union-attr]  # np.void is not statically a scalar
+    for name, value in draft.custom.items():
+        if isinstance(value, np.generic):
+            # Normalize NumPy scalars (e.g. from set_param writes) to
+            # native Python values.
+            slots[str(name)] = value.item()
+        elif isinstance(value, np.ndarray):
+            slots[str(name)] = np.array(value, dtype=np.float64, order="C")
         else:
-            value = np.array(raw, dtype=np.float64, order="C")
-        slots[str(name)] = value
+            slots[str(name)] = value
     return slots
 
 

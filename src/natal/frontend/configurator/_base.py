@@ -218,9 +218,13 @@ def set_param(
     """
     entry = lookup_or_none(name)
     if entry is None:
-        # Fallback: check custom fields (not in the route table).
-        if hasattr(config, 'custom') and config.custom.dtype.names and name in config.custom.dtype.names:
-            config.custom[name][()] = value
+        # Fallback: check custom slots (not in the route table).  The
+        # slot dict is shared mutable content on the draft, so the write
+        # is visible to the population without a _replace.
+        from natal.frontend.data import build_custom_slots
+
+        if name in getattr(config, "custom", ()):
+            config.custom[name] = build_custom_slots({name: value})[name]
             return config
         raise KeyError(f"Unknown parameter: {name!r}")
     if entry.kind in ("geno_tensor", "age_vec", "sex_row"):
@@ -360,9 +364,9 @@ class Configurator:
         # reconfiguration can reconstruct modifiers from the original recipes.
         self._presets: list[GeneticPreset] = []
 
-        # Accumulated kwargs for custom structured-array fields.  Each
-        # .custom() call adds to this dict; build_custom_array() is called
-        # only at the end.
+        # Accumulated kwargs for user custom slots.  Each .custom() call
+        # adds to this dict; build_custom_slots() normalizes it whenever
+        # the values are (re)applied to the draft.
         self._custom_kwargs: dict[str, object] = {}
 
         # optional backref for writing config updates back to a Population when created via for_population()
@@ -1145,42 +1149,32 @@ class Configurator:
     # -- custom fields ---------------------------------------------------------
 
     def custom(self, **kwargs: bool | int | float | NDArray[np.float64]) -> Self:
-        """Register custom named fields on ``config.custom``.
+        """Register custom named slots on ``config.custom``.
 
         Multiple calls accumulate — ``.custom(a=1).custom(b=2)`` stores both.
 
-        Unlike most domain methods which modify 0-d ndarrays in-place
-        (sharing the same ``ModelDraft`` reference with the Population),
-        ``custom()`` must call ``_replace`` to create a new config object
-        with a rebuilt ``custom`` structured array.  When called via
-        ``pop.update().custom(...)``, the ``_pop_ref`` back-reference
-        (set by ``BasePopulation._create_configurator()``) is used to write
-        the new config back into the Population.
+        ``config.custom`` is a plain ``{name: value}`` dict shared between
+        the Configurator and the Population's draft, so values are written
+        in place and are immediately visible on both sides — no
+        ``_replace`` or write-back round-trip is needed.  When called via
+        ``pop.update().custom(...)``, the ``_rust_dirty`` sink is marked
+        so the Rust session refreshes ``custom_slots`` before the next run.
 
         Args:
-            **kwargs: Name-value pairs for custom fields.  Values must be
+            **kwargs: Name-value pairs for custom slots.  Values must be
                 ``bool``, ``int``, ``float``, or ``NDArray[np.float64]``.
 
         Returns:
             Self for chaining.
         """
-        from natal.frontend.data import build_custom_array
+        from natal.frontend.data import build_custom_slots
 
         self._custom_kwargs.update(kwargs)
-        names = self._config.custom.dtype.names or ()
-
-        if any(k not in names for k in kwargs):
-            self._config = self._config._replace(
-                custom=build_custom_array(self._custom_kwargs)
-            )
-            if self._pop_ref is not None:
-                self._pop_ref.set_config(self._config)
-        else:
-            # All fields already exist — write incrementally in-place.
-            # self._config shares array references with pop.config, so
-            # no write-back is needed for existing fields.
-            for key, value in kwargs.items():
-                self._config.custom[key][()] = value
+        normalized = build_custom_slots(self._custom_kwargs)
+        # Keep the same dict object (shared with the population's draft):
+        # clear + update in place instead of rebinding the slot.
+        self._config.custom.clear()
+        self._config.custom.update(normalized)
         sink = self._rust_dirty_sink()
         if sink is not None:
             sink.add("custom_slots")
@@ -1735,9 +1729,9 @@ class Configurator:
 
         # Custom kwargs (accumulated by .custom()) applied to final config.
         if self._custom_kwargs:
-            from natal.frontend.data import build_custom_array
+            from natal.frontend.data import build_custom_slots
             final_config = final_config._replace(
-                custom=build_custom_array(self._custom_kwargs)
+                custom=build_custom_slots(self._custom_kwargs)
             )
 
         # Resolve name: explicit argument > setup(name=...) > default

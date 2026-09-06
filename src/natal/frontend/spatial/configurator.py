@@ -1288,6 +1288,24 @@ class SpatialConfigurator:
             },
         )
 
+    def custom(self, **kwargs: bool | int | float | NDArray[np.float64]) -> SpatialConfigurator:
+        """Register custom named slots on every deme's draft.
+
+        Custom slots are container-uniform: the kwargs are replayed onto
+        each group template at build time, so all demes carry the same
+        values (per-deme custom slots are not a batch_setting axis).
+        Values follow the panmictic ``Configurator.custom`` contract and
+        reach the Rust session via ``Params.custom_slots``.
+
+        Args:
+            **kwargs: Name-value pairs for custom slots.  Values must be
+                ``bool``, ``int``, ``float``, or ``NDArray[np.float64]``.
+
+        Returns:
+            Self for chaining.
+        """
+        return self._detect_and_delegate("custom", dict(kwargs))
+
     def hooks(self, *hook_items: _HookItem) -> SpatialConfigurator:
         """Register lifecycle hooks.
 

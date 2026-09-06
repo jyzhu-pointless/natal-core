@@ -1,7 +1,7 @@
 """Builder functions — split across _config and _engine modules."""
 from natal.frontend.data._config import build_population_config
 from natal.frontend.data._engine import (
-    build_custom_array,
+    build_custom_slots,
     build_discrete_engine_config,
     compress_config,
     compress_hl,
@@ -13,7 +13,7 @@ from natal.frontend.data._engine import (
 __all__ = [
     'build_population_config',
     'build_discrete_engine_config',
-    'build_custom_array',
+    'build_custom_slots',
     'initialize_zygote_map',
     'initialize_gamete_map',
     'compress_hl',

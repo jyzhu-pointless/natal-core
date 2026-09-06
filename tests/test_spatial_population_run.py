@@ -26,6 +26,7 @@ import natal as nt
 from natal.frontend.data import DiscretePopulationState, PopulationState
 from natal.frontend.genetics import Species
 from natal.frontend.hooks import Op
+from natal.frontend.hooks.tick_context import TickContext
 from natal.frontend.spatial.population import SpatialPopulation
 
 
@@ -299,6 +300,43 @@ def test_spatial_population_run_stop_marks_finish():
     assert d0.finish_events == 1 and d1.finish_events == 1
 
 
+def test_spatial_stop_path_finish_hooks_see_own_deme_ids() -> None:
+    """Finish hooks observe the firing deme's own index on the stop path.
+
+    Regression guard: ``_mark_all_demes_stopped`` used to trigger finish
+    without a deme id, so every stop-path finish hook saw the default
+    instead of its deme index.  The stopping deme's own lifecycle finish
+    (fired once with its live id) is pre-existing behavior pinned here.
+    """
+    species = _make_species("spatial_stop_finish_ids")
+    finish_ids: list[int] = []
+
+    @nt.hook(event="first", deme=1)
+    def stop_on_deme_one(pop: TickContext) -> int:
+        """Deme 1 requests the stop; every deme's finish then fires."""
+        return pop.stop()
+
+    @nt.hook(event="finish")
+    def record_finish(pop: TickContext) -> int:
+        finish_ids.append(int(pop.deme_id))
+        return 0
+
+    demes = [_build_test_deme(f"stop_id_d{i}", species) for i in range(3)]
+    for deme in demes:
+        deme.register_hooks(record_finish)
+    demes[1].register_hooks(stop_on_deme_one)
+
+    spatial = SpatialPopulation(demes, migration_rate=0.0)
+    with python_reference():
+        spatial.run(n_steps=5)
+
+    # Deme 1 stops first: its lifecycle fires its own finish (id 1), then
+    # the container's mark-all pass fires every deme in list order with
+    # each deme's own index.  Demes 0 and 2 finish only via mark-all.
+    assert finish_ids == [1, 0, 1, 2]
+    assert all(deme._finished for deme in demes)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+
+
 def test_spatial_population_stochastic_discrete_migration_preserves_integer_counts():
     """Stochastic discrete migration keeps per-deme counts integral."""
     species = _make_species("spatial_run_stochastic_discrete")
@@ -472,6 +510,59 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     assert calls == ["d0", "d1"]
     assert float(spatial.deme(0).state.individual_count.sum()) == 22.0
     assert float(spatial.deme(1).state.individual_count.sum()) == 24.0
+
+
+def test_spatial_reference_run_hooks_see_live_deme_ids() -> None:
+    """During a reference spatial run every deme's hook sees its own index.
+
+    Regression guard for the ``deme_id=-1`` sentinel that used to leak
+    from the reference lifecycle: hooks read ``pop.deme_id`` through the
+    TickContext and must observe the live deme index, never -1.
+    """
+    species = _make_species("spatial_deme_id_value")
+    seen: list[int] = []
+
+    @nt.hook(event="first", priority=0)
+    def record_deme(pop: TickContext) -> int:
+        """Record the executing deme id exactly as reported."""
+        seen.append(int(pop.deme_id))
+        return 0
+
+    demes = [_build_test_deme(f"deme_id_d{i}", species) for i in range(3)]
+    for deme in demes:
+        deme.register_hooks(record_deme)
+    spatial = SpatialPopulation(demes, migration_rate=0.0)
+    with python_reference():
+        spatial.run(n_steps=2)
+
+    # Each of the 3 demes fires its first-event hook once per tick.
+    assert sorted(seen) == [0, 0, 1, 1, 2, 2]
+
+
+def test_spatial_reference_deme_selector_targets_one_deme() -> None:
+    """A ``deme=1`` hook fires only on deme 1 during a reference run.
+
+    Deme-selector filtering consumes the same ``deme_id`` value; before
+    the fix the sentinel -1 matched no selector, so deme-targeted hooks
+    silently never ran on the reference backend.
+    """
+    species = _make_species("spatial_deme_id_selector")
+    hits: list[int] = []
+
+    @nt.hook(event="first", priority=0, deme=1)
+    def only_deme_one(pop: TickContext) -> int:
+        """Record the deme ids where this selector-matched hook fires."""
+        hits.append(int(pop.deme_id))
+        return 0
+
+    demes = [_build_test_deme(f"sel_deme_d{i}", species) for i in range(3)]
+    for deme in demes:
+        deme.register_hooks(only_deme_one)
+    spatial = SpatialPopulation(demes, migration_rate=0.0)
+    with python_reference():
+        spatial.run(n_steps=1)
+
+    assert hits == [1]
 
 
 def test_spatial_compiled_local_hooks_still_take_effect() -> None:
@@ -1065,3 +1156,45 @@ def test_homogeneous_100_deme_subprocess_no_crash() -> None:
         f"subprocess returned {result.returncode}\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+def test_spatial_builder_custom_slots_reach_all_demes() -> None:
+    """``.custom()`` on the spatial chain carries slots to every deme.
+
+    Homogeneous path: the template draft carries the slots and clones
+    share it.  Heterogeneous path: every group template replays the
+    same kwargs, so all groups carry them too.
+    """
+    species = _make_species("spatial_custom_slots")
+
+    homogeneous = (
+        SpatialPopulation.builder(species, n_demes=3)
+        .setup(stochastic=False)
+        .initial_state(
+            individual_count={"female": {"WT|WT": [100.0, 0.0]}, "male": {"WT|WT": [100.0, 0.0]}}
+        )
+        .reproduction(eggs_per_female=0.0)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .custom(x=1, tag=2.5)
+        .build()
+    )
+    for i, d in enumerate(homogeneous.demes):
+        assert d.config.custom["x"] == 1, i
+        assert d.config.custom["tag"] == 2.5, i
+
+    heterogeneous = (
+        SpatialPopulation.builder(species, n_demes=4)
+        .setup(stochastic=False)
+        .initial_state(
+            individual_count={"female": {"WT|WT": [100.0, 0.0]}, "male": {"WT|WT": [100.0, 0.0]}}
+        )
+        .reproduction(eggs_per_female=0.0)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .competition(
+            carrying_capacity=nt.batch_setting([1000.0, 1000.0, 2000.0, 2000.0])
+        )
+        .custom(x=7)
+        .build()
+    )
+    for i, d in enumerate(heterogeneous.demes):
+        assert d.config.custom["x"] == 7, i
