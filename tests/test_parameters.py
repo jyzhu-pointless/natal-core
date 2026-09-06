@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 from dataclasses import FrozenInstanceError
+from typing import TextIO
 
 import pytest
 
@@ -11,6 +13,7 @@ from natal.frontend.utils.parameters import (
     PARAM_IDS,
     PARAMETERS_BY_DOMAIN,
     ParamDescriptor,
+    _build_registry,
 )
 from natal.frontend.data import ModelDraft
 
@@ -212,3 +215,30 @@ class TestParamIds:
         """PARAM_IDS values start at 0 and are contiguous."""
         ids = list(PARAM_IDS.values())
         assert ids == list(range(len(PARAM_IDS)))
+
+
+class TestRegistryFileHandling:
+    """Issue #40: the parameter-table read must not leak an open file handle."""
+
+    def test_build_registry_closes_parameter_file(self, monkeypatch):
+        """The handle ``_build_registry()`` opens for the table is closed by
+        the time the call returns (``with open``), and the rebuilt table has
+        the same keys as the import-time ALL_PARAMETERS table."""
+        real_open = builtins.open
+        opened_handles: list[TextIO] = []
+
+        def tracking_open(path: str, mode: str = "r") -> TextIO:
+            handle = real_open(path, mode)
+            opened_handles.append(handle)
+            return handle
+
+        monkeypatch.setattr(builtins, "open", tracking_open)
+        registry = _build_registry()
+        monkeypatch.undo()
+
+        # Exactly one file (the parameter table) was opened, and it is
+        # deterministically closed after the call — no GC-timing reliance.
+        assert len(opened_handles) == 1
+        assert opened_handles[0].closed is True
+        assert len(registry) == len(ALL_PARAMETERS)
+        assert set(registry) == set(ALL_PARAMETERS)

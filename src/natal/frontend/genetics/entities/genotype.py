@@ -529,7 +529,11 @@ class Genotype:
                 genes.append(gene)
 
             recombinant_haplotype = Haplotype(chromosome=chromosome, genes=genes)
-            result[recombinant_haplotype] = frequencies[pattern_idx]
+            # Both homolog starts can yield the same gene sequence (homozygous
+            # loci, symmetric crossover paths); accumulate to keep their mass.
+            result[recombinant_haplotype] = (
+                result.get(recombinant_haplotype, 0.0) + frequencies[pattern_idx]
+            )
 
         return result
 
@@ -539,16 +543,22 @@ class Genotype:
         recomb_rates: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Compute recombination patterns, selecting implementation.
+        Compute recombination patterns from both homologs.
+
+        A real meiosis starts the crossover chain on either homolog with
+        equal probability, so both chain starts are enumerated and weighted
+        0.5.  Restricting to one start silently drops every gamete that
+        begins on the other homolog while still summing to 1 (issue #43).
 
         Args:
             n_loci: Number of loci
             recomb_rates: Recombination rates between adjacent loci
 
         Returns:
-            (patterns, frequencies) tuple
+            (patterns, frequencies) tuple with ``2 * 2**(n_loci - 1)`` rows
+            whose frequencies sum to 1.0
         """
-        return compute_recombinant_haplotypes(n_loci, recomb_rates, start_maternal=True)
+        return _compute_both_homolog_patterns(n_loci, recomb_rates)
 
 
     def __repr__(self):
@@ -627,45 +637,80 @@ def compute_recombinant_haplotypes(
     return patterns, frequencies
 
 
+def _compute_both_homolog_patterns(
+    n_loci: int,
+    recombination_rates: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Enumerate crossover patterns starting from either homolog.
+
+    Each single-start pattern family gets an equal 0.5 prior weight, so the
+    combined frequencies always sum to 1.0.  Patterns duplicated across the
+    two starts are kept as separate rows; callers must accumulate haplotype
+    mass instead of overwriting.
+
+    Args:
+        n_loci: Number of loci (>= 1)
+        recombination_rates: Shape (n_loci - 1,). recombination_rates[i] = rate between locus i and i+1
+
+    Returns:
+        haplotype_patterns: Shape (2 * 2**(n_loci - 1), n_loci). Each row is a
+                            01 sequence: 0=maternal allele, 1=paternal allele.
+        frequencies: Shape (2 * 2**(n_loci - 1),). Frequency of each pattern.
+    """
+    mat_patterns, mat_frequencies = compute_recombinant_haplotypes(
+        n_loci, recombination_rates, start_maternal=True
+    )
+    pat_patterns, pat_frequencies = compute_recombinant_haplotypes(
+        n_loci, recombination_rates, start_maternal=False
+    )
+    patterns = np.vstack((mat_patterns, pat_patterns))
+    frequencies = 0.5 * np.concatenate((mat_frequencies, pat_frequencies))
+    return patterns, frequencies
+
+
 def compute_recombinant_haplotypes_with_alleles(
     maternal_alleles: List[str],
     paternal_alleles: List[str],
     recombination_rates: np.ndarray,
-    start_maternal: bool = True
 ) -> Dict[str, float]:
     """
     Compute recombinant haplotypes with actual allele symbols.
 
     Given maternal and paternal allele sequences, compute all recombinant
     haplotypes considering recombination rates, and return them as strings
-    mapped to their frequencies.
+    mapped to their frequencies.  Crossover chains starting on either
+    homolog are enumerated with equal 0.5 prior weight, so returned
+    frequencies sum to 1.0.  Identical haplotypes produced by different
+    crossover paths are accumulated.
 
     Args:
         maternal_alleles: List of allele symbols at each locus (maternal chain)
         paternal_alleles: List of allele symbols at each locus (paternal chain)
         recombination_rates: Recombination rates between adjacent loci
-        start_maternal: Start from maternal (True) or paternal (False)
 
     Returns:
-        Dict mapping haplotype string (e.g., "A1/a2/A3") to frequency
+        Dict mapping haplotype string (e.g., "A1/a2/A3") to frequency;
+        frequencies sum to 1.0.
     """
     n_loci = len(maternal_alleles)
     if len(paternal_alleles) != n_loci:
         raise ValueError("maternal_alleles and paternal_alleles must have same length")
 
-    # Compute patterns (auto-selects the backend)
-    patterns, frequencies = compute_recombinant_haplotypes(
-        n_loci, recombination_rates, start_maternal
+    # Enumerate patterns from both homolog starts (full Mendelian set)
+    patterns, frequencies = _compute_both_homolog_patterns(
+        n_loci, recombination_rates
     )
 
-    # Convert patterns to haplotype strings
+    # Convert patterns to haplotype strings, accumulating duplicates
     result: Dict[str, float] = {}
     for pattern_idx, pattern in enumerate(patterns):
         alleles = [
             maternal_alleles[i] if chain == 0 else paternal_alleles[i]
             for i, chain in enumerate(pattern)
         ]
-        result["/".join(alleles)] = frequencies[pattern_idx]
+        key = "/".join(alleles)
+        result[key] = result.get(key, 0.0) + frequencies[pattern_idx]
 
     return result
 

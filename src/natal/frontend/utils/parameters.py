@@ -151,10 +151,11 @@ def _build_registry(path: str | None = None) -> dict[str, ParamDescriptor]:
         # parameters.jsonc lives at the package root: ../.. from frontend/utils/.
         path = os.path.join(os.path.dirname(__file__), "..", "..", "parameters.jsonc")
     stripped: list[str] = []
-    for raw in open(path):
-        s = raw.split("//", 1)[0].rstrip()
-        if s:
-            stripped.append(s)
+    with open(path) as f:
+        for raw in f:
+            s = raw.split("//", 1)[0].rstrip()
+            if s:
+                stripped.append(s)
 
     entries = cast("list[_Entry]", json.loads("".join(stripped)))
     dtype_map: dict[str, type] = {"float": float, "int": int, "bool": bool}
