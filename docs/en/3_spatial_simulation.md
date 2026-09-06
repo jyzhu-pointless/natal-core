@@ -415,10 +415,10 @@ pop.run(500, record_every=5)
 
 ```python
 # Cross-deme aggregation
-pop.total_population_size   # Total individual count
-pop.total_females           # Total female count
-pop.total_males             # Total male count
-pop.sex_ratio               # Sex ratio (female/male)
+pop.get_total_count()       # Total individual count
+pop.get_female_count()      # Total female count
+pop.get_male_count()        # Total male count
+pop.get_female_count() / pop.get_male_count()   # Sex ratio (female/male)
 pop.tick                    # Current time step
 
 # Allele frequencies (full spatial aggregation)
@@ -433,32 +433,38 @@ aggregate = pop.aggregate_individual_count()
 ```python
 # Get deme by index
 deme_0 = pop.deme(0)
-print(deme_0.total_population_size)
+print(deme_0.get_total_count())
 print(deme_0.compute_allele_frequencies())
 
 # Iterate over all demes
 for i in range(pop.n_demes):
     d = pop.deme(i)
-    print(f"deme {i}: {d.total_population_size}")
+    print(f"deme {i}: {d.get_total_count()}")
 ```
 
-Each deme is an `AgeStructuredPopulation` or
-`DiscreteGenerationPopulation`. The spatial container itself provides the
-canonical `observation`, `observe()`, and typed `history` interfaces.
+Each deme is accessed through a `DemeSlice` view (reads delegate to the
+underlying `AgeStructuredPopulation` / `DiscreteGenerationPopulation`,
+writes go through the `write_ecology` / `write_genetics` channels). The
+spatial container itself provides the canonical `observation`, `observe()`,
+and typed `history` interfaces.
 
 ### Reset and Control
 
 ```python
-# Reset all demes to initial state
+# Reset all demes to their initial state (clears finished marks)
 pop.reset()
 
-# Check if simulation is finished
-if pop.is_finished:
-    print("Simulation has terminated")
+# Finished state is checked per deme — the container has no
+# is_finished of its own (DemeSlice delegates to the underlying deme)
+any(d.is_finished for d in pop.demes)
 
-# Manually terminate
-pop.finish_simulation()
+# Manually terminate one deme (fires its finish event and locks it)
+pop.deme(0).finish_simulation()
 ```
+
+The container has no `is_finished` / `finish_simulation()` of its own:
+once any deme has finished, `run()` / `run_tick()` raise `RuntimeError`;
+when a hook requests a stop, the container marks every deme finished.
 
 ### Data Output
 

@@ -415,10 +415,10 @@ pop.run(500, record_every=5)
 
 ```python
 # 跨 deme 汇总
-pop.total_population_size   # 总个体数
-pop.total_females           # 总雌性数
-pop.total_males             # 总雄性数
-pop.sex_ratio               # 性别比例（雌/雄）
+pop.get_total_count()       # 总个体数
+pop.get_female_count()      # 总雌性数
+pop.get_male_count()        # 总雄性数
+pop.get_female_count() / pop.get_male_count()   # 性别比例（雌/雄）
 pop.tick                    # 当前时间步
 
 # 等位基因频率（全空间汇总）
@@ -433,31 +433,35 @@ aggregate = pop.aggregate_individual_count()
 ```python
 # 按索引获取 deme
 deme_0 = pop.deme(0)
-print(deme_0.total_population_size)
+print(deme_0.get_total_count())
 print(deme_0.compute_allele_frequencies())
 
 # 遍历所有 deme
 for i in range(pop.n_demes):
     d = pop.deme(i)
-    print(f"deme {i}: {d.total_population_size}")
+    print(f"deme {i}: {d.get_total_count()}")
 ```
 
-每个 deme 是 `AgeStructuredPopulation` 或 `DiscreteGenerationPopulation` 实例；
+每个 deme 通过 `DemeSlice` 视图访问（读操作委托给底层种群，写入走
+`write_ecology` / `write_genetics` 通道）；
 空间容器自身提供 canonical `observation`、`observe()` 和类型化 `history`。
 
 ### 重置与控制
 
 ```python
-# 重置所有 deme 到初始状态
+# 重置所有 deme 到初始状态（清除终止标记）
 pop.reset()
 
-# 检查是否已终止
-if pop.is_finished:
-    print("模拟已终止")
+# 检查终止状态——容器自身没有 is_finished，逐 deme 检查
+any(d.is_finished for d in pop.demes)
 
-# 手动终止
-pop.finish_simulation()
+# 手动终止单个 deme（立即触发其 finish 事件并锁定）
+pop.deme(0).finish_simulation()
 ```
+
+容器没有 `is_finished` / `finish_simulation()`：任何 deme 终止后，`run()` /
+`run_tick()` 会抛出 `RuntimeError`；由 hook 触发停止时，容器会把所有 deme
+标记为 finished。
 
 ### 数据输出
 
