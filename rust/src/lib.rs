@@ -17,6 +17,7 @@ mod eco_param_wire;
 mod equilibrate;
 mod hooks;
 mod lifecycle;
+mod offspring;
 mod rng;
 mod session;
 mod spatial;
@@ -347,6 +348,8 @@ fn equilibrium_metrics(
 
 #[pymodule]
 fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    use offspring::compute_offspring_tensor;
+
     module.add_function(wrap_pyfunction!(age_structured_aging, module)?)?;
     module.add_function(wrap_pyfunction!(discrete_aging, module)?)?;
     module.add_class::<EngineSession>()?;
@@ -356,5 +359,6 @@ fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(equilibrium_metrics, module)?)?;
     module.add_function(wrap_pyfunction!(migrate_csr_deterministic, module)?)?;
     module.add_function(wrap_pyfunction!(migrate_csr_stochastic, module)?)?;
+    module.add_function(wrap_pyfunction!(compute_offspring_tensor, module)?)?;
     Ok(())
 }

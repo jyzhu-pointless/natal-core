@@ -214,3 +214,10 @@ def migrate_csr_stochastic(
     continuous_sampling: bool,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Apply one stochastic CSR migration step."""
+
+
+def compute_offspring_tensor(
+    meiosis: NDArray[np.float64],
+    fusion: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Compute the offspring probability tensor from meiosis and fusion tables."""

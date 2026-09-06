@@ -29,6 +29,32 @@ __all__ = [
 ]
 
 
+def _rust_offspring_kernel(
+    meiosis: NDArray[np.float64], fusion: NDArray[np.float64]
+) -> NDArray[np.float64] | None:
+    """Run the Rust offspring kernel when the extension is available.
+
+    Args:
+        meiosis: Meiosis table of shape ``(2, n_ztypes, n_gtypes)``.
+        fusion: Fusion table of shape ``(n_gtypes, n_gtypes, n_ztypes)``.
+
+    Returns:
+        The flat kernel result reshaped to ``(n_ztypes,)*3``, or ``None``
+        when the extension is not importable (the pure-Python fallback
+        remains until the Rust-only stage retires it).
+    """
+    try:
+        from natal._engine_rs import compute_offspring_tensor as rust_kernel
+    except ImportError:
+        return None
+    flat = rust_kernel(
+        np.ascontiguousarray(meiosis, dtype=np.float64),
+        np.ascontiguousarray(fusion, dtype=np.float64),
+    )
+    z = int(meiosis.shape[1])
+    return np.asarray(flat, dtype=np.float64).reshape(z, z, z)
+
+
 def recompute_offspring_tensor(
     meiosis: NDArray[np.float64],
     fusion: NDArray[np.float64],
@@ -40,7 +66,10 @@ def recompute_offspring_tensor(
     every caller — the writer channel, the spatial variant channel, the
     modifier refresh, the registry compression, and the build-time map
     computation — funnels through this one spelling so they cannot drift
-    apart.
+    apart.  The numeric kernel lives in Rust (plan 5.2); the pure-Python
+    spelling below is the extension-less fallback and both are
+    statement-for-statement identical, so results are bit-equal either
+    way.
 
     Args:
         meiosis: Meiosis table of shape ``(2, n_ztypes, n_gtypes)``.
@@ -49,12 +78,17 @@ def recompute_offspring_tensor(
     Returns:
         The recomputed offspring tensor ``(n_ztypes, n_ztypes, n_ztypes)``.
     """
+    meiosis = np.ascontiguousarray(meiosis, dtype=np.float64)
+    fusion = np.ascontiguousarray(fusion, dtype=np.float64)
+    rust_result = _rust_offspring_kernel(meiosis, fusion)
+    if rust_result is not None:
+        return rust_result
+    # Extension-less fallback: same statement order and zero-skips as the
+    # Rust kernel (bit-identical results).
     from natal.backends.reference.simulation.age_structured import (
         compute_offspring_probability_tensor,
     )
 
-    meiosis = np.asarray(meiosis, dtype=np.float64)
-    fusion = np.asarray(fusion, dtype=np.float64)
     # Single-gamete-label layouts collapse the label axis, so the
     # ztype/gtype counts come from the meiosis table itself.
     n_z = int(meiosis.shape[1])

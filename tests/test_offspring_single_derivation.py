@@ -29,12 +29,16 @@ Every test here attacks one way that collapse could be wrong:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
+from collections.abc import Callable
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 import natal as nt
 
@@ -87,6 +91,22 @@ def _einsum_reference(meiosis: np.ndarray, fusion: np.ndarray) -> np.ndarray:
         ``einsum('ia,jb,abk->ijk', meiosis[0], meiosis[1], fusion)``.
     """
     return np.einsum("ia,jb,abk->ijk", meiosis[0], meiosis[1], fusion)
+
+
+def _load_rust_kernel() -> (
+    Callable[[NDArray[np.float64], NDArray[np.float64]], NDArray[np.float64]] | None
+):
+    """Return the raw Rust offspring pyfunction, or None without the build.
+
+    Returns:
+        ``natal._engine_rs.compute_offspring_tensor`` when the compiled
+        extension is importable, else ``None`` (extension-less CI).
+    """
+    try:
+        from natal._engine_rs import compute_offspring_tensor
+    except ImportError:
+        return None
+    return compute_offspring_tensor
 
 
 # ── Axis-combination equivalence: compression × gamete labels ────────────────
@@ -570,3 +590,485 @@ class TestModuleLifecycle:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__])
+
+
+class TestRustKernelParity:
+    """The Rust kernel and the pure-Python fallback are bit-identical."""
+
+    def test_rust_kernel_bitwise_matches_python_kernel(self) -> None:
+        """Random tables (with zero entries) agree bitwise across kernels.
+
+        The Rust kernel and the reference Python kernel use the same
+        statement order and zero-skips, so any divergence is a kernel
+        bug, not float noise.
+        """
+        rust_available = True
+        try:
+            from natal._engine_rs import compute_offspring_tensor as rust_kernel
+        except ImportError:
+            rust_available = False
+        if not rust_available:
+            from natal.frontend.data._engine import _rust_offspring_kernel
+
+            assert _rust_offspring_kernel(
+                np.zeros((2, 1, 1)), np.zeros((1, 1, 1))
+            ) is None
+            return
+
+        from natal.backends.reference.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        rng = np.random.default_rng(2026)
+        for z, g in ((2, 2), (5, 4), (7, 6), (13, 3)):
+            meiosis = rng.random((2, z, g))
+            meiosis[meiosis < 0.3] = 0.0  # exercise the skip-zero path
+            # Renormalize rows so entries stay probability-like (values
+            # themselves do not need to be probabilities for the parity
+            # check, but keep them finite and in [0, 1]).
+            fusion = (rng.random((g, g, z)) < 0.5).astype(np.float64)
+
+            rust = np.asarray(
+                rust_kernel(
+                    np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion)
+                )
+            ).reshape(z, z, z)
+            py = compute_offspring_probability_tensor(
+                meiosis_f=meiosis[0],
+                meiosis_m=meiosis[1],
+                haplo_to_genotype_map=fusion,
+                n_ztypes=z,
+                n_gtypes=g,
+            )
+            np.testing.assert_array_equal(
+                rust, py, err_msg=f"kernel parity broke at z={z}, g={g}"
+            )
+
+    def test_wrapper_prefers_rust_kernel_when_available(self) -> None:
+        """The single wrapper dispatches to the Rust kernel path.
+
+        With the extension importable, the wrapper's result must equal
+        the direct kernel call exactly (identity of code path, not just
+        of values).
+        """
+        from natal.frontend.data._engine import _rust_offspring_kernel
+
+        rng = np.random.default_rng(99)
+        meiosis = np.ascontiguousarray(rng.random((2, 4, 3)))
+        fusion = np.ascontiguousarray(
+            (rng.random((3, 3, 4)) < 0.5).astype(np.float64)
+        )
+        wrapped = _rust_offspring_kernel(meiosis, fusion)
+        if wrapped is None:
+            pytest.skip("rust extension not built")
+        import natal._engine_rs as rs
+
+        direct = np.asarray(rs.compute_offspring_tensor(meiosis, fusion)).reshape(
+            4, 4, 4
+        )
+        np.testing.assert_array_equal(wrapped, direct)
+
+
+class TestRustKernelAdversarialParity:
+    """Batch-10 attacks: the Rust kernel is the *same* arithmetic.
+
+    Category map (adversarial-review): shape/sparsity grid = axis
+    combination; order probe and FMA probe = invariant (statement-order
+    and rounding identity); NaN/inf = invariant (propagation identity);
+    forced-ImportError = state transition (dispatch branch); shape
+    violations = error path; per-call storage = ownership.  Every value
+    assertion is a byte-level comparison (``tobytes``), never a
+    tolerance — the contract is bit identity, not closeness.
+    """
+
+    _GRID = (
+        # (name, z, g, meiosis zero-fraction): single element, wide/tall
+        # degenerate axes, empty tables, squares, non-squares, dense.
+        ("single", 1, 1, 0.0),
+        ("wide_z1", 1, 5, 0.3),
+        ("tall_g1", 6, 1, 0.5),
+        ("empty", 0, 0, 0.0),
+        ("square2", 2, 2, 0.3),
+        ("square9", 9, 9, 0.2),
+        ("z5_g4", 5, 4, 0.4),
+        ("z7_g6", 7, 6, 0.1),
+        ("z13_g3", 13, 3, 0.6),
+        ("z4_g10", 4, 10, 0.25),
+        ("dense", 10, 7, 0.0),
+    )
+
+    def test_shape_sparsity_grid_is_bit_identical(self) -> None:
+        """Every shape corner and sparsity level matches the Python kernel.
+
+        Attack: an indexing bug that only shows on non-square ``z != g``
+        tables (fusion strides use ``z``, meiosis strides use ``g``), on
+        degenerate 1-wide axes, or on the skip-zero path (an all-zero
+        female ztype row is injected whenever ``z >= 2``) would flip
+        cells that square dense tables never visit.
+        """
+        rust = _load_rust_kernel()
+        if rust is None:
+            from natal.frontend.data._engine import _rust_offspring_kernel
+
+            assert _rust_offspring_kernel(
+                np.zeros((2, 1, 1)), np.zeros((1, 1, 1))
+            ) is None
+            return
+
+        from natal.backends.reference.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        rng = np.random.default_rng(20260906)
+        for name, z, g, sparsity in self._GRID:
+            meiosis = rng.random((2, z, g))
+            meiosis[rng.random((2, z, g)) < sparsity] = 0.0
+            if z >= 2:
+                meiosis[0, 1, :] = 0.0  # all-zero female ztype row
+            fusion = (rng.random((g, g, z)) < 0.55).astype(np.float64)
+
+            rust_out = np.asarray(
+                rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
+            ).reshape(z, z, z)
+            py_out = compute_offspring_probability_tensor(
+                meiosis_f=meiosis[0],
+                meiosis_m=meiosis[1],
+                haplo_to_genotype_map=fusion,
+                n_ztypes=z,
+                n_gtypes=g,
+            )
+            assert rust_out.shape == (z, z, z), name
+            assert rust_out.dtype == np.float64, name
+            assert rust_out.tobytes() == np.ascontiguousarray(py_out).tobytes(), name
+
+        # All-zero tables: exact zeros everywhere, both kernels.
+        zero_out = np.asarray(
+            rust(np.zeros((2, 3, 4)), np.zeros((4, 4, 3)))
+        ).reshape(3, 3, 3)
+        assert zero_out.tobytes() == np.zeros((3, 3, 3)).tobytes()
+
+    def test_order_probe_discriminates_and_rust_uses_reference_order(
+        self,
+    ) -> None:
+        """Rust accumulates in the reference (hf, hm) order — proven, not
+        assumed.
+
+        Attack: two kernels could agree on random dense tables by luck
+        while summing in different orders.  Tables built from
+        0.1/0.2/0.3-family values make summation order visible in the
+        low bits; this test first *proves the probe has power* (a
+        reversed (hf, hm) accumulation differs somewhere) and only then
+        asserts the Rust bytes equal the forward-order Python bytes.
+        """
+        rust = _load_rust_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+
+        from natal.backends.reference.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        vals = np.array(
+            [0.1, 0.2, 0.3, 0.7, 0.9, 1.0 / 3.0, 0.123456789, 0.987654321]
+        )
+        z, g = 3, 4
+        rng = np.random.default_rng(424242)
+        meiosis = vals[rng.integers(0, len(vals), size=(2, z, g))]
+        fusion = vals[rng.integers(0, len(vals), size=(g, g, z))]
+
+        forward = compute_offspring_probability_tensor(
+            meiosis_f=meiosis[0],
+            meiosis_m=meiosis[1],
+            haplo_to_genotype_map=fusion,
+            n_ztypes=z,
+            n_gtypes=g,
+        )
+        # Reversed (hf, hm) accumulation — a legal but *different* order.
+        flat = np.ascontiguousarray(fusion).reshape(g * g, z)
+        reversed_out = np.zeros((z, z, z))
+        for gf in range(z):
+            for gm in range(z):
+                for go in range(z):
+                    s = 0.0
+                    for hf in range(g - 1, -1, -1):
+                        mf = meiosis[0, gf, hf]
+                        if mf == 0.0:
+                            continue
+                        for hm in range(g - 1, -1, -1):
+                            mm = meiosis[1, gm, hm]
+                            if mm == 0.0:
+                                continue
+                            s += mf * mm * flat[hf * g + hm, go]
+                    reversed_out[gf, gm, go] = s
+
+        n_diff = int(
+            np.count_nonzero(
+                forward.view(np.uint64) != reversed_out.view(np.uint64)
+            )
+        )
+        # Probe power: if this fails the probe went vacuous — redesign it,
+        # do not delete it.
+        assert n_diff >= 1
+
+        rust_out = np.asarray(
+            rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
+        ).reshape(z, z, z)
+        assert rust_out.tobytes() == np.ascontiguousarray(forward).tobytes()
+
+    def test_release_build_performs_unfused_multiply_add(self) -> None:
+        """The release build rounds every multiply and add separately.
+
+        Attack: an optimizer that contracts ``s += mf * mm * fusion``
+        into a fused multiply-add (one rounding instead of two) would
+        shift results by 1 ulp on tables where the two spellings differ.
+        The constants below were found by search so that the separate
+        and fused spellings differ; the kernel must land on the
+        separate value.  ``float(Fraction ... )`` reproduces the exact
+        single-rounding fma semantics portably (no ``math.fma`` — the
+        project supports Python 3.9).
+        """
+        rust = _load_rust_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+
+        a, b, c, d, e, f = (
+            0.09266663117715868,
+            0.009808112625737497,
+            187.1507120918915,
+            0.2709929808816529,
+            420.6642290190864,
+            5.228309038042963,
+        )
+        # (2, 1, 2) meiosis / (2, 2, 1) fusion: the cell accumulates
+        # exactly two nonzero terms, (hf=0,hm=0) -> a*b*c and
+        # (hf=1,hm=1) -> d*e*f.
+        meiosis = np.array([[[a, d]], [[b, e]]])
+        fusion = np.array([[[c], [0.0]], [[0.0], [f]]])
+
+        kernel_value = float(np.asarray(rust(meiosis, fusion))[0])
+        separate = a * b * c + d * e * f  # Python: no contraction
+        # Contraction of the LAST multiply-add only: the earlier products
+        # stay rounded, the final p2*f + s collapses to one rounding.
+        fused = float(Fraction(d * e) * Fraction(f) + Fraction(a * b * c))
+
+        assert separate != fused  # the constants discriminate (1 ulp)
+        assert kernel_value.hex() == separate.hex()
+        assert kernel_value.hex() != fused.hex()
+
+    def test_nan_inf_propagation_is_bit_identical(self) -> None:
+        """NaN and inf inputs propagate to identical bit patterns.
+
+        Attack: a kernel that reordered terms (e.g. an FMA or a different
+        skip rule for non-finite values) produces different NaN cells —
+        ``0 * inf = nan`` and ``finite + nan = nan`` are order-sensitive
+        poison.  ``tobytes`` compares NaN payloads; ``array_equal``
+        cannot.
+        """
+        rust = _load_rust_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+
+        from natal.backends.reference.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        rng = np.random.default_rng(8080)
+        meiosis = rng.random((2, 3, 3))
+        # Exact zero placed so it pairs with the inf fusion entry below:
+        # with the skip-zero rule the 0 * inf = nan poison is never
+        # computed and the cell stays inf; a kernel that dropped the
+        # skip materializes NaN instead (order-sensitive).
+        meiosis[0, 0, 1] = 0.0
+        meiosis[0, 1, 2] = np.nan
+        fusion = rng.random((3, 3, 3))
+        fusion[1, 1, 0] = np.inf
+
+        rust_out = np.asarray(
+            rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
+        ).reshape(3, 3, 3)
+        py_out = compute_offspring_probability_tensor(
+            meiosis_f=meiosis[0],
+            meiosis_m=meiosis[1],
+            haplo_to_genotype_map=fusion,
+            n_ztypes=3,
+            n_gtypes=3,
+        )
+        # Probe power: the poison really reaches the outputs — the NaN
+        # row poisons every (gf=1) cell, the inf fusion entry surfaces
+        # in the (gf=2, go=0) cells, and the zeroed female entry at
+        # (gf=0, hf=1) keeps the whole (gf=0) row finite (a kernel
+        # without the skip turns that row into NaN via 0 * inf).
+        assert np.isnan(py_out[1, :, :]).all()
+        assert np.isinf(py_out[2, :, 0]).all()
+        assert np.isfinite(py_out[0, :, :]).all()
+        assert rust_out.tobytes() == np.ascontiguousarray(py_out).tobytes()
+
+    def test_forced_import_failure_routes_to_python_and_stays_bit_identical(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blocking the extension forces the fallback — same bytes out.
+
+        Attack: the dispatch could take the Python branch but diverge
+        (different dtype coercion, einsum-style reorder, cached stale
+        tensor).  A ``None`` entry in ``sys.modules`` makes the
+        function-level ``from natal._engine_rs import ...`` raise
+        ImportError, which is exactly the branch the wrapper must
+        survive.  After the block lifts, the wrapper must retry the
+        import (no negative caching of the failed lookup).
+        """
+        from natal.frontend.data._engine import (
+            _rust_offspring_kernel,
+            recompute_offspring_tensor,
+        )
+        from natal.backends.reference.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        rng = np.random.default_rng(31337)
+        meiosis = rng.random((2, 5, 4))
+        meiosis[meiosis < 0.25] = 0.0
+        fusion = (rng.random((4, 4, 5)) < 0.5).astype(np.float64)
+
+        extension_result = recompute_offspring_tensor(meiosis, fusion)
+
+        monkeypatch.setitem(sys.modules, "natal._engine_rs", None)
+        assert _rust_offspring_kernel(meiosis, fusion) is None
+        fallback_result = recompute_offspring_tensor(meiosis, fusion)
+
+        # Byte identity across the two dispatch branches.
+        assert fallback_result.tobytes() == extension_result.tobytes()
+        # And the fallback really spells the reference kernel.
+        direct = compute_offspring_probability_tensor(
+            meiosis_f=meiosis[0],
+            meiosis_m=meiosis[1],
+            haplo_to_genotype_map=fusion,
+            n_ztypes=5,
+            n_gtypes=4,
+        )
+        assert fallback_result.tobytes() == np.ascontiguousarray(direct).tobytes()
+
+        # Lift the block: the next call must find the extension again.
+        monkeypatch.undo()
+        if _load_rust_kernel() is not None:
+            assert (
+                recompute_offspring_tensor(meiosis, fusion).tobytes()
+                == extension_result.tobytes()
+            )
+
+    def test_shape_violations_raise_pyvalueerror_from_rust(self) -> None:
+        """Invalid shapes/dtype raise the documented errors at the boundary.
+
+        Attack: a kernel that indexes out of bounds instead of validating
+        would segfault or read garbage rather than raise; the messages
+        pin *which* validation fired so a swapped check cannot pass.
+        """
+        rust = _load_rust_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+
+        good_fusion = np.zeros((2, 2, 2))
+        with pytest.raises(ValueError, match="leading sex axis of 2"):
+            rust(np.ones((3, 2, 2)), good_fusion)
+        with pytest.raises(ValueError, match="leading sex axis of 2"):
+            rust(np.ones((1, 2, 2)), good_fusion)
+        with pytest.raises(
+            ValueError, match=re.escape("fusion shape must be (4, 4, 3)")
+        ):
+            rust(np.ones((2, 3, 4)), np.zeros((4, 4, 4)))
+        with pytest.raises(ValueError, match="must be C-contiguous"):
+            rust(
+                np.asfortranarray(np.ones((2, 3, 4))), np.zeros((4, 4, 3))
+            )
+        with pytest.raises(TypeError):
+            rust(np.ones((2, 3, 4), dtype=np.float32), np.zeros((4, 4, 3)))
+
+    def test_wrapper_rejects_bad_fusion_and_leaves_inputs_untouched(self) -> None:
+        """The wrapper surfaces the ValueError and mutates nothing.
+
+        Attack: an error path that had already scribbled on the caller's
+        tables before raising would corrupt live config state; the
+        wrapper is documented pure, so inputs must survive the raise
+        bit-identically on *both* dispatch branches.
+        """
+        from natal.frontend.data._engine import recompute_offspring_tensor
+
+        meiosis = np.ones((2, 3, 4))
+        fusion = np.zeros((4, 4, 4))
+        m_before, f_before = meiosis.copy(), fusion.copy()
+        with pytest.raises(ValueError):
+            recompute_offspring_tensor(meiosis, fusion)
+        np.testing.assert_array_equal(meiosis, m_before)
+        np.testing.assert_array_equal(fusion, f_before)
+
+    def test_kernel_result_freshly_owned_each_call(self) -> None:
+        """Each kernel call returns fresh storage; inputs stay read-only.
+
+        Attack: a wrapper that cached the flat result, or a Rust side
+        that reused a buffer, would hand two callers the same memory —
+        poisoning one result would poison the other, and mutating the
+        output could scribble on the input tables.
+        """
+        rust = _load_rust_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+
+        rng = np.random.default_rng(5150)
+        meiosis = np.ascontiguousarray(rng.random((2, 4, 4)))
+        fusion = np.ascontiguousarray(rng.random((4, 4, 4)))
+        m_before, f_before = meiosis.copy(), fusion.copy()
+
+        r1 = np.asarray(rust(meiosis, fusion))
+        expected = r1.copy()
+        r1.fill(-1.0)  # poison the caller's view of the first result
+        r2 = np.asarray(rust(meiosis, fusion))
+
+        assert r1 is not r2
+        assert r2.tobytes() == expected.tobytes()  # not cached, not aliased
+        assert not np.shares_memory(r2, meiosis)
+        assert not np.shares_memory(r2, fusion)
+        np.testing.assert_array_equal(meiosis, m_before)
+        np.testing.assert_array_equal(fusion, f_before)
+
+    def test_wrapper_matches_rust_kernel_and_python_reference(self) -> None:
+        """Wrapper, raw kernel, and reference kernel agree byte-for-byte.
+
+        Attack: the wrapper reshapes with ``meiosis.shape[1]`` while the
+        kernel derives ``z`` internally — a mismatch (or an
+        F-order/dtype coercion bug in the wrapper's ``ascontiguousarray``
+        funnel) would show as a reshape into the wrong cube or shifted
+        values.  Comparing against the *independent* Python spelling
+        also catches a wrapper that merely round-trips its own output.
+        """
+        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.backends.reference.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
+
+        rng = np.random.default_rng(99)
+        meiosis = rng.random((2, 4, 3))
+        fusion = (rng.random((3, 3, 4)) < 0.5).astype(np.float64)
+
+        wrapped = recompute_offspring_tensor(meiosis, fusion)
+        assert wrapped.shape == (4, 4, 4)
+
+        py = compute_offspring_probability_tensor(
+            meiosis_f=meiosis[0],
+            meiosis_m=meiosis[1],
+            haplo_to_genotype_map=fusion,
+            n_ztypes=4,
+            n_gtypes=3,
+        )
+        assert wrapped.tobytes() == np.ascontiguousarray(py).tobytes()
+
+        # F-order inputs are value-preserved through the funnel.
+        wrapped_f = recompute_offspring_tensor(
+            np.asfortranarray(meiosis), np.asfortranarray(fusion)
+        )
+        assert wrapped_f.tobytes() == wrapped.tobytes()
+
+        rust = _load_rust_kernel()
+        if rust is not None:
+            direct = np.asarray(
+                rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
+            ).reshape(4, 4, 4)
+            assert wrapped.tobytes() == direct.tobytes()
