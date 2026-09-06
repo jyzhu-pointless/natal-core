@@ -36,6 +36,7 @@ import sys
 from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -1756,3 +1757,742 @@ class TestEquilibriumKernelParity:
             assert struct.pack(">d", s2) == struct.pack(">d", fs2) == (
                 struct.pack(">d", float(ps2))
             ), f"external s* three-way mismatch at trial {trial}"
+
+    def test_build_path_uses_rust_and_matches_fallback_bitwise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Build-time metrics are bitwise-identical across both kernels.
+
+        The build path keeps its own None semantics (reproduction is
+        pre-normalized to a possibly all-zero array — never the sync
+        path's mating-row fallback), and the Rust dispatch and the forced
+        Python fallback must agree bit for bit on those inputs.
+        """
+        if _load_equilibrium_kernel() is None:
+            pytest.skip("rust extension not built")
+        from natal.frontend.data import _engine as engine_module
+        from natal.frontend.data._config import build_population_config
+
+        def build_once() -> nt.ModelDraft:
+            return build_population_config(
+                n_genotypes=3,
+                n_gtypes=2,
+                n_glabs=1,
+                n_ages=4,
+                new_adult_age=2,
+                age_based_survival_rates=np.array(
+                    [[1.0, 0.9, 0.7, 0.4], [1.0, 0.85, 0.6, 0.3]]
+                ),
+                age_based_mating_rates=np.array(
+                    [[0.0, 1.0, 1.0, 0.0], [0.0, 1.0, 0.5, 0.0]]
+                ),
+                female_age_based_fertility=np.array([0.0, 0.0, 0.9, 0.5]),
+                age_based_relative_competition_strength=np.array(
+                    [1.0, 0.6, 0.2, 0.0]
+                ),
+                carrying_capacity=750.0,
+                eggs_per_female=23.0,
+                sex_ratio=0.5,
+            )
+
+        rust_built = build_once()
+        rust_metrics = _draft_metrics(rust_built)
+        assert rust_metrics[0] > 0.0  # non-degenerate
+        assert 0.0 < rust_metrics[1] <= 1.0
+
+        # The build function imports the dispatch from the engine module
+        # inside its body, so the swap must target that source module.
+        def force_fallback(  # object: probe shim mirrors any dispatch call shape
+            *args: object, **kwargs: object
+        ) -> None:
+            return None
+
+        monkeypatch.setattr(
+            engine_module, "equilibrium_metrics_dispatch", force_fallback
+        )
+        py_built = build_once()
+
+        assert _pack_metrics(rust_metrics) == _pack_metrics(
+            _draft_metrics(py_built)
+        )
+
+
+class _AgeBuildCase(NamedTuple):
+    """One typed build-path parameter set for the parity matrix."""
+
+    tag: str
+    n_ages: int
+    new_adult_age: int
+    survival: NDArray[np.float64]
+    mating: NDArray[np.float64]
+    reproduction: NDArray[np.float64] | None
+    fertility: NDArray[np.float64]
+    competition: NDArray[np.float64]
+    k: float
+    eggs: float
+    sr: float
+    declared: NDArray[np.float64] | None
+    external: float | None
+
+
+def _age_build_cases() -> list[_AgeBuildCase]:
+    """The six build-path axes: undeclared/declared/all-zero reproduction
+    x derive/declared distribution x external egg override, plus the
+    minimal age ladder and an asymmetric sex ratio."""
+    declared = np.array(
+        [[0.0, 240.0, 180.0, 90.0], [0.0, 230.0, 150.0, 60.0]]
+    )
+    return [
+        # 1. Undeclared reproduction: _validate_or_default_array must
+        #    normalize to ones-with-juveniles-zeroed ([0, 0, 1, 1]) — the
+        #    mating rows are deliberately unlike that default so the
+        #    sync-path's mating-row fallback would give a different answer.
+        _AgeBuildCase(
+            tag="undeclared-repro",
+            n_ages=4,
+            new_adult_age=2,
+            survival=np.array([[1.0, 0.9, 0.7, 0.4], [1.0, 0.85, 0.6, 0.3]]),
+            mating=np.array([[0.0, 0.25, 0.5, 0.75], [0.0, 0.9, 0.8, 0.7]]),
+            reproduction=None,
+            fertility=np.array([0.0, 0.0, 0.9, 0.5]),
+            competition=np.array([1.0, 0.6, 0.2, 0.0]),
+            k=750.0,
+            eggs=23.0,
+            sr=0.5,
+            declared=None,
+            external=None,
+        ),
+        # 2. Declared reproduction + declared (2, n_ages) distribution.
+        _AgeBuildCase(
+            tag="declared-dist",
+            n_ages=4,
+            new_adult_age=2,
+            survival=np.array([[0.95, 0.88, 0.7, 0.5], [0.92, 0.8, 0.6, 0.4]]),
+            mating=np.array([[0.0, 1.0, 0.9, 0.0], [0.0, 0.8, 0.7, 0.0]]),
+            reproduction=np.array([0.0, 0.6, 0.9, 0.3]),
+            fertility=np.array([0.0, 0.0, 0.85, 0.45]),
+            competition=np.array([1.0, 0.7, 0.1, 0.0]),
+            k=1200.0,
+            eggs=41.0,
+            sr=0.5,
+            declared=declared,
+            external=None,
+        ),
+        # 3. External Champer egg override (moves the survival rate only).
+        _AgeBuildCase(
+            tag="external-eggs",
+            n_ages=4,
+            new_adult_age=2,
+            survival=np.array([[0.95, 0.88, 0.7, 0.5], [0.92, 0.8, 0.6, 0.4]]),
+            mating=np.array([[0.0, 1.0, 0.9, 0.0], [0.0, 0.8, 0.7, 0.0]]),
+            reproduction=np.array([0.0, 0.6, 0.9, 0.3]),
+            fertility=np.array([0.0, 0.0, 0.85, 0.45]),
+            competition=np.array([1.0, 0.7, 0.1, 0.0]),
+            k=1200.0,
+            eggs=41.0,
+            sr=0.5,
+            declared=None,
+            external=3131.0,
+        ),
+        # 4. Minimal ladder: new_adult_age=1, n_ages=2 — the juvenile
+        #    competition loop over ages 1..new_adult_age is empty, so the
+        #    egg mass alone feeds C*.
+        _AgeBuildCase(
+            tag="minimal-ladder",
+            n_ages=2,
+            new_adult_age=1,
+            survival=np.array([[0.9, 0.5], [0.8, 0.4]]),
+            mating=np.array([[0.0, 0.7], [0.0, 0.6]]),
+            reproduction=None,
+            fertility=np.array([0.0, 0.95]),
+            competition=np.array([1.0, 0.3]),
+            k=600.0,
+            eggs=19.0,
+            sr=0.5,
+            declared=None,
+            external=None,
+        ),
+        # 5. Declared all-zero reproduction: produced_age_0 == 0, so the
+        #    survival-rate guard must fire (s* == 1.0 exactly) while the
+        #    juvenile age-1 mass still drives C* > 0.
+        _AgeBuildCase(
+            tag="zero-repro",
+            n_ages=4,
+            new_adult_age=2,
+            survival=np.array([[1.0, 0.9, 0.7, 0.4], [1.0, 0.85, 0.6, 0.3]]),
+            mating=np.array([[0.0, 1.0, 1.0, 0.0], [0.0, 1.0, 0.5, 0.0]]),
+            reproduction=np.zeros(4),
+            fertility=np.array([0.0, 0.0, 0.9, 0.5]),
+            competition=np.array([1.0, 0.6, 0.2, 0.0]),
+            k=750.0,
+            eggs=23.0,
+            sr=0.5,
+            declared=None,
+            external=None,
+        ),
+        # 6. Asymmetric sex ratio on a deeper ladder.
+        _AgeBuildCase(
+            tag="deep-ladder",
+            n_ages=6,
+            new_adult_age=3,
+            survival=np.array(
+                [
+                    [0.97, 0.93, 0.88, 0.8, 0.7, 0.5],
+                    [0.96, 0.9, 0.84, 0.75, 0.6, 0.4],
+                ]
+            ),
+            mating=np.array(
+                [
+                    [0.0, 0.0, 0.8, 0.9, 0.7, 0.2],
+                    [0.0, 0.0, 0.6, 0.8, 0.5, 0.1],
+                ]
+            ),
+            reproduction=np.array([0.0, 0.0, 0.0, 0.85, 0.9, 0.4]),
+            fertility=np.array([0.0, 0.0, 0.0, 0.9, 0.75, 0.3]),
+            competition=np.array([1.0, 0.8, 0.5, 0.2, 0.05, 0.0]),
+            k=2100.0,
+            eggs=37.0,
+            sr=0.3,
+            declared=np.array(
+                [
+                    [0.0, 260.0, 200.0, 320.0, 250.0, 140.0],
+                    [0.0, 240.0, 180.0, 300.0, 220.0, 110.0],
+                ]
+            ),
+            external=None,
+        ),
+    ]
+
+
+def _build_age_draft(case: _AgeBuildCase) -> nt.ModelDraft:
+    """Run one matrix case through the public age-structured builder."""
+    from natal.frontend.data._config import build_population_config
+
+    return build_population_config(
+        n_genotypes=3,
+        n_gtypes=2,
+        n_glabs=1,
+        n_ages=case.n_ages,
+        new_adult_age=case.new_adult_age,
+        age_based_survival_rates=case.survival,
+        age_based_mating_rates=case.mating,
+        age_based_reproduction_rates=case.reproduction,
+        female_age_based_fertility=case.fertility,
+        age_based_relative_competition_strength=case.competition,
+        carrying_capacity=case.k,
+        eggs_per_female=case.eggs,
+        sex_ratio=case.sr,
+        equilibrium_individual_distribution=case.declared,
+        external_expected_eggs=case.external,
+    )
+
+
+def _pack_metrics(metrics: tuple[float, float]) -> tuple[bytes, bytes]:
+    """Full 64-bit bit patterns of a metric pair (catches -0.0/ulp drift)."""
+    return struct.pack(">d", float(metrics[0])), struct.pack(
+        ">d", float(metrics[1])
+    )
+
+
+def _draft_metrics(draft: nt.ModelDraft) -> tuple[float, float]:
+    """The two equilibrium caches of a built draft."""
+    return (
+        float(draft.expected_competition_strength),
+        float(draft.expected_survival_rate),
+    )
+
+
+def _assert_draft_fields_equal(
+    left: nt.ModelDraft, right: nt.ModelDraft, context: str
+) -> None:
+    """Every NamedTuple field of two builds on identical input is equal."""
+    right_fields = right._asdict()
+    for name, left_value in left._asdict().items():
+        right_value = right_fields[name]
+        if isinstance(left_value, np.ndarray):
+            np.testing.assert_array_equal(
+                left_value, right_value, err_msg=f"{context}: field {name}"
+            )
+        else:
+            assert left_value == right_value, (
+                f"{context}: field {name}: {left_value!r} != {right_value!r}"
+            )
+
+
+class TestBuildPathEquilibriumDispatch:
+    """Adversarial tests for the batch-12 build-path dispatch collapse."""
+
+    def test_build_matrix_rust_matches_forced_fallback_bitwise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Six build axes: rust dispatch vs forced fallback are bit-equal.
+
+        Attack: the two build branches could drift — the Rust branch
+        normalizes dtypes/contiguity through ``ascontiguousarray`` while
+        the Python fallback consumes the raw arrays, a sentinel could be
+        treated as declared on one side only, or a vector could be wired
+        into the wrong kernel slot.  Each case pins the full 64-bit
+        pattern of both metrics AND every other draft field (only the
+        kernel may differ, nothing else), plus per-case sensitivity
+        floors so equality is never vacuous.
+        """
+        if _load_equilibrium_kernel() is None:
+            pytest.skip("rust extension not built")
+        from natal.frontend.data import _engine as engine_module
+
+        def force_fallback(  # object: probe shim mirrors any dispatch call shape
+            *args: object, **kwargs: object
+        ) -> None:
+            return None
+
+        cases = _age_build_cases()
+        for case in cases:
+            rust_draft = _build_age_draft(case)
+            rust_metrics = _draft_metrics(rust_draft)
+            # Sensitivity floors per case family.
+            assert rust_metrics[0] > 0.0, f"{case.tag}: degenerate C*"
+            assert 0.0 < rust_metrics[1] <= 1.0 or case.tag == "zero-repro", (
+                f"{case.tag}: implausible s*"
+            )
+            if case.tag == "zero-repro":
+                # produced_age_0 == 0 fires the survival-rate guard.
+                assert rust_metrics[1] == 1.0, (
+                    f"{case.tag}: zero reproduction must yield s* == 1.0"
+                )
+            if case.tag == "external-eggs":
+                # The override moves only the survival rate — compare
+                # against the same case without the override.
+                no_ext = _age_build_cases()[1]
+                assert no_ext.tag == "declared-dist"
+                base = _draft_metrics(_build_age_draft(no_ext))
+                assert rust_metrics[0] != base[0], (
+                    "external case lost its distinct declared/derive setup"
+                )
+
+            monkeypatch.setattr(
+                engine_module, "equilibrium_metrics_dispatch", force_fallback
+            )
+            try:
+                py_draft = _build_age_draft(case)
+            finally:
+                monkeypatch.undo()
+            assert _pack_metrics(rust_metrics) == _pack_metrics(
+                _draft_metrics(py_draft)
+            ), f"{case.tag}: rust/forced-fallback metrics differ in bits"
+            _assert_draft_fields_equal(
+                rust_draft, py_draft, context=case.tag
+            )
+
+    def test_build_and_sync_none_semantics_differ_deliberately(self) -> None:
+        """Undeclared reproduction: build uses the normalized default,
+        sync uses the female mating row — and both match their own
+        reference exactly.
+
+        Attack: the None handling could be silently unified in either
+        direction (build inheriting the mating fallback, or sync losing
+        it).  The mating row here is unlike the normalized default, so
+        each wrong unification moves the metrics.  As a bonus invariant,
+        the built draft (reproduction stored non-None) is a fixed point
+        of sync.
+        """
+        from natal.backends.reference.simulation.age_structured import (
+            compute_equilibrium_metrics,
+        )
+        from natal.frontend.configurator._routes import (
+            sync_equilibrium_for_draft,
+        )
+
+        case = _age_build_cases()[0]
+        assert case.tag == "undeclared-repro"
+        draft = _build_age_draft(case)
+        # The builder normalized the undeclared reproduction in place.
+        np.testing.assert_array_equal(
+            draft.age_based_reproduction_rates, [0.0, 0.0, 1.0, 1.0]
+        )
+
+        def reference(reproduction: NDArray[np.float64]) -> tuple[float, float]:
+            return compute_equilibrium_metrics(
+                carrying_capacity=case.k,
+                eggs_per_female=case.eggs,
+                sex_ratio=case.sr,
+                age_based_survival_rates=case.survival,
+                age_based_mating_rates=case.mating,
+                age_based_reproduction_rates=reproduction,
+                female_age_based_fertility=case.fertility,
+                relative_competition_strength=case.competition,
+                new_adult_age=case.new_adult_age,
+                n_ages=case.n_ages,
+                equilibrium_individual_count=None,
+                external_expected_eggs=None,
+            )
+
+        ref_default = reference(np.array([0.0, 0.0, 1.0, 1.0]))
+        ref_mating = reference(case.mating[0].copy())
+        # Non-vacuous: the two candidate semantics genuinely differ.
+        assert ref_default != ref_mating
+
+        build_metrics = _draft_metrics(draft)
+        assert _pack_metrics(build_metrics) == _pack_metrics(ref_default), (
+            "build must consume the normalized default, not mating[0]"
+        )
+        assert _pack_metrics(build_metrics) != _pack_metrics(ref_mating)
+
+        # Sync on a draft carrying None resolves to the female mating row.
+        synced_none = sync_equilibrium_for_draft(
+            draft._replace(age_based_reproduction_rates=None)
+        )
+        assert _pack_metrics(_draft_metrics(synced_none)) == _pack_metrics(
+            ref_mating
+        ), "sync(None) must consume the female mating row"
+        assert _pack_metrics(_draft_metrics(synced_none)) != _pack_metrics(
+            ref_default
+        )
+
+        # Fixed point: sync on the stored (non-None) reproduction is the
+        # build result — build->sync cannot move the caches.
+        synced_stored = sync_equilibrium_for_draft(draft)
+        assert _pack_metrics(_draft_metrics(synced_stored)) == (
+            _pack_metrics(build_metrics)
+        )
+
+    def test_dispatch_normalizes_empty_sentinels_to_derive(self) -> None:
+        """None, (0,0), (2,0), and 1-D empty declared all derive; a real
+        (2, n) declaration switches branch and matches the reference.
+
+        Attack: a dispatch that forwarded the empty sentinel as a
+        declared zero distribution would read out of bounds or derive a
+        degenerate all-zero distribution instead of K.
+        """
+        if _load_equilibrium_kernel() is None:
+            pytest.skip("rust extension not built")
+        from natal.backends.reference.simulation.age_structured import (
+            compute_equilibrium_metrics,
+        )
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+
+        survival = np.array([[0.9, 0.8, 0.7], [0.85, 0.75, 0.65]])
+        reproduction = np.array([0.0, 0.8, 0.6])
+        fertility = np.array([0.0, 1.0, 0.9])
+        competition = np.array([1.0, 0.5, 0.2])
+
+        def call(
+            declared: NDArray[np.float64] | None,
+            external: float | None = None,
+        ) -> tuple[float, float]:
+            result = equilibrium_metrics_dispatch(
+                400.0,
+                30.0,
+                0.5,
+                survival,
+                reproduction,
+                fertility,
+                competition,
+                1,
+                3,
+                declared,
+                external,
+            )
+            assert result is not None  # extension guarded above
+            return result
+
+        from_none = call(None)
+        for empty in (
+            np.zeros((0, 0)),
+            np.zeros((2, 0)),
+            np.zeros(0),
+        ):
+            assert _pack_metrics(call(empty)) == _pack_metrics(from_none), (
+                f"sentinel {empty.shape} must derive like None"
+            )
+
+        declared = np.array(
+            [[0.0, 200.0, 150.0], [0.0, 180.0, 120.0]]
+        )
+        declared_metrics = call(declared)
+        assert _pack_metrics(declared_metrics) != _pack_metrics(from_none), (
+            "declared distribution must switch the kernel branch"
+        )
+        # Declared branch matches the Python reference bitwise.
+        ref = compute_equilibrium_metrics(
+            carrying_capacity=400.0,
+            eggs_per_female=30.0,
+            sex_ratio=0.5,
+            age_based_survival_rates=survival,
+            age_based_mating_rates=np.zeros((2, 3)),  # unused: reproduction given
+            age_based_reproduction_rates=reproduction,
+            female_age_based_fertility=fertility,
+            relative_competition_strength=competition,
+            new_adult_age=1,
+            n_ages=3,
+            equilibrium_individual_count=declared,
+            external_expected_eggs=None,
+        )
+        assert _pack_metrics(declared_metrics) == _pack_metrics(ref)
+
+        # External override moves only the survival rate.
+        external_metrics = call(None, external=3131.0)
+        assert struct.pack(">d", external_metrics[0]) == struct.pack(
+            ">d", from_none[0]
+        ), "external override must not move C*"
+        assert struct.pack(">d", external_metrics[1]) != struct.pack(
+            ">d", from_none[1]
+        ), "external override must move s*"
+
+    def test_dispatch_block_recover_state_transition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """rust build -> blocked dispatch (None) -> fallback build ->
+        unblocked rust build: every state produces the same bits.
+
+        Attack: a negative import cache would keep the fallback active
+        after the block lifts; a fallback that drifts from the kernel
+        would flip the metrics between the blocked and unblocked builds.
+        """
+        if _load_equilibrium_kernel() is None:
+            pytest.skip("rust extension not built")
+        import natal._engine_rs  # noqa: F401  # pin the module in sys.modules
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+
+        case = _age_build_cases()[0]
+        pre_block = _draft_metrics(_build_age_draft(case))
+
+        monkeypatch.setitem(sys.modules, "natal._engine_rs", None)
+        assert equilibrium_metrics_dispatch(
+            400.0, 30.0, 0.5,
+            np.zeros((2, 3)), np.zeros(3), np.zeros(3), np.zeros(3),
+            1, 3, None, None,
+        ) is None, "blocked import must return None"
+        blocked_build = _draft_metrics(_build_age_draft(case))
+        assert _pack_metrics(blocked_build) == _pack_metrics(pre_block), (
+            "fallback build drifted from the rust build"
+        )
+
+        monkeypatch.undo()
+        after = _draft_metrics(_build_age_draft(case))
+        assert _pack_metrics(after) == _pack_metrics(pre_block), (
+            "dispatch must rediscover the extension after the block lifts"
+        )
+
+    def test_single_dispatch_point_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Build and sync both resolve the kernel through the engine
+        module attribute — and neither spells the rust import inline.
+
+        Attack: an inline ``from natal._engine_rs import ...`` (the
+        batch-11 spelling) inside either caller would bypass the module
+        attribute, so the recorder below would not fire.  The recorder
+        also pins the caller-policy contract: sync resolves None
+        reproduction to the female mating row *before* dispatching,
+        build passes the already-normalized array.
+        """
+        import inspect
+
+        from natal.frontend.configurator import _routes as routes_module
+        from natal.frontend.configurator._routes import (
+            sync_equilibrium_for_draft,
+        )
+        from natal.frontend.data import _engine as engine_module
+        from natal.frontend.data._config import build_population_config
+
+        # object: recorded positional/keyword payloads of arbitrary dispatch calls
+        calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def recorder(  # object: recorder mirrors any dispatch call shape
+            *args: object, **kwargs: object
+        ) -> None:
+            calls.append((args, kwargs))
+            return None  # forces each caller's fallback translation
+
+        case = _age_build_cases()[0]
+        draft = _build_age_draft(case)
+        expected_metrics = _draft_metrics(draft)
+
+        monkeypatch.setattr(
+            engine_module, "equilibrium_metrics_dispatch", recorder
+        )
+        try:
+            rebuilt = build_population_config(
+                n_genotypes=3,
+                n_gtypes=2,
+                n_glabs=1,
+                n_ages=case.n_ages,
+                new_adult_age=case.new_adult_age,
+                age_based_survival_rates=case.survival,
+                age_based_mating_rates=case.mating,
+                age_based_reproduction_rates=case.reproduction,
+                female_age_based_fertility=case.fertility,
+                age_based_relative_competition_strength=case.competition,
+                carrying_capacity=case.k,
+                eggs_per_female=case.eggs,
+                sex_ratio=case.sr,
+            )
+            synced = sync_equilibrium_for_draft(
+                draft._replace(age_based_reproduction_rates=None)
+            )
+        finally:
+            monkeypatch.undo()
+
+        assert len(calls) == 2, "build and sync must each dispatch exactly once"
+        (build_args, build_kwargs), (sync_args, _sync_kwargs) = calls
+        # The build caller spells keywords; the sync caller spells
+        # positionals (slot 5 / index 4 is the resolved reproduction).
+        np.testing.assert_array_equal(
+            np.asarray(build_kwargs["reproduction_rates"]),
+            [0.0, 0.0, 1.0, 1.0],
+            err_msg="build must dispatch the normalized default vector",
+        )
+        np.testing.assert_array_equal(
+            np.asarray(sync_args[4]), case.mating[0],
+            err_msg="sync must dispatch the female mating row for None",
+        )
+        # The None return was translated into the fallback on both sides.
+        assert _pack_metrics(_draft_metrics(rebuilt)) == _pack_metrics(
+            expected_metrics
+        )
+        assert _pack_metrics(_draft_metrics(synced)) == _pack_metrics(
+            _draft_metrics(
+                sync_equilibrium_for_draft(
+                    draft._replace(
+                        age_based_reproduction_rates=case.mating[0].copy()
+                    )
+                )
+            )
+        )
+
+        # Negative contract: no inline rust import survives in _routes,
+        # and the dispatch is plumbing, not public API.
+        routes_source = inspect.getsource(routes_module)
+        assert "equilibrium_metrics_flat" not in routes_source
+        assert "_engine_rs" not in routes_source
+        import natal.frontend.data as data_package
+
+        assert not hasattr(data_package, "equilibrium_metrics_dispatch")
+        assert "equilibrium_metrics_dispatch" not in data_package.__all__
+
+    def test_dispatch_error_paths_and_ownership(self) -> None:
+        """Wrong shapes raise ValueError naming the field, leave the
+        caller's arrays bit-identical, and no state is retained between
+        calls.
+
+        Attack: a validation that scribbles before raising corrupts live
+        config; a kernel that retains the declared storage would ignore
+        later mutations of the same array object.
+        """
+        if _load_equilibrium_kernel() is None:
+            pytest.skip("rust extension not built")
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+
+        survival = np.array([[0.9, 0.8, 0.7], [0.85, 0.75, 0.65]])
+        reproduction = np.array([0.0, 0.8, 0.6])
+        fertility = np.array([0.0, 1.0, 0.9])
+        competition = np.array([1.0, 0.5, 0.2])
+        snapshots = [a.copy() for a in (survival, reproduction, fertility, competition)]
+
+        def call(
+            survival_rates: NDArray[np.float64] = survival,
+            reproduction_rates: NDArray[np.float64] = reproduction,
+            declared: NDArray[np.float64] | None = None,
+        ) -> tuple[float, float]:
+            result = equilibrium_metrics_dispatch(
+                400.0, 30.0, 0.5,
+                survival_rates, reproduction_rates, fertility, competition,
+                1, 3, declared, None,
+            )
+            assert result is not None  # extension guarded above
+            return result
+
+        with pytest.raises(ValueError, match="reproduction_rates must have length"):
+            call(reproduction_rates=np.zeros(2))
+        with pytest.raises(ValueError, match="declared_distribution shape"):
+            call(declared=np.zeros((2, 4)))
+        with pytest.raises(ValueError, match="survival_rates shape"):
+            call(survival_rates=np.zeros((1, 3)))
+        # State clean after every raise.
+        for original, current in zip(
+            snapshots, (survival, reproduction, fertility, competition)
+        ):
+            np.testing.assert_array_equal(current, original)
+
+        # Ownership: an F-order caller is copied, not reordered in place.
+        survival_f = np.asfortranarray(survival)
+        survival_f_snapshot = survival_f.copy()
+        call(survival_rates=survival_f)
+        assert not survival_f.flags.c_contiguous
+        np.testing.assert_array_equal(survival_f, survival_f_snapshot)
+
+        # No retained kernel state: mutating the declared array between
+        # calls must change the next result.
+        declared = np.array([[0.0, 200.0, 150.0], [0.0, 180.0, 120.0]])
+        first = call(declared=declared)
+        declared[0, 1] = 999.0
+        second = call(declared=declared)
+        assert _pack_metrics(first) != _pack_metrics(second)
+
+    def test_discrete_build_path_parity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The discrete factory funnels through the same changed
+        build_config_maps, so its caches are kernel-independent too.
+
+        Attack: build_discrete_engine_config normalizes its demographic
+        vectors (survival [1,0], reproduction [0,1], new_adult_age=1)
+        before the shared computation; a dispatch wiring that mishandled
+        those discrete defaults would flip the discrete caches while the
+        age-structured matrix stayed green.
+        """
+        if _load_equilibrium_kernel() is None:
+            pytest.skip("rust extension not built")
+        from natal.frontend.data import _engine as engine_module
+        from natal.frontend.data._engine import build_discrete_engine_config
+
+        # Minimal Mendelian maps: 1 locus, 2 alleles, 3 genotypes.
+        meiosis = np.array(
+            [
+                [[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]],
+                [[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]],
+            ]
+        )
+        fusion = np.zeros((2, 2, 3))
+        for gf, female_allele in enumerate(("A", "B")):
+            for gm, male_allele in enumerate(("A", "B")):
+                zygote = {"AA": 0, "AB": 1, "BA": 1, "BB": 2}[
+                    female_allele + male_allele
+                ]
+                fusion[gf, gm, zygote] = 1.0
+
+        def build_once() -> nt.ModelDraft:
+            return build_discrete_engine_config(
+                n_genotypes=3,
+                n_gtypes=2,
+                n_glabs=1,
+                zygotes_to_gametes_map=meiosis,
+                gametes_to_zygotes_map=fusion,
+                carrying_capacity=850.0,
+                eggs_per_female=31.0,
+                sex_ratio=0.55,
+                stochastic=False,
+            )
+
+        rust_draft = build_once()
+        rust_metrics = _draft_metrics(rust_draft)
+        assert rust_metrics[0] > 0.0
+        assert 0.0 < rust_metrics[1] <= 1.0
+
+        def force_fallback(  # object: probe shim mirrors any dispatch call shape
+            *args: object, **kwargs: object
+        ) -> None:
+            return None
+
+        monkeypatch.setattr(
+            engine_module, "equilibrium_metrics_dispatch", force_fallback
+        )
+        py_draft = build_once()
+        assert _pack_metrics(rust_metrics) == _pack_metrics(
+            _draft_metrics(py_draft)
+        )
+        _assert_draft_fields_equal(
+            rust_draft,
+            py_draft,
+            context="discrete",
+        )

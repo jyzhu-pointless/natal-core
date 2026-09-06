@@ -22,11 +22,75 @@ from ._config import (
 from .config import ModelDraft
 
 __all__ = [
+    "equilibrium_metrics_dispatch",
     "initialize_gamete_map",
     "initialize_zygote_map",
     "recompute_offspring_tensor",
     "validate_meiosis_table",
 ]
+
+
+def equilibrium_metrics_dispatch(
+    carrying_capacity: float,
+    eggs_per_female: float,
+    sex_ratio: float,
+    survival_rates: NDArray[np.float64],
+    reproduction_rates: NDArray[np.float64],
+    fertility: NDArray[np.float64],
+    competition_weights: NDArray[np.float64],
+    new_adult_age: int,
+    n_ages: int,
+    declared_distribution: NDArray[np.float64] | None,
+    external_expected_eggs: float | None,
+) -> tuple[float, float] | None:
+    """Run the Rust equilibrium kernel; ``None`` when it is unavailable.
+
+    Single dispatch point for the equilibrium calibration (plan 5.2):
+    the sensitive-parameter sync path and the build-time map computation
+    both funnel through here so the kernel choice cannot drift apart.
+    Callers feed already-resolved reproduction vectors (the None-fallback
+    to the female mating row is caller policy) and translate ``None``
+    into their pure-Python fallback.
+
+    Args:
+        carrying_capacity: Carrying capacity K (age-1 total).
+        eggs_per_female: Baseline offspring count per female.
+        sex_ratio: Female proportion.
+        survival_rates: ``(2, n_ages)`` survival matrix.
+        reproduction_rates: Resolved ``(n_ages,)`` participation vector.
+        fertility: ``(n_ages,)`` relative female fertility.
+        competition_weights: ``(n_ages,)`` juvenile competition weights.
+        new_adult_age: First adult age index.
+        n_ages: Total age classes.
+        declared_distribution: ``None`` or empty means derive mode.
+        external_expected_eggs: Champer egg override (``None`` = unused).
+
+    Returns:
+        ``(expected_competition_strength, expected_survival_rate)`` from
+        the Rust kernel, or ``None`` when the extension is absent.
+    """
+    try:
+        from natal._engine_rs import equilibrium_metrics_flat as rust_metrics
+    except ImportError:
+        return None
+    declared = (
+        np.ascontiguousarray(declared_distribution, dtype=np.float64)
+        if declared_distribution is not None and declared_distribution.size > 0
+        else None
+    )
+    return rust_metrics(
+        float(carrying_capacity),
+        float(eggs_per_female),
+        float(sex_ratio),
+        np.ascontiguousarray(survival_rates, dtype=np.float64),
+        np.ascontiguousarray(reproduction_rates, dtype=np.float64),
+        np.ascontiguousarray(fertility, dtype=np.float64),
+        np.ascontiguousarray(competition_weights, dtype=np.float64),
+        int(new_adult_age),
+        int(n_ages),
+        declared,
+        external_expected_eggs,
+    )
 
 
 def _rust_offspring_kernel(
