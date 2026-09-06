@@ -66,16 +66,11 @@ fn map_lifecycle_error(err: String) -> PyErr {
     PyRuntimeError::new_err(err)
 }
 
-/// Ecology scalar field names carried by a memory checkpoint.
-pub(crate) const ECOLOGY_SCALARS: [&str; 7] = [
-    "carrying_capacity",
-    "eggs_per_female",
-    "sex_ratio",
-    "sperm_displacement_rate",
-    "low_density_growth_rate",
-    "growth_mode",
-    "external_expected_eggs",
-];
+/// Ecology scalar field names carried by a memory checkpoint —
+/// generated from the jsonc wire order with ``growth_mode`` and
+/// ``external_expected_eggs`` appended (plan 5.4: one source, no
+/// hand-written copies).
+use crate::eco_param_wire::ECOLOGY_SCALARS;
 
 /// Ecology vector field names carried by a memory checkpoint.
 ///

@@ -21,6 +21,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from natal.frontend.utils.parameters import ParamDescriptor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGET = REPO_ROOT / "rust" / "src" / "eco_param_wire.rs"
@@ -53,13 +57,54 @@ def _wire_rows() -> list[tuple[str, float, float]]:
     return rows
 
 
-def _render(rows: list[tuple[str, float, float]]) -> str:
-    """Render the Rust module text for the given wire rows."""
+def _require_jsonc_names(
+    by_name: dict[str, ParamDescriptor], names: tuple[str, ...]
+) -> None:
+    """Fail closed when a layout-appended name disappears from the jsonc."""
+    for name in names:
+        if name not in by_name:
+            raise SystemExit(
+                f"parameter {name!r} is part of the Rust layout contract but "
+                "is missing from src/natal/parameters.jsonc"
+            )
+
+
+def _layout_names(
+    by_name: dict[str, ParamDescriptor],
+) -> tuple[list[str], list[str]]:
+    """Return the params-contract and checkpoint scalar column lists.
+
+    Both lists extend the fixed wire order with layout-appended scalar
+    names that exist in the jsonc: the params contract carries
+    ``external_expected_eggs`` last; the memory checkpoint additionally
+    carries ``growth_mode`` before it.
+    """
+    from natal.frontend.hooks.types import ECO_PARAM_NAMES
+
+    appended = ("external_expected_eggs", "growth_mode")
+    _require_jsonc_names(by_name, appended)
+    contract_columns = list(ECO_PARAM_NAMES) + ["external_expected_eggs"]
+    checkpoint_columns = (
+        list(ECO_PARAM_NAMES) + ["growth_mode", "external_expected_eggs"]
+    )
+    return contract_columns, checkpoint_columns
+
+
+def _render(
+    rows: list[tuple[str, float, float]],
+    contract_columns: list[str],
+    checkpoint_columns: list[str],
+) -> str:
+    """Render the Rust module text for the wire rows and layout lists."""
     n = len(rows)
     # Trailing commas keep rustfmt happy (the generated file must pass
     # `cargo fmt --check` untouched).
     names = "\n    ".join(f'"{name}",' for name, _, _ in rows)
     bounds = "\n    ".join(f"({lo!r}, {hi!r})," for _, lo, hi in rows)
+    contract_list = "\n    ".join(f'"{c}",' for c in contract_columns)
+    checkpoint_list = "\n    ".join(f'"{c}",' for c in checkpoint_columns)
+    n_contract = len(contract_columns)
+    n_checkpoint = len(checkpoint_columns)
     return (
         f"{HEADER}\n"
         f"/// Wire names of the runtime-mutable ecology parameters, in the\n"
@@ -69,7 +114,13 @@ def _render(rows: list[tuple[str, float, float]]) -> str:
         f"pub const N_ECO_PARAMS: usize = ECO_PARAM_COLUMNS.len();\n\n"
         f"/// Validity bounds per column — the generated mirror of the jsonc\n"
         f"/// scalar ``bounds`` (same order as ``ECO_PARAM_COLUMNS``).\n"
-        f"pub const ECO_PARAM_BOUNDS: [(f64, f64); N_ECO_PARAMS] = [\n    {bounds}\n];\n"
+        f"pub const ECO_PARAM_BOUNDS: [(f64, f64); N_ECO_PARAMS] = [\n    {bounds}\n];\n\n"
+        f"/// Ecology scalar channel names of the params contract: the wire\n"
+        f"/// order plus ``external_expected_eggs`` appended last.\n"
+        f"pub const ECOLOGY_SCALAR_COLUMNS: [&str; {n_contract}] = [\n    {contract_list}\n];\n\n"
+        f"/// Ecology scalar names carried by a memory checkpoint: the wire\n"
+        f"/// order plus ``growth_mode`` and ``external_expected_eggs``.\n"
+        f"pub const ECOLOGY_SCALARS: [&str; {n_checkpoint}] = [\n    {checkpoint_list}\n];\n"
     )
 
 
@@ -91,7 +142,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    rendered = _render(_wire_rows())
+    from natal.frontend.utils.parameters import ALL_PARAMETERS
+
+    by_name = {d.name: d for d in ALL_PARAMETERS.values()}
+    rows = _wire_rows()
+    contract_columns, checkpoint_columns = _layout_names(by_name)
+    rendered = _render(rows, contract_columns, checkpoint_columns)
     if args.check:
         current = (
             TARGET.read_text(encoding="utf-8") if TARGET.is_file() else ""

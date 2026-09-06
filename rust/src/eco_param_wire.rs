@@ -28,3 +28,26 @@ pub const ECO_PARAM_BOUNDS: [(f64, f64); N_ECO_PARAMS] = [
     (0.0, 1.0),
     (0.0, 1000000.0),
 ];
+
+/// Ecology scalar channel names of the params contract: the wire
+/// order plus ``external_expected_eggs`` appended last.
+pub const ECOLOGY_SCALAR_COLUMNS: [&str; 6] = [
+    "carrying_capacity",
+    "eggs_per_female",
+    "sex_ratio",
+    "sperm_displacement_rate",
+    "low_density_growth_rate",
+    "external_expected_eggs",
+];
+
+/// Ecology scalar names carried by a memory checkpoint: the wire
+/// order plus ``growth_mode`` and ``external_expected_eggs``.
+pub const ECOLOGY_SCALARS: [&str; 7] = [
+    "carrying_capacity",
+    "eggs_per_female",
+    "sex_ratio",
+    "sperm_displacement_rate",
+    "low_density_growth_rate",
+    "growth_mode",
+    "external_expected_eggs",
+];

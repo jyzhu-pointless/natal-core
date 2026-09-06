@@ -680,15 +680,10 @@ pub struct Params {
     pub custom_slots: HashMap<String, f64>,
 }
 
-/// Ecology scalar column names (f64 channels).
-const ECOLOGY_SCALAR_COLUMNS: [&str; 6] = [
-    "carrying_capacity",
-    "eggs_per_female",
-    "sex_ratio",
-    "sperm_displacement_rate",
-    "low_density_growth_rate",
-    "external_expected_eggs",
-];
+/// Ecology scalar column names (f64 channels) — generated from the
+/// jsonc wire order with ``external_expected_eggs`` appended (plan 5.4:
+/// one source, no hand-written copies).
+use crate::eco_param_wire::ECOLOGY_SCALAR_COLUMNS;
 
 /// Canonical ``Op.set_param`` id order — generated from
 /// ``src/natal/parameters.jsonc`` via ``scripts/generate_param_tables.py``

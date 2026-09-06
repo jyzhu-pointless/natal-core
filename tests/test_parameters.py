@@ -354,11 +354,12 @@ class TestRustWireTables:
             )
 
     def test_wire_tables_have_no_handwritten_copy_in_rust_src(self) -> None:
-        """Only the generated module may define the wire tables.
+        """Only the generated module may define the wire/layout tables.
 
-        ``pub use crate::eco_param_wire::...`` re-exports are the sanctioned
+        ``use crate::eco_param_wire::...`` imports are the sanctioned
         access path; any other ``const ECO_PARAM_COLUMNS/BOUNDS/N_ECO_PARAMS
-        = ...`` definition in rust/src would reintroduce the manual sync
+        = ...`` or ``ECOLOGY_SCALAR_COLUMNS/ECOLOGY_SCALARS = ...``
+        definition in rust/src would reintroduce the manual sync
         discipline that plan 5.4 removes.
         """
         offenders: list[str] = []
@@ -370,7 +371,40 @@ class TestRustWireTables:
                 r"N_ECO_PARAMS\s*:\s*usize", body
             ):
                 offenders.append(str(path.relative_to(REPO_ROOT)))
+            if re.search(r"ECOLOGY_SCALAR_COLUMNS\s*:\s*\[", body) or re.search(
+                r"ECOLOGY_SCALARS\s*:\s*\[", body
+            ):
+                offenders.append(str(path.relative_to(REPO_ROOT)))
         assert offenders == [], f"hand-written wire table copies: {offenders}"
+
+    def test_ecology_layout_lists_extend_wire_order(self) -> None:
+        """The generated layout lists extend the wire order, nothing else.
+
+        Contract channels are the wire order plus ``external_expected_eggs``
+        last; the checkpoint list additionally carries ``growth_mode``
+        before it.  Both appended names must exist in the jsonc.
+        """
+        wire = list(ECO_PARAM_NAMES)
+        text = WIRE_TABLE.read_text(encoding="utf-8")
+
+        contract = re.search(
+            r"pub const ECOLOGY_SCALAR_COLUMNS: \[&str; (\d+)\] = \[(.*?)\];",
+            text, re.DOTALL,
+        )
+        checkpoint = re.search(
+            r"pub const ECOLOGY_SCALARS: \[&str; (\d+)\] = \[(.*?)\];",
+            text, re.DOTALL,
+        )
+        assert contract is not None and checkpoint is not None
+
+        contract_names = re.findall(r'"([^"]+)"', contract.group(2))
+        checkpoint_names = re.findall(r'"([^"]+)"', checkpoint.group(2))
+        assert int(contract.group(1)) == len(contract_names) == 6
+        assert int(checkpoint.group(1)) == len(checkpoint_names) == 7
+        assert contract_names == wire + ["external_expected_eggs"]
+        assert checkpoint_names == wire + ["growth_mode", "external_expected_eggs"]
+        by_name = {d.name for d in ALL_PARAMETERS.values()}
+        assert {"external_expected_eggs", "growth_mode"} <= by_name
 
 
 class TestParamTableGenerator:
@@ -393,7 +427,13 @@ class TestParamTableGenerator:
         by_name = {d.name: d.bounds for d in ALL_PARAMETERS.values()}
         for name, lo, hi in rows:
             assert (lo, hi) == by_name[name]
-        declared_len, rendered_names = _columns_block(generator._render(rows))
+        declared_len, rendered_names = _columns_block(
+            generator._render(
+                rows,
+                ["carrying_capacity", "growth_mode"],
+                ["carrying_capacity"],
+            )
+        )
         assert rendered_names == list(reversed(original))
         assert declared_len == len(original)
 
@@ -423,15 +463,74 @@ class TestParamTableGenerator:
         with pytest.raises(SystemExit, match="carrying_capacity"):
             generator._wire_rows()
 
+    def test_layout_names_missing_appended_name_aborts(self) -> None:
+        """A layout-appended name missing from the jsonc aborts loudly.
+
+        ``external_expected_eggs`` (both layout lists) and ``growth_mode``
+        (checkpoint list only) are appendees that must exist in the
+        registry; pruning either must abort the generator with a message
+        naming it, before any layout list is produced — a silent skip
+        would emit a checkpoint contract that drops the field.
+        """
+        generator = _load_generator()
+        full = {d.name: d for d in ALL_PARAMETERS.values()}
+        for missing in ("external_expected_eggs", "growth_mode"):
+            pruned = {k: v for k, v in full.items() if k != missing}
+            with pytest.raises(SystemExit, match=re.escape(missing)):
+                generator._layout_names(pruned)
+
+    def test_layout_names_lists_are_wire_plus_appended(self) -> None:
+        """``_layout_names`` is the wire order plus the fixed appendees.
+
+        The two returned lists must be array-equal to ``ECO_PARAM_NAMES``
+        with ``external_expected_eggs`` (contract) and additionally
+        ``growth_mode`` before it (checkpoint) — no sorting, dedup, or
+        reordering may intervene between the wire tuple and the layout
+        output.
+        """
+        generator = _load_generator()
+        by_name = {d.name: d for d in ALL_PARAMETERS.values()}
+        contract_columns, checkpoint_columns = generator._layout_names(by_name)
+        assert contract_columns == list(ECO_PARAM_NAMES) + [
+            "external_expected_eggs"
+        ]
+        assert checkpoint_columns == list(ECO_PARAM_NAMES) + [
+            "growth_mode",
+            "external_expected_eggs",
+        ]
+
     def test_render_is_deterministic_and_matches_disk(self) -> None:
-        """Rendering is a pure function of the rows and equals the shipped file.
+        """Rendering is a pure function of its inputs and equals the shipped file.
 
         Two consecutive renders must be byte-identical (no timestamps or
         environment-dependent content), and both must equal the committed
         rust/src/eco_param_wire.rs.
         """
         generator = _load_generator()
-        first = generator._render(generator._wire_rows())
-        second = generator._render(generator._wire_rows())
+        by_name = {d.name: d for d in ALL_PARAMETERS.values()}
+        layout = generator._layout_names(by_name)
+
+        first = generator._render(generator._wire_rows(), *layout)
+        second = generator._render(generator._wire_rows(), *layout)
+
         assert first == second
         assert first == WIRE_TABLE.read_text(encoding="utf-8")
+
+    def test_main_check_mode_runs_in_process_fresh(self) -> None:
+        """``main(["--check"])`` exercises the full assembly in-process.
+
+        The subprocess freshness test measures behavior but not line
+        coverage; calling ``main`` directly keeps the generator's
+        assembly path inside the pytest coverage net and still proves
+        the zero return on a fresh tree.
+        """
+        generator = _load_generator()
+        assert generator.main(["--check"]) == 0
+
+    def test_main_write_mode_is_idempotent_in_process(self) -> None:
+        """``main([])`` rewrites byte-identical content and stays fresh."""
+        generator = _load_generator()
+        before = WIRE_TABLE.read_text(encoding="utf-8")
+        assert generator.main([]) == 0
+        assert WIRE_TABLE.read_text(encoding="utf-8") == before
+        assert generator.main(["--check"]) == 0
