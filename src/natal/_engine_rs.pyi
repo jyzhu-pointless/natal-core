@@ -221,3 +221,19 @@ def compute_offspring_tensor(
     fusion: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """Compute the offspring probability tensor from meiosis and fusion tables."""
+
+
+def equilibrium_metrics_flat(
+    carrying_capacity: float,
+    eggs_per_female: float,
+    sex_ratio: float,
+    survival_rates: NDArray[np.float64],
+    reproduction_rates: NDArray[np.float64],
+    fertility: NDArray[np.float64],
+    competition_weights: NDArray[np.float64],
+    new_adult_age: int,
+    n_ages: int,
+    declared_distribution: NDArray[np.float64] | None = ...,
+    external_expected_eggs: float | None = ...,
+) -> tuple[float, float]:
+    """Compute equilibrium metrics from flat demographic inputs."""

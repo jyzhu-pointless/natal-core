@@ -30,6 +30,7 @@ Every test here attacks one way that collapse could be wrong:
 from __future__ import annotations
 
 import re
+import struct
 import subprocess
 import sys
 from collections.abc import Callable
@@ -107,6 +108,38 @@ def _load_rust_kernel() -> (
     except ImportError:
         return None
     return compute_offspring_tensor
+
+
+def _load_equilibrium_kernel() -> (
+    Callable[
+        [
+            float,
+            float,
+            float,
+            NDArray[np.float64],
+            NDArray[np.float64],
+            NDArray[np.float64],
+            NDArray[np.float64],
+            int,
+            int,
+            NDArray[np.float64] | None,
+            float | None,
+        ],
+        tuple[float, float],
+    ]
+    | None
+):
+    """Return the flat Rust equilibrium pyfunction, or None without the build.
+
+    Returns:
+        ``natal._engine_rs.equilibrium_metrics_flat`` when the compiled
+        extension is importable, else ``None`` (extension-less CI).
+    """
+    try:
+        from natal._engine_rs import equilibrium_metrics_flat
+    except ImportError:
+        return None
+    return equilibrium_metrics_flat
 
 
 # ── Axis-combination equivalence: compression × gamete labels ────────────────
@@ -916,12 +949,12 @@ class TestRustKernelAdversarialParity:
         survive.  After the block lifts, the wrapper must retry the
         import (no negative caching of the failed lookup).
         """
+        from natal.backends.reference.simulation.age_structured import (
+            compute_offspring_probability_tensor,
+        )
         from natal.frontend.data._engine import (
             _rust_offspring_kernel,
             recompute_offspring_tensor,
-        )
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
         )
 
         rng = np.random.default_rng(31337)
@@ -1039,10 +1072,10 @@ class TestRustKernelAdversarialParity:
         values.  Comparing against the *independent* Python spelling
         also catches a wrapper that merely round-trips its own output.
         """
-        from natal.frontend.data._engine import recompute_offspring_tensor
         from natal.backends.reference.simulation.age_structured import (
             compute_offspring_probability_tensor,
         )
+        from natal.frontend.data._engine import recompute_offspring_tensor
 
         rng = np.random.default_rng(99)
         meiosis = rng.random((2, 4, 3))
@@ -1072,3 +1105,654 @@ class TestRustKernelAdversarialParity:
                 rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
             ).reshape(4, 4, 4)
             assert wrapped.tobytes() == direct.tobytes()
+
+
+class TestEquilibriumKernelParity:
+    """The Rust equilibrium kernel matches the Python reference bitwise."""
+
+    def _python_reference(self, **kw: object) -> tuple[float, float]:  # object: probe mirrors the production kwargs dict (heterogeneous value types)
+        from natal.backends.reference.simulation.age_structured import (
+            compute_equilibrium_metrics,
+        )
+
+        return compute_equilibrium_metrics(**kw)  # type: ignore[arg-type]  # probe mirrors the production kwargs
+
+    def test_equilibrium_rust_kernel_bitwise_matches_python(self) -> None:
+        """Random demographic inputs agree bitwise across both kernels."""
+        try:
+            from natal._engine_rs import equilibrium_metrics_flat as rust_metrics
+        except ImportError:
+            pytest.skip("rust extension not built")
+
+        rng = np.random.default_rng(4242)
+        for trial in range(8):
+            n_ages = int(rng.integers(2, 9))
+            new_adult = int(rng.integers(1, n_ages))
+            survival = rng.random((2, n_ages))
+            mating = rng.random((2, n_ages))
+            reproduction = rng.random(n_ages) if trial % 2 else None
+            fertility = rng.random(n_ages)
+            competition = rng.random(n_ages)
+            sex_ratio = float(rng.random())
+            k = float(rng.random() * 5000)
+            eggs = float(rng.random() * 40)
+            declared = rng.random((2, n_ages)) * 100 if trial % 3 == 0 else None
+            external = float(rng.random() * 3000) if trial % 4 == 0 else None
+
+            py = self._python_reference(
+                carrying_capacity=k,
+                eggs_per_female=eggs,
+                age_based_survival_rates=survival,
+                age_based_mating_rates=mating,
+                age_based_reproduction_rates=reproduction,
+                female_age_based_fertility=fertility,
+                relative_competition_strength=competition,
+                sex_ratio=sex_ratio,
+                new_adult_age=new_adult,
+                n_ages=n_ages,
+                equilibrium_individual_count=declared,
+                external_expected_eggs=external,
+            )
+            resolved = reproduction if reproduction is not None else mating[0]
+            rust = rust_metrics(
+                k, eggs, sex_ratio,
+                np.ascontiguousarray(survival),
+                np.ascontiguousarray(resolved),
+                np.ascontiguousarray(fertility),
+                np.ascontiguousarray(competition),
+                new_adult, n_ages,
+                (
+                    np.ascontiguousarray(declared)
+                    if declared is not None
+                    else None
+                ),
+                external,
+            )
+            assert rust == py, f"equilibrium parity broke at trial {trial}"
+
+    def test_sync_path_uses_rust_and_matches_fallback_bitwise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The production sync entry returns bitwise-identical metrics
+        under the Rust dispatch and the forced Python fallback.
+
+        Attack: the two dispatch branches could drift (dtype coercion,
+        sentinel normalization, a stale cached import).  A ``None`` entry
+        in ``sys.modules`` makes the function-level ``from
+        natal._engine_rs import ...`` raise ImportError — exactly the
+        branch the sync must survive — without replacing the
+        process-global ``builtins.__import__`` (the same blocking method
+        the batch-10 kernel tests use).  Both results are also anchored
+        against an independent Python computation on the draft's own
+        fields, so a shared bug in both branches cannot pass.
+        """
+        from natal.backends.reference.simulation.age_structured import (
+            compute_equilibrium_metrics,
+        )
+        from natal.frontend.configurator._routes import sync_equilibrium_for_draft
+
+        sp = nt.Species.from_dict(
+            name="__eq_parity_species__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        draft = (
+            nt.AgeStructuredPopulation.setup(sp, stochastic=False)
+            .age_structure(n_ages=5, new_adult_age=2)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 0, 40, 0, 0]},
+                    "male": {"A|A": [0, 0, 40, 0, 0]},
+                }
+            )
+            .competition(carrying_capacity=1234.0, juvenile_growth_mode=3)
+            .reproduction(eggs_per_female=17.0, sex_ratio=0.5)
+            .survival(female_age_based_survival=0.85, male_age_based_survival=0.8)
+            .build()
+        ).config
+        # Distinct fertility/competition vectors: the builder defaults
+        # are all-ones, where a kernel wiring swap (fertility read as
+        # competition) is numerically invisible.  Nonzero survival keeps
+        # the derive branch's produced_age_0 nonzero and value-sensitive.
+        rng = np.random.default_rng(424242)
+        draft = draft._replace(
+            female_age_based_fertility=rng.random(5),
+            age_based_relative_competition_strength=rng.random(5),
+        )
+        survival_before = draft.age_based_survival_rates.copy()
+        mating_before = draft.age_based_mating_rates.copy()
+        fertility_before = draft.female_age_based_fertility.copy()
+        competition_before = (
+            draft.age_based_relative_competition_strength.copy()
+        )
+
+        rust_synced = sync_equilibrium_for_draft(draft)
+
+        monkeypatch.setitem(sys.modules, "natal._engine_rs", None)
+        py_synced = sync_equilibrium_for_draft(draft)
+
+        assert py_synced.expected_competition_strength == (
+            rust_synced.expected_competition_strength
+        )
+        assert py_synced.expected_survival_rate == (
+            rust_synced.expected_survival_rate
+        )
+        # Anchor both branches against the reference kernel on the
+        # draft's own demographic fields (a wrong-but-agreed pair fails).
+        expected = compute_equilibrium_metrics(
+            carrying_capacity=float(draft.carrying_capacity),
+            eggs_per_female=float(draft.eggs_per_female),
+            sex_ratio=float(draft.sex_ratio),
+            age_based_survival_rates=draft.age_based_survival_rates,
+            age_based_mating_rates=draft.age_based_mating_rates,
+            age_based_reproduction_rates=draft.age_based_reproduction_rates,
+            female_age_based_fertility=draft.female_age_based_fertility,
+            relative_competition_strength=(
+                draft.age_based_relative_competition_strength
+            ),
+            new_adult_age=int(draft.new_adult_age),
+            n_ages=int(draft.n_ages),
+            equilibrium_individual_count=None,
+            external_expected_eggs=None,
+        )
+        assert rust_synced.expected_competition_strength == expected[0]
+        assert rust_synced.expected_survival_rate == expected[1]
+        # Ownership: sync must read the draft, never scribble on it —
+        # every demographic array survives both dispatch branches
+        # bit-identically, and the caches keep their build-time values.
+        draft_cache = (
+            draft.expected_competition_strength,
+            draft.expected_survival_rate,
+        )
+        np.testing.assert_array_equal(
+            draft.age_based_survival_rates, survival_before
+        )
+        np.testing.assert_array_equal(
+            draft.age_based_mating_rates, mating_before
+        )
+        np.testing.assert_array_equal(
+            draft.female_age_based_fertility, fertility_before
+        )
+        np.testing.assert_array_equal(
+            draft.age_based_relative_competition_strength, competition_before
+        )
+        assert (
+            draft.expected_competition_strength,
+            draft.expected_survival_rate,
+        ) == draft_cache
+
+        # Lift the block: the next call must find the extension again
+        # (no negative caching of the failed import).
+        monkeypatch.undo()
+        again = sync_equilibrium_for_draft(draft)
+        assert again.expected_competition_strength == (
+            rust_synced.expected_competition_strength
+        )
+        assert again.expected_survival_rate == rust_synced.expected_survival_rate
+
+    def test_sync_resolves_none_reproduction_to_mating_row(self) -> None:
+        """A draft carrying ``age_based_reproduction_rates=None`` syncs to
+        the mating-row fallback on both dispatch branches.
+
+        Attack: the Optional annotation (batch 11) exists because the
+        runtime intermediate state can hold None — the 1102 incident.
+        The Rust pre-resolution could pick the male row, clamp
+        differently, or crash on the None; the Python fallback must keep
+        its own ``mating[0]`` semantics.  Bitwise equality of the two
+        branches plus the None-vs-resolved draft comparison pins the row
+        choice.
+        """
+        from natal.frontend.configurator._routes import sync_equilibrium_for_draft
+
+        sp = nt.Species.from_dict(
+            name="__eq_none_repro_species__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        draft = (
+            nt.AgeStructuredPopulation.setup(sp, stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 40, 0, 0]},
+                    "male": {"A|A": [0, 40, 0, 0]},
+                }
+            )
+            .competition(carrying_capacity=977.0, juvenile_growth_mode=3)
+            .reproduction(eggs_per_female=23.0, sex_ratio=0.5)
+            .survival(female_age_based_survival=0.9, male_age_based_survival=0.7)
+            .build()
+        ).config
+        # Overwrite the two mating rows with clearly different adult
+        # values so a wrong row choice changes the output.
+        draft.age_based_mating_rates[0][1:] = 0.9
+        draft.age_based_mating_rates[1][1:] = 0.4
+        female_row = draft.age_based_mating_rates[0].copy()
+        male_row = draft.age_based_mating_rates[1].copy()
+        assert not np.array_equal(female_row, male_row)
+
+        none_draft = draft._replace(age_based_reproduction_rates=None)
+        synced_none = sync_equilibrium_for_draft(none_draft)
+        synced_resolved = sync_equilibrium_for_draft(draft._replace(
+            age_based_reproduction_rates=female_row
+        ))
+        # None must behave exactly like the female mating row.
+        assert synced_none.expected_competition_strength == (
+            synced_resolved.expected_competition_strength
+        )
+        assert synced_none.expected_survival_rate == (
+            synced_resolved.expected_survival_rate
+        )
+        # And unlike the male row (the wrong-row detector).
+        synced_male = sync_equilibrium_for_draft(draft._replace(
+            age_based_reproduction_rates=male_row
+        ))
+        assert synced_male.expected_competition_strength != (
+            synced_none.expected_competition_strength
+        )
+
+    def test_equilibrium_parity_edge_axis_matrix(self) -> None:
+        """Bit-pattern parity across the edge/axis product of inputs.
+
+        Attack: the random trial in the sibling test draws every value
+        from ``[0, 1)`` with positive K and eggs — the degenerate
+        branches (sex_ratio 0/1, all-zero survival/fertility, K=0,
+        eggs=0, external=0.0) are never entered, so a kernel that
+        mishandles only a degenerate guard would pass it.  This test
+        enumerates the sentinel corners and compares full 64-bit
+        patterns (``struct.pack``), so even a ``-0.0``/``0.0`` or
+        last-ulp difference fails.
+        """
+        rust = _load_equilibrium_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+        from natal.backends.reference.simulation.age_structured import (
+            compute_equilibrium_metrics,
+        )
+
+        rng = np.random.default_rng(20260906)
+        base_vectors = {
+            n: (
+                rng.random((2, n)),
+                rng.random((2, n)),
+                rng.random(n),
+                rng.random(n),
+            )
+            for n in (2, 3, 5, 8)
+        }
+
+        def both_ways(k, eggs, sr, surv, mat, repro, fert, comp, na, n,
+                      declared, external):
+            py = compute_equilibrium_metrics(
+                carrying_capacity=k,
+                eggs_per_female=eggs,
+                age_based_survival_rates=surv,
+                age_based_mating_rates=mat,
+                age_based_reproduction_rates=repro,
+                female_age_based_fertility=fert,
+                relative_competition_strength=comp,
+                sex_ratio=sr,
+                new_adult_age=na,
+                n_ages=n,
+                equilibrium_individual_count=declared,
+                external_expected_eggs=external,
+            )
+            resolved = repro if repro is not None else mat[0]
+            ru = rust(
+                float(k), float(eggs), float(sr),
+                np.ascontiguousarray(surv, dtype=np.float64),
+                np.ascontiguousarray(resolved, dtype=np.float64),
+                np.ascontiguousarray(fert, dtype=np.float64),
+                np.ascontiguousarray(comp, dtype=np.float64),
+                int(na), int(n),
+                (np.ascontiguousarray(declared, dtype=np.float64)
+                 if declared is not None else None),
+                external,
+            )
+            return (
+                struct.pack(">d", float(py[0])) == struct.pack(">d", ru[0])
+                and struct.pack(">d", float(py[1])) == struct.pack(">d", ru[1])
+            )
+
+        for n_ages, (survival, mating, repro, comp) in base_vectors.items():
+            fert = rng.random(n_ages)
+            na = max(1, n_ages // 2)
+            assert both_ways(
+                1234.0, 17.0, 0.5, survival, mating, repro, fert, comp,
+                na, n_ages, None, None,
+            ), f"derive parity broke at n_ages={n_ages}"
+            # Python's own fallback branch: reproduction=None -> mating[0].
+            assert both_ways(
+                1234.0, 17.0, 0.5, survival, mating, None, fert, comp,
+                na, n_ages, None, None,
+            ), f"mating-fallback parity broke at n_ages={n_ages}"
+            declared = rng.random((2, n_ages)) * 400.0
+            assert both_ways(
+                1234.0, 17.0, 0.5, survival, mating, repro, fert, comp,
+                na, n_ages, declared, None,
+            ), f"declared parity broke at n_ages={n_ages}"
+            assert both_ways(
+                1234.0, 17.0, 0.5, survival, mating, repro, fert, comp,
+                na, n_ages, declared, 3131.0,
+            ), f"external parity broke at n_ages={n_ages}"
+
+        # Degenerate corners (each targets one guard in the reference).
+        surv, mat, repro, comp = base_vectors[3]
+        fert = np.array([0.0, 1.0, 0.9])
+        corners = [
+            ("sex_ratio=0", 0.0, 800.0, 25.0, surv, repro, fert),
+            ("sex_ratio=1", 1.0, 800.0, 25.0, surv, repro, fert),
+            ("survival all zero", 0.5, 800.0, 25.0, np.zeros((2, 3)), repro, fert),
+            ("fertility all zero", 0.5, 800.0, 25.0, surv, repro, np.zeros(3)),
+            ("K=0", 0.5, 0.0, 25.0, surv, repro, fert),
+            ("eggs=0", 0.5, 800.0, 0.0, surv, repro, fert),
+        ]
+        for label, sr, k, eggs, s, r, f in corners:
+            assert both_ways(
+                k, eggs, sr, s, mat, r, f, comp, 1, 3, None, None
+            ), f"{label} parity broke"
+        # external=0.0 (not None) must keep the "rate degenerates to 1.0"
+        # branch identical on both sides.
+        assert both_ways(
+            800.0, 25.0, 0.5, surv, mat, repro, fert, comp, 1, 3, None, 0.0
+        ), "external=0.0 parity broke"
+
+    def test_equilibrium_clamp_fires_identically_on_both_kernels(self) -> None:
+        """clamp01 must actually run — and identically — on both kernels.
+
+        Attack: the sibling random trial only feeds ``rng.random()``
+        values in [0, 1), where clamp01 is the identity, so deleting the
+        clamp entirely would still pass it.  The invariant here is
+        mathematical: clamp01(2.0) == clamp01(1.0) and clamp01(-3.0) ==
+        clamp01(0.0), so a kernel with a working clamp returns *bitwise
+        equal* results for those input pairs, while an identity "clamp"
+        (or a wrong-direction one) does not.  Parity with the Python
+        reference is asserted on the same out-of-range inputs.
+        """
+        rust = _load_equilibrium_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+        from natal.backends.reference.simulation.age_structured import (
+            compute_equilibrium_metrics,
+        )
+
+        rng = np.random.default_rng(616)
+        n = 4
+        survival = rng.random((2, n))
+        mating = rng.random((2, n))
+        fert = rng.random(n) + 0.5
+        comp = rng.random(n) + 0.5
+        k, eggs = 1500.0, 12.0
+
+        def call_rust(repro):
+            return rust(
+                k, eggs, 0.5,
+                np.ascontiguousarray(survival), np.ascontiguousarray(repro),
+                np.ascontiguousarray(fert), np.ascontiguousarray(comp),
+                1, n, None, None,
+            )
+
+        high = np.array([0.0, 2.0, 1.7, 50.0])
+        unit = np.array([0.0, 1.0, 1.0, 1.0])
+        low = np.array([0.0, -3.0, -0.1, -100.0])
+        zero = np.zeros(n)
+
+        # Sensitivity floor: the reproduction vector must move the output
+        # (otherwise the equalities below are vacuous).
+        mid = np.array([0.0, 1.0, 0.5, 1.0])
+        assert call_rust(high) != call_rust(mid)
+        assert call_rust(high) == call_rust(unit), "clamp(>1) must equal clamp(=1)"
+        assert call_rust(low) == call_rust(zero), "clamp(<0) must equal clamp(=0)"
+
+        # Out-of-range values through the Python fallback row too.
+        mating_out = mating.copy()
+        mating_out[0] = np.array([-2.0, 0.4, 1.9, 3.0])
+        py = compute_equilibrium_metrics(
+            carrying_capacity=k, eggs_per_female=eggs,
+            age_based_survival_rates=survival,
+            age_based_mating_rates=mating_out,
+            age_based_reproduction_rates=None,
+            female_age_based_fertility=fert,
+            relative_competition_strength=comp,
+            sex_ratio=0.5, new_adult_age=1, n_ages=n,
+            equilibrium_individual_count=None, external_expected_eggs=None,
+        )
+        ru = rust(
+            k, eggs, 0.5,
+            np.ascontiguousarray(survival),
+            np.ascontiguousarray(mating_out[0]),
+            np.ascontiguousarray(fert), np.ascontiguousarray(comp),
+            1, n, None, None,
+        )
+        assert ru == py, "out-of-range fallback-row parity broke"
+
+    def test_equilibrium_sentinel_and_shape_contracts(self) -> None:
+        """None/empty declared derive; every wrong shape names its field.
+
+        Attack: a kernel that treated the empty derive-mode sentinel as
+        a declared zero distribution (or validated shapes in the wrong
+        order, or validated none at all) would silently mis-derive or
+        read out of bounds.  Error paths must also leave the caller's
+        arrays bit-identical (a validation that scribbles before raising
+        corrupts live config).
+        """
+        rust = _load_equilibrium_kernel()
+        if rust is None:
+            pytest.skip("rust extension not built")
+
+        n = 4
+        survival = np.array([[0.8, 0.9, 0.7, 0.6], [0.85, 0.75, 0.65, 0.55]])
+        repro = np.array([0.0, 0.8, 0.7, 0.6])
+        fert = np.array([0.0, 1.0, 0.9, 0.8])
+        comp = np.array([1.0, 0.8, 0.7, 0.6])
+
+        def call(declared, external=None, surv=survival, r=repro, f=fert,
+                 c=comp, na=1, ages=n):
+            return rust(
+                400.0, 30.0, 0.5,
+                np.ascontiguousarray(surv), np.ascontiguousarray(r),
+                np.ascontiguousarray(f), np.ascontiguousarray(c),
+                na, ages, declared, external,
+            )
+
+        from_none = call(None)
+        # All three empty spellings derive, bit-identically to None.
+        assert call(np.zeros((0, 0))) == from_none
+        assert call(np.zeros((2, 0))) == from_none
+
+        # Wrong declared shapes: ValueError naming the field and shape.
+        for bad in (np.zeros((2, n + 1)), np.zeros((2, n - 1)), np.zeros((3, n))):
+            with pytest.raises(ValueError, match="declared_distribution shape"):
+                call(bad)
+        # Wrong survival shapes and vector lengths: each names its field.
+        with pytest.raises(ValueError, match="survival_rates shape"):
+            call(None, surv=np.zeros((2, n + 1)))
+        with pytest.raises(ValueError, match="survival_rates shape"):
+            call(None, surv=np.zeros((1, n)))
+        with pytest.raises(ValueError, match="reproduction_rates must have length"):
+            call(None, r=np.zeros(n - 1))
+        with pytest.raises(ValueError, match="fertility must have length"):
+            call(None, f=np.zeros(n + 1))
+        with pytest.raises(ValueError, match="competition_weights must have length"):
+            call(None, c=np.zeros(n + 2))
+        # Non-contiguous inputs are rejected, not silently copied
+        # (direct kernel calls — the sync path always pre-normalizes).
+        with pytest.raises(ValueError, match="must be C-contiguous"):
+            rust(
+                400.0, 30.0, 0.5,
+                np.asfortranarray(survival), np.ascontiguousarray(repro),
+                np.ascontiguousarray(fert), np.ascontiguousarray(comp),
+                1, n, None, None,
+            )
+        wide = np.zeros((2, 2 * n))
+        with pytest.raises(
+            ValueError, match="declared_distribution must be C-contiguous"
+        ):
+            rust(
+                400.0, 30.0, 0.5,
+                np.ascontiguousarray(survival), np.ascontiguousarray(repro),
+                np.ascontiguousarray(fert), np.ascontiguousarray(comp),
+                1, n, np.asfortranarray(wide[:, :n]), None,
+            )
+
+        # Ownership/error-path: the caller's arrays survive every raise
+        # above bit-identically (no partial writes before the error).
+        np.testing.assert_array_equal(
+            survival, [[0.8, 0.9, 0.7, 0.6], [0.85, 0.75, 0.65, 0.55]]
+        )
+        np.testing.assert_array_equal(repro, [0.0, 0.8, 0.7, 0.6])
+        np.testing.assert_array_equal(fert, [0.0, 1.0, 0.9, 0.8])
+        np.testing.assert_array_equal(comp, [1.0, 0.8, 0.7, 0.6])
+
+        # A declared input mutated after the call must not leak into any
+        # retained kernel state (the kernel copies into owned storage).
+        declared = np.array([[0.0, 200.0, 150.0, 100.0],
+                             [0.0, 200.0, 150.0, 100.0]])
+        r1 = call(declared)
+        declared.fill(0.0)
+        r2 = call(declared)
+        assert r1 != r2, "kernel retained the first call's declared storage"
+
+    def test_contract_wrapper_and_flat_entry_agree_bitwise(self) -> None:
+        """The core extraction refactor changed no contract-path bits.
+
+        Attack: ``equilibrium_metrics`` (bp/params, consumed by SimConfig
+        assembly) now funnels through ``equilibrium_metrics_core``; a
+        slice off-by-one, a swapped field, or a re-ordered argument in
+        the wrapper would change the contract results while the flat
+        entry (independently wired) stayed right.  Three-way bit
+        equality — contract vs flat vs Python reference — across
+        derive/declared/external modes pins the wrapper.
+        """
+        from natal import _engine_rs
+        from natal.backends.reference.simulation.age_structured import (
+            compute_equilibrium_metrics,
+        )
+        from natal.contracts.materialize import materialize
+
+        sp = nt.Species.from_dict(
+            name="__eq_refactor_zero_change__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        rng = np.random.default_rng(70707)
+        for trial in range(3):
+            n = int(rng.integers(2, 9))
+            na = int(rng.integers(1, n))
+            draft = (
+                nt.AgeStructuredPopulation.setup(sp, stochastic=False)
+                .age_structure(n_ages=n, new_adult_age=na)
+                .initial_state(
+                    individual_count={
+                        "female": {"A|A": [40, 0, 0, 0, 0, 0, 0, 0][:n]},
+                        "male": {"A|A": [40, 0, 0, 0, 0, 0, 0, 0][:n]},
+                    }
+                )
+                .competition(
+                    carrying_capacity=float(rng.uniform(100, 4000)),
+                    juvenile_growth_mode=3,
+                )
+                .reproduction(
+                    eggs_per_female=float(rng.uniform(5, 60)),
+                    sex_ratio=float(rng.uniform(0.2, 0.8)),
+                )
+                .survival(
+                    female_age_based_survival=float(rng.uniform(0.4, 0.95)),
+                    male_age_based_survival=float(rng.uniform(0.4, 0.95)),
+                )
+                .build()
+            ).config
+            # Distinct fertility/competition vectors (builder defaults are
+            # all-ones, hiding a wiring swap in the core extraction).
+            draft = draft._replace(
+                female_age_based_fertility=rng.random(n) + 0.25,
+                age_based_relative_competition_strength=rng.random(n) + 0.25,
+            )
+            contracts = materialize(draft)
+            bp, params = contracts.blueprint, contracts.params
+
+            def py_call(d, declared, external):
+                return compute_equilibrium_metrics(
+                    carrying_capacity=float(d.carrying_capacity),
+                    eggs_per_female=float(d.eggs_per_female),
+                    sex_ratio=float(d.sex_ratio),
+                    age_based_survival_rates=d.age_based_survival_rates,
+                    age_based_mating_rates=d.age_based_mating_rates,
+                    age_based_reproduction_rates=(
+                        d.age_based_reproduction_rates
+                    ),
+                    female_age_based_fertility=d.female_age_based_fertility,
+                    relative_competition_strength=(
+                        d.age_based_relative_competition_strength
+                    ),
+                    new_adult_age=int(d.new_adult_age),
+                    n_ages=int(d.n_ages),
+                    equilibrium_individual_count=declared,
+                    external_expected_eggs=external,
+                )
+
+            def flat_call(d, declared, external):
+                return _engine_rs.equilibrium_metrics_flat(
+                    float(d.carrying_capacity),
+                    float(d.eggs_per_female),
+                    float(d.sex_ratio),
+                    np.ascontiguousarray(
+                        d.age_based_survival_rates, dtype=np.float64
+                    ),
+                    np.ascontiguousarray(
+                        d.age_based_reproduction_rates, dtype=np.float64
+                    ),
+                    np.ascontiguousarray(
+                        d.female_age_based_fertility, dtype=np.float64
+                    ),
+                    np.ascontiguousarray(
+                        d.age_based_relative_competition_strength,
+                        dtype=np.float64,
+                    ),
+                    int(d.new_adult_age),
+                    int(d.n_ages),
+                    (np.ascontiguousarray(declared, dtype=np.float64)
+                     if declared is not None else None),
+                    external,
+                )
+
+            # Derive mode: contract carries the empty sentinel column.
+            c, s = _engine_rs.equilibrium_metrics(bp, params)
+            fc, fs = flat_call(draft, None, None)
+            pc, ps = py_call(draft, None, None)
+            assert struct.pack(">d", c) == struct.pack(">d", fc) == (
+                struct.pack(">d", float(pc))
+            ), f"derive C* three-way mismatch at trial {trial}"
+            assert struct.pack(">d", s) == struct.pack(">d", fs) == (
+                struct.pack(">d", float(ps))
+            ), f"derive s* three-way mismatch at trial {trial}"
+
+            # Declared mode: widen the contract column and mirror it in
+            # the flat/python calls.
+            declared = rng.random((2, n)) * 300.0
+            params.equilibrium_distribution = declared.ravel().copy()
+            c, s = _engine_rs.equilibrium_metrics(bp, params)
+            fc, fs = flat_call(draft, declared, None)
+            pc, ps = py_call(draft, declared, None)
+            assert struct.pack(">d", c) == struct.pack(">d", fc) == (
+                struct.pack(">d", float(pc))
+            ), f"declared C* three-way mismatch at trial {trial}"
+            assert struct.pack(">d", s) == struct.pack(">d", fs) == (
+                struct.pack(">d", float(ps))
+            ), f"declared s* three-way mismatch at trial {trial}"
+
+            # External override: only the survival-rate path may move.
+            external = float(rng.uniform(100, 9000))
+            params.external_expected_eggs = external
+            c2, s2 = _engine_rs.equilibrium_metrics(bp, params)
+            fc2, fs2 = flat_call(draft, declared, external)
+            pc2, ps2 = py_call(draft, declared, external)
+            assert struct.pack(">d", c2) == struct.pack(">d", c), (
+                "external override must not move C*"
+            )
+            assert struct.pack(">d", c2) == struct.pack(">d", fc2) == (
+                struct.pack(">d", float(pc2))
+            )
+            assert struct.pack(">d", s2) == struct.pack(">d", fs2) == (
+                struct.pack(">d", float(ps2))
+            ), f"external s* three-way mismatch at trial {trial}"

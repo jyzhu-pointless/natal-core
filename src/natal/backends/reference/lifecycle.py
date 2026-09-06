@@ -346,7 +346,7 @@ def run_wf_tick(
         stochastic=bool(config.stochastic),
         mating_rate_f=config.age_based_mating_rates[0, 1],
         mating_rate_m=config.age_based_mating_rates[1, 1],
-        reproduction_rate=config.age_based_reproduction_rates[1],
+        reproduction_rate=config.age_based_reproduction_rates[1],  # pyright: ignore[reportOptionalSubscript, reportUnknownArgumentType]  # build always resolves the vector (factory fills the mating fallback)
         carrying_capacity=config.carrying_capacity,
         juvenile_growth_mode=config.juvenile_growth_mode,
         low_density_growth_rate=config.low_density_growth_rate,

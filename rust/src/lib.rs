@@ -24,8 +24,8 @@ mod spatial;
 mod spatial_session;
 
 use numpy::{
-    PyArray4, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray4, PyReadwriteArray3,
-    PyUntypedArrayMethods,
+    PyArray4, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray4,
+    PyReadwriteArray3, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -346,6 +346,117 @@ fn equilibrium_metrics(
     Ok(crate::equilibrate::equilibrium_metrics(&bp, &pr, 0))
 }
 
+/// Flat-signature equilibrium metrics for the Python sync channel.
+///
+/// Mirrors ``compute_equilibrium_metrics`` in the Python reference
+/// (same statement order, bit-identical results) without materializing
+/// a contract pair: the sensitive-parameter sync path runs on every
+/// committed ecology write, so it must stay an O(n_ages) call.
+#[pyfunction]
+#[pyo3(signature = (
+    carrying_capacity,
+    eggs_per_female,
+    sex_ratio,
+    survival_rates,
+    reproduction_rates,
+    fertility,
+    competition_weights,
+    new_adult_age,
+    n_ages,
+    declared_distribution=None,
+    external_expected_eggs=None,
+))]
+// The flat parameter table mirrors the Python reference signature
+// one-to-one (plan 5.2 parity); a params struct would decouple the
+// two spellings the single-source rule keeps aligned.
+#[allow(clippy::too_many_arguments)]
+fn equilibrium_metrics_flat(
+    carrying_capacity: f64,
+    eggs_per_female: f64,
+    sex_ratio: f64,
+    survival_rates: PyReadonlyArray2<'_, f64>,
+    reproduction_rates: PyReadonlyArray1<'_, f64>,
+    fertility: PyReadonlyArray1<'_, f64>,
+    competition_weights: PyReadonlyArray1<'_, f64>,
+    new_adult_age: usize,
+    n_ages: usize,
+    declared_distribution: Option<PyReadonlyArray2<'_, f64>>,
+    external_expected_eggs: Option<f64>,
+) -> PyResult<(f64, f64)> {
+    let s_shape = survival_rates.shape();
+    if s_shape != [2, n_ages] {
+        return Err(PyValueError::new_err(format!(
+            "survival_rates shape must be (2, {n_ages}), got {s_shape:?}"
+        )));
+    }
+    for (name, arr, len) in [
+        ("reproduction_rates", reproduction_rates.shape()[0], n_ages),
+        ("fertility", fertility.shape()[0], n_ages),
+        (
+            "competition_weights",
+            competition_weights.shape()[0],
+            n_ages,
+        ),
+    ] {
+        if arr != len {
+            return Err(PyValueError::new_err(format!(
+                "{name} must have length {len}, got {arr}"
+            )));
+        }
+    }
+    let s_view = survival_rates.as_array();
+    let survival = s_view
+        .as_slice()
+        .ok_or_else(|| PyValueError::new_err("survival_rates must be C-contiguous"))?;
+    let r_view = reproduction_rates.as_array();
+    let reproduce = r_view
+        .as_slice()
+        .ok_or_else(|| PyValueError::new_err("reproduction_rates must be C-contiguous"))?;
+    let f_view = fertility.as_array();
+    let fert = f_view
+        .as_slice()
+        .ok_or_else(|| PyValueError::new_err("fertility must be C-contiguous"))?;
+    let c_view = competition_weights.as_array();
+    let comp = c_view
+        .as_slice()
+        .ok_or_else(|| PyValueError::new_err("competition_weights must be C-contiguous"))?;
+    let declared_storage: Vec<f64>;
+    let declared: &[f64] = match declared_distribution {
+        // The draft's derivation-mode sentinel is an empty (0, 0) array,
+        // which lands here exactly like an explicit None.
+        Some(arr) if arr.len() > 0 => {
+            let d_shape = arr.shape();
+            if d_shape != [2, n_ages] {
+                return Err(PyValueError::new_err(format!(
+                    "declared_distribution shape must be (2, {n_ages}), got {d_shape:?}"
+                )));
+            }
+            let d_view = arr.as_array();
+            let slice = d_view.as_slice().ok_or_else(|| {
+                PyValueError::new_err("declared_distribution must be C-contiguous")
+            })?;
+            declared_storage = slice.to_vec();
+            &declared_storage
+        }
+        _ => &[],
+    };
+    // The materialization convention stores "unused" as a negative value.
+    let external = external_expected_eggs.unwrap_or(-1.0);
+    Ok(crate::equilibrate::equilibrium_metrics_core(
+        carrying_capacity,
+        eggs_per_female,
+        sex_ratio,
+        survival,
+        reproduce,
+        fert,
+        comp,
+        declared,
+        external,
+        new_adult_age,
+        n_ages,
+    ))
+}
+
 #[pymodule]
 fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     use offspring::compute_offspring_tensor;
@@ -357,6 +468,7 @@ fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<SpatialEngineSession>()?;
     module.add_class::<HeterogeneousSpatialEngineSession>()?;
     module.add_function(wrap_pyfunction!(equilibrium_metrics, module)?)?;
+    module.add_function(wrap_pyfunction!(equilibrium_metrics_flat, module)?)?;
     module.add_function(wrap_pyfunction!(migrate_csr_deterministic, module)?)?;
     module.add_function(wrap_pyfunction!(migrate_csr_stochastic, module)?)?;
     module.add_function(wrap_pyfunction!(compute_offspring_tensor, module)?)?;

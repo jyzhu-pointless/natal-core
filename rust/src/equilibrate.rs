@@ -52,22 +52,78 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &Params, deme: usize) -> (f64
     let fertility: &[f64] = &params.fertility[deme_idx * a..(deme_idx + 1) * a];
     let competition_weights: &[f64] = &params.competition_weights[deme_idx * a..(deme_idx + 1) * a];
     let survival_rates: &[f64] = &params.survival_rates[deme_idx * 2 * a..(deme_idx + 1) * 2 * a];
+    let declared: &[f64] = if params.equilibrium_distribution.is_empty() {
+        &[]
+    } else {
+        &params.equilibrium_distribution[deme_idx * 2 * a..(deme_idx + 1) * 2 * a]
+    };
+    let external = params.external_expected_eggs[deme_idx];
 
+    equilibrium_metrics_core(
+        carrying_capacity,
+        eggs_per_female,
+        sex_ratio,
+        survival_rates,
+        reproduce_rates,
+        fertility,
+        competition_weights,
+        declared,
+        external,
+        new_adult_age,
+        n_ages,
+    )
+}
+
+/// The pure equilibrium computation shared by every caller (plan 5.2:
+/// Rust owns the numeric algorithm; both the contract-column wrapper
+/// above and the flat PyO3 entry below funnel through this core).
+///
+/// Mirrors the Python reference statement by statement.  An empty
+/// ``declared`` slice derives the distribution; a negative
+/// ``external_expected_eggs`` means "unused" (Python's ``None``).
+///
+/// ## Parameters
+/// - `survival_rates`: Flat ``(2 * n_ages)`` row-major survival matrix.
+/// - `reproduce_rates`: Resolved ``(n_ages,)`` reproduction participation.
+/// - `fertility`: ``(n_ages,)`` relative female fertility.
+/// - `competition_weights`: ``(n_ages,)`` juvenile competition weights.
+/// - `declared`: Flat ``(2 * n_ages)`` declared distribution, or empty.
+/// - `external_expected_eggs`: Champer egg override (negative = unused).
+/// - `new_adult_age` / `n_ages`: Age-structure bounds.
+///
+/// ## Returns
+/// ``(expected_competition_strength, expected_survival_rate)``.
+// The flat parameter table mirrors the Python reference signature
+// one-to-one (plan 5.2 parity); a params struct would decouple the
+// two spellings the single-source rule keeps aligned.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn equilibrium_metrics_core(
+    carrying_capacity: f64,
+    eggs_per_female: f64,
+    sex_ratio: f64,
+    survival_rates: &[f64],
+    reproduce_rates: &[f64],
+    fertility: &[f64],
+    competition_weights: &[f64],
+    declared: &[f64],
+    external_expected_eggs: f64,
+    new_adult_age: usize,
+    n_ages: usize,
+) -> (f64, f64) {
     let mut p_reproducing = vec![0.0_f64; n_ages];
     for age in new_adult_age..n_ages {
         p_reproducing[age] = clamp01(reproduce_rates[age]);
     }
 
-    let has_declared = !params.equilibrium_distribution.is_empty();
     let expected_distribution: Vec<f64>;
     let total_age_1: f64;
     let mut produced_age_0 = 0.0_f64;
 
-    if has_declared {
+    if !declared.is_empty() {
         // 1. Use the user-provided equilibrium distribution (flat (2, A)
         //    segment of the deme's column).
-        expected_distribution =
-            params.equilibrium_distribution[deme_idx * 2 * a..(deme_idx + 1) * 2 * a].to_vec();
+        expected_distribution = declared.to_vec();
         for age in new_adult_age..n_ages {
             let n_f = expected_distribution[age]; // row 0 = female
                                                   // Contribution of this age to age-0 production:
@@ -111,11 +167,10 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &Params, deme: usize) -> (f64
 
     // external_expected_eggs replaces produced_age_0 in the survival-rate
     // formula only; negative means "unused" (Python's None).
-    let external = params.external_expected_eggs[deme_idx];
-    let survival_eggs = if external < 0.0 {
+    let survival_eggs = if external_expected_eggs < 0.0 {
         produced_age_0
     } else {
-        external
+        external_expected_eggs
     };
 
     let expected_survival_rate = if survival_eggs > 0.0 && s_0_avg > 1e-10 {

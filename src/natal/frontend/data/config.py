@@ -132,7 +132,9 @@ class ModelDraft(NamedTuple):
     # -- demographic vectors --
     age_based_survival_rates: NDArray[np.float64]
     age_based_mating_rates: NDArray[np.float64]
-    age_based_reproduction_rates: NDArray[np.float64]
+    # Optional at runtime: None means "not declared", and consumers fall
+    # back to the female mating-rate row.
+    age_based_reproduction_rates: NDArray[np.float64] | None
     female_age_based_fertility: NDArray[np.float64]
     age_based_relative_competition_strength: NDArray[np.float64]
     # -- ecological scalars (immutable NamedTuple fields) --

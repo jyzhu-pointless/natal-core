@@ -595,7 +595,52 @@ def sync_equilibrium_for_draft(draft: ModelDraft) -> ModelDraft:
     )
 
     eq_dist = draft.equilibrium_individual_distribution
+    # None and the empty derive-mode sentinel both mean "derive".
+    declared_for_kernel = (
+        np.ascontiguousarray(eq_dist, dtype=np.float64)
+        if eq_dist is not None and eq_dist.size > 0
+        else None
+    )
     external_eggs = draft.external_expected_eggs
+    # Python falls back to the female mating-rate row when the
+    # reproduction vector was not declared; resolve that here so both the
+    # Rust kernel and the Python fallback consume the same inputs.
+    reproduction = (
+        draft.age_based_reproduction_rates
+        if draft.age_based_reproduction_rates is not None
+        else draft.age_based_mating_rates[0]
+    )
+
+    # Rust kernel first (plan 5.2: Rust owns the numeric algorithm); the
+    # pure-Python spelling remains the extension-less fallback until the
+    # Rust-only stage retires it.  Both mirror each other statement by
+    # statement, so the results are bit-identical either way.
+    try:
+        from natal._engine_rs import equilibrium_metrics_flat as rust_metrics
+    except ImportError:
+        rust_metrics = None
+    if rust_metrics is not None:
+        expected_comp, expected_surv = rust_metrics(
+            float(draft.carrying_capacity),
+            float(draft.eggs_per_female),
+            float(draft.sex_ratio),
+            np.ascontiguousarray(draft.age_based_survival_rates, dtype=np.float64),
+            np.ascontiguousarray(reproduction, dtype=np.float64),
+            np.ascontiguousarray(draft.female_age_based_fertility, dtype=np.float64),
+            np.ascontiguousarray(
+                draft.age_based_relative_competition_strength, dtype=np.float64
+            ),
+            int(draft.new_adult_age),
+            int(draft.n_ages),
+            # None and the empty derive-mode sentinel both mean "derive".
+            declared_for_kernel,
+            external_eggs,
+        )
+        return draft._replace(
+            expected_competition_strength=expected_comp,
+            expected_survival_rate=expected_surv,
+        )
+
     expected_comp, expected_surv = compute_equilibrium_metrics(
         carrying_capacity=float(draft.carrying_capacity),
         eggs_per_female=float(draft.eggs_per_female),

@@ -72,7 +72,7 @@ def run_discrete_reproduction(
         sperm, cfg.offspring_tensor,
         cfg.fecundity_fitness[0], cfg.fecundity_fitness[1],
         cfg.eggs_per_female,  # pyright: ignore[reportArgumentType]
-        cfg.age_based_reproduction_rates[1],
+        cfg.age_based_reproduction_rates[1],  # pyright: ignore[reportOptionalSubscript, reportUnknownArgumentType]  # build always resolves the vector (factory fills the mating fallback)
         cfg.sex_ratio,  # pyright: ignore[reportArgumentType]
         cfg.has_sex_chromosomes,
         cfg.female_ztype_compatibility, cfg.male_ztype_compatibility,
