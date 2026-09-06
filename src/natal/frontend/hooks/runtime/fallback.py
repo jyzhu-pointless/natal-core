@@ -229,7 +229,7 @@ class HookExecutor:
         event_id: int,
         population: BasePopulation[Any],
         tick: int,
-        deme_id: int = -1,
+        deme_id: int = 0,
     ) -> int:
         """Run all hooks for *event_id* in priority order.
 
@@ -245,7 +245,9 @@ class HookExecutor:
             event_id: Numeric event id.
             population: The owning population.
             tick: Current tick.
-            deme_id: Deme index for selector filtering.
+            deme_id: Deme index for selector filtering.  ``0`` for
+                panmictic populations; the live deme index under a
+                SpatialPopulation.
 
         Returns:
             ``RESULT_CONTINUE`` or ``RESULT_STOP``.

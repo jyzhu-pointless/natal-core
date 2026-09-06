@@ -274,7 +274,7 @@ Use the single-parameter callback shape when you need to read and write state ar
 | Member | Type / semantics |
 |---|---|
 | `pop.tick` | Current simulation tick (read-only). |
-| `pop.deme_id` | Deme index of this invocation (`-1` panmictic, read-only). |
+| `pop.deme_id` | Deme index of this invocation (`0` panmictic, the live deme index under a SpatialPopulation, read-only). |
 | `pop.state` | Writable state view (short-term loan; writes take effect immediately). |
 | `pop.params` | Writable parameter surface (same writer stack as `pop.params`; attribute writes are bounds-validated and reach the draft, the live Rust session, and the parameter snapshot log). |
 | `pop.blueprint` | Read-only dimensions, name catalogs, and engine switches (`n_sexes`, `n_ages`, `n_ztypes`, `ztype_names`, ...). |

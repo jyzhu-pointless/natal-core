@@ -119,6 +119,11 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._name = name
         self._hook_slot = self._derive_hook_slot(name)
         self._tick = 0
+        # Deme index this population executes as: 0 for panmictic models,
+        # the live deme index when a SpatialPopulation manages this object
+        # as one of its demes.  Hooks read it via pop.deme_id, so the Rust
+        # per-deme kernel and the Python reference lifecycle must agree.
+        self._deme_id: int = 0
         # DELAYED: Registry will be created via _initialize_registry()
         self._index_registry: Optional[IndexRegistry] = None
         self._registry: Optional[IndexRegistry] = None
@@ -266,6 +271,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         clone._name = name
         clone._hook_slot = self._hook_slot
         clone._tick = int(self._tick)
+        # Clones are built via __new__ (no __init__), so the deme index
+        # must be copied explicitly; a spatial deme's clone keeps its id
+        # until SpatialPopulation.__init__ restamps the whole list.
+        clone._deme_id = int(self._deme_id)
 
         # --- shared hooks (compiled, read-only during simulation) ---
         clone.compiled_hook_descriptors = self.compiled_hook_descriptors

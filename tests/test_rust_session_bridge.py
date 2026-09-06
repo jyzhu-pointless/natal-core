@@ -432,8 +432,9 @@ def test_python_callback_fires_and_stops(age_species: Species) -> None:
 
     assert was_stopped is True
     # The callback fired once, at the first event of tick 0, and stopped the
-    # batch: the tick must not have advanced.
-    assert calls == [(0, -1)]
+    # batch: the tick must not have advanced.  The batch is panmictic, so
+    # the callback must observe deme 0 (TickContext.deme_id contract).
+    assert calls == [(0, 0)]
     assert next_state.n_tick == 0
 
     # Clearing the callbacks lets the same session run to completion.

@@ -789,7 +789,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         if was_stopped:
             self._finished = True
-            self.trigger_event("finish")
+            self.trigger_event("finish", deme_id=self._deme_id)
         elif finish:
             self.finish_simulation()
 
@@ -927,7 +927,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             first_hook=first_hook,
             early_hook=early_hook,
             late_hook=late_hook,
-            deme_id=-1,
+            deme_id=self._deme_id,
             n_steps=n_steps,
             record_every=record_every,
             record_fn=record_fn,
@@ -944,7 +944,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         if was_stopped:
             self._finished = True
-            self.trigger_event("finish")
+            self.trigger_event("finish", deme_id=self._deme_id)
         elif finish:
             self.finish_simulation()
 

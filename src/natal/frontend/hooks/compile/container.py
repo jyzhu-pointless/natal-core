@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from natal.frontend.hooks.types import EVENT_NAMES, HookCallable
 
 
-def _noop_hook(state: Any, config: Any = None, deme_id: int = -1) -> int:  # Host-contract signature; Any matches (state, config, deme_id) protocol
+def _noop_hook(state: Any, config: Any = None, deme_id: int = 0) -> int:  # Host-contract signature; Any matches (state, config, deme_id) protocol
     """Default no-op hook: ``(state, config, deme_id) -> 0``.
 
     Used as the fallback when no hooks are registered for an event.

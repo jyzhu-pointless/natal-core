@@ -722,12 +722,27 @@ def test_registration_rejects_invalid_items() -> None:
     assert pop.get_compiled_hooks() == []
 
 
-def test_declarative_op_without_event_rejected() -> None:
-    """A bare Op with no resolvable event raises ValueError."""
+def test_declarative_op_without_event_defaults_to_early() -> None:
+    """A bare Op with no event registers at the documented ``early`` default."""
     pop = _build("s4x_op_no_event")
 
-    with pytest.raises(ValueError, match="No event specified"):
-        pop.update().hooks(Op.set_count(genotypes="WT|WT", ages=0, value=1.0))
+    pop.update().hooks(Op.set_count(genotypes="WT|WT", ages=0, value=1.0))
+    descs = pop.get_compiled_hooks()
+    assert len(descs) == 1
+    assert descs[0].event == "early"
+
+
+def test_registration_event_overrides_op_early_default() -> None:
+    """An explicit registration-level event wins over the early default."""
+    pop = _build("s4x_op_event_override")
+
+    pop.update().hooks(
+        Op.set_param("carrying_capacity", "K * 0.95", every=10),
+        event="late",
+    )
+    descs = pop.get_compiled_hooks()
+    assert len(descs) == 1
+    assert descs[0].event == "late"
 
 
 def test_meta_object_without_register_rejected() -> None:
@@ -801,7 +816,12 @@ def test_has_python_hooks_alias_agrees() -> None:
 
 
 def test_deme_selector_serialization_and_panmictic_filter() -> None:
-    """int/range/list selectors serialize into the program and filter -1."""
+    """int/range/list selectors serialize into the program and filter demes.
+
+    The panmictic default trigger executes as deme 0, so the range
+    selector ``[0, 2)`` matches it; a deme no selector covers applies
+    no marker.
+    """
 
     def make_cb(tag: str) -> Callable[[TickContext], int]:
         @nt.hook(event="first")
@@ -831,9 +851,16 @@ def test_deme_selector_serialization_and_panmictic_filter() -> None:
     types = pop._run_program.hooks.deme_selector_types.tolist()
     assert sorted(t for t in types if t != 0) == [1, 2, 3]
 
-    # Panmictic trigger (deme -1) matches none of them: no marker applied.
-    assert pop.trigger_event("first") == 0
+    # Deme 5 matches no selector: no marker applied.
+    assert pop.trigger_event("first", deme_id=5) == 0
     np.testing.assert_array_equal(pop.state.individual_count, before)
+
+    # The panmictic default trigger executes as deme 0: the range
+    # selector [0, 2) matches and applies its marker at [0, 0, 0] only.
+    assert pop.trigger_event("first") == 0
+    expected = before.copy()
+    expected[0, 0, 0] += 1000.0
+    np.testing.assert_array_equal(pop.state.individual_count, expected)
 
 
 def test_runner_skips_non_tick_event_descriptors() -> None:

@@ -12,7 +12,7 @@
 | 成员 | 类型 / 语义 |
 |---|---|
 | `pop.tick` | 当前模拟 tick（只读）。 |
-| `pop.deme_id` | 本次调用的 deme 索引（panmictic 为 `-1`，只读）。 |
+| `pop.deme_id` | 本次调用的 deme 索引（panmictic 为 `0`，空间模型为实际 deme 下标，只读）。 |
 | `pop.state` | 可写状态视图（短期借用；写入立即生效）。 |
 | `pop.params` | 可写参数面（与 `pop.params` 相同的写入器栈；属性写入经边界校验，同时到达 draft、Rust 会话与参数快照日志）。 |
 | `pop.blueprint` | 只读维度、名称目录与引擎开关（`n_sexes`、`n_ages`、`n_ztypes`、`discrete`、`stochastic`、`continuous_sampling`、`extreme_speed_mode`、`ztype_names`、`gtype_names`）。 |

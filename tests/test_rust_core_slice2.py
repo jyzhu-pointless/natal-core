@@ -774,12 +774,12 @@ def test_python_callback_event_order_first_early_late(age_species: Species) -> N
     state, _, was_stopped = backend.run(state, n_steps=2, record_every=0)
     assert was_stopped is False
     assert order == [
-        ("first", 0, -1),
-        ("early", 0, -1),
-        ("late", 0, -1),
-        ("first", 1, -1),
-        ("early", 1, -1),
-        ("late", 1, -1),
+        ("first", 0, 0),
+        ("early", 0, 0),
+        ("late", 0, 0),
+        ("first", 1, 0),
+        ("early", 1, 0),
+        ("late", 1, 0),
     ]
 
     # Clear, then re-register: the new callback must fire again.
@@ -788,7 +788,7 @@ def test_python_callback_event_order_first_early_late(age_species: Species) -> N
     backend.set_python_callbacks([make_cb("again")], [], [])
     state, _, was_stopped = backend.run(state, n_steps=1, record_every=0)
     assert was_stopped is False
-    assert order == [("again", 2, -1)]
+    assert order == [("again", 2, 0)]
 
 
 @pytest.mark.parametrize("boundary", ["first", "early", "late"])

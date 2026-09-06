@@ -670,6 +670,13 @@ class SpatialPopulation:
         # tuple view to prevent accidental external mutation.
         self._demes: List[DemePopulation] = list(demes)
 
+        # Stamp each deme with its live index so hooks see the same
+        # pop.deme_id the Rust per-deme kernel reports (0 for panmictic,
+        # the deme index here).  One stamping point covers every build
+        # path (homogeneous template, heterogeneous groups, clones).
+        for _deme_index, _deme in enumerate(self._demes):
+            _deme._deme_id = _deme_index  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; stamping the live index is the sanctioned write.
+
         # Spatial container expects all demes to share one Species object so
         # genotype indexing and config semantics are globally consistent.
         first_species = self._demes[0].species
@@ -2404,7 +2411,7 @@ class SpatialPopulation:
         """Mark all demes finished and emit the finish event."""
         for deme in self._demes:
             deme._finished = True  # type: ignore[attr-defined]
-            deme.trigger_event("finish")
+            deme.trigger_event("finish", deme_id=deme._deme_id)  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; finish hooks must observe the firing deme's own index.
 
     def _run_python_dispatch_tick(self) -> bool:
         """Run one tick via per-deme lifecycle and shared migration.

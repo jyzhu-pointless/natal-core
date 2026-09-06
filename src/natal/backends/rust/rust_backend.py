@@ -330,7 +330,7 @@ class RustLifecycleBackend:
     def run_tick(
         self,
         state: PopulationState,
-        deme_id: int = -1,
+        deme_id: int = 0,
     ) -> tuple[PopulationState, int]:
         """Run one full age-structured tick in Rust.
 
@@ -340,8 +340,8 @@ class RustLifecycleBackend:
         Args:
             state: Current population state.  It is not modified; the returned
                 state contains the tick result.
-            deme_id: Deme index used by CSR deme selectors.  ``-1`` is the
-                panmictic default.
+            deme_id: Deme index used by CSR deme selectors and reported to
+                hooks as ``pop.deme_id``.  ``0`` is the panmictic default.
 
         Returns:
             ``(next_state, result_code)`` where result code is ``0``

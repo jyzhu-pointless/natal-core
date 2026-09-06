@@ -197,6 +197,29 @@ def test_tick_and_deme_id_read_only() -> None:
         ctx.deme_id = 3  # type: ignore[misc]
 
 
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_deme_id_is_zero_on_panmictic_runs(backend: str) -> None:
+    """``pop.deme_id`` must be 0 (never -1) in panmictic hooks.
+
+    Contract: deme_id is 0 for single-population models on every backend.
+    The reference lifecycle used to leak a ``-1`` sentinel into the
+    TickContext; the Rust kernel already reported 0.
+    """
+    seen: list[int] = []
+
+    @nt.hook(event="first")
+    def record_deme(pop: TickContext) -> int:
+        seen.append(int(pop.deme_id))
+        return 0
+
+    pop = _build_discrete(
+        f"s4_deme_id_{backend}", backend=backend, hook_items=[record_deme]
+    )
+    pop.run(n_steps=2)
+
+    assert seen == [0, 0]
+
+
 def test_rng_is_deterministic_per_invocation() -> None:
     """The context RNG is deterministic per (pop, tick, deme, hook) and isolated."""
     draws: list[list[float]] = []

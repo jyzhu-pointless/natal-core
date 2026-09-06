@@ -304,7 +304,8 @@ class TickContext:
         Args:
             pop: The owning population.
             tick: Current simulation tick.
-            deme_id: Deme index (``-1`` for panmictic populations).
+            deme_id: Deme index (``0`` for panmictic populations, the live
+                deme index under a SpatialPopulation).
             state: The writable state view for this callback.
             hook_index: Position of this hook within its event; folds into
                 the RNG stream so same-tick hooks get independent draws.
@@ -327,7 +328,7 @@ class TickContext:
 
     @property
     def deme_id(self) -> int:
-        """Deme index for this invocation (``-1`` panmictic)."""
+        """Deme index for this invocation (``0`` panmictic)."""
         return self._deme_id
 
     # -- blueprint / params / state / metrics -----------------------------------

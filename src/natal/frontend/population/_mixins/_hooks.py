@@ -181,10 +181,11 @@ class HookManagerMixin:
             (op.event for op in ops if op.event is not None), event
         )
         if resolved_event is None:
-            raise ValueError(
-                "No event specified for declarative hook: pass "
-                ".hooks(..., event='early') or set event on the Op."
-            )
+            # Documented default (2_hooks.md, plan §〇): declarative ops
+            # registered without an event fire at "early".  An explicit
+            # registration-level event still overrides, and an op-level
+            # event still wins over the registration call.
+            resolved_event = "early"
         descriptor_name = name or f"declarative_{resolved_event}_{len(ops)}op"
         desc = compile_declarative_hook(
             ops,
@@ -299,7 +300,7 @@ class HookManagerMixin:
 
     # ── Dispatch ──────────────────────────────────────────────────────
 
-    def trigger_event(self, event_name: str, deme_id: int = -1) -> int:
+    def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """Trigger an event and execute all registered hooks for it.
 
         Execution order per event: CSR declarative plans first, then
@@ -308,7 +309,9 @@ class HookManagerMixin:
 
         Args:
             event_name: Event name to trigger.
-            deme_id: Deme index. Default -1 for non-spatial populations.
+            deme_id: Deme index the hooks execute as.  0 for panmictic
+                populations; the live deme index when the population is
+                managed by a SpatialPopulation.
 
         Returns:
             int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1)

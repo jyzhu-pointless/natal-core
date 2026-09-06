@@ -648,11 +648,13 @@ pub fn run_tick(
         tick,
         cfg.stochastic,
         cfg.continuous_sampling,
-        -1,
+        0,
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(0, ind, &mut [], tick, -1)?;
+        // Discrete Rust sessions are panmictic-only today: hooks must see
+        // deme 0 (TickContext.deme_id contract), never a -1 sentinel.
+        result = hooks.fire_python_callbacks(0, ind, &mut [], tick, 0)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
@@ -676,11 +678,11 @@ pub fn run_tick(
         tick,
         cfg.stochastic,
         cfg.continuous_sampling,
-        -1,
+        0,
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(1, ind, &mut [], tick, -1)?;
+        result = hooks.fire_python_callbacks(1, ind, &mut [], tick, 0)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
@@ -704,11 +706,11 @@ pub fn run_tick(
         tick,
         cfg.stochastic,
         cfg.continuous_sampling,
-        -1,
+        0,
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(2, ind, &mut [], tick, -1)?;
+        result = hooks.fire_python_callbacks(2, ind, &mut [], tick, 0)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
@@ -953,11 +955,11 @@ pub fn run_batch(
                 current_tick,
                 cfg.stochastic,
                 cfg.continuous_sampling,
-                -1,
+                0,
                 eco_values,
             );
             if result == 0 {
-                result = hooks.fire_python_callbacks(0, ind, &mut [], current_tick, -1)?;
+                result = hooks.fire_python_callbacks(0, ind, &mut [], current_tick, 0)?;
             }
             if let Some(ctx) = eco_ctx.as_mut() {
                 ctx.tick = current_tick;

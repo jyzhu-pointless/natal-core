@@ -225,13 +225,13 @@ impl DiscreteEngineSession {
                 tick,
                 cfg.stochastic,
                 cfg.continuous_sampling,
-                -1,
+                0,
                 &mut eco_values,
             );
             if result == 0 {
                 result = self
                     .hooks
-                    .fire_python_callbacks(0, ind, &mut [], tick, -1)
+                    .fire_python_callbacks(0, ind, &mut [], tick, 0)
                     .map_err(PyRuntimeError::new_err)?;
             }
             let mut ctx = crate::lifecycle::EcoCtx {

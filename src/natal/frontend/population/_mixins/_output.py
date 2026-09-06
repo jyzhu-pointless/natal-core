@@ -40,6 +40,7 @@ class OutputMixin(ModifierPresetMixin):
     _observation: Observation | None  # type: ignore[assignment]  # host owns mutable policy
     _history_obj: History | None  # type: ignore[assignment]  # host owns mutable row storage
     _tick: int  # type: ignore[assignment]  # host owns mutable lifecycle state
+    _deme_id: int  # type: ignore[assignment]  # host provides at runtime (0 panmictic, live index under SpatialPopulation)
     max_history: int  # type: ignore[assignment]  # host provides at runtime
     name: str  # type: ignore[assignment]  # host provides at runtime
     species: Any  # type: ignore[assignment]  # host provides at runtime
@@ -269,7 +270,7 @@ class OutputMixin(ModifierPresetMixin):
             )
 
         self._finished = True
-        self.trigger_event("finish")
+        self.trigger_event("finish", deme_id=self._deme_id)
 
     @abstractmethod
     def run(

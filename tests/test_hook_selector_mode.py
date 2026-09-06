@@ -232,8 +232,8 @@ class TestSelectorExecution:
 
         fn.register(pop)
         # Explicit event triggering forwards the requested deme id; the
-        # panmictic default inside per-deme lifecycles is -1.
+        # panmictic default inside per-deme lifecycles is 0.
         pop.trigger_event("first", deme_id=5)
         pop.run(n_steps=1)
 
-        assert seen == [5, -1]
+        assert seen == [5, 0]

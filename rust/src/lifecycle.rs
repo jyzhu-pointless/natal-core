@@ -1198,6 +1198,8 @@ pub fn run_batch(
         // With an EcoCtx, run_tick commits ECO writes and re-assembles the
         // config at every event boundary (matching the Python lifecycle);
         // without one the batch cfg stays frozen for the whole batch.
+        // The batch loop is panmictic: hooks must see deme 0 (the
+        // TickContext.deme_id contract), never a -1 sentinel.
         let result = run_tick(
             rng,
             cfg,
@@ -1205,7 +1207,7 @@ pub fn run_batch(
             ind,
             sperm,
             current_tick,
-            -1,
+            0,
             eco_values,
             eco_ctx,
         )?;

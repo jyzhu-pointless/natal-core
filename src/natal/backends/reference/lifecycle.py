@@ -83,7 +83,7 @@ def _run_event(
         registry: ``HookProgram`` with CSR declarative operations.
         event_hook: Combined hook with signature
             ``(state, config, deme_id) -> int``.
-        deme_id: Deme index.  ``-1`` is the panmictic default.
+        deme_id: Deme index.  ``0`` is the panmictic default.
         has_sperm_storage: Whether *sperm_store* contains real data.  When
             False, *sperm_store* must be ``None`` (no dummy array).
         sperm_store: Sperm-storage array or ``None`` for discrete models.
@@ -142,7 +142,7 @@ def run_structured_tick(
     first_hook: _LifecycleHook,
     early_hook: _LifecycleHook,
     late_hook: _LifecycleHook,
-    deme_id: int = -1,
+    deme_id: int = 0,
     config_refresh: Optional[Callable[[ModelDraft], ModelDraft]] = None,
 ) -> tuple[PopulationState, int, ModelDraft]:
     """Execute one age-structured tick with hooks at each lifecycle stage.
@@ -154,7 +154,7 @@ def run_structured_tick(
         first_hook: Combined ``first`` event hook.
         early_hook: Combined ``early`` event hook.
         late_hook: Combined ``late`` event hook.
-        deme_id: Deme index.  ``-1`` is the panmictic default.
+        deme_id: Deme index.  ``0`` is the panmictic default.
         config_refresh: Optional callback returning the population's
             current config; used after each event so write-channel
             rebinds made by hook execution stay visible for the rest of
@@ -220,7 +220,7 @@ def run_discrete_tick(
     first_hook: _LifecycleHook,
     early_hook: _LifecycleHook,
     late_hook: _LifecycleHook,
-    deme_id: int = -1,
+    deme_id: int = 0,
     config_refresh: Optional[Callable[[ModelDraft], ModelDraft]] = None,
 ) -> tuple[DiscretePopulationState, int, ModelDraft]:
     """Execute one discrete-generation tick with hooks at each stage.
@@ -232,7 +232,7 @@ def run_discrete_tick(
         first_hook: Combined ``first`` event hook.
         early_hook: Combined ``early`` event hook.
         late_hook: Combined ``late`` event hook.
-        deme_id: Deme index.  ``-1`` is the panmictic default.
+        deme_id: Deme index.  ``0`` is the panmictic default.
         config_refresh: Optional callback returning the population's
             current config; used after each event so write-channel
             rebinds made by hook execution stay visible for the rest of
@@ -289,7 +289,7 @@ def run_wf_tick(
     first_hook: _LifecycleHook,
     early_hook: _LifecycleHook,
     late_hook: _LifecycleHook,
-    deme_id: int = -1,
+    deme_id: int = 0,
     config_refresh: Optional[Callable[[ModelDraft], ModelDraft]] = None,
 ) -> tuple[DiscretePopulationState, int, ModelDraft]:
     """Execute one Wright-Fisher fused tick.
@@ -305,7 +305,7 @@ def run_wf_tick(
         first_hook: Combined ``first`` event hook.
         early_hook: Accepted for signature uniformity; unused.
         late_hook: Accepted for signature uniformity; unused.
-        deme_id: Deme index.  ``-1`` is the panmictic default.
+        deme_id: Deme index.  ``0`` is the panmictic default.
         config_refresh: Optional callback returning the population's
             current config; used after the first event so write-channel
             rebinds made by hook execution stay visible.
@@ -391,7 +391,7 @@ def run(
         first_hook: Combined ``first`` event hook.
         early_hook: Combined ``early`` event hook.
         late_hook: Combined ``late`` event hook.
-        deme_id: Deme index.  ``-1`` is the panmictic default.
+        deme_id: Deme index.  ``0`` is the panmictic default.
         n_steps: Number of ticks to execute.
         record_every: Record after ticks satisfying
             ``tick % record_every == 0``.  ``0`` disables recording.
