@@ -1953,18 +1953,48 @@ class SpatialConfigurator:
         variant = base_config._replace(**replace_kwargs)
 
         if needs_equilibrium:
-            new_comp, new_surv = compute_equilibrium_metrics(
-                carrying_capacity=variant.carrying_capacity,  # pyright: ignore[reportArgumentType]
-                eggs_per_female=variant.eggs_per_female,  # pyright: ignore[reportArgumentType]
-                age_based_survival_rates=variant.age_based_survival_rates,
-                age_based_mating_rates=variant.age_based_mating_rates,
-                female_age_based_fertility=variant.female_age_based_fertility,
-                relative_competition_strength=variant.age_based_relative_competition_strength,
-                sex_ratio=variant.sex_ratio,  # pyright: ignore[reportArgumentType]
-                new_adult_age=int(variant.new_adult_age),
-                n_ages=int(variant.n_ages),
-                age_based_reproduction_rates=variant.age_based_reproduction_rates,
+            # Route through the shared Rust dispatch (plan 5.2) and carry
+            # the variant's declared distribution and Champer egg override
+            # into the recompute — dropping them silently recomputed the
+            # metrics in derivation mode even when a distribution was
+            # declared.
+            from natal.frontend.data._engine import equilibrium_metrics_dispatch
+
+            reproduction = (
+                variant.age_based_reproduction_rates
+                if variant.age_based_reproduction_rates is not None
+                else variant.age_based_mating_rates[0]
             )
+            metrics = equilibrium_metrics_dispatch(
+                float(variant.carrying_capacity),
+                float(variant.eggs_per_female),
+                float(variant.sex_ratio),
+                variant.age_based_survival_rates,
+                reproduction,
+                variant.female_age_based_fertility,
+                variant.age_based_relative_competition_strength,
+                int(variant.new_adult_age),
+                int(variant.n_ages),
+                variant.equilibrium_individual_distribution,
+                variant.external_expected_eggs,
+            )
+            if metrics is None:
+                new_comp, new_surv = compute_equilibrium_metrics(
+                    carrying_capacity=variant.carrying_capacity,  # pyright: ignore[reportArgumentType]
+                    eggs_per_female=variant.eggs_per_female,  # pyright: ignore[reportArgumentType]
+                    age_based_survival_rates=variant.age_based_survival_rates,
+                    age_based_mating_rates=variant.age_based_mating_rates,
+                    female_age_based_fertility=variant.female_age_based_fertility,
+                    relative_competition_strength=variant.age_based_relative_competition_strength,
+                    sex_ratio=variant.sex_ratio,  # pyright: ignore[reportArgumentType]
+                    new_adult_age=int(variant.new_adult_age),
+                    n_ages=int(variant.n_ages),
+                    age_based_reproduction_rates=variant.age_based_reproduction_rates,
+                    equilibrium_individual_count=variant.equilibrium_individual_distribution,
+                    external_expected_eggs=variant.external_expected_eggs,
+                )
+            else:
+                new_comp, new_surv = metrics
             variant = variant._replace(
                 expected_competition_strength=np.array(float(new_comp)),
                 expected_survival_rate=np.array(float(new_surv)),

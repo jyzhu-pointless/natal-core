@@ -31,6 +31,7 @@ import pytest
 import natal as nt
 from natal.frontend.spatial.population import DemeSlice, SpatialPopulation
 
+
 @pytest.fixture(scope="module")
 def species():
     """Build the minimal species shared by the spatial write tests."""
@@ -451,3 +452,207 @@ class TestBuildSemanticsPreserved:
     ) -> None:
         """build() still returns a SpatialPopulation (single entry point)."""
         assert isinstance(homogeneous_pop, SpatialPopulation)
+
+
+class TestVariantEquilibriumDeclaration:
+    """Variant recompute must honor declared distributions/egg overrides.
+
+    Regression: the variant rebuild used to drop
+    ``equilibrium_individual_distribution`` and ``external_expected_eggs``
+    from the recompute, silently switching heterogeneous demes back into
+    derivation mode.
+
+    Heterogeneity is driven by ``eggs_per_female`` on purpose: its batch
+    parameter name is a draft field, so the builder takes the
+    ``_build_variant_config`` fast path this class exercises.  (A batched
+    ``carrying_capacity`` registers as ``age_1_carrying_capacity``, which
+    is not a draft field — that configuration replays the whole template
+    and computes its metrics through the sync path instead.)
+    """
+
+    def _eggs_heterogeneous_population(
+        self, name: str, *, external_females: float | None = None
+    ):
+        """Two demes with eggs 10/20, a declared distribution, optional override.
+
+        Declared distribution: 50 females + 50 males at age 1, both adult
+        ages reproducing at rate 1 with fertility 1.
+
+        Returns:
+            The built population and the declared (2, 4) array.
+        """
+        species = nt.Species.from_dict(
+            name="__test_spatial_eq_decl__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        declared = np.zeros((2, 4))
+        declared[0, 1] = 50.0
+        declared[1, 1] = 50.0
+        competition_kwargs: dict[str, object] = {
+            "carrying_capacity": 100.0,
+            "juvenile_growth_mode": 3,
+            "equilibrium_distribution": declared,
+        }
+        if external_females is not None:
+            competition_kwargs["expected_num_new_adult_females"] = external_females
+        return (
+            nt.SpatialPopulation.builder(species, n_demes=2, pop_type="age_structured")
+            .setup(name=name, stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 50, 0, 0]},
+                    "male": {"A|A": [0, 50, 0, 0]},
+                }
+            )
+            .reproduction(
+                female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                eggs_per_female=nt.batch_setting([10.0, 20.0]),
+            )
+            .survival(
+                female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+                male_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+            )
+            .competition(**competition_kwargs)
+            .build()
+        ), declared
+
+    def test_variant_recompute_honors_declared_distribution(self) -> None:
+        """A variant egg count keeps every deme on the declared distribution.
+
+        Hand computation: 50 declared females at age 1, reproduction rate
+        1, fertility 1 → produced eggs = 50 * 1 * 1 * eggs_per_female.
+        Competition weight[0] = 1 → C* = produced.  s* = 100 / produced
+        (s_0_avg = 1).  Deme 0 (eggs 10): (500, 0.2).  Deme 1 (eggs 20):
+        (1000, 0.1).  The pre-fix variant recomputed in derivation mode
+        and produced (2530, 0.0395...) on deme 1 instead.
+        """
+        pop, _declared = self._eggs_heterogeneous_population("eq_declared_variant")
+
+        d0 = pop.demes[0].config
+        d1 = pop.demes[1].config
+        assert float(d0.eggs_per_female) == 10.0
+        assert float(d1.eggs_per_female) == 20.0
+        assert float(d0.expected_competition_strength) == 500.0
+        assert float(d0.expected_survival_rate) == 0.2
+        assert float(d1.expected_competition_strength) == 1000.0
+        assert float(d1.expected_survival_rate) == 0.1
+
+    def test_variant_external_eggs_drive_survival_not_competition(self) -> None:
+        """The variant's survival rate uses the persisted egg override.
+
+        With ``expected_num_new_adult_females=100`` the override is
+        100 * eggs * (1 + 0.9 + 0.7 * 0.63...) — computed on the template
+        — and only feeds s*: C* stays declared-driven (500 / 1000), s*
+        becomes 100 / external per deme.
+        """
+        pop, _declared = self._eggs_heterogeneous_population(
+            "eq_external_variant", external_females=100.0
+        )
+        ext0 = float(pop.demes[0].config.external_expected_eggs)
+        ext1 = float(pop.demes[1].config.external_expected_eggs)
+        assert ext0 == ext1  # the override is declared, not per-deme
+        # External eggs only change s*, never the competition strength.
+        assert float(pop.demes[0].config.expected_competition_strength) == 500.0
+        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
+        assert (
+            float(pop.demes[0].config.expected_survival_rate)
+            == 100.0 / ext0
+        )
+        assert (
+            float(pop.demes[1].config.expected_survival_rate)
+            == 100.0 / ext1
+        )
+
+    def test_variant_python_fallback_carries_the_two_params(self, monkeypatch) -> None:
+        """The forced Python fallback recompute carries declared + external.
+
+        The assertion is scoped to the *variant* call (eggs = 20), so a
+        regression that drops the two kwargs again cannot hide behind the
+        template/sync calls that legitimately carry them.
+        """
+        from natal.frontend.data import _engine as engine_module
+
+        calls: list[dict[str, float | None]] = []
+
+        def recording_dispatch(
+            carrying_capacity: float,
+            eggs_per_female: float,
+            sex_ratio: float,
+            survival_rates: object,
+            reproduction_rates: object,
+            fertility: object,
+            competition_weights: object,
+            new_adult_age: int,
+            n_ages: int,
+            declared_distribution: object,
+            external_expected_eggs: float | None,
+        ) -> None:
+            calls.append({"eggs": eggs_per_female})
+            return None  # force the python fallback everywhere
+
+        monkeypatch.setattr(
+            engine_module, "equilibrium_metrics_dispatch", recording_dispatch
+        )
+        pop, declared = self._eggs_heterogeneous_population(
+            "eq_fallback_variant", external_females=100.0
+        )
+
+        variant_calls = [c for c in calls if c["eggs"] == 20.0]
+        assert variant_calls, "the variant path never dispatched"
+        # And the fallback results honor the declared distribution, i.e.
+        # the python branch carried the two kwargs too.
+        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
+        assert (
+            float(pop.demes[1].config.expected_survival_rate)
+            == 100.0 / float(pop.demes[1].config.external_expected_eggs)
+        )
+
+    def test_variant_metrics_isolated_between_demes(self) -> None:
+        """A runtime ecology write on deme 0 leaves deme 1's metrics alone."""
+        pop, _declared = self._eggs_heterogeneous_population("eq_isolation_variant")
+        pop.run(1, record_every=0)
+
+        pop.demes[0].write_ecology("carrying_capacity", 999.0)
+
+        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
+        assert float(pop.demes[1].config.expected_survival_rate) == 0.1
+
+    def test_bad_declared_shape_raises_value_error(self) -> None:
+        """A declared distribution of the wrong shape fails loudly."""
+        species = nt.Species.from_dict(
+            name="__test_spatial_eq_badshape__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        with pytest.raises(ValueError, match=r"\(2, 4\)"):
+            (
+                nt.SpatialPopulation.builder(
+                    species, n_demes=2, pop_type="age_structured"
+                )
+                .setup(name="eq_badshape", stochastic=False)
+                .age_structure(n_ages=4, new_adult_age=1)
+                .initial_state(
+                    individual_count={
+                        "female": {"A|A": [0, 50, 0, 0]},
+                        "male": {"A|A": [0, 50, 0, 0]},
+                    }
+                )
+                .reproduction(
+                    female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                    male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                    eggs_per_female=nt.batch_setting([10.0, 20.0]),
+                )
+                .survival(
+                    female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+                    male_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+                )
+                .competition(
+                    carrying_capacity=100.0,
+                    juvenile_growth_mode=3,
+                    equilibrium_distribution=np.zeros((2, 3)),
+                )
+                .build()
+            )
