@@ -138,12 +138,10 @@ class ModifierPresetMixin(HookManagerMixin):
             and by individual ``add_gamete_modifier`` / ``add_zygote_modifier``
             when ``refresh=True``.
         """
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
         from natal.frontend.data._engine import (
             initialize_gamete_map,
             initialize_zygote_map,
+            recompute_offspring_tensor,
         )
         from natal.frontend.modifiers.module import build_modifier_wrappers
 
@@ -223,23 +221,14 @@ class ModifierPresetMixin(HookManagerMixin):
 
         # Step 4: Compute the full offspring probability tensor by
         # convolving the maternal and paternal gametogenesis maps through
-        # the fusion map.  The result is a 4-D array indexed by
-        # (maternal_genotype, paternal_genotype, gamete_label, offspring_genotype).
-        #
-        # Use the rebuilt map's actual dimensions — after compression some
-        # (genotype, slab) pairs may be pruned, making the regular-grid
-        # formula ``len(diploid_genotypes) * n_slabs`` mismatch the
-        # config's ``n_ztypes``.
+        # the fusion map — via the single shared derivation so this
+        # refresh can never drift from the writer/build/compression
+        # spellings.
         n_g = int(zygotes_to_gametes_map.shape[1])
         n_hg = int(zygotes_to_gametes_map.shape[2])
-        offspring_tensor = compute_offspring_probability_tensor(
-            meiosis_f=zygotes_to_gametes_map[0],
-            meiosis_m=zygotes_to_gametes_map[1],
-            haplo_to_genotype_map=gametes_to_zygotes_map,
-            n_ztypes=n_g,
-            n_gtypes=n_hg,
+        offspring_tensor = recompute_offspring_tensor(
+            zygotes_to_gametes_map, gametes_to_zygotes_map
         )
-        offspring_tensor = np.ascontiguousarray(offspring_tensor)
 
         # Step 5: Persist all three maps into the config via shallow copy.
         self._config = self._config._replace(

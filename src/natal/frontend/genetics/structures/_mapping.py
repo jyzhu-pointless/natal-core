@@ -122,9 +122,7 @@ class SpeciesMappingMixin:
         if self.config_blueprint is not None:
             return self.config_blueprint
 
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
+        from natal.frontend.data._engine import recompute_offspring_tensor
 
         genotypes = self.get_all_genotypes(unordered=self.unordered)
         haplotypes = self.get_all_haploid_genotypes()
@@ -142,13 +140,7 @@ class SpeciesMappingMixin:
         n_ztypes = n_g * n_slabs
         n_gtypes = n_hg * n_glabs
 
-        offspring = compute_offspring_probability_tensor(
-            meiosis_f=meiosis_f,
-            meiosis_m=meiosis_m,
-            haplo_to_genotype_map=g2z,
-            n_ztypes=n_ztypes,
-            n_gtypes=n_gtypes,
-        )
+        offspring = recompute_offspring_tensor(z2g, g2z)
 
         f_compat = meiosis_f.sum(axis=1)
         m_compat = meiosis_m.sum(axis=1)

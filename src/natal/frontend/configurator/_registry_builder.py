@@ -219,9 +219,7 @@ def rebuild_config_maps(
     This is used by spatial compression to combine modifier maps from
     multiple demes into a unified BFS adjacency matrix.
     """
-    from natal.backends.reference.simulation.age_structured import (
-        compute_offspring_probability_tensor,
-    )
+    from natal.frontend.data._engine import recompute_offspring_tensor
     from natal.frontend.modifiers.module import build_modifier_wrappers
 
     # ---- resolve genotype/haplotype lists from the registry ----
@@ -353,13 +351,11 @@ def rebuild_config_maps(
         n_g_compressed = int(ctx.config.n_ztypes)
         ctx.registry.compress(ztype_mask, gtype_mask)
 
-    # ---- recompute offspring probability tensor from the updated maps ----
-    offspring_tensor = compute_offspring_probability_tensor(
-        meiosis_f=zygotes_to_gametes_map[0],
-        meiosis_m=zygotes_to_gametes_map[1],
-        haplo_to_genotype_map=gametes_to_zygotes_map,
-        n_ztypes=n_g_compressed,
-        n_gtypes=n_hg_effective if gtype_compressed else n_hg_effective * n_glabs_effective,
+    # ---- recompute offspring probability tensor from the updated maps via
+    # the single shared derivation (shape-derived counts, so both the
+    # compressed and the full glab-product layouts resolve correctly) ----
+    offspring_tensor = recompute_offspring_tensor(
+        zygotes_to_gametes_map, gametes_to_zygotes_map
     )
 
     # ---- write everything back into the config via _replace ----

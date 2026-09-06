@@ -21,6 +21,84 @@ from ._config import (
 )
 from .config import ModelDraft
 
+__all__ = [
+    "initialize_gamete_map",
+    "initialize_zygote_map",
+    "recompute_offspring_tensor",
+    "validate_meiosis_table",
+]
+
+
+def recompute_offspring_tensor(
+    meiosis: NDArray[np.float64],
+    fusion: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Recompute the derived offspring tensor from the live tables.
+
+    Single owner of the derivation
+    ``P[i,j,k] = sum(meiosis_f[i,a] * meiosis_m[j,b] * fusion[a,b,k])``;
+    every caller — the writer channel, the spatial variant channel, the
+    modifier refresh, the registry compression, and the build-time map
+    computation — funnels through this one spelling so they cannot drift
+    apart.
+
+    Args:
+        meiosis: Meiosis table of shape ``(2, n_ztypes, n_gtypes)``.
+        fusion: Fusion table of shape ``(n_gtypes, n_gtypes, n_ztypes)``.
+
+    Returns:
+        The recomputed offspring tensor ``(n_ztypes, n_ztypes, n_ztypes)``.
+    """
+    from natal.backends.reference.simulation.age_structured import (
+        compute_offspring_probability_tensor,
+    )
+
+    meiosis = np.asarray(meiosis, dtype=np.float64)
+    fusion = np.asarray(fusion, dtype=np.float64)
+    # Single-gamete-label layouts collapse the label axis, so the
+    # ztype/gtype counts come from the meiosis table itself.
+    n_z = int(meiosis.shape[1])
+    n_g = int(meiosis.shape[2])
+    return np.ascontiguousarray(
+        compute_offspring_probability_tensor(
+            meiosis_f=meiosis[0],
+            meiosis_m=meiosis[1],
+            haplo_to_genotype_map=fusion,
+            n_ztypes=n_z,
+            n_gtypes=n_g,
+        )
+    )
+
+
+def validate_meiosis_table(candidate: NDArray[np.float64]) -> None:
+    """Reject a meiosis table whose rows are not distributions.
+
+    Single validation point shared by every meiosis write channel, so
+    they all refuse the same inputs.
+
+    Args:
+        candidate: The candidate ``(2, n_ztypes, n_gtypes)`` table.
+
+    Raises:
+        ValueError: If any (sex, ztype) row does not sum to 1 or
+            contains a negative entry — meiosis always produces
+            exactly one gamete with non-negative probability.
+    """
+    row_sums = candidate.sum(axis=-1)
+    ok = np.isclose(row_sums, 1.0, rtol=1e-9, atol=1e-12)
+    if not ok.all():
+        bad = int(np.count_nonzero(~ok))
+        raise ValueError(
+            "meiosis_map rows must be probability distributions "
+            f"(each (sex, ztype) row sums to 1); {bad} row(s) violate this"
+        )
+    if (candidate < 0.0).any():
+        bad = int(np.count_nonzero(candidate < 0.0))
+        raise ValueError(
+            "meiosis_map entries must be non-negative; "
+            f"{bad} entr(ies) violate this"
+        )
+
 
 def initialize_zygote_map(
     haploid_genotypes: List[HaploidGenotype],

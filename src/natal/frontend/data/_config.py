@@ -282,13 +282,12 @@ def build_config_maps(
                 female_only_by_sex_chrom[g_off] = f_ok and not m_ok
                 male_only_by_sex_chrom[g_off] = m_ok and not f_ok
 
-    # Offspring probability tensor.
-    offspring_tensor = alg.compute_offspring_probability_tensor(
-        meiosis_f=_m_f, meiosis_m=_m_m,
-        haplo_to_genotype_map=_z2g,
-        n_ztypes=n_g_compressed,
-        n_gtypes=n_hg_effective * n_glabs_effective,
-    )
+    # Offspring probability tensor — via the single shared derivation
+    # (counts resolve from the table shapes, which are already the
+    # compressed/effective axes at this point).
+    from natal.frontend.data._engine import recompute_offspring_tensor
+
+    offspring_tensor = recompute_offspring_tensor(z2g_expanded, g2z)
 
     return _ComputedMaps(
         n_sexes=n_sexes_i,

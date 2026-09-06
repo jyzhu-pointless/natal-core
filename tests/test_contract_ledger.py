@@ -570,6 +570,35 @@ def test_known_violations_have_red_light_repros() -> None:
         )
 
 
+def test_offspring_derivation_has_a_single_spelling() -> None:
+    """The offspring-tensor derivation is spelled exactly once (S1).
+
+    ``compute_offspring_probability_tensor`` is the numeric kernel; it
+    may be called only from the shared wrapper
+    (:func:`natal.frontend.data._engine.recompute_offspring_tensor`).
+    Any second call site reintroduces the four-way drift the S1
+    batches collapsed (writer channel, modifier refresh, registry
+    compression, species blueprint, build-time maps).
+    """
+    allowed = {
+        "natal/backends/reference/simulation/age_structured.py",  # kernel
+        "natal/frontend/data/_engine.py",  # single wrapper
+    }
+    src_root = REPO_ROOT / "src"
+    offenders: list[str] = []
+    for path in src_root.rglob("*.py"):
+        rel = str(path.relative_to(src_root))
+        if rel in allowed:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "compute_offspring_probability_tensor" in text:
+            offenders.append(rel)
+    assert not offenders, (
+        "offspring derivation re-spelled outside the single wrapper: "
+        f"{offenders}"
+    )
+
+
 def test_repro_script_covers_only_registered_defects() -> None:
     """The repro script's registry and this ledger stay in sync."""
     import re
