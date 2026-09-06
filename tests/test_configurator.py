@@ -913,6 +913,422 @@ class TestReconfigurePreset:
 # ══════════════════════════════════════════════════════════════════════════
 
 
+    def test_reconfigure_executes_recipe_exactly_once(self, simple_species: nt.Species) -> None:
+        """One reconfigure runs the user recipe once (no clone-to-validate).
+
+        The former transaction cloned the population and exercised the
+        complete rebuild there before executing the same recipe a second
+        time on the real object; the unified transaction (plan 5.1)
+        executes the recipe once on the live population.
+        """
+        calls = {"n": 0}
+
+        class CountingDrive(nt.HomingDrive):
+            def gamete_modifier(self, pop):  # noqa: ARG002  # signature mirrors the preset protocol
+                calls["n"] += 1
+                return super().gamete_modifier(pop)
+
+        drive = CountingDrive(
+            name="__reconfigure_recipe_count__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({
+                "female": {"WT|Dr": [0, 100]},
+                "male": {"WT|Dr": [0, 100]},
+            })
+            .competition(carrying_capacity=500)
+            .presets(drive)
+            .build()
+        )
+        recipe_runs_at_build = calls["n"]
+        assert recipe_runs_at_build >= 1  # sanity: the counter is wired
+
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+
+        # Exactly one further recipe execution per refresh call site:
+        # the candidate execution IS the commit.
+        assert calls["n"] - recipe_runs_at_build == 1
+        # The commit writes the raw attribute value (scalar form); the
+        # preset's readers accept both scalar and (female, male) forms.
+        assert drive.drive_conversion_rate == 0.3
+
+    def test_reconfigure_failure_rolls_back_every_snapshot(self, simple_species: nt.Species, monkeypatch) -> None:
+        """A recipe that fails mid-rebuild leaves the population bitwise unchanged.
+
+        The failure lands in reapply_preset_fitness — after refresh has
+        already replaced the meiosis/offspring tables and cleared the
+        shared fitness arrays in place — which is the deepest mutation
+        point the rollback has to cover.
+        """
+        drive = nt.HomingDrive(
+            name="__reconfigure_rollback__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+            fecundity_scaling={"female": 0.5},
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({
+                "female": {"WT|Dr": [0, 100]},
+                "male": {"WT|Dr": [0, 100]},
+            })
+            .competition(carrying_capacity=500)
+            .presets(drive)
+            .build()
+        )
+
+        before = {
+            "z2g": pop.config.zygotes_to_gametes_map.copy(),
+            "g2z": pop.config.gametes_to_zygotes_map.copy(),
+            "offspring": pop.config.offspring_tensor.copy(),
+            "viability": pop.config.viability_fitness.copy(),
+            "fecundity": pop.config.fecundity_fitness.copy(),
+            "sexual": pop.config.sexual_selection_fitness.copy(),
+            "zygote": pop.config.zygote_viability_fitness.copy(),
+            "gamete_mods": list(pop.gamete_modifiers),
+            "zygote_mods": list(pop.zygote_modifiers),
+            "presets": list(pop.presets),
+        }
+
+        def exploding_patch():
+            raise RuntimeError("boom: fitness patch failure")
+
+        monkeypatch.setattr(drive, "fitness_patch", exploding_patch)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+
+        monkeypatch.undo()
+        # The attribute change never landed on the registered object...
+        assert drive.drive_conversion_rate == (0.9, 0.9)
+        # ...and every mutated surface is restored bitwise.
+        np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, before["z2g"])
+        np.testing.assert_array_equal(pop.config.gametes_to_zygotes_map, before["g2z"])
+        np.testing.assert_array_equal(pop.config.offspring_tensor, before["offspring"])
+        np.testing.assert_array_equal(pop.config.viability_fitness, before["viability"])
+        np.testing.assert_array_equal(pop.config.fecundity_fitness, before["fecundity"])
+        np.testing.assert_array_equal(pop.config.sexual_selection_fitness, before["sexual"])
+        np.testing.assert_array_equal(pop.config.zygote_viability_fitness, before["zygote"])
+        assert list(pop.gamete_modifiers) == before["gamete_mods"]
+        assert list(pop.zygote_modifiers) == before["zygote_mods"]
+        assert list(pop.presets) == before["presets"]
+        assert pop.presets[0] is drive  # registry identity restored
+
+    def test_reconfigure_failure_restores_rust_dirty_bridge(
+        self, simple_species: nt.Species, monkeypatch
+    ) -> None:
+        """A failed reconfigure rolls the Rust dirty bridge back to its pre-call state.
+
+        ``refresh_modifier_maps`` marks ``{meiosis_map, offspring_tensor,
+        __hooks__}`` after rebuilding the maps.  When the recipe then
+        fails, those marks must be rolled back together with the config:
+        a surviving ``__hooks__`` mark routes the next ``run()`` through a
+        full Rust session rebuild, which reseeds the session RNG — the
+        failure would then change the population's future stochastic
+        trajectory (plan 5.1: neither the declaration nor the session may
+        be polluted by a failed attempt).  Marks that were already pending
+        *before* the attempt (the user's own value update) must survive
+        the rollback — restore, not clear.
+        """
+        drive = nt.HomingDrive(
+            name="__reconfigure_dirty_bridge__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({
+                "female": {"WT|Dr": [0, 100]},
+                "male": {"WT|Dr": [0, 100]},
+            })
+            .competition(carrying_capacity=500)
+            .presets(drive)
+            .build()
+        )
+        # A pending user update: its mark must outlive the failed attempt.
+        pop.update().competition(carrying_capacity=400)
+        dirty_before = set(pop._rust_dirty)
+        assert dirty_before == {"carrying_capacity"}  # sanity: the bridge is marked
+
+        def exploding_patch():
+            raise RuntimeError("boom: dirty bridge")
+
+        monkeypatch.setattr(drive, "fitness_patch", exploding_patch)
+        with pytest.raises(RuntimeError, match="boom"):
+            pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        monkeypatch.undo()
+
+        assert set(pop._rust_dirty) == dirty_before
+
+    def test_reconfigure_failure_mid_refresh_rolls_back(
+        self, simple_species: nt.Species, monkeypatch
+    ) -> None:
+        """A failure before the map rebuild leaves nothing behind.
+
+        The ``zygote_modifier`` failure point sits inside
+        ``refresh_modifiers`` but *before* ``refresh_modifier_maps``: the
+        modifier lists have been cleared and partially rebuilt, while the
+        config instance and the fitness arrays are still untouched.  The
+        rollback must restore the lists, preserve the config object
+        identity (external holders keep their references), and leave the
+        dirty bridge empty.
+        """
+        drive = nt.HomingDrive(
+            name="__reconfigure_mid_failure__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({
+                "female": {"WT|Dr": [0, 100]},
+                "male": {"WT|Dr": [0, 100]},
+            })
+            .competition(carrying_capacity=500)
+            .presets(drive)
+            .build()
+        )
+        config_before = pop.config
+        z2g_before = pop.config.zygotes_to_gametes_map
+        fitness_before = pop.config.fecundity_fitness.copy()
+        gamete_mods_before = list(pop.gamete_modifiers)
+        zygote_mods_before = list(pop.zygote_modifiers)
+
+        def exploding_zygote_modifier(population):  # noqa: ARG001  # protocol signature
+            raise RuntimeError("boom: mid refresh")
+
+        monkeypatch.setattr(drive, "zygote_modifier", exploding_zygote_modifier)
+        with pytest.raises(RuntimeError, match="boom"):
+            pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        monkeypatch.undo()
+
+        assert drive.drive_conversion_rate == (0.9, 0.9)  # attribute never landed
+        assert pop.config is config_before  # identity, not merely value
+        assert pop.config.zygotes_to_gametes_map is z2g_before
+        np.testing.assert_array_equal(pop.config.fecundity_fitness, fitness_before)
+        assert list(pop.gamete_modifiers) == gamete_mods_before
+        assert list(pop.zygote_modifiers) == zygote_mods_before
+        assert pop.presets[0] is drive
+        assert set(pop._rust_dirty) == set()
+
+    def test_reconfigure_failure_preserves_rust_session_stream(
+        self, simple_species: nt.Species, monkeypatch
+    ) -> None:
+        from natal.backends.rust.rust_backend import rust_backend_available
+
+        if not rust_backend_available():  # environment guard, mirrors test_rust_session_bridge
+            pytest.skip("rust extension not built")
+        """A failed reconfigure must not change the population's future trajectory.
+
+        The Rust session's RNG stream is sequential (checkpoint tests
+        capture RNG words to resume it).  If the failed attempt leaves the
+        ``__hooks__`` dirty mark behind, the next ``run()`` rebuilds the
+        whole session from the original seed — restarting the RNG
+        mid-stream and diverging every later stochastic draw.  Control:
+        one fused ``run(6)``.  Treatment: ``run(3)``, failed reconfigure,
+        ``run(3)``.  Bitwise-equal histories plus a session object that
+        survives both the failure and the next run prove the failure was a
+        true no-op for the session.
+        """
+        def build_viable_stochastic(name: str, drive: nt.HomingDrive):
+            return (
+                nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=True)
+                .age_structure(5, 2)
+                .initial_state(
+                    individual_count={
+                        "female": {"WT|WT": 40, "WT|Dr": 25, "Dr|Dr": 10},
+                        "male": {"WT|WT": 30, "WT|Dr": 20, "Dr|Dr": 5},
+                    }
+                )
+                .competition(
+                    juvenile_growth_mode=2,
+                    carrying_capacity=400,
+                    low_density_growth_rate=2.0,
+                )
+                .reproduction(eggs_per_female=40, sex_ratio=0.5)
+                .survival(female_age_based_survival=0.6, male_age_based_survival=0.55)
+                .presets(drive)
+                .build()
+            )
+
+        control = build_viable_stochastic(
+            "ctrl", nt.HomingDrive(
+                name="__stream_ctrl__",
+                drive_allele="Dr",
+                target_allele="WT",
+                drive_conversion_rate=0.9,
+            )
+        ).enable_rust_backend(seed=99)
+        drive_t = nt.HomingDrive(
+            name="__stream_treat__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+        )
+        treat = build_viable_stochastic("treat", drive_t).enable_rust_backend(seed=99)
+        control.run(6, record_every=1)
+
+        treat.run(3, record_every=1)
+        session_before = treat._rust_lifecycle_backend
+
+        def exploding_patch():
+            raise RuntimeError("boom: stream")
+
+        monkeypatch.setattr(drive_t, "fitness_patch", exploding_patch)
+        with pytest.raises(RuntimeError, match="boom"):
+            treat.update().reconfigure_preset(drive_t, drive_conversion_rate=0.3)
+        monkeypatch.undo()
+
+        # The live session was never touched during the attempt itself...
+        assert treat._rust_lifecycle_backend is session_before
+        treat.run(3, record_every=1)
+
+        # ...so the split run must equal the fused run bitwise, and the
+        # session object must survive the second run too (a rebuild would
+        # have reseeded the RNG).
+        np.testing.assert_array_equal(
+            treat.history.individual_count, control.history.individual_count
+        )
+        assert treat._rust_lifecycle_backend is session_before
+
+        # Guard against vacuous equality through extinction: another seed
+        # must produce a different trajectory.
+        other = build_viable_stochastic(
+            "other", nt.HomingDrive(
+                name="__stream_other__",
+                drive_allele="Dr",
+                target_allele="WT",
+                drive_conversion_rate=0.9,
+            )
+        ).enable_rust_backend(seed=98)
+        other.run(6, record_every=1)
+        assert control.history.individual_count[-1].sum() > 0  # population alive
+        assert not np.array_equal(
+            other.history.individual_count, control.history.individual_count
+        )
+
+    def test_reconfigure_twice_matches_direct_build(self, simple_species: nt.Species) -> None:
+        """Two successive reconfigures converge to the directly-built state.
+
+        ``0.9 -> 0.3 -> 0.7`` must leave the population bitwise identical
+        to one built at ``0.7`` from scratch.  Any hidden state left by
+        the candidate-execution path (registry identity churn, modifier
+        wrappers still bound to a discarded candidate, config instance
+        replacement) would surface as a map, fitness, or trajectory
+        difference.
+        """
+        def build_deterministic(drive: nt.HomingDrive):
+            return (
+                nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+                .age_structure(5, 2)
+                .initial_state(
+                    individual_count={
+                        "female": {"WT|WT": 40, "WT|Dr": 25, "Dr|Dr": 10},
+                        "male": {"WT|WT": 30, "WT|Dr": 20, "Dr|Dr": 5},
+                    }
+                )
+                .competition(
+                    juvenile_growth_mode=2,
+                    carrying_capacity=400,
+                    low_density_growth_rate=2.0,
+                )
+                .reproduction(eggs_per_female=40, sex_ratio=0.5)
+                .survival(female_age_based_survival=0.6, male_age_based_survival=0.55)
+                .presets(drive)
+                .build()
+            )
+
+        drive_a = nt.HomingDrive(
+            name="__twice_a__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+        )
+        pop_a = build_deterministic(drive_a)
+        pop_a.update().reconfigure_preset(drive_a, drive_conversion_rate=0.3)
+        pop_a.update().reconfigure_preset(drive_a, drive_conversion_rate=0.7)
+
+        drive_b = nt.HomingDrive(
+            name="__twice_b__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.7,
+        )
+        pop_b = build_deterministic(drive_b)
+
+        assert pop_a.presets[0] is drive_a  # registry identity restored each time
+        assert drive_a.drive_conversion_rate == 0.7  # raw committed value
+        for field in (
+            "zygotes_to_gametes_map",
+            "gametes_to_zygotes_map",
+            "offspring_tensor",
+            "viability_fitness",
+            "fecundity_fitness",
+            "sexual_selection_fitness",
+            "zygote_viability_fitness",
+        ):
+            np.testing.assert_array_equal(
+                getattr(pop_a.config, field),
+                getattr(pop_b.config, field),
+                err_msg=field,
+            )
+        pop_a.run(4, record_every=1)
+        pop_b.run(4, record_every=1)
+        np.testing.assert_array_equal(
+            pop_a.history.individual_count, pop_b.history.individual_count
+        )
+
+    def test_reconfigure_does_not_clone_population(
+        self, simple_species: nt.Species, monkeypatch
+    ) -> None:
+        """reconfigure_preset executes on the live population, never via _clone.
+
+        The pre-5.1 transaction validated the candidate on a clone
+        produced by ``pop._clone`` before re-running the recipe on the
+        real object.  Plan 5.1 deletes that path: poisoning ``_clone``
+        must not affect a successful reconfigure, proving the
+        clone-validation transaction is truly gone.
+        """
+        drive = nt.HomingDrive(
+            name="__reconfigure_no_clone__",
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=simple_species, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state({
+                "female": {"WT|Dr": [0, 100]},
+                "male": {"WT|Dr": [0, 100]},
+            })
+            .competition(carrying_capacity=500)
+            .presets(drive)
+            .build()
+        )
+
+        def poisoned_clone(*args, **kwargs):
+            raise AssertionError("reconfigure_preset must not clone the population")
+
+        monkeypatch.setattr(type(pop), "_clone", poisoned_clone)
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        monkeypatch.undo()
+
+        assert drive.drive_conversion_rate == 0.3
+        assert pop.name != "__reconfigure_no_clone____preset_validation__"
+
+
 class TestDiscreteScalarSync:
     """Verify that discrete-specific scalars land in the unified vectors.
 
@@ -1223,3 +1639,4 @@ class TestSpermStorageShape:
         assert pop.state is not None
         # Sperm storage should exist in the state
         assert hasattr(pop.state, 'sperm_storage')
+

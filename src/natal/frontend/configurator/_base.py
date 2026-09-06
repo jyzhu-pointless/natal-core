@@ -1598,30 +1598,78 @@ class Configurator:
                     f"on the preset object."
                 )
 
-        # Exercise the complete rebuild on an isolated population before
-        # mutating the registered preset.  Calling only the recipe factories
-        # is insufficient because a custom modifier may fail later, when its
-        # returned callable is invoked by refresh_modifier_maps().
+        # Execute the recipe exactly once, on the live population, with the
+        # candidate preset swapped into the registry (plan 5.1: no
+        # clone-to-validate followed by a second execution on the real
+        # object).  A failure rolls the population back from snapshots
+        # before re-raising, so neither the session nor the committed
+        # declaration is polluted.  Outside this guarantee: the user
+        # recipe's own side effects on the world (files, globals) and any
+        # NATAL state it mutates beyond the modifier/fitness surfaces
+        # below (e.g. calling pop.add_gamete_modifier itself).
         candidate = copy(preset)
         for attr, value in changes.items():
             setattr(candidate, attr, value)
-        trial = pop._clone(  # pyright: ignore[reportPrivateUsage]
-            f"{pop.name}__preset_validation__",
-            config=deepcopy(pop.config),
-        )
-        trial._presets = [  # pyright: ignore[reportPrivateUsage]
-            candidate if registered is preset else registered
-            for registered in trial._presets  # pyright: ignore[reportPrivateUsage]
-        ]
-        trial.refresh_modifiers()
-        trial.reapply_preset_fitness()
 
-        # ── Commit phase ──
+        saved_presets = list(pop._presets)  # pyright: ignore[reportPrivateUsage]
+        saved_config = pop._config  # pyright: ignore[reportPrivateUsage]
+        assert saved_config is not None  # a live population always has a config
+        saved_gamete_modifiers = list(pop._gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
+        saved_zygote_modifiers = list(pop._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
+        # refresh_modifier_maps marks the Rust bridge mid-rebuild; leaving
+        # those markers behind would force a full session rebuild (and RNG
+        # reset) on the next run.  Pending markers the user created before
+        # the reconfigure must survive the restore, so snapshot-and-restore
+        # rather than clear.
+        saved_dirty = set(pop._rust_dirty)  # pyright: ignore[reportPrivateUsage]
+        # reapply_preset_fitness clears the shared fitness arrays in place,
+        # so a failed run must restore their contents, not just the config
+        # reference.
+        saved_fitness = tuple(
+            tensor.copy()
+            for tensor in (
+                saved_config.viability_fitness,
+                saved_config.fecundity_fitness,
+                saved_config.sexual_selection_fitness,
+                saved_config.zygote_viability_fitness,
+            )
+        )
+        try:
+            pop._presets = [  # pyright: ignore[reportPrivateUsage]
+                candidate if registered is preset else registered
+                for registered in saved_presets
+            ]
+            pop.refresh_modifiers()
+            pop.reapply_preset_fitness()
+        except BaseException:
+            pop._presets = saved_presets  # pyright: ignore[reportPrivateUsage]
+            pop._config = saved_config  # pyright: ignore[reportPrivateUsage]
+            pop._gamete_modifiers[:] = saved_gamete_modifiers  # pyright: ignore[reportPrivateUsage]
+            pop._zygote_modifiers[:] = saved_zygote_modifiers  # pyright: ignore[reportPrivateUsage]
+            pop._rust_dirty.clear()  # pyright: ignore[reportPrivateUsage]
+            pop._rust_dirty.update(saved_dirty)  # pyright: ignore[reportPrivateUsage]
+            for tensor, saved in zip(
+                (
+                    saved_config.viability_fitness,
+                    saved_config.fecundity_fitness,
+                    saved_config.sexual_selection_fitness,
+                    saved_config.zygote_viability_fitness,
+                ),
+                saved_fitness,
+            ):
+                tensor[...] = saved
+            raise
+
+        # ── Commit phase: the candidate products are already live on the
+        # population; adopt the attribute changes onto the registered
+        # object and restore its identity in the registry so add_preset's
+        # idempotency-by-identity keeps working.
         for attr, value in changes.items():
             setattr(preset, attr, value)
-
-        pop.refresh_modifiers()
-        pop.reapply_preset_fitness()
+        pop._presets = [  # pyright: ignore[reportPrivateUsage]
+            preset if registered is candidate else registered
+            for registered in pop._presets  # pyright: ignore[reportPrivateUsage]
+        ]
         self._config = pop.config
 
         self._config = sync_equilibrium_for_draft(self._config)
