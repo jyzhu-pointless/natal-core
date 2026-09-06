@@ -374,5 +374,19 @@ class ParamsView:
 
         Raises:
             ValueError: On a size mismatch (zero writes).
+            RuntimeError: If a genetics tensor is written on a deme of a
+                spatial population — its draft tables are shared between
+                demes, so the write would leak into every other deme.
+                Use the deme's ``write_genetics`` channel, which forks
+                the variant first.
         """
+        if field in _GENETICS_TENSORS and getattr(
+            self._pop, "_shares_genetics_draft", False
+        ):
+            raise RuntimeError(
+                f"cannot tensor_write genetics field {field!r} on a spatial "
+                "deme: the draft tables are shared across demes and the "
+                "write would leak into all of them; use the deme's "
+                "write_genetics channel instead"
+            )
         self._writer().tensor_write(field, values)

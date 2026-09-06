@@ -56,6 +56,28 @@ def _build_discrete(species, *, n_demes: int = 4, k: float = 500.0):
     )
 
 
+def _build_two_allele_discrete(name: str):
+    """A no-migration two-allele discrete spatial population (WT/Dr)."""
+    species = nt.Species.from_dict(
+        name="__test_spatial_meiosis_plane__",
+        structure={"auto": {"A": ["WT", "Dr"]}},
+    )
+    return (
+        nt.SpatialPopulation
+        .builder(species, n_demes=4, topology=nt.SquareGrid(2, 2),
+                 pop_type="discrete_generation")
+        .setup(name=name, stochastic=False)
+        .initial_state(individual_count={
+            "female": {"WT|WT": 100}, "male": {"WT|WT": 100},
+        })
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0,
+                     juvenile_growth_mode="beverton_holt")
+        .build()
+    )
+
+
 def _build_age(species, *, n_demes: int = 4, k: float = 500.0):
     topo = nt.SquareGrid(2, 2)
     return (
@@ -306,6 +328,105 @@ class TestDemeSliceGeneticsFork:
         pop = homogeneous_pop
         with pytest.raises(KeyError):
             pop.deme(0).write_genetics("survival_rates", np.zeros(1))
+
+    def test_meiosis_fork_recomputes_derived_tensor_and_isolates(self) -> None:
+        """A meiosis fork recomputes the derived offspring tensor (C3 fix).
+
+        Forcing WT|WT individuals to transmit only ``Dr`` gametes must
+        recompute the deme's offspring tensor — the engines only consume
+        the derived table — while demes still sharing the original
+        tables stay bitwise unchanged, and the biased deme's next
+        generation is entirely Dr|Dr at the same total census (a meiosis
+        bias redistributes genotypes; it does not change counts).
+        """
+        pop = _build_two_allele_discrete("meiosis_fork")
+        baseline = _build_two_allele_discrete("meiosis_fork_base")
+
+        biased = np.asarray(
+            pop.deme(0).config.zygotes_to_gametes_map, dtype=np.float64
+        ).copy()
+        biased[:, 0, :] = [0.0, 1.0]
+        pop.deme(0).write_genetics("meiosis_map", biased)
+
+        # The fork's derived tensor follows the biased meiosis...
+        np.testing.assert_allclose(
+            pop.deme(0).config.offspring_tensor[0, 0, :], [0.0, 0.0, 1.0]
+        )
+        # ...while sharing demes keep the Mendelian original bitwise.
+        np.testing.assert_allclose(
+            pop.deme(1).config.offspring_tensor[0, 0, :], [1.0, 0.0, 0.0]
+        )
+
+        pop.run(1, record_every=0)
+        baseline.run(1, record_every=0)
+
+        biased_counts = pop.deme(0).state.individual_count
+        np.testing.assert_allclose(biased_counts[:, 1, 0], 0.0)  # WT|WT gone
+        np.testing.assert_allclose(biased_counts[:, 1, 1], 0.0)  # WT|Dr gone
+        assert biased_counts[:, 1, 2].min() > 0.0  # all mass on Dr|Dr
+        # Same total census as the unbiased baseline deme.
+        np.testing.assert_allclose(
+            biased_counts.sum(), baseline.deme(0).state.individual_count.sum()
+        )
+        # Untouched demes track the baseline bitwise.
+        for i in (1, 2, 3):
+            np.testing.assert_array_equal(
+                pop.deme(i).state.individual_count,
+                baseline.deme(i).state.individual_count,
+            )
+
+    def test_meiosis_fork_rejects_invalid_tables_atomically(self) -> None:
+        """Non-distribution meiosis rows are refused on the fork channel too."""
+        pop = _build_two_allele_discrete("meiosis_fork_bad")
+        saved = np.asarray(pop.deme(0).config.zygotes_to_gametes_map).copy()
+        saved_offspring = np.asarray(pop.deme(0).config.offspring_tensor).copy()
+
+        wrong_sum = saved.copy()
+        wrong_sum[0, 1, :] = [0.6, 0.6]
+        with pytest.raises(ValueError, match="must be probability distributions"):
+            pop.deme(0).write_genetics("meiosis_map", wrong_sum)
+
+        negative = saved.copy()
+        negative[0, 1, :] = [-0.5, 1.5]
+        with pytest.raises(ValueError, match="must be non-negative"):
+            pop.deme(0).write_genetics("meiosis_map", negative)
+
+        # Zero writes: both demes' tables are bitwise unchanged.
+        np.testing.assert_array_equal(
+            pop.deme(0).config.zygotes_to_gametes_map, saved
+        )
+        np.testing.assert_array_equal(
+            pop.deme(0).config.offspring_tensor, saved_offspring
+        )
+        np.testing.assert_array_equal(
+            pop.deme(1).config.zygotes_to_gametes_map, saved
+        )
+
+    def test_deme_params_tensor_write_refuses_genetics_fields(
+        self, homogeneous_pop,
+    ) -> None:
+        """Per-deme ``params.tensor_write`` refuses every genetics tensor.
+
+        Spatial demes start with shared draft tables; an in-place genetics
+        write would leak into all other demes.  The refusal routes the
+        caller to ``write_genetics`` (the forking channel); ecology
+        vectors keep working through ``tensor_write``.
+        """
+        from natal.frontend.population._params_view import _GENETICS_TENSORS
+
+        pop = homogeneous_pop
+        for field in sorted(_GENETICS_TENSORS):
+            with pytest.raises(RuntimeError, match="write_genetics"):
+                pop.deme(0).params.tensor_write(
+                    field, np.zeros(1, dtype=np.float64)
+                )
+
+        # Ecology vectors stay writable through the same surface.
+        rates = np.asarray(pop.deme(0).params.survival_rates, dtype=np.float64)
+        pop.deme(0).params.tensor_write("survival_rates", rates)
+        np.testing.assert_array_equal(
+            pop.deme(0).params.survival_rates, rates
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════

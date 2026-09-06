@@ -669,6 +669,12 @@ class SpatialPopulation:
         # Keep a stable list internally; public accessor returns an immutable
         # tuple view to prevent accidental external mutation.
         self._demes: List[DemePopulation] = list(demes)
+        # Genetics draft tables start out shared by every deme; in-place
+        # genetics writes would leak across demes, so the per-deme params
+        # view refuses them and routes through write_genetics (which forks
+        # the variant first).  See ParamsView.tensor_write.
+        for _d in self._demes:
+            _d._shares_genetics_draft = True  # pyright: ignore[reportPrivateUsage]  # the marker is defined on BasePopulation for ParamsView to read
 
         # Stamp each deme with its live index so hooks see the same
         # pop.deme_id the Rust per-deme kernel reports (0 for panmictic,
@@ -1268,6 +1274,10 @@ class SpatialPopulation:
         The Rust bank variant of the deme is cloned first (other demes
         keep sharing the original tables) and the draft arrays are
         detached the same way, so the fork is atomic across backends.
+        A ``meiosis_map`` write also recomputes the derived offspring
+        tensor on the forked tables — the engines only consume the
+        derived tensor, so leaving it stale would be silently inert
+        (audit finding C3).
 
         Args:
             deme_index: Zero-based deme index.
@@ -1276,7 +1286,13 @@ class SpatialPopulation:
 
         Raises:
             KeyError: If *field* is not a genetics tensor.
+            ValueError: If a meiosis table's rows are not distributions.
         """
+        from natal.frontend.configurator._writers import (
+            recompute_offspring_tensor,
+            validate_meiosis_table,
+        )
+
         if field not in _GENETICS_DRAFT_FIELDS:
             raise KeyError(f"unknown genetics tensor {field!r}")
         draft_field = _GENETICS_DRAFT_FIELDS[field]
@@ -1287,9 +1303,24 @@ class SpatialPopulation:
                 f"a scalar"
             )
         field_array: NDArray[np.float64] = cast("NDArray[np.float64]", field_value)
-        field_array[...] = np.asarray(values, dtype=np.float64).reshape(
-            field_array.shape
-        )
+        candidate = np.asarray(values, dtype=np.float64).reshape(field_array.shape)
+        if field == "meiosis_map":
+            validate_meiosis_table(candidate)
+        field_array[...] = candidate
+
+        refresh_fields = [field]
+        if field == "meiosis_map":
+            # Detach the derived tensor too (clone-on-write, same as the
+            # meiosis table) so the recompute cannot leak into the demes
+            # still sharing the original offspring table.
+            config, offspring_value = self._detach_deme_field(
+                deme_index, "offspring_tensor"
+            )
+            offspring_array = cast("NDArray[np.float64]", offspring_value)
+            offspring_array[...] = recompute_offspring_tensor(
+                field_array, config.gametes_to_zygotes_map
+            )
+            refresh_fields.append("offspring_tensor")
 
         backend = self._rust_spatial_session()
         if backend is not None:
@@ -1300,7 +1331,7 @@ class SpatialPopulation:
                 from natal.contracts.materialize import materialize
 
                 contracts = materialize(config)
-                refresh(variant_id, [field], contracts.params)
+                refresh(variant_id, refresh_fields, contracts.params)
 
 
     @property

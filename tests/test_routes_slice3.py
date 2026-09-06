@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 
 import natal as nt
+from natal.backends.rust.rust_backend import rust_backend_available
 from natal.frontend.configurator import Configurator, set_param
 from natal.frontend.data import ModelDraft
 from natal.frontend.configurator import _routes
@@ -341,9 +342,12 @@ class TestGenoTensorShape:
         table = pop.params.meiosis_map.array
         table[0, 0, :] = [0.25, 0.75]
         pop.params.tensor_write("meiosis_map", table)
-        # Contract-name marker — the same name the modifier refresh and
-        # the Rust genetics-tensor set (_RUST_GENETICS_TENSORS) use.
-        assert pop._rust_dirty == {"meiosis_map"}
+        # Contract-name markers — the same names the modifier refresh and
+        # the Rust genetics-tensor set (_RUST_GENETICS_TENSORS) use.  The
+        # derived offspring tensor is recomputed and marked in the same
+        # transaction, otherwise the engine would keep consuming the stale
+        # table (audit finding C3).
+        assert pop._rust_dirty == {"meiosis_map", "offspring_tensor"}
         pop.run(1, record_every=1)
         assert pop._rust_dirty == set()  # drained into the session
         np.testing.assert_allclose(
@@ -369,6 +373,432 @@ class TestGenoTensorShape:
         # Homozygote rows pass the single allele through untouched.
         np.testing.assert_allclose(table[0, 0, :], [1.0, 0.0])
         np.testing.assert_allclose(table[1, 2, :], [0.0, 1.0])
+
+    def test_meiosis_write_recomputes_derived_offspring_dynamics(self):
+        """A biased meiosis write changes offspring genotypes (C3 fix).
+
+        Forcing WT|WT individuals to transmit only ``Dr`` gametes makes
+        every WT|WT x WT|WT offspring Dr|Dr; before the derived-tensor
+        recompute this write was silently inert for the run.
+        """
+        sp = nt.Species.from_dict(
+            name="__slice3_c3__",
+            structure={"chr1": {"loc": ["WT", "Dr"]}},
+            gamete_labels=["default"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(sp, stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 10},
+                    "male": {"WT|WT": 10},
+                }
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=2, sex_ratio=0.5)
+            .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+            .build()
+        )
+        biased = pop.params.meiosis_map.array
+        biased[:, 0, :] = [0.0, 1.0]
+        pop.params.tensor_write("meiosis_map", biased)
+
+        pop.run(1)
+
+        counts = pop.state.individual_count
+        # Genotype order WT|WT, WT|Dr, Dr|Dr: the next generation is
+        # entirely Dr|Dr at the fixed point of 10 per sex.
+        np.testing.assert_allclose(counts[:, 1, 2], [10.0, 10.0])
+        np.testing.assert_allclose(counts[:, 1, 0], [0.0, 0.0])
+
+    def test_meiosis_write_rejects_non_normalized_rows(self):
+        """A meiosis table whose rows are not distributions is rejected atomically.
+
+        Meiosis always yields exactly one gamete, so any (sex, ztype)
+        row summing away from 1 is invalid input; nothing may change.
+        """
+        pop = _age_pop()
+        table = pop.params.meiosis_map.array
+        table[0, 1, :] = [0.6, 0.6]
+        dirty_before = set(pop._rust_dirty)
+
+        with pytest.raises(ValueError, match="must be probability distributions"):
+            pop.params.tensor_write("meiosis_map", table)
+
+        # Zero writes: the live table, the derived tensor, and the dirty
+        # bridge are all untouched.
+        np.testing.assert_allclose(pop.params.meiosis_map.array[0, 1, :], [0.5, 0.5])
+        assert pop._rust_dirty == dirty_before
+
+    def test_meiosis_write_rejects_negative_entries(self):
+        """A row summing to 1 through a negative entry is rejected atomically.
+
+        ``[-0.5, 1.5]`` passes a naive sum check but is not a
+        distribution; the write must change nothing.
+        """
+        pop = _age_pop()
+        table = pop.params.meiosis_map.array
+        table[0, 1, :] = [-0.5, 1.5]
+        dirty_before = set(pop._rust_dirty)
+        offspring_before = np.asarray(pop.config.offspring_tensor).copy()
+
+        with pytest.raises(ValueError, match="must be non-negative"):
+            pop.params.tensor_write("meiosis_map", table)
+
+        np.testing.assert_allclose(pop.params.meiosis_map.array[0, 1, :], [0.5, 0.5])
+        np.testing.assert_array_equal(
+            np.asarray(pop.config.offspring_tensor), offspring_before
+        )
+        assert pop._rust_dirty == dirty_before
+
+
+def _biased_meiosis_pop(species_name: str, initial: dict[str, dict[str, float]]):
+    """Build the deterministic two-allele meiosis-bias population."""
+    sp = nt.Species.from_dict(
+        name=species_name,
+        structure={"chr1": {"loc": ["WT", "Dr"]}},
+        gamete_labels=["default"],
+    )
+    return (
+        nt.DiscreteGenerationPopulation.setup(sp, stochastic=False)
+        .initial_state(individual_count=initial)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        .build()
+    )
+
+
+class TestMeiosisDerivedRecompute:
+    """Adversarial C3 coverage: writes must recompute the derived tensor.
+
+    Every test pins the mathematical identity
+    ``P[i,j,k] = sum_{a,b} z2g_f[i,a] * z2g_m[j,b] * fusion[a,b,k]``
+    with an einsum computed independently of the writer's code path, then
+    attacks one axis the batch-5 fix could have missed.
+    """
+
+    def test_offspring_tensor_after_write_matches_einsum_convolution(self):
+        """The recomputed tensor equals the meiosis-fusion convolution.
+
+        Attack: a derivation with swapped fusion axes (``fusion[b,a,k]``),
+        swapped maternal/paternal meiosis tables, or a transposed
+        ``(gf, gm)`` index pair still yields a stochastic tensor whose
+        rows sum to 1 — only the closed-form einsum identity evaluated
+        elementwise detects the transposition.  The bias is therefore
+        female-only, which breaks the ``(i, j)`` symmetry a swap bug
+        would hide behind (identical sex tables make P symmetric).
+        """
+        pop = _biased_meiosis_pop(
+            "__slice3_c3a__",
+            {"female": {"WT|WT": 10}, "male": {"WT|WT": 10}},
+        )
+        biased = pop.params.meiosis_map.array
+        biased[0, 0, :] = [0.0, 1.0]  # female WT|WT transmits only Dr
+        pop.params.tensor_write("meiosis_map", biased)
+
+        meiosis = np.asarray(pop.config.zygotes_to_gametes_map)
+        fusion = np.asarray(pop.config.gametes_to_zygotes_map)
+        derived = np.asarray(pop.config.offspring_tensor)
+        reference = np.einsum("ia,jb,abk->ijk", meiosis[0], meiosis[1], fusion)
+        np.testing.assert_allclose(reference, derived, rtol=1e-13, atol=1e-15)
+
+        # Every (gf, gm) row of the derived tensor stays a distribution.
+        np.testing.assert_allclose(derived.sum(axis=-1), 1.0, rtol=0, atol=1e-12)
+        # Hand-computed asymmetric cells (fusion is symmetric over its
+        # gamete axes, so these differ only through the sex asymmetry):
+        # female Dr-only x male Mendelian WT|WT -> WT|Dr.
+        np.testing.assert_allclose(derived[0, 0, :], [0.0, 1.0, 0.0], rtol=0, atol=0)
+        # f(WT|WT)=Dr x m(WT|Dr)={WT,Dr}/2 -> 1/2 WT|Dr + 1/2 Dr|Dr.
+        np.testing.assert_allclose(derived[0, 1, :], [0.0, 0.5, 0.5], rtol=0, atol=0)
+        # f(WT|Dr)={WT,Dr}/2 x m(WT|WT)=WT -> 1/2 WT|WT + 1/2 WT|Dr —
+        # differs from derived[0, 1, :], pinning the (gf, gm) axis order.
+        np.testing.assert_allclose(derived[1, 0, :], [0.5, 0.5, 0.0], rtol=0, atol=0)
+        # The params read channel reflects the same recomputed tensor
+        # (TensorView reads the live draft array in place).
+        np.testing.assert_array_equal(pop.params.offspring_tensor.array, derived)
+
+    def test_meiosis_write_recompute_on_compressed_non_square_registry(self):
+        """A compressed registry (n_ztypes != n_gtypes) recomputes exactly.
+
+        Attack: compression prunes the genotype and gamete axes
+        independently, so a derivation that reads the counts from the
+        blueprint's Cartesian dimensions (or from the fusion table's
+        last axis) computes a tensor of the wrong shape or slices the
+        wrong axes; the einsum identity on the live tables catches it.
+        """
+        sp = nt.Species.from_dict(
+            name="__slice3_c3b__",
+            structure={"c1": {"l1": ["A", "B", "C"]}},
+            gamete_labels=["default"],
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(sp, stochastic=False, compress=True)
+            .initial_state(
+                individual_count={"female": {"B|C": 10}, "male": {"B|C": 10}}
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=2, sex_ratio=0.5)
+            .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+            .build()
+        )
+        # From B|C only {B, C} gametes and {B|B, B|C, C|C} zygotes stay:
+        # 3 ztypes on a 2-gtype gamete axis — not a Cartesian product.
+        assert int(pop.config.n_ztypes) == 3
+        assert int(pop.config.n_gtypes) == 2
+
+        table = pop.params.meiosis_map.array
+        table[:, :, 0] = 1.0  # every ztype transmits only the B gamete
+        table[:, :, 1] = 0.0
+        pop.params.tensor_write("meiosis_map", table)
+
+        meiosis = np.asarray(pop.config.zygotes_to_gametes_map)
+        fusion = np.asarray(pop.config.gametes_to_zygotes_map)
+        derived = np.asarray(pop.config.offspring_tensor)
+        assert meiosis.shape == (2, 3, 2)
+        assert fusion.shape == (2, 2, 3)
+        assert derived.shape == (3, 3, 3)
+        reference = np.einsum("ia,jb,abk->ijk", meiosis[0], meiosis[1], fusion)
+        np.testing.assert_allclose(reference, derived, rtol=1e-13, atol=1e-15)
+
+        pop.run(1)
+        # B|C x B|C with B-only transmission: the next generation is
+        # entirely B|B at the fixed point of 10 per sex, and B|C / C|C
+        # are exactly zero (not merely reduced).
+        counts = pop.state.individual_count
+        np.testing.assert_allclose(counts[:, 1, 0], [10.0, 10.0], rtol=0, atol=1e-9)
+        np.testing.assert_allclose(counts[:, 1, 1:], 0.0, rtol=0, atol=0)
+
+    def test_meiosis_write_accepts_preset_rows_and_matches_modifier_refresh(self):
+        """Preset-derived float rows pass validation; derivations agree.
+
+        Attack 1 (tolerance false rejection): an over-strict check
+        (``== 1.0`` or ``atol=0``) would reject every modifier-produced
+        table — the HomingDrive r=0.95 heterozygote row is
+        ``[0.025, 0.975]`` — so the round trip must be accepted.
+        Attack 2 (derivation drift): the write-path recompute and
+        ``refresh_modifier_maps`` Step 4 are separate spellings of the
+        same formula; a no-op write must reproduce the refresh output
+        bit-for-bit or the two channels disagree.
+        """
+        sp = nt.Species.from_dict(
+            name="__slice3_c3c__",
+            structure={"chr1": {"loc": ["WT", "Dr"]}},
+            gamete_labels=["default"],
+        )
+        drive = nt.HomingDrive(
+            name="hd", drive_allele="Dr", target_allele="WT",
+            resistance_allele="WT", drive_conversion_rate=0.95,
+        )
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(sp, stochastic=False)
+            .presets(drive)
+            .initial_state(
+                individual_count={"female": {"WT|Dr": 10}, "male": {"WT|Dr": 10}}
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=2, sex_ratio=0.5)
+            .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+            .build()
+        )
+        table = pop.params.meiosis_map.array
+        # r=0.95: the heterozygote segregates (1-r)/2 = 0.025 vs 0.975.
+        np.testing.assert_allclose(table[:, 1, :], [[0.025, 0.975], [0.025, 0.975]])
+
+        pop.refresh_modifier_maps()
+        refreshed = np.asarray(pop.config.offspring_tensor).copy()
+        # The refresh itself marks __hooks__ (a rebuild sentinel); drop the
+        # bridge noise so the write's own marking is asserted exactly.
+        pop._rust_dirty.clear()
+        # Round trip of the preset-produced table: accepted, and the
+        # write-channel recompute equals the refresh-channel recompute
+        # bit-for-bit (same floats in, same floats out).
+        pop.params.tensor_write("meiosis_map", pop.params.meiosis_map.array)
+        np.testing.assert_array_equal(np.asarray(pop.config.offspring_tensor), refreshed)
+        assert pop._rust_dirty == {"meiosis_map", "offspring_tensor"}
+
+    @pytest.mark.skipif(
+        not rust_backend_available(), reason="natal._engine_rs is not built"
+    )
+    def test_meiosis_write_rust_session_consumes_recomputed_tensor(self):
+        """The Rust session consumes the recomputed tensor (C3, engine axis).
+
+        Attack: a fix that only updates the draft leaves the Rust
+        session's offspring tensor stale, so the Rust run shows the
+        pre-write genotypes while the reference run shows the biased
+        ones; both engines must instead agree bit-for-bit.
+        """
+        ref = _biased_meiosis_pop(
+            "__slice3_c3d_ref__",
+            {"female": {"WT|WT": 10}, "male": {"WT|WT": 10}},
+        )
+        rst = _biased_meiosis_pop(
+            "__slice3_c3d_rust__",
+            {"female": {"WT|WT": 10}, "male": {"WT|WT": 10}},
+        ).enable_rust_backend(seed=42)
+        assert rst.using_rust_backend
+
+        for pop in (ref, rst):
+            biased = pop.params.meiosis_map.array
+            biased[:, 0, :] = [0.0, 1.0]
+            pop.params.tensor_write("meiosis_map", biased)
+        # The derived table is marked in the same transaction on the
+        # session path too, then drained into the session by the run.
+        assert rst._rust_dirty == {"meiosis_map", "offspring_tensor"}
+        ref.run(1)
+        rst.run(1)
+        assert rst._rust_dirty == set()
+        np.testing.assert_array_equal(
+            rst.state.individual_count, ref.state.individual_count
+        )
+        np.testing.assert_allclose(
+            rst.state.individual_count[:, 1, :], [[0.0, 0.0, 10.0], [0.0, 0.0, 10.0]]
+        )
+
+    def test_meiosis_write_run_then_rebias_sequence(self):
+        """write -> run -> write -> run keeps both engines exact (state).
+
+        Attack: if the second write reused a cached/stale derived tensor
+        (or the first run clobbered the draft tables), the rebased
+        generation would not return to exactly WT|WT.
+        """
+        pop = _biased_meiosis_pop(
+            "__slice3_c3e__",
+            {"female": {"WT|WT": 10}, "male": {"WT|WT": 10}},
+        )
+        first = pop.params.meiosis_map.array
+        first[:, 0, :] = [0.0, 1.0]  # WT|WT transmits only Dr
+        pop.params.tensor_write("meiosis_map", first)
+        pop.run(1)
+        np.testing.assert_allclose(
+            pop.state.individual_count[:, 1, :], [[0.0, 0.0, 10.0], [0.0, 0.0, 10.0]]
+        )
+        second = pop.params.meiosis_map.array
+        second[:, 2, :] = [1.0, 0.0]  # Dr|Dr now transmits only WT
+        pop.params.tensor_write("meiosis_map", second)
+        pop.run(1)
+        np.testing.assert_allclose(
+            pop.state.individual_count[:, 1, :], [[10.0, 0.0, 0.0], [10.0, 0.0, 0.0]]
+        )
+
+    def test_meiosis_write_rejection_leaves_all_state_bit_unchanged(self):
+        """Non-distribution and NaN rows are rejected with zero writes.
+
+        Attack: validation that runs after the commit (or that only
+        checks a summary statistic) leaves a half-written table; the
+        whole meiosis table, the derived tensor, and the dirty bridge
+        must be bit-identical to their pre-call state.
+        """
+        pop = _age_pop()
+        meiosis_before = np.asarray(pop.config.zygotes_to_gametes_map).copy()
+        offspring_before = np.asarray(pop.config.offspring_tensor).copy()
+        dirty_before = set(pop._rust_dirty)
+
+        non_normalized = meiosis_before.copy()
+        non_normalized[0, 1, :] = [0.6, 0.6]
+        with pytest.raises(ValueError, match="must be probability distributions"):
+            pop.params.tensor_write("meiosis_map", non_normalized)
+
+        # NaN sums never satisfy allclose — a NaN row is a rejection, not
+        # a silent pass-through into the engine.
+        nan_row = meiosis_before.copy()
+        nan_row[1, 2, :] = [np.nan, np.nan]
+        with pytest.raises(ValueError, match="must be probability distributions"):
+            pop.params.tensor_write("meiosis_map", nan_row)
+
+        np.testing.assert_array_equal(
+            np.asarray(pop.config.zygotes_to_gametes_map), meiosis_before
+        )
+        np.testing.assert_array_equal(
+            np.asarray(pop.config.offspring_tensor), offspring_before
+        )
+        assert pop._rust_dirty == dirty_before
+
+    def test_draft_writer_meiosis_write_recomputes_on_build_path(self):
+        """DraftWriter (no session) recomputes and marks both fields.
+
+        Attack: the recompute wired only into CoreConfigWriter would
+        leave build-path writes stale — the sink must carry both the
+        written field and the derived field, and the einsum identity
+        must hold without any session push.
+        """
+        from natal.frontend.data import build_population_config
+
+        draft: ModelDraft = build_population_config(
+            n_genotypes=3, n_gtypes=2, n_glabs=1, n_ages=3, new_adult_age=1,
+        )
+        # The synthetic draft carries zero placeholder genetics; install a
+        # Mendelian meiosis/fusion pair with known convolution first.
+        mendelian = np.zeros((2, 3, 2))
+        mendelian[:, 0, :] = [1.0, 0.0]
+        mendelian[:, 1, :] = [0.5, 0.5]
+        mendelian[:, 2, :] = [0.0, 1.0]
+        fusion = np.zeros((2, 2, 3))
+        fusion[0, 0, 0] = fusion[0, 1, 1] = fusion[1, 0, 1] = fusion[1, 1, 2] = 1.0
+        draft = draft._replace(
+            zygotes_to_gametes_map=mendelian, gametes_to_zygotes_map=fusion
+        )
+        sink: set[str] = set()
+        writer = DraftWriter(draft, sink)
+
+        biased = mendelian.copy()
+        biased[:, 0, :] = [0.0, 1.0]
+        writer.tensor_write("meiosis_map", biased)
+
+        assert sink == {"meiosis_map", "offspring_tensor"}
+        derived = np.asarray(writer.draft.offspring_tensor)
+        reference = np.einsum(
+            "ia,jb,abk->ijk",
+            np.asarray(writer.draft.zygotes_to_gametes_map)[0],
+            np.asarray(writer.draft.zygotes_to_gametes_map)[1],
+            np.asarray(writer.draft.gametes_to_zygotes_map),
+        )
+        np.testing.assert_allclose(reference, derived, rtol=1e-13, atol=1e-15)
+
+        # Rejection on the build path is equally atomic.
+        draft2 = draft._replace(zygotes_to_gametes_map=mendelian.copy())
+        sink2: set[str] = set()
+        writer2 = DraftWriter(draft2, sink2)
+        bad = mendelian.copy()
+        bad[0, 1, :] = [0.6, 0.6]
+        with pytest.raises(ValueError, match="must be probability distributions"):
+            writer2.tensor_write("meiosis_map", bad)
+        np.testing.assert_array_equal(
+            np.asarray(writer2.draft.zygotes_to_gametes_map), mendelian
+        )
+        assert sink2 == set()
+
+    def test_spatial_container_params_rejects_genetics_tensor_write(self):
+        """The spatial container surface exposes no meiosis write channel.
+
+        Attack: if SpatialParamsView.tensor_write silently forwarded
+        genetics fields, a container-level meiosis write would bypass
+        the per-deme fork channel and the recompute entirely.
+        """
+        sp = nt.Species.from_dict(
+            name="__slice3_c3f__",
+            structure={"chr1": {"loc": ["WT", "Dr"]}},
+            gamete_labels=["default"],
+        )
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species=sp, n_demes=2, pop_type="discrete_generation"
+            )
+            .setup(stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 10}, "male": {"WT|WT": 10},
+                }
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=2, sex_ratio=0.5)
+            .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+            .build()
+        )
+        with pytest.raises(ValueError, match="unknown spatial params field"):
+            spatial.params.tensor_write(
+                "meiosis_map", spatial.demes[0].params.meiosis_map.array
+            )
 
 
 # ── 2. import-time validation ────────────────────────────────────────────────

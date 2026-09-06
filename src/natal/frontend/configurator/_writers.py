@@ -58,6 +58,8 @@ __all__ = [
     "HookConfigWriter",
     "SessionChannel",
     "contract_to_draft_field",
+    "recompute_offspring_tensor",
+    "validate_meiosis_table",
 ]
 
 
@@ -110,6 +112,76 @@ def _session_of(session: object) -> SessionChannel | None:
     if session is not None and isinstance(session, SessionChannel):
         return session
     return None
+
+
+def validate_meiosis_table(candidate: NDArray[np.float64]) -> None:
+    """Reject a meiosis table whose rows are not distributions.
+
+    Single validation point shared by the writer channel and the spatial
+    variant channel, so both refuse the same inputs.
+
+    Args:
+        candidate: The candidate ``(2, n_ztypes, n_gtypes)`` table.
+
+    Raises:
+        ValueError: If any (sex, ztype) row does not sum to 1 or
+            contains a negative entry — meiosis always produces
+            exactly one gamete with non-negative probability.
+    """
+    row_sums = candidate.sum(axis=-1)
+    ok = np.isclose(row_sums, 1.0, rtol=1e-9, atol=1e-12)
+    if not ok.all():
+        bad = int(np.count_nonzero(~ok))
+        raise ValueError(
+            "meiosis_map rows must be probability distributions "
+            f"(each (sex, ztype) row sums to 1); {bad} row(s) violate this"
+        )
+    if (candidate < 0.0).any():
+        bad = int(np.count_nonzero(candidate < 0.0))
+        raise ValueError(
+            "meiosis_map entries must be non-negative; "
+            f"{bad} entr(ies) violate this"
+        )
+
+
+def recompute_offspring_tensor(
+    meiosis: NDArray[np.float64],
+    fusion: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Recompute the derived offspring tensor from the live tables.
+
+    Single owner of the derivation
+    ``P[i,j,k] = sum(meiosis_f[i,a] * meiosis_m[j,b] * fusion[a,b,k])``;
+    the writer channel, the spatial variant channel, and (for now) the
+    modifier refresh all funnel through this one spelling so they cannot
+    drift apart.
+
+    Args:
+        meiosis: Meiosis table of shape ``(2, n_ztypes, n_gtypes)``.
+        fusion: Fusion table of shape ``(n_gtypes, n_gtypes, n_ztypes)``.
+
+    Returns:
+        The recomputed offspring tensor ``(n_ztypes, n_ztypes, n_ztypes)``.
+    """
+    from natal.backends.reference.simulation.age_structured import (
+        compute_offspring_probability_tensor,
+    )
+
+    meiosis = np.asarray(meiosis, dtype=np.float64)
+    fusion = np.asarray(fusion, dtype=np.float64)
+    # Single-gamete-label layouts collapse the label axis, so the
+    # ztype/gtype counts come from the meiosis table itself.
+    n_z = int(meiosis.shape[1])
+    n_g = int(meiosis.shape[2])
+    return np.ascontiguousarray(
+        compute_offspring_probability_tensor(
+            meiosis_f=meiosis[0],
+            meiosis_m=meiosis[1],
+            haplo_to_genotype_map=fusion,
+            n_ztypes=n_z,
+            n_gtypes=n_g,
+        )
+    )
 
 
 # Contract (Params) name -> ModelDraft field name; only renames listed.
@@ -288,6 +360,19 @@ class _DraftWriterBase:
         self._write_contract_tensor(field, values)
         if self._dirty is not None:
             self._dirty.add(field)
+        if field == "meiosis_map":
+            # The derived offspring tensor changed with the meiosis
+            # write: mark and push it inside the same transaction so the
+            # engine consumes the recomputed table.
+            if self._dirty is not None:
+                self._dirty.add("offspring_tensor")
+            if self._session is not None:
+                self._session.tensor_write(
+                    "offspring_tensor",
+                    np.ascontiguousarray(
+                        np.asarray(self._draft.offspring_tensor, dtype=np.float64)
+                    ).ravel(),
+                )
         if self._session is not None and np.asarray(values).size:
             self._session.tensor_write(
                 field, np.ascontiguousarray(values, dtype=np.float64).ravel()
@@ -383,7 +468,22 @@ class _DraftWriterBase:
             raise ValueError(
                 f"{field!r}: expected {typed_target.size} elements, got {arr.size}"
             )
+        if field == "meiosis_map":
+            validate_meiosis_table(arr.reshape(typed_target.shape))
         typed_target[...] = arr.reshape(typed_target.shape)
+        if field == "meiosis_map":
+            # The engines only consume the derived offspring tensor; a
+            # meiosis write that leaves it stale is silently inert for the
+            # run (audit finding C3), so recompute it in the same write.
+            self._recompute_offspring_tensor()
+
+    def _recompute_offspring_tensor(self) -> None:
+        """Recompute the derived offspring tensor from the live tables."""
+        offspring = recompute_offspring_tensor(
+            self._draft.zygotes_to_gametes_map,
+            self._draft.gametes_to_zygotes_map,
+        )
+        self._draft.offspring_tensor[...] = offspring
 
 
 class DraftWriter(_DraftWriterBase):

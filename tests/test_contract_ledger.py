@@ -484,13 +484,15 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
 
 # Audit findings recorded by the S0 reviewers (not in the plan's R/T list):
 # C1 pop.params.meiosis_map raised AttributeError — FIXED in S1 batch 4 by
-#     adding the meiosis_map -> zygotes_to_gametes_map rename; tests below.
+#     adding the meiosis_map -> zygotes_to_gametes_map rename.
 # C2 plain vs spatial discrete default growth semantics diverge — still open.
-# C3 tensor_write("meiosis_map", ...) reaches storage but not dynamics: the
-#     engines only consume the derived offspring_tensor, and writing the
-#     meiosis table alone does not recompute it (silent no-op for the run).
-#     Owner: S1 unified genetics compilation must recompute derived tables
-#     on meiosis writes (or reject them explicitly).
+# C3 tensor_write("meiosis_map") reached storage but not dynamics — FIXED in
+#     S1 batch 5: the write now recomputes the derived offspring tensor in
+#     the same transaction (and rejects non-distribution rows atomically).
+# C4 deme.update().fitness(...) still writes the shared viability tables
+#     in place, leaking into every other deme (pre-existing sibling of the
+#     P2 leak closed in batch 5; needs a spec decision whether to refuse
+#     like tensor_write or route through write_genetics).
 EXTRA_FINDINGS: tuple[InvariantEntry, ...] = (
     InvariantEntry(
         area="C1: public meiosis_map params route resolves",
@@ -503,8 +505,12 @@ EXTRA_FINDINGS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="C3: meiosis_map writes recompute the derived offspring tensor",
+        owning_tests=("test_routes_slice3.py",),
+    ),
+    InvariantEntry(
+        area="C4: deme-level fitness writes do not leak across shared tables",
         owning_tests=(),
-        known_violations=("C3",),
+        known_violations=("C4",),
     ),
 )
 
@@ -557,8 +563,8 @@ def test_known_violations_have_red_light_repros() -> None:
     assert REPRO_SCRIPT.is_file(), "scripts/known_defect_repro.py missing"
     text = REPRO_SCRIPT.read_text(encoding="utf-8")
     for defect_id in sorted(KNOWN_DEFECT_IDS):
-        if defect_id == "C2":
-            continue  # documented in this ledger only; needs a spec decision first
+        if defect_id in ("C2", "C4"):
+            continue  # documented here; both need a spec decision first
         assert f'def repro_{defect_id.lower()}(' in text, (
             f"{defect_id}: no repro function in known_defect_repro.py"
         )
@@ -570,7 +576,7 @@ def test_repro_script_covers_only_registered_defects() -> None:
 
     text = REPRO_SCRIPT.read_text(encoding="utf-8")
     registered = set(re.findall(r'"(R\d|C\d)":\s*repro_', text))
-    repro_backed = {d for d in KNOWN_DEFECT_IDS if d != "C2"}
+    repro_backed = {d for d in KNOWN_DEFECT_IDS if d not in ("C2", "C4")}
     assert registered == repro_backed, (
         f"repro script registry {sorted(registered)} diverged from the "
         f"ledger's repro-backed defects {sorted(repro_backed)}"
@@ -589,4 +595,4 @@ def test_ledger_state_importable_without_side_effects() -> None:
         spec.loader.exec_module(module)
     finally:
         del sys.modules[spec.name]
-    assert set(module.REPROS) == {"R1", "R2", "R3", "R4", "R5", "C3"}
+    assert set(module.REPROS) == {"R1", "R2", "R3", "R4", "R5"}

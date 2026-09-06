@@ -94,6 +94,13 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         "finish",
     ]
 
+    # Set to True on demes of a SpatialPopulation: their genetics draft
+    # tables start out shared, so in-place genetics writes would leak
+    # across demes.  ParamsView.tensor_write refuses genetics writes on
+    # such populations; the sanctioned channel is DemeSlice.write_genetics,
+    # which forks the variant first.
+    _shares_genetics_draft: bool = False
+
     def __init__(
         self,
         species: Species,
