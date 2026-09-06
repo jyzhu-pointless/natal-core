@@ -123,6 +123,9 @@ _CONTRACT_TO_DRAFT: dict[str, str] = {
         "female_age_based_fertility": "fertility",
         "age_based_relative_competition_strength": "competition_weights",
         "equilibrium_individual_distribution": "equilibrium_distribution",
+        # The contract exposes the meiosis table under its biology name;
+        # the draft has kept the verbose builder-era field name.
+        "zygotes_to_gametes_map": "meiosis_map",
     }.items()
 }
 

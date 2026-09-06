@@ -274,6 +274,102 @@ class TestGenoTensorShape:
         assert arr[1, 0, 0] == 0.5
         assert arr[0, 0, 1] == 1.0  # untouched genotype
 
+    def test_meiosis_map_contract_read_resolves_to_draft_table(self):
+        """``pop.params.meiosis_map`` exposes the draft meiosis table.
+
+        The contract field carries the biology name while the draft
+        keeps the builder-era field name; the rename map used to miss
+        this entry, making the advertised read channel raise
+        AttributeError (audit finding C1).
+        """
+        pop = _age_pop()
+        view = pop.params.meiosis_map
+        draft_table = np.asarray(pop.config.zygotes_to_gametes_map)
+
+        assert view.shape == draft_table.shape
+        np.testing.assert_array_equal(view.array, draft_table)
+        # Reads hand out copies: scribbling on a returned array must
+        # not reach the draft table.
+        snapshot = view.array
+        snapshot.fill(-1.0)
+        np.testing.assert_array_equal(view.array, draft_table)
+        # Pattern read at the ztype axis aggregates the gamete axis:
+        # every Mendelian meiosis row is a distribution summing to 1.
+        assert view[0, "A|B"] == pytest.approx(1.0)
+        assert view[1, "A|A"] == pytest.approx(1.0)
+
+    def test_meiosis_map_tensor_write_updates_draft(self):
+        """``tensor_write("meiosis_map", ...)`` routes to the draft table."""
+        pop = _age_pop()
+        table = pop.params.meiosis_map.array
+        table[0, 0, :] = [0.25, 0.75]
+        pop.params.tensor_write("meiosis_map", table)
+
+        np.testing.assert_allclose(
+            pop.params.meiosis_map.array[0, 0, :], [0.25, 0.75]
+        )
+        np.testing.assert_allclose(
+            np.asarray(pop.config.zygotes_to_gametes_map)[0, 0, :], [0.25, 0.75]
+        )
+
+    def test_meiosis_map_size_mismatch_is_zero_write(self):
+        """A bad-size meiosis write commits nothing and marks nothing.
+
+        Attack: a wrong-sized payload must raise before any draft cell,
+        dirty-bridge entry, or session push happens — a partial write
+        would leave the draft and the Rust session disagreeing.
+        """
+        pop = _age_pop()
+        before = np.asarray(pop.config.zygotes_to_gametes_map).copy()
+        dirty_before = set(pop._rust_dirty)
+        with pytest.raises(ValueError, match="expected"):
+            pop.params.tensor_write("meiosis_map", np.ones(5))
+        np.testing.assert_array_equal(
+            np.asarray(pop.config.zygotes_to_gametes_map), before
+        )
+        assert pop._rust_dirty == dirty_before
+
+    def test_meiosis_map_write_marks_dirty_and_survives_run(self):
+        """A meiosis write marks the Rust bridge and survives the drain.
+
+        Attack: if the write forgot to mark ``_rust_dirty`` (or marked a
+        draft name the bridge does not know), the next ``run()`` would
+        drain nothing into the session; if the drain clobbered the
+        draft, the written row would not survive the run.
+        """
+        pop = _age_pop()
+        table = pop.params.meiosis_map.array
+        table[0, 0, :] = [0.25, 0.75]
+        pop.params.tensor_write("meiosis_map", table)
+        # Contract-name marker — the same name the modifier refresh and
+        # the Rust genetics-tensor set (_RUST_GENETICS_TENSORS) use.
+        assert pop._rust_dirty == {"meiosis_map"}
+        pop.run(1, record_every=1)
+        assert pop._rust_dirty == set()  # drained into the session
+        np.testing.assert_allclose(
+            pop.params.meiosis_map.array[0, 0, :], [0.25, 0.75]
+        )
+
+    def test_meiosis_map_pattern_read_type_and_mendelian_cells(self):
+        """Pattern reads return plain floats over an exactly Mendelian table.
+
+        Attack: the aggregate ``== 1.0`` assertion above cannot tell
+        Mendelian 0.5/0.5 segregation from a biased row such as
+        [0.9, 0.1]; only cell-level equality pins the segregation, and
+        only a type check proves the aggregation hands the caller a
+        detached float rather than a live 0-d array.
+        """
+        pop = _age_pop()
+        value = pop.params.meiosis_map[0, "A|B"]
+        assert isinstance(value, float)
+        table = pop.params.meiosis_map.array
+        # Heterozygote rows segregate 0.5/0.5 in both sexes.
+        np.testing.assert_allclose(table[0, 1, :], [0.5, 0.5])
+        np.testing.assert_allclose(table[1, 1, :], [0.5, 0.5])
+        # Homozygote rows pass the single allele through untouched.
+        np.testing.assert_allclose(table[0, 0, :], [1.0, 0.0])
+        np.testing.assert_allclose(table[1, 2, :], [0.0, 1.0])
+
 
 # ── 2. import-time validation ────────────────────────────────────────────────
 

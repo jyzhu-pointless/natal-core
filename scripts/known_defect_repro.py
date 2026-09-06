@@ -1,13 +1,13 @@
-"""Red-light repros for the known defects R1-R5 (RUST_ONLY_REFACTOR_PLAN section 3).
+"""Red-light repros for the known defects R1-R5 and C3 (plan section 3 + audits).
 
 Each function asserts the **correct** behavior; every assertion currently
 FAILS on this tree because the corresponding defect is present.  This
 script is construction scaffolding for stage S0, not a pytest module:
 per the plan, "the red-light repros are construction preparation, not a
 code delivery that can request APPROVED".  When the owning stage lands
-(S2 absorbs R3/R4/R5, S3 absorbs R1/R2), each repro turns green and is
-promoted into the regular pytest suite together with its fix in the
-same batch.
+(S2 absorbs R3/R4/R5, S3 absorbs R1/R2, S1 absorbs C3), each repro
+turns green and is promoted into the regular pytest suite together
+with its fix in the same batch.
 
 Run: ``python scripts/known_defect_repro.py`` prints one line per
 defect with PASS (defect gone) / FAIL (defect present) plus evidence.
@@ -292,6 +292,46 @@ def repro_r5() -> None:
     ), "R5: writing through the returned state container mutated the engine's live arrays"
 
 
+# ── C3: tensor_write("meiosis_map") does not recompute the derived offspring tensor
+#
+# The engines only consume the derived offspring_tensor; writing the meiosis
+# table alone reaches storage (and the params view) but leaves the derived
+# tensor untouched, so a fully biased meiosis map has zero effect on the run.
+
+
+def repro_c3() -> None:
+    """Assert a meiosis write changes offspring genotypes (currently fails)."""
+    species = _two_allele_species("ReproC3Species")
+    pop = (
+        nt.DiscreteGenerationPopulation.setup(
+            species=species, name="ReproC3Pop", stochastic=False
+        )
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": 10},
+                "male": {"WT|WT": 10},
+            }
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        .build()
+    )
+
+    baseline = pop.state.individual_count.copy()
+    biased = pop.params.meiosis_map.array
+    # Force WT|WT individuals to transmit only Dr gametes.
+    biased[:, 0, :] = [0.0, 1.0]
+    pop.params.tensor_write("meiosis_map", biased)
+
+    pop.run(1)
+    after = pop.state.individual_count
+
+    assert not np.array_equal(
+        after[:, 1, :], baseline[:, 1, :]
+    ), "C3: a fully biased meiosis map left the offspring genotypes unchanged — the derived offspring tensor was not recomputed"
+
+
 # ── runner ────────────────────────────────────────────────────────────────────
 
 REPROS: dict[str, Callable[[], None]] = {
@@ -300,6 +340,7 @@ REPROS: dict[str, Callable[[], None]] = {
     "R3": repro_r3,
     "R4": repro_r4,
     "R5": repro_r5,
+    "C3": repro_c3,
 }
 
 OWNING_STAGE = {
@@ -308,6 +349,7 @@ OWNING_STAGE = {
     "R3": "S2/S4 (public restore wired to the Rust checkpoint)",
     "R4": "S2 (frozen Blueprint inside the Rust session)",
     "R5": "S2 (snapshots instead of live containers)",
+    "C3": "S1 (unified genetics compilation recomputes derived tables)",
 }
 
 

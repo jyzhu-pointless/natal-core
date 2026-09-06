@@ -15,9 +15,9 @@ the ledgers as data and checks them mechanically:
   silent partial deletion cannot go unnoticed.
 - ``INVARIANTS``: every verification face from plan section 12.1 maps
   to owning tests; currently-violated invariants are registered as
-  known violations — R1-R5 point at their red-light repros in
-  ``scripts/known_defect_repro.py``, while the two audit findings
-  C1/C2 are documented in this ledger only (no repro function yet).
+  known violations with red-light repros in
+  ``scripts/known_defect_repro.py`` (audit finding C1 was fixed in S1
+  batch 4; C2 still needs a spec decision and is documented here only).
 
 Any pytest failure that is NOT in the known-violation list is by
 construction a new regression.
@@ -421,8 +421,9 @@ class InvariantEntry:
     Attributes:
         area: Verification face name.
         owning_tests: Test files that prove the invariant today.
-        known_violations: Defect ids (R1-R5, C1, C2) that currently break
-            the face, each with a red-light repro in the repro script.
+        known_violations: Defect ids (R1-R5, C2, C3) that currently
+            break the face, each (except C2) with a red-light repro in
+            the repro script.
     """
 
     area: str
@@ -482,18 +483,28 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
 )
 
 # Audit findings recorded by the S0 reviewers (not in the plan's R/T list):
-# C1 pop.params.meiosis_map raises AttributeError (advertised public route broken)
-# C2 plain vs spatial discrete default growth semantics diverge
+# C1 pop.params.meiosis_map raised AttributeError — FIXED in S1 batch 4 by
+#     adding the meiosis_map -> zygotes_to_gametes_map rename; tests below.
+# C2 plain vs spatial discrete default growth semantics diverge — still open.
+# C3 tensor_write("meiosis_map", ...) reaches storage but not dynamics: the
+#     engines only consume the derived offspring_tensor, and writing the
+#     meiosis table alone does not recompute it (silent no-op for the run).
+#     Owner: S1 unified genetics compilation must recompute derived tables
+#     on meiosis writes (or reject them explicitly).
 EXTRA_FINDINGS: tuple[InvariantEntry, ...] = (
     InvariantEntry(
         area="C1: public meiosis_map params route resolves",
-        owning_tests=(),
-        known_violations=("C1",),
+        owning_tests=("test_routes_slice3.py",),
     ),
     InvariantEntry(
         area="C2: plain vs spatial discrete density semantics agree",
         owning_tests=(),
         known_violations=("C2",),
+    ),
+    InvariantEntry(
+        area="C3: meiosis_map writes recompute the derived offspring tensor",
+        owning_tests=(),
+        known_violations=("C3",),
     ),
 )
 
@@ -546,8 +557,8 @@ def test_known_violations_have_red_light_repros() -> None:
     assert REPRO_SCRIPT.is_file(), "scripts/known_defect_repro.py missing"
     text = REPRO_SCRIPT.read_text(encoding="utf-8")
     for defect_id in sorted(KNOWN_DEFECT_IDS):
-        if defect_id in ("C1", "C2"):
-            continue  # audit findings documented in this ledger only
+        if defect_id == "C2":
+            continue  # documented in this ledger only; needs a spec decision first
         assert f'def repro_{defect_id.lower()}(' in text, (
             f"{defect_id}: no repro function in known_defect_repro.py"
         )
@@ -559,8 +570,10 @@ def test_repro_script_covers_only_registered_defects() -> None:
 
     text = REPRO_SCRIPT.read_text(encoding="utf-8")
     registered = set(re.findall(r'"(R\d|C\d)":\s*repro_', text))
-    assert registered == {d for d in KNOWN_DEFECT_IDS if d.startswith("R")}, (
-        "repro script registry diverged from the ledger"
+    repro_backed = {d for d in KNOWN_DEFECT_IDS if d != "C2"}
+    assert registered == repro_backed, (
+        f"repro script registry {sorted(registered)} diverged from the "
+        f"ledger's repro-backed defects {sorted(repro_backed)}"
     )
 
 
@@ -576,4 +589,4 @@ def test_ledger_state_importable_without_side_effects() -> None:
         spec.loader.exec_module(module)
     finally:
         del sys.modules[spec.name]
-    assert set(module.REPROS) == {"R1", "R2", "R3", "R4", "R5"}
+    assert set(module.REPROS) == {"R1", "R2", "R3", "R4", "R5", "C3"}
