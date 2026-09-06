@@ -1038,15 +1038,23 @@ class SpatialConfigurator:
         """
         if self._pop_type != "age_structured":
             raise TypeError("age_structure() is only valid for age_structured pop_type")
-        return self._detect_and_delegate(
+        # ``equilibrium_distribution`` is a competition-domain declaration:
+        # the underlying age_structure has no such parameter, so routing it
+        # through competition (the working channel) keeps the advertised
+        # kwarg functional instead of dying on a TypeError.
+        result = self._detect_and_delegate(
             "age_structure",
             {
                 "n_ages": n_ages,
                 "new_adult_age": new_adult_age,
                 "generation_time": generation_time,
-                "equilibrium_distribution": equilibrium_distribution,
             },
         )
+        if equilibrium_distribution is not None:
+            self._detect_and_delegate(
+                "competition", {"equilibrium_distribution": equilibrium_distribution},
+            )
+        return result
 
     def initial_state(
         self,
@@ -1092,15 +1100,27 @@ class SpatialConfigurator:
             Self for chaining.
         """
         if self._pop_type == "age_structured":
-            return self._detect_and_delegate(
+            # ``equilibrium_distribution`` is a competition-domain
+            # declaration: the underlying survival has no such parameter,
+            # so route it through competition (the working channel).
+            # NOTE: ``generation_time`` remains forwarded-and-rejected for
+            # now — the template's age_structure must precede every domain
+            # method, so a survival-time override has no lawful channel
+            # until the structure-domain cleanup batch.
+            result = self._detect_and_delegate(
                 "survival",
                 {
                     "female_age_based_survival": female_age_based_survival,
                     "male_age_based_survival": male_age_based_survival,
                     "generation_time": generation_time,
-                    "equilibrium_distribution": equilibrium_distribution,
                 },
             )
+            if equilibrium_distribution is not None:
+                self._detect_and_delegate(
+                    "competition",
+                    {"equilibrium_distribution": equilibrium_distribution},
+                )
+            return result
         else:
             return self._detect_and_delegate(
                 "survival",

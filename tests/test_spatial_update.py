@@ -656,3 +656,428 @@ class TestVariantEquilibriumDeclaration:
                 )
                 .build()
             )
+
+
+class TestEquilibriumDistributionChannels:
+    """The wrapper-advertised equilibrium_distribution kwargs are live.
+
+    Both the age_structure and survival wrappers advertise an
+    ``equilibrium_distribution`` parameter that used to be forwarded to
+    template methods rejecting it (TypeError).  Both now route the
+    declaration through competition — the working channel.
+    """
+
+    def _population(self, name: str, channel: str, *, heterogeneous: bool = False):
+        """Build a two-deme population declaring via the given channel."""
+        species = nt.Species.from_dict(
+            name="__test_spatial_eq_channel__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        declared = np.zeros((2, 4))
+        declared[0, 1] = 50.0
+        declared[1, 1] = 50.0
+        eggs: object = (
+            nt.batch_setting([10.0, 20.0]) if heterogeneous else 10.0
+        )
+        age_kwargs: dict[str, object] = {"n_ages": 4, "new_adult_age": 1}
+        survival_kwargs: dict[str, object] = {
+            "female_age_based_survival": [1.0, 0.9, 0.7, 0.0],
+            "male_age_based_survival": [1.0, 0.9, 0.7, 0.0],
+        }
+        if channel == "age_structure":
+            age_kwargs["equilibrium_distribution"] = declared
+        elif channel == "survival":
+            survival_kwargs["equilibrium_distribution"] = declared
+        else:
+            raise ValueError(f"unknown channel {channel!r}")
+        return (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, pop_type="age_structured"
+            )
+            .setup(name=name, stochastic=False)
+            .age_structure(**age_kwargs)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 50, 0, 0]},
+                    "male": {"A|A": [0, 50, 0, 0]},
+                }
+            )
+            .reproduction(
+                female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                eggs_per_female=eggs,  # type: ignore[arg-type]  # scalar or BatchSetting by construction
+            )
+            .survival(**survival_kwargs)
+            .competition(carrying_capacity=100.0, juvenile_growth_mode=3)
+            .build()
+        )
+
+    def test_age_structure_channel_declares_distribution(self) -> None:
+        """age_structure(equilibrium_distribution=...) takes effect.
+
+        Declared: 50F+50M at age 1, eggs 10 → C* = 50*1*1*10 = 500 and
+        s* = 100/500 = 0.2 (hand-computed anchors).
+        """
+        pop = self._population("eq_channel_age", "age_structure")
+        cfg = pop.demes[0].config
+        assert float(cfg.expected_competition_strength) == 500.0
+        assert float(cfg.expected_survival_rate) == 0.2
+
+    def test_survival_channel_declares_distribution(self) -> None:
+        """survival(equilibrium_distribution=...) takes effect identically."""
+        pop = self._population("eq_channel_survival", "survival")
+        cfg = pop.demes[0].config
+        assert float(cfg.expected_competition_strength) == 500.0
+        assert float(cfg.expected_survival_rate) == 0.2
+
+    def test_channel_survives_heterogeneous_replay(self) -> None:
+        """The declaration recorded in the replay log reaches variants.
+
+        Heterogeneous eggs drive the variant rebuild path; the variant
+        deme must stay on the declared distribution (500 / 1000), not the
+        derivation mode the pre-fix variant recompute produced.
+        """
+        pop = self._population(
+            "eq_channel_replay", "age_structure", heterogeneous=True
+        )
+        assert float(pop.demes[0].config.expected_competition_strength) == 500.0
+        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
+
+
+class TestEquilibriumChannelAdversarial:
+    """Adversarial follow-ups for the wrapper declaration channels.
+
+    Every test here pins a way the routing could silently diverge from
+    the direct ``competition(equilibrium_distribution=...)`` channel:
+    bit-level draft equivalence, replay-log recording (the contract the
+    variant/replay paths depend on), per-deme batch declarations,
+    overwrite ordering, None semantics, error paths, and the documented
+    ``generation_time`` dead channel.
+    """
+
+    AGE_DECLARED = np.array(
+        [[0.0, 50.0, 0.0, 0.0], [0.0, 50.0, 0.0, 0.0]]
+    )
+
+    @staticmethod
+    def _species(tag: str) -> nt.Species:
+        return nt.Species.from_dict(
+            name=f"__test_spatial_eq_adv_{tag}__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+
+    def _population(
+        self,
+        tag: str,
+        channel: str,
+        *,
+        declared: object = "default",
+        eggs: object = 10.0,
+        carrying_capacity: object = 100.0,
+        extra_survival_decl: object = None,
+        tail_competition_decl: object = "unset",
+    ):
+        """Build a two-deme age-structured population via one channel.
+
+        Args:
+            tag: Unique species-name fragment (species cache is a
+                singleton per name).
+            channel: ``"age_structure"``, ``"survival"`` or
+                ``"competition"`` — where the declaration enters.
+            declared: The declared distribution (ndarray or BatchSetting);
+                ``"default"`` uses the 50F/50M-at-age-1 anchor array.
+            eggs: Scalar or ``BatchSetting`` eggs_per_female.
+            carrying_capacity: Scalar or ``BatchSetting`` K.
+            extra_survival_decl: Optional second declaration through the
+                survival channel (last-write-wins probe).
+            tail_competition_decl: Value passed as
+                ``equilibrium_distribution`` to the final competition
+                call; ``"unset"`` omits the kwarg entirely.
+
+        Returns:
+            The built SpatialPopulation.
+        """
+        if isinstance(declared, str) and declared == "default":
+            declared = self.AGE_DECLARED
+        age_kwargs: dict[str, object] = {"n_ages": 4, "new_adult_age": 1}
+        survival_kwargs: dict[str, object] = {
+            "female_age_based_survival": [1.0, 0.9, 0.7, 0.0],
+            "male_age_based_survival": [1.0, 0.9, 0.7, 0.0],
+        }
+        competition_kwargs: dict[str, object] = {
+            "carrying_capacity": carrying_capacity,
+            "juvenile_growth_mode": 3,
+        }
+        if channel == "age_structure":
+            age_kwargs["equilibrium_distribution"] = declared
+        elif channel == "survival":
+            survival_kwargs["equilibrium_distribution"] = declared
+        elif channel == "competition":
+            competition_kwargs["equilibrium_distribution"] = declared
+        else:
+            raise ValueError(f"unknown channel {channel!r}")
+        if extra_survival_decl is not None:
+            survival_kwargs["equilibrium_distribution"] = extra_survival_decl
+        if tail_competition_decl != "unset":
+            competition_kwargs["equilibrium_distribution"] = tail_competition_decl
+        return (
+            nt.SpatialPopulation.builder(
+                self._species(tag), n_demes=2, pop_type="age_structured"
+            )
+            .setup(name=f"eq_adv_{tag}", stochastic=False)
+            .age_structure(**age_kwargs)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 50, 0, 0]},
+                    "male": {"A|A": [0, 50, 0, 0]},
+                }
+            )
+            .reproduction(
+                female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                eggs_per_female=eggs,  # type: ignore[arg-type]  # scalar or BatchSetting by construction
+            )
+            .survival(**survival_kwargs)
+            .competition(**competition_kwargs)
+            .build()
+        )
+
+    def test_three_entry_channels_bit_identical(self) -> None:
+        """age_structure / survival / competition entries converge bit-exact.
+
+        Channel-independence invariant: the declared array stored on the
+        draft and both equilibrium metrics are bit-identical regardless
+        of which wrapper the declaration entered through.  A routing bug
+        that transposes, re-dtypes, or drops the declaration on one
+        channel breaks the byte comparison or the exact metric equality.
+        """
+        pops = {
+            ch: self._population(f"equiv_{ch}", ch)
+            for ch in ("age_structure", "survival", "competition")
+        }
+        ref = pops["competition"].demes[0].config
+        for ch, pop in pops.items():
+            cfg = pop.demes[0].config
+            stored = cfg.equilibrium_individual_distribution
+            assert stored is not None, f"{ch}: declaration lost entirely"
+            assert stored.tobytes() == self.AGE_DECLARED.tobytes(), (
+                f"{ch}: stored distribution bytes differ from the declared array"
+            )
+            assert float(cfg.expected_competition_strength) == 500.0, ch
+            assert float(cfg.expected_survival_rate) == 0.2, ch
+            # Bit-level metric equality against the direct channel.
+            assert (
+                float(cfg.expected_competition_strength).hex()
+                == float(ref.expected_competition_strength).hex()
+            ), ch
+            assert (
+                float(cfg.expected_survival_rate).hex()
+                == float(ref.expected_survival_rate).hex()
+            ), ch
+            # The rest of the ecology anchors are channel-independent too.
+            assert float(cfg.carrying_capacity) == 100.0, ch
+            assert float(cfg.eggs_per_female) == 10.0, ch
+
+    def test_wrapper_channels_record_competition_replay_entry(self) -> None:
+        """Both wrapper channels record the declaration in the replay log.
+
+        The replay log is the sole input to ``_build_template_for_group``
+        (full replay) and, through the template it rebuilds, to the
+        variant ``_replace`` path.  A routing that touches only
+        ``self._template`` directly (never entering the log) keeps the
+        homogeneous build green while every heterogeneous rebuild silently
+        reverts to derivation mode — this introspection catches it
+        without needing a batch setting at all.
+        """
+        for channel in ("age_structure", "survival"):
+            builder = nt.SpatialPopulation.builder(
+                self._species(f"log_{channel}"),
+                n_demes=2,
+                pop_type="age_structured",
+            ).setup(name=f"eq_log_{channel}", stochastic=False)
+            if channel == "age_structure":
+                builder.age_structure(
+                    n_ages=4,
+                    new_adult_age=1,
+                    equilibrium_distribution=self.AGE_DECLARED,
+                )
+            else:
+                builder.age_structure(n_ages=4, new_adult_age=1)
+                builder.survival(equilibrium_distribution=self.AGE_DECLARED)
+            entries = builder._replay_log  # pyright: ignore[reportPrivateUsage]  # the log is the replay contract under test; no public accessor exists
+            comp_entries = [kw for m, kw in entries if m == "competition"]
+            assert any(
+                kw.get("equilibrium_distribution") is not None
+                for kw in comp_entries
+            ), f"{channel}: no competition entry carries the declaration"
+
+    def test_homogeneous_build_keeps_declaration(self) -> None:
+        """Without batch settings the direct-template path keeps the declaration.
+
+        The no-batch build clones the chain-built template, so the routed
+        competition call must have reached ``self._template`` as well as
+        the log.  Both demes carry the declared array and the exact
+        hand-computed metrics (C* = 50*1*1*10 = 500, s* = 100/500 = 0.2).
+        """
+        pop = self._population("homog", "age_structure")
+        for i in range(2):
+            cfg = pop.demes[i].config
+            stored = cfg.equilibrium_individual_distribution
+            assert stored is not None, f"deme{i}: declaration lost on clone"
+            assert stored.tobytes() == self.AGE_DECLARED.tobytes()
+            assert float(cfg.expected_competition_strength) == 500.0
+            assert float(cfg.expected_survival_rate) == 0.2
+
+    def test_carrying_capacity_batch_replay_keeps_declaration(self) -> None:
+        """A K batch forces full template replay; the declaration survives it.
+
+        ``carrying_capacity`` registers as the non-draft-field batch name
+        ``age_1_carrying_capacity``, so both demes rebuild through
+        ``_build_template_for_group`` — the pure replay path.  Under the
+        declared distribution both metrics are pinned by the declaration
+        itself (total_age_1 = 100 declared, produced = 500), so C* = 500
+        and s* = 0.2 on *both* demes even though K differs; only the
+        carrying-capacity field tracks the batch.
+        """
+        pop = self._population(
+            "cc_replay",
+            "survival",
+            carrying_capacity=nt.batch_setting([100.0, 200.0]),
+        )
+        for i, expected_k in ((0, 100.0), (1, 200.0)):
+            cfg = pop.demes[i].config
+            stored = cfg.equilibrium_individual_distribution
+            assert stored is not None, f"deme{i}: declaration lost in replay"
+            assert stored.tobytes() == self.AGE_DECLARED.tobytes()
+            assert float(cfg.carrying_capacity) == expected_k
+            assert float(cfg.expected_competition_strength) == 500.0
+            assert float(cfg.expected_survival_rate) == 0.2
+
+    def test_batch_setting_declaration_applies_per_deme(self) -> None:
+        """A BatchSetting of distributions declares one equilibrium per deme.
+
+        Deme 0 (50F/50M at age 1, eggs 10): produced = 500 = C*,
+        s* = 100/500 = 0.2.  Deme 1 (30F/30M at age 2): produced =
+        30*1*1*10 = 300 = C*, and total_age_1 = 0 (nothing declared at
+        age 1) so s* = 0/300 = 0.0.  A routing that collapsed the batch
+        to its first value would report 500/0.2 on deme 1 too.
+        """
+        declared_b = np.zeros((2, 4))
+        declared_b[0, 2] = 30.0
+        declared_b[1, 2] = 30.0
+        pop = self._population(
+            "batch_declare",
+            "age_structure",
+            declared=nt.batch_setting([self.AGE_DECLARED, declared_b]),
+        )
+        for i, (expected_c, expected_s, expected_bytes) in enumerate(
+            (
+                (500.0, 0.2, self.AGE_DECLARED.tobytes()),
+                (300.0, 0.0, declared_b.tobytes()),
+            )
+        ):
+            cfg = pop.demes[i].config
+            stored = cfg.equilibrium_individual_distribution
+            assert stored is not None, f"deme{i}: declaration lost"
+            assert stored.tobytes() == expected_bytes
+            assert float(cfg.expected_competition_strength) == expected_c
+            assert float(cfg.expected_survival_rate) == expected_s
+
+    def test_double_declaration_last_write_wins(self) -> None:
+        """A survival-channel declaration overwrites an earlier age_structure one.
+
+        Both route to the same competition parameter, so the later
+        declaration (25F/25M at age 1) wins: produced = 25*1*1*10 = 250
+        = C*, s* = 50/250 = 0.2.  First-write-wins or merge semantics
+        would produce 500 instead of 250.
+        """
+        second = np.array([[0.0, 25.0, 0.0, 0.0], [0.0, 25.0, 0.0, 0.0]])
+        pop = self._population(
+            "double_decl", "age_structure", extra_survival_decl=second
+        )
+        cfg = pop.demes[0].config
+        stored = cfg.equilibrium_individual_distribution
+        assert stored is not None
+        assert stored.tobytes() == second.tobytes()
+        assert float(cfg.expected_competition_strength) == 250.0
+        assert float(cfg.expected_survival_rate) == 0.2
+
+    def test_later_none_competition_does_not_clear_declaration(self) -> None:
+        """competition(equilibrium_distribution=None) means "don't touch".
+
+        None is the parameter default, not a clear request: a trailing
+        competition call that passes None explicitly must leave the
+        wrapper's earlier declaration intact (C* stays 500).  A routing
+        that forwarded None as a clearing write would flip the draft back
+        to derivation mode.
+        """
+        pop = self._population(
+            "none_tail", "age_structure", tail_competition_decl=None
+        )
+        cfg = pop.demes[0].config
+        stored = cfg.equilibrium_individual_distribution
+        assert stored is not None, "explicit None cleared the declaration"
+        assert stored.tobytes() == self.AGE_DECLARED.tobytes()
+        assert float(cfg.expected_competition_strength) == 500.0
+        assert float(cfg.expected_survival_rate) == 0.2
+
+    def test_bad_shape_via_wrapper_channel_raises_value_error(self) -> None:
+        """A wrong-shaped declaration fails with the expected shape named.
+
+        The routed competition channel validates the (2, n_ages) shape;
+        the error must name the expected shape so the wrapper channels
+        report it exactly like the direct channel.
+        """
+        bad = np.zeros((2, 3))
+        with pytest.raises(ValueError, match=r"\(2, 4\)"):
+            self._population("bad_shape", "age_structure", declared=bad)
+
+    def test_survival_generation_time_dead_channel_status_quo(self) -> None:
+        """survival(generation_time=...) is the documented dead channel.
+
+        The batch-14 NOTE records that a survival-time structure override
+        has no lawful channel until the structure-domain cleanup batch:
+        the template's survival has no ``generation_time`` parameter, so
+        the wrapper's forward must keep raising TypeError.  The lawful
+        channel — age_structure(generation_time=...) — must keep working
+        and land the value on the draft (3.0).
+        """
+        builder = nt.SpatialPopulation.builder(
+            self._species("gt_surv"),
+            n_demes=2,
+            pop_type="age_structured",
+        ).setup(name="eq_gt_surv", stochastic=False)
+        with pytest.raises(TypeError, match="generation_time"):
+            builder.survival(generation_time=3.0)
+
+        # age_structure(generation_time=...) is the live channel: the
+        # value must land on the draft verbatim (3.0, vs the derived
+        # 0.0 the same demographics produce without the kwarg).
+        pop = self._population("gt_age", "age_structure")
+        assert float(pop.demes[0].config.generation_time) == 0.0
+        builder2 = nt.SpatialPopulation.builder(
+            self._species("gt_age2"),
+            n_demes=2,
+            pop_type="age_structured",
+        ).setup(name="eq_gt_age", stochastic=False)
+        builder2.age_structure(n_ages=4, new_adult_age=1, generation_time=3.0)
+        builder2.initial_state(
+            individual_count={
+                "female": {"A|A": [0, 50, 0, 0]},
+                "male": {"A|A": [0, 50, 0, 0]},
+            }
+        )
+        builder2.reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+            eggs_per_female=10.0,
+        )
+        builder2.survival(
+            female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+        )
+        builder2.competition(carrying_capacity=100.0, juvenile_growth_mode=3)
+        pop2 = builder2.build()
+        assert float(pop2.demes[0].config.generation_time) == 3.0
