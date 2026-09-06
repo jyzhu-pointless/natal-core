@@ -11,6 +11,9 @@ mod contract;
 pub mod curves;
 mod discrete;
 mod discrete_session;
+/// Generated wire tables (parameters.jsonc is the single source; see
+/// scripts/generate_param_tables.py — do not hand-edit).
+mod eco_param_wire;
 mod equilibrate;
 mod hooks;
 mod lifecycle;

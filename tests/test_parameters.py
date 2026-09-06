@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import builtins
+import importlib.util
+import re
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import TextIO
 
 import pytest
 
+from natal.frontend.data import ModelDraft
+from natal.frontend.hooks.types import ECO_PARAM_NAMES
 from natal.frontend.utils.parameters import (
     ALL_PARAMETERS,
     PARAM_IDS,
@@ -15,7 +23,10 @@ from natal.frontend.utils.parameters import (
     ParamDescriptor,
     _build_registry,
 )
-from natal.frontend.data import ModelDraft
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GENERATOR_SCRIPT = REPO_ROOT / "scripts" / "generate_param_tables.py"
+WIRE_TABLE = REPO_ROOT / "rust" / "src" / "eco_param_wire.rs"
 
 
 class TestParamDescriptor:
@@ -74,6 +85,17 @@ class TestAllParameters:
         """Every value is a ParamDescriptor instance."""
         for desc in ALL_PARAMETERS.values():
             assert isinstance(desc, ParamDescriptor)
+
+    def test_bare_names_unique_across_domains(self):
+        """No two parameters share a bare name.
+
+        ``scripts/generate_param_tables.py`` keys its ECO lookup by bare
+        name, not by the ``{domain}.{name}`` registry key; a cross-domain
+        collision would silently collapse to whichever entry iterated
+        last, sourcing bounds from the wrong parameter.
+        """
+        names = [desc.name for desc in ALL_PARAMETERS.values()]
+        assert len(names) == len(set(names)), "duplicate bare parameter names"
 
     @pytest.mark.parametrize(
         "key",
@@ -242,3 +264,174 @@ class TestRegistryFileHandling:
         assert opened_handles[0].closed is True
         assert len(registry) == len(ALL_PARAMETERS)
         assert set(registry) == set(ALL_PARAMETERS)
+
+
+def _load_generator() -> ModuleType:
+    """Import ``scripts/generate_param_tables.py`` as an in-process module.
+
+    The generator is a script, not a package member, so it is loaded by
+    path (same pattern as ``tests/test_contract_ledger.py``).
+    """
+    spec = importlib.util.spec_from_file_location(
+        "generate_param_tables_probe", GENERATOR_SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    module: ModuleType = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        del sys.modules[spec.name]
+    return module
+
+
+def _columns_block(text: str) -> tuple[int, list[str]]:
+    """Return (declared_len, ordered names) from the generated columns array."""
+    block = re.search(
+        r"pub const ECO_PARAM_COLUMNS: \[&str; (\d+)\] = \[(.*?)\];",
+        text,
+        re.DOTALL,
+    )
+    assert block is not None, "ECO_PARAM_COLUMNS definition missing"
+    return int(block.group(1)), re.findall(r'"([^"]+)"', block.group(2))
+
+
+class TestRustWireTables:
+    """The Rust wire tables are generated from this jsonc (plan 5.4)."""
+
+    def test_rust_wire_tables_fresh_against_jsonc(self) -> None:
+        """``rust/src/eco_param_wire.rs`` matches the jsonc exactly.
+
+        The bounds/names table must never be hand-written twice: this
+        runs the generator in ``--check`` mode, so editing the jsonc
+        without regenerating fails the suite.
+        """
+        result = subprocess.run(
+            [sys.executable, str(GENERATOR_SCRIPT), "--check"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            "rust/src/eco_param_wire.rs is stale against "
+            f"src/natal/parameters.jsonc:\n{result.stderr}"
+        )
+
+    def test_generated_wire_order_matches_eco_param_names(self) -> None:
+        """The generated column list equals ECO_PARAM_NAMES exactly, in order.
+
+        Substring membership is not enough: a reordered or extended table
+        still contains every name, so the columns array is parsed out and
+        compared as an ordered list (including its declared length).
+        """
+        declared_len, names = _columns_block(WIRE_TABLE.read_text(encoding="utf-8"))
+        assert names == list(ECO_PARAM_NAMES)
+        assert declared_len == len(ECO_PARAM_NAMES)
+
+    def test_generated_bounds_match_jsonc_exactly(self) -> None:
+        """Every generated bounds row equals the jsonc bounds for its column.
+
+        The freshness subprocess test proves file == render(rows); this
+        proves render(rows) == jsonc values, so a renderer bug (swapped
+        lo/hi, misaligned row) cannot hide behind a self-consistent file.
+        Floats compare exactly: both sides are decimal round-trips of the
+        same f64.
+        """
+        text = WIRE_TABLE.read_text(encoding="utf-8")
+        block = re.search(
+            r"pub const ECO_PARAM_BOUNDS: \[\(f64, f64\); N_ECO_PARAMS\] = \[(.*?)\];",
+            text,
+            re.DOTALL,
+        )
+        assert block is not None, "ECO_PARAM_BOUNDS definition missing"
+        rows = re.findall(r"\(([\d.eE+-]+),\s*([\d.eE+-]+)\),", block.group(1))
+        by_name = {d.name: d.bounds for d in ALL_PARAMETERS.values()}
+        expected = [by_name[name] for name in ECO_PARAM_NAMES]
+        assert len(rows) == len(expected)
+        for row, (name, want) in zip(rows, zip(ECO_PARAM_NAMES, expected), strict=True):
+            assert (float(row[0]), float(row[1])) == want, (
+                f"bounds row for {name!r}: file has ({row[0]}, {row[1]}), "
+                f"jsonc has {want}"
+            )
+
+    def test_wire_tables_have_no_handwritten_copy_in_rust_src(self) -> None:
+        """Only the generated module may define the wire tables.
+
+        ``pub use crate::eco_param_wire::...`` re-exports are the sanctioned
+        access path; any other ``const ECO_PARAM_COLUMNS/BOUNDS/N_ECO_PARAMS
+        = ...`` definition in rust/src would reintroduce the manual sync
+        discipline that plan 5.4 removes.
+        """
+        offenders: list[str] = []
+        for path in sorted((REPO_ROOT / "rust" / "src").rglob("*.rs")):
+            if path.name == "eco_param_wire.rs":
+                continue
+            body = path.read_text(encoding="utf-8")
+            if re.search(r"ECO_PARAM_(?:COLUMNS|BOUNDS)\s*:\s*\[", body) or re.search(
+                r"N_ECO_PARAMS\s*:\s*usize", body
+            ):
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+        assert offenders == [], f"hand-written wire table copies: {offenders}"
+
+
+class TestParamTableGenerator:
+    """Adversarial probes of scripts/generate_param_tables.py itself."""
+
+    def test_wire_rows_order_follows_eco_param_names(self, monkeypatch) -> None:
+        """Reordering ECO_PARAM_NAMES reorders the generated rows.
+
+        Proves the generator has no hidden name hardcoding: rows are
+        driven by the tuple, and each row's bounds stay aligned with its
+        name (not with the old position).
+        """
+        import natal.frontend.hooks.types as hooks_types
+
+        generator = _load_generator()
+        original = tuple(hooks_types.ECO_PARAM_NAMES)
+        monkeypatch.setattr(hooks_types, "ECO_PARAM_NAMES", tuple(reversed(original)))
+        rows = generator._wire_rows()
+        assert [row[0] for row in rows] == list(reversed(original))
+        by_name = {d.name: d.bounds for d in ALL_PARAMETERS.values()}
+        for name, lo, hi in rows:
+            assert (lo, hi) == by_name[name]
+        declared_len, rendered_names = _columns_block(generator._render(rows))
+        assert rendered_names == list(reversed(original))
+        assert declared_len == len(original)
+
+    def test_wire_rows_missing_bounds_raises_system_exit(self, monkeypatch) -> None:
+        """A registry entry without bounds aborts the generator loudly.
+
+        The shipped registry cannot produce this state (bounds are a
+        required jsonc column), so this pins the generator's own guard
+        against a future optional-bounds descriptor silently emitting a
+        ``(nan, nan)``-style row.
+        """
+        import natal.frontend.utils.parameters as params_module
+
+        generator = _load_generator()
+        entries = [
+            SimpleNamespace(
+                name=name,
+                bounds=None if name == "carrying_capacity" else (0.0, 1.0),
+            )
+            for name in ECO_PARAM_NAMES
+        ]
+        monkeypatch.setattr(
+            params_module,
+            "ALL_PARAMETERS",
+            {f"probe.{entry.name}": entry for entry in entries},
+        )
+        with pytest.raises(SystemExit, match="carrying_capacity"):
+            generator._wire_rows()
+
+    def test_render_is_deterministic_and_matches_disk(self) -> None:
+        """Rendering is a pure function of the rows and equals the shipped file.
+
+        Two consecutive renders must be byte-identical (no timestamps or
+        environment-dependent content), and both must equal the committed
+        rust/src/eco_param_wire.rs.
+        """
+        generator = _load_generator()
+        first = generator._render(generator._wire_rows())
+        second = generator._render(generator._wire_rows())
+        assert first == second
+        assert first == WIRE_TABLE.read_text(encoding="utf-8")

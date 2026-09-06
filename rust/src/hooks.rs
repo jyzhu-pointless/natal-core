@@ -41,8 +41,10 @@ const RPN_MUL: i64 = 4;
 const RPN_DIV: i64 = 5;
 
 /// Number of fixed ecology params addressable by ``OP_SET_PARAM``.
-/// Mirrors ``ECO_PARAM_NAMES`` in ``natal.hooks.types`` (order included).
-pub const N_ECO_PARAMS: usize = 5;
+/// Generated from ``src/natal/parameters.jsonc`` together with the
+/// wire column names (plan 5.4: one source, no hand-written copies).
+pub use crate::eco_param_wire::ECO_PARAM_BOUNDS;
+pub use crate::eco_param_wire::N_ECO_PARAMS;
 
 /// Public alias of the ``OP_SET_PARAM`` opcode for cross-module checks
 /// (e.g. session deserialization flagging programs with param writes).
@@ -54,22 +56,11 @@ pub const OP_SET_PARAM_PUBLIC: i64 = 10;
 /// ``spatial::SpatialEcoJournalRow``).
 pub type EcoJournalRow = (i64, usize, f64, f64);
 
-/// Validity bounds per ECO param id — the wire mirror of the Python
-/// ``natal/parameters.jsonc`` scalar ``bounds`` for the five
-/// runtime-mutable ecology scalars, in ``ECO_PARAM_COLUMNS`` id order.
-///
-/// ``EcoCtx::commit`` rejects non-finite or out-of-bounds writes with this
-/// table, so an inf/nan RPN result can never silently enter the session
-/// columns (parity with the Python flush channel's bounds validation).
-/// **Sync discipline**: when a bound changes in ``parameters.jsonc``, this
-/// table and the locking unit test below must change in the same commit.
-pub const ECO_PARAM_BOUNDS: [(f64, f64); N_ECO_PARAMS] = [
-    (0.0, 1e12), // carrying_capacity
-    (0.0, 1e6),  // eggs_per_female
-    (0.0, 1.0),  // sex_ratio
-    (0.0, 1.0),  // sperm_displacement_rate
-    (0.0, 1e6),  // low_density_growth_rate
-];
+// Validity bounds per ECO param id live in the generated
+// ``eco_param_wire`` module (re-exported above): the jsonc is the single
+// source and the pytest freshness test fails on drift, so an inf/nan or
+// out-of-bounds RPN result can never silently enter the session columns
+// with bounds the Python flush channel would treat differently.
 
 /// Validate one ECO param value against the wire bounds table.
 ///
@@ -950,32 +941,19 @@ mod setparam_convert_tests {
         crate::rng::new_rng(42)
     }
 
-    /// The wire bounds table is locked against ``natal/parameters.jsonc``:
-    /// every row must match the jsonc scalar bounds for the corresponding
-    /// ``ECO_PARAM_COLUMNS`` entry, or the Rust commit gate would accept (or
-    /// reject) values the Python flush channel treats differently.
+    /// The generated wire tables are internally consistent: one bounds
+    /// row per column, and every row is a real interval.  Value-level
+    /// freshness against ``parameters.jsonc`` is enforced by the Python
+    /// generator's ``--check`` test — no second hand-written copy here.
     #[test]
-    fn eco_param_bounds_match_jsonc_wire_contract() {
+    fn eco_param_wire_tables_are_consistent() {
         assert_eq!(
-            crate::contract::ECO_PARAM_COLUMNS,
-            [
-                "carrying_capacity",
-                "eggs_per_female",
-                "sex_ratio",
-                "sperm_displacement_rate",
-                "low_density_growth_rate"
-            ],
-            "bounds rows are indexed by ECO_PARAM_COLUMNS order"
+            ECO_PARAM_BOUNDS.len(),
+            crate::contract::ECO_PARAM_COLUMNS.len()
         );
-        let expected = [
-            (0.0, 1e12), // carrying_capacity
-            (0.0, 1e6),  // eggs_per_female
-            (0.0, 1.0),  // sex_ratio
-            (0.0, 1.0),  // sperm_displacement_rate
-            (0.0, 1e6),  // low_density_growth_rate
-        ];
-        for (id, (got, want)) in ECO_PARAM_BOUNDS.iter().zip(expected.iter()).enumerate() {
-            assert_eq!(got, want, "bounds row {id}");
+        assert!(!crate::contract::ECO_PARAM_COLUMNS.is_empty());
+        for (id, (lo, hi)) in ECO_PARAM_BOUNDS.iter().enumerate() {
+            assert!(lo <= hi, "bounds row {id} is not an interval");
         }
     }
 

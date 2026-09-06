@@ -690,16 +690,11 @@ const ECOLOGY_SCALAR_COLUMNS: [&str; 6] = [
     "external_expected_eggs",
 ];
 
-/// Canonical ``Op.set_param`` id order — mirrors ``ECO_PARAM_NAMES`` in
-/// ``natal.frontend.hooks.types``.  The interpreter indexes its
-/// ``eco_values`` slice by position here; the order is a wire contract.
-pub const ECO_PARAM_COLUMNS: [&str; 5] = [
-    "carrying_capacity",
-    "eggs_per_female",
-    "sex_ratio",
-    "sperm_displacement_rate",
-    "low_density_growth_rate",
-];
+/// Canonical ``Op.set_param`` id order — generated from
+/// ``src/natal/parameters.jsonc`` via ``scripts/generate_param_tables.py``
+/// in the fixed ``ECO_PARAM_NAMES`` wire order.  The interpreter indexes
+/// its ``eco_values`` slice by position here; the order is a wire contract.
+pub use crate::eco_param_wire::ECO_PARAM_COLUMNS;
 
 /// Ecology vector column names (columnized tensor channels).
 const ECOLOGY_TENSOR_COLUMNS: [&str; 7] = [
