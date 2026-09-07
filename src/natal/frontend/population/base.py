@@ -106,6 +106,16 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     # Configurator.build(); None until then (e.g. clones built via __new__).
     _definition: ModelDefinition | None = None
 
+    # Runtime reconfiguration log (plan 5.1 slice 4 / plan 5.3): the
+    # build-time definition stays frozen; every committed preset
+    # reconfiguration appends here so the post-build history of genetic
+    # rule changes is replayable next to the frozen snapshot.  Annotation
+    # only — the list is created per-instance (never a class-level
+    # default, which every instance would share).
+    # object: reconfigure_preset's **changes values are heterogeneous
+    # user input (floats, dicts, ...), mirrored verbatim per entry.
+    _reconfiguration_log: list[tuple[int, str, dict[str, object]]]
+
     def __init__(
         self,
         species: Species,
@@ -273,6 +283,9 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
         # --- rust dirty bridge (independent per deme) ---
         clone._rust_dirty = set()
+
+        # --- runtime provenance (independent per clone) ---
+        clone._reconfiguration_log = []
 
         # --- per-clone bookkeeping (deferred hooks already finalized) ---
         clone._pending_hook_items = []
@@ -646,6 +659,29 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         .. versionadded:: NEXT
         """
         ...
+
+    @property
+    def reconfiguration_log(
+        self,
+    ) -> tuple[tuple[int, str, dict[str, object]], ...]:
+        """The committed runtime preset reconfigurations, in order.
+
+        Each entry is ``(tick, preset_name, changes)`` recorded after a
+        reconfiguration committed; failed attempts append nothing.  The
+        build-time declaration lives on :attr:`definition` — this log is
+        the post-build provenance of genetic-rule changes.
+
+        Returns:
+            The ordered reconfiguration entries.
+        """
+        entries: list[tuple[int, str, dict[str, object]]] = (
+            self.__dict__.get("_reconfiguration_log", [])
+        )
+        # Each returned entry carries a fresh dict copy — callers
+        # cannot mutate the recorded history through the snapshot.
+        return tuple(
+            (tick, name, dict(changes)) for tick, name, changes in entries
+        )
 
     @property
     def definition(self) -> ModelDefinition:

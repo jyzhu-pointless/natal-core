@@ -1793,6 +1793,22 @@ class Configurator:
         ]
         self._config = pop.config
 
+        # Plan 5.3: record the committed reconfiguration so the post-build
+        # history is replayable next to the frozen definition.  A failed
+        # transaction never reaches this point, so the log only carries
+        # committed changes.
+        # Per-instance lazy provenance storage (the class carries only
+        # the annotation; a class-level list default would be shared by
+        # every population).
+        # object: the lazily-attached provenance list's element type is
+        # narrowed by the isinstance check below.
+        existing: object = pop.__dict__.get("_reconfiguration_log")
+        if not isinstance(existing, list):
+            existing = []
+            pop._reconfiguration_log = existing  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]  # the sanctioned runtime provenance attach
+        log = cast("list[tuple[int, str, dict[str, object]]]", existing)
+        log.append((int(pop.tick), preset.name, dict(changes)))
+
         return self
 
     # -- apply / build ---------------------------------------------------------

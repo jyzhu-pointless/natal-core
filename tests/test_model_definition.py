@@ -201,3 +201,100 @@ class TestSpatialDefinitionSnapshot:
             "eggs_per_female"
         ]
         assert template_eggs == 10.0
+
+
+class TestReconfigurationProvenance:
+    """Post-build genetic-rule changes are recorded next to the snapshot.
+
+    Plan 5.3: the reconfiguration history must express the committed
+    rebuild events; failed transactions append nothing.
+    """
+
+    def _population(self):
+        species = _species()
+        drive = nt.HomingDrive(
+            name="__reconf_probe__",
+            drive_allele="B",
+            target_allele="A",
+            drive_conversion_rate=0.9,
+        )
+        pop = (
+            Configurator.for_age_structured(species)
+            .setup(stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 60, 0, 0]},
+                    "male": {"A|A": [0, 40, 0, 0]},
+                }
+            )
+            .reproduction(eggs_per_female=17.0)
+            .competition(carrying_capacity=500.0, juvenile_growth_mode=3)
+            .presets(drive)
+            .build()
+        )
+        return pop, drive
+
+    def test_log_empty_at_build_and_appends_on_commit(self) -> None:
+        """Committed reconfigurations append (tick, name, changes)."""
+        pop, drive = self._population()
+        assert pop.reconfiguration_log == ()
+
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+
+        assert pop.reconfiguration_log == (
+            (0, "__reconf_probe__", {"drive_conversion_rate": 0.3}),
+        )
+
+        pop.run(3)
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.5)
+
+        assert pop.reconfiguration_log[-1] == (
+            3,
+            "__reconf_probe__",
+            {"drive_conversion_rate": 0.5},
+        )
+
+    def test_failed_reconfiguration_appends_nothing(self) -> None:
+        """An aborted transaction leaves the log untouched."""
+        pop, drive = self._population()
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        before = pop.reconfiguration_log
+
+        with pytest.raises(AttributeError):
+            pop.update().reconfigure_preset(drive, no_such_knob=1.0)
+
+        assert pop.reconfiguration_log == before
+
+    def test_log_is_a_copy_not_live_list(self) -> None:
+        """The property hands out an immutable snapshot copy."""
+        pop, _drive = self._population()
+        log = pop.reconfiguration_log
+        assert isinstance(log, tuple)
+
+    def test_rollback_failure_appends_nothing(self) -> None:
+        """A mid-rebuild ValueError rolls back and logs nothing.
+
+        drive_conversion_rate=1.5 is out of the preset's value domain:
+        the candidate rebuild raises inside the try block, the batch-9
+        snapshot rollback restores the tables, and no provenance entry
+        may appear (the append sits in the commit phase only).
+        """
+        pop, drive = self._population()
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        before = pop.reconfiguration_log
+
+        with pytest.raises(ValueError):
+            pop.update().reconfigure_preset(drive, drive_conversion_rate=1.5)
+
+        assert pop.reconfiguration_log == before
+
+    def test_snapshot_dicts_are_copies(self) -> None:
+        """Mutating a returned entry cannot rewrite the recorded history."""
+        pop, drive = self._population()
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+
+        snapshot = pop.reconfiguration_log
+        snapshot[0][2]["drive_conversion_rate"] = 999.0  # type: ignore[index]  # ownership attack on the returned entry
+
+        assert pop.reconfiguration_log[0][2]["drive_conversion_rate"] == 0.3
