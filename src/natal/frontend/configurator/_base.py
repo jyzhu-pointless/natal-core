@@ -1318,19 +1318,31 @@ class Configurator:
             Self for chaining.
         """
         if self._pop_ref is not None:
+            # Runtime transaction (plan 5.1): the recipes execute exactly
+            # once against the live population — no clone-to-validate and
+            # no isolated-deepcopy replay.  A failure rolls back from
+            # snapshots (the same transaction shape reconfigure_preset
+            # uses): registration lists, config identity, derived modifier
+            # lists, the dirty bridge, and the in-place fitness arrays.
             pop = self._pop_ref
             original_config = pop.config
             original_presets = pop.presets
             original_gamete = pop.gamete_modifiers
             original_zygote = pop.zygote_modifiers
+            original_dirty = set(pop._rust_dirty)  # pyright: ignore[reportPrivateUsage]  # snapshot for the rollback (stale markers would reset the session RNG).
+            original_fitness = tuple(
+                tensor.copy()
+                for tensor in (
+                    original_config.viability_fitness,
+                    original_config.fecundity_fitness,
+                    original_config.sexual_selection_fitness,
+                    original_config.zygote_viability_fitness,
+                )
+            )
             preset_bindings: list[tuple[GeneticPreset, Species | None]] = [
                 (preset, preset._bound_species)  # pyright: ignore[reportPrivateUsage]  # rollback must preserve binding after a failed first registration.
                 for preset in presets
             ]
-            # Fitness writers mutate arrays in place.  Rebuild against an
-            # isolated config so an exception can restore the exact original
-            # config identity and every observable array.
-            pop.set_config(deepcopy(original_config))
             try:
                 for preset in presets:
                     pop.add_preset(preset)
@@ -1341,6 +1353,18 @@ class Configurator:
                 pop._gamete_modifiers = original_gamete  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
                 pop._zygote_modifiers = original_zygote  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
                 pop.set_config(original_config)
+                pop._rust_dirty.clear()  # pyright: ignore[reportPrivateUsage]  # restore the pre-transaction bridge state
+                pop._rust_dirty.update(original_dirty)  # pyright: ignore[reportPrivateUsage]  # restore the pre-transaction bridge state
+                for tensor, saved in zip(
+                    (
+                        original_config.viability_fitness,
+                        original_config.fecundity_fitness,
+                        original_config.sexual_selection_fitness,
+                        original_config.zygote_viability_fitness,
+                    ),
+                    original_fitness,
+                ):
+                    tensor[...] = saved
                 for preset, bound_species in preset_bindings:
                     preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
                 self._config = original_config

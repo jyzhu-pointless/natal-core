@@ -220,7 +220,6 @@ def rebuild_config_maps(
     multiple demes into a unified BFS adjacency matrix.
     """
     from natal.frontend.data._engine import recompute_offspring_tensor
-    from natal.frontend.modifiers.module import build_modifier_wrappers
 
     # ---- resolve genotype/haplotype lists from the registry ----
     haploid_genotypes = ctx.registry.index_to_haplo
@@ -230,27 +229,38 @@ def rebuild_config_maps(
 
     n_glabs = int(ctx.config.n_glabs)
     if override_z2g is not None and override_g2z is not None:
-        zygotes_to_gametes_map = override_z2g.copy()
-        gametes_to_zygotes_map = override_g2z.copy()
-    else:
-        # ---- compile modifier callables from the accumulated modifier lists ----
-        gamete_funcs, zygote_funcs = build_modifier_wrappers(
-            gamete_modifiers=ctx.gamete_modifiers,
-            zygote_modifiers=ctx.zygote_modifiers,
-            population=None,
-            registry=ctx.registry,
+        # Overrides (spatial compression's combined maps) skip the recipes
+        # but still funnel through the unified compiler for the offspring
+        # derivation, so there is exactly one spelling of that step too.
+        from natal.frontend.genetics.compile import compile_modifier_maps
+
+        zygotes_to_gametes_map, gametes_to_zygotes_map, _derived = (
+            compile_modifier_maps(
+                override_z2g,
+                override_g2z,
+                gamete_modifiers=[],
+                zygote_modifiers=[],
+                registry=ctx.registry,
+                population=None,
+            )
         )
+    else:
+        # ---- the unified compiler: baseline from the species cache,
+        # modifier recipes chained, offspring derived — the same spelling
+        # the population-side refresh uses ----
+        from natal.frontend.genetics.compile import compile_modifier_maps
 
-        # ---- fetch the Mendelian baseline from the species cache ----
         bp = ctx.species.get_config_blueprint()
-        zygotes_to_gametes_map = bp["zygotes_to_gametes_map"].copy()
-        gametes_to_zygotes_map = bp["gametes_to_zygotes_map"].copy()
-
-        # ---- chain modifier callables on top of the baseline ----
-        for fn in gamete_funcs:
-            zygotes_to_gametes_map = fn(zygotes_to_gametes_map)
-        for fn in zygote_funcs:
-            gametes_to_zygotes_map = fn(gametes_to_zygotes_map)
+        zygotes_to_gametes_map, gametes_to_zygotes_map, _derived = (
+            compile_modifier_maps(
+                bp["zygotes_to_gametes_map"],
+                bp["gametes_to_zygotes_map"],
+                gamete_modifiers=ctx.gamete_modifiers,
+                zygote_modifiers=ctx.zygote_modifiers,
+                registry=ctx.registry,
+                population=None,
+            )
+        )
 
     # ---- index compression (optional) ----
     n_g_compressed = int(ctx.config.n_ztypes)

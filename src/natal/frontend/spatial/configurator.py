@@ -778,7 +778,6 @@ class SpatialConfigurator:
         combined_g2z: NDArray[np.float64] = np.zeros_like(baseline_g2z)
 
         from natal.frontend.configurator._registry_builder import build_registry
-        from natal.frontend.modifiers.module import build_modifier_wrappers
 
         registry = build_registry(self._species)
 
@@ -841,20 +840,19 @@ class SpatialConfigurator:
             gamete_mods = cfg.gamete_modifiers
             zygote_mods = cfg.zygote_modifiers
 
-            # Build wrappers and apply to baseline copies.
-            z2g_copy = baseline_z2g.copy()
-            g2z_copy = baseline_g2z.copy()
+            # Apply the group's recipes through the unified compiler; the
+            # derived offspring tensor is not needed for BFS seeding, but
+            # routing here keeps exactly one application spelling.
+            from natal.frontend.genetics.compile import compile_modifier_maps
 
-            g_funcs, z_funcs = build_modifier_wrappers(
-                gamete_modifiers=gamete_mods,
-                zygote_modifiers=zygote_mods,
-                population=None,
+            z2g_copy, g2z_copy, _unused_tensor = compile_modifier_maps(
+                baseline_z2g,
+                baseline_g2z,
+                gamete_modifiers=list(gamete_mods),
+                zygote_modifiers=list(zygote_mods),
                 registry=registry,
+                population=None,
             )
-            for fn in g_funcs:
-                z2g_copy = fn(z2g_copy)
-            for fn in z_funcs:
-                g2z_copy = fn(g2z_copy)
 
             combined_z2g += z2g_copy
             combined_g2z += g2z_copy

@@ -12,11 +12,13 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    cast,
 )
 
-import numpy as np
-
 from natal.frontend.population._mixins._hooks import HookManagerMixin
+
+if TYPE_CHECKING:
+    from natal.frontend.population.base import BasePopulation
 
 if TYPE_CHECKING:
     from natal.frontend.genetics import Species
@@ -121,29 +123,25 @@ class ModifierPresetMixin(HookManagerMixin):
     def refresh_modifier_maps(self) -> None:
         """Rebuild the three modifier maps from current modifier lists.
 
-        Recomputes:
-        - ``zygotes_to_gametes_map``: mapping from diploid genotype indices
-          to haploid gamete probability distributions (one per sex).
-        - ``gametes_to_zygotes_map``: mapping from paired haploid gametes back
-          to diploid offspring genotype indices.
-        - ``offspring_tensor``: precomputed 4-D tensor combining both maps
-          for efficient native-accelerated reproduction.
-
-        The maps are stored in ``_config`` via ``_replace``, which creates a
-        shallow copy of the config with updated fields.
+        Recomputes ``zygotes_to_gametes_map``,
+        ``gametes_to_zygotes_map``, and the derived ``offspring_tensor``
+        through the unified compiler
+        (:func:`natal.frontend.genetics.compile.compile_modifier_maps`)
+        — the same spelling the build path uses, so the two entry
+        points cannot drift (pinned bit-for-bit by the parity safety
+        net).
 
         .. note::
 
             This method is called automatically by :meth:`refresh_modifiers`
-            and by individual ``add_gamete_modifier`` / ``add_zygote_modifier``
-            when ``refresh=True``.
+            and by individual ``add_gamete_modifier`` /
+            ``add_zygote_modifier`` when ``refresh=True``.
         """
         from natal.frontend.data._engine import (
             initialize_gamete_map,
             initialize_zygote_map,
-            recompute_offspring_tensor,
         )
-        from natal.frontend.modifiers.module import build_modifier_wrappers
+        from natal.frontend.genetics.compile import compile_modifier_maps
 
         if self._config is None or self._registry is None:
             return
@@ -156,21 +154,10 @@ class ModifierPresetMixin(HookManagerMixin):
         n_glabs = int(self._config.n_glabs)
         n_slabs = int(self._config.n_slabs)
 
-        # Step 1: Build wrapper callables from the combined modifier
-        # lists (preset-derived + manually added).  Each wrapper is a
-        # callable that accepts genotype indices and returns modified
-        # probability vectors.
-        gamete_funcs, zygote_funcs = build_modifier_wrappers(
-            gamete_modifiers=self._gamete_modifiers,
-            zygote_modifiers=self._zygote_modifiers,
-            population=self,
-            registry=self._index_registry,
-        )
-
-        # Step 2: Build full Mendelian maps, then project them onto the
-        # registry's active flat axes.  Compression may retain arbitrary
-        # (genotype, slab) and (haplotype, glab) entries, so neither active
-        # axis is necessarily a Cartesian product.
+        # Step 1: full Mendelian baselines, projected onto the registry's
+        # active flat axes.  Compression may retain arbitrary
+        # (genotype, slab) and (haplotype, glab) entries, so neither
+        # active axis is necessarily a Cartesian product.
         full_z2g = initialize_gamete_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
@@ -200,40 +187,30 @@ class ModifierPresetMixin(HookManagerMixin):
         active_gtypes = [
             full_gtype_index[gtype] for gtype in self._registry.index_to_gtype
         ]
-        zygotes_to_gametes_map = full_z2g[
-            :, active_ztypes, :
-        ][:, :, active_gtypes]
-        gametes_to_zygotes_map = full_g2z[
-            active_gtypes, :, :
-        ][:, active_gtypes, :][:, :, active_ztypes]
+        projected_z2g = full_z2g[:, active_ztypes, :][:, :, active_gtypes]
+        projected_g2z = full_g2z[active_gtypes, :, :][:, active_gtypes, :][
+            :, :, active_ztypes
+        ]
 
-        # Step 3: Apply all wrappers in priority order on the already-projected
-        # axes, so their compressed indices address the correct entries.
-        for modifier in gamete_funcs:
-            zygotes_to_gametes_map = modifier(zygotes_to_gametes_map)
-        for modifier in zygote_funcs:
-            gametes_to_zygotes_map = modifier(gametes_to_zygotes_map)
-        # Configs from different demes share one unified NamedTuple type.  Keep
-        # array layout stable as well as dtype/shape so a typed.List can hold
-        # refreshed and untouched deme configs together.
-        zygotes_to_gametes_map = np.ascontiguousarray(zygotes_to_gametes_map)
-        gametes_to_zygotes_map = np.ascontiguousarray(gametes_to_zygotes_map)
-
-        # Step 4: Compute the full offspring probability tensor by
-        # convolving the maternal and paternal gametogenesis maps through
-        # the fusion map — via the single shared derivation so this
-        # refresh can never drift from the writer/build/compression
-        # spellings.
-        n_g = int(zygotes_to_gametes_map.shape[1])
-        n_hg = int(zygotes_to_gametes_map.shape[2])
-        offspring_tensor = recompute_offspring_tensor(
-            zygotes_to_gametes_map, gametes_to_zygotes_map
+        # Step 2: the unified compiler applies the modifier recipes on
+        # the projected axes and derives the offspring tensor.
+        # The mixin always composes into a BasePopulation; the runtime
+        # refresh passes the live host so recipe factories can read it.
+        z2g, g2z, offspring_tensor = compile_modifier_maps(
+            projected_z2g,
+            projected_g2z,
+            gamete_modifiers=self._gamete_modifiers,
+            zygote_modifiers=self._zygote_modifiers,
+            registry=self._index_registry,
+            population=cast("BasePopulation[Any]", self),
         )
 
-        # Step 5: Persist all three maps into the config via shallow copy.
+        # Step 3: Persist all three maps into the config via shallow copy.
+        n_g = int(z2g.shape[1])
+        n_hg = int(z2g.shape[2])
         self._config = self._config._replace(
-            zygotes_to_gametes_map=zygotes_to_gametes_map,
-            gametes_to_zygotes_map=gametes_to_zygotes_map,
+            zygotes_to_gametes_map=z2g,
+            gametes_to_zygotes_map=g2z,
             offspring_tensor=offspring_tensor,
             n_ztypes=n_g,
             n_gtypes=n_hg,
