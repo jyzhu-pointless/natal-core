@@ -216,6 +216,9 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # exactly these fields into the session (no rebuild, no RNG reset).
         # The sentinel "__blueprint__" forces a full backend rebuild instead.
         self._rust_dirty: set[str] = set()
+        # Session ownership flags live in the model subclasses (their
+        # backends are concrete types); base-class consumers reach them via
+        # getattr so the annotation stays unclaimed here.
 
     def set_eco_value_override(self, values: Optional[NDArray[np.float64]]) -> None:
         """Freeze or clear the Op.set_param operand snapshot.
@@ -284,6 +287,17 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
         # --- rust dirty bridge (independent per deme) ---
         clone._rust_dirty = set()
+        # Session-ownership attributes (plan S2): clones start backend-less
+        # with a fresh cache flag — __new__ skips every initializer, so a
+        # missing attribute here would crash reset()/state reads later.
+        # object.__setattr__ matches the __new__-host idiom used above.
+        for _attr, _value in (
+            ("_rust_lifecycle_backend", None),
+            ("_rust_backend_seed", None),
+            ("_rust_run_active", False),
+            ("_state_cache_stale", False),
+        ):
+            object.__setattr__(clone, _attr, _value)
 
         # --- runtime provenance (independent per clone) ---
         clone._reconfiguration_log = []
@@ -746,15 +760,60 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         encodes that invariant instead of scattering Optional guards.
         The public :attr:`state` stays the snapshot face.
 
+        Under a live Rust backend the session owns the authoritative
+        counts and tick; ``_state`` is a lazily refreshed cache and this
+        accessor pulls a fresh snapshot whenever the cache is marked
+        stale (after runs, restores, or session writes).  Without a
+        backend (reference path) ``_state`` itself is authoritative.
+
         Returns:
-            The live ``_state`` container (arrays shared with the engine).
+            The live ``_state`` container (arrays shared with the engine
+            or a fresh session snapshot under Rust).
 
         Raises:
             RuntimeError: If the state has not been initialized.
         """
+        if (
+            getattr(self, "_rust_lifecycle_backend", None) is not None
+            and getattr(self, "_state_cache_stale", False)
+        ):
+            self._refresh_state_cache_from_session()
         if self._state is None:
             raise RuntimeError("Population state has not been initialized.")
         return self._state
+
+    def _refresh_state_cache_from_session(self) -> None:
+        """Pull the session-owned state into the local cache (subclass hook).
+
+        Subclasses with a live Rust backend rebuild their state container
+        from ``backend.state_snapshot()``.  The base default is a no-op so
+        duck-typed hosts without a session stay functional.
+        """
+        return
+
+    def _mark_state_cache_stale(self) -> None:
+        """Flag the cached state as behind the Rust session.
+
+        Runs, restores, and direct session writes change the session-owned
+        state; the next ``_live_state()`` read pulls a fresh snapshot.
+        """
+        self._state_cache_stale = True
+
+    def _flush_state_to_session(self, state: T_State) -> None:
+        """Push a borrowed live container back into the session.
+
+        The hook executor lends the live container to callbacks; after the
+        event, writes made through the loan reach the engine.  Without a
+        Rust backend the container already IS the engine state (no-op).
+
+        Args:
+            state: The borrowed container the callbacks may have written.
+        """
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is None:
+            return
+        backend.set_state(state)
+        self._state_cache_stale = False
 
     def _restore_ecology_to_draft(self, ecology: Mapping[str, object]) -> None:
         """Write a restored checkpoint's ecology into the draft.

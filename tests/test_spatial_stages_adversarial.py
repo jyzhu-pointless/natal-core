@@ -985,7 +985,10 @@ class TestSpatialCheckpointColumns:
         ind = np.full((2, n_ages, n_z), 10.0)
         sperm = np.zeros((n_ages, n_z, n_z))
         session = _engine_rs.EngineSession(bp, params, 0)
-        snapshot = session.snapshot_state(ind, sperm, 7)
+        # Session-owned surface (plan S2): install the explicit state, then
+        # snapshot_state captures the session-owned checkpoint in full.
+        session.set_state(ind.ravel(), sperm.ravel(), 7)
+        snapshot = session.snapshot_state()
         _tick, ind_flat, sperm_flat, rng_words, ecology = snapshot
         assert np.array_equal(
             np.asarray(dict(ecology)["migration_rate"]), rate_before.ravel()
@@ -1008,8 +1011,10 @@ class TestSpatialCheckpointColumns:
             session.get_tensor("migration_rate"), rate_before.ravel()
         )
 
+        # The session owns the state; restore_state reinstalls the snapshot
+        # pieces into the session directly.
         session.restore_state(
-            ind, sperm, 7, ind_flat, sperm_flat, rng_words, ecology)
+            _tick, ind_flat, sperm_flat, rng_words, ecology)
         assert session.get_scalar("carrying_capacity") == 500.0
         np.testing.assert_array_equal(
             session.get_tensor("migration_rate"), rate_before.ravel(),

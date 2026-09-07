@@ -37,6 +37,7 @@ class OutputMixin(ModifierPresetMixin):
     _finished: bool  # type: ignore[assignment]  # host provides at runtime
     _state: Any  # type: ignore[assignment]  # host BasePopulation supplies the generic state
     _live_state: Any  # type: ignore[assignment]  # host live container accessor (snapshot twin)
+    _mark_state_cache_stale: Any  # type: ignore[assignment]  # host flags the session cache stale
     _restore_ecology_to_draft: Any  # type: ignore[assignment]  # host writes restored ecology into the draft
     _registry: Any  # type: ignore[assignment]  # host provides at runtime
     _observation: Observation | None  # type: ignore[assignment]  # host owns mutable policy
@@ -87,7 +88,7 @@ class OutputMixin(ModifierPresetMixin):
         tick = int(self._tick)
         if self._state is None:
             raise RuntimeError("Population state is not initialized.")
-        state = self._state
+        state = self._live_state()  # lazily pulls the session snapshot under Rust
         if history_obj.schema.mode == "observation":
             observation = self._observation
             if observation is None:
@@ -168,15 +169,15 @@ class OutputMixin(ModifierPresetMixin):
             )
         backend = getattr(self, "_rust_lifecycle_backend", None)
         if backend is not None:
-            result = backend.restore_from_checkpoint(self._live_state(), tick)
+            result = backend.restore_from_checkpoint(tick)
             if result is None:
                 # Frozen-surface message: checkpoints are record-aligned with the
                 # history rows, so the frozen "not found in history" wording stays.
                 raise ValueError(f"Tick {tick} not found in history.")
             restored_tick, ecology = result
             self._restore_ecology_to_draft(ecology)
-            self._state = self._live_state()._replace(n_tick=restored_tick)
             self._tick = restored_tick
+            self._mark_state_cache_stale()
             backend.truncate_checkpoints(tick)
             history_obj.truncate(retain_until_tick=tick)
             return

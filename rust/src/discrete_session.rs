@@ -1,8 +1,6 @@
 //! PyO3 session object for the discrete-generation / Wright-Fisher backend.
 
-use numpy::{
-    PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray4, PyReadwriteArray3, PyUntypedArrayMethods,
-};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray4};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -46,6 +44,10 @@ pub struct DiscreteEngineSession {
     /// Record-aligned full checkpoints (plan 13.1 R3) — the discrete twin
     /// of ``EngineSession::checkpoints``.
     checkpoints: Vec<crate::lifecycle::TickCheckpoint>,
+    /// Session-owned live state (plan S2): flattened counts plus the
+    /// authoritative tick; runs and ticks operate on these directly.
+    state_ind: Vec<f64>,
+    state_tick: i64,
 }
 
 #[pymethods]
@@ -80,6 +82,10 @@ impl DiscreteEngineSession {
         genetics.validate(&bp)?;
         // Validate the discrete normalization once at construction.
         DiscreteConfig::assemble(&bp, &pr, &genetics)?;
+        // Seed the session-owned state from the blueprint's frozen initial
+        // population; enable_rust_backend follows with set_state carrying
+        // the live Python state.
+        let state_ind = bp.initial_individual_count.to_vec();
         Ok(Self {
             blueprint: bp,
             params: pr,
@@ -88,6 +94,8 @@ impl DiscreteEngineSession {
             hooks: HookProgram::default(),
             eco_journal: Vec::new(),
             checkpoints: Vec::new(),
+            state_ind,
+            state_tick: 0,
         })
     }
 
@@ -198,29 +206,30 @@ impl DiscreteEngineSession {
     ///
     /// ## Returns
     /// ``0`` or ``1`` (stop).
-    fn tick(
-        &mut self,
-        mut individual_count: PyReadwriteArray3<'_, f64>,
-        tick: i64,
-        wf: bool,
-    ) -> PyResult<i32> {
+    #[pyo3(signature = (wf))]
+    fn tick(&mut self, wf: bool) -> PyResult<i32> {
         let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         // Discrete path runs the standard tick; WF path runs only the first
-        // hook and then the fused Wright-Fisher update.
-        let shape = individual_count.shape();
-        if shape != [2, 2, cfg.n_ztypes] {
-            return Err(PyValueError::new_err(format!(
-                "individual_count shape must be [2, 2, {}], got {shape:?}",
-                cfg.n_ztypes
-            )));
-        }
-        let ind = individual_count
-            .as_slice_mut()
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        // hook and then the fused Wright-Fisher update.  The kernel mutates
+        // the session-owned state buffer directly (plan S2).
+        let tick = self.state_tick;
+        // Split borrows: hooks/rng/state on one side, the EcoCtx contract
+        // borrow on the other.
+        let Self {
+            rng,
+            hooks,
+            state_ind,
+            blueprint,
+            params,
+            genetics,
+            eco_journal,
+            ..
+        } = self;
+        let ind = state_ind.as_mut_slice();
         if wf {
-            let mut eco_values = self.eco_values();
-            let mut result = self.hooks.execute_event(
-                &mut self.rng,
+            let mut eco_values = params.eco_values_row(0);
+            let mut result = hooks.execute_event(
+                rng,
                 0,
                 ind,
                 &mut [],
@@ -234,48 +243,45 @@ impl DiscreteEngineSession {
                 &mut eco_values,
             );
             if result == 0 {
-                result = self
-                    .hooks
+                result = hooks
                     .fire_python_callbacks(0, ind, &mut [], tick, 0)
                     .map_err(PyRuntimeError::new_err)?;
             }
             let mut ctx = crate::lifecycle::EcoCtx {
-                bp: &self.blueprint,
-                params: &mut self.params,
-                genetics: &self.genetics,
+                bp: blueprint,
+                params,
+                genetics,
                 deme: 0,
                 tick,
                 journal: Vec::new(),
             };
             ctx.commit(&eco_values).map_err(map_lifecycle_error)?;
-            self.eco_journal.append(&mut ctx.journal);
+            eco_journal.append(&mut ctx.journal);
             if result != 0 {
                 return Ok(result);
             }
-            discrete::run_wf_tick(&mut self.rng, &cfg, ind).map_err(map_lifecycle_error)?;
+            discrete::run_wf_tick(rng, &cfg, ind).map_err(map_lifecycle_error)?;
+            self.state_tick = tick + 1;
             Ok(0)
         } else {
-            let mut eco_values = self.eco_values();
+            let mut eco_values = params.eco_values_row(0);
             let mut ctx = Some(crate::lifecycle::EcoCtx {
-                bp: &self.blueprint,
-                params: &mut self.params,
-                genetics: &self.genetics,
+                bp: blueprint,
+                params,
+                genetics,
                 deme: 0,
                 tick,
                 journal: Vec::new(),
             });
-            let result = discrete::run_tick(
-                &mut self.rng,
-                &cfg,
-                &self.hooks,
-                ind,
-                tick,
-                &mut eco_values,
-                &mut ctx,
-            )
-            .map_err(map_lifecycle_error);
+            let result = discrete::run_tick(rng, &cfg, hooks, ind, tick, &mut eco_values, &mut ctx)
+                .map_err(map_lifecycle_error);
             if let Some(ctx) = ctx.as_mut() {
-                self.eco_journal.append(&mut ctx.journal);
+                eco_journal.append(&mut ctx.journal);
+            }
+            if matches!(result, Ok(0)) {
+                // Only a completed tick advances; a stop freezes the tick
+                // exactly like the batch loop and the WF branch above.
+                self.state_tick = tick + 1;
             }
             result
         }
@@ -286,12 +292,10 @@ impl DiscreteEngineSession {
     /// ## Returns
     /// ``(final_tick, history, was_stopped)``.
     #[allow(clippy::too_many_arguments)] // PyO3 boundary mirrors the Numba run_fn signature.
-    #[pyo3(signature = (individual_count, tick, n_ticks, record_interval, wf, observation_mask=None, checkpoint_every=0))]
+    #[pyo3(signature = (n_ticks, record_interval, wf, observation_mask=None, checkpoint_every=0))]
     fn run<'py>(
         &mut self,
         py: Python<'py>,
-        mut individual_count: PyReadwriteArray3<'py, f64>,
-        tick: i64,
         n_ticks: i64,
         record_interval: i64,
         wf: bool,
@@ -299,18 +303,9 @@ impl DiscreteEngineSession {
         checkpoint_every: i64,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
         // Assemble the config from the owned contracts at the batch entry,
-        // then run a batch of discrete or WF ticks inside Rust.
+        // then run a batch of discrete or WF ticks directly on the
+        // session-owned state (plan S2: control parameters only).
         let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        let shape = individual_count.shape();
-        if shape != [2, 2, cfg.n_ztypes] {
-            return Err(PyValueError::new_err(format!(
-                "individual_count shape must be [2, 2, {}], got {shape:?}",
-                cfg.n_ztypes
-            )));
-        }
-        let ind = individual_count
-            .as_slice_mut()
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
         let mask_vec = match observation_mask {
             Some(mask) => Some(
                 mask.as_slice()
@@ -325,15 +320,15 @@ impl DiscreteEngineSession {
             params: &mut self.params,
             genetics: &self.genetics,
             deme: 0,
-            tick,
+            tick: self.state_tick,
             journal: Vec::new(),
         });
         let (final_tick, flat_history, n_rows, was_stopped) = discrete::run_batch(
             &mut self.rng,
             &cfg,
             &self.hooks,
-            ind,
-            tick,
+            &mut self.state_ind,
+            self.state_tick,
             n_ticks,
             record_interval,
             mask_vec.as_deref(),
@@ -344,6 +339,7 @@ impl DiscreteEngineSession {
             &mut self.checkpoints,
         )
         .map_err(map_lifecycle_error)?;
+        self.state_tick = final_tick;
         if let Some(ctx) = eco_ctx.as_mut() {
             self.eco_journal.append(&mut ctx.journal);
         }
@@ -373,20 +369,35 @@ impl DiscreteEngineSession {
     ///
     /// ## Returns
     /// ``(tick, ind_flat, rng_words, ecology)``.
-    #[pyo3(signature = (individual_count, tick))]
-    fn snapshot_state<'py>(
-        &self,
-        py: Python<'py>,
-        individual_count: numpy::PyReadonlyArray3<'py, f64>,
-        tick: i64,
-    ) -> PyResult<DiscreteSnapshot<'py>> {
-        let ind = individual_count
-            .as_slice()
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        let ind_flat = PyArray1::from_slice(py, ind);
+    /// Install a full live state (plan S2 state ownership; discrete twin).
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` when the vector has the wrong length.
+    #[pyo3(signature = (ind_flat, tick))]
+    fn set_state(&mut self, ind_flat: Vec<f64>, tick: i64) -> PyResult<()> {
+        let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let want = 2 * 2 * cfg.n_ztypes;
+        if ind_flat.len() != want {
+            return Err(PyValueError::new_err(format!(
+                "ind_flat must contain {want} values, got {}",
+                ind_flat.len()
+            )));
+        }
+        self.state_ind = ind_flat;
+        self.state_tick = tick;
+        Ok(())
+    }
+
+    /// Return a point-in-time snapshot of the session-owned state.
+    fn state_snapshot<'py>(&self, py: Python<'py>) -> (i64, Bound<'py, PyArray1<f64>>) {
+        (self.state_tick, PyArray1::from_slice(py, &self.state_ind))
+    }
+
+    fn snapshot_state<'py>(&self, py: Python<'py>) -> PyResult<DiscreteSnapshot<'py>> {
+        let ind_flat = PyArray1::from_slice(py, &self.state_ind);
         let rng_words = self.rng.state_words().to_vec();
         let ecology = ecology_snapshot(py, &self.params)?;
-        Ok((tick, ind_flat, rng_words, ecology))
+        Ok((self.state_tick, ind_flat, rng_words, ecology))
     }
 
     /// Restore a memory checkpoint produced by
@@ -405,23 +416,14 @@ impl DiscreteEngineSession {
     /// ## Errors
     /// Returns ``PyValueError`` on array size, RNG word count, or ecology
     /// field mismatch.
-    #[pyo3(signature = (individual_count, tick, ind_flat, rng_words, ecology))]
+    #[pyo3(signature = (tick, ind_flat, rng_words, ecology))]
     fn restore_state(
         &mut self,
-        mut individual_count: PyReadwriteArray3<'_, f64>,
         tick: i64,
         ind_flat: numpy::PyReadonlyArray1<'_, f64>,
         rng_words: Vec<u64>,
         ecology: &Bound<'_, PyAny>,
     ) -> PyResult<i64> {
-        let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        let shape = individual_count.shape();
-        if shape != [2, 2, cfg.n_ztypes] {
-            return Err(PyValueError::new_err(format!(
-                "individual_count shape must be [2, 2, {}], got {shape:?}",
-                cfg.n_ztypes
-            )));
-        }
         if rng_words.len() != 4 {
             return Err(PyValueError::new_err(format!(
                 "rng_words must contain 4 state words, got {}",
@@ -431,17 +433,13 @@ impl DiscreteEngineSession {
         let ind_src = ind_flat
             .as_slice()
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        if ind_src.len() != individual_count.len() {
+        if ind_src.len() != self.state_ind.len() {
             return Err(PyValueError::new_err(
                 "checkpoint array does not match the live state size",
             ));
         }
-        {
-            let ind = individual_count
-                .as_slice_mut()
-                .map_err(|err| PyValueError::new_err(err.to_string()))?;
-            ind.copy_from_slice(ind_src);
-        }
+        self.state_ind.copy_from_slice(ind_src);
+        self.state_tick = tick;
         let mut words = [0_u64; 4];
         words.copy_from_slice(&rng_words);
         self.rng = SessionRng::from_state_words(words);
@@ -456,11 +454,10 @@ impl DiscreteEngineSession {
     /// captured words, and the ecology section is restored.  Returns
     /// ``Some((tick, ecology))`` or ``None`` when the tick has no
     /// checkpoint.
-    #[pyo3(signature = (individual_count, tick))]
+    #[pyo3(signature = (tick))]
     fn restore_from_checkpoint<'py>(
         &mut self,
         py: Python<'py>,
-        mut individual_count: PyReadwriteArray3<'_, f64>,
         tick: i64,
     ) -> PyResult<Option<(i64, Bound<'py, PyDict>)>> {
         let found = self
@@ -472,23 +469,13 @@ impl DiscreteEngineSession {
         let Some(cp) = found else {
             return Ok(None);
         };
-        let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        let shape = individual_count.shape();
-        if shape != [2, 2, cfg.n_ztypes] {
-            return Err(PyValueError::new_err(format!(
-                "individual_count shape must be [2, 2, {}], got {shape:?}",
-                cfg.n_ztypes
-            )));
-        }
-        if cp.ind.len() != individual_count.len() {
+        if cp.ind.len() != self.state_ind.len() {
             return Err(PyValueError::new_err(
                 "checkpoint arrays do not match the live state size",
             ));
         }
-        let ind = individual_count
-            .as_slice_mut()
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        ind.copy_from_slice(&cp.ind);
+        self.state_ind.copy_from_slice(&cp.ind);
+        self.state_tick = cp.tick;
         self.rng = SessionRng::from_state_words(cp.rng_words);
         self.params
             .ecology_restore_words(&self.blueprint, &cp.eco_scalars, &cp.eco_vectors)?;

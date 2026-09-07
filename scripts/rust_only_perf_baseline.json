@@ -1,33 +1,33 @@
 {
   "identity": {
-    "git_sha": "573885a1d68e381c3a42d58697a5d648a0a4328c",
-    "extension": "_engine_rs.cpython-313-darwin.so@sha256:633775738eb57dfb",
+    "git_sha": "f635d4490b0f544635528984b5e111ff4148b340",
+    "extension": "_engine_rs.cpython-313-darwin.so@sha256:7cf145cd2bd9f6cb",
     "python": "3.13.2"
   },
   "threshold": 0.1,
   "scenarios": {
     "single_deme_long_run": {
-      "median_s": 0.0068,
-      "peak_mb": 4.3
+      "median_s": 0.0064,
+      "peak_mb": 4.32
     },
     "many_homogeneous_demes": {
-      "median_s": 1.7967,
+      "median_s": 1.7289,
       "peak_mb": 2.84
     },
     "large_space_few_variants": {
-      "median_s": 0.0241,
+      "median_s": 0.0268,
       "peak_mb": 0.17
     },
     "frequent_ecology_updates": {
-      "median_s": 0.0087,
-      "peak_mb": 0.08
+      "median_s": 0.0085,
+      "peak_mb": 0.07
     },
     "preset_reconfiguration": {
-      "median_s": 0.0452,
-      "peak_mb": 0.14
+      "median_s": 0.0439,
+      "peak_mb": 0.13
     },
     "raw_large_history": {
-      "median_s": 0.0051,
+      "median_s": 0.005,
       "peak_mb": 0.11
     },
     "observation_small_history": {
@@ -35,7 +35,7 @@
       "peak_mb": 0.05
     },
     "python_hook_per_tick": {
-      "median_s": 0.0052,
+      "median_s": 0.005,
       "peak_mb": 0.08
     }
   }

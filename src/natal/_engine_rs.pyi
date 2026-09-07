@@ -58,18 +58,15 @@ class EngineSession:
         individual_count: NDArray[np.float64],
         sperm_storage: NDArray[np.float64],
     ) -> None: ...
-    def tick(
+    def tick(self, deme_id: int) -> int: ...
+    def set_state(
+        self, ind_flat: NDArray[np.float64], sperm_flat: NDArray[np.float64], tick: int
+    ) -> None: ...
+    def state_snapshot(
         self,
-        individual_count: NDArray[np.float64],
-        sperm_storage: NDArray[np.float64],
-        tick: int,
-        deme_id: int,
-    ) -> int: ...
+    ) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]: ...
     def run(
         self,
-        individual_count: NDArray[np.float64],
-        sperm_storage: NDArray[np.float64],
-        tick: int,
         n_ticks: int,
         record_interval: int,
         observation_mask: NDArray[np.float64] | None = None,
@@ -77,14 +74,9 @@ class EngineSession:
     ) -> tuple[int, NDArray[np.float64], bool]: ...
     def snapshot_state(
         self,
-        individual_count: NDArray[np.float64],
-        sperm_storage: NDArray[np.float64],
-        tick: int,
     ) -> tuple[int, NDArray[np.float64], NDArray[np.float64], list[int], dict[str, object]]: ...
     def restore_state(
         self,
-        individual_count: NDArray[np.float64],
-        sperm_storage: NDArray[np.float64],
         tick: int,
         ind_flat: NDArray[np.float64],
         sperm_flat: NDArray[np.float64],
@@ -93,8 +85,6 @@ class EngineSession:
     ) -> int: ...
     def restore_from_checkpoint(
         self,
-        individual_count: NDArray[np.float64],
-        sperm_storage: NDArray[np.float64],
         tick: int,
     ) -> tuple[int, dict[str, object]] | None: ...
     def clear_checkpoints(self) -> None: ...
@@ -121,16 +111,11 @@ class DiscreteEngineSession:
     def clear_python_callbacks(self) -> None: ...
     def reseed(self, seed: int) -> None: ...
     def drain_eco_journal(self) -> list[tuple[int, int, float, float]]: ...
-    def tick(
-        self,
-        individual_count: NDArray[np.float64],
-        tick: int,
-        wf: bool,
-    ) -> int: ...
+    def tick(self, wf: bool) -> int: ...
+    def set_state(self, ind_flat: NDArray[np.float64], tick: int) -> None: ...
+    def state_snapshot(self) -> tuple[int, NDArray[np.float64]]: ...
     def run(
         self,
-        individual_count: NDArray[np.float64],
-        tick: int,
         n_ticks: int,
         record_interval: int,
         wf: bool,
@@ -139,12 +124,9 @@ class DiscreteEngineSession:
     ) -> tuple[int, NDArray[np.float64], bool]: ...
     def snapshot_state(
         self,
-        individual_count: NDArray[np.float64],
-        tick: int,
     ) -> tuple[int, NDArray[np.float64], list[int], dict[str, object]]: ...
     def restore_state(
         self,
-        individual_count: NDArray[np.float64],
         tick: int,
         ind_flat: NDArray[np.float64],
         rng_words: list[int],
@@ -152,7 +134,6 @@ class DiscreteEngineSession:
     ) -> int: ...
     def restore_from_checkpoint(
         self,
-        individual_count: NDArray[np.float64],
         tick: int,
     ) -> tuple[int, dict[str, object]] | None: ...
     def clear_checkpoints(self) -> None: ...

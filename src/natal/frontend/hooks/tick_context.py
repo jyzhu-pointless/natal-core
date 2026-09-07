@@ -408,7 +408,7 @@ class TickContext:
 def _build_blueprint(pop: BasePopulation[Any]) -> BlueprintView:
     """Project a population onto the read-only blueprint view."""
     config = pop.config
-    ic = pop._live_state().individual_count  # pyright: ignore[reportPrivateUsage]  # shape probe: avoid a full snapshot copy per call
+    ic = pop._state.individual_count  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]  # shape probe only: shape is invariant and probing must never trigger the session pull (callbacks run inside the session borrow)
     discrete = bool(getattr(config, "discrete_generation", False))
     return BlueprintView(
         n_sexes=int(ic.shape[0]),
@@ -472,7 +472,7 @@ def state_view_for(
     )
 
     config = pop.config
-    live = pop._live_state().individual_count  # pyright: ignore[reportPrivateUsage]  # shape probe: avoid a full snapshot copy per callback
+    live = pop._state.individual_count  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]  # shape probe only: same invariance argument as _build_blueprint
     n_sexes = int(live.shape[0])
     n_ages = int(live.shape[1])
     n_ztypes = int(live.shape[2])

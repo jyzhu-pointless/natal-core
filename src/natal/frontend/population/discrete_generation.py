@@ -373,22 +373,38 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             seed=seed,
         )
         self._register_rust_callbacks(backend)
+        # Capture the state BEFORE the field switch: under a rebuild
+        # (refresh_rust_backend) the lazy pull must read the OLD session,
+        # not the freshly constructed one whose state is the blueprint
+        # initial population again.
+        state_to_install = self._live_state()
         self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
         self._contract_params = materialize(self.config).params
         self._rust_dirty.clear()
+        # The session owns the state from here on (plan S2): install the
+        # live Python state so the freshly seeded RNG continues from the
+        # population's current counts and tick.
+        backend.set_state(state_to_install)
+        self._state_cache_stale = False
         return self
 
     def disable_rust_backend(self) -> DiscreteGenerationPopulation:
         """Disable the Rust backend and return to the reference path.
 
+        The session-owned state is pulled back into the Python container
+        first, so disabling mid-simulation keeps every count and the tick.
+
         Returns:
             Self for chaining.
         """
+        if self._rust_lifecycle_backend is not None:
+            self._refresh_state_cache_from_session()
         self._rust_lifecycle_backend = None
         self._rust_backend_seed = None
         self._contract_params = None
         self._rust_dirty.clear()
+        self._state_cache_stale = False
         return self
 
     def refresh_rust_backend(self) -> DiscreteGenerationPopulation:
@@ -477,8 +493,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         # In-hook writes during the batch defer session pushes to the next run.
         self._rust_run_active = True
         try:
-            final_state, history_new, was_stopped = backend.run(
-                self._live_state(),
+            final_tick, history_new, was_stopped = backend.run(
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=self._observation_mask,
@@ -492,8 +507,10 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         # the same audit trail and draft visibility as the Python channel.
         self._absorb_rust_eco_journal(backend.drain_eco_journal())
 
-        self._state = final_state
-        self._tick = int(final_state.n_tick)
+        # The session owns the state: only the mirror tick updates eagerly;
+        # the cached container refreshes lazily on the next read.
+        self._tick = int(final_tick)
+        self._mark_state_cache_stale()
         self._process_kernel_history(history_new, clear_history_on_start)
 
         if was_stopped:
@@ -702,6 +719,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 n_tick=0,
                 individual_count=ind_copy.copy(),
             )
+        backend = self._rust_lifecycle_backend
+        if backend is not None and self._state is not None:
+            # The session owns the runtime state: the reset container
+            # becomes the new session state.
+            backend.set_state(self._state)
+            self._state_cache_stale = False
 
     def get_total_count(self) -> int:
         """Return the total number of individuals across all categories."""
@@ -794,7 +817,27 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             individual_count=state_obj.individual_count.copy(),
         )
         self._tick = int(state_obj.n_tick)
+        backend = self._rust_lifecycle_backend
+        if backend is not None:
+            # The session owns the runtime state (plan S2): the imported
+            # container becomes the new session state.
+            backend.set_state(self._state)
+            self._state_cache_stale = False
         self.clear_history()
+
+    def _refresh_state_cache_from_session(self) -> None:
+        """Pull the session-owned state into the local cache (plan S2)."""
+        backend = self._rust_lifecycle_backend
+        if backend is None:
+            return
+        tick, ind_flat = backend.state_snapshot()
+        n_ztypes = int(self.config.n_ztypes)
+        self._state = DiscretePopulationState(
+            n_tick=int(tick),
+            individual_count=ind_flat.reshape(2, 2, n_ztypes).copy(),
+        )
+        self._tick = int(tick)
+        self._state_cache_stale = False
 
     def _snapshot_state(self) -> DiscretePopulationState:
         """Copy the live state container for the public :attr:`state` snapshot.
@@ -803,7 +846,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             A fresh ``DiscretePopulationState`` with a copied count
             array; writes through it never reach the engine.
         """
-        src = self._state
+        src = self._live_state()  # lazily pulls the session snapshot under Rust
         assert src is not None  # the base property guards initialization
         return DiscretePopulationState(
             n_tick=int(src.n_tick),

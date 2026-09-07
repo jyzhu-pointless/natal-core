@@ -208,7 +208,7 @@ pop.import_state(state_flat)
 从原始历史恢复：
 
 - 恢复后 tick 与状态一致（`state.n_tick` 同步），历史清空；
-- Rust 会话通过 `restore_checkpoint(state, snapshot)` 恢复会话并返回新 state；
+- Rust 会话通过 `restore_from_checkpoint(tick)` 就地回滚会话拥有的状态、RNG 与生态，并返回恢复后的生态参数（population 层将其同时写回草稿）；
 - 参数快照 `params_log` 是 hook 内参数修改的审计轨迹，与检查点独立
   （检查点不包含 params_log；如需审计历史请另行保存）。
 

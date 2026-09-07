@@ -404,6 +404,27 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         for age in range(self.new_adult_age, self.n_ages):
                             self._live_state().sperm_storage[age, f_z, m_z] = float(age_data)
 
+    def _refresh_state_cache_from_session(self) -> None:
+        """Pull the session-owned state into the local cache (plan S2).
+
+        The Rust session owns the counts, sperm storage, and tick; the
+        cache container is rebuilt from a fresh snapshot and the mirror
+        tick follows.
+        """
+        backend = self._rust_lifecycle_backend
+        if backend is None:
+            return
+        tick, ind_flat, sperm_flat = backend.state_snapshot()
+        n_ages = int(self.config.n_ages)
+        n_ztypes = int(self.config.n_ztypes)
+        self._state = PopulationState(
+            n_tick=int(tick),
+            individual_count=ind_flat.reshape(2, n_ages, n_ztypes).copy(),
+            sperm_storage=sperm_flat.reshape(n_ages, n_ztypes, n_ztypes).copy(),
+        )
+        self._tick = int(tick)
+        self._state_cache_stale = False
+
     def _snapshot_state(self) -> PopulationState:
         """Copy the live state container for the public :attr:`state` snapshot.
 
@@ -411,7 +432,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             A fresh ``PopulationState`` with copied count and sperm
             arrays; writes through it never reach the engine.
         """
-        src = self._state
+        src = self._live_state()  # lazily pulls the session snapshot under Rust
         assert src is not None  # the base property guards initialization
         return PopulationState(
             n_tick=int(src.n_tick),
@@ -439,6 +460,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 individual_count=ind_copy.copy(),
                 sperm_storage=sperm_copy.copy(),
             )
+        backend = self._rust_lifecycle_backend
+        if backend is not None and self._state is not None:
+            # The session owns the runtime state: the reset container
+            # becomes the new session state (RNG keeps its current stream;
+            # the explicit reseed/reset of the stream is refresh_rust_backend).
+            backend.set_state(self._state)
+            self._state_cache_stale = False
 
     @property
     def n_ages(self) -> int:
@@ -593,6 +621,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             sperm_storage=self._live_state().sperm_storage,
         )
         self._tick = int(state_obj.n_tick)
+        backend = self._rust_lifecycle_backend
+        if backend is not None:
+            # The session owns the runtime state (plan S2): the imported
+            # container becomes the new session state.
+            backend.set_state(self._state)
+            self._state_cache_stale = False
         self.clear_history()
 
     # ========================================================================
@@ -685,22 +719,38 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             seed=seed,
         )
         self._register_rust_callbacks(backend)
+        # Capture the state BEFORE the field switch: under a rebuild
+        # (refresh_rust_backend) the lazy pull must read the OLD session,
+        # not the freshly constructed one whose state is the blueprint
+        # initial population again.
+        state_to_install = self._live_state()
         self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
         self._contract_params = materialize(self.config).params
         self._rust_dirty.clear()
+        # The session owns the state from here on (plan S2): install the
+        # live Python state so the freshly seeded RNG continues from the
+        # population's current counts and tick.
+        backend.set_state(state_to_install)
+        self._state_cache_stale = False
         return self
 
     def disable_rust_backend(self) -> AgeStructuredPopulation:
         """Disable the Rust backend and return to the reference path.
 
+        The session-owned state is pulled back into the Python container
+        first, so disabling mid-simulation keeps every count and the tick.
+
         Returns:
             Self for chaining.
         """
+        if self._rust_lifecycle_backend is not None:
+            self._refresh_state_cache_from_session()
         self._rust_lifecycle_backend = None
         self._rust_backend_seed = None
         self._contract_params = None
         self._rust_dirty.clear()
+        self._state_cache_stale = False
         return self
 
     def refresh_rust_backend(self) -> AgeStructuredPopulation:
@@ -789,8 +839,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         # In-hook writes during the batch defer session pushes to the next run.
         self._rust_run_active = True
         try:
-            final_state, history_new, was_stopped = backend.run(
-                self._live_state(),
+            final_tick, history_new, was_stopped = backend.run(
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=observation_mask,
@@ -804,8 +853,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         # the same audit trail and draft visibility as the Python channel.
         self._absorb_rust_eco_journal(backend.drain_eco_journal())
 
-        self._state = final_state
-        self._tick = int(final_state.n_tick)
+        # The session owns the state: only the mirror tick updates eagerly;
+        # the cached container refreshes lazily on the next read.
+        self._tick = int(final_tick)
+        self._mark_state_cache_stale()
         self._process_kernel_history(history_new, clear_history_on_start)
 
         if was_stopped:

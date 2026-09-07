@@ -7,13 +7,13 @@ import pytest
 from scipy import stats
 
 import natal as nt
-from natal.frontend.configurator import Configurator
-from natal.frontend.data import DiscretePopulationState, ModelDraft
+from natal.backends.reference.lifecycle import run_discrete_tick, run_wf_tick
 from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
     rust_backend_available,
 )
-from natal.backends.reference.lifecycle import run_discrete_tick, run_wf_tick
+from natal.frontend.configurator import Configurator
+from natal.frontend.data import DiscretePopulationState, ModelDraft
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import HookProgram
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
@@ -97,7 +97,15 @@ def test_discrete_tick_matches_reference(config: ModelDraft) -> None:
 def test_discrete_batch_matches_reference(config: ModelDraft) -> None:
     state = _state(config, seed=2)
     backend = RustDiscreteLifecycleBackend(config, _empty_hook_program(), seed=0)
-    actual, history, stopped = backend.run(state, n_steps=3, record_every=1)
+    # Session-owned surface (plan S2): install the explicit state, run the
+    # batch, and read the post-run container back from a fresh snapshot.
+    backend.set_state(state)
+    _, history, stopped = backend.run(n_steps=3, record_every=1)
+    tick, ind_flat = backend.state_snapshot()
+    actual = DiscretePopulationState(
+        n_tick=int(tick),
+        individual_count=ind_flat.reshape(state.individual_count.shape),
+    )
     expected_state = DiscretePopulationState(
         n_tick=state.n_tick,
         individual_count=state.individual_count.copy(),

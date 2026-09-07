@@ -212,8 +212,9 @@ raw history:
 
 - After restoration the tick and state are consistent (`state.n_tick` synced)
   and the history is cleared;
-- Rust sessions restore via `restore_checkpoint(state, snapshot)` and return
-  the new state;
+- Rust sessions restore via `restore_from_checkpoint(tick)`, which rolls
+  the session-owned state, RNG, and ecology back in place and returns the
+  restored ecology (the population layer also writes it back into the draft);
 - The `params_log` parameter snapshot is the audit trail of hook-side parameter
   writes and is independent of checkpoints (checkpoints do not carry
   `params_log`; save it separately if you need the audit).

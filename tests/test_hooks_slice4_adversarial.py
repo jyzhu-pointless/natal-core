@@ -301,21 +301,35 @@ def test_hook_state_write_feeds_subsequent_engine_stages(backend: str) -> None:
 
 @pytest.mark.parametrize("backend", _BACKENDS)
 def test_external_state_tampering_between_runs_rejected(backend: str) -> None:
-    """Writing pop.state between runs trips the History boundary guard.
+    """External state tampering between runs is contained.
 
-    The long-term immutability contract is enforced: the engine refuses
-    to continue from a state that diverges from the latest recorded
-    history row instead of silently adopting the tampered values.
+    Two layers enforce the long-term immutability contract:
+
+    - Python engine (reference path): the engine refuses to continue from
+      a state that diverges from the latest recorded history row — the
+      boundary guard raises.
+    - Rust engine (plan S2): the session owns the state outright, so a
+      tampered Python cache simply cannot reach the engine — the next
+      run's trajectory is bit-identical to an untampered twin.
     """
     pop = _build(f"s4x_tamper_{backend}", backend=backend)
+    twin = _build(f"s4x_tamper_{backend}_twin", backend=backend)
     pop.run(n_steps=1)
+    twin.run(n_steps=1)
 
-    # Tampering must reach the engine to exercise the guard: the public
+    # Tampering must reach the engine to exercise the layer: the public
     # state snapshots since R5, so write the live container directly.
     pop._state.individual_count[0, 0, 0] = 777.0  # pyright: ignore[reportPrivateUsage]
 
-    with pytest.raises(ValueError, match="boundary"):
+    if backend == "rust":
         pop.run(n_steps=1)
+        twin.run(n_steps=1)
+        np.testing.assert_array_equal(
+            pop.state.individual_count, twin.state.individual_count
+        )
+    else:
+        with pytest.raises(ValueError, match="boundary"):
+            pop.run(n_steps=1)
 
 
 def test_blueprint_view_is_read_only_and_cached() -> None:

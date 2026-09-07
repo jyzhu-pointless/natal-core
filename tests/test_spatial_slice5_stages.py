@@ -24,7 +24,6 @@ from collections.abc import Sequence
 
 import numpy as np
 import pytest
-from natal.frontend.spatial.configurator import SpatialConfigurator, batch_setting
 
 import natal as nt
 from natal.backends.rust.rust_backend import (
@@ -34,6 +33,7 @@ from natal.backends.rust.rust_backend import (
     rust_backend_available,
 )
 from natal.contracts.materialize import materialize
+from natal.frontend.spatial.configurator import SpatialConfigurator, batch_setting
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -384,7 +384,10 @@ class TestCheckpointMigrationRate:
         sperm = np.zeros((n_ages, n_z, n_z))
 
         session = _engine_rs.EngineSession(bp, params, 0)
-        snapshot = session.snapshot_state(ind, sperm, 7)
+        # Session-owned surface (plan S2): install the explicit state, then
+        # snapshot_state captures the session-owned checkpoint in full.
+        session.set_state(ind.ravel(), sperm.ravel(), 7)
+        snapshot = session.snapshot_state()
         _tick, ind_flat, sperm_flat, rng_words, ecology = snapshot
         # The snapshot ecology carries the rate column.
         assert "migration_rate" in dict(ecology)
@@ -400,8 +403,10 @@ class TestCheckpointMigrationRate:
         )
 
         # Restore: the checkpointed (pre-mutation) column comes back.
+        # The session owns the state; restore_state reinstalls the snapshot
+        # pieces into the session directly.
         session.restore_state(
-            ind, sperm, 7, ind_flat, sperm_flat, rng_words, ecology
+            _tick, ind_flat, sperm_flat, rng_words, ecology
         )
         np.testing.assert_array_equal(
             session.get_tensor("migration_rate"),

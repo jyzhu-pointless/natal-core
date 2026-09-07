@@ -36,15 +36,15 @@ from natal.backends.rust.rust_backend import (
     RustLifecycleBackend,
     rust_backend_available,
 )
-from natal.frontend.configurator import Configurator  # unified since slice 3
 from natal.contracts.materialize import materialize
+from natal.frontend.configurator import Configurator  # unified since slice 3
 from natal.frontend.data import DiscretePopulationState, PopulationState
+from natal.frontend.genetics import Species
 from natal.frontend.hooks.entry.declarative import Op
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 from natal.frontend.population.discrete_generation import (
     DiscreteGenerationPopulation,
 )
-from natal.frontend.genetics import Species
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -179,6 +179,96 @@ def _disc_state(config) -> DiscretePopulationState:
         n_ztypes=config.n_ztypes,
         individual_count=np.array(config.initial_individual_count, dtype=np.float64),
     )
+
+
+def _age_state_from_session(
+    backend: RustLifecycleBackend,
+    shape_source: PopulationState,
+) -> PopulationState:
+    """Rebuild a state container from the session-owned snapshot.
+
+    Args:
+        backend: Session-owned backend whose live state is read.
+        shape_source: Container lending the blueprint reshape shapes.
+
+    Returns:
+        A fresh ``PopulationState`` carrying the session tick and reshaped
+        flat copies of the session-owned counts and sperm storage.
+    """
+    tick, ind_flat, sperm_flat = backend.state_snapshot()
+    return PopulationState(
+        n_tick=int(tick),
+        individual_count=ind_flat.reshape(shape_source.individual_count.shape),
+        sperm_storage=sperm_flat.reshape(shape_source.sperm_storage.shape),
+    )
+
+
+def _run_age(
+    backend: RustLifecycleBackend,
+    state: PopulationState,
+    n_steps: int,
+    record_every: int = 0,
+) -> PopulationState:
+    """Run an explicit-state batch on the session-owned backend.
+
+    Session-owned surface (plan S2): the explicit state is installed with
+    ``set_state``, the batch runs on the session, and the post-run state is
+    read back through a fresh snapshot.
+
+    Args:
+        backend: Backend whose session receives *state*.
+        state: Starting state; it is copied into the session, not mutated.
+        n_steps: Number of ticks to execute.
+        record_every: Recording interval; ``0`` disables recording.
+
+    Returns:
+        The post-run state as a fresh ``PopulationState``.
+    """
+    backend.set_state(state)
+    backend.run(n_steps=n_steps, record_every=record_every)
+    return _age_state_from_session(backend, state)
+
+
+def _disc_state_from_session(
+    backend: RustDiscreteLifecycleBackend,
+    shape_source: DiscretePopulationState,
+) -> DiscretePopulationState:
+    """Rebuild a discrete container from the session-owned snapshot.
+
+    Args:
+        backend: Session-owned backend whose live state is read.
+        shape_source: Container lending the reshape shape.
+
+    Returns:
+        A fresh ``DiscretePopulationState`` carrying the session tick.
+    """
+    tick, ind_flat = backend.state_snapshot()
+    return DiscretePopulationState(
+        n_tick=int(tick),
+        individual_count=ind_flat.reshape(shape_source.individual_count.shape),
+    )
+
+
+def _run_discrete(
+    backend: RustDiscreteLifecycleBackend,
+    state: DiscretePopulationState,
+    n_steps: int,
+    record_every: int = 0,
+) -> DiscretePopulationState:
+    """Run an explicit-state discrete batch on the session-owned backend.
+
+    Args:
+        backend: Backend whose session receives *state*.
+        state: Starting state; it is copied into the session, not mutated.
+        n_steps: Number of ticks to execute.
+        record_every: Recording interval; ``0`` disables recording.
+
+    Returns:
+        The post-run state as a fresh ``DiscretePopulationState``.
+    """
+    backend.set_state(state)
+    backend.run(n_steps=n_steps, record_every=record_every)
+    return _disc_state_from_session(backend, state)
 
 
 # ── 1. write channels at the session boundary ────────────────────────────────
@@ -591,11 +681,11 @@ def test_directed_refresh_equals_fresh_rebuild_bitwise(age_species: Species) -> 
     draft_updated = draft_updated._replace(carrying_capacity=700.0)
     contracts = materialize(draft_updated)
     updated.refresh_params(["carrying_capacity"], contracts.params)
-    state_u, _, _ = updated.run(state_u, n_steps=10, record_every=0)
+    state_u = _run_age(updated, state_u, 10)
 
     fresh = RustLifecycleBackend(draft_fresh, None, seed=20_260_902)
     state_f = _age_state(draft_fresh)
-    state_f, _, _ = fresh.run(state_f, n_steps=10, record_every=0)
+    state_f = _run_age(fresh, state_f, 10)
 
     assert state_u.n_tick == state_f.n_tick == 10
     assert np.array_equal(state_u.individual_count, state_f.individual_count)
@@ -694,16 +784,19 @@ def test_discrete_wf_checkpoint_restore_bitwise(discrete_species: Species) -> No
 
     continuous = RustDiscreteLifecycleBackend(wf_draft, None, seed=13)
     state_c = _disc_state(wf_draft)
-    state_c, _, _ = continuous.run(state_c, n_steps=10, record_every=0)
+    state_c = _run_discrete(continuous, state_c, 10)
 
     split = RustDiscreteLifecycleBackend(wf_draft, None, seed=13)
     state_s = _disc_state(wf_draft)
-    state_s, _, _ = split.run(state_s, n_steps=4, record_every=0)
-    checkpoint = split.snapshot_checkpoint(state_s)
-    state_s, _, _ = split.run(state_s, n_steps=6, record_every=0)
-    state_s = split.restore_checkpoint(state_s, checkpoint)
+    state_s = _run_discrete(split, state_s, 4)
+    checkpoint = split.snapshot_checkpoint()
+    state_s = _run_discrete(split, state_s, 6)
+    split.restore_checkpoint(checkpoint)
+    # Pull the restored session state back out so the replay run starts
+    # from the rollback, not from the stale post-run container.
+    state_s = _disc_state_from_session(split, state_s)
     assert state_s.n_tick == 4
-    state_s, _, _ = split.run(state_s, n_steps=6, record_every=0)
+    state_s = _run_discrete(split, state_s, 6)
 
     assert state_s.n_tick == state_c.n_tick == 10
     assert np.array_equal(state_s.individual_count, state_c.individual_count)
@@ -722,20 +815,20 @@ def test_restore_keeps_last_genetics_write_not_snapshot_value(
     draft = _build_age_draft(age_species, "slice2_ckpt_genetics", stochastic=False)
     backend = RustLifecycleBackend(draft, None, seed=0)
     state = _age_state(draft)
-    state, _, _ = backend.run(state, n_steps=2, record_every=0)
+    _ = _run_age(backend, state, 2)
 
     n_flat = 2 * int(draft.n_ages) * int(draft.n_ztypes)
     # Genetics write before the snapshot: viability = 0.5 everywhere.
     backend.tensor_write("viability_fitness", np.full(n_flat, 0.5))
-    checkpoint = backend.snapshot_checkpoint(state)
+    checkpoint = backend.snapshot_checkpoint()
 
     # After the snapshot: a new genetics write (0.8) and an ecology write.
     backend.tensor_write("viability_fitness", np.full(n_flat, 0.8))
     backend.apply({"carrying_capacity": 999.0})
-    state, _, _ = backend.run(state, n_steps=1, record_every=0)
+    _ = _run_age(backend, state, 1)
     assert backend._session.get_scalar("carrying_capacity") == 999.0
 
-    backend.restore_checkpoint(state, checkpoint)
+    backend.restore_checkpoint(checkpoint)
     # Ecology section rolled back to the checkpointed value...
     assert backend._session.get_scalar("carrying_capacity") == 400.0
     # ...while genetics keeps the last write (0.8), not the snapshot's 0.5.
@@ -771,7 +864,9 @@ def test_python_callback_event_order_first_early_late(age_species: Species) -> N
     backend.set_python_callbacks(
         [make_cb("first")], [make_cb("early")], [make_cb("late")]
     )
-    state, _, was_stopped = backend.run(state, n_steps=2, record_every=0)
+    backend.set_state(state)
+    _, _, was_stopped = backend.run(n_steps=2, record_every=0)
+    state = _age_state_from_session(backend, state)
     assert was_stopped is False
     assert order == [
         ("first", 0, 0),
@@ -786,7 +881,9 @@ def test_python_callback_event_order_first_early_late(age_species: Species) -> N
     backend.clear_python_callbacks()
     order.clear()
     backend.set_python_callbacks([make_cb("again")], [], [])
-    state, _, was_stopped = backend.run(state, n_steps=1, record_every=0)
+    backend.set_state(state)
+    _, _, was_stopped = backend.run(n_steps=1, record_every=0)
+    state = _age_state_from_session(backend, state)
     assert was_stopped is False
     assert order == [("again", 2, 0)]
 
@@ -819,7 +916,9 @@ def test_python_callback_stop_at_each_boundary(
         [stop_immediately] if boundary == "early" else [],
         [stop_immediately] if boundary == "late" else [],
     )
-    next_state, _, was_stopped = backend.run(state, n_steps=4, record_every=0)
+    backend.set_state(state)
+    _, _, was_stopped = backend.run(n_steps=4, record_every=0)
+    next_state = _age_state_from_session(backend, state)
 
     assert was_stopped is True
     assert calls == [0]

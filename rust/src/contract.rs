@@ -1407,6 +1407,19 @@ impl Params {
         })
     }
 
+    /// Snapshot the canonical ECO param values for one deme column.
+    ///
+    /// Borrow-splitting twin of ``EngineSession::eco_values``: reads only
+    /// the params, so callers holding a field-wise borrow of the session
+    /// can still assemble the scratch row.
+    pub(crate) fn eco_values_row(&self, deme: usize) -> [f64; crate::hooks::N_ECO_PARAMS] {
+        let mut values = [0.0; crate::hooks::N_ECO_PARAMS];
+        for (id, slot) in values.iter_mut().enumerate() {
+            *slot = self.eco_value(id, deme);
+        }
+        values
+    }
+
     /// Copy one ecology vector column (full column, all demes).
     fn ecology_vector_copy(&self, name: &str) -> PyResult<Vec<f64>> {
         let v: &Vec<f64> = match name {

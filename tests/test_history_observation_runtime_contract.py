@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-
-from contextlib import contextmanager
+from natal.frontend.output import History
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.configurator import (
+    _float_value,  # type: ignore[reportPrivateUsage]  # directly verify replay-log type boundary
+    _object_sequence,  # type: ignore[reportPrivateUsage]  # directly verify positional replay boundary
+    batch_setting,
+)
+from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
 @contextmanager
@@ -22,14 +29,6 @@ def python_reference():
     previously forced the Python path stay readable.
     """
     yield
-from natal.frontend.output import History
-from natal.frontend.patterns import IndividualSelector
-from natal.frontend.spatial.configurator import (
-    _float_value,  # type: ignore[reportPrivateUsage]  # directly verify replay-log type boundary
-    _object_sequence,  # type: ignore[reportPrivateUsage]  # directly verify positional replay boundary
-    batch_setting,
-)
-from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
 def _species(name: str) -> nt.Species:
@@ -688,6 +687,10 @@ def test_clear_then_record_starts_fresh() -> None:
     assert len(pop.history) == 4  # ticks 0-3
     pop.clear_history()
     assert len(pop.history) == 0, "clear_history must empty history"
+    # Session-owned state (plan S2): after a Rust run the Python-side state
+    # container is a lazily refreshed cache.  The public ``state`` read is
+    # the sync point, so record_snapshot stamps the session tick and rows.
+    _ = pop.state
     pop.record_snapshot()
     assert len(pop.history) == 1, "record_snapshot must work after clear"
     assert pop.history.ticks == (3,), f"Expected tick (3,), got {pop.history.ticks}"

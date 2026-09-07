@@ -282,61 +282,41 @@ class RustLifecycleBackend:
         """Clear all registered Python callbacks."""
         self._session.clear_python_callbacks()
 
-    def snapshot_checkpoint(self, state: PopulationState) -> AgeCheckpoint:
+    def snapshot_checkpoint(self) -> AgeCheckpoint:
         """Capture a memory checkpoint of the session-owned state.
-
-        Args:
-            state: Current population state providing the arrays and tick.
 
         Returns:
             ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.  The RNG
             words capture the full generator state, so restoring continues
             the exact stream.
         """
-        return self._session.snapshot_state(
-            state.individual_count, state.sperm_storage, int(state.n_tick)
-        )
+        return _session_call(lambda: self._session.snapshot_state())
 
-    def restore_checkpoint(
-        self, state: PopulationState, snapshot: AgeCheckpoint
-    ) -> PopulationState:
-        """Restore a checkpoint produced by :meth:`snapshot_checkpoint`.
+    def restore_checkpoint(self, snapshot: AgeCheckpoint) -> int:
+        """Restore a checkpoint into the session-owned state.
 
         Args:
-            state: Live population state whose arrays are overwritten.
             snapshot: The tuple returned by :meth:`snapshot_checkpoint`.
 
         Returns:
-            A new state carrying the restored arrays and the checkpointed
-            tick (states are NamedTuples, so the tick travels with a fresh
-            instance).
+            The restored tick value.
         """
         tick, ind_flat, sperm_flat, rng_words, ecology = snapshot
-        restored_tick = self._session.restore_state(
-            state.individual_count,
-            state.sperm_storage,
-            int(tick),
-            ind_flat,
-            sperm_flat,
-            rng_words,
-            ecology,
-        )
-        return PopulationState(
-            n_tick=int(restored_tick),
-            individual_count=state.individual_count,
-            sperm_storage=state.sperm_storage,
+        return int(
+            _session_call(
+                lambda: self._session.restore_state(
+                    int(tick), ind_flat, sperm_flat, rng_words, ecology
+                )
+            )
         )
 
     def restore_from_checkpoint(
         self,
-        state: PopulationState,
         tick: int,
     ) -> tuple[int, dict[str, object]] | None:
         """Roll the session back to the record-aligned checkpoint at *tick*.
 
         Args:
-            state: Live population state whose arrays are overwritten in
-                place with the checkpointed counts and sperm storage.
             tick: A tick that carried a recorded checkpoint.
 
         Returns:
@@ -345,17 +325,12 @@ class RustLifecycleBackend:
             ``None`` when no checkpoint exists at *tick*.
 
         Raises:
-            ValueError: When the live arrays do not match the checkpoint
-                sizes.
+            ValueError: When the session state does not match the
+                checkpoint sizes.
         """
-        result = _session_call(
-            lambda: self._session.restore_from_checkpoint(
-                state.individual_count,
-                state.sperm_storage,
-                int(tick),
-            )
+        return _session_call(
+            lambda: self._session.restore_from_checkpoint(int(tick))
         )
-        return result
 
     def clear_checkpoints(self) -> None:
         """Drop every stored checkpoint (paired with ``clear_history``)."""
@@ -364,6 +339,37 @@ class RustLifecycleBackend:
     def truncate_checkpoints(self, retain_until_tick: int) -> None:
         """Drop checkpoints captured after *retain_until_tick*."""
         _session_call(lambda: self._session.truncate_checkpoints(int(retain_until_tick)))
+
+    def set_state(self, state: PopulationState) -> None:
+        """Install a full live state into the session (plan S2).
+
+        Args:
+            state: The state whose flattened arrays and tick become the
+                session-owned authoritative state.
+
+        Raises:
+            ValueError: When either array has the wrong size.
+        """
+        _session_call(
+            lambda: self._session.set_state(
+                np.ascontiguousarray(state.individual_count, dtype=np.float64).reshape(-1),
+                np.ascontiguousarray(state.sperm_storage, dtype=np.float64).reshape(-1),
+                int(state.n_tick),
+            )
+        )
+
+    def state_snapshot(self) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]:
+        """Return a point-in-time copy of the session-owned state.
+
+        Returns:
+            ``(tick, ind_flat, sperm_flat)`` — fresh 1-D copies; writes
+            through them never reach the session.  Callers reshape with
+            their own blueprint dimensions.
+        """
+        tick, ind_flat, sperm_flat = _session_call(
+            lambda: self._session.state_snapshot()
+        )
+        return int(tick), ind_flat, sperm_flat
 
     def run_tick(
         self,
@@ -385,24 +391,16 @@ class RustLifecycleBackend:
             ``(next_state, result_code)`` where result code is ``0``
             (continue) or ``1`` (a declarative stop operation triggered).
         """
-        ind_count = np.array(state.individual_count, dtype=np.float64, order="C", copy=True)
-        sperm_store = np.array(state.sperm_storage, dtype=np.float64, order="C", copy=True)
-        result = _session_call(
-            lambda: self._session.tick(
-                ind_count, sperm_store, int(state.n_tick), int(deme_id)
-            )
-        )
-        if result == 0:
-            next_tick = int(state.n_tick) + 1
-        else:
-            next_tick = int(state.n_tick)
+        self.set_state(state)
+        result = int(_session_call(lambda: self._session.tick(int(deme_id))))
+        tick, ind_flat, sperm_flat = self.state_snapshot()
         return (
             PopulationState(
-                n_tick=next_tick,
-                individual_count=ind_count,
-                sperm_storage=sperm_store,
+                n_tick=int(tick),
+                individual_count=ind_flat.reshape(state.individual_count.shape),
+                sperm_storage=sperm_flat.reshape(state.sperm_storage.shape),
             ),
-            int(result),
+            result,
         )
 
     def run_tick_inplace(self, state: PopulationState) -> tuple[PopulationState, int]:
@@ -423,45 +421,39 @@ class RustLifecycleBackend:
         Raises:
             ValueError: If either array is not C-contiguous float64.
         """
-        ind_count = state.individual_count
-        sperm_store = state.sperm_storage
-        if ind_count.dtype != np.float64 or not ind_count.flags.c_contiguous:
-            raise ValueError("individual_count must be C-contiguous float64")
-        if sperm_store.dtype != np.float64 or not sperm_store.flags.c_contiguous:
-            raise ValueError("sperm_storage must be C-contiguous float64")
-        result = _session_call(
-            lambda: self._session.tick(ind_count, sperm_store, int(state.n_tick), -1)
-        )
-        next_tick = int(state.n_tick) + 1 if result == 0 else int(state.n_tick)
+        self.set_state(state)
+        result = int(_session_call(lambda: self._session.tick(-1)))
+        tick, ind_flat, sperm_flat = self.state_snapshot()
+        state.individual_count[...] = ind_flat.reshape(state.individual_count.shape)
+        state.sperm_storage[...] = sperm_flat.reshape(state.sperm_storage.shape)
         return (
             PopulationState(
-                n_tick=next_tick,
-                individual_count=ind_count,
-                sperm_storage=sperm_store,
+                n_tick=int(tick),
+                individual_count=state.individual_count,
+                sperm_storage=state.sperm_storage,
             ),
-            int(result),
+            result,
         )
 
     def run(
         self,
-        state: PopulationState,
         n_steps: int,
         record_every: int = 0,
         observation_mask: NDArray[np.float64] | None = None,
         checkpoint_every: int = 0,
-    ) -> tuple[PopulationState, NDArray[np.float64], bool]:
-        """Run up to ``n_steps`` ticks inside Rust with optional recording.
+    ) -> tuple[int, NDArray[np.float64], bool]:
+        """Run up to ``n_steps`` ticks on the session-owned state.
 
-        This is the batch counterpart of :meth:`run_tick`.  The caller-owned
-        state is copied once, all ticks execute in Rust, and flattened history
-        rows (when requested) are returned without Python per-tick callbacks.
-        Parameter writes made by in-run ``Op.set_param`` hooks accumulate in
-        the session audit journal — drain them with
-        :meth:`drain_eco_journal` after this call to keep the population's
-        ``params_log`` and draft in sync.
+        The session owns the counts and the tick (plan S2): Python passes
+        control parameters only and reads state back through
+        :meth:`state_snapshot`.  Flattened history rows (when requested)
+        are returned without Python per-tick callbacks.  Parameter writes
+        made by in-run ``Op.set_param`` hooks accumulate in the session
+        audit journal — drain them with :meth:`drain_eco_journal` after
+        this call to keep the population's ``params_log`` and draft in
+        sync.
 
         Args:
-            state: Current population state.  It is not modified.
             n_steps: Number of ticks to execute.
             record_every: Record interval in ticks.  ``0`` disables recording.
             observation_mask: Optional ``(n_groups, n_sexes, n_ages, n_ztypes)``
@@ -473,39 +465,26 @@ class RustLifecycleBackend:
                 ``restore_checkpoint``.  ``0`` disables capture.
 
         Returns:
-            ``(next_state, history_rows, was_stopped)``.  ``history_rows`` is
-            a 2-D float64 array, possibly with zero rows when recording is
-            disabled.
+            ``(final_tick, history_rows, was_stopped)``.  ``history_rows``
+            is a 2-D float64 array, possibly with zero rows when recording
+            is disabled.
 
         Raises:
             ValueError: When an in-run ``Op.set_param`` value fails the Rust
                 bounds gate (non-finite or outside the jsonc bounds); the
                 message names the parameter, tick, and value.
         """
-        ind_count = np.array(state.individual_count, dtype=np.float64, order="C", copy=True)
-        sperm_store = np.array(state.sperm_storage, dtype=np.float64, order="C", copy=True)
         if observation_mask is not None:
             observation_mask = np.ascontiguousarray(observation_mask, dtype=np.float64)
         final_tick, history_rows, was_stopped = _session_call(
             lambda: self._session.run(
-                ind_count,
-                sperm_store,
-                int(state.n_tick),
                 int(n_steps),
                 int(record_every),
                 observation_mask,
                 int(checkpoint_every),
             )
         )
-        return (
-            PopulationState(
-                n_tick=int(final_tick),
-                individual_count=ind_count,
-                sperm_storage=sperm_store,
-            ),
-            history_rows,
-            bool(was_stopped),
-        )
+        return (int(final_tick), history_rows, bool(was_stopped))
 
     def drain_eco_journal(self) -> list[EcoJournalEntry]:
         """Drain the session's accumulated set_param audit journal.
@@ -602,58 +581,43 @@ class RustDiscreteLifecycleBackend:
         """Clear all registered Python callbacks."""
         self._session.clear_python_callbacks()
 
-    def snapshot_checkpoint(self, state: DiscretePopulationState) -> DiscreteCheckpoint:
+    def snapshot_checkpoint(self) -> DiscreteCheckpoint:
         """Capture a memory checkpoint (no sperm storage in discrete models).
-
-        Args:
-            state: Current discrete population state.
 
         Returns:
             ``(tick, ind_flat, rng_words, ecology)``.
         """
-        return self._session.snapshot_state(
-            state.individual_count, int(state.n_tick)
-        )
+        return _session_call(lambda: self._session.snapshot_state())
 
-    def restore_checkpoint(
-        self, state: DiscretePopulationState, snapshot: DiscreteCheckpoint
-    ) -> DiscretePopulationState:
-        """Restore a checkpoint produced by :meth:`snapshot_checkpoint`.
+    def restore_checkpoint(self, snapshot: DiscreteCheckpoint) -> int:
+        """Restore a checkpoint into the session-owned state.
 
         Args:
-            state: Live discrete population state whose array is overwritten.
             snapshot: The tuple returned by :meth:`snapshot_checkpoint`.
 
         Returns:
-            A new state carrying the restored array and the checkpointed
-            tick.
+            The restored tick value.
         """
         tick, ind_flat, rng_words, ecology = snapshot
-        restored_tick = self._session.restore_state(
-            state.individual_count,
-            int(tick),
-            ind_flat,
-            rng_words,
-            ecology,
-        )
-        return DiscretePopulationState(
-            n_tick=int(restored_tick),
-            individual_count=state.individual_count,
+        return int(
+            _session_call(
+                lambda: self._session.restore_state(
+                    int(tick), ind_flat, rng_words, ecology
+                )
+            )
         )
 
     def restore_from_checkpoint(
         self,
-        state: DiscretePopulationState,
         tick: int,
     ) -> tuple[int, dict[str, object]] | None:
         """Roll the session back to the record-aligned checkpoint at *tick*.
 
-        Discrete twin of the age-structured backend: the live count array
-        is overwritten in place, the RNG continues from the captured
+        Discrete twin of the age-structured backend: the session-owned
+        counts and tick are restored, the RNG continues from the captured
         words, and the session ecology is restored.
 
         Args:
-            state: Live discrete state whose array is overwritten.
             tick: A tick that carried a recorded checkpoint.
 
         Returns:
@@ -661,14 +625,11 @@ class RustDiscreteLifecycleBackend:
             checkpoint.
 
         Raises:
-            ValueError: When the live array does not match the checkpoint
-                size.
+            ValueError: When the session state does not match the
+                checkpoint size.
         """
         return _session_call(
-            lambda: self._session.restore_from_checkpoint(
-                state.individual_count,
-                int(tick),
-            )
+            lambda: self._session.restore_from_checkpoint(int(tick))
         )
 
     def clear_checkpoints(self) -> None:
@@ -679,23 +640,54 @@ class RustDiscreteLifecycleBackend:
         """Drop checkpoints captured after *retain_until_tick*."""
         _session_call(lambda: self._session.truncate_checkpoints(int(retain_until_tick)))
 
-    def run_tick(self, state: DiscretePopulationState) -> tuple[DiscretePopulationState, int]:
-        """Run one discrete-generation or Wright-Fisher tick in Rust.
+    def set_state(self, state: DiscretePopulationState) -> None:
+        """Install a full live state into the session (plan S2).
 
         Args:
-            state: Current population state.  It is not modified.
+            state: The state whose flattened counts and tick become the
+                session-owned authoritative state.
+
+        Raises:
+            ValueError: When the array has the wrong size.
+        """
+        _session_call(
+            lambda: self._session.set_state(
+                np.ascontiguousarray(state.individual_count, dtype=np.float64).reshape(-1),
+                int(state.n_tick),
+            )
+        )
+
+    def state_snapshot(self) -> tuple[int, NDArray[np.float64]]:
+        """Return a point-in-time copy of the session-owned state.
+
+        Returns:
+            ``(tick, ind_flat)`` — a fresh 1-D copy.
+        """
+        tick, ind_flat = _session_call(lambda: self._session.state_snapshot())
+        return int(tick), ind_flat
+
+    def run_tick(self, state: DiscretePopulationState) -> tuple[DiscretePopulationState, int]:
+        """Run one discrete/Wright-Fisher tick from an explicit state.
+
+        The explicit state is installed into the session, one tick runs,
+        and a fresh post-tick snapshot is returned (the spatial data plane
+        drives per-tick states this way).
+
+        Args:
+            state: The state to advance from.  It is not modified.
 
         Returns:
             ``(next_state, result_code)``.
         """
-        ind_count = np.array(state.individual_count, dtype=np.float64, order="C", copy=True)
-        result = _session_call(
-            lambda: self._session.tick(ind_count, int(state.n_tick), self._wf)
-        )
-        next_tick = int(state.n_tick) + 1 if result == 0 else int(state.n_tick)
+        self.set_state(state)
+        result = int(_session_call(lambda: self._session.tick(self._wf)))
+        tick, ind_flat = self.state_snapshot()
         return (
-            DiscretePopulationState(n_tick=next_tick, individual_count=ind_count),
-            int(result),
+            DiscretePopulationState(
+                n_tick=int(tick),
+                individual_count=ind_flat.reshape(state.individual_count.shape),
+            ),
+            result,
         )
 
     def run_tick_inplace(
@@ -716,26 +708,24 @@ class RustDiscreteLifecycleBackend:
         Raises:
             ValueError: If the array is not C-contiguous float64.
         """
-        ind_count = state.individual_count
-        if ind_count.dtype != np.float64 or not ind_count.flags.c_contiguous:
-            raise ValueError("individual_count must be C-contiguous float64")
-        result = _session_call(
-            lambda: self._session.tick(ind_count, int(state.n_tick), self._wf)
-        )
-        next_tick = int(state.n_tick) + 1 if result == 0 else int(state.n_tick)
+        self.set_state(state)
+        result = int(_session_call(lambda: self._session.tick(self._wf)))
+        tick, ind_flat = self.state_snapshot()
+        state.individual_count[...] = ind_flat.reshape(state.individual_count.shape)
         return (
-            DiscretePopulationState(n_tick=next_tick, individual_count=ind_count),
-            int(result),
+            DiscretePopulationState(
+                n_tick=int(tick), individual_count=state.individual_count
+            ),
+            result,
         )
 
     def run(
         self,
-        state: DiscretePopulationState,
         n_steps: int,
         record_every: int = 0,
         observation_mask: NDArray[np.float64] | None = None,
         checkpoint_every: int = 0,
-    ) -> tuple[DiscretePopulationState, NDArray[np.float64], bool]:
+    ) -> tuple[int, NDArray[np.float64], bool]:
         """Run up to ``n_steps`` ticks inside Rust with optional recording.
 
         In-run ``Op.set_param`` writes accumulate in the session audit
@@ -754,13 +744,10 @@ class RustDiscreteLifecycleBackend:
             ValueError: When an in-run ``Op.set_param`` value fails the Rust
                 bounds gate (non-finite or outside the jsonc bounds).
         """
-        ind_count = np.array(state.individual_count, dtype=np.float64, order="C", copy=True)
         if observation_mask is not None:
             observation_mask = np.ascontiguousarray(observation_mask, dtype=np.float64)
         final_tick, history_rows, was_stopped = _session_call(
             lambda: self._session.run(
-                ind_count,
-                int(state.n_tick),
                 int(n_steps),
                 int(record_every),
                 self._wf,
@@ -768,11 +755,7 @@ class RustDiscreteLifecycleBackend:
                 int(checkpoint_every),
             )
         )
-        return (
-            DiscretePopulationState(n_tick=int(final_tick), individual_count=ind_count),
-            history_rows,
-            bool(was_stopped),
-        )
+        return (int(final_tick), history_rows, bool(was_stopped))
 
     def drain_eco_journal(self) -> list[EcoJournalEntry]:
         """Drain the session's accumulated set_param audit journal.

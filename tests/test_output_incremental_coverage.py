@@ -18,7 +18,6 @@ from natal.frontend.output import (
 )
 from natal.frontend.output.observation import ObservationFilter
 from natal.frontend.patterns import IndividualSelector
-from natal.frontend.spatial.configurator import batch_setting
 from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 

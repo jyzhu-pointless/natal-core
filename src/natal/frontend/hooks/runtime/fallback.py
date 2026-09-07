@@ -251,10 +251,10 @@ class HookExecutor:
 
         # Live state on purpose: hooks borrow the writable arrays for one
         # callback (short-term loan).  The public ``population.state``
-        # returns snapshots, so the executor must reach the private
-        # container directly to keep hook writes effective.
-        state = population._state  # pyright: ignore[reportPrivateUsage]  # sanctioned live loan channel into callbacks
-        assert state is not None  # events only fire on initialized populations
+        # returns snapshots, so the executor borrows the live container
+        # (a fresh session snapshot under Rust) and flushes any callback
+        # writes back into the session after the event.
+        state = population._live_state()  # pyright: ignore[reportPrivateUsage]  # sanctioned live loan channel into callbacks
         ind_count = state.individual_count
 
         # Resolve runtime state flags.  No dummy sperm array is created:
@@ -337,13 +337,18 @@ class HookExecutor:
                     population, eco_values, _fired_set_param_names(plan, tick)
                 )
 
-        # Python callbacks run after all CSR plans for the event.
-        return self._runner.run_event(
+        # Python callbacks run after all CSR plans for the event.  The
+        # borrowed container (a session snapshot under Rust) is flushed
+        # back afterwards so callback and CSR writes reach the
+        # session-owned state.
+        result = self._runner.run_event(
             event_id,
             tick=tick,
             deme_id=deme_id,
             state=state,
         )
+        population._flush_state_to_session(state)  # pyright: ignore[reportPrivateUsage]  # hook writes reach the session-owned state
+        return result
 
     def get_hooks_for_event(self, event_id: int) -> List[CompiledHookDescriptor]:
         """Return CSR descriptors for *event_id*, sorted by priority."""
