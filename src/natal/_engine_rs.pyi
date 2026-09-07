@@ -140,23 +140,6 @@ class DiscreteEngineSession:
     def truncate_checkpoints(self, retain_until_tick: int) -> None: ...
 
 
-class SpatialEngineSession:
-    """Rust-owned homogeneous spatial multi-deme lifecycle session."""
-
-    def __init__(self, blueprint: object, params: object, seed: int = 0) -> None: ...
-    def refresh_params(self, fields: list[str], source: object) -> None: ...
-    def set_hook_program(self, program: object) -> None: ...
-    def clear_hook_program(self) -> None: ...
-    def reseed(self, seed: int) -> None: ...
-    def drain_eco_journal(self) -> list[tuple[int, int, int, float, float]]: ...
-    def run(
-        self,
-        individual_count_all: NDArray[np.float64],
-        sperm_storage_all: NDArray[np.float64],
-        tick: int,
-    ) -> int: ...
-
-
 class HeterogeneousSpatialEngineSession:
     """Rust-owned heterogeneous spatial session over the variant bank.
 
@@ -178,6 +161,7 @@ class HeterogeneousSpatialEngineSession:
         individual_count_all: NDArray[np.float64],
         sperm_storage_all: NDArray[np.float64],
         tick: int,
+        model: str = "age_structured",
         stay_after_send: bool = False,
         seed: int = 0,
     ) -> None: ...

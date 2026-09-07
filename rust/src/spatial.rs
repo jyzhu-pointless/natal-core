@@ -1,11 +1,15 @@
 //! Spatial multi-deme lifecycle and migration kernels.
 //!
-//! The module runs the per-deme age-structured lifecycle over a stacked state,
-//! supports heterogeneous config banks, and implements both adjacency-based
-//! and topology-kernel migration in deterministic and stochastic forms.
+//! The module schedules one tick for every deme over a stacked state —
+//! age-structured and discrete-generation lifecycles share the same D-axis
+//! scheduler, RNG-bank discipline, and migration stage — and implements
+//! both adjacency-based and topology-kernel migration in deterministic and
+//! stochastic forms.
 //!
-//! Per-deme RNG streams derive from the base seed via ``seed ^ deme_id``
-//! (XOR keeps every base-seed bit present in each stream).
+//! Per-deme RNG streams live in the session's persistent bank (seeded
+//! ``seed ^ deme_id`` and advancing across ticks); the standalone one-shot
+//! migration entries rebuild streams from a base seed for their
+//! reproducibility contract.
 
 #![allow(clippy::needless_range_loop)] // Index loops mirror the Python reference for parity review.
 #![allow(clippy::too_many_arguments)] // Migration helpers mirror the Numba kernel signatures.
@@ -14,6 +18,8 @@ use rayon::prelude::*;
 
 use crate::config::SimConfig;
 use crate::contract::{Blueprint, Params, TensorSet};
+use crate::discrete;
+use crate::discrete::DiscreteConfig;
 use crate::hooks::HookProgram;
 use crate::lifecycle;
 use crate::rng::{new_rng, SessionRng};
@@ -41,118 +47,99 @@ fn local_params(hooks: &HookProgram, params: &Params, deme: usize) -> Option<Par
     }
 }
 
-/// Run one age-structured tick for every deme in parallel (homogeneous config).
-///
-/// The stacked state is split into per-deme chunks; each deme gets an
-/// independent RNG derived from ``seed ^ deme_id``.
+/// Shared D-axis scheduler: split the stacked state into per-deme chunks
+/// and run every deme's tick, either on the rayon pool (callback-free
+/// programs — deme streams are disjoint so scheduling cannot change the
+/// assignment) or in stable deme order (callback-carrying programs fire on
+/// the GIL).  This is the ONE scheduler for every spatial lifecycle.
 ///
 /// ## Parameters
-/// - `cfg`: Shared simulation config.
-/// - `hooks`: CSR hook program.
-/// - `seed`: Base RNG seed.
-/// - `ind_all`: Stacked individual-count slice.
-/// - `sperm_all`: Stacked sperm-storage slice.
-/// - `n_demes`: Number of demes.
-/// - `tick`: Current tick.
-/// - `bp`: Blueprint backing config re-assembly (set_param programs).
-/// - `params`: Session ecology columns the local copies are cut from.
-/// - `genetics`: Shared genetics tables for config re-assembly.
-/// - `journal`: Session audit sink, extended with this tick's per-deme
-///   set_param transitions in deme order.
+/// - `hooks`: CSR hook program (its callback inventory picks the mode).
+/// - `rngs`: Per-deme persistent RNG streams (advanced in place).
+/// - `ind_all` / `sperm_all`: Stacked state slices.
+/// - `eco_all`: Per-deme ECO scratch rows for OP_SET_PARAM.
+/// - `n_demes` / `ind_stride` / `sperm_stride`: Layout of the stacks.
+/// - `journal`: Session audit sink, extended in deme-then-commit order.
+/// - `tick_deme`: Per-deme body ``(deme_id, rng, ind, sperm, eco)``.
 ///
 /// ## Returns
-/// ``Ok(())`` or an error string if a deme hook stops or shapes mismatch.
-///
-/// ## Panics
-/// Panics (via slicing) if the ecology columns do not actually hold
-/// ``n_demes`` entries; sessions validate that at construction.
-#[allow(clippy::too_many_arguments)] // Session boundary mirror of the panmictic tick API.
-pub fn run_spatial_tick(
-    cfg: &SimConfig,
+/// ``Ok(0)`` when every deme completed the tick, ``Ok(1)`` when a hook
+/// stopped (the caller keeps the boundary state and freezes the tick), or
+/// an error string.
+#[allow(clippy::too_many_arguments)] // Generic scheduler boundary.
+pub fn schedule_deme_ticks<F>(
     hooks: &HookProgram,
-    seed: u64,
+    rngs: &mut [SessionRng],
     ind_all: &mut [f64],
     sperm_all: &mut [f64],
-    n_demes: usize,
-    tick: i64,
     eco_all: &mut [f64],
-    bp: &Blueprint,
-    params: &Params,
-    genetics: &TensorSet,
+    n_demes: usize,
+    ind_stride: usize,
+    sperm_stride: usize,
     journal: &mut Vec<SpatialEcoJournalRow>,
-) -> Result<(), String> {
-    // Split stacked state into per-deme chunks and run each deme tick in
-    // parallel with an independent RNG derived from seed ^ deme id.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let ind_stride = 2 * n_ages * n_ztypes;
-    let sperm_stride = n_ages * n_ztypes * n_ztypes;
-
+    tick_deme: F,
+) -> Result<i32, String>
+where
+    F: Fn(
+            usize,
+            &mut SessionRng,
+            &mut [f64],
+            &mut [f64],
+            &mut [f64],
+        ) -> (Result<i32, String>, Vec<SpatialEcoJournalRow>)
+        + Sync,
+{
     let mut ind_chunks: Vec<&mut [f64]> = ind_all.chunks_mut(ind_stride).collect();
     let mut sperm_chunks: Vec<&mut [f64]> = sperm_all.chunks_mut(sperm_stride).collect();
-    if ind_chunks.len() != n_demes || sperm_chunks.len() != n_demes {
+    let mut eco_chunks: Vec<&mut [f64]> = eco_all.chunks_mut(crate::hooks::N_ECO_PARAMS).collect();
+    if ind_chunks.len() != n_demes || sperm_chunks.len() != n_demes || rngs.len() != n_demes {
         return Err(format!(
-            "stacked state length mismatch: expected {n_demes} demes, got ind={} sperm={}",
+            "stacked state length mismatch: expected {n_demes} demes, got ind={} sperm={} rngs={}",
             ind_chunks.len(),
-            sperm_chunks.len()
+            sperm_chunks.len(),
+            rngs.len()
         ));
     }
-    // Per-deme ECO scratch rows (N_ECO_PARAMS wide) for OP_SET_PARAM;
-    // chunk boundaries make the parallel deme writes disjoint.
-    let mut eco_chunks: Vec<&mut [f64]> = eco_all.chunks_mut(crate::hooks::N_ECO_PARAMS).collect();
+    // Python callbacks run on the GIL: firing them from rayon workers
+    // would race the interpreter and make cross-deme callback order
+    // nondeterministic, so any callback-carrying program demotes the
+    // scheduler to a stable deme-order sequential loop.
+    let sequential = hooks
+        .python_callbacks
+        .iter()
+        .any(|callbacks| !callbacks.is_empty());
 
-    let results: Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)> = ind_chunks
-        .par_iter_mut()
-        .zip(sperm_chunks.par_iter_mut())
-        .zip(eco_chunks.par_iter_mut())
-        .enumerate()
-        .map(|(deme_id, ((ind, sperm), eco))| {
-            let mut rng: SessionRng = new_rng(crate::rng::stream_seed(seed, deme_id as i64));
-            let mut local = local_params(hooks, params, deme_id);
-            let mut ctx = local.as_mut().map(|local_params| lifecycle::EcoCtx {
-                bp,
-                params: local_params,
-                genetics,
-                // The local copy has exactly one column: writes target index 0.
-                deme: 0,
-                tick,
-                journal: Vec::new(),
-            });
-            let result = lifecycle::run_tick(
-                &mut rng,
-                cfg,
-                hooks,
-                ind,
-                sperm,
-                tick,
-                deme_id as i64,
-                eco,
-                &mut ctx,
-            );
-            let rows = ctx.map(|ctx| {
-                // The local copy's final values are the deme's tick result:
-                // reflect them into the eco scratch row the session reads
-                // for its column write-back (multi-event writes included).
-                for id in 0..crate::hooks::N_ECO_PARAMS {
-                    eco[id] = ctx.params.eco_value(id, 0);
-                }
-                ctx.journal
-                    .into_iter()
-                    .map(|(t, id, old, new)| (deme_id, t, id, old, new))
-                    .collect::<Vec<SpatialEcoJournalRow>>()
-            });
-            (result, rows.unwrap_or_default())
-        })
-        .collect::<Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)>>();
+    let results: Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)> = if sequential {
+        ind_chunks
+            .iter_mut()
+            .zip(sperm_chunks.iter_mut())
+            .zip(eco_chunks.iter_mut())
+            .zip(rngs.iter_mut())
+            .enumerate()
+            .map(|(deme_id, (((ind, sperm), eco), rng))| tick_deme(deme_id, rng, ind, sperm, eco))
+            .collect()
+    } else {
+        ind_chunks
+            .par_iter_mut()
+            .zip(sperm_chunks.par_iter_mut())
+            .zip(eco_chunks.par_iter_mut())
+            .zip(rngs.par_iter_mut())
+            .enumerate()
+            .map(|(deme_id, (((ind, sperm), eco), rng))| tick_deme(deme_id, rng, ind, sperm, eco))
+            .collect()
+    };
 
+    let mut stopped = false;
     for (result, rows) in results {
         journal.extend(rows);
         let code = result?;
         if code != 0 {
-            return Err(format!("deme hook requested stop with code {code}"));
+            // Keep sweeping the remaining results so every journal row
+            // lands, then report the stop to the caller.
+            stopped = true;
         }
     }
-    Ok(())
+    Ok(if stopped { 1 } else { 0 })
 }
 
 /// Tick one heterogeneous deme: lifecycle plus per-deme hook context.
@@ -255,29 +242,14 @@ pub fn run_spatial_tick_heterogeneous(
     deme_variants: &[usize],
     journal: &mut Vec<SpatialEcoJournalRow>,
 ) -> Result<i32, String> {
-    // Like run_spatial_tick, but each deme consumes its own pre-assembled
-    // per-deme config and its own persistent RNG stream.
     if configs.is_empty() {
         return Err(
             "heterogeneous spatial run requires at least one config and one deme".to_string(),
         );
     }
     let n_demes = configs.len();
-    let first = &configs[0];
-    let n_ages = first.n_ages;
-    let n_ztypes = first.n_ztypes;
-    let ind_stride = 2 * n_ages * n_ztypes;
-    let sperm_stride = n_ages * n_ztypes * n_ztypes;
-
-    let mut ind_chunks: Vec<&mut [f64]> = ind_all.chunks_mut(ind_stride).collect();
-    let mut sperm_chunks: Vec<&mut [f64]> = sperm_all.chunks_mut(sperm_stride).collect();
-    if ind_chunks.len() != n_demes || sperm_chunks.len() != n_demes {
-        return Err(format!(
-            "stacked state length mismatch: expected {n_demes} demes, got ind={} sperm={}",
-            ind_chunks.len(),
-            sperm_chunks.len()
-        ));
-    }
+    let n_ages = configs[0].n_ages;
+    let n_ztypes = configs[0].n_ztypes;
     if params.n_demes != n_demes || deme_variants.len() != n_demes || rngs.len() != n_demes {
         return Err(format!(
             "heterogeneous spatial run requires {n_demes} ecology columns, variant ids, and RNG streams, got {}, {}, and {}",
@@ -286,78 +258,141 @@ pub fn run_spatial_tick_heterogeneous(
             rngs.len()
         ));
     }
+    // Capture per-deme config references up front so the scheduler body
+    // only carries the deme id and the disjoint mutable slices.
+    let deme_configs: Vec<&SimConfig> = configs.iter().collect();
+    schedule_deme_ticks(
+        hooks,
+        rngs,
+        ind_all,
+        sperm_all,
+        eco_all,
+        n_demes,
+        2 * n_ages * n_ztypes,
+        n_ages * n_ztypes * n_ztypes,
+        journal,
+        |deme_id, rng, ind, sperm, eco| {
+            let cfg = deme_configs[deme_id];
+            if cfg.n_ages != n_ages || cfg.n_ztypes != n_ztypes {
+                return (
+                    Err(format!(
+                        "config for deme {deme_id} dimensions do not match the stacked state"
+                    )),
+                    Vec::new(),
+                );
+            }
+            let genetics = &variants[deme_variants[deme_id]];
+            tick_hetero_deme(
+                deme_id, cfg, hooks, rng, ind, sperm, eco, tick, bp, params, genetics,
+            )
+        },
+    )
+}
 
-    // Per-deme ECO scratch rows (N_ECO_PARAMS wide) for OP_SET_PARAM.
-    let mut eco_chunks: Vec<&mut [f64]> = eco_all.chunks_mut(crate::hooks::N_ECO_PARAMS).collect();
-
-    // Python callbacks run on the GIL: firing them from rayon workers
-    // would race the interpreter and make cross-deme callback order
-    // nondeterministic, so any callback-carrying program demotes the
-    // scheduler to a stable deme-order sequential loop.
-    let sequential = hooks
-        .python_callbacks
-        .iter()
-        .any(|callbacks| !callbacks.is_empty());
-
-    let results: Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)> = if sequential {
-        ind_chunks
-            .iter_mut()
-            .zip(sperm_chunks.iter_mut())
-            .zip(eco_chunks.iter_mut())
-            .zip(configs.iter())
-            .zip(rngs.iter_mut())
-            .enumerate()
-            .map(|(deme_id, ((((ind, sperm), eco), cfg), rng))| {
-                if cfg.n_ages != n_ages || cfg.n_ztypes != n_ztypes {
-                    return (
-                        Err(format!(
-                            "config for deme {deme_id} dimensions do not match the stacked state"
-                        )),
-                        Vec::new(),
-                    );
-                }
-                let genetics = &variants[deme_variants[deme_id]];
-                tick_hetero_deme(
-                    deme_id, cfg, hooks, rng, ind, sperm, eco, tick, bp, params, genetics,
-                )
-            })
-            .collect()
-    } else {
-        ind_chunks
-            .par_iter_mut()
-            .zip(sperm_chunks.par_iter_mut())
-            .zip(eco_chunks.par_iter_mut())
-            .zip(configs.par_iter())
-            .zip(rngs.par_iter_mut())
-            .enumerate()
-            .map(|(deme_id, ((((ind, sperm), eco), cfg), rng))| {
-                if cfg.n_ages != n_ages || cfg.n_ztypes != n_ztypes {
-                    return (
-                        Err(format!(
-                            "config for deme {deme_id} dimensions do not match the stacked state"
-                        )),
-                        Vec::new(),
-                    );
-                }
-                let genetics = &variants[deme_variants[deme_id]];
-                tick_hetero_deme(
-                    deme_id, cfg, hooks, rng, ind, sperm, eco, tick, bp, params, genetics,
-                )
-            })
-            .collect()
-    };
-
-    let mut stopped = false;
-    for (result, rows) in results {
-        journal.extend(rows);
-        let code = result?;
-        if code != 0 {
-            // Keep sweeping the remaining results so every journal row
-            // lands, then report the stop to the caller.
-            stopped = true;
+/// Tick one discrete-generation deme: lifecycle plus per-deme hook context.
+///
+/// Discrete twin of [`tick_hetero_deme`]; the sperm plane is a
+/// session-maintained zero sink the discrete lifecycle never touches.
+#[allow(clippy::too_many_arguments)] // Per-deme boundary mirror.
+fn tick_discrete_deme(
+    deme_id: usize,
+    cfg: &DiscreteConfig,
+    hooks: &HookProgram,
+    rng: &mut SessionRng,
+    ind: &mut [f64],
+    eco: &mut [f64],
+    tick: i64,
+    bp: &Blueprint,
+    params: &Params,
+    genetics: &TensorSet,
+) -> (Result<i32, String>, Vec<SpatialEcoJournalRow>) {
+    let mut local = local_params(hooks, params, deme_id);
+    let mut ctx = local.as_mut().map(|local_params| lifecycle::EcoCtx {
+        bp,
+        params: local_params,
+        genetics,
+        // The local copy has exactly one column: writes target index 0.
+        deme: 0,
+        tick,
+        journal: Vec::new(),
+    });
+    let result = discrete::run_tick(rng, cfg, hooks, ind, tick, eco, &mut ctx);
+    let rows = ctx.map(|ctx| {
+        for id in 0..crate::hooks::N_ECO_PARAMS {
+            eco[id] = ctx.params.eco_value(id, 0);
         }
+        ctx.journal
+            .into_iter()
+            .map(|(t, id, old, new)| (deme_id, t, id, old, new))
+            .collect::<Vec<SpatialEcoJournalRow>>()
+    });
+    (result, rows.unwrap_or_default())
+}
+
+/// Run one discrete-generation tick for every deme over the variant bank.
+///
+/// Same scheduler, RNG-bank discipline, and stop contract as the
+/// age-structured kernel; the discrete lifecycle carries no sperm plane.
+///
+/// ## Parameters
+/// - `configs`: Per-deme discrete configs (index-aligned with the demes).
+/// - `hooks`, `rngs`, `ind_all`, `tick`, `eco_all`, `bp`, `params`,
+///   `variants`, `deme_variants`, `journal`: see
+///   [`run_spatial_tick_heterogeneous`].
+///
+/// ## Returns
+/// ``Ok(0)`` continue / ``Ok(1)`` stopped / error string.
+#[allow(clippy::too_many_arguments)] // Session boundary mirror of the age kernel.
+pub fn run_spatial_tick_discrete(
+    configs: &[DiscreteConfig],
+    hooks: &HookProgram,
+    rngs: &mut [SessionRng],
+    ind_all: &mut [f64],
+    tick: i64,
+    eco_all: &mut [f64],
+    bp: &Blueprint,
+    params: &Params,
+    variants: &[TensorSet],
+    deme_variants: &[usize],
+    journal: &mut Vec<SpatialEcoJournalRow>,
+) -> Result<i32, String> {
+    if configs.is_empty() {
+        return Err("discrete spatial run requires at least one config and one deme".to_string());
     }
-    Ok(if stopped { 1 } else { 0 })
+    let n_demes = configs.len();
+    let n_ztypes = configs[0].n_ztypes;
+    // Discrete canonicalization: 2 sexes x 2 ages.
+    let ind_stride = 2 * 2 * n_ztypes;
+    if params.n_demes != n_demes || deme_variants.len() != n_demes || rngs.len() != n_demes {
+        return Err(format!(
+            "discrete spatial run requires {n_demes} ecology columns, variant ids, and RNG streams, got {}, {}, and {}",
+            params.n_demes,
+            deme_variants.len(),
+            rngs.len()
+        ));
+    }
+    // A zero sperm plane satisfies the scheduler's chunking contract; the
+    // discrete lifecycle never reads it.
+    let mut sink = vec![0.0f64; ind_all.len().max(1)];
+    let deme_configs: Vec<&DiscreteConfig> = configs.iter().collect();
+    schedule_deme_ticks(
+        hooks,
+        rngs,
+        ind_all,
+        &mut sink,
+        eco_all,
+        n_demes,
+        ind_stride,
+        ind_stride,
+        journal,
+        |deme_id, rng, ind, _sperm_sink, eco| {
+            let cfg = deme_configs[deme_id];
+            let genetics = &variants[deme_variants[deme_id]];
+            tick_discrete_deme(
+                deme_id, cfg, hooks, rng, ind, eco, tick, bp, params, genetics,
+            )
+        },
+    )
 }
 
 /// Deterministically move individuals and stored sperm along a CSR routing table.

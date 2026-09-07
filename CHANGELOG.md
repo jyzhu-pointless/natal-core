@@ -56,6 +56,15 @@
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
   `batch_setting()` values.
+- **One spatial session for every model**: discrete-generation spatial
+  populations now share the session-owned heterogeneous kernel with
+  age-structured (per-deme RNG banks, declarative hooks and Python-callback
+  registration, migration inside the tick).  The hook-less per-config-bank
+  discrete backends, the homogeneous `SpatialEngineSession` /
+  `RustSpatialLifecycleBackend` pair, and the `RustSpatialLifecycleBackend.run`
+  state round trip are deleted; discrete spatial `reset()` now also restores
+  the random source.  Fixes defect R2 (declarative hooks were silently
+  skipped on the discrete spatial Rust path).
 - **Rust spatial session owns the run state**: the heterogeneous session holds
   the stacked counts, sperm storage, tick, and per-deme RNG bank;
   `RustHeterogeneousSpatialLifecycleBackend.run(ind, sperm, tick)` is replaced

@@ -14,10 +14,11 @@ the ledgers as data and checks them mechanically:
   unreachability assertions when the owning stage deletes them, so a
   silent partial deletion cannot go unnoticed.
 - ``INVARIANTS``: every verification face from plan section 12.1 maps
-  to owning tests; currently-violated invariants are registered as
-  known violations with red-light repros in
-  ``scripts/known_defect_repro.py`` (audit finding C1 was fixed in S1
-  batch 4; C2 still needs a spec decision and is documented here only).
+  to owning tests; a violated invariant can be registered as a known
+  violation.  All S0 red-light repros (R1-R5) have graduated into the
+  pytest suite next to their owning stage's fix, and the construction
+  script ``scripts/known_defect_repro.py`` is retired (C2/C4 remain
+  documented-only pending a spec decision).
 
 Any pytest failure that is NOT in the known-violation list is by
 construction a new regression.
@@ -27,14 +28,11 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REPRO_SCRIPT = REPO_ROOT / "scripts" / "known_defect_repro.py"
 
 
 # ── Ledger 1: must-exist ──────────────────────────────────────────────────────
@@ -209,9 +207,12 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     ),
     RemovalEntry(
         item_id="discrete-spatial-hookless-backend",
-        description="separate hook-less discrete-spatial backend construction path",
+        description=(
+            "separate hook-less discrete-spatial backend construction path "
+            "(S3b: one session and Program for every model)"
+        ),
         owner_stage="S3",
-        status="pending",
+        status="removed",
     ),
     RemovalEntry(
         item_id="python-history-append-store",
@@ -272,9 +273,9 @@ def _removed_probe_configcontext_population_clone() -> None:
     from natal.frontend import presets as presets_pkg
     from natal.frontend.configurator import _registry_builder as rb
 
-    assert not _module_importable("natal.frontend.configurator._registry_builder.ConfigContext"), (
-        "ConfigContext is importable again — the Population mimicry is back"
-    )
+    assert not _module_importable(
+        "natal.frontend.configurator._registry_builder.ConfigContext"
+    ), "ConfigContext is importable again — the Population mimicry is back"
     assert not hasattr(rb, "ConfigContext"), (
         "ConfigContext is getattr-reachable on _registry_builder again"
     )
@@ -321,12 +322,35 @@ def _removed_probe_per_run_session_rebuild() -> None:
         )
 
 
+def _removed_probe_discrete_spatial_hookless_backend() -> None:
+    """The hook-less discrete-spatial construction is unreachable."""
+    from natal.frontend.spatial.population import SpatialPopulation
+
+    # The container no longer builds per-bank hook-less discrete backends:
+    # both models share the one heterogeneous session.
+    assert not hasattr(SpatialPopulation, "_run_rust_discrete_spatial_tick"), (
+        "the legacy discrete per-bank tick path is back"
+    )
+    import natal.backends.rust.rust_backend as rb
+
+    source = (
+        REPO_ROOT / "src" / "natal" / "frontend" / "spatial" / "population.py"
+    ).read_text(encoding="utf-8")
+    assert "RustDiscreteLifecycleBackend(cfg, None" not in source, (
+        "the hook-less discrete-spatial construction is back"
+    )
+    assert hasattr(rb, "RustDiscreteLifecycleBackend"), (
+        "the plain-model discrete session must remain (spatial per-bank use is gone)"
+    )
+
+
 REMOVED_PROBES: dict[str, Callable[[], None]] = {
     "output.record": _removed_probe_output_record,
     "build_observation_row_panmictic": _removed_probe_build_observation_row_panmictic,
     "configcontext-population-clone": _removed_probe_configcontext_population_clone,
     "rust-dirty-bridge": _removed_probe_rust_dirty_bridge,
     "per-run-session-rebuild": _removed_probe_per_run_session_rebuild,
+    "discrete-spatial-hookless-backend": _removed_probe_discrete_spatial_hookless_backend,
 }
 
 
@@ -362,9 +386,9 @@ def _pending_probe_backend_selector() -> None:
     )
     from natal.frontend.spatial.population import SpatialPopulation
 
-    assert "backend" in inspect.signature(
-        DiscreteGenerationPopulation.setup
-    ).parameters, "DiscreteGenerationPopulation.setup lost the backend= selector kwarg"
+    assert (
+        "backend" in inspect.signature(DiscreteGenerationPopulation.setup).parameters
+    ), "DiscreteGenerationPopulation.setup lost the backend= selector kwarg"
     for cls in (DiscreteGenerationPopulation, SpatialPopulation):
         assert hasattr(cls, "enable_rust_backend")
         assert hasattr(cls, "disable_rust_backend")
@@ -398,21 +422,6 @@ def _pending_probe_python_authoritative_state() -> None:
         )
 
 
-def _pending_probe_discrete_spatial_hookless_backend() -> None:
-    """The hook-less discrete-spatial backend construction must still exist."""
-    source = (
-        REPO_ROOT / "src" / "natal" / "frontend" / "spatial" / "population.py"
-    ).read_text(encoding="utf-8")
-    # R2 defect site: discrete spatial demes get RustDiscreteLifecycleBackend
-    # built with an explicit None hook program, unlike the age-structured
-    # spatial path which compiles one.  Static probe: the construction is
-    # textual and lives in a single known place.
-    assert "RustDiscreteLifecycleBackend(cfg, None" in source, (
-        "the hook-less discrete-spatial backend construction is gone — flip "
-        'this entry to "removed" in the same batch as the S3 unification'
-    )
-
-
 def _pending_probe_python_history_append_store() -> None:
     """The Python History append-store must still exist."""
     from natal.frontend.output.history import History
@@ -436,7 +445,6 @@ PENDING_PROBES: dict[str, Callable[[], None]] = {
     "backends.reference": _pending_probe_backends_reference,
     "backend-selector": _pending_probe_backend_selector,
     "python-authoritative-state": _pending_probe_python_authoritative_state,
-    "discrete-spatial-hookless-backend": _pending_probe_discrete_spatial_hookless_backend,
     "python-history-append-store": _pending_probe_python_history_append_store,
     "same-path-parity-tests": _pending_probe_same_path_parity_tests,
 }
@@ -471,9 +479,9 @@ class InvariantEntry:
     Attributes:
         area: Verification face name.
         owning_tests: Test files that prove the invariant today.
-        known_violations: Defect ids (R1-R5, C2, C3) that currently
-            break the face, each (except C2) with a red-light repro in
-            the repro script.
+        known_violations: Defect ids (C2/C4 pending spec decisions) that
+            currently break the face; everything else graduates into the
+            owning tests once its stage lands.
     """
 
     area: str
@@ -500,8 +508,10 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="random streams advance; split run == single run; restore replays",
-        owning_tests=(),
-        known_violations=("R1",),
+        owning_tests=(
+            "test_spatial_session_ownership.py",
+            "test_restore_checkpoint_semantics.py",
+        ),
     ),
     InvariantEntry(
         area="migration conserves counts; empty-neighbor/edge/zero-rate behavior",
@@ -524,12 +534,17 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="hook x model x space combinations run uniformly (plan 12.2)",
-        owning_tests=("test_frozen_hook_format.py",),
-        known_violations=("R2",),
+        owning_tests=(
+            "test_frozen_hook_format.py",
+            "test_spatial_session_ownership.py",
+        ),
     ),
     InvariantEntry(
         area="observation: current query == history recompute == direct record",
-        owning_tests=("test_observation_phase2.py", "test_history_observation_contract.py"),
+        owning_tests=(
+            "test_observation_phase2.py",
+            "test_history_observation_contract.py",
+        ),
     ),
 )
 
@@ -609,18 +624,6 @@ def test_invariant_owning_test_files_exist() -> None:
             )
 
 
-def test_known_violations_have_red_light_repros() -> None:
-    """Every registered violation maps to a repro function in the script."""
-    assert REPRO_SCRIPT.is_file(), "scripts/known_defect_repro.py missing"
-    text = REPRO_SCRIPT.read_text(encoding="utf-8")
-    for defect_id in sorted(KNOWN_DEFECT_IDS):
-        if defect_id in ("C2", "C4"):
-            continue  # documented here; both need a spec decision first
-        assert f'def repro_{defect_id.lower()}(' in text, (
-            f"{defect_id}: no repro function in known_defect_repro.py"
-        )
-
-
 def test_offspring_derivation_has_a_single_spelling() -> None:
     """The offspring-tensor derivation is spelled exactly once (S1).
 
@@ -645,38 +648,24 @@ def test_offspring_derivation_has_a_single_spelling() -> None:
         if "compute_offspring_probability_tensor" in text:
             offenders.append(rel)
     assert not offenders, (
-        "offspring derivation re-spelled outside the single wrapper: "
-        f"{offenders}"
+        f"offspring derivation re-spelled outside the single wrapper: {offenders}"
     )
 
 
-def test_repro_script_covers_only_registered_defects() -> None:
-    """The repro script's registry and this ledger stay in sync."""
-    import re
+def test_graduated_defects_keep_their_promoted_tests() -> None:
+    """Every graduated red-light repro has a live pytest home.
 
-    text = REPRO_SCRIPT.read_text(encoding="utf-8")
-    registered = set(re.findall(r'"(R\d|C\d)":\s*repro_', text))
-    repro_backed = {d for d in KNOWN_DEFECT_IDS if d not in ("C2", "C4")}
-    assert registered == repro_backed, (
-        f"repro script registry {sorted(registered)} diverged from the "
-        f"ledger's repro-backed defects {sorted(repro_backed)}"
-    )
-
-
-def test_ledger_state_importable_without_side_effects() -> None:
-    """Importing the repro module (module-level only) stays side-effect free."""
-    spec = importlib.util.spec_from_file_location(
-        "known_defect_repro_ledger_probe", REPRO_SCRIPT
-    )
-    assert spec is not None and spec.loader is not None
-    module: ModuleType = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        del sys.modules[spec.name]
-    # R4/R5 graduated to tests/test_ownership_snapshots.py in S2 batch 22
-    # (C3 precedent: fixed and promoted in the same batch).
-    # R3 graduated to tests/test_restore_checkpoint_semantics.py in S2
-    # batch 22b (R4/R5 in batch 22a; C3 in S1 batch 5).
-    assert set(module.REPROS) == {"R1", "R2"}
+    R4/R5 graduated in S2 batch 22a, R3 in batch 22b, and R1/R2 in S3
+    (batches 95544b4 and the discrete unification).  Deleting a promoted
+    file silently would otherwise go unnoticed by this ledger.
+    """
+    for test_file in (
+        "test_ownership_snapshots.py",
+        "test_restore_checkpoint_semantics.py",
+        "test_spatial_session_ownership.py",
+    ):
+        path = REPO_ROOT / "tests" / test_file
+        assert path.is_file(), (
+            f"graduated repro home {test_file} is missing — the defect's "
+            "regression evidence must stay in the suite"
+        )

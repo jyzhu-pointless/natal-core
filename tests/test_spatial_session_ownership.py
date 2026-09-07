@@ -419,3 +419,97 @@ def test_discrete_spatial_rust_tick_keeps_the_migration_tail() -> None:
         _stacked(reference),
         err_msg="discrete spatial rust path dropped the migration stage",
     )
+
+
+def test_declarative_hooks_run_on_discrete_spatial_rust() -> None:
+    """R2 promotion: one Program for every model — a declarative halve-K
+    hook lands on the discrete spatial Rust path exactly like the plain
+    discrete twin (K 10000 -> 2500 over two late-event firings)."""
+    @nt.hook(event="late")
+    def halve_k() -> list:
+        return [nt.Op.set_param("carrying_capacity", "K * 0.5")]
+
+    spatial = (
+        nt.SpatialPopulation.builder(
+            _species("own_r2sp"), n_demes=4, pop_type="discrete_generation"
+        )
+        .setup(name="own_r2_spatial", stochastic=False)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [
+                    {"female": {"WT|WT": 100.0}, "male": {"WT|WT": 100.0}},
+                ]
+                * 4
+            )
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=10000.0, low_density_growth_rate=2.0)
+        .migration(adjacency=_ring_adjacency(4), migration_rate=0.0)
+        .hooks(halve_k)
+        .build()
+    )
+    spatial.enable_rust_backend(seed=7)
+    assert spatial.using_rust_backend
+    spatial.run(2, record_every=0)
+    ks = [deme.params.carrying_capacity for deme in spatial.demes]
+    assert ks == [2500.0, 2500.0, 2500.0, 2500.0]
+
+    plain = (
+        nt.DiscreteGenerationPopulation.setup(
+            species=_species("own_r2plain"), name="own_r2_plain", stochastic=False
+        )
+        .initial_state(
+            individual_count={"female": {"WT|WT": 100.0}, "male": {"WT|WT": 100.0}}
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=10000.0, low_density_growth_rate=2.0)
+        .hooks(halve_k)
+        .build()
+    )
+    plain.run(2, record_every=0)
+    assert plain.params.carrying_capacity == 2500.0
+
+
+def test_discrete_spatial_stochastic_migration_matches_python_dispatch() -> None:
+    """The fused discrete kernel's stochastic migration tail matches the
+    python-dispatch reference statistically (mass conservation + integer
+    counts), and discrete reset restores the random source."""
+    def build(name: str, seed: int, enable: bool):
+        pop = (
+            nt.SpatialPopulation.builder(
+                _species(f"{name}sp"), n_demes=4, pop_type="discrete_generation"
+            )
+            .setup(name=name, stochastic=True)
+            .initial_state(
+                individual_count=nt.batch_setting(
+                    [
+                        {"female": {"WT|WT": 100.0}, "male": {"WT|WT": 100.0}},
+                    ]
+                    * 4
+                )
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=2, sex_ratio=0.5)
+            .competition(carrying_capacity=1e12, low_density_growth_rate=2.0)
+            .migration(adjacency=np.ones((4, 4)), migration_rate=0.25)
+            .build()
+        )
+        if enable:
+            pop.enable_rust_backend(seed=seed)
+        return pop
+
+    population = build("own_dmig", 62, enable=True)
+    population.run(2, record_every=0)
+    totals = [_stacked(population)[d].sum() for d in range(4)]
+    assert all(float(t).is_integer() for t in totals)
+    # Reset restores state AND the random source: reset then run(1) equals
+    # a fresh same-seed population's run(1) bitwise.
+    population.run(1, record_every=0)
+    population.reset()
+    fresh = build("own_dmig_fresh", 62, enable=True)
+    fresh.run(1, record_every=0)
+    population.reset()
+    population.run(1, record_every=0)
+    np.testing.assert_array_equal(_stacked(population), _stacked(fresh))

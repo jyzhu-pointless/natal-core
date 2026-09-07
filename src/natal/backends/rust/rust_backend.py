@@ -44,7 +44,6 @@ __all__ = [
     "RustDiscreteLifecycleBackend",
     "RustHeterogeneousSpatialLifecycleBackend",
     "RustLifecycleBackend",
-    "RustSpatialLifecycleBackend",
     "ecology_columns_from_drafts",
     "genetics_variant_bank",
     "rust_backend_available",
@@ -786,110 +785,6 @@ class RustDiscreteLifecycleBackend:
         self._session.reseed(seed)
 
 
-class RustSpatialLifecycleBackend:
-    """Rust backend for homogeneous spatial multi-deme lifecycle runs.
-
-    This P4 slice runs the age-structured lifecycle for every deme and does
-    not include migration yet.  Config and hooks are shared across demes.
-    """
-
-    def __init__(
-        self,
-        config: ModelDraft,
-        hook_program: HookProgram | None = None,
-        seed: int = 0,
-    ) -> None:
-        """Create a Rust spatial lifecycle backend.
-
-        Args:
-            config: Shared age-structured ``ModelDraft`` (materialized once).
-            hook_program: Optional shared declarative CSR hook program.
-            seed: Base seed; deme *d* uses ``seed ^ d`` for its RNG.
-        """
-        try:
-            from natal import _engine_rs
-        except ImportError as err:
-            raise RuntimeError(
-                "natal._engine_rs is not available; build it with `maturin develop` "
-                "and re-run."
-            ) from err
-        contracts: Materialized = materialize(config)
-        # PyO3 #[new]: the class constructor *is* from_parts(bp, params, seed).
-        self._session = _engine_rs.SpatialEngineSession(
-            contracts.blueprint, contracts.params, seed
-        )
-        if hook_program is not None:
-            self._session.set_hook_program(hook_program)
-
-    def refresh_params(self, fields: list[str], params_obj: Params) -> None:
-        """Pull exactly *fields* from the contract params into the session.
-
-        Args:
-            fields: Contract field names (sorted for determinism).
-            params_obj: A ``natal.contracts.Params`` carrying the current
-                values for those fields.
-        """
-        self._session.refresh_params(fields, params_obj)
-
-    def run(
-        self,
-        individual_count_all: NDArray[np.float64],
-        sperm_storage_all: NDArray[np.float64],
-        tick: int,
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64], int]:
-        """Run one tick for all demes.
-
-        Args:
-            individual_count_all: Stacked state ``(n_demes, 2, n_ages, n_z)``.
-            sperm_storage_all: Stacked storage ``(n_demes, n_ages, n_z, n_z)``.
-            tick: Current tick.
-
-        Returns:
-            ``(individual_count_all, sperm_storage_all, next_tick)``.  The
-            input arrays are copied first.
-
-        Raises:
-            ValueError: When an in-run ``Op.set_param`` value fails the Rust
-                bounds gate (non-finite or outside the jsonc bounds).
-        """
-        ind = np.array(individual_count_all, dtype=np.float64, order="C", copy=True)
-        sperm = np.array(sperm_storage_all, dtype=np.float64, order="C", copy=True)
-        next_tick = _session_call(lambda: self._session.run(ind, sperm, int(tick)))
-        return ind, sperm, int(next_tick)
-
-    def drain_eco_journal(self) -> list[EcoJournalEntry]:
-        """Drain the session's per-deme set_param audit journal.
-
-        Spatial journal rows carry the deme as a name prefix —
-        ``(tick, "deme{i}:{name}", old, new)`` — because a single
-        ``params_log`` row ``(tick, name, old, new)`` has no deme
-        dimension.  Split the prefix on ``":"`` to recover the deme id and
-        the plain parameter name.
-
-        Returns:
-            ``(tick, "deme{i}:{name}", old, new)`` rows, one per committed
-            value change since the previous drain, in deme-then-commit
-            order.  Values were already bounds-validated on the Rust side.
-        """
-        return [
-            (
-                int(tick),
-                f"{_SPATIAL_ROW_PREFIX}{deme}:{ECO_PARAM_NAMES[param_id]}",
-                float(old),
-                float(new),
-            )
-            for deme, tick, param_id, old, new in self._session.drain_eco_journal()
-        ]
-
-    def reseed(self, seed: int) -> None:
-        """Reseed the deme RNG stream.
-
-        Args:
-            seed: New base seed.
-        """
-        self._session.reseed(seed)
-
-
 class RustHeterogeneousSpatialLifecycleBackend:
     """Rust backend for heterogeneous spatial runs over the variant bank.
 
@@ -914,6 +809,7 @@ class RustHeterogeneousSpatialLifecycleBackend:
         individual_count_all: NDArray[np.float64],
         sperm_storage_all: NDArray[np.float64],
         tick: int,
+        model: str = "age_structured",
         stay_after_send: bool = False,
         hook_program: HookProgram | None = None,
         seed: int = 0,
@@ -934,8 +830,12 @@ class RustHeterogeneousSpatialLifecycleBackend:
                 ``(n_demes, 2, n_ages, n_ztypes)`` — the one-time build
                 handoff of the run state into the session.
             sperm_storage_all: Stacked initial sperm
-                ``(n_demes, n_ages, n_ztypes, n_ztypes)``.
+                ``(n_demes, n_ages, n_ztypes, n_ztypes)``; for discrete
+                demes this is the session's zero sink (the discrete
+                lifecycle carries no sperm plane).
             tick: The authoritative starting tick.
+            model: ``"age_structured"`` or ``"discrete_generation"`` —
+                which lifecycle the per-deme kernel runs.
             stay_after_send: Deterministic-migration bookkeeping order
                 mirrored from the frozen migration CSR.
             hook_program: Optional shared declarative CSR hook program.
@@ -970,6 +870,7 @@ class RustHeterogeneousSpatialLifecycleBackend:
             np.ascontiguousarray(individual_count_all, dtype=np.float64),
             np.ascontiguousarray(sperm_storage_all, dtype=np.float64),
             int(tick),
+            model,
             bool(stay_after_send),
             seed,
         )

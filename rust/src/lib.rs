@@ -33,7 +33,7 @@ use pyo3::prelude::*;
 use crate::contract::{Blueprint, Params};
 use crate::discrete_session::DiscreteEngineSession;
 use crate::session::EngineSession;
-use crate::spatial_session::{HeterogeneousSpatialEngineSession, SpatialEngineSession};
+use crate::spatial_session::HeterogeneousSpatialEngineSession;
 
 /// Row-major flat index for ``(sex, age, ztype)``.
 #[inline]
@@ -465,7 +465,6 @@ fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(discrete_aging, module)?)?;
     module.add_class::<EngineSession>()?;
     module.add_class::<DiscreteEngineSession>()?;
-    module.add_class::<SpatialEngineSession>()?;
     module.add_class::<HeterogeneousSpatialEngineSession>()?;
     module.add_function(wrap_pyfunction!(equilibrium_metrics, module)?)?;
     module.add_function(wrap_pyfunction!(equilibrium_metrics_flat, module)?)?;

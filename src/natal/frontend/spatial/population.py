@@ -2491,55 +2491,6 @@ class SpatialPopulation:
         """
         return True
 
-    def _config_equivalence_groups(self) -> list[tuple[ConfigObject, list[int]]]:
-        """Group deme indices by value-equivalent exported configs.
-
-        Returns:
-            A list of ``(config, deme_indices)`` groups where each group shares
-            one value-equivalent config.
-
-        Raises:
-            TypeError: If any deme does not implement ``export_config``.
-        """
-        groups: list[tuple[ConfigObject, list[int]]] = []
-
-        for deme_idx, deme in enumerate(self._demes):
-            deme_export = getattr(deme, "export_config", None)
-            if not callable(deme_export):
-                raise TypeError(f"deme[{deme_idx}] does not implement export_config()")
-            cfg = deme_export()
-
-            assigned = False
-            for group_idx, (group_cfg, group_deme_indices) in enumerate(groups):
-                if self._configs_match(group_cfg, cfg):
-                    group_deme_indices.append(deme_idx)
-                    groups[group_idx] = (group_cfg, group_deme_indices)
-                    assigned = True
-                    break
-            if not assigned:
-                groups.append((cfg, [deme_idx]))
-
-        return groups
-
-    def _heterogeneous_config_bank_and_ids(
-        self,
-    ) -> tuple[list[object], NDArray[np.int64]]:
-        """Build a config bank and per-deme config ids.
-
-        Returns:
-            A tuple ``(config_bank, deme_config_ids)`` where ``config_bank``
-            is a list of unique configs and ``deme_config_ids`` maps each
-            deme to one config index.
-        """
-        groups = self._config_equivalence_groups()
-        deme_config_ids = np.empty(self.n_demes, dtype=np.int64)
-        config_bank: list[object] = []
-        for group_id, (group_cfg, group_deme_indices) in enumerate(groups):
-            config_bank.append(group_cfg)
-            for deme_idx in group_deme_indices:
-                deme_config_ids[deme_idx] = np.int64(group_id)
-        return config_bank, deme_config_ids
-
     def _ensure_demes_runnable(self, *, context: str) -> None:
         """Raise if any deme is already finished before execution."""
         for idx, deme in enumerate(self._demes):
@@ -2689,21 +2640,21 @@ class SpatialPopulation:
     def enable_rust_backend(self, seed: int = 0) -> SpatialPopulation:
         """Enable the Rust spatial backend for subsequent runs.
 
-        This first integration supports age-structured spatial populations
-        with CSR-only hooks.  The Rust backend runs the per-deme lifecycle
-        and then applies dense-adjacency or topology-kernel migration using
-        the Rust migration kernels.
+        Both age-structured and discrete-generation spatial populations are
+        supported: the session-owned Rust kernel runs each deme's lifecycle
+        (declarative hooks and event-level ``set_param`` included) and then
+        the CSR migration stage, with one persistent RNG stream per deme.
 
         Args:
-            seed: Base seed; deme *d* uses ``seed ^ d`` for its RNG.
+            seed: Base seed; deme *d* uses ``seed ^ d`` for its persistent
+                stream.
 
         Returns:
             Self for chaining.
 
         Raises:
-            RuntimeError: If the Rust extension is unavailable, the spatial
-                population is discrete, custom hooks are present, or the
-                migration configuration is not yet supported.
+            RuntimeError: If the Rust extension is unavailable or
+                Python-callback hooks are present (not bridged yet).
         """
         from natal.backends.rust.rust_backend import (
             RustHeterogeneousSpatialLifecycleBackend,
@@ -2723,23 +2674,13 @@ class SpatialPopulation:
                 "yet. Keep the reference backend for callback hooks."
             )
 
-        if self._is_discrete_demes():
-            from natal.backends.rust.rust_backend import RustDiscreteLifecycleBackend
-
-            config_bank, _deme_config_ids = self._heterogeneous_config_bank_and_ids()
-            config_bank_list = cast(list[ModelDraft], config_bank)
-            self._rust_discrete_spatial_backends = [
-                RustDiscreteLifecycleBackend(cfg, None, seed=seed + idx)
-                for idx, cfg in enumerate(config_bank_list)
-            ]
-            self._rust_spatial_backend = None
-            self._rust_spatial_seed = seed
-            return self
-
-        # Stage-2 variant bank: per-deme ecology columns plus a genetics
-        # bank deduplicated by tensor content.  Bank size follows genetics
+        model = "discrete_generation" if self._is_discrete_demes() else "age_structured"
+        # Variant bank: per-deme ecology columns plus a genetics bank
+        # deduplicated by tensor content.  Bank size follows genetics
         # diversity only — ecological batch differences never clone
-        # variants, and identical genetics never clone ecology.
+        # variants, and identical genetics never clone ecology.  Both
+        # models share this session (plan S3: one Program, per-deme RNG
+        # banks, no per-config-bank execution sessions).
         deme_drafts = self._export_deme_drafts()
         columns = ecology_columns_from_drafts(deme_drafts)
         columns["migration_rate"] = np.asarray(
@@ -2759,7 +2700,8 @@ class SpatialPopulation:
             ind_all,
             sperm_all,
             int(self._tick),
-            bool(self._migration_csr.stay_after_send),
+            model=model,
+            stay_after_send=bool(self._migration_csr.stay_after_send),
             hook_program=hook_program,
             seed=seed,
         )
@@ -2779,7 +2721,6 @@ class SpatialPopulation:
         """
         self._ensure_rust_states_fresh()
         self._rust_spatial_backend = None
-        self._rust_discrete_spatial_backends = None
         self._rust_spatial_seed = None
         self._rust_states_dirty = False
         return self
@@ -2793,8 +2734,8 @@ class SpatialPopulation:
         """
         return (
             getattr(self, "_rust_spatial_backend", None) is not None
-            or getattr(self, "_rust_discrete_spatial_backends", None) is not None
-        ) and not getattr(self._demes[0], "has_python_callbacks", lambda: False)()
+            and not getattr(self._demes[0], "has_python_callbacks", lambda: False)()
+        )
 
     def _absorb_rust_spatial_journal(self, backend: object) -> None:
         """Split a drained spatial journal into per-deme plain-name rows.
@@ -2840,8 +2781,6 @@ class SpatialPopulation:
             modifications up to that boundary and the tick freezes),
             ``False`` when the tick completed.
         """
-        if self._is_discrete_demes():
-            return self._run_rust_discrete_spatial_tick()
         backend = getattr(self, "_rust_spatial_backend", None)
         if backend is None:
             raise RuntimeError("Rust spatial backend is not enabled.")
@@ -2916,61 +2855,6 @@ class SpatialPopulation:
         )
         self._tick = int(deme.tick)
         self._rust_states_dirty = False
-
-    def _run_rust_discrete_spatial_tick(self) -> bool:
-        """Run one discrete spatial tick through the per-bank sessions.
-
-        Legacy path kept until S3b unifies discrete demes onto the
-        session-owned heterogeneous kernel (plan S3: one Program, per-deme
-        RNG banks, no per-config-bank execution sessions).  The shared
-        migration tail (rate column x frozen CSR) runs after the per-deme
-        lifecycle, exactly like the reference and fused-kernel paths.
-        """
-        from natal.backends.rust.rust_backend import (
-            rust_migrate_csr_deterministic,
-            rust_migrate_csr_stochastic,
-        )
-
-        ind_all, sperm_all = self._stack_deme_state_arrays()
-        backends = getattr(self, "_rust_discrete_spatial_backends", None)
-        if backends is None:
-            raise RuntimeError("Rust spatial backend is not enabled.")
-        _, deme_config_ids = self._heterogeneous_config_bank_and_ids()
-        new_ind = np.zeros_like(ind_all)
-        for deme_id, deme in enumerate(self._demes):
-            backend = backends[int(deme_config_ids[deme_id])]
-            state = DiscretePopulationState(
-                n_tick=self._tick,
-                individual_count=deme._live_state().individual_count,  # pyright: ignore[reportPrivateUsage]
-            )
-            next_state, _ = backend.run_tick(state)
-            # Per-deme sessions journal plain rows; merge them into the
-            # deme's own params_log and draft.
-            absorb = getattr(deme, "_absorb_rust_eco_journal", None)
-            if absorb is not None:
-                absorb(backend.drain_eco_journal())
-            new_ind[deme_id] = next_state.individual_count
-        next_tick = self._tick + 1
-        # Shared migration tail (pre-S3b): zero-rate skip preserves the
-        # no-routing identity bitwise.
-        rate = self._params.migration_rate
-        if not bool(np.all(np.asarray(rate) <= 0.0)):
-            csr = self._migration_csr
-            if bool(self._blueprint.stochastic):
-                new_ind, sperm_all = rust_migrate_csr_stochastic(
-                    new_ind, sperm_all,
-                    csr.indptr, csr.dest_idx, csr.weights, rate,
-                    int(self._rust_spatial_seed or 0),
-                    bool(self._blueprint.continuous_sampling),
-                )
-            else:
-                new_ind, sperm_all = rust_migrate_csr_deterministic(
-                    new_ind, sperm_all,
-                    csr.indptr, csr.dest_idx, csr.weights, rate,
-                    bool(csr.stay_after_send),
-                )
-        self._apply_stacked_state(new_ind, sperm_all, int(next_tick))
-        return False
 
     def _run_rust_spatial_steps(
         self,

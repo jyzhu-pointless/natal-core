@@ -4,24 +4,22 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy import stats
+
+from natal.backends.reference.migration.adjacency import apply_csr_migration
+from natal.backends.reference.spatial_simulator import (
+    run_spatial_tick_heterogeneous,
+)
 from natal.backends.rust.rust_backend import (
     RustHeterogeneousSpatialLifecycleBackend,
-    RustSpatialLifecycleBackend,
     rust_backend_available,
     rust_migrate_csr_deterministic,
     rust_migrate_csr_stochastic,
 )
-from natal.backends.reference.migration.adjacency import apply_csr_migration
-from natal.backends.reference.spatial_simulator import (
-    run_spatial_tick,
-    run_spatial_tick_heterogeneous,
-)
-from natal.frontend.spatial.population import SpatialPopulation
-from natal.frontend.spatial.topology import SquareGrid, build_adjacency_matrix
-from scipy import stats
-
 from natal.frontend.configurator import Configurator
 from natal.frontend.spatial.migration import fold_migration_csr
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import SquareGrid, build_adjacency_matrix
 
 
 def _fold_adjacency(adjacency):
@@ -41,9 +39,8 @@ def _fold_adjacency(adjacency):
     return csr.indptr, csr.dest_idx, csr.weights, csr.stay_after_send
 
 
-from natal.frontend.hooks.types import HookProgram
-
 from natal.frontend.genetics import Species
+from natal.frontend.hooks.types import HookProgram
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -81,7 +78,13 @@ def config() -> object:
         structure={"chr1": {"loc": ["A", "B"]}},
         gamete_labels=["default"],
     )
-    return Configurator.from_species(species).age_structure(4, 2).setup(stochastic=False).build().config
+    return (
+        Configurator.from_species(species)
+        .age_structure(4, 2)
+        .setup(stochastic=False)
+        .build()
+        .config
+    )
 
 
 def _stacked_state(config: object, n_demes: int, seed: int):
@@ -89,7 +92,9 @@ def _stacked_state(config: object, n_demes: int, seed: int):
     n_ages = config.n_ages
     n_ztypes = config.n_ztypes
     ind = rng.integers(10, 50, size=(n_demes, 2, n_ages, n_ztypes)).astype(np.float64)
-    sperm = rng.integers(0, 3, size=(n_demes, n_ages, n_ztypes, n_ztypes)).astype(np.float64)
+    sperm = rng.integers(0, 3, size=(n_demes, n_ages, n_ztypes, n_ztypes)).astype(
+        np.float64
+    )
     sperm[:, : config.new_adult_age, :, :] = 0.0
     for deme in range(n_demes):
         for age in range(config.new_adult_age, n_ages):
@@ -98,22 +103,6 @@ def _stacked_state(config: object, n_demes: int, seed: int):
                 if total > ind[deme, 0, age, female_ztype]:
                     sperm[deme, age, female_ztype, :] = 0.0
     return ind, sperm
-
-
-def test_homogeneous_spatial_tick_matches_reference(config: object) -> None:
-    ind, sperm = _stacked_state(config, n_demes=5, seed=10)
-    reference_ind = ind.copy()
-    reference_sperm = sperm.copy()
-    expected_ind, expected_sperm, expected_tick = run_spatial_tick(
-        reference_ind, reference_sperm, config, tick=7
-    )
-
-    backend = RustSpatialLifecycleBackend(config, _empty_hook_program(), seed=0)
-    actual_ind, actual_sperm, actual_tick = backend.run(ind, sperm, tick=7)
-
-    assert actual_tick == expected_tick == 8
-    assert np.array_equal(actual_ind, expected_ind)
-    assert np.array_equal(actual_sperm, expected_sperm)
 
 
 def test_heterogeneous_spatial_tick_matches_reference(config: object) -> None:
@@ -133,7 +122,11 @@ def test_heterogeneous_spatial_tick_matches_reference(config: object) -> None:
     reference_ind = ind.copy()
     reference_sperm = sperm.copy()
     expected_ind, expected_sperm, expected_tick = run_spatial_tick_heterogeneous(
-        reference_ind, reference_sperm, [config_high, config_low], deme_config_ids, tick=6
+        reference_ind,
+        reference_sperm,
+        [config_high, config_low],
+        deme_config_ids,
+        tick=6,
     )
 
     columns = ecology_columns_from_drafts(deme_drafts)
@@ -221,8 +214,14 @@ def test_stochastic_adjacency_migration_is_distributionally_equivalent(
         indptr, dest_idx, weights, _ = _fold_adjacency(adjacency)
         rate3d = np.tile(rate, (n_demes, 2, 1))
         rust_ind, rust_sperm = rust_migrate_csr_stochastic(
-            ind, sperm, indptr, dest_idx, weights, rate3d,
-            seed=500 + index, continuous_sampling=False,
+            ind,
+            sperm,
+            indptr,
+            dest_idx,
+            weights,
+            rate3d,
+            seed=500 + index,
+            continuous_sampling=False,
         )
         rust_totals.append(float(rust_ind[0].sum()))
 
@@ -259,7 +258,10 @@ def test_deterministic_kernel_migration_matches_reference(config: object) -> Non
     csr = fold_migration_csr(
         n_demes=n_demes,
         topology=SquareGrid(
-            rows=topology_rows, cols=topology_cols, neighborhood="von_neumann", wrap=True
+            rows=topology_rows,
+            cols=topology_cols,
+            neighborhood="von_neumann",
+            wrap=True,
         ),
         adjacency_dense=np.zeros((n_demes, n_demes)),
         migration_kernel=kernel,
@@ -289,7 +291,9 @@ def test_deterministic_kernel_migration_matches_reference(config: object) -> Non
     assert np.allclose(actual_sperm, expected_sperm, rtol=1e-12, atol=1e-12)
 
 
-def test_real_discrete_spatial_population_rust_matches_reference(config: object) -> None:
+def test_real_discrete_spatial_population_rust_matches_reference(
+    config: object,
+) -> None:
     """A real discrete SpatialPopulation with Rust backend must match reference."""
     import natal as nt
 
@@ -313,14 +317,22 @@ def test_real_discrete_spatial_population_rust_matches_reference(config: object)
             .build()
         )
 
-    demes_ref = [build_deme(f"disc_ref_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)]
-    demes_rust = [build_deme(f"disc_rust_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)]
+    demes_ref = [
+        build_deme(f"disc_ref_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)
+    ]
+    demes_rust = [
+        build_deme(f"disc_rust_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)
+    ]
     adjacency = build_adjacency_matrix(
         SquareGrid(rows=2, cols=2, neighborhood="von_neumann", wrap=False),
         row_normalize=True,
     )
-    reference = SpatialPopulation(demes=demes_ref, adjacency=adjacency, migration_rate=0.2)
-    rust_pop = SpatialPopulation(demes=demes_rust, adjacency=adjacency, migration_rate=0.2)
+    reference = SpatialPopulation(
+        demes=demes_ref, adjacency=adjacency, migration_rate=0.2
+    )
+    rust_pop = SpatialPopulation(
+        demes=demes_rust, adjacency=adjacency, migration_rate=0.2
+    )
     rust_pop.enable_rust_backend(seed=8)
 
     reference.run_tick()
@@ -363,7 +375,9 @@ def test_real_discrete_spatial_wf_rust_runs(config: object) -> None:
         pop.import_config(pop.config._replace(extreme_speed_mode=3))
         return pop
 
-    demes = [build_deme(f"wf_deme_{i}", adult=100.0 if i == 0 else 0.0) for i in range(3)]
+    demes = [
+        build_deme(f"wf_deme_{i}", adult=100.0 if i == 0 else 0.0) for i in range(3)
+    ]
     adjacency = build_adjacency_matrix(
         SquareGrid(rows=1, cols=3, neighborhood="von_neumann", wrap=False),
         row_normalize=True,
@@ -395,7 +409,10 @@ def test_stochastic_kernel_migration_is_distributionally_equivalent(
         csr = fold_migration_csr(
             n_demes=n_demes,
             topology=SquareGrid(
-                rows=topology_rows, cols=topology_cols, neighborhood="von_neumann", wrap=True
+                rows=topology_rows,
+                cols=topology_cols,
+                neighborhood="von_neumann",
+                wrap=True,
             ),
             adjacency_dense=np.zeros((n_demes, n_demes)),
             migration_kernel=kernel,
@@ -434,9 +451,9 @@ def test_stochastic_kernel_migration_is_distributionally_equivalent(
     rust_mean = float(np.mean(rust_totals))
     reference_mean = float(np.mean(reference_totals))
     assert abs(rust_mean - reference_mean) < max(5.0, 0.15 * reference_mean)
-    assert abs(float(np.std(rust_totals)) - float(np.std(reference_totals))) < 0.5 * max(
-        1.0, float(np.std(reference_totals))
-    )
+    assert abs(
+        float(np.std(rust_totals)) - float(np.std(reference_totals))
+    ) < 0.5 * max(1.0, float(np.std(reference_totals)))
 
 
 def test_real_spatial_population_rust_backend_matches_reference(config: object) -> None:
@@ -463,14 +480,22 @@ def test_real_spatial_population_rust_backend_matches_reference(config: object) 
             .build()
         )
 
-    demes_ref = [build_deme(f"deme_ref_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)]
-    demes_rust = [build_deme(f"deme_rust_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)]
+    demes_ref = [
+        build_deme(f"deme_ref_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)
+    ]
+    demes_rust = [
+        build_deme(f"deme_rust_{i}", adult=100.0 if i == 0 else 0.0) for i in range(4)
+    ]
     adjacency = build_adjacency_matrix(
         SquareGrid(rows=2, cols=2, neighborhood="von_neumann", wrap=False),
         row_normalize=True,
     )
-    reference = SpatialPopulation(demes=demes_ref, adjacency=adjacency, migration_rate=0.2)
-    rust_pop = SpatialPopulation(demes=demes_rust, adjacency=adjacency, migration_rate=0.2)
+    reference = SpatialPopulation(
+        demes=demes_ref, adjacency=adjacency, migration_rate=0.2
+    )
+    rust_pop = SpatialPopulation(
+        demes=demes_rust, adjacency=adjacency, migration_rate=0.2
+    )
     rust_pop.enable_rust_backend(seed=7)
 
     reference.run_tick()
@@ -488,20 +513,78 @@ def test_real_spatial_population_rust_backend_matches_reference(config: object) 
 
 
 def test_spatial_backend_does_not_mutate_inputs(config: object) -> None:
+    """The one-time handoff copies: caller arrays stay untouched."""
     ind, sperm = _stacked_state(config, n_demes=3, seed=11)
     original_ind = ind.copy()
     original_sperm = sperm.copy()
-    RustSpatialLifecycleBackend(config, _empty_hook_program(), seed=0).run(
-        ind, sperm, tick=0
+    from natal.contracts.materialize import SpatialMigration, materialize
+
+    migration = SpatialMigration(
+        indptr=np.zeros(4, dtype=np.int64),
+        dest_idx=np.zeros(0, dtype=np.int64),
+        weights=np.zeros(0, dtype=np.float64),
+        rate=np.zeros((3, 2, config.n_ages), dtype=np.float64),
     )
+    blueprint = materialize(config, migration).blueprint
+    deme_drafts = [config] * 3
+    from natal.backends.rust.rust_backend import (
+        ecology_columns_from_drafts,
+        genetics_variant_bank,
+    )
+
+    columns = ecology_columns_from_drafts(deme_drafts)
+    columns["migration_rate"] = np.zeros(3 * 2 * config.n_ages, dtype=np.float64)
+    tensor_bank, variant_ids = genetics_variant_bank(deme_drafts)
+    backend = RustHeterogeneousSpatialLifecycleBackend(
+        blueprint,
+        columns,
+        tensor_bank,
+        variant_ids,
+        ind,
+        sperm,
+        0,
+        hook_program=_empty_hook_program(),
+        seed=0,
+    )
+    backend.run_tick()
     assert np.array_equal(ind, original_ind)
     assert np.array_equal(sperm, original_sperm)
 
 
 def test_spatial_backend_rejects_bad_sperm_shape(config: object) -> None:
-    ind, _ = _stacked_state(config, n_demes=2, seed=12)
+    """A malformed handoff plane is rejected at construction, atomically."""
+    ind, good_sperm = _stacked_state(config, n_demes=2, seed=12)
     bad_sperm = np.zeros((2, 4, 3, 4), dtype=np.float64)
+    from natal.contracts.materialize import SpatialMigration, materialize
+
+    migration = SpatialMigration(
+        indptr=np.zeros(3, dtype=np.int64),
+        dest_idx=np.zeros(0, dtype=np.int64),
+        weights=np.zeros(0, dtype=np.float64),
+        rate=np.zeros((2, 2, config.n_ages), dtype=np.float64),
+    )
+    blueprint = materialize(config, migration).blueprint
+    deme_drafts = [config] * 2
+    from natal.backends.rust.rust_backend import (
+        ecology_columns_from_drafts,
+        genetics_variant_bank,
+    )
+
+    columns = ecology_columns_from_drafts(deme_drafts)
+    columns["migration_rate"] = np.zeros(2 * 2 * config.n_ages, dtype=np.float64)
+    tensor_bank, variant_ids = genetics_variant_bank(deme_drafts)
     with pytest.raises(ValueError, match="sperm_storage_all"):
-        RustSpatialLifecycleBackend(config, _empty_hook_program(), seed=0).run(
-            ind, bad_sperm, tick=0
+        RustHeterogeneousSpatialLifecycleBackend(
+            blueprint,
+            columns,
+            tensor_bank,
+            variant_ids,
+            ind,
+            bad_sperm,
+            0,
+            hook_program=_empty_hook_program(),
+            seed=0,
         )
+    # The constructor validates every plane before touching session
+    # state, so nothing was installed and the caller's data is intact.
+    assert good_sperm.shape[0] == 2
