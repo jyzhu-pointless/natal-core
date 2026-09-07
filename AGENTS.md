@@ -2,121 +2,57 @@
 
 > 这是中文版。另见：[English version](./AGENTS.en.md)
 >
-> 任一一版更新时，另一版必须同步更新。
+> 任一版更新时，另一版必须同步更新；含义冲突时以英文版为准。
 
-## 语言
+## 语言与规范来源
 
-默认使用中文回答。仅在用户明确使用英文提问时用英文回复。
+默认使用中文回答，仅在用户明确使用英文提问时用英文回复。代码和文档中的英语使用美式拼写，docstring 内容使用英文。
 
-**代码与文档中的英语一律使用美式拼写**：identifier、docstring、注释、commit message 均如此。常见转换：`-ise/-isation` → `-ize/-ization`（initialize/materialize/normalize）、`-our` → `-or`（behavior/color）、`-re` → `-er`（center）、`modelling` → `modeling`。注意排除本身就以 `-ise` 结尾的合法美式词（comprise、exercise、raise、noise、wise 等）。
+本文件定义授权、风险分类和 agent 协作。质量要求以 [quality_checks_spec.md](./quality_checks_spec.md) 为准，docstring 和类型标注格式以 [docstring_spec.md](./docstring_spec.md) 为准。对应中文版为说明；同一主题以英文规范为准。Skill 提供执行方法，不另设相互重复的门禁或覆盖率政策。
 
-## 规范引用
+## 授权与工作边界
 
-以下文件定义本项目的编码、文档和测试规范，按优先级排列：
+- 用户明确要求实现、修复或重构某个目标后，agent 可自主完成范围内的调查、实现、测试和必要修复，无须逐步确认。已有授权持续有效。
+- 扩大任务范围、改变未获授权的公开 API 或科学模型语义、增加生产依赖，以及执行破坏性操作前，必须说明原因并获得批准。已经明确授权的变更不重复询问。
+- 多个实现都可行时，选择符合现有架构、简单且容易验证的方案。只有缺失信息、用户偏好或重要取舍影响决策时才询问；期间继续不依赖答案的工作。
+- 未经用户明确要求，不得 commit、push 或修改 `.gitignore`，不得创建 Markdown 文档文件。既有文档的必要同步属于已授权任务。
+- 保留用户已有修改。不得通过扩大修复范围、压制错误或调整检查配置来制造通过结果。
 
-1. `docstring_spec.md`
-2. `quality_checks_spec.md`
-3. `docstring_spec_cn.md`（中文说明）
-4. `quality_checks_spec_cn.md`（中文说明）
+## 实现与沟通
 
-规范冲突时以英文版为准。
+- 不为假想需求抽象。注释解释设计意图、约束和非显而易见的逻辑，避免复述代码。
+- 使用通俗语言解释改了什么、为什么以及效果；引入尚未在项目中确立的专业术语时解释含义。
+- 使用当前环境可用且适合任务的工具；搜索优先使用 `rg`，批量操作可用 shell。工具名称不是固定流程要求。
 
-## 行为指南
+## 风险分类
 
-- 任何方案、计划或非平凡修改，必须先向用户说明并获得批准后再执行。不得擅自实施。
-- 倾向于写注释。注释应解释 WHY（设计意图、约束、非显而易见的逻辑），而非 WHAT（代码本身已经说明）。
-- 不要创建文档文件（*.md），除非用户明确要求。
-- 不要过早抽象。不为假想需求设计。
-- 修改后使用文字详细解释你的修改内容，包括为什么修改以及修改后的效果。避免使用模糊的表述，如“我改了这个函数”，而是具体说明改了什么（如“我将 `foo` 函数的参数从 `x` 改为 `y`，以支持新的用例”）。
-- **【重要！】在文字表述中，尽可能使用通俗易懂的语言。如引入专业的软件工程术语（本项目架构中已引入的概念除外），必须详细解释其含义。**例子：
-  - 不这样说："preset 参数由 Configurator 的 deferred 管理，运行时也是 Configurator 来改。"
-  - 而是说："遗传预设（preset）的参数比较特殊——它不能在构建过程中直接写入配置，必须等 Population 对象创建完成后才能生效。所以 Configurator 会先把这些参数暂存起来（deferred），等 `build()` 真正执行时再统一应用。运行时修改 preset 参数也是通过 Configurator 的 `update()` 入口。"
-- **优先使用专用工具**：Read/Glob/Grep/Edit/Write 等专用工具比 shell 命令更可靠（不会被沙箱拦截、输出格式稳定、渲染更友好）。仅在批量操作、管道组合、或专用工具无法实现时使用 Bash。
-- **禁止主动 commit / push**：除非用户明确要求，不得执行 `git commit`、`git push` 或任何形式的提交操作。
-- **禁止修改 `.gitignore`**：除非用户明确要求，不得改动 `.gitignore` 文件。
+首次工作说明中给出分类和简短理由。无需逐次批准分类；调查发现风险扩大时说明并升级。按行为影响判断，不能仅根据修改行数降级。
 
-## 门禁检查
+| 分类 | 判定依据 | 必需验证与协作 |
+|---|---|---|
+| 文档与格式修改 | 仅正文、注释或排版，不改变运行行为或示例代码 | 检查准确性、中英同步、链接和相关格式；无需代码全量门禁 |
+| 局部代码修改 | 影响范围明确，不涉及下列高风险内容 | 针对性测试，交付前完整门禁；主 agent 可以完成 |
+| 高风险修改 | 科学计算公式、随机分布、状态恢复、可变数据共享、公开 API 合同、Python/Rust 数据交换，或代码影响范围不明确 | 委派 tester，独立 evaluator 审查，最终完整门禁 |
 
-每次修改后，必须运行以下命令：
+纯文字的规则或 skill 修改按文档检查；若会显著改变 agent 决策，增加独立场景推演。修改项目 API 或模型的可执行示例时按代码风险分类，执行受影响示例。规范中不调用项目代码、不描述项目 API、也不表达科学模型的独立语法或风格示意，按文档检查并验证片段本身，不触发项目全量门禁。小规模计算公式修改仍属于高风险。
 
-```bash
-pytest                          # 运行全部测试
-pyright                         # 类型检查（strict mode）
-ruff check src demos             # Lint 检查
-ruff check src demos --fix       # Lint 自动修复
-python scripts/check_rust.py    # Rust：fmt + clippy + check（rust-analyzer 可选诊断）
-python scripts/generate_init_pyi.py  # 公开 API 变更后重新生成 stub
-```
+## 验证时机与角色
 
-虚拟环境已自动激活，直接运行命令即可。
+采用以下顺序：实现与针对性验证 → 必要的测试补强 → 文档及 stub 同步 → 最终验证与必要的独立审查。测试可以先于实现或穿插进行。
 
-提交前必须通过 **Python 三项与 Rust 硬门禁**：`pytest` + `pyright` + `ruff check src demos`，以及 `python scripts/check_rust.py`（其内部的 `cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo check --all-targets` 任一失败即门禁失败；rust-analyzer 诊断为可选，不阻断）。不压制、不绕过。
+- **tester**：高风险代码修改必须委派，寻找遗漏场景、验证已有覆盖并补强必要测试。已有测试充分时记录依据，不为凑数量新增测试。数值测试按需使用 `numerical-verification`，合同攻击按需使用 `adversarial-review`。
+- **docs**：公开 API 改动必须同步 `docs/zh/`、`docs/en/` 和相关示例，在最终审查前完成。按工作量决定是否委派，主 agent 可直接完成。
+- **evaluator**：高风险代码修改必须独立审查最终代码、测试、stub 和文档，并独立运行最终完整门禁。局部修改在用户要求或存在审查不确定性时委派。使用 `adversarial-review`；仅在数值检查需要时加载 `numerical-verification`，不强制再加载或启动全局 `code-review` 流程。
 
-### 审查流程
+这些名称表示职责，使用当前环境的子 agent 能力落实，并服从可用并发数量。无子 agent 能力时，高风险任务标记“独立审查未完成”，不得以自审冒充批准。
 
-每次完成代码修改后，必须按以下顺序执行，**禁止以自我审查代替**：
+主 agent 可运行任何验证命令，但应区分“自测通过”和“独立审查通过”。由 evaluator 运行最终完整门禁时，主 agent 不必预先重复相同检查。最终审查后若发生实质修改，重新验证并审查受影响部分；若影响已有全量结果的有效性或范围无法确定，重新运行完整门禁。
 
-1. **`@tester`** — 根据 `numerical-verification` 和 `adversarial-review` 标准，为新代码或变更代码生成严格测试。必须覆盖五类测试：**负向合同测试**（assert 已删除接口不可访问）、**所有权测试**（assert 返回的 ndarray/list/dict 是副本或只读）、**状态转换测试**（restore→run、finish→snapshot、import→run、clear→record）、**轴组合测试**（配置轴的笛卡尔积枚举）、**错误路径测试**（无效输入抛正确异常且状态不变）。每条断言必须证明一个数值不变量。
-2. **运行 `python scripts/generate_init_pyi.py`** — 公开 API 变更后重新生成 stub，确保后续 pyright 检查基于最新 stub。
-3. **`@evaluator`** — 执行**对抗性**审查。审查者采取攻击者立场，主动寻找代码不符合 spec 的证据，而非仅验证门禁通过。必须：
-   - 从 spec 建立**账本**：must-exist、must-not-exist、invariants 三份清单
-   - 对每个 must-not-exist 项做**全仓搜索**（src/tests/demos/docs/stub），确认无法访问
-   - 对每个 invariant 执行**攻击**：所有权攻击（检查 ndarray 引用/写保护）、状态机攻击（restore→run、finish→snapshot）、轴组合攻击（笛卡尔积枚举）
-   - **实际执行**所有 demo 脚本和文档示例代码
-   - 运行 `pytest` / `pyright` / `ruff` / `python scripts/check_rust.py` 门禁，加载 `code-review`、`numerical-verification`、`adversarial-review` skill
-   - 判定为**机械规则**：`APPROVED` ⇔ 零 hard-blocker
-4. **若变更涉及公开 API（签名、参数、默认值、模块重命名等），主 agent 调用 `@docs`** 同步 `docs/zh/` 和 `docs/en/` 中的文档和示例代码。
-5. **主 agent 不得自行运行 `pytest`、`pyright`、`ruff`、`python scripts/check_rust.py` 并声称"已通过审查"**。这些命令的结果必须由 evaluator 独立验证并出具结构化报告。
+## 完成标准
 
-只有当 evaluator 给出 `APPROVED` 判定后，修改才算完成。
+测试适用条件、覆盖率、门禁命令、基线失败证据和审查结论统一见 [质量规范](./quality_checks_spec_cn.md)。
 
-#### evaluator 强制拒绝标准
-
-以下任一情况发生时，evaluator **必须**返回 `REJECTED`。**严重度不软化 hard-blocker**：一个缺少注释的 `Any` 和一项语义破坏同等对待。
-
-- **测试失败**：`pytest` 出现任何 FAILED。
-- **Rust 硬门禁失败**：`cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo check --all-targets` 任一非零（通过 `python scripts/check_rust.py` 执行）。rust-analyzer 可选诊断不构成拒绝理由。
-- **覆盖率不足**：新模块或已有模块新增代码的行覆盖率 **< 95%**。
-- **Hard-blocker 存在**：以下任一类问题出现一条即 REJECTED：
-  - **Must-not-exist 违规**：spec 要求删除的接口仍可访问（含 `getattr`、`__init__` 重导出）
-  - **Invariant 破坏**：所有权泄漏（ndarray 引用/非写保护）、状态机错误（restore 后 tick 不同步）、轴组合崩溃
-  - **Demo/doc 崩溃**：demo 脚本或文档示例代码实际运行报错
-  - **未注释的 `Any` / `object`**
-  - **未注释的 `# type: ignore`**
-  - **`cast(Any, …)`**
-  - **非 Google 风格 docstring section** 或 **缺少类型标注的参数/返回值/属性**
-- **负向合同缺失**：spec 标注为删除的接口，tests 中没有对应的 assert-not-exists 测试。
-- **所有权测试缺失**：返回容器（ndarray/list/dict）的公开方法，tests 中没有对应的只读/副本验证。
-- **状态转换未覆盖**：restore→run、finish→snapshot、import→run、clear→record 等关键生命周期序列未被测试。
-
-### 修复策略
-
-- **修改的文件**：所有 pyright / ruff / pytest / cargo fmt / cargo clippy / cargo check 报错必须修。
-- **被改动波及的文件**：签名或 import 变更导致的其他文件报错也必须修。
-- **未修改文件的既有问题**：指出并分析；修复推荐但不强制当前提交必须完成。
-- **`cast(Any, …)` 禁止**。不能用它绕过类型检查。出现即 REJECTED。
-- **禁止滥用 `Any` 和 `object`**：参数、返回值、变量类型注解必须指向具体类型，不要偷懒用 `Any` 或 `object`。为导入类型而添加新的 import 是值得的。仅在有具体、书面理由（如泛型 `Callable[..., Any]` 表示"任意可调用对象"）时才可用 `Any`。
-- **`cast(T, x)`** 仅在静态分析完全无法证明 `x: T` 时可用（如 guard 后 narrow Optional）。优先用类型窄化断言或重构。
-- **`# type: ignore`** 是最后手段。每个 ignore 必须附带简短原因。缺少注释即 REJECTED。
-
-### 测试覆盖
-
-- **新模块**：≥95% 行覆盖。
-- **已有模块新增代码**：≥95% 行覆盖。
-- **确定性模拟** (`stochastic=False`)：精确数值断言。
-- **随机模拟**：需统计验证（多次运行、置信区间或分布检验），单次通过不算。
-- **优先使用 pytest-collected 测试**，而非脚本式 smoke test。
-
-### Docstring 规范
-
-- 仅使用 Google 风格 section（`Args:`、`Returns:`、`Raises:` 等）。不发明新的 section 名称。
-- docstring 内容使用**英文**。
-- 所有参数、返回值、属性必须显式标注类型（优先使用 annotation）。
-
-### 变更说明
-
-每次修改完成后，必须包含以下四项：
-1. 变更的文件
-2. 行为变化
-3. 执行的验证命令
-4. 残余风险或后续事项（如有）
+- 高风险代码修改必须获得 evaluator 的 `APPROVED`；缺少必需验证时不得宣称完成。
+- 局部代码修改可由主 agent 按同一质量标准交付，无须强制独立批准。
+- 文档修改完成适用检查后即可交付；需要独立场景推演的规则修改，应先解决推演发现的阻断问题。
+- 交付说明包括：变更文件、行为变化及原因、实际执行的验证命令与结果、残余风险或后续事项。明确哪些结果来自自测、哪些来自独立审查，不得将已确认的基线失败说成“全部通过”。

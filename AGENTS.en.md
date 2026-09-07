@@ -2,127 +2,57 @@
 
 > This is the English version. See also: [Chinese version](./AGENTS.md)
 >
-> When either version is updated, the other must be updated synchronously.
+> Update both versions together. The English version takes precedence if meanings conflict.
 
-## Language
+## Language and Sources of Rules
 
-Use Chinese by default. Only reply in English when the user explicitly asks in English.
+Reply in Chinese unless the user explicitly asks in English. Use American spelling in English code and documentation, and write docstrings in English.
 
-**All English in code and documentation must use American spelling**: identifiers, docstrings, comments, commit messages all follow this. Common conversions: `-ise/-isation` → `-ize/-ization` (initialize/materialize/normalize), `-our` → `-or` (behavior/color), `-re` → `-er` (center), `modelling` → `modeling`. Note exceptions: words that legitimately end with `-ise` in American English (comprise, exercise, raise, noise, wise, etc.) are left as is.
+This file defines authorization, risk classification, and agent collaboration. [quality_checks_spec.md](./quality_checks_spec.md) owns quality requirements; [docstring_spec.md](./docstring_spec.md) owns docstring and type annotation format. Chinese counterparts explain the same rules; the English specification governs each topic. Skills provide methods rather than duplicate gate or coverage policies.
 
-## Specification References
+## Authorization and Scope
 
-The following files define this project's coding, documentation, and testing standards, in order of priority:
+- An explicit request to implement, fix, or refactor a goal authorizes investigation, implementation, testing, and necessary repairs within that scope without approval for each step. Existing authorization remains valid.
+- Explain and obtain approval before expanding scope, changing public API or scientific model semantics outside the authorization, adding production dependencies, or performing destructive operations. Do not ask again for changes already explicitly authorized.
+- When several implementations are viable, choose a simple, verifiable approach consistent with the existing architecture. Ask only when missing information, user preferences, or important tradeoffs affect the decision; continue independent work while waiting.
+- Do not commit, push, modify `.gitignore`, or create Markdown documentation files without an explicit user request. Necessary synchronization of existing documentation is part of the authorized task.
+- Preserve existing user changes. Do not expand repair scope, suppress errors, or alter check configuration to manufacture passing results.
 
-1. `docstring_spec.md`
-2. `quality_checks_spec.md`
-3. `docstring_spec_cn.md` (Chinese explanation)
-4. `quality_checks_spec_cn.md` (Chinese explanation)
+## Implementation and Communication
 
-In case of conflict, the English versions take precedence.
+- Do not abstract for hypothetical needs. Comments explain intent, constraints, and non-obvious logic rather than repeat the code.
+- Explain what changed, why, and its effect in plain language. Explain technical terms not already established in the project.
+- Use tools available in the current environment that fit the task; prefer `rg` for search and allow shell for batch operations. Tool names do not prescribe a fixed workflow.
 
-## Behavioral Guidelines
+## Risk Classification
 
-- Any proposal, plan, or non‑trivial modification must first be explained to the user and approved before execution. Do not implement without permission.
-- Prefer writing comments. Comments should explain WHY (design intent, constraints, non‑obvious logic), not WHAT (the code itself already shows that).
-- Do not create documentation files (*.md) unless explicitly requested by the user.
-- Do not over‑abstract. Do not design for hypothetical needs.
-- After modifications, provide a detailed written explanation of what you changed, why, and the resulting effect. Avoid vague statements like "I changed this function"; instead be specific, e.g., "I changed the `foo` function's parameter from `x` to `y` to support the new use case."
-- **【Important!】In written explanations, use plain, accessible language as much as possible. If you introduce specialized software engineering terms (other than concepts already established in this project's architecture), you must explain them in detail.** Examples:
-  - Not: "The preset parameter is managed by the Configurator's deferred mechanism and is also modified by the Configurator at runtime."
-  - But: "Genetic preset parameters are special—they cannot be written directly into the configuration during construction; they must wait until the Population object is actually created. So the Configurator temporarily stores them (deferred) and applies them all at once when `build()` is executed. Runtime modifications to preset parameters also go through the Configurator's `update()` entry point."
-- **Prefer specialized tools**: Read/Glob/Grep/Edit/Write are more reliable than shell commands (they are not blocked by the sandbox, have stable output format, and are more user‑friendly). Use Bash only for batch operations, pipe combinations, or when specialized tools cannot accomplish the task.
-- **Do not commit / push proactively**: Do not execute `git commit`, `git push`, or any form of commit operation unless explicitly requested by the user.
-- **Do not modify `.gitignore`**: Do not change `.gitignore` unless explicitly requested.
+State the classification and a short reason in the initial work update. Classification needs no separate approval; explain and upgrade it when investigation reveals greater risk. Judge behavioral impact, not line count.
 
-## Gate Checks
+| Class | Criteria | Required validation and collaboration |
+|---|---|---|
+| Documentation and formatting | Prose, comments, or layout only; no runtime or example code changes | Check accuracy, bilingual consistency, links, and relevant formatting; no full code gates |
+| Local code change | Clear impact, with none of the high-risk concerns below | Targeted tests and full gates before delivery; the main agent may complete it |
+| High-risk change | Scientific formulas, random distributions, state restoration, mutable data sharing, public API contracts, Python/Rust data exchange, or unclear code impact | Delegate a tester, obtain independent evaluator review, and run final full gates |
 
-After every change, the following commands must be run:
+Text-only rule or skill changes use documentation checks; add independent scenario exercises when they materially change agent decisions. Classify executable project API or model example changes by code risk and run affected examples. Standalone syntax or style illustrations in specifications that do not call project code, describe project APIs, or express scientific models use document checks and validation of the snippets themselves, without full project gates. A small formula change remains high-risk.
 
-```bash
-pytest                          # Run all tests
-pyright                         # Type check (strict mode)
-ruff check src demos             # Lint check
-ruff check src demos --fix       # Lint auto‑fix
-python scripts/check_rust.py    # Rust: fmt + clippy + check (rust‑analyzer optional diagnostics)
-python scripts/generate_init_pyi.py  # Regenerate stubs after public API changes
-```
+## Validation Timing and Roles
 
-The virtual environment is already activated, so you can run the commands directly.
+Use this order: implementation and targeted validation → necessary test strengthening → documentation and stub synchronization → final validation and any required independent review. Tests may precede or accompany implementation.
 
-Before committing, you must pass the **Python triple gate and the Rust hard gate**: `pytest` + `pyright` + `ruff check src demos`, and `python scripts/check_rust.py` (where `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo check --all-targets` must all succeed; rust‑analyzer diagnostics are optional and do not block). Do not suppress or bypass them.
+- **tester**: Delegation is required for high-risk code changes. Find missing scenarios, verify existing coverage, and strengthen tests where needed. Cite adequate existing tests rather than add tests to satisfy a quota. Use `numerical-verification` for numerical tests and `adversarial-review` for contract attacks when relevant.
+- **docs**: Public API changes require synchronized `docs/zh/`, `docs/en/`, and related examples before final review. Delegate according to workload; the main agent may do the work.
+- **evaluator**: Independently review final code, tests, stubs, and documentation and independently run final full gates for high-risk code changes. Delegate local changes when requested or when review uncertainty warrants it. Use `adversarial-review`; load `numerical-verification` only for numerical checks. Do not automatically load or launch the global `code-review` workflow.
 
-### Review Process
+These names describe responsibilities implemented with the environment's subagent tools and available concurrency. Without delegation capability, mark high-risk work as “independent review incomplete”; self-review cannot substitute for approval.
 
-After each code modification, the following sequence must be executed in order. **Do not substitute self‑review for these steps**:
+The main agent may run any validation command but must distinguish self-test results from independent review. When the evaluator runs final full gates, the main agent need not duplicate them beforehand. After substantive post-review edits, revalidate and review affected areas; rerun full gates if prior full results are invalidated or the impact is unclear.
 
-1. **`@tester`** — Generate rigorous tests for new or changed code according to the `numerical-verification` and `adversarial-review` standards. Must cover five test categories:
-   - **Negative contract tests** (assert that deleted interfaces are inaccessible)
-   - **Ownership tests** (assert returned ndarray/list/dict are copies or read‑only)
-   - **State transition tests** (restore→run, finish→snapshot, import→run, clear→record)
-   - **Axis combination tests** (Cartesian enumeration of configuration axes)
-   - **Error path tests** (invalid inputs raise the correct exception and leave state unchanged)
-   Each assertion must prove a numerical invariant.
-2. **Run `python scripts/generate_init_pyi.py`** — Regenerate stubs after public API changes so subsequent `pyright` checks use the latest stubs.
-3. **`@evaluator`** — Perform an **adversarial** review. The reviewer takes an attacker's stance, actively seeking evidence that the code does not conform to the spec, rather than merely verifying that gates pass. Must:
-   - Build a **ledger** from the spec: three lists: must‑exist, must‑not‑exist, and invariants
-   - For every must‑not‑exist item, do a **full‑repo search** (src/tests/demos/docs/stub) to confirm it is inaccessible
-   - For every invariant, execute **attacks**: ownership attacks (check ndarray references/write‑protection), state‑machine attacks (restore→run, finish→snapshot), axis‑combination attacks (Cartesian enumeration)
-   - **Actually run** all demo scripts and documented code examples
-   - Run `pytest` / `pyright` / `ruff` / `python scripts/check_rust.py` gates, loading the `code‑review`, `numerical‑verification`, and `adversarial‑review` skills
-   - Decision rule (mechanical): `APPROVED` ⇔ zero hard‑blockers
-4. **If the change involves public API (signatures, parameters, defaults, module renames, etc.), the main agent invokes `@docs`** to synchronize documentation and example code in `docs/zh/` and `docs/en/`.
-5. **The main agent must not run `pytest`, `pyright`, `ruff`, `python scripts/check_rust.py` themselves and claim "review passed."** The results of these commands must be independently verified by the evaluator and reported in a structured report.
+## Completion
 
-A modification is considered complete only after the evaluator gives an `APPROVED` verdict.
+[The quality specification](./quality_checks_spec.md) is the single source for test applicability, coverage, gate commands, baseline failure evidence, and verdicts.
 
-#### Mandatory Rejection Criteria for Evaluator
-
-When any of the following occurs, the evaluator **must** return `REJECTED`. **Hard‑blockers are not softened by severity** – one missing annotation for `Any` is treated the same as a semantic break.
-
-- **Test failures**: `pytest` shows any FAILED.
-- **Rust hard gate failure**: `cargo fmt --check`, `cargo clippy -- -D warnings`, or `cargo check --all-targets` returns non‑zero (executed via `python scripts/check_rust.py`). rust‑analyzer optional diagnostics are not a reason for rejection.
-- **Insufficient coverage**: line coverage for new modules or new code in existing modules is **< 95%**.
-- **Hard‑blocker exists**: any one of the following categories triggers REJECTED:
-  - **Must‑not‑exist violation**: interfaces that the spec requires to be deleted are still accessible (including via `getattr`, `__init__` re‑exports)
-  - **Invariant break**: ownership leak (ndarray references / non‑write‑protected), state‑machine error (tick out of sync after restore), axis‑combination crash
-  - **Demo/doc crash**: demo scripts or documented code examples actually error out when run
-  - **Unannotated `Any` / `object`**
-  - **Unannotated `# type: ignore`**
-  - **`cast(Any, …)`**
-  - **Non‑Google‑style docstring section** or **missing type annotation for parameter / return / attribute**
-- **Missing negative contract tests**: no `assert‑not‑exists` tests for interfaces marked as deleted in the spec.
-- **Missing ownership tests**: public methods that return containers (ndarray/list/dict) lack read‑only / copy verification in tests.
-- **State transitions not covered**: critical lifecycle sequences (restore→run, finish→snapshot, import→run, clear→record) are not tested.
-
-### Fix Strategy
-
-- **Modified files**: all pyright / ruff / pytest / cargo fmt / cargo clippy / cargo check errors must be fixed.
-- **Files affected by the change**: errors in other files caused by signature or import changes must also be fixed.
-- **Pre‑existing issues in untouched files**: point them out and analyze; fixing is recommended but not required in the current commit.
-- **`cast(Any, …)` is forbidden**. Do not use it to bypass type checking. Its presence triggers REJECTED.
-- **Do not abuse `Any` or `object`**: parameter, return, and variable type annotations must point to concrete types; do not lazily use `Any` or `object`. Adding imports for the needed types is worthwhile. `Any` is only acceptable when there is a specific, documented reason (e.g., `Callable[..., Any]` for "any callable").
-- **`cast(T, x)`** is allowed only when static analysis cannot possibly prove `x: T` (e.g., narrowing an `Optional` after a guard). Prefer type‑narrowing assertions or refactoring.
-- **`# type: ignore`** is a last resort. Every ignore must be accompanied by a short comment. Missing comment triggers REJECTED.
-
-### Test Coverage
-
-- **New modules**: ≥95% line coverage.
-- **New code in existing modules**: ≥95% line coverage.
-- **Deterministic simulations** (`stochastic=False`): exact numeric assertions.
-- **Stochastic simulations**: require statistical validation (multiple runs, confidence intervals, or distribution tests). A single run that passes is not sufficient.
-- Prefer using pytest‑collected tests over script‑based smoke tests.
-
-### Docstring Specification
-
-- Use only Google‑style sections (`Args:`, `Returns:`, `Raises:`, etc.). Do not invent new section names.
-- Docstring content must be in **English**.
-- All parameters, returns, and attributes must be explicitly type‑annotated (prefer using annotations).
-
-### Change Description
-
-After every modification, include the following four items:
-1. Changed files
-2. Behavioral changes
-3. Verification commands executed
-4. Residual risks or follow‑up items (if any)
+- High-risk code changes require an evaluator's `APPROVED`; do not claim completion while required validation is missing.
+- The main agent may deliver local code changes against the same quality standard without mandatory independent approval.
+- Deliver documentation changes after applicable checks; resolve blockers from required independent scenario exercises for rule changes first.
+- Report changed files, behavior and rationale, commands actually executed and their results, and residual risks or follow-ups. Identify self-tests versus independent review and never describe confirmed baseline failures as “all checks passed.”
