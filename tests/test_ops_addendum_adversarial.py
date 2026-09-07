@@ -740,7 +740,7 @@ def _overwrite_adult_rows(
     row carries the same known value (and, optionally, zero the A|a
     destination column).
     """
-    ind = pop.state.individual_count
+    ind = pop._state.individual_count  # pyright: ignore[reportPrivateUsage]  # setup write: public state is a snapshot since R5
     ind[:, :, 0] = 0.0
     ind[0, 1:, 0] = female_aa
     ind[1, 1:, 0] = male_aa

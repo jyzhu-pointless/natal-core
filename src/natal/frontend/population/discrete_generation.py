@@ -180,13 +180,13 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         )
 
         cfg_init_ind = self.config.initial_individual_count
-        if cfg_init_ind.shape == self.state.individual_count.shape:
-            self.state.individual_count[:] = cfg_init_ind
+        if cfg_init_ind.shape == self._live_state().individual_count.shape:
+            self._live_state().individual_count[:] = cfg_init_ind
 
         # An explicit distribution overrides the config default. We zero out
         # the array first because _distribute_initial_population accumulates.
         if initial_individual_count is not None:
-            self.state.individual_count.fill(0.0)
+            self._live_state().individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
 
         self._python_backend = False
@@ -202,7 +202,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         # Keep a pristine copy so reset() can restore the starting state.
         self._initial_population_snapshot = (
-            self.state.individual_count.copy(),
+            self._live_state().individual_count.copy(),
             None,
             None,
         )
@@ -300,7 +300,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Raises:
             ValueError: If sex key is not ``"female"`` or ``"male"``.
         """
-        self.state.individual_count.fill(0.0)
+        self._live_state().individual_count.fill(0.0)
         for sex_key, genotype_dist in distribution.items():
             sex_key_norm = sex_key.lower().strip()
             if sex_key_norm == "female":
@@ -325,8 +325,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
                 z_idx = self.registry.resolve_default_ztype_index(pattern)
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
-                self.state.individual_count[sex_idx, 0, z_idx] = age0_count
-                self.state.individual_count[sex_idx, 1, z_idx] = age1_count
+                self._live_state().individual_count[sex_idx, 0, z_idx] = age0_count
+                self._live_state().individual_count[sex_idx, 1, z_idx] = age1_count
 
     def enable_rust_backend(self, seed: int = 0) -> DiscreteGenerationPopulation:
         """Enable the Rust backend for subsequent runs.
@@ -466,7 +466,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._rust_run_active = True
         try:
             final_state, history_new, was_stopped = backend.run(
-                self.state,
+                self._live_state(),
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=self._observation_mask,
@@ -635,7 +635,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         input_config = self.config
         final_state, was_stopped, config = lifecycle_engine.run(
             tick_fn=tick_fn,
-            state=self.state,
+            state=self._live_state(),
             config=self.config,
             registry=registry,
             first_hook=first_hook,
@@ -692,15 +692,15 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def get_total_count(self) -> int:
         """Return the total number of individuals across all categories."""
-        return int(round(np.sum(self.state.individual_count)))
+        return int(round(np.sum(self._live_state().individual_count)))
 
     def get_female_count(self) -> int:
         """Return the total number of female individuals."""
-        return int(round(np.sum(self.state.individual_count[int(Sex.FEMALE.value)])))
+        return int(round(np.sum(self._live_state().individual_count[int(Sex.FEMALE.value)])))
 
     def get_male_count(self) -> int:
         """Return the total number of male individuals."""
-        return int(round(np.sum(self.state.individual_count[int(Sex.MALE.value)])))
+        return int(round(np.sum(self._live_state().individual_count[int(Sex.MALE.value)])))
 
     def clear_history(self) -> None:
         """Remove all recorded history snapshots."""
@@ -712,7 +712,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Returns:
             NDArray: Flattened state array.
         """
-        return self.state.flatten_all()
+        return self._live_state().flatten_all()
 
     @property
     def config(self) -> ModelDraft:
@@ -768,7 +768,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 individual_count=np.asarray(state["individual_count"], dtype=np.float64),
             )
 
-        expected_shape = self.state.individual_count.shape
+        expected_shape = self._live_state().individual_count.shape
         if state_obj.individual_count.shape != expected_shape:
             raise ValueError(
                 "individual_count shape mismatch: expected "
@@ -783,16 +783,19 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._tick = int(state_obj.n_tick)
         self.clear_history()
 
-    @property
-    def state(self) -> DiscretePopulationState:
-        """DiscretePopulationState: The current population state.
+    def _snapshot_state(self) -> DiscretePopulationState:
+        """Copy the live state container for the public :attr:`state` snapshot.
 
-        Raises:
-            AttributeError: If the state has not been initialized.
+        Returns:
+            A fresh ``DiscretePopulationState`` with a copied count
+            array; writes through it never reach the engine.
         """
-        if self._state is None:
-            raise AttributeError("Population state has not been initialized.")
-        return self._state
+        src = self._state
+        assert src is not None  # the base property guards initialization
+        return DiscretePopulationState(
+            n_tick=int(src.n_tick),
+            individual_count=src.individual_count.copy(),
+        )
 
     def update(self) -> Configurator:
         """Return a ``Configurator`` for modifying this population's config."""

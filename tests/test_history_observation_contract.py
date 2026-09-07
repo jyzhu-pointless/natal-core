@@ -147,7 +147,7 @@ def test_identity_projection_preserves_group_sex_age_coordinates() -> None:
     observation = population.observation
     assert observation is not None
     counts = _coordinate_unique_counts(population.index_registry.n_ztypes)
-    population.state.individual_count[...] = counts
+    population._state.individual_count[...] = counts  # pyright: ignore[reportPrivateUsage]  # setup write: public state is a snapshot since R5
 
     expected = np.moveaxis(counts, 2, 0)
     np.testing.assert_array_equal(observation.apply(counts), expected)
@@ -177,7 +177,7 @@ def test_collapse_age_sums_only_the_age_axis() -> None:
         collapse_age=True,
     )
     counts = _coordinate_unique_counts(population.index_registry.n_ztypes)
-    population.state.individual_count[...] = counts
+    population._state.individual_count[...] = counts  # pyright: ignore[reportPrivateUsage]  # setup write: public state is a snapshot since R5
 
     expected = np.moveaxis(counts, 2, 0).sum(axis=2)
     result = population.observe()

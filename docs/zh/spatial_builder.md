@@ -169,8 +169,9 @@ def _clone_deme(template, config, name):
     clone._name    = name
     clone._history = []
     clone._state   = State.create(...)                        # 新 state 数组
-    clone.state.individual_count[:] = template.state.individual_count
-    clone.state.sperm_storage[:]    = template.state.sperm_storage
+    # `state` 返回快照（R5 之后），填充克隆必须写活容器：
+    clone._state.individual_count[:] = template._state.individual_count
+    clone._state.sperm_storage[:]     = template._state.sperm_storage
     clone._initial_population_snapshot  = (copy of template's snapshot)
 
     return clone

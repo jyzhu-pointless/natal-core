@@ -169,7 +169,10 @@ class TestDemeSliceReadCompat:
         pop = homogeneous_pop
         deme0 = pop.deme(0)
         assert deme0.config is pop._demes[0].config  # pyright: ignore[reportPrivateUsage]  # compat contract: same object
-        assert deme0.state is pop._demes[0].state  # pyright: ignore[reportPrivateUsage]  # compat contract
+        # DemeSlice.state delegates to the deme's live container (the
+        # public population-level state is a snapshot since R5; spatial
+        # deme handles keep their live-delegation semantics until S3).
+        assert deme0.state is pop._demes[0]._state  # pyright: ignore[reportPrivateUsage]  # compat contract
         assert deme0.name == pop._demes[0].name  # pyright: ignore[reportPrivateUsage]  # compat contract
         assert deme0.registry is pop._demes[0].registry  # pyright: ignore[reportPrivateUsage]  # compat contract (UI reads)
         assert deme0.export_config().n_ages == pop._demes[0].export_config().n_ages  # pyright: ignore[reportPrivateUsage]  # compat contract

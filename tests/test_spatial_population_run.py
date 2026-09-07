@@ -141,7 +141,15 @@ class _RunDemePopulation:
 
     @property
     def state(self) -> PopulationState:
-        """PopulationState: the deme's live state."""
+        """PopulationState: snapshot face (unused by the orchestration)."""
+        return self._state
+
+    def _live_state(self) -> PopulationState:
+        """Live container — the spatial write-back channels call this.
+
+        Duck-type adapter: since R5 the production populations expose the
+        live container through this accessor while ``state`` snapshots.
+        """
         return self._state
 
     def export_config(self) -> object:
@@ -214,7 +222,11 @@ class _RunDiscreteDemePopulation:
 
     @property
     def state(self) -> DiscretePopulationState:
-        """DiscretePopulationState: the deme's live state."""
+        """DiscretePopulationState: snapshot face (unused by orchestration)."""
+        return self._state
+
+    def _live_state(self) -> DiscretePopulationState:
+        """Live container — the spatial write-back channels call this."""
         return self._state
 
     def export_config(self) -> object:

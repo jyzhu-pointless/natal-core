@@ -25,7 +25,7 @@ from typing import NamedTuple, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.contracts.blueprint import Blueprint, format_type_name
+from natal.contracts.blueprint import Blueprint, format_type_name, frozen
 from natal.contracts.params import CustomValue, Params
 from natal.frontend.data.config import ModelDraft
 
@@ -178,7 +178,7 @@ def _blueprint(
         n_gtypes=int(draft.n_gtypes),
         n_glabs=int(draft.n_glabs),
         new_adult_age=int(draft.new_adult_age),
-        adult_ages=np.array(draft.adult_ages, dtype=np.int64, order="C"),
+        adult_ages=frozen(np.array(draft.adult_ages, dtype=np.int64, order="C")),
         stochastic=bool(draft.stochastic),
         continuous_sampling=bool(draft.continuous_sampling),
         fixed_egg_count=bool(draft.fixed_egg_count),
@@ -186,20 +186,24 @@ def _blueprint(
         extreme_speed_mode=int(draft.extreme_speed_mode),
         ztype_names=tuple(draft.ztype_names),
         gtype_names=tuple(draft.gtype_names),
-        female_only_by_sex_chrom=np.array(
-            draft.female_only_by_sex_chrom, dtype=np.bool_, order="C"
+        female_only_by_sex_chrom=frozen(
+            np.array(draft.female_only_by_sex_chrom, dtype=np.bool_, order="C")
         ),
-        male_only_by_sex_chrom=np.array(draft.male_only_by_sex_chrom, dtype=np.bool_, order="C"),
-        initial_individual_count=np.array(
-            draft.initial_individual_count, dtype=np.float64, order="C"
+        male_only_by_sex_chrom=frozen(
+            np.array(draft.male_only_by_sex_chrom, dtype=np.bool_, order="C")
+        ),
+        initial_individual_count=frozen(
+            np.array(draft.initial_individual_count, dtype=np.float64, order="C")
         ),
         initial_sperm_storage=(
-            np.array(sperm, dtype=np.float64, order="C") if sperm.size else np.zeros((0,))
+            frozen(np.array(sperm, dtype=np.float64, order="C"))
+            if sperm.size
+            else frozen(np.zeros((0,)))
         ),
         n_demes=n_demes,
-        migration_indptr=indptr,
-        migration_dest_idx=dest_idx,
-        migration_weights=weights,
+        migration_indptr=frozen(indptr),
+        migration_dest_idx=frozen(dest_idx),
+        migration_weights=frozen(weights),
     )
 
 

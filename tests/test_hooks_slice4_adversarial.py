@@ -105,7 +105,7 @@ def _ztype_index(ctx: TickContext, base: str) -> int:
 
 def _live_ctx(pop: nt.DiscreteGenerationPopulation) -> TickContext:
     """A read-only context view over the population's current state."""
-    return TickContext(pop, tick=pop.tick, deme_id=-1, state=pop.state)
+    return TickContext(pop, tick=pop.tick, deme_id=-1, state=pop._state)  # pyright: ignore[reportPrivateUsage]  # TickContext borrows the live arrays (short-term loan)
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +310,9 @@ def test_external_state_tampering_between_runs_rejected(backend: str) -> None:
     pop = _build(f"s4x_tamper_{backend}", backend=backend)
     pop.run(n_steps=1)
 
-    pop.state.individual_count[0, 0, 0] = 777.0  # tamper with the live view
+    # Tampering must reach the engine to exercise the guard: the public
+    # state snapshots since R5, so write the live container directly.
+    pop._state.individual_count[0, 0, 0] = 777.0  # pyright: ignore[reportPrivateUsage]
 
     with pytest.raises(ValueError, match="boundary"):
         pop.run(n_steps=1)
@@ -360,9 +362,10 @@ def test_metrics_mixture_exact_frequencies() -> None:
     aa = _ztype_index(_live_ctx(pop), "A|A")
     ab = _ztype_index(_live_ctx(pop), "A|B")
     # Overwrite the quiescent start with the target mixture (age 0).
-    pop.state.individual_count[:] = 0.0
-    pop.state.individual_count[0, 0, aa] = 600.0  # female A|A
-    pop.state.individual_count[1, 0, ab] = 400.0  # male A|B
+    # Setup writes reach the live container (pop.state is a snapshot since R5).
+    pop._state.individual_count[:] = 0.0  # pyright: ignore[reportPrivateUsage]
+    pop._state.individual_count[0, 0, aa] = 600.0  # female A|A
+    pop._state.individual_count[1, 0, ab] = 400.0  # male A|B
 
     pop.trigger_event("first")
     ctx = captured[0]
@@ -403,7 +406,8 @@ def test_metrics_zero_total_maps_frequencies_to_zero() -> None:
         return 0
 
     pop = _build("s4x_zero", hooks=[capture])
-    pop.state.individual_count[:] = 0.0
+    # Setup write reaches the live container (pop.state is a snapshot since R5).
+    pop._state.individual_count[:] = 0.0  # pyright: ignore[reportPrivateUsage]
     pop.trigger_event("first")
 
     ctx = captured[0]

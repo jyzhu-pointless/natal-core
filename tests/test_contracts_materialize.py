@@ -254,7 +254,12 @@ def test_blueprint_initial_state_is_a_copy() -> None:
     cfg = _age_config()
     bp = materialize(cfg).blueprint
     sentinel = float(cfg.initial_individual_count.sum())
-    bp.initial_individual_count[...] = -1.0
+    # R4: the blueprint's arrays are read-only — the strongest form of the
+    # isolation contract (no write path exists at all, so the draft can
+    # never be corrupted through the contract).
+    assert not bp.initial_individual_count.flags.writeable
+    with pytest.raises(ValueError, match="read-only"):
+        bp.initial_individual_count[...] = -1.0
     assert float(cfg.initial_individual_count.sum()) == sentinel
 
 

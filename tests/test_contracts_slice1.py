@@ -302,9 +302,13 @@ def test_blueprint_arrays_are_owned_copies(
     contract_arr = getattr(bp, bp_field)
     # Identity: the contract never aliases the draft.
     assert contract_arr is not draft_arr
-    # Write isolation: mutating the contract leaves the draft intact.
+    # R4 write isolation: blueprint arrays are frozen read-only, so the
+    # strongest isolation holds — there is no write path at all.  The
+    # draft therefore cannot be corrupted through the contract.
     sentinel = np.array(draft_arr, copy=True)
-    contract_arr[...] = 1 if contract_arr.dtype == np.bool_ else -7.0
+    assert not contract_arr.flags.writeable
+    with pytest.raises(ValueError, match="read-only"):
+        contract_arr[...] = 1 if contract_arr.dtype == np.bool_ else -7.0
     np.testing.assert_array_equal(draft_arr, sentinel)
 
 

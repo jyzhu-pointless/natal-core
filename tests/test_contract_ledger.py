@@ -490,8 +490,7 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="ownership: returned arrays are snapshots; hook refs detach",
-        owning_tests=("test_rust_session_bridge.py",),
-        known_violations=("R4", "R5"),
+        owning_tests=("test_rust_session_bridge.py", "test_ownership_snapshots.py"),
     ),
     InvariantEntry(
         area="lifecycle: restore->run, finish->snapshot, import->run, clear->record",
@@ -651,4 +650,6 @@ def test_ledger_state_importable_without_side_effects() -> None:
         spec.loader.exec_module(module)
     finally:
         del sys.modules[spec.name]
-    assert set(module.REPROS) == {"R1", "R2", "R3", "R4", "R5"}
+    # R4/R5 graduated to tests/test_ownership_snapshots.py in S2 batch 22
+    # (C3 precedent: fixed and promoted in the same batch).
+    assert set(module.REPROS) == {"R1", "R2", "R3"}

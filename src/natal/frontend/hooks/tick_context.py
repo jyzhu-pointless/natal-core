@@ -408,7 +408,7 @@ class TickContext:
 def _build_blueprint(pop: BasePopulation[Any]) -> BlueprintView:
     """Project a population onto the read-only blueprint view."""
     config = pop.config
-    ic = pop.state.individual_count
+    ic = pop._live_state().individual_count  # pyright: ignore[reportPrivateUsage]  # shape probe: avoid a full snapshot copy per call
     discrete = bool(getattr(config, "discrete_generation", False))
     return BlueprintView(
         n_sexes=int(ic.shape[0]),
@@ -472,9 +472,10 @@ def state_view_for(
     )
 
     config = pop.config
-    n_sexes = int(pop.state.individual_count.shape[0])
-    n_ages = int(pop.state.individual_count.shape[1])
-    n_ztypes = int(pop.state.individual_count.shape[2])
+    live = pop._live_state().individual_count  # pyright: ignore[reportPrivateUsage]  # shape probe: avoid a full snapshot copy per callback
+    n_sexes = int(live.shape[0])
+    n_ages = int(live.shape[1])
+    n_ztypes = int(live.shape[2])
     ind = ind_flat.reshape(n_sexes, n_ages, n_ztypes)
     if sperm_flat is None or sperm_flat.size == 0:
         return DiscretePopulationState(n_tick=tick, individual_count=ind)

@@ -339,15 +339,18 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
                 object.__setattr__(clone, _attr, _val)
 
         # --- fresh state: copy data from template ---
-        state_cls = type(self.state)
+        template_state = self._live_state()
+        state_cls = type(template_state)
         new_state = state_cls.create(
             n_ztypes=resolved_config.n_ztypes,
             n_sexes=resolved_config.n_sexes,
             n_ages=resolved_config.n_ages,
         )
         object.__setattr__(clone, '_state', new_state)
-        clone_state_nn = clone.state
-        self_state_nn = self.state
+        # Live containers on both sides: the copy below must populate the
+        # clone's engine arrays, not a snapshot.
+        clone_state_nn = clone._live_state()
+        self_state_nn = template_state
         clone_state_nn.individual_count[:] = self_state_nn.individual_count
         # sperm_storage only exists on PopulationState (age-structured), not
         # on DiscretePopulationState — use getattr for type-safe access.
@@ -704,13 +707,52 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
     @property
     def state(self) -> T_State:
-        """Return the current population state container.
+        """Return a point-in-time snapshot of the current state container.
+
+        Snapshot discipline (plan 13.1 R5): long-lived callers outside
+        hooks receive copies, so writing through the returned container
+        can never reach the engine's live arrays.  The in-hook writable
+        loan is a separate controlled channel (:class:`TickContext`).
 
         Returns:
-            PopulationState: The current state object used by the population.
+            A fresh state container holding copied arrays and the
+            current tick.
+
+        Raises:
+            AttributeError: If the state has not been initialized.
         """
         if self._state is None:
             raise AttributeError("Population state has not been initialized.")
+        return self._snapshot_state()
+
+    def _snapshot_state(self) -> T_State:
+        """Build the snapshot returned by :attr:`state` (subclass hook).
+
+        Returns:
+            A fresh container with copied arrays; never the live
+            ``_state`` itself.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _snapshot_state()"
+        )
+
+    def _live_state(self) -> T_State:
+        """Return the live state container for internal engine paths.
+
+        The narrowed, non-optional twin of ``_state``: every internal
+        caller (state install, lifecycle write-back, migration stack)
+        runs after construction created the container, so this accessor
+        encodes that invariant instead of scattering Optional guards.
+        The public :attr:`state` stays the snapshot face.
+
+        Returns:
+            The live ``_state`` container (arrays shared with the engine).
+
+        Raises:
+            RuntimeError: If the state has not been initialized.
+        """
+        if self._state is None:
+            raise RuntimeError("Population state has not been initialized.")
         return self._state
 
     @property
@@ -750,7 +792,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             PopulationLayout,
         )
 
-        state = self.state
+        state = self._live_state()
         ind = state.individual_count
         n_sexes = int(ind.shape[0])
         n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1

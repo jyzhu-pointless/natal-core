@@ -1855,7 +1855,7 @@ class SpatialConfigurator:
         )
         # _clone_deme copies state arrays from base_template; overwrite
         # them with the deme's own initial values.
-        state = deme.state
+        state = deme._live_state()  # pyright: ignore[reportPrivateUsage]  # live container: overwrite reaches the engine
         if "individual_count" in value_map:
             state.individual_count[:] = variant_config.initial_individual_count
         if "sperm_storage" in value_map:

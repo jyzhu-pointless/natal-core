@@ -46,6 +46,10 @@ class _DummyDemePopulation(BasePopulation):
     def update(self) -> Any:  # type: ignore[no-untyped-def,any-return]  # duck-typed double: mirrors the untyped base-class hook; never called on this stub
         raise NotImplementedError
 
+    def _snapshot_state(self):
+        """Snapshot hook: return the stub container itself (read-only stub)."""
+        return self._state
+
     @property
     def species(self) -> Species:
         return self._species

@@ -267,7 +267,14 @@ class DemeSlice:
     @property
     def state(self) -> PopulationState | DiscretePopulationState:
         """The deme's live state NamedTuple (state arrays are writable)."""
-        return self._pop._demes[self._index].state  # pyright: ignore[reportPrivateUsage]  # delegated read channel
+        # Live delegation on purpose: the spatial container and the test
+        # fixtures write through this channel today; the snapshot
+        # discipline for deme handles lands with S3's unification.
+        deme = self._pop._demes[self._index]  # pyright: ignore[reportPrivateUsage]  # delegated live channel until S3
+        assert deme is not None  # slot access implies a constructed deme
+        state = deme._state  # pyright: ignore[reportPrivateUsage]  # live delegation
+        assert state is not None  # constructed demes always carry a container
+        return state
 
     # -- stage-3 write path --------------------------------------------------
 
@@ -325,6 +332,8 @@ def _minimal_contract(
     Returns:
         A ``(Blueprint, Params)`` pair with placeholder genetics.
     """
+    from natal.contracts.blueprint import frozen
+
     blueprint = Blueprint(
         n_sexes=n_sexes,
         n_ages=n_ages,
@@ -332,7 +341,7 @@ def _minimal_contract(
         n_gtypes=0,
         n_glabs=0,
         new_adult_age=0,
-        adult_ages=np.zeros(0, dtype=np.int64),
+        adult_ages=frozen(np.zeros(0, dtype=np.int64)),
         stochastic=False,
         continuous_sampling=False,
         fixed_egg_count=False,
@@ -340,14 +349,18 @@ def _minimal_contract(
         extreme_speed_mode=0,
         ztype_names=(),
         gtype_names=(),
-        female_only_by_sex_chrom=np.zeros(0, dtype=np.bool_),
-        male_only_by_sex_chrom=np.zeros(0, dtype=np.bool_),
-        initial_individual_count=np.zeros((0,), dtype=np.float64),
-        initial_sperm_storage=np.zeros((0,), dtype=np.float64),
+        female_only_by_sex_chrom=frozen(np.zeros(0, dtype=np.bool_)),
+        male_only_by_sex_chrom=frozen(np.zeros(0, dtype=np.bool_)),
+        initial_individual_count=frozen(np.zeros((0,), dtype=np.float64)),
+        initial_sperm_storage=frozen(np.zeros((0,), dtype=np.float64)),
         n_demes=n_demes,
-        migration_indptr=np.asarray(migration_csr.indptr, dtype=np.int64),
-        migration_dest_idx=np.asarray(migration_csr.dest_idx, dtype=np.int64),
-        migration_weights=np.asarray(migration_csr.weights, dtype=np.float64),
+        # np.array (not asarray): the CSR inputs are already int64/float64,
+        # so asarray would return the CALLER's buffers — freezing those
+        # would both pollute the caller and leave the blueprint mutable
+        # through any holder that re-enables the write flag.
+        migration_indptr=frozen(np.array(migration_csr.indptr, dtype=np.int64)),
+        migration_dest_idx=frozen(np.array(migration_csr.dest_idx, dtype=np.int64)),
+        migration_weights=frozen(np.array(migration_csr.weights, dtype=np.float64)),
     )
     params = Params(
         carrying_capacity=0.0,
@@ -882,7 +895,7 @@ class SpatialPopulation:
         if callable(export_fn):
             draft = cast(ModelDraft, export_fn())
             return int(draft.n_sexes), int(draft.n_ages), int(draft.new_adult_age)
-        ind = self._demes[0].state.individual_count
+        ind = self._demes[0]._live_state().individual_count  # pyright: ignore[reportPrivateUsage]  # orchestration consumer
         if ind.ndim == 3:
             return int(ind.shape[0]), int(ind.shape[1]), (1 if ind.shape[1] > 1 else 0)
         return 2, 1, 0
@@ -1556,19 +1569,19 @@ class SpatialPopulation:
                 "restoration."
             )
         restored_tick, ic, ss = history_obj.restore_state(tick)
-        if ic.ndim >= 3:
-            n_demes_restored = ic.shape[0] if ic.ndim == 4 else 1
-            for di in range(min(n_demes_restored, len(self._demes))):
+        # A spatial raw history always restores a
+        # (n_demes, n_sexes, n_ages, n_ztypes) 4-D block
+        # (History.restore_state derives the shape from the spatial
+        # schema), so a plain 3-D payload can never reach this container.
+        if ic.ndim == 4:
+            for di in range(min(ic.shape[0], len(self._demes))):
                 deme = self._demes[di]
-                if ic.ndim == 4:
-                    deme.state.individual_count[:] = ic[di]
-                else:
-                    deme.state.individual_count[:] = ic
+                deme._live_state().individual_count[:] = ic[di]  # pyright: ignore[reportPrivateUsage]  # live write-back
                 if ss is not None:
-                    sp = getattr(deme.state, "sperm_storage", None)
+                    sp = getattr(deme._live_state(), "sperm_storage", None)  # pyright: ignore[reportPrivateUsage]  # live write-back
                     if sp is not None:
                         sp[:] = ss[di] if ss.ndim == 4 else ss
-                deme._state = deme.state._replace(n_tick=restored_tick)  # type: ignore[attr-defined]  # checkpoint must synchronize the immutable state tick
+                deme._state = deme._live_state()._replace(n_tick=restored_tick)  # pyright: ignore[reportPrivateUsage]  # type: ignore[attr-defined]  # checkpoint must synchronize the immutable state tick
                 deme._tick = restored_tick  # type: ignore[attr-defined]  # private attr on base population
         self._tick = restored_tick
         history_obj.truncate(retain_until_tick=tick)
@@ -2213,7 +2226,7 @@ class SpatialPopulation:
                 new_fields["sperm_storage"] = sperm_all[deme_id]
 
             # Replace immutable state tuple and keep mirror tick fields aligned.
-            deme._state = deme.state._replace(**new_fields)  # type: ignore[attr-defined]
+            deme._state = deme._live_state()._replace(**new_fields)  # type: ignore[attr-defined]  # duck-typed deme doubles carry the same container shape
             deme.tick = int(tick)
         self._tick = int(tick)
 
@@ -2710,7 +2723,7 @@ class SpatialPopulation:
                 backend = backends[int(deme_config_ids[deme_id])]
                 state = DiscretePopulationState(
                     n_tick=self._tick,
-                    individual_count=deme.state.individual_count,
+                    individual_count=deme._live_state().individual_count,  # pyright: ignore[reportPrivateUsage]
                 )
                 next_state, _ = backend.run_tick(state)
                 # Per-deme sessions journal plain rows; merge them into the

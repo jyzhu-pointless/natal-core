@@ -8,7 +8,8 @@ code delivery that can request APPROVED".  When the owning stage lands
 (S2 absorbs R3/R4/R5, S3 absorbs R1/R2), each repro turns green and is
 promoted into the regular pytest suite together with its fix in the
 same batch.  (Audit finding C3 followed exactly this path: fixed and
-promoted in S1 batch 5.)
+promoted in S1 batch 5.  R4 and R5 followed it in S2 batch 22 — now
+tests/test_ownership_snapshots.py.)
 
 Run: ``python scripts/known_defect_repro.py`` prints one line per
 defect with PASS (defect gone) / FAIL (defect present) plus evidence.
@@ -213,102 +214,18 @@ def repro_r3() -> None:
     )
 
 
-# ── R4: the eight Blueprint ndarrays are writable
-#
-# A NamedTuple freezes field binding, not array contents: any holder can
-# mutate the engine's model arrays through the shared references.
-
-
-def repro_r4() -> None:
-    """Assert materialized Blueprint arrays reject writes (currently fails)."""
-    from natal.contracts.materialize import materialize
-
-    species = _two_allele_species("ReproR4Species")
-    pop = (
-        nt.DiscreteGenerationPopulation.setup(
-            species=species, name="ReproR4Pop", stochastic=False
-        )
-        .initial_state(
-            individual_count={
-                "female": {"WT|WT": 10},
-                "male": {"WT|WT": 10},
-            }
-        )
-        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-        .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
-        .build()
-    )
-    mat = materialize(pop.config)
-    blueprint = mat.blueprint
-
-    array_fields = [
-        "adult_ages",
-        "female_only_by_sex_chrom",
-        "male_only_by_sex_chrom",
-        "initial_individual_count",
-        "initial_sperm_storage",
-        "migration_indptr",
-        "migration_dest_idx",
-        "migration_weights",
-    ]
-    writable = [
-        field for field in array_fields
-        if isinstance(getattr(blueprint, field), np.ndarray)
-        and getattr(blueprint, field).flags.writeable
-    ]
-
-    assert not writable, (
-        f"R4: Blueprint ndarray fields are writable: {writable} — external "
-        "holders can mutate the engine's frozen model arrays in place"
-    )
-
-
-# ── R5: pop.state returns the live internal state container
-
-
-def repro_r5() -> None:
-    """Assert mutating the returned state cannot reach the engine (currently fails)."""
-    species = _two_allele_species("ReproR5Species")
-    pop = (
-        nt.DiscreteGenerationPopulation.setup(
-            species=species, name="ReproR5Pop", stochastic=False
-        )
-        .initial_state(
-            individual_count={
-                "female": {"WT|WT": 10},
-                "male": {"WT|WT": 10},
-            }
-        )
-        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-        .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
-        .build()
-    )
-    before = pop.state.individual_count.copy()
-    pop.state.individual_count[0, 1, 0] = 999.0
-
-    assert np.array_equal(
-        pop.state.individual_count, before
-    ), "R5: writing through the returned state container mutated the engine's live arrays"
-
-
 # ── runner ────────────────────────────────────────────────────────────────────
 
 REPROS: dict[str, Callable[[], None]] = {
     "R1": repro_r1,
     "R2": repro_r2,
     "R3": repro_r3,
-    "R4": repro_r4,
-    "R5": repro_r5,
 }
 
 OWNING_STAGE = {
     "R1": "S3 (persistent per-deme RNG + unified Program)",
     "R2": "S3 (one Program for all models)",
     "R3": "S2/S4 (public restore wired to the Rust checkpoint)",
-    "R4": "S2 (frozen Blueprint inside the Rust session)",
-    "R5": "S2 (snapshots instead of live containers)",
 }
 
 

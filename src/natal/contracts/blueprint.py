@@ -20,12 +20,34 @@ access) resolve names through it instead of threading indices around.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import NamedTuple, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["Blueprint"]
+__all__ = ["Blueprint", "frozen"]
+
+# Preserves the concrete dtype parameter through the freeze helper.
+_FrozenArrayT = TypeVar("_FrozenArrayT", bound=NDArray[np.generic])
+
+
+def frozen(array: _FrozenArrayT) -> _FrozenArrayT:
+    """Return *array* with its buffer marked read-only.
+
+    The enforcement point of the frozen discipline: Blueprint arrays are
+    freshly copied by their constructors (``materialize`` and the
+    spatial test double), so flipping the write flag in place is free
+    and makes any later in-place write through any holder raise instead
+    of silently mutating the engine's frozen model arrays.
+
+    Args:
+        array: A freshly owned ndarray about to be stored on a Blueprint.
+
+    Returns:
+        The same array, now read-only.
+    """
+    array.setflags(write=False)
+    return array
 
 
 class Blueprint(NamedTuple):
@@ -104,9 +126,9 @@ class Blueprint(NamedTuple):
     # shared class-level objects, which is safe because the frozen
     # discipline forbids writing Blueprint arrays after build.
     n_demes: int = 1
-    migration_indptr: NDArray[np.int64] = np.zeros(0, dtype=np.int64)
-    migration_dest_idx: NDArray[np.int64] = np.zeros(0, dtype=np.int64)
-    migration_weights: NDArray[np.float64] = np.zeros(0, dtype=np.float64)
+    migration_indptr: NDArray[np.int64] = frozen(np.zeros(0, dtype=np.int64))
+    migration_dest_idx: NDArray[np.int64] = frozen(np.zeros(0, dtype=np.int64))
+    migration_weights: NDArray[np.float64] = frozen(np.zeros(0, dtype=np.float64))
 
 
 def format_type_name(genotype: object, label: str) -> str:

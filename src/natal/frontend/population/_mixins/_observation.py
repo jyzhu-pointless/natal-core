@@ -34,14 +34,3 @@ class ObservationMixin:
     species: Any  # type: ignore[assignment]  # see class comment
     state: Any  # type: ignore[assignment]  # see class comment
 
-    # ── Observation infrastructure ──────────────────────────────────
-
-    def _build_observation_mask(self, obs: Observation) -> np.ndarray:
-        """Build the 4-D binary mask from an Observation and current state dims."""
-        state = self.state
-        ind = state.individual_count
-        return obs.build_mask(
-            n_sexes=ind.shape[0],
-            n_ages=ind.shape[1] if ind.ndim == 3 else 1,
-            n_ztypes=ind.shape[-1],
-        )

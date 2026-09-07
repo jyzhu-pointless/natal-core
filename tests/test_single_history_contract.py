@@ -388,7 +388,9 @@ def _continuation_mutable_count(
         assert isinstance(population, nt.SpatialPopulation)
         return population.demes[0].state.individual_count
     assert not isinstance(population, nt.SpatialPopulation)
-    return population.state.individual_count
+    # Tampering must reach the engine: pop.state returns snapshots since
+    # the R5 fix, so the boundary-guard probe writes the live container.
+    return population._state.individual_count  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.parametrize(

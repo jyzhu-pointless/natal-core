@@ -958,9 +958,9 @@ def test_age_invalid_conversion_rate_is_atomic() -> None:
         name="invalid_rate_atomic_age_pop",
     )
     original_config = pop.config
-    original_state = pop.state
-    original_counts = pop.state.individual_count.copy()
-    original_sperm = pop.state.sperm_storage.copy()
+    original_state = pop._state  # pyright: ignore[reportPrivateUsage]  # live container (public state snapshots since R5)
+    original_counts = pop._state.individual_count.copy()  # pyright: ignore[reportPrivateUsage]
+    original_sperm = pop._state.sperm_storage.copy()  # pyright: ignore[reportPrivateUsage]
     original_gamete = pop.gamete_modifiers
     original_zygote = pop.zygote_modifiers
     original_presets = pop.presets
@@ -973,9 +973,9 @@ def test_age_invalid_conversion_rate_is_atomic() -> None:
 
     assert drive.drive_conversion_rate == (0.8, 0.8)
     assert pop.config is original_config
-    assert pop.state is original_state
-    np.testing.assert_array_equal(pop.state.individual_count, original_counts)
-    np.testing.assert_array_equal(pop.state.sperm_storage, original_sperm)
+    assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.sperm_storage, original_sperm)  # pyright: ignore[reportPrivateUsage]
     assert pop.gamete_modifiers == original_gamete
     assert pop.zygote_modifiers == original_zygote
     assert pop.presets == original_presets
@@ -1039,8 +1039,8 @@ def test_nonspatial_first_registration_late_stage_failure_is_atomic(
         failure_stage=failure_stage,
     )
     original_config = pop.config
-    original_state = pop.state
-    original_counts = pop.state.individual_count.copy()
+    original_state = pop._state  # pyright: ignore[reportPrivateUsage]  # live container (public state snapshots since R5)
+    original_counts = pop._state.individual_count.copy()  # pyright: ignore[reportPrivateUsage]
     original_presets = pop.presets
     original_gamete = pop.gamete_modifiers
     original_zygote = pop.zygote_modifiers
@@ -1066,8 +1066,8 @@ def test_nonspatial_first_registration_late_stage_failure_is_atomic(
         pop.update().presets(failing)
 
     assert pop.config is original_config
-    assert pop.state is original_state
-    np.testing.assert_array_equal(pop.state.individual_count, original_counts)
+    assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
     assert pop.presets == original_presets
     assert pop.gamete_modifiers == original_gamete
     assert pop.zygote_modifiers == original_zygote
@@ -1168,9 +1168,9 @@ def test_deferred_modifier_failure_is_atomic_nonspatial() -> None:
         name="deferred_failure_nonspatial_pop",
     )
     original_config = pop.config
-    original_state = pop.state
-    original_counts = pop.state.individual_count.copy()
-    original_sperm = pop.state.sperm_storage.copy()
+    original_state = pop._state  # pyright: ignore[reportPrivateUsage]  # live container (public state snapshots since R5)
+    original_counts = pop._state.individual_count.copy()  # pyright: ignore[reportPrivateUsage]
+    original_sperm = pop._state.sperm_storage.copy()  # pyright: ignore[reportPrivateUsage]
     original_presets = pop.presets
     original_gamete = pop.gamete_modifiers
     original_zygote = pop.zygote_modifiers
@@ -1183,9 +1183,9 @@ def test_deferred_modifier_failure_is_atomic_nonspatial() -> None:
 
     assert preset.fail_during_rebuild is False
     assert pop.config is original_config
-    assert pop.state is original_state
-    np.testing.assert_array_equal(pop.state.individual_count, original_counts)
-    np.testing.assert_array_equal(pop.state.sperm_storage, original_sperm)
+    assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.sperm_storage, original_sperm)  # pyright: ignore[reportPrivateUsage]
     assert pop.presets == original_presets
     assert pop.gamete_modifiers == original_gamete
     assert pop.zygote_modifiers == original_zygote

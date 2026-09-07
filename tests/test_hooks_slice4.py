@@ -293,10 +293,11 @@ def test_metrics_match_manual_numpy() -> None:
         return 0
 
     pop = _build_discrete("s4_metrics", hook_items=[capture])
-    # Uneven starting distribution.
-    pop.state.individual_count[0, 1, 0] = 30.0  # female WT|WT
-    pop.state.individual_count[1, 1, 0] = 50.0  # male WT|WT
-    pop.state.individual_count[0, 1, 2] = 20.0  # female Dr|Dr
+    # Uneven starting distribution.  Setup writes target the live
+    # container: pop.state is a snapshot since the R5 fix.
+    pop._state.individual_count[0, 1, 0] = 30.0  # female WT|WT
+    pop._state.individual_count[1, 1, 0] = 50.0  # male WT|WT
+    pop._state.individual_count[0, 1, 2] = 20.0  # female Dr|Dr
 
     pop.trigger_event("first")  # observe mid-tick state, no lifecycle stages
     ctx = captured[0]
@@ -353,8 +354,9 @@ def test_metrics_c_star_s_star_recompute_on_demand() -> None:
         np.array([1.0, 1.0], dtype=np.float64),
     )
     # Adults drive egg production; give the population a breeding base.
-    pop.state.individual_count[:, 1, :] = 50.0
-    pop.state.individual_count[:] *= 2.0  # mutate state before the hook runs
+    # Live-container writes (pop.state snapshots since R5).
+    pop._state.individual_count[:, 1, :] = 50.0
+    pop._state.individual_count[:] *= 2.0  # mutate state before the hook runs
     pop.trigger_event("first")
 
     ctx = captured[0]

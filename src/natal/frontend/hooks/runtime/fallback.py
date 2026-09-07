@@ -249,7 +249,12 @@ class HookExecutor:
         if event_id < 0 or event_id >= NUM_EVENTS:
             return RESULT_CONTINUE
 
-        state = population.state
+        # Live state on purpose: hooks borrow the writable arrays for one
+        # callback (short-term loan).  The public ``population.state``
+        # returns snapshots, so the executor must reach the private
+        # container directly to keep hook writes effective.
+        state = population._state  # pyright: ignore[reportPrivateUsage]  # sanctioned live loan channel into callbacks
+        assert state is not None  # events only fire on initialized populations
         ind_count = state.individual_count
 
         # Resolve runtime state flags.  No dummy sperm array is created:

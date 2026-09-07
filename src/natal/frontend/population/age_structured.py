@@ -115,11 +115,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         # Initialize from builder-injected config arrays if available.
         cfg_init_ind = population_config.initial_individual_count
-        if cfg_init_ind.shape == self.state.individual_count.shape:
-            self.state.individual_count[:] = cfg_init_ind
+        if cfg_init_ind.shape == self._live_state().individual_count.shape:
+            self._live_state().individual_count[:] = cfg_init_ind
         cfg_init_sperm = population_config.initial_sperm_storage
-        if cfg_init_sperm.shape == self.state.sperm_storage.shape:
-            self.state.sperm_storage[:] = cfg_init_sperm
+        if cfg_init_sperm.shape == self._live_state().sperm_storage.shape:
+            self._live_state().sperm_storage[:] = cfg_init_sperm
 
         self.snapshots = {}
         self._python_backend = False
@@ -134,7 +134,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._contract_params: Params | None = None
 
         if initial_individual_count is not None:
-            self.state.individual_count.fill(0.0)
+            self._live_state().individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
 
         if initial_sperm_storage is not None:
@@ -142,8 +142,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self._distribute_initial_sperm_storage(species, initial_sperm_storage)
 
         self._initial_population_snapshot = (
-            self.state.individual_count.copy(),
-            self.state.sperm_storage.copy(),
+            self._live_state().individual_count.copy(),
+            self._live_state().sperm_storage.copy(),
             None,
         )
 
@@ -249,7 +249,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             ValueError: If sex key is invalid.
             TypeError: If age data is not a list or dict.
         """
-        self.state.individual_count.fill(0.0)
+        self._live_state().individual_count.fill(0.0)
         for sex_key, genotype_dist in distribution.items():
             sex_key_norm = sex_key.lower().strip()
             if sex_key_norm == "female":
@@ -281,7 +281,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             raise TypeError(f"Age count must be numeric, got {type(raw_count)}")
                         count = float(raw_count)
                         if age < self.config.n_ages and count > 0:
-                            self.state.individual_count[sex_idx, age, z_idx] = count
+                            self._live_state().individual_count[sex_idx, age, z_idx] = count
                 elif isinstance(age_data, dict):
                     for age_raw, raw_count in cast(Dict[object, object], age_data).items():
                         if not isinstance(age_raw, int):
@@ -291,7 +291,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         age = age_raw
                         count = float(raw_count)
                         if age < self.config.n_ages and count > 0:
-                            self.state.individual_count[sex_idx, age, z_idx] = count
+                            self._live_state().individual_count[sex_idx, age, z_idx] = count
                 else:
                     raise TypeError(f"age_data must be a list or dict, got {type(age_data)}")
 
@@ -319,7 +319,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             TypeError: If genotype keys or age data have incorrect types.
             ValueError: If sperm counts or ages are out of range.
         """
-        self.state.sperm_storage.fill(0.0)
+        self._live_state().sperm_storage.fill(0.0)
         from natal.frontend.patterns import GenotypePatternParser, ZygoteTypePattern
 
         for female_key, male_dict in sperm_storage_dist.items():
@@ -368,7 +368,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
                         if count > 0:
-                            self.state.sperm_storage[age, f_z, m_z] = count
+                            self._live_state().sperm_storage[age, f_z, m_z] = count
 
                 elif isinstance(age_data, list):
                     # List format: [count_age0, count_age1, ...]
@@ -381,7 +381,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
                         if count > 0:
-                            self.state.sperm_storage[age, f_z, m_z] = count
+                            self._live_state().sperm_storage[age, f_z, m_z] = count
 
                 elif isinstance(age_data, tuple):
                     # Tuple format: (count_age0, count_age1, ...)
@@ -394,7 +394,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         if count < 0:
                             raise ValueError(f"Sperm count must be non-negative, got {count}")
                         if count > 0:
-                            self.state.sperm_storage[age, f_z, m_z] = count
+                            self._live_state().sperm_storage[age, f_z, m_z] = count
 
                 else:
                     # Scalar format: apply to all adult ages
@@ -402,14 +402,22 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                         raise ValueError(f"Sperm count must be non-negative, got {age_data}")
                     if age_data > 0:
                         for age in range(self.new_adult_age, self.n_ages):
-                            self.state.sperm_storage[age, f_z, m_z] = float(age_data)
+                            self._live_state().sperm_storage[age, f_z, m_z] = float(age_data)
 
-    @property
-    def state(self) -> PopulationState:
-        """PopulationState: The current state container for the population."""
-        if self._state is None:
-            raise AttributeError("Population state has not been initialized.")
-        return self._state
+    def _snapshot_state(self) -> PopulationState:
+        """Copy the live state container for the public :attr:`state` snapshot.
+
+        Returns:
+            A fresh ``PopulationState`` with copied count and sperm
+            arrays; writes through it never reach the engine.
+        """
+        src = self._state
+        assert src is not None  # the base property guards initialization
+        return PopulationState(
+            n_tick=int(src.n_tick),
+            individual_count=src.individual_count.copy(),
+            sperm_storage=src.sperm_storage.copy(),
+        )
 
     def reset(self) -> None:
         """Reset the population to its initial state.
@@ -448,7 +456,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: Grand total across all sexes, ages, and genotypes.
         """
-        return self.state.individual_count.sum()
+        return self._live_state().individual_count.sum()
 
     def get_female_count(self) -> int:
         """Return the total number of female individuals.
@@ -456,7 +464,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: Sum of all female individual counts.
         """
-        return self.state.individual_count[Sex.FEMALE.value, :, :].sum()
+        return self._live_state().individual_count[Sex.FEMALE.value, :, :].sum()
 
     def get_male_count(self) -> int:
         """Return the total number of male individuals.
@@ -464,7 +472,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: Sum of all male individual counts.
         """
-        return self.state.individual_count[Sex.MALE.value, :, :].sum()
+        return self._live_state().individual_count[Sex.MALE.value, :, :].sum()
 
     def get_adult_count(self, sex: str = 'both') -> int:
         """Return the number of adult individuals for the given sex.
@@ -484,10 +492,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         total = 0
 
         if sex in ('female', 'F', 'both'):
-            total += self.state.individual_count[Sex.FEMALE.value, self.new_adult_age:self.n_ages, :].sum()
+            total += self._live_state().individual_count[Sex.FEMALE.value, self.new_adult_age:self.n_ages, :].sum()
 
         if sex in ('male', 'M', 'both'):
-            total += self.state.individual_count[Sex.MALE.value, self.new_adult_age:self.n_ages, :].sum()
+            total += self._live_state().individual_count[Sex.MALE.value, self.new_adult_age:self.n_ages, :].sum()
 
         return int(total)
 
@@ -528,7 +536,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             NDArray: Flattened state array ``[n_tick, ind_count.ravel(), sperm_storage.ravel()]``.
         """
-        return self.state.flatten_all()
+        return self._live_state().flatten_all()
 
     def import_state(self, state: Union[PopulationState, NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]]) -> None:
         """Import state and reset the history timeline.
@@ -541,7 +549,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         from natal.frontend.data import PopulationState, parse_flattened_state
 
-        n_sexes, n_ages, n_ztypes = self.state.individual_count.shape
+        n_sexes, n_ages, n_ztypes = self._live_state().individual_count.shape
 
         # ── Phase 1: parse and validate all inputs ──
         if isinstance(state, np.ndarray):
@@ -563,13 +571,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 sperm_storage=np.asarray(state[1], dtype=np.float64),
             )
 
-        expected_individual_shape = self.state.individual_count.shape
+        expected_individual_shape = self._live_state().individual_count.shape
         if state_obj.individual_count.shape != expected_individual_shape:
             raise ValueError(
                 "individual_count shape mismatch: expected "
                 f"{expected_individual_shape}, got {state_obj.individual_count.shape}"
             )
-        expected_sperm_shape = self.state.sperm_storage.shape
+        expected_sperm_shape = self._live_state().sperm_storage.shape
         if state_obj.sperm_storage.shape != expected_sperm_shape:
             raise ValueError(
                 "sperm_storage shape mismatch: expected "
@@ -577,12 +585,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             )
 
         # ── Phase 2: commit atomically ──
-        self.state.individual_count[:] = state_obj.individual_count
-        self.state.sperm_storage[:] = state_obj.sperm_storage
+        self._live_state().individual_count[:] = state_obj.individual_count
+        self._live_state().sperm_storage[:] = state_obj.sperm_storage
         self._state = PopulationState(
             n_tick=state_obj.n_tick,
-            individual_count=self.state.individual_count,
-            sperm_storage=self.state.sperm_storage,
+            individual_count=self._live_state().individual_count,
+            sperm_storage=self._live_state().sperm_storage,
         )
         self._tick = int(state_obj.n_tick)
         self.clear_history()
@@ -770,7 +778,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._rust_run_active = True
         try:
             final_state, history_new, was_stopped = backend.run(
-                self.state,
+                self._live_state(),
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=observation_mask,
@@ -921,7 +929,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         input_config = self.config
         final_state, was_stopped, config = lifecycle_engine.run(
             tick_fn=tick_fn,
-            state=self.state,
+            state=self._live_state(),
             config=self.config,
             registry=registry,
             first_hook=first_hook,
@@ -979,11 +987,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         # Access directly from PopulationState
         if sex in ('female', 'F'):
-            return self.state.individual_count[Sex.FEMALE.value, :, :].sum(axis=1)
+            return self._live_state().individual_count[Sex.FEMALE.value, :, :].sum(axis=1)
         elif sex in ('male', 'M'):
-            return self.state.individual_count[Sex.MALE.value, :, :].sum(axis=1)
+            return self._live_state().individual_count[Sex.MALE.value, :, :].sum(axis=1)
         else:
-            return self.state.individual_count.sum(axis=(0, 2))
+            return self._live_state().individual_count.sum(axis=(0, 2))
 
     def get_genotype_count(self, genotype: Genotype) -> Tuple[int, int]:
         """Return total counts for a genotype as (female_count, male_count).
@@ -997,8 +1005,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             DeprecationWarning, stacklevel=2,
         )
         genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
-        female_count = self.state.individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
-        male_count = self.state.individual_count[Sex.MALE.value, :, genotype_idx].sum()
+        female_count = self._live_state().individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
+        male_count = self._live_state().individual_count[Sex.MALE.value, :, genotype_idx].sum()
         return (female_count, male_count)
 
     @property
@@ -1016,7 +1024,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         )
         present: Set[Genotype] = set()
         for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
-            total_count = self.state.individual_count[:, :, z_idx].sum()
+            total_count = self._live_state().individual_count[:, :, z_idx].sum()
             if total_count > 0:
                 present.add(genotype)
         return present
