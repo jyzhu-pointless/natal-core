@@ -32,6 +32,7 @@ from natal.contracts.materialize import SpatialMigration, materialize
 from natal.contracts.params import Params
 from natal.frontend.data import (
     DiscretePopulationState,
+    ModelDefinition,
     ModelDraft,
     PopulationState,
 )
@@ -669,6 +670,9 @@ class SpatialPopulation:
         # Keep a stable list internally; public accessor returns an immutable
         # tuple view to prevent accidental external mutation.
         self._demes: List[DemePopulation] = list(demes)
+        # Frozen declaration snapshot, attached by
+        # SpatialConfigurator.build() (plan 5.1 slice 3).
+        self._definition: ModelDefinition | None = None
         # Genetics draft tables start out shared by every deme; in-place
         # genetics writes would leak across demes, so the per-deme params
         # view refuses them and routes through write_genetics (which forks
@@ -1333,6 +1337,27 @@ class SpatialPopulation:
     def tick(self) -> int:
         """int: Shared simulation tick across all demes."""
         return self._tick
+
+    @property
+    def definition(self) -> ModelDefinition:
+        """The frozen declaration snapshot this spatial population was
+        built from.
+
+        Returns:
+            The :class:`~natal.frontend.data.ModelDefinition` captured at
+            build time (the wrapper journal with raw BatchSetting
+            declarations preserved).
+
+        Raises:
+            AttributeError: If the population was not built through
+                ``SpatialConfigurator.build()``.
+        """
+        if self._definition is None:
+            raise AttributeError(
+                "This spatial population has no declaration snapshot; it "
+                "was not built through SpatialConfigurator.build()."
+            )
+        return self._definition
 
     @property
     def history(self) -> History:

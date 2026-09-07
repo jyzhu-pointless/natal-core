@@ -1659,6 +1659,20 @@ class SpatialConfigurator:
             adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
+        # Freeze the spatial declaration snapshot (plan 5.1 slice 3):
+        # the wrapper journal carries the raw BatchSetting declarations —
+        # the authoritative record for a spatial build (the per-deme
+        # snapshots hold the template's first-value chain instead).
+        from natal.frontend.data.definition import ModelDefinition
+
+        spatial._definition = ModelDefinition(  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]  # build() is the sanctioned attachment point
+            species=self._species,
+            discrete_generation=bool(self._pop_type == "discrete_generation"),
+            journal=tuple(
+                (name, dict(kwargs)) for name, kwargs in self._declaration_log
+            ),
+            build_name=self._spatial_name,
+        )
         self._compile_recording_plan(spatial)
         return spatial
 

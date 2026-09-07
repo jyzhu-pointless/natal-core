@@ -31,6 +31,7 @@ from numpy.typing import NDArray
 
 from natal.frontend.data import (
     DiscretePopulationState,
+    ModelDefinition,
     ModelDraft,
     PopulationState,
 )
@@ -100,6 +101,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     # such populations; the sanctioned channel is DemeSlice.write_genetics,
     # which forks the variant first.
     _shares_genetics_draft: bool = False
+
+    # Frozen declaration snapshot (plan 5.1 slice 3), attached by
+    # Configurator.build(); None until then (e.g. clones built via __new__).
+    _definition: ModelDefinition | None = None
 
     def __init__(
         self,
@@ -641,6 +646,25 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         .. versionadded:: NEXT
         """
         ...
+
+    @property
+    def definition(self) -> ModelDefinition:
+        """The frozen declaration snapshot this population was built from.
+
+        Returns:
+            The :class:`~natal.frontend.data.ModelDefinition` captured at
+            build time.
+
+        Raises:
+            AttributeError: If the population was not built through
+                ``Configurator.build()`` (no snapshot exists).
+        """
+        if self._definition is None:
+            raise AttributeError(
+                "This population has no declaration snapshot; it was not "
+                "built through Configurator.build()."
+            )
+        return self._definition
 
     @property
     def state(self) -> T_State:

@@ -23,6 +23,7 @@ from ._extract import (
 )
 from .config import ModelDraft
 from .constants import BEVERTON_HOLT, FIXED, LINEAR, LOGISTIC, NO_COMPETITION
+from .definition import ModelDefinition
 from .state import (
     DiscretePopulationState,
     PlainDiscretePopulationState,
@@ -37,6 +38,8 @@ from .state import (
 )
 
 __all__ = [
+    # definition.py
+    "ModelDefinition",
     # config.py
     'ModelDraft',
     # constants.py

@@ -1929,6 +1929,20 @@ class Configurator:
                 name=name,
             )
 
+        # Freeze the declaration snapshot onto the population (plan 5.1
+        # slice 3): the ordered journal plus the declared identity.  The
+        # snapshot is frozen — runtime updates never rewrite it.
+        from natal.frontend.data.definition import ModelDefinition
+
+        pop._definition = ModelDefinition(  # pyright: ignore[reportPrivateUsage]  # build() is the sanctioned attachment point
+            species=self._species,
+            discrete_generation=bool(final_config.discrete_generation),
+            journal=tuple(
+                (name, dict(kwargs)) for name, kwargs in self._declaration_log
+            ),
+            build_name=name,
+        )
+
         # Configurator applies modifiers before Population construction.  Carry
         # both the recipe objects and their current derived callables across the
         # boundary so refresh_modifiers() and reconfigure_preset() behave the
