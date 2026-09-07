@@ -891,6 +891,8 @@ pub fn run_batch(
     wf: bool,
     eco_values: &mut [f64],
     eco_ctx: &mut Option<crate::lifecycle::EcoCtx<'_>>,
+    checkpoint_every: i64,
+    checkpoints: &mut Vec<crate::lifecycle::TickCheckpoint>,
 ) -> Result<(i64, Vec<f64>, usize, bool), String> {
     // Loop discrete or WF ticks in Rust with optional history recording.
     let g = cfg.n_ztypes;
@@ -941,6 +943,16 @@ pub fn run_batch(
     if record_interval > 0 && current_tick % record_interval == 0 {
         record(&mut history, ind, observation_mask, groups, current_tick);
         n_rows += 1;
+        if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
+            crate::lifecycle::capture_checkpoint(
+                rng,
+                ind,
+                &[],
+                current_tick,
+                eco_ctx,
+                checkpoints,
+            )?;
+        }
     }
     for _ in 0..n_ticks {
         let result = if wf {
@@ -980,6 +992,16 @@ pub fn run_batch(
         if record_interval > 0 && current_tick % record_interval == 0 {
             record(&mut history, ind, observation_mask, groups, current_tick);
             n_rows += 1;
+            if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
+                crate::lifecycle::capture_checkpoint(
+                    rng,
+                    ind,
+                    &[],
+                    current_tick,
+                    eco_ctx,
+                    checkpoints,
+                )?;
+            }
         }
     }
     Ok((current_tick, history, n_rows, false))

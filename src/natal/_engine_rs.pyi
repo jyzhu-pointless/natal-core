@@ -73,6 +73,7 @@ class EngineSession:
         n_ticks: int,
         record_interval: int,
         observation_mask: NDArray[np.float64] | None = None,
+        checkpoint_every: int = 0,
     ) -> tuple[int, NDArray[np.float64], bool]: ...
     def snapshot_state(
         self,
@@ -90,6 +91,14 @@ class EngineSession:
         rng_words: list[int],
         ecology: dict[str, object],
     ) -> int: ...
+    def restore_from_checkpoint(
+        self,
+        individual_count: NDArray[np.float64],
+        sperm_storage: NDArray[np.float64],
+        tick: int,
+    ) -> tuple[int, dict[str, object]] | None: ...
+    def clear_checkpoints(self) -> None: ...
+    def truncate_checkpoints(self, retain_until_tick: int) -> None: ...
 
 
 class DiscreteEngineSession:
@@ -126,6 +135,7 @@ class DiscreteEngineSession:
         record_interval: int,
         wf: bool,
         observation_mask: NDArray[np.float64] | None = None,
+        checkpoint_every: int = 0,
     ) -> tuple[int, NDArray[np.float64], bool]: ...
     def snapshot_state(
         self,
@@ -140,6 +150,13 @@ class DiscreteEngineSession:
         rng_words: list[int],
         ecology: dict[str, object],
     ) -> int: ...
+    def restore_from_checkpoint(
+        self,
+        individual_count: NDArray[np.float64],
+        tick: int,
+    ) -> tuple[int, dict[str, object]] | None: ...
+    def clear_checkpoints(self) -> None: ...
+    def truncate_checkpoints(self, retain_until_tick: int) -> None: ...
 
 
 class SpatialEngineSession:

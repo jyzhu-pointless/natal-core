@@ -656,6 +656,21 @@ fn extract_custom_slots(obj: &Bound<'_, PyAny>) -> PyResult<HashMap<String, f64>
 /// the session's variant bank); all writes go through the validated
 /// channels ([`Params::apply`], [`Params::tensor_write`],
 /// [`Params::pull_fields`]).
+/// Ecology vector field names carried by a memory checkpoint.
+///
+/// ``migration_rate`` is the spatial rate column folded into the params
+/// contract (slice 5); restoring it keeps a checkpoint a complete save of
+/// the ecology section.
+pub(crate) const ECOLOGY_VECTORS: [&str; 7] = [
+    "survival_rates",
+    "mating_rates",
+    "reproduction_rates",
+    "fertility",
+    "competition_weights",
+    "equilibrium_distribution",
+    "migration_rate",
+];
+
 #[derive(Clone)]
 pub struct Params {
     /// Number of deme columns carried by every field.
@@ -1390,6 +1405,67 @@ impl Params {
                 )))
             }
         })
+    }
+
+    /// Copy one ecology vector column (full column, all demes).
+    fn ecology_vector_copy(&self, name: &str) -> PyResult<Vec<f64>> {
+        let v: &Vec<f64> = match name {
+            "survival_rates" => &self.survival_rates,
+            "mating_rates" => &self.mating_rates,
+            "reproduction_rates" => &self.reproduction_rates,
+            "fertility" => &self.fertility,
+            "competition_weights" => &self.competition_weights,
+            "equilibrium_distribution" => &self.equilibrium_distribution,
+            "migration_rate" => &self.migration_rate,
+            other => {
+                return Err(PyKeyError::new_err(format!(
+                    "unknown or non-tensor params field {other:?}"
+                )))
+            }
+        };
+        Ok(v.clone())
+    }
+
+    /// Snapshot the full ecology section as parallel word vectors.
+    ///
+    /// Rust-native twin of the Python-dict ``ecology_snapshot``: the
+    /// record-point checkpoint store (run_batch) captures ecology without a
+    /// Python round trip.  Scalars follow the ``ECOLOGY_SCALAR_COLUMNS``
+    /// wire order (deme 0); vectors follow ``ECOLOGY_VECTORS`` (full
+    /// columns).
+    pub(crate) fn ecology_snapshot_words(&self) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+        let mut scalars = Vec::with_capacity(crate::eco_param_wire::ECOLOGY_SCALARS.len());
+        for name in crate::eco_param_wire::ECOLOGY_SCALARS {
+            scalars.push(self.get_scalar(name)?);
+        }
+        let mut vectors = Vec::with_capacity(ECOLOGY_VECTORS.len());
+        for name in ECOLOGY_VECTORS {
+            vectors.push(self.ecology_vector_copy(name)?);
+        }
+        Ok((scalars, vectors))
+    }
+
+    /// Restore the ecology section from parallel word vectors.
+    ///
+    /// Companion of [`Params::ecology_snapshot_words`]: per-field
+    /// validation through ``apply`` / ``tensor_write`` keeps prior contents
+    /// on failure, exactly like the dict-based ``restore_ecology``.
+    pub(crate) fn ecology_restore_words(
+        &mut self,
+        bp: &Blueprint,
+        scalars: &[f64],
+        vectors: &[Vec<f64>],
+    ) -> PyResult<()> {
+        for (name, value) in crate::eco_param_wire::ECOLOGY_SCALARS
+            .iter()
+            .zip(scalars.iter())
+        {
+            self.apply(HashMap::from([(name.to_string(), *value)]))?;
+        }
+        for (name, values) in ECOLOGY_VECTORS.iter().zip(vectors.iter()) {
+            self.tensor_write(bp, name, values.clone())?;
+        }
+        Ok(())
     }
 
     /// Read a copy of an ecology vector field (full column).

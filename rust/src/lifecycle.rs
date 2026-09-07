@@ -1113,6 +1113,60 @@ pub fn run_tick(
 ///
 /// ## Returns
 /// ``(final_tick, flat_history, n_rows, was_stopped)``.
+/// One full in-memory checkpoint captured at a record-aligned tick.
+///
+/// The S2 record-point store (plan 13.1 R3): alongside every raw history
+/// row the session keeps a complete save — state arrays, the RNG words
+/// (continuation, not a reseed), and the ecology section — so the public
+/// ``restore_checkpoint`` rolls back everything, not just counts.
+#[derive(Clone)]
+pub struct TickCheckpoint {
+    /// Tick the checkpoint was captured at.
+    pub tick: i64,
+    /// Flattened individual counts at capture time.
+    pub ind: Vec<f64>,
+    /// Flattened sperm storage at capture time (empty for discrete).
+    pub sperm: Vec<f64>,
+    /// Four Xoshiro256++ state words at capture time.
+    pub rng_words: [u64; 4],
+    /// Ecology scalars in ``ECOLOGY_SCALARS`` wire order.
+    pub eco_scalars: Vec<f64>,
+    /// Ecology vectors in ``ECOLOGY_VECTORS`` order.
+    pub eco_vectors: Vec<Vec<f64>>,
+}
+
+/// Capture one checkpoint into *store* from the current batch state.
+///
+/// Ecology comes from the borrowed EcoCtx params (the session always lends
+/// one on the batch path); without an EcoCtx the ecology section is left
+/// empty and only state + RNG are captured.
+pub(crate) fn capture_checkpoint(
+    rng: &SessionRng,
+    ind: &[f64],
+    sperm: &[f64],
+    tick: i64,
+    eco_ctx: &Option<EcoCtx<'_>>,
+    store: &mut Vec<TickCheckpoint>,
+) -> Result<(), String> {
+    let (eco_scalars, eco_vectors) = match eco_ctx
+        .as_ref()
+        .map(|ctx| ctx.params.ecology_snapshot_words())
+    {
+        Some(Ok(words)) => words,
+        Some(Err(err)) => return Err(err.to_string()),
+        None => (Vec::new(), Vec::new()),
+    };
+    store.push(TickCheckpoint {
+        tick,
+        ind: ind.to_vec(),
+        sperm: sperm.to_vec(),
+        rng_words: rng.state_words(),
+        eco_scalars,
+        eco_vectors,
+    });
+    Ok(())
+}
+
 pub fn run_batch(
     rng: &mut SessionRng,
     cfg: &SimConfig,
@@ -1125,6 +1179,8 @@ pub fn run_batch(
     observation_mask: Option<&[f64]>,
     eco_values: &mut [f64],
     eco_ctx: &mut Option<EcoCtx<'_>>,
+    checkpoint_every: i64,
+    checkpoints: &mut Vec<TickCheckpoint>,
 ) -> Result<(i64, Vec<f64>, usize, bool), String> {
     // Loop n_ticks entirely in Rust.
     // When recording is enabled, append a history row at the requested interval.
@@ -1192,6 +1248,9 @@ pub fn run_batch(
             current_tick,
         );
         n_rows += 1;
+        if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
+            capture_checkpoint(rng, ind, sperm, current_tick, eco_ctx, checkpoints)?;
+        }
     }
 
     for _ in 0..n_ticks {
@@ -1225,6 +1284,9 @@ pub fn run_batch(
                 current_tick,
             );
             n_rows += 1;
+            if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
+                capture_checkpoint(rng, ind, sperm, current_tick, eco_ctx, checkpoints)?;
+            }
         }
     }
 

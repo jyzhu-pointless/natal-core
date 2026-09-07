@@ -5,6 +5,7 @@ use numpy::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 use crate::contract::{session_get_tensor, session_tensor_write, Blueprint, Params, TensorSet};
@@ -42,6 +43,9 @@ pub struct DiscreteEngineSession {
     /// Audited set_param transitions accumulated across tick/run calls;
     /// drained by the Python adapter after each run (see ``EngineSession``).
     eco_journal: Vec<crate::hooks::EcoJournalRow>,
+    /// Record-aligned full checkpoints (plan 13.1 R3) — the discrete twin
+    /// of ``EngineSession::checkpoints``.
+    checkpoints: Vec<crate::lifecycle::TickCheckpoint>,
 }
 
 #[pymethods]
@@ -83,6 +87,7 @@ impl DiscreteEngineSession {
             rng: new_rng(seed),
             hooks: HookProgram::default(),
             eco_journal: Vec::new(),
+            checkpoints: Vec::new(),
         })
     }
 
@@ -281,7 +286,7 @@ impl DiscreteEngineSession {
     /// ## Returns
     /// ``(final_tick, history, was_stopped)``.
     #[allow(clippy::too_many_arguments)] // PyO3 boundary mirrors the Numba run_fn signature.
-    #[pyo3(signature = (individual_count, tick, n_ticks, record_interval, wf, observation_mask=None))]
+    #[pyo3(signature = (individual_count, tick, n_ticks, record_interval, wf, observation_mask=None, checkpoint_every=0))]
     fn run<'py>(
         &mut self,
         py: Python<'py>,
@@ -291,6 +296,7 @@ impl DiscreteEngineSession {
         record_interval: i64,
         wf: bool,
         observation_mask: Option<PyReadonlyArray4<'py, f64>>,
+        checkpoint_every: i64,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
         // Assemble the config from the owned contracts at the batch entry,
         // then run a batch of discrete or WF ticks inside Rust.
@@ -334,6 +340,8 @@ impl DiscreteEngineSession {
             wf,
             &mut eco_values,
             &mut eco_ctx,
+            checkpoint_every,
+            &mut self.checkpoints,
         )
         .map_err(map_lifecycle_error)?;
         if let Some(ctx) = eco_ctx.as_mut() {
@@ -439,6 +447,65 @@ impl DiscreteEngineSession {
         self.rng = SessionRng::from_state_words(words);
         restore_ecology(&mut self.params, &self.blueprint, ecology)?;
         Ok(tick)
+    }
+
+    /// Restore the newest record-aligned checkpoint for *tick* (discrete).
+    ///
+    /// Discrete twin of ``EngineSession::restore_from_checkpoint``: the
+    /// state array is written back in place, the RNG continues from the
+    /// captured words, and the ecology section is restored.  Returns
+    /// ``Some((tick, ecology))`` or ``None`` when the tick has no
+    /// checkpoint.
+    #[pyo3(signature = (individual_count, tick))]
+    fn restore_from_checkpoint<'py>(
+        &mut self,
+        py: Python<'py>,
+        mut individual_count: PyReadwriteArray3<'_, f64>,
+        tick: i64,
+    ) -> PyResult<Option<(i64, Bound<'py, PyDict>)>> {
+        let found = self
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|cp| cp.tick == tick)
+            .cloned();
+        let Some(cp) = found else {
+            return Ok(None);
+        };
+        let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let shape = individual_count.shape();
+        if shape != [2, 2, cfg.n_ztypes] {
+            return Err(PyValueError::new_err(format!(
+                "individual_count shape must be [2, 2, {}], got {shape:?}",
+                cfg.n_ztypes
+            )));
+        }
+        if cp.ind.len() != individual_count.len() {
+            return Err(PyValueError::new_err(
+                "checkpoint arrays do not match the live state size",
+            ));
+        }
+        let ind = individual_count
+            .as_slice_mut()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        ind.copy_from_slice(&cp.ind);
+        self.rng = SessionRng::from_state_words(cp.rng_words);
+        self.params
+            .ecology_restore_words(&self.blueprint, &cp.eco_scalars, &cp.eco_vectors)?;
+        Ok(Some((
+            cp.tick,
+            crate::session::ecology_snapshot(py, &self.params)?,
+        )))
+    }
+
+    /// Drop every stored checkpoint (paired with ``clear_history``).
+    fn clear_checkpoints(&mut self) {
+        self.checkpoints.clear();
+    }
+
+    /// Drop checkpoints captured after *retain_until_tick*.
+    fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
+        self.checkpoints.retain(|cp| cp.tick <= retain_until_tick);
     }
 }
 

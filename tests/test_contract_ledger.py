@@ -494,8 +494,10 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="lifecycle: restore->run, finish->snapshot, import->run, clear->record",
-        owning_tests=("test_frozen_lifecycle_rules.py",),
-        known_violations=("R3",),
+        owning_tests=(
+            "test_frozen_lifecycle_rules.py",
+            "test_restore_checkpoint_semantics.py",
+        ),
     ),
     InvariantEntry(
         area="hook x model x space combinations run uniformly (plan 12.2)",
@@ -652,4 +654,6 @@ def test_ledger_state_importable_without_side_effects() -> None:
         del sys.modules[spec.name]
     # R4/R5 graduated to tests/test_ownership_snapshots.py in S2 batch 22
     # (C3 precedent: fixed and promoted in the same batch).
-    assert set(module.REPROS) == {"R1", "R2", "R3"}
+    # R3 graduated to tests/test_restore_checkpoint_semantics.py in S2
+    # batch 22b (R4/R5 in batch 22a; C3 in S1 batch 5).
+    assert set(module.REPROS) == {"R1", "R2"}

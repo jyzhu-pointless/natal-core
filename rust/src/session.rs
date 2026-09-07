@@ -72,20 +72,9 @@ fn map_lifecycle_error(err: String) -> PyErr {
 /// hand-written copies).
 use crate::eco_param_wire::ECOLOGY_SCALARS;
 
-/// Ecology vector field names carried by a memory checkpoint.
-///
-/// ``migration_rate`` is the spatial rate column folded into the params
-/// contract (slice 5); restoring it keeps a checkpoint a complete save of
-/// the ecology section.
-pub(crate) const ECOLOGY_VECTORS: [&str; 7] = [
-    "survival_rates",
-    "mating_rates",
-    "reproduction_rates",
-    "fertility",
-    "competition_weights",
-    "equilibrium_distribution",
-    "migration_rate",
-];
+/// Ecology vector field names carried by a memory checkpoint — the
+/// canonical definition lives next to ``Params`` in ``contract.rs``.
+use crate::contract::ECOLOGY_VECTORS;
 
 /// Copy the ecology section of *params* into a fresh Python dict.
 ///
@@ -157,6 +146,10 @@ pub struct EngineSession {
     /// drained by the Python adapter after each run so ``params_log`` and
     /// the draft stay synchronized with the session-owned columns.
     eco_journal: Vec<crate::hooks::EcoJournalRow>,
+    /// Record-aligned full checkpoints (plan 13.1 R3): state + RNG words +
+    /// ecology, captured at every recorded tick of a raw-mode run.  The
+    /// public ``restore_checkpoint`` restores from here.
+    checkpoints: Vec<lifecycle::TickCheckpoint>,
 }
 
 #[pymethods]
@@ -195,6 +188,7 @@ impl EngineSession {
             rng: new_rng(seed),
             hooks: HookProgram::default(),
             eco_journal: Vec::new(),
+            checkpoints: Vec::new(),
         })
     }
 
@@ -405,7 +399,7 @@ impl EngineSession {
     /// ## Returns
     /// ``(final_tick, history, was_stopped)``.
     #[allow(clippy::too_many_arguments)] // PyO3 boundary mirrors the Numba run_fn signature.
-    #[pyo3(signature = (individual_count, sperm_storage, tick, n_ticks, record_interval, observation_mask=None))]
+    #[pyo3(signature = (individual_count, sperm_storage, tick, n_ticks, record_interval, observation_mask=None, checkpoint_every=0))]
     fn run<'py>(
         &mut self,
         py: Python<'py>,
@@ -415,6 +409,7 @@ impl EngineSession {
         n_ticks: i64,
         record_interval: i64,
         observation_mask: Option<PyReadonlyArray4<'py, f64>>,
+        checkpoint_every: i64,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
         // Assemble the config from the owned contracts at the batch entry,
         // copy the observation mask if present, run the Rust batch loop,
@@ -461,6 +456,8 @@ impl EngineSession {
             mask_vec.as_deref(),
             &mut eco_values,
             &mut eco_ctx,
+            checkpoint_every,
+            &mut self.checkpoints,
         )
         .map_err(map_lifecycle_error)?;
 
@@ -598,6 +595,89 @@ impl EngineSession {
         self.rng = SessionRng::from_state_words(words);
         restore_ecology(&mut self.params, &self.blueprint, ecology)?;
         Ok(tick)
+    }
+
+    /// Restore the newest record-aligned checkpoint for *tick*.
+    ///
+    /// The session's checkpoint store (captured at every recorded tick of
+    /// raw-mode runs) is rolled back in full: state arrays are written
+    /// back in place, the RNG continues from the captured words, and the
+    /// ecology section is restored through the validated channels.  The
+    /// genetics section is untouched (a checkpoint is a save, not an
+    /// uninstallation of genetic mods).
+    ///
+    /// ## Parameters
+    /// - `individual_count`: Live state array, overwritten.
+    /// - `sperm_storage`: Live sperm array, overwritten.
+    /// - `tick`: The recorded tick to roll back to.
+    ///
+    /// ## Returns
+    /// ``Some((tick, ecology))`` with the restored ecology dict (for the
+    /// Python draft write-back), or ``None`` when no checkpoint exists at
+    /// *tick*.
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` on array size mismatch.
+    #[pyo3(signature = (individual_count, sperm_storage, tick))]
+    fn restore_from_checkpoint<'py>(
+        &mut self,
+        py: Python<'py>,
+        mut individual_count: PyReadwriteArray3<'_, f64>,
+        mut sperm_storage: PyReadwriteArray3<'_, f64>,
+        tick: i64,
+    ) -> PyResult<Option<(i64, Bound<'py, PyDict>)>> {
+        // Clone out of the store first: the restore below needs &mut self
+        // while the search borrows it immutably.
+        let found = self
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|cp| cp.tick == tick)
+            .cloned();
+        let Some(cp) = found else {
+            return Ok(None);
+        };
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let ind_shape = individual_count.shape();
+        if ind_shape != [2, cfg.n_ages, cfg.n_ztypes] {
+            return Err(PyValueError::new_err(format!(
+                "individual_count shape must be [2, {}, {}], got {ind_shape:?}",
+                cfg.n_ages, cfg.n_ztypes
+            )));
+        }
+        if cp.ind.len() != individual_count.len() || cp.sperm.len() != sperm_storage.len() {
+            return Err(PyValueError::new_err(
+                "checkpoint arrays do not match the live state size",
+            ));
+        }
+        {
+            let ind = individual_count
+                .as_slice_mut()
+                .map_err(|err| PyValueError::new_err(err.to_string()))?;
+            ind.copy_from_slice(&cp.ind);
+            let sperm = sperm_storage
+                .as_slice_mut()
+                .map_err(|err| PyValueError::new_err(err.to_string()))?;
+            sperm.copy_from_slice(&cp.sperm);
+        }
+        self.rng = SessionRng::from_state_words(cp.rng_words);
+        self.params
+            .ecology_restore_words(&self.blueprint, &cp.eco_scalars, &cp.eco_vectors)?;
+        Ok(Some((cp.tick, ecology_snapshot(py, &self.params)?)))
+    }
+
+    /// Drop every stored checkpoint (paired with ``clear_history``).
+    fn clear_checkpoints(&mut self) {
+        self.checkpoints.clear();
+    }
+
+    /// Drop checkpoints captured after *retain_until_tick*.
+    ///
+    /// Paired with the history truncate after a restore: reruns from the
+    /// restored tick overwrite later ticks, so stale future checkpoints
+    /// must not survive.
+    fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
+        self.checkpoints.retain(|cp| cp.tick <= retain_until_tick);
     }
 }
 

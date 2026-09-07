@@ -951,7 +951,10 @@ mod setparam_convert_tests {
             ECO_PARAM_BOUNDS.len(),
             crate::contract::ECO_PARAM_COLUMNS.len()
         );
-        assert!(!crate::contract::ECO_PARAM_COLUMNS.is_empty());
+        // Compile-time completeness: the generated wire table must never
+        // be empty (a const assert avoids clippy's const_is_empty lint on
+        // the runtime form).
+        const _: () = assert!(!crate::contract::ECO_PARAM_COLUMNS.is_empty());
         for (id, (lo, hi)) in ECO_PARAM_BOUNDS.iter().enumerate() {
             assert!(lo <= hi, "bounds row {id} is not an interval");
         }

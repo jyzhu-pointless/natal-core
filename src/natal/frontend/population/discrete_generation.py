@@ -462,6 +462,18 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 "Rust backend is not enabled; call enable_rust_backend() first."
             )
 
+        # Raw-mode runs keep a full record-aligned checkpoint per recorded
+        # tick inside the session (state + RNG + ecology), so the public
+        # restore_checkpoint rolls back everything, not just counts.
+        history_obj = getattr(self, "_history_obj", None)
+        checkpoint_every = (
+            record_every
+            if record_every > 0
+            and history_obj is not None
+            and history_obj.schema.mode == "raw"
+            else 0
+        )
+
         # In-hook writes during the batch defer session pushes to the next run.
         self._rust_run_active = True
         try:
@@ -470,6 +482,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=self._observation_mask,
+                checkpoint_every=checkpoint_every,
             )
         finally:
             self._rust_run_active = False
@@ -703,8 +716,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return int(round(np.sum(self._live_state().individual_count[int(Sex.MALE.value)])))
 
     def clear_history(self) -> None:
-        """Remove all recorded history snapshots."""
-        self.history.clear()
+        """Clear history rows and the paired session checkpoints."""
+        super().clear_history()
 
     def export_state(self) -> NDArray[np.float64]:
         """Export the current state as a flat array.

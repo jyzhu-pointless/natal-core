@@ -327,6 +327,44 @@ class RustLifecycleBackend:
             sperm_storage=state.sperm_storage,
         )
 
+    def restore_from_checkpoint(
+        self,
+        state: PopulationState,
+        tick: int,
+    ) -> tuple[int, dict[str, object]] | None:
+        """Roll the session back to the record-aligned checkpoint at *tick*.
+
+        Args:
+            state: Live population state whose arrays are overwritten in
+                place with the checkpointed counts and sperm storage.
+            tick: A tick that carried a recorded checkpoint.
+
+        Returns:
+            ``(restored_tick, ecology)`` with the restored ecology mapping
+            (contract names → values) for the Python draft write-back, or
+            ``None`` when no checkpoint exists at *tick*.
+
+        Raises:
+            ValueError: When the live arrays do not match the checkpoint
+                sizes.
+        """
+        result = _session_call(
+            lambda: self._session.restore_from_checkpoint(
+                state.individual_count,
+                state.sperm_storage,
+                int(tick),
+            )
+        )
+        return result
+
+    def clear_checkpoints(self) -> None:
+        """Drop every stored checkpoint (paired with ``clear_history``)."""
+        _session_call(lambda: self._session.clear_checkpoints())
+
+    def truncate_checkpoints(self, retain_until_tick: int) -> None:
+        """Drop checkpoints captured after *retain_until_tick*."""
+        _session_call(lambda: self._session.truncate_checkpoints(int(retain_until_tick)))
+
     def run_tick(
         self,
         state: PopulationState,
@@ -410,6 +448,7 @@ class RustLifecycleBackend:
         n_steps: int,
         record_every: int = 0,
         observation_mask: NDArray[np.float64] | None = None,
+        checkpoint_every: int = 0,
     ) -> tuple[PopulationState, NDArray[np.float64], bool]:
         """Run up to ``n_steps`` ticks inside Rust with optional recording.
 
@@ -428,6 +467,10 @@ class RustLifecycleBackend:
             observation_mask: Optional ``(n_groups, n_sexes, n_ages, n_ztypes)``
                 observation mask; when provided, rows contain per-group sums
                 over the ztype axis instead of raw state.
+            checkpoint_every: When ``> 0``, the session stores a full
+                in-memory checkpoint (state + RNG words + ecology) at every
+                aligned recorded tick, feeding the public
+                ``restore_checkpoint``.  ``0`` disables capture.
 
         Returns:
             ``(next_state, history_rows, was_stopped)``.  ``history_rows`` is
@@ -451,6 +494,7 @@ class RustLifecycleBackend:
                 int(n_steps),
                 int(record_every),
                 observation_mask,
+                int(checkpoint_every),
             )
         )
         return (
@@ -597,6 +641,44 @@ class RustDiscreteLifecycleBackend:
             individual_count=state.individual_count,
         )
 
+    def restore_from_checkpoint(
+        self,
+        state: DiscretePopulationState,
+        tick: int,
+    ) -> tuple[int, dict[str, object]] | None:
+        """Roll the session back to the record-aligned checkpoint at *tick*.
+
+        Discrete twin of the age-structured backend: the live count array
+        is overwritten in place, the RNG continues from the captured
+        words, and the session ecology is restored.
+
+        Args:
+            state: Live discrete state whose array is overwritten.
+            tick: A tick that carried a recorded checkpoint.
+
+        Returns:
+            ``(restored_tick, ecology)`` or ``None`` when the tick has no
+            checkpoint.
+
+        Raises:
+            ValueError: When the live array does not match the checkpoint
+                size.
+        """
+        return _session_call(
+            lambda: self._session.restore_from_checkpoint(
+                state.individual_count,
+                int(tick),
+            )
+        )
+
+    def clear_checkpoints(self) -> None:
+        """Drop every stored checkpoint (paired with ``clear_history``)."""
+        _session_call(lambda: self._session.clear_checkpoints())
+
+    def truncate_checkpoints(self, retain_until_tick: int) -> None:
+        """Drop checkpoints captured after *retain_until_tick*."""
+        _session_call(lambda: self._session.truncate_checkpoints(int(retain_until_tick)))
+
     def run_tick(self, state: DiscretePopulationState) -> tuple[DiscretePopulationState, int]:
         """Run one discrete-generation or Wright-Fisher tick in Rust.
 
@@ -652,6 +734,7 @@ class RustDiscreteLifecycleBackend:
         n_steps: int,
         record_every: int = 0,
         observation_mask: NDArray[np.float64] | None = None,
+        checkpoint_every: int = 0,
     ) -> tuple[DiscretePopulationState, NDArray[np.float64], bool]:
         """Run up to ``n_steps`` ticks inside Rust with optional recording.
 
@@ -682,6 +765,7 @@ class RustDiscreteLifecycleBackend:
                 int(record_every),
                 self._wf,
                 observation_mask,
+                int(checkpoint_every),
             )
         )
         return (

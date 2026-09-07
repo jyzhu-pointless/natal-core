@@ -36,6 +36,8 @@ class OutputMixin(ModifierPresetMixin):
     # allow mixin attribute declarations to shadow base-class @property.
     _finished: bool  # type: ignore[assignment]  # host provides at runtime
     _state: Any  # type: ignore[assignment]  # host BasePopulation supplies the generic state
+    _live_state: Any  # type: ignore[assignment]  # host live container accessor (snapshot twin)
+    _restore_ecology_to_draft: Any  # type: ignore[assignment]  # host writes restored ecology into the draft
     _registry: Any  # type: ignore[assignment]  # host provides at runtime
     _observation: Observation | None  # type: ignore[assignment]  # host owns mutable policy
     _history_obj: History | None  # type: ignore[assignment]  # host owns mutable row storage
@@ -109,9 +111,16 @@ class OutputMixin(ModifierPresetMixin):
             history_obj._append(batch)  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
 
     def clear_history(self) -> None:
-        """Remove all rows while preserving the frozen History schema."""
+        """Remove all rows while preserving the frozen History schema.
+
+        Session-side record checkpoints are dropped with the rows so a
+        later ``restore_checkpoint`` cannot resurrect cleared ticks.
+        """
         if self._history_obj is not None:
             self._history_obj.clear()
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            backend.clear_checkpoints()
 
     def record_snapshot(self) -> None:
         """Record the current stable state into history.
@@ -130,11 +139,17 @@ class OutputMixin(ModifierPresetMixin):
         self._record_current_snapshot(allow_existing=False)
 
     def restore_checkpoint(self, tick: int) -> None:
-        """Restore population state from a raw-history record at *tick*.
+        """Restore the population to its recorded state at *tick*.
 
-        Only valid for raw-mode history.  Restores individual counts and
-        (when applicable) sperm storage.  All records after *tick* are
-        removed.
+        Only valid for raw-mode history.  On the Rust backend the session
+        rolls back its record-aligned checkpoint in full — counts, sperm
+        storage, the ecology parameters (so a post-record parameter change
+        like ``update().competition(...)`` is undone), and the RNG stream
+        (a restore continues the exact stream rather than reseeding).
+        Without a live Rust session (reference path) only counts, sperm
+        storage, and the tick are restored from the Python history.
+
+        All records after *tick* are removed.
 
         Args:
             tick: Exact tick to restore.
@@ -151,6 +166,20 @@ class OutputMixin(ModifierPresetMixin):
                 "history.  Record raw history to enable checkpoint "
                 "restoration."
             )
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            result = backend.restore_from_checkpoint(self._live_state(), tick)
+            if result is None:
+                # Frozen-surface message: checkpoints are record-aligned with the
+                # history rows, so the frozen "not found in history" wording stays.
+                raise ValueError(f"Tick {tick} not found in history.")
+            restored_tick, ecology = result
+            self._restore_ecology_to_draft(ecology)
+            self._state = self._live_state()._replace(n_tick=restored_tick)
+            self._tick = restored_tick
+            backend.truncate_checkpoints(tick)
+            history_obj.truncate(retain_until_tick=tick)
+            return
         restored_tick, ic, ss = history_obj.restore_state(tick)
         state = self._state
         state.individual_count[:] = ic.reshape(state.individual_count.shape)

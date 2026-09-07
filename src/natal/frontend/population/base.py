@@ -18,6 +18,7 @@ from typing import (
     TYPE_CHECKING,
     Generic,
     List,
+    Mapping,
     Optional,
     Self,
     Tuple,
@@ -754,6 +755,61 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         if self._state is None:
             raise RuntimeError("Population state has not been initialized.")
         return self._state
+
+    def _restore_ecology_to_draft(self, ecology: Mapping[str, object]) -> None:
+        """Write a restored checkpoint's ecology into the draft.
+
+        The Rust session already restored its own columns; this mirrors
+        the same values into the Python draft so ``pop.params`` reads the
+        checkpointed ecology.  No dirty-bridge marking happens — the
+        session already holds identical values (the same shape as
+        ``_absorb_rust_eco_journal``).
+
+        Args:
+            ecology: Contract-name → value mapping from
+                ``backend.restore_from_checkpoint`` (scalars as floats,
+                vectors as arrays).
+        """
+        from natal.frontend.configurator._writers import contract_to_draft_field
+
+        # Draft ecology values are heterogeneous: scalars stay floats,
+        # vectors become float64 ndarrays, and the eggs sentinel becomes
+        # None (the Optional declaration).
+        overrides: dict[str, float | NDArray[np.float64] | None] = {}
+        for name, value in ecology.items():
+            draft_field = contract_to_draft_field(str(name))
+            if not hasattr(self._config, draft_field):
+                # e.g. migration_rate on panmictic drafts (never declared).
+                continue
+            current: float | NDArray[np.float64] | None = getattr(
+                self._config, draft_field
+            )
+            if isinstance(value, np.ndarray):
+                restored = np.array(value, dtype=np.float64)
+                if isinstance(current, np.ndarray):
+                    # The wire carries deme-flattened vectors; the draft
+                    # stores the structured shape (e.g. survival as
+                    # (2, n_ages)).  Restore the declared shape so routed
+                    # reads and update() writes keep working.
+                    overrides[draft_field] = restored.reshape(current.shape)
+                elif restored.size == 0:
+                    # Undeclared on the draft (derive-mode sentinel): an
+                    # empty wire vector must not flip the None declaration
+                    # into a zero-length array.
+                    continue
+                else:
+                    overrides[draft_field] = restored
+            elif isinstance(value, float):
+                if draft_field == "external_expected_eggs" and value < 0.0:
+                    # Wire sentinel ↔ draft Optional translation.
+                    overrides[draft_field] = None
+                else:
+                    overrides[draft_field] = value
+            elif isinstance(value, int):
+                overrides[draft_field] = float(value)
+        draft = self._config
+        if overrides and draft is not None:
+            self._config = draft._replace(**overrides)
 
     @property
     def history(self) -> History:

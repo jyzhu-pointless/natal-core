@@ -8,8 +8,9 @@ code delivery that can request APPROVED".  When the owning stage lands
 (S2 absorbs R3/R4/R5, S3 absorbs R1/R2), each repro turns green and is
 promoted into the regular pytest suite together with its fix in the
 same batch.  (Audit finding C3 followed exactly this path: fixed and
-promoted in S1 batch 5.  R4 and R5 followed it in S2 batch 22 — now
-tests/test_ownership_snapshots.py.)
+promoted in S1 batch 5.  R4 and R5 followed it in S2 batch 22a — now
+tests/test_ownership_snapshots.py — and R3 in batch 22b — now
+tests/test_restore_checkpoint_semantics.py.)
 
 Run: ``python scripts/known_defect_repro.py`` prints one line per
 defect with PASS (defect gone) / FAIL (defect present) plus evidence.
@@ -182,50 +183,16 @@ def repro_r2() -> None:
     )
 
 
-# ── R3: public restore_checkpoint only restores counts/tick, not ecology/RNG
-
-
-def repro_r3() -> None:
-    """Assert restore_checkpoint rolls ecology back to the checkpointed tick (currently fails)."""
-    species = _two_allele_species("ReproR3Species")
-    pop = (
-        nt.DiscreteGenerationPopulation.setup(
-            species=species, name="ReproR3Pop", stochastic=False
-        )
-        .initial_state(
-            individual_count={
-                "female": {"WT|WT": 10},
-                "male": {"WT|WT": 10},
-            }
-        )
-        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-        .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
-        .record_history(mode="raw")
-        .build()
-    )
-    pop.run(3, record_every=1)
-    pop.update().competition(carrying_capacity=4321.0)
-    pop.restore_checkpoint(1)
-
-    assert pop.params.carrying_capacity == 100000.0, (
-        "R3: restore_checkpoint(1) kept the later K="
-        f"{pop.params.carrying_capacity} instead of the checkpointed 100000.0"
-    )
-
-
 # ── runner ────────────────────────────────────────────────────────────────────
 
 REPROS: dict[str, Callable[[], None]] = {
     "R1": repro_r1,
     "R2": repro_r2,
-    "R3": repro_r3,
 }
 
 OWNING_STAGE = {
     "R1": "S3 (persistent per-deme RNG + unified Program)",
     "R2": "S3 (one Program for all models)",
-    "R3": "S2/S4 (public restore wired to the Rust checkpoint)",
 }
 
 

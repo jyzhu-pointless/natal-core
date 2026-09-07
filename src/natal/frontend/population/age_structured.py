@@ -527,8 +527,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._config = config
 
     def clear_history(self) -> None:
-        """Clear history records."""
-        self.history.clear()
+        """Clear history rows and the paired session checkpoints."""
+        super().clear_history()
 
     def export_state(self) -> NDArray[np.float64]:
         """Export population state as a flattened array.
@@ -774,6 +774,18 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
 
         observation_mask = self._observation_mask
+        # Raw-mode runs keep a full record-aligned checkpoint per recorded
+        # tick inside the session (state + RNG + ecology), so the public
+        # restore_checkpoint rolls back everything, not just counts.
+        history_obj = getattr(self, "_history_obj", None)
+        checkpoint_every = (
+            record_every
+            if record_every > 0
+            and history_obj is not None
+            and history_obj.schema.mode == "raw"
+            else 0
+        )
+
         # In-hook writes during the batch defer session pushes to the next run.
         self._rust_run_active = True
         try:
@@ -782,6 +794,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=observation_mask,
+                checkpoint_every=checkpoint_every,
             )
         finally:
             self._rust_run_active = False
