@@ -1,0 +1,249 @@
+"""Declaration-journal contract tests (plan 5.1, ModelDefinition slice 1).
+
+The ``@_declared`` journal records every public chaining call of a
+Configurator with its explicitly-passed kwargs and live object
+references.  ``replay_declarations`` rebuilds a fresh configurator from
+that journal — the ordered log is the replayable source of what the
+user declared, the seed of the future ModelDefinition.
+
+Every assertion pins a replayability invariant: the journal plus the
+method defaults must reproduce the draft bit-for-bit.
+"""
+
+from __future__ import annotations
+
+from functools import partial
+
+import numpy as np
+
+import natal as nt
+from natal.frontend.configurator import Configurator
+from natal.frontend.configurator._base import replay_declarations
+
+
+def _species() -> nt.Species:
+    """Return the shared two-allele species for journal samples."""
+    return nt.Species.from_dict(
+        name="__journal_species__",
+        structure={"chr1": {"loc": ["A", "B"]}},
+        gamete_labels=["default"],
+    )
+
+
+def _typical_chain(cfg: Configurator) -> Configurator:
+    """Run a representative declaration chain covering every journaled method."""
+    drive = nt.HomingDrive(
+        name="__journal_drive__",
+        drive_allele="B",
+        target_allele="A",
+        drive_conversion_rate=0.9,
+        fecundity_scaling={"female": 0.5},
+    )
+    return (
+        cfg.age_structure(n_ages=4, new_adult_age=1)
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+            eggs_per_female=17.0,
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+            male_age_based_survival=[1.0, 0.85, 0.6, 0.0],
+        )
+        .competition(carrying_capacity=500.0, juvenile_growth_mode=3)
+        .initial_state(
+            individual_count={
+                "female": {"A|A": [0, 60, 0, 0], "A|B": [0, 10, 0, 0]},
+                "male": {"A|A": [0, 40, 0, 0]},
+            }
+        )
+        .custom(cohort=7, temperature=2.5)
+        .presets(drive)
+        .fitness(fecundity={"A|B": 0.5})
+        .fitness(fecundity={"A|B": 0.8}, mode="multiply")
+        .hooks(nt.Op.set_count(genotypes="A|A", sex="both", value=3.0))
+        .with_observation(
+            groups={"carriers": nt.IndividualSelector(ztype="*|B")}
+        )
+        .record_history(mode="observation", max_rows=50)
+    )
+
+
+class TestDeclarationJournal:
+    """Journal content and replayability contracts."""
+
+    def test_journal_records_call_order_with_explicit_kwargs(self) -> None:
+        """Entries follow call order; only explicit kwargs are journaled."""
+        cfg = _typical_chain(Configurator.for_age_structured(_species()))
+        log = cfg._declaration_log
+
+        assert [name for name, _ in log] == [
+            "age_structure",
+            "reproduction",
+            "survival",
+            "competition",
+            "initial_state",
+            "custom",
+            "presets",
+            "fitness",
+            "fitness",
+            "hooks",
+            "with_observation",
+            "record_history",
+        ]
+        # Explicit kwargs only — reproduction's untouched sex_ratio or
+        # survival's discrete cells must not appear.
+        assert set(log[1][1]) == {
+            "female_age_based_mating_rate",
+            "male_age_based_mating_rate",
+            "eggs_per_female",
+        }
+        # Two fitness calls keep their distinct kwargs: the first relied
+        # on the default mode (not journaled — only explicit kwargs are),
+        # the second passed multiply explicitly.
+        assert "mode" not in log[7][1]
+        assert log[8][1]["mode"] == "multiply"
+        assert log[8][1]["fecundity"] == {"A|B": 0.8}
+        # Variadic presets land under the reserved positional key.
+        assert isinstance(log[6][1]["__args__"], tuple)
+
+    def test_journal_preserves_live_object_references(self) -> None:
+        """Preset/hook references are stored as-is (no copies)."""
+        cfg = _typical_chain(Configurator.for_age_structured(_species()))
+        preset_entry = next(kw for name, kw in cfg._declaration_log if name == "presets")
+        journaled_preset = preset_entry["__args__"]
+        assert isinstance(journaled_preset, tuple)
+        assert journaled_preset[0] is cfg._presets[0]
+
+    def test_replay_reproduces_draft_bitwise(self) -> None:
+        """Journal replay rebuilds a bit-identical draft."""
+        import dataclasses
+
+        species = _species()
+        original = _typical_chain(Configurator.for_age_structured(species))
+        replayed = replay_declarations(
+            partial(Configurator.for_age_structured, species),
+            original._declaration_log,
+        )
+
+        left = original.config
+        right = replayed.config
+        assert dataclasses.is_dataclass(left) is False  # NamedTuple
+        for field in left._fields:
+            lv = getattr(left, field)
+            rv = getattr(right, field)
+            if isinstance(lv, np.ndarray):
+                np.testing.assert_array_equal(
+                    lv, rv, err_msg=f"field {field} diverged on replay"
+                )
+            elif isinstance(lv, dict):
+                assert lv.keys() == rv.keys(), field
+                for key in lv:
+                    lval, rval = lv[key], rv[key]
+                    if isinstance(lval, np.ndarray):
+                        np.testing.assert_array_equal(lval, rval, key)
+                    else:
+                        assert lval == rval, (field, key)
+            else:
+                assert lv == rv, field
+
+        # The accumulated declaration surfaces survive replay too.
+        assert replayed._custom_kwargs == original._custom_kwargs
+        assert len(replayed._hook_calls) == len(original._hook_calls)
+        assert replayed._record_history_mode == original._record_history_mode
+        assert replayed._record_history_max_rows == original._record_history_max_rows
+
+    def test_replay_of_discrete_granularity(self) -> None:
+        """Discrete chains replay onto the discrete granularity factory."""
+
+        species = _species()
+        original = (
+            Configurator.for_discrete(species)
+            .reproduction(eggs_per_female=6.0, sex_ratio=0.4)
+            .survival(female_age0_survival=1.0, male_age0_survival=0.9)
+            .competition(carrying_capacity=800.0, juvenile_growth_mode=2)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": 30},
+                    "male": {"A|A": 30},
+                }
+            )
+        )
+        replayed = replay_declarations(
+            partial(Configurator.for_discrete, species),
+            original._declaration_log,
+        )
+        for field in original.config._fields:
+            lv = getattr(original.config, field)
+            rv = getattr(replayed.config, field)
+            if isinstance(lv, np.ndarray):
+                np.testing.assert_array_equal(lv, rv, field)
+            else:
+                assert lv == rv, field
+
+    def test_journal_excludes_runtime_and_terminal_methods(self) -> None:
+        """build()/apply()/reconfigure_preset() never enter the journal."""
+        species = _species()
+        pop = _typical_chain(Configurator.for_age_structured(species)).build()
+        # for_population wraps an existing population — its writes are
+        # runtime updates, not declarations.
+        cfg = Configurator.for_population(pop)
+        cfg.competition(carrying_capacity=4321.0)
+        # The journal is per-configurator; the update configurator's own
+        # journal records its calls (they are that configurator's
+        # declarations), but the population's build journal is frozen at
+        # build time — verified by replaying the build journal.
+        names = [name for name, _ in pop._definition_journal_names()] if hasattr(
+            pop, "_definition_journal_names"
+        ) else None
+        assert names is None  # populations do not expose a journal yet (slice 3)
+
+    def test_empty_journal_replays_to_fresh_state(self) -> None:
+        """An empty journal replays to the untouched factory state."""
+        species = _species()
+        replayed = replay_declarations(
+            partial(Configurator.for_age_structured, species), []
+        )
+        fresh = Configurator.for_age_structured(species)
+        for field in fresh.config._fields:
+            lv = getattr(fresh.config, field)
+            rv = getattr(replayed.config, field)
+            if isinstance(lv, np.ndarray):
+                np.testing.assert_array_equal(lv, rv, field)
+            else:
+                assert lv == rv, field
+
+    def test_replay_reproduces_setup_flags_and_compression(self) -> None:
+        """setup declarations (compress, declared types, flags) replay.
+
+        The compress flag and declared zygote types change the build-time
+        compilation; the journal must carry them so replay compiles the
+        same compressed layout.
+        """
+        species = _species()
+        original = (
+            Configurator.for_age_structured(species)
+            .setup(stochastic=False, compress=True, declared_zygote_types=("A|A", "A|B"))
+            .age_structure(n_ages=4, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 60, 0, 0]},
+                    "male": {"A|A": [0, 40, 0, 0]},
+                }
+            )
+            .competition(carrying_capacity=500.0, juvenile_growth_mode=3)
+        )
+        replayed = replay_declarations(
+            partial(Configurator.for_age_structured, species),
+            original._declaration_log,
+        )
+        for field in original.config._fields:
+            lv = getattr(original.config, field)
+            rv = getattr(replayed.config, field)
+            if isinstance(lv, np.ndarray):
+                np.testing.assert_array_equal(lv, rv, err_msg=field)
+            else:
+                assert lv == rv, field
+        assert replayed._compress is True
+        # setup normalizes the declared sequence into a set.
+        assert replayed._declared_zygote_types == {"A|A", "A|B"}

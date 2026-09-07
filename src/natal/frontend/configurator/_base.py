@@ -33,13 +33,16 @@ See also :func:`set_param` (low-level scalar writer).
 from __future__ import annotations
 
 from copy import copy, deepcopy
+from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Concatenate,
     Literal,
     Mapping,
     Optional,
+    ParamSpec,
     Self,
     Sequence,
     cast,
@@ -316,6 +319,102 @@ def _extract_refs_from_callable(func: Callable[..., Any]) -> set[str]:
 # ── Configurator ───────────────────────────────────────────────────────────────
 
 
+
+_P = ParamSpec("_P")
+
+
+def _declared(
+    method: Callable[Concatenate[Configurator, _P], Configurator],
+) -> Callable[Concatenate[Configurator, _P], Configurator]:
+    """Journal one public chaining call for replayable declaration order.
+
+    Plan 5.1: the future ModelDefinition needs the semantic declaration
+    order, not just the accumulated state.  Every decorated call appends
+    ``(method_name, explicitly_passed_kwargs)`` to the instance journal —
+    object references are stored as-is (presets, hooks, BatchSetting),
+    so replay re-executes the user's exact declarations.  Defaults the
+    caller did not pass are not recorded; replay re-applies the same
+    defaults.
+
+    Args:
+        method: The chaining method (first positional arg is ``self``).
+
+    Returns:
+        The wrapped method.
+    """
+    from inspect import signature
+
+    @wraps(method)
+    def wrapper(self: Configurator, *args: _P.args, **kwargs: _P.kwargs) -> Configurator:
+        # bind WITHOUT apply_defaults: only what the caller explicitly
+        # passed is journaled; replay re-applies the method defaults for
+        # the rest.  Variadic parameters are normalized so the journal
+        # stays a flat kwargs dict: *args lands under the reserved
+        # "__args__" key, **kwargs are expanded back into their keys.
+        from inspect import Parameter
+
+        sig = signature(method)
+        bound = sig.bind(self, *args, **kwargs)
+        declared: dict[str, object] = {}
+        for name, value in bound.arguments.items():
+            if name == "self":
+                continue
+            kind = sig.parameters[name].kind
+            if kind == Parameter.VAR_KEYWORD:
+                declared.update(value)
+            elif kind == Parameter.VAR_POSITIONAL:
+                declared["__args__"] = value
+            else:
+                declared[name] = value
+        self._declaration_log.append(  # pyright: ignore[reportPrivateUsage]  # the journal lives on the instance this decorator wraps
+            (method.__name__, declared)
+        )
+        return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+
+def replay_declarations(
+    factory: Callable[[], Configurator],
+    journal: list[tuple[str, dict[str, object]]],
+) -> Configurator:
+    """Rebuild a configurator by replaying a declaration journal.
+
+    The replay companion of the ``@_declared`` journal (plan 5.1: the
+    ordered log is the replayable source of what the user declared).
+    Each journaled call is re-executed on a fresh configurator from
+    *factory* with the explicitly-passed kwargs only, so method defaults
+    re-apply exactly as they did originally.
+
+    Args:
+        factory: Zero-argument constructor producing a fresh, empty
+            configurator of the right granularity (e.g.
+            ``functools.partial(Configurator.for_discrete, species)``).
+        journal: The ``_declaration_log`` of the original configurator.
+
+    Returns:
+        The freshly built configurator after replaying every entry.
+    """
+    replayed = factory()
+    for method_name, declared in journal:
+        method = getattr(replayed, method_name)
+        args_value: object = declared.get("__args__")
+        # isinstance narrows to a bare tuple of unknown element type; the
+        # journal stores the variadic positional tuple as-is, so the cast
+        # is the value's actual shape by construction.
+        positional = (
+            cast("tuple[object, ...]", args_value)
+            if isinstance(args_value, tuple)
+            else ()
+        )
+        replayed_kwargs: dict[str, object] = {
+            key: value for key, value in declared.items() if key != "__args__"
+        }
+        method(*positional, **replayed_kwargs)  # pyright: ignore[reportAttributeAccessIssue, reportCallIssue]  # journal entries name public chaining methods by construction
+    return replayed
+
+
 class Configurator:
     """Parameter configurator — unified API for build-time and runtime use.
 
@@ -394,6 +493,15 @@ class Configurator:
         # Stored .hooks() calls (build path); replayed onto the population
         # after construction and before backend enable.
         self._hook_calls: list[HookCall] = []
+
+        # Declaration journal (plan 5.1: ModelDefinition needs the semantic
+        # declaration ORDER).  Every public chaining call records
+        # ``(method_name, kwargs)`` with live object references preserved
+        # (BatchSetting on the spatial side, preset/hook objects here), so
+        # the ordered log is the single replayable source of what the user
+        # declared.  User callables keep their no-serialization contract:
+        # the journal stores references, never copies.
+        self._declaration_log: list[tuple[str, dict[str, object]]] = []
 
     @property
     def config(self) -> ModelDraft:
@@ -660,6 +768,7 @@ class Configurator:
 
     # -- setup flags -----------------------------------------------------------
 
+    @_declared
     def setup(
         self,
         *,
@@ -755,6 +864,7 @@ class Configurator:
     # method bodies.
 
 
+    @_declared
     def age_structure(
         self, n_ages: int, new_adult_age: int,
         generation_time: float | None = None,
@@ -837,6 +947,7 @@ class Configurator:
             self._registry = build_registry(self._species)
         return self
 
+    @_declared
     def competition(
         self,
         *,
@@ -937,6 +1048,7 @@ class Configurator:
         writer.apply({"external_expected_eggs": eggs})
         self._config = writer.draft
 
+    @_declared
     def reproduction(
         self,
         *,
@@ -1024,6 +1136,7 @@ class Configurator:
             self._config = writer.draft
         return self
 
+    @_declared
     def survival(
         self,
         *,
@@ -1065,6 +1178,7 @@ class Configurator:
             self._config = writer.draft
         return self
 
+    @_declared
     def initial_state(
         self,
         individual_count: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]],
@@ -1148,6 +1262,7 @@ class Configurator:
 
     # -- custom fields ---------------------------------------------------------
 
+    @_declared
     def custom(self, **kwargs: bool | int | float | NDArray[np.float64]) -> Self:
         """Register custom named slots on ``config.custom``.
 
@@ -1182,6 +1297,7 @@ class Configurator:
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
 
+    @_declared
     def presets(self, *presets: GeneticPreset) -> Self:
         """Apply genetic presets to config arrays.
 
@@ -1282,6 +1398,7 @@ class Configurator:
             raise
         return self
 
+    @_declared
     def modifiers(
         self,
         gamete_modifiers: list[GameteModifier] | None = None,
@@ -1326,6 +1443,7 @@ class Configurator:
         self._sync_from_ctx(ctx)
         return self
 
+    @_declared
     def fitness(
         self,
         viability: Mapping[str, float | Mapping[str, float]] | None = None,
@@ -1426,6 +1544,7 @@ class Configurator:
 
     # -- hooks ------------------------------------------------------------------
 
+    @_declared
     def hooks(
         self,
         *hook_items: _HookItem,
@@ -1469,6 +1588,7 @@ class Configurator:
 
     # -- observations ------------------------------------------------------------
 
+    @_declared
     def with_observation(
         self,
         groups: Mapping[str, IndividualSelector],
@@ -1501,6 +1621,7 @@ class Configurator:
         self._observation_collapse_age = collapse_age
         return self
 
+    @_declared
     def record_history(
         self,
         *,
